@@ -63,13 +63,15 @@ isolated user config, cache, and prefix, forces `https://registry.npmjs.org`,
 disables scripts, and asserts both npm version and active registry. Runner-owned
 npm configuration created later is distinct from untrusted repository config.
 
-Audit snapshot when this lane was authored: the repository was private,
-Actions allowed every action without mandatory SHA pins, no environments
-existed, and rulesets were unavailable on the private-repository plan. Those
-facts are release blockers, not settings this branch changes. The Coordinator
-must execute and verify the required GitHub/npm configuration under decision
-`client-server-release-lanes-autonomy` without treating that decision as tag or
-publication authorization.
+Current verified control-plane snapshot: the repository is public; secret
+scanning, push protection, Dependabot, and CodeQL are enabled; Actions permits
+only GitHub-owned actions with mandatory full-SHA pins, a read-only default
+token, and no pull-request approval; and active rulesets protect `main` and make
+`v*.*.*` tags immutable with Queen-only bypass. The `npm-publish` environment
+and npm Trusted Publisher remain outstanding and gated until this source
+workflow is approved. The Coordinator must execute and verify those remaining
+controls under decision `client-server-release-lanes-autonomy` without treating
+that decision as tag or publication authorization.
 
 ## Source And Tag Gate
 
