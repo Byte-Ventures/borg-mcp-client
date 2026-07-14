@@ -1,9 +1,8 @@
 # Borg MCP Client
 
-This repository is the future public home of the open, permissively licensed
-Borg MCP client. The client connects coding-agent harnesses to a Borg
-coordination authority and provides the local command-line and MCP integration
-used by those agents.
+This repository is the future public home of the Borg MCP client. The client
+connects coding-agent harnesses to a Borg coordination authority and provides
+the local command-line and MCP integration used by those agents.
 
 This repository is currently an early extraction scaffold. The client is being
 moved here and is not yet available from this repository as a complete,
