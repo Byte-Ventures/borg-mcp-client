@@ -318,6 +318,60 @@ test('lock binding rejects wrong identity, version, host tricks, suffixes, and m
   }
 });
 
+test('lock binding accepts only complete canonical nested package paths', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'borgmcp-client-lock-path-'));
+  try {
+    const { lock } = await validPackage(directory);
+    const integrity = `sha512-${Buffer.alloc(64).toString('base64')}`;
+    const entry = (name) => ({
+      version: '1.0.0',
+      resolved: `https://registry.npmjs.org/${name}/-/${name.slice(name.lastIndexOf('/') + 1)}-1.0.0.tgz`,
+      integrity,
+    });
+    const valid = [
+      ['node_modules/parent/node_modules/child', 'child'],
+      ['node_modules/parent/node_modules/@scope/child', '@scope/child'],
+      ['node_modules/@scope/parent/node_modules/child', 'child'],
+      ['node_modules/@scope/parent/node_modules/@other/child', '@other/child'],
+    ];
+    const accepted = structuredClone(lock);
+    for (const [path, name] of valid) accepted.packages[path] = entry(name);
+    const entries = lockRegistryEntries(accepted);
+    for (const [path, name] of valid) {
+      assert.equal(entries.find((candidate) => candidate.path === path)?.name, name);
+    }
+
+    const hostile = [
+      '../outside/node_modules/evil',
+      'node_modules/parent/../../escape/node_modules/evil',
+      '/tmp/escape/node_modules/evil',
+      'prefix/node_modules/evil',
+      'node_modules\\evil',
+      'node_modules//evil',
+      'node_modules/./node_modules/evil',
+      'node_modules/../node_modules/evil',
+      'node_modules/parent//node_modules/evil',
+      'node_modules/@scope',
+      'node_modules/@/evil',
+      'node_modules/@scope/',
+      'node_modules/@scope/../node_modules/evil',
+      'node_modules/@scope/evil/foreign',
+      'node_modules/@scope/evil/node_modules/@/child',
+    ];
+    for (const path of hostile) {
+      const candidate = structuredClone(lock);
+      candidate.packages[path] = entry('evil');
+      assert.throws(
+        () => lockRegistryEntries(candidate),
+        /non-registry package path/,
+        `accepted hostile lock path: ${path}`,
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('official registry metadata must match the reviewed lock URL and integrity', () => {
   const integrity = `sha512-${Buffer.alloc(64).toString('base64')}`;
   const entry = {

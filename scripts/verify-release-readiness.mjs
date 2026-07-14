@@ -125,11 +125,25 @@ function verifySharedLock(lock) {
 }
 
 function packageNameFromLockPath(path) {
-  const marker = 'node_modules/';
-  const index = path.lastIndexOf(marker);
-  if (index < 0) return null;
-  const name = path.slice(index + marker.length);
-  return /^(?:@[a-z0-9._-]+\/[a-z0-9._-]+|[a-z0-9._-]+)$/.test(name) ? name : null;
+  if (path.startsWith('/') || path.includes('\\')) return null;
+  const segments = path.split('/');
+  const validPart = (part) => typeof part === 'string' && /^[a-z0-9][a-z0-9._-]*$/.test(part);
+  let name = null;
+  for (let index = 0; index < segments.length;) {
+    if (segments[index] !== 'node_modules') return null;
+    const first = segments[index + 1];
+    if (first?.startsWith('@')) {
+      const leaf = segments[index + 2];
+      if (!validPart(first.slice(1)) || !validPart(leaf)) return null;
+      name = `${first}/${leaf}`;
+      index += 3;
+    } else {
+      if (!validPart(first)) return null;
+      name = first;
+      index += 2;
+    }
+  }
+  return name;
 }
 
 function canonicalTarballUrl(name, version) {
