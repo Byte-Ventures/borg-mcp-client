@@ -13,10 +13,10 @@ standalone release.
 - [borg-mcp-server](https://github.com/Byte-Ventures/borg-mcp-server) is the
   self-hostable Borg coordination server. It is under active development and is
   not yet a finished release.
-- [borg-mcp-shared](https://github.com/Byte-Ventures/borg-mcp-shared) is the
-  home of `@borgmcp/shared`, the protocol, domain, and conformance package used
-  to keep Borg clients and servers aligned. Its public package contract is
-  under active development.
+- [Borg MCP shared contracts](https://github.com/Byte-Ventures/borg-mcp-shared)
+  contains the protocol, domain, and conformance package used to keep Borg
+  clients and servers aligned. Its public package contract is under active
+  development and will be published to npm when ready.
 
 Installation and usage documentation will be added as the client extraction
 and server integration become ready to use.
