@@ -57,11 +57,12 @@ tag. Repository settings are operator-owned; source changes do not apply them.
    and Dependabot security updates. Enable validity checks and non-provider
    patterns when the organization plan supports them.
 
-Both jobs reject a checked-out root `.npmrc` immediately after checkout and
-before `setup-node` or any npm command. The exact npm bootstrap then uses an
-isolated user config, cache, and prefix, forces `https://registry.npmjs.org`,
-disables scripts, and asserts both npm version and active registry. Runner-owned
-npm configuration created later is distinct from untrusted repository config.
+Immediately after checkout, both jobs reject immutable reruns and then reject a
+checked-out root `.npmrc`, before `setup-node` or any npm command. The exact npm
+bootstrap then uses an isolated user config, cache, and prefix under the runner
+temporary directory, forces `https://registry.npmjs.org`, disables scripts, and
+asserts both npm version and active registry. The repository root remains
+config-free through artifact verification.
 
 Current verified control-plane snapshot: the repository is public; secret
 scanning, push protection, Dependabot, and CodeQL are enabled; Actions permits

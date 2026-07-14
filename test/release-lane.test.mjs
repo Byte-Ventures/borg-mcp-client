@@ -153,16 +153,27 @@ test('release workflow separates unprivileged verification from protected OIDC p
   assert.equal((workflow.match(/npm publish "\$\{PWD\}\/release\//g) ?? []).length, 2);
   assert.equal((workflow.match(/npm install --global --prefix "\$\{consumer\}"/g) ?? []).length, 1);
   assert.doesNotMatch(workflow, /NODE_AUTH_TOKEN: \$\{\{ secrets\./);
-  const guards = [...workflow.matchAll(/run: test ! -e \.npmrc/g)].map((match) => match.index);
+  const checkouts = [...workflow.matchAll(/uses: actions\/checkout@/g)].map((match) => match.index);
+  const attemptGuards = [...workflow.matchAll(/run: test "\$\{GITHUB_RUN_ATTEMPT\}" = "1"/g)]
+    .map((match) => match.index);
+  const configGuards = [...workflow.matchAll(/run: test ! -e \.npmrc/g)].map((match) => match.index);
   const setupNodes = [...workflow.matchAll(/uses: actions\/setup-node@/g)].map((match) => match.index);
   const bootstraps = [...workflow.matchAll(/npm install --prefix "\$\{npm_prefix\}"/g)].map((match) => match.index);
-  assert.equal(guards.length, 2);
+  assert.equal(checkouts.length, 2);
+  assert.equal(attemptGuards.length, 2);
+  assert.equal(configGuards.length, 2);
   assert.equal(setupNodes.length, 2);
   assert.equal(bootstraps.length, 2);
-  assert.ok(guards.every((index, position) => index < setupNodes[position]));
-  assert.ok(guards.every((index, position) => index < bootstraps[position]));
+  for (const position of [0, 1]) {
+    assert.ok(checkouts[position] < attemptGuards[position]);
+    assert.ok(attemptGuards[position] < configGuards[position]);
+    assert.ok(configGuards[position] < setupNodes[position]);
+    assert.ok(setupNodes[position] < bootstraps[position]);
+  }
+  assert.doesNotMatch(workflow, /registry-url:/);
   assert.equal((workflow.match(/--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/g) ?? []).length, 2);
-  assert.equal((workflow.match(/NPM_CONFIG_USERCONFIG=/g) ?? []).length, 6);
+  assert.equal((workflow.match(/NPM_CONFIG_USERCONFIG=/g) ?? []).length, 8);
+  assert.equal((workflow.match(/NPM_CONFIG_CACHE=/g) ?? []).length, 4);
   assert.equal((workflow.match(/config get registry/g) ?? []).length, 2);
 
   const ci = await readFile(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
@@ -201,22 +212,35 @@ test('repository npm config is rejected before any release bootstrap may run', a
   await assert.rejects(() => verifyReleaseReadiness(packageRoot), /Repository-local \.npmrc is forbidden/);
 });
 
-test('checked-out npm config is rejected while isolated runner config remains allowed', async (t) => {
+test('workflow guards reruns and hostile source config before trusted npm bootstrap', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'borgmcp-client-npmrc-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
+  const { packageRoot } = await validPackage(directory);
   const runnerConfig = join(directory, 'runner.npmrc');
-  await writeFile(join(directory, '.npmrc'), 'registry=https://attacker.invalid/\n');
-  await writeFile(runnerConfig, 'registry=https://registry.npmjs.org/\n');
-  assert.throws(() => execFileSync('bash', ['-c', 'test ! -e .npmrc'], {
-    cwd: directory,
-    env: { ...process.env, NPM_CONFIG_USERCONFIG: runnerConfig },
+  const readinessScript = join(root, 'scripts', 'verify-release-readiness.mjs');
+  const workflowSteps = `set -euo pipefail
+test "\${GITHUB_RUN_ATTEMPT}" = "1"
+test ! -e .npmrc
+printf '%s\\n' 'registry=https://registry.npmjs.org/' > "\${NPM_CONFIG_USERCONFIG}"
+node "${readinessScript}"
+`;
+  const runWorkflowSteps = (attempt) => execFileSync('bash', ['-c', workflowSteps], {
+    cwd: packageRoot,
+    env: { ...process.env, GITHUB_RUN_ATTEMPT: attempt, NPM_CONFIG_USERCONFIG: runnerConfig },
     stdio: 'pipe',
-  }));
-  await rm(join(directory, '.npmrc'));
-  assert.doesNotThrow(() => execFileSync('bash', ['-c', 'test ! -e .npmrc'], {
-    cwd: directory,
-    env: { ...process.env, NPM_CONFIG_USERCONFIG: runnerConfig },
-  }));
+  });
+
+  assert.doesNotThrow(() => runWorkflowSteps('1'));
+  assert.equal(await readFile(runnerConfig, 'utf8'), 'registry=https://registry.npmjs.org/\n');
+
+  await writeFile(join(packageRoot, '.npmrc'), 'registry=https://attacker.invalid/\n');
+  await writeFile(runnerConfig, 'bootstrap-not-reached\n');
+  assert.throws(() => runWorkflowSteps('1'));
+  assert.equal(await readFile(runnerConfig, 'utf8'), 'bootstrap-not-reached\n');
+
+  await rm(join(packageRoot, '.npmrc'));
+  assert.throws(() => runWorkflowSteps('2'));
+  assert.equal(await readFile(runnerConfig, 'utf8'), 'bootstrap-not-reached\n');
 });
 
 test('release readiness rejects source-coupled shared dependencies', async (t) => {
