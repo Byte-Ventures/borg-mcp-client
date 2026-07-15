@@ -8,7 +8,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 
 ## Deliberate Transformations
 
-- Replaced the Git dependency on `borgmcp-shared` with registry range `^0.2.0` and a fresh canonical npm lockfile.
+- Replaced the monorepo dependency on `borgmcp-shared` with a standalone dependency and fresh lockfile. The retry-enrollment WIP temporarily pins the exact reviewed shared-contract Git commit; release requires audited registry `borgmcp-shared@0.3.0`.
 - Replaced local template, role-section, drone-address, and log high-water-mark implementations with `borgmcp-shared` exports.
 - Removed monorepo-only website anti-drift tests and re-anchored remaining filesystem tests to this repository.
 - Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
@@ -17,9 +17,9 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 - Hardened the Desktop OAuth callback to an exact IPv4 loopback binding with
   transaction state, bounded static responses, and adversarial callback tests;
   test-only Google client-ID lookalikes use the reserved `.test` domain.
-- Scoped cube creation language to Borg Cloud and marked the self-hosted
-  `--host --enroll` path as a held, pre-provisioned integration rather than
-  supported onboarding.
+- Kept self-hosted `--host --enroll` preview-only while implementing the
+  client-generated PENDING credential/retry tuple and capability-gated,
+  repository-idempotent cube creation required for local dogfood.
 - Retained the existing package version `1.1.15`; extraction does not authorize a version bump or release.
 
 ## Review Holds
@@ -33,4 +33,8 @@ The pinned SHA-256 fingerprints, in Desktop client ID, Desktop public-client val
 - `385408ac72401565fd40515635041d4bd33d9e8bc19488bfc4b237605dcdffef`
 - `6915f25f028886263d0d4a649a1d1c4135413ce3c75fb3abd4dbe5916d804031`
 
-Local enrollment still uses the pre-redesign server-generated bearer response. The reviewed shared contract must move to client-generated credential plus retry key, a pre-request `PENDING` keychain record, exact-tuple ambiguous retry, verified activation, and no file fallback before local dogfood release.
+Local enrollment now uses the reviewed client-generated credential/retry
+contract, with a pre-request `PENDING` keychain record, exact-tuple ambiguous
+retry, verified activation, and no file fallback. Release remains blocked until
+that contract is published as audited `borgmcp-shared@0.3.0` and the matching
+server passes the process-level setup→create→attach→restart→log/SSE gate.

@@ -1,19 +1,30 @@
 import {
+  CUBES_PATH,
   ENROLLMENT_EXCHANGE_PATH,
   HEALTH_PATH,
   PROTOCOL_INFO_PATH,
   createProtocolEnvelope,
+  decodeCreateCubeRequest,
+  decodeCreateCubeResponseEnvelope,
   decodeEnrollmentExchangeRequest,
   decodeEnrollmentExchangeResponseEnvelope,
   decodeProtocolEnvelope,
   negotiateProtocol,
+  type CreateCubeResponse,
   type ProtocolInfo,
+  type ServerCapability,
 } from 'borgmcp-shared/protocol';
 import { randomUUID } from 'node:crypto';
 import {
+  activatePendingServerEnrollment,
+  clearPendingServerCubeCreation,
+  clearPendingServerEnrollment,
   getServerCredential,
-  storeServerCredential,
+  getServerCredentialRecord,
+  getOrCreatePendingServerCubeCreation,
+  getOrCreatePendingServerEnrollment,
   storeServerSessionCredential,
+  type PendingServerCubeCreationRecord,
 } from './config.js';
 import { BorgServerError } from './server-errors.js';
 import { readBoundedResponseBody } from './server-response.js';
@@ -63,6 +74,18 @@ const readHandshakeBody = (response: Response, signal?: AbortSignal) =>
     'Borg server protocol handshake exceeded the response limit',
     signal,
   );
+
+async function readHandshakeBodyWithTimeout(response: Response): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new Error('Borg server protocol handshake timed out'));
+  }, HANDSHAKE_TIMEOUT_MS);
+  try {
+    return await readHandshakeBody(response, controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 /**
  * Authenticate and negotiate the shared protocol without consulting Cloud.
@@ -116,6 +139,8 @@ export interface EnrolledServerConnection {
   token: string;
   trustIdentity: string;
   protocol: ProtocolInfo;
+  clientId?: string | null;
+  serverCapabilities?: ServerCapability[];
 }
 
 export interface ResolvedServerAuthority extends BorgServerTrust {
@@ -124,7 +149,7 @@ export interface ResolvedServerAuthority extends BorgServerTrust {
 
 export interface NewServerEnrollment extends EnrolledServerConnection {
   clientId: string;
-  credentialExpiresAt?: string | null;
+  serverCapabilities: ServerCapability[];
 }
 
 export interface ServerAttachResult {
@@ -290,9 +315,10 @@ export async function attachBorgServer(
 
 /**
  * Redeem one invitation after the caller has verified TLS and derived the
- * stable server/CA identity. The secret stays in the versioned request body,
- * never the URL, argv, environment, output, or diagnostics. The returned
- * bearer is negotiated before it is written once to the dedicated keychain.
+ * stable server/CA identity. The client-generated bearer + retry key are
+ * persisted PENDING in the OS keychain before the first request. A transport-
+ * ambiguous exchange is retried with that exact tuple; only a decoded response
+ * followed by an authenticated protocol proof activates the bearer.
  */
 export async function enrollBorgServer(
   origin: string,
@@ -300,66 +326,201 @@ export async function enrollBorgServer(
   invitation: string,
   deps: {
     fetchImpl?: FetchLike;
-    storeCredential?: typeof storeServerCredential;
+    prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
+    activateEnrollment?: typeof activatePendingServerEnrollment;
+    clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     clientName?: string;
   } = {},
 ): Promise<NewServerEnrollment> {
-  const request = decodeEnrollmentExchangeRequest({
+  const pending = await (deps.prepareEnrollment ?? getOrCreatePendingServerEnrollment)({
+    origin,
+    trustIdentity,
     invitation,
-    ...(deps.clientName ? { client_name: deps.clientName } : {}),
+    ...(deps.clientName ? { clientName: deps.clientName } : {}),
+  });
+  const request = decodeEnrollmentExchangeRequest({
+    invitation: pending.invitation,
+    retry_key: pending.retryKey,
+    client_credential: pending.credential,
+    ...(pending.clientName ? { client_name: pending.clientName } : {}),
   });
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
-  let response: Response;
-  try {
-    response = await fetchImpl(handshakeUrl(origin, ENROLLMENT_EXCHANGE_PATH), {
-      method: 'POST',
-      redirect: 'error',
-      signal: controller.signal,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(createProtocolEnvelope(randomUUID(), request)),
-    });
-    if (response.status === 401 || response.status === 403) {
-      throw new BorgServerError(
-        'INVITATION_REJECTED',
-        'the invitation was rejected or expired',
-      );
-    }
-    if (response.status !== 201) {
-      throw new Error(`Borg server enrollment failed (HTTP ${response.status})`);
-    }
-    let decoded: ReturnType<typeof decodeEnrollmentExchangeResponseEnvelope>;
+  let response: Response | null = null;
+  let responseController: AbortController | null = null;
+  let lastTransportError: unknown;
+  for (let attempt = 0; attempt < 2 && response === null; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
     try {
-      decoded = decodeEnrollmentExchangeResponseEnvelope(
-        JSON.parse(await readHandshakeBody(response, controller.signal)),
-      );
+      response = await fetchImpl(handshakeUrl(origin, ENROLLMENT_EXCHANGE_PATH), {
+        method: 'POST',
+        redirect: 'error',
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(createProtocolEnvelope(randomUUID(), request)),
+      });
+      responseController = controller;
     } catch (error) {
-      if (error instanceof Error && error.message.includes('response limit')) throw error;
-      throw new Error('Borg server returned an invalid enrollment envelope');
+      lastTransportError = error;
+    } finally {
+      clearTimeout(timeout);
     }
+  }
+  if (!response || !responseController) throw lastTransportError;
 
-    const protocol = await negotiateBorgServer(origin, decoded.payload.credential, fetchImpl);
-    await (deps.storeCredential ?? storeServerCredential)({
+  if (response.status === 401 || response.status === 403) {
+    await (deps.clearPendingEnrollment ?? clearPendingServerEnrollment)(
       origin,
       trustIdentity,
-      credential: decoded.payload.credential,
-    });
-    return {
-      token: decoded.payload.credential,
-      trustIdentity,
-      protocol,
-      clientId: decoded.payload.client_id,
-      ...(decoded.payload.credential_expires_at === undefined
-        ? {}
-        : { credentialExpiresAt: decoded.payload.credential_expires_at }),
-    };
-  } finally {
-    clearTimeout(timeout);
+      pending.retryKey,
+    );
+    throw new BorgServerError(
+      'INVITATION_REJECTED',
+      'the invitation was rejected or expired',
+    );
   }
+  if (response.status !== 201) {
+    throw new Error(`Borg server enrollment failed (HTTP ${response.status})`);
+  }
+  let decoded: ReturnType<typeof decodeEnrollmentExchangeResponseEnvelope>;
+  try {
+    decoded = decodeEnrollmentExchangeResponseEnvelope(
+      JSON.parse(await readHandshakeBodyWithTimeout(response)),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('response limit')) throw error;
+    throw new Error('Borg server returned an invalid enrollment envelope');
+  }
+
+  const protocol = await negotiateBorgServer(origin, pending.credential, fetchImpl);
+  await (deps.activateEnrollment ?? activatePendingServerEnrollment)({
+    origin,
+    trustIdentity,
+    retryKey: pending.retryKey,
+    credential: pending.credential,
+    clientId: decoded.payload.client_id,
+    serverCapabilities: decoded.payload.server_capabilities,
+  });
+  return {
+    token: pending.credential,
+    trustIdentity,
+    protocol,
+    clientId: decoded.payload.client_id,
+    serverCapabilities: decoded.payload.server_capabilities,
+  };
+}
+
+/**
+ * Create one repository cube through the narrow owner capability. The retry
+ * key is persisted in the OS keychain before network I/O and reused exactly
+ * after an ambiguous transport result. Ordinary clients are denied locally
+ * before any create request is sent.
+ */
+export async function createBorgServerCube(
+  origin: string,
+  trustIdentity: string,
+  parentCredential: string,
+  input: { projectRoot: string; name: string },
+  deps: {
+    fetchImpl?: FetchLike;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+    prepareCubeCreation?: typeof getOrCreatePendingServerCubeCreation;
+    clearCubeCreation?: typeof clearPendingServerCubeCreation;
+  } = {},
+): Promise<CreateCubeResponse> {
+  const active = await (deps.loadCredentialRecord ?? getServerCredentialRecord)(
+    origin,
+    trustIdentity,
+  );
+  if (!active || active.credential !== parentCredential) {
+    throw new BorgServerError('CREDENTIAL_REJECTED', 'stored Borg server credential was rejected');
+  }
+  if (!active.clientId || !active.serverCapabilities.includes('create_cube')) {
+    throw new Error('This Borg server client is not authorized to create cubes');
+  }
+  const pending = await (deps.prepareCubeCreation ?? getOrCreatePendingServerCubeCreation)({
+    origin,
+    trustIdentity,
+    clientId: active.clientId,
+    projectRoot: input.projectRoot,
+    name: input.name,
+    template: 'default',
+  });
+  const request = decodeCreateCubeRequest({
+    retry_key: pending.retryKey,
+    name: pending.name,
+    template: pending.template,
+  });
+
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  let response: Response | null = null;
+  let lastTransportError: unknown;
+  for (let attempt = 0; attempt < 2 && response === null; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
+    try {
+      response = await fetchImpl(handshakeUrl(origin, CUBES_PATH), {
+        method: 'POST',
+        redirect: 'error',
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${parentCredential}`,
+        },
+        body: JSON.stringify(createProtocolEnvelope(randomUUID(), request)),
+      });
+    } catch (error) {
+      lastTransportError = error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  if (!response) throw lastTransportError;
+  if (response.status === 401 || response.status === 403) {
+    throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
+  }
+  if (response.status === 404) {
+    throw new Error('This Borg server client is not authorized to create cubes');
+  }
+  if (response.status === 409) {
+    throw new Error('Borg server cube creation retry state conflicted');
+  }
+  if (response.status !== 201) {
+    throw new Error(`Borg server cube creation failed (HTTP ${response.status})`);
+  }
+  let decoded: ReturnType<typeof decodeCreateCubeResponseEnvelope>;
+  try {
+    decoded = decodeCreateCubeResponseEnvelope(
+      JSON.parse(await readHandshakeBodyWithTimeout(response)),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('response limit')) throw error;
+    throw new Error('Borg server returned an invalid cube creation envelope');
+  }
+  await (deps.clearCubeCreation ?? clearPendingServerCubeCreation)(
+    pending as PendingServerCubeCreationRecord,
+  );
+  return decoded.payload;
+}
+
+export async function createLocalBorgServerCube(
+  origin: string,
+  trustIdentity: string,
+  parentCredential: string,
+  input: { projectRoot: string; name: string },
+  deps: { loadTrust?: typeof loadBorgServerTrust } = {},
+): Promise<CreateCubeResponse> {
+  const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+  if (trust.identity !== trustIdentity) {
+    throw new Error('Borg server trust identity changed; refusing cube creation');
+  }
+  return createBorgServerCube(origin, trustIdentity, parentCredential, input, {
+    fetchImpl: trust.fetchImpl,
+  });
 }
 
 /**
@@ -372,11 +533,19 @@ export async function connectEnrolledBorgServer(
   trustIdentity: string,
   deps: {
     loadCredential?: typeof getServerCredential;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
     fetchImpl?: FetchLike;
   } = {},
 ): Promise<EnrolledServerConnection> {
-  const loadCredential = deps.loadCredential ?? getServerCredential;
-  const token = await loadCredential(origin, trustIdentity);
+  const active = deps.loadCredentialRecord
+    ? await deps.loadCredentialRecord(origin, trustIdentity)
+    : deps.loadCredential
+      ? null
+      : await getServerCredentialRecord(origin, trustIdentity);
+  const token = active?.credential ?? await (deps.loadCredential ?? getServerCredential)(
+    origin,
+    trustIdentity,
+  );
   if (!token) {
     throw new BorgServerError(
       'NOT_ENROLLED',
@@ -384,7 +553,15 @@ export async function connectEnrolledBorgServer(
     );
   }
   const protocol = await negotiateBorgServer(origin, token, deps.fetchImpl ?? fetch);
-  return { token, trustIdentity, protocol };
+  return {
+    token,
+    trustIdentity,
+    protocol,
+    ...(active === null ? {} : {
+      clientId: active.clientId,
+      serverCapabilities: active.serverCapabilities,
+    }),
+  };
 }
 
 /** Resolve the same-user server CA and its authority-bound keychain credential. */
@@ -393,10 +570,19 @@ export async function resolveBorgServerAuthority(
   deps: {
     loadTrust?: typeof loadBorgServerTrust;
     loadCredential?: typeof getServerCredential;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
   } = {},
 ): Promise<ResolvedServerAuthority> {
   const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
-  const token = await (deps.loadCredential ?? getServerCredential)(origin, trust.identity);
+  const active = deps.loadCredentialRecord
+    ? await deps.loadCredentialRecord(origin, trust.identity)
+    : deps.loadCredential
+      ? null
+      : await getServerCredentialRecord(origin, trust.identity);
+  const token = active?.credential ?? await (deps.loadCredential ?? getServerCredential)(
+    origin,
+    trust.identity,
+  );
   if (!token) {
     throw new BorgServerError(
       'NOT_ENROLLED',
@@ -412,15 +598,17 @@ export async function connectLocalBorgServer(
   deps: {
     loadTrust?: typeof loadBorgServerTrust;
     loadCredential?: typeof getServerCredential;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
   } = {},
 ): Promise<EnrolledServerConnection> {
-  const authority = await resolveBorgServerAuthority(origin, deps);
-  const protocol = await negotiateBorgServer(origin, authority.token, authority.fetchImpl);
-  return {
-    token: authority.token,
-    trustIdentity: authority.identity,
-    protocol,
-  };
+  const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+  return connectEnrolledBorgServer(origin, trust.identity, {
+    fetchImpl: trust.fetchImpl,
+    ...(deps.loadCredential === undefined ? {} : { loadCredential: deps.loadCredential }),
+    ...(deps.loadCredentialRecord === undefined
+      ? {}
+      : { loadCredentialRecord: deps.loadCredentialRecord }),
+  });
 }
 
 /** Load and verify the local CA before sending a single-use invitation. */
@@ -429,14 +617,20 @@ export async function enrollLocalBorgServer(
   invitation: string,
   deps: {
     loadTrust?: typeof loadBorgServerTrust;
-    storeCredential?: typeof storeServerCredential;
+    prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
+    activateEnrollment?: typeof activatePendingServerEnrollment;
+    clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     clientName?: string;
   } = {},
 ): Promise<NewServerEnrollment> {
   const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
   return enrollBorgServer(origin, trust.identity, invitation, {
     fetchImpl: trust.fetchImpl,
-    ...(deps.storeCredential === undefined ? {} : { storeCredential: deps.storeCredential }),
+    ...(deps.prepareEnrollment === undefined ? {} : { prepareEnrollment: deps.prepareEnrollment }),
+    ...(deps.activateEnrollment === undefined ? {} : { activateEnrollment: deps.activateEnrollment }),
+    ...(deps.clearPendingEnrollment === undefined
+      ? {}
+      : { clearPendingEnrollment: deps.clearPendingEnrollment }),
     ...(deps.clientName === undefined ? {} : { clientName: deps.clientName }),
   });
 }

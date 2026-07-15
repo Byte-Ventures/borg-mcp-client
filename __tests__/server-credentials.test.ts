@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   __setServerCredentialBackendForTest,
+  activatePendingServerEnrollment,
+  clearPendingServerCubeCreation,
   clearServerSessionCredential,
   clearServerCredential,
+  getOrCreatePendingServerCubeCreation,
+  getOrCreatePendingServerEnrollment,
   getServerSessionCredential,
   getServerCredential,
+  getServerCredentialRecord,
   storeServerSessionCredential,
   storeServerCredential,
 } from '../src/config.js';
@@ -78,6 +83,89 @@ describe('self-hosted server credential storage', () => {
     await expect(storeServerCredential({
       origin, trustIdentity, credential: 'weak',
     })).rejects.toThrow(/credential/i);
+  });
+
+  it('persists enrollment PENDING before activation and reuses only the exact tuple', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const invitation = 'i'.repeat(43);
+    const pending = await getOrCreatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      invitation,
+      clientName: 'operator-laptop',
+    });
+
+    expect(pending.credential).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(pending.retryKey).toMatch(/^[0-9a-f-]{36}$/i);
+    expect([...values.keys()]).toEqual([
+      expect.stringMatching(/^borg-server-enrollment-pending:[a-f0-9]{64}$/),
+    ]);
+    await expect(getServerCredential(origin, trustIdentity)).resolves.toBeNull();
+    await expect(getOrCreatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      invitation,
+      clientName: 'operator-laptop',
+    })).resolves.toEqual(pending);
+    await expect(getOrCreatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      invitation: 'j'.repeat(43),
+      clientName: 'operator-laptop',
+    })).rejects.toThrow(/does not match/i);
+
+    await activatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      retryKey: pending.retryKey,
+      credential: pending.credential,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+    });
+    await expect(getServerCredentialRecord(origin, trustIdentity)).resolves.toMatchObject({
+      credential: pending.credential,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+    });
+    expect([...values.keys()].some((key) => key.includes('enrollment-pending'))).toBe(false);
+  });
+
+  it('keeps repository cube retry keys stable and isolates multiple repositories', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const binding = {
+      origin,
+      trustIdentity,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      name: 'project-one',
+      template: 'default' as const,
+    };
+    const first = await getOrCreatePendingServerCubeCreation({
+      ...binding,
+      projectRoot: '/work/project-one',
+    });
+    await expect(getOrCreatePendingServerCubeCreation({
+      ...binding,
+      projectRoot: '/work/project-one',
+    })).resolves.toEqual(first);
+    const second = await getOrCreatePendingServerCubeCreation({
+      ...binding,
+      projectRoot: '/work/project-two',
+      name: 'project-two',
+    });
+    expect(second.retryKey).not.toBe(first.retryKey);
+    await expect(getOrCreatePendingServerCubeCreation({
+      ...binding,
+      projectRoot: '/work/project-one',
+      name: 'changed-name',
+    })).rejects.toThrow(/does not match/i);
+    await clearPendingServerCubeCreation(first);
+    const replacement = await getOrCreatePendingServerCubeCreation({
+      ...binding,
+      projectRoot: '/work/project-one',
+    });
+    expect(replacement.retryKey).not.toBe(first.retryKey);
   });
 });
 

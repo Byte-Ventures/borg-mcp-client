@@ -3,6 +3,7 @@ import {
   DEFAULT_LOCAL_SERVER_ORIGIN,
   attachBorgServer,
   connectEnrolledBorgServer,
+  createBorgServerCube,
   enrollBorgServer,
   probeBorgServer,
   negotiateBorgServer,
@@ -20,6 +21,7 @@ const protocolInfo = {
     'coordination.core',
     'auth.bearer',
     'auth.revocation',
+    'auth.retry-safe-enrollment',
     'scope.cube-isolation',
     'transport.tls',
     'authority.no-cloud-fallback',
@@ -135,14 +137,16 @@ describe('self-hosted server handshake', () => {
   it('enrolls through a versioned body, negotiates, then stores the bound credential', async () => {
     const invitation = 'i'.repeat(43);
     const credential = 'c'.repeat(43);
+    const retryKey = '55555555-5555-4555-8555-555555555555';
+    const clientId = '66666666-6666-4666-8666-666666666666';
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
         protocol_version: '1',
         request_id: 'enroll-request-1',
         payload: {
-          client_id: 'client-12345678',
-          credential,
-          credential_expires_at: null,
+          purpose: 'owner',
+          client_id: clientId,
+          server_capabilities: ['create_cube'],
         },
       }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -150,17 +154,30 @@ describe('self-hosted server handshake', () => {
         request_id: 'protocol-request-1',
         payload: protocolInfo,
       }), { status: 200 }));
-    const storeCredential = vi.fn(async () => {});
+    const prepareEnrollment = vi.fn(async () => ({
+      origin: 'https://server.example.com',
+      trustIdentity: 'sha256:server-a',
+      invitation,
+      retryKey,
+      credential,
+      clientName: 'operator-laptop',
+    }));
+    const activateEnrollment = vi.fn(async () => {});
 
     await expect(enrollBorgServer(
       'https://server.example.com',
       'sha256:server-a',
       invitation,
-      { fetchImpl: fetchImpl as typeof fetch, storeCredential, clientName: 'operator-laptop' },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        prepareEnrollment,
+        activateEnrollment,
+        clientName: 'operator-laptop',
+      },
     )).resolves.toMatchObject({
       token: credential,
-      clientId: 'client-12345678',
-      credentialExpiresAt: null,
+      clientId,
+      serverCapabilities: ['create_cube'],
     });
 
     const [enrollmentUrl, enrollmentInit] = fetchImpl.mock.calls[0];
@@ -169,17 +186,44 @@ describe('self-hosted server handshake', () => {
     const body = JSON.parse(String(enrollmentInit?.body));
     expect(body).toMatchObject({
       protocol_version: '1',
-      payload: { invitation, client_name: 'operator-laptop' },
+      payload: {
+        invitation,
+        retry_key: retryKey,
+        client_credential: credential,
+        client_name: 'operator-laptop',
+      },
     });
     expect(String(enrollmentUrl)).not.toContain(invitation);
-    expect(storeCredential).toHaveBeenCalledWith({
+    expect(activateEnrollment).toHaveBeenCalledWith({
       origin: 'https://server.example.com',
       trustIdentity: 'sha256:server-a',
+      retryKey,
       credential,
+      clientId,
+      serverCapabilities: ['create_cube'],
     });
-    expect(storeCredential.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(prepareEnrollment.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchImpl.mock.invocationCallOrder[0],
+    );
+    expect(activateEnrollment.mock.invocationCallOrder[0]).toBeGreaterThan(
       fetchImpl.mock.invocationCallOrder[1],
     );
+  });
+
+  it('does not send an invitation when the pending keychain write fails', async () => {
+    const fetchImpl = vi.fn();
+    await expect(enrollBorgServer(
+      'https://server.example.com',
+      'sha256:server-a',
+      'i'.repeat(43),
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        prepareEnrollment: vi.fn(async () => {
+          throw new Error('keychain locked');
+        }),
+      },
+    )).rejects.toThrow('keychain locked');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('classifies a rejected invitation without reading or storing the response body', async () => {
@@ -188,7 +232,15 @@ describe('self-hosted server handshake', () => {
       `reflected ${reflectedInvitation}`,
       { status: 401 },
     ));
-    const storeCredential = vi.fn(async () => {});
+    const pending = {
+      origin: 'https://server.example.com',
+      trustIdentity: 'sha256:server-a',
+      invitation: reflectedInvitation,
+      retryKey: '55555555-5555-4555-8555-555555555555',
+      credential: 'c'.repeat(43),
+    };
+    const clearPendingEnrollment = vi.fn(async () => {});
+    const activateEnrollment = vi.fn(async () => {});
 
     let error: unknown;
     try {
@@ -196,14 +248,148 @@ describe('self-hosted server handshake', () => {
         'https://server.example.com',
         'sha256:server-a',
         reflectedInvitation,
-        { fetchImpl: fetchImpl as typeof fetch, storeCredential },
+        {
+          fetchImpl: fetchImpl as typeof fetch,
+          prepareEnrollment: vi.fn(async () => pending),
+          activateEnrollment,
+          clearPendingEnrollment,
+        },
       );
     } catch (caught) {
       error = caught;
     }
     expect(error).toMatchObject({ code: 'INVITATION_REJECTED' });
     expect((error as Error).message).not.toContain(reflectedInvitation);
-    expect(storeCredential).not.toHaveBeenCalled();
+    expect(activateEnrollment).not.toHaveBeenCalled();
+    expect(clearPendingEnrollment).toHaveBeenCalledWith(
+      pending.origin,
+      pending.trustIdentity,
+      pending.retryKey,
+    );
+  });
+
+  it('retries an ambiguous enrollment with the exact persisted tuple', async () => {
+    const pending = {
+      origin: 'https://server.example.com',
+      trustIdentity: 'sha256:server-a',
+      invitation: 'i'.repeat(43),
+      retryKey: '55555555-5555-4555-8555-555555555555',
+      credential: 'c'.repeat(43),
+      clientName: 'operator-laptop',
+    };
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new Error('response lost'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        protocol_version: '1',
+        request_id: 'enroll-retry-1',
+        payload: {
+          purpose: 'owner',
+          client_id: '66666666-6666-4666-8666-666666666666',
+          server_capabilities: ['create_cube'],
+        },
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        protocol_version: '1',
+        request_id: 'protocol-retry-1',
+        payload: protocolInfo,
+      }), { status: 200 }));
+    const activateEnrollment = vi.fn(async () => {});
+
+    await enrollBorgServer(
+      pending.origin,
+      pending.trustIdentity,
+      pending.invitation,
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        prepareEnrollment: vi.fn(async () => pending),
+        activateEnrollment,
+        clientName: pending.clientName,
+      },
+    );
+
+    const first = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+    const retry = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
+    expect(retry.payload).toEqual(first.payload);
+    expect(retry.payload).toEqual({
+      invitation: pending.invitation,
+      retry_key: pending.retryKey,
+      client_credential: pending.credential,
+      client_name: pending.clientName,
+    });
+    expect(activateEnrollment).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates a cube idempotently for an owner and rejects ordinary clients before network', async () => {
+    const cubeRetry = {
+      origin: 'https://server.example.com',
+      trustIdentity: 'sha256:server-a',
+      clientId: '66666666-6666-4666-8666-666666666666',
+      repositoryBinding: 'a'.repeat(64),
+      retryKey: '77777777-7777-4777-8777-777777777777',
+      name: 'project-one',
+      template: 'default' as const,
+    };
+    const active = {
+      origin: cubeRetry.origin,
+      trustIdentity: cubeRetry.trustIdentity,
+      credential: 'c'.repeat(43),
+      clientId: cubeRetry.clientId,
+      serverCapabilities: ['create_cube'] as const,
+    };
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new Error('response lost'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        protocol_version: '1',
+        request_id: 'cube-retry-1',
+        payload: {
+          cube_id: CUBE_ID,
+          human_seat_role_id: '88888888-8888-4888-8888-888888888888',
+          default_worker_role_id: ROLE_ID,
+          access: 'manage',
+        },
+      }), { status: 201 }));
+    const clearCubeCreation = vi.fn(async () => {});
+
+    await expect(createBorgServerCube(
+      cubeRetry.origin,
+      cubeRetry.trustIdentity,
+      active.credential,
+      { projectRoot: '/work/project-one', name: cubeRetry.name },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          ...active,
+          serverCapabilities: [...active.serverCapabilities],
+        })),
+        prepareCubeCreation: vi.fn(async () => cubeRetry),
+        clearCubeCreation,
+      },
+    )).resolves.toMatchObject({ cube_id: CUBE_ID, access: 'manage' });
+    const first = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+    const retry = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
+    expect(retry.payload).toEqual(first.payload);
+    expect(retry.payload).toEqual({
+      retry_key: cubeRetry.retryKey,
+      name: cubeRetry.name,
+      template: 'default',
+    });
+    expect(clearCubeCreation).toHaveBeenCalledWith(cubeRetry);
+
+    const deniedFetch = vi.fn();
+    await expect(createBorgServerCube(
+      cubeRetry.origin,
+      cubeRetry.trustIdentity,
+      active.credential,
+      { projectRoot: '/work/ordinary', name: 'ordinary' },
+      {
+        fetchImpl: deniedFetch as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          ...active,
+          serverCapabilities: [],
+        })),
+      },
+    )).rejects.toThrow(/not authorized to create cubes/i);
+    expect(deniedFetch).not.toHaveBeenCalled();
   });
 
   it('attaches with a persisted retry key and keychains the returned generation', async () => {

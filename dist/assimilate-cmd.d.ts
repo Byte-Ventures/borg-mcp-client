@@ -100,6 +100,7 @@ export interface AssimilateDeps {
     createCube: (apiUrl: string, token: string, params: {
         name?: string;
         template?: string;
+        projectRoot?: string;
     }, serverTrustIdentity?: string) => Promise<CubeDetail>;
     assimilate: (apiUrl: string, token: string, params: {
         cube_id: string;

@@ -1939,9 +1939,15 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(0);
 
-    expect(prompt).toHaveBeenCalledTimes(2); // authority + first-cube template
+    expect(prompt).toHaveBeenCalledTimes(1); // authority; local server owns its fixed template
     expect(String(prompt.mock.calls[0][0])).toContain('Local Borg server detected');
     expect(connectServer).toHaveBeenCalledWith('https://localhost:8787');
+    expect(deps.createCube).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ template: 'default', projectRoot: '/work/myrepo' }),
+      SERVER_TRUST_IDENTITY,
+    );
   });
 
   it('allows declining detection and choosing Cloud explicitly', async () => {

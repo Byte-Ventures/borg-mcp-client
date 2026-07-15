@@ -1,8 +1,35 @@
+import type { ServerCapability } from 'borgmcp-shared/protocol';
 import { type TokenBackend } from './token-store.js';
 export interface ServerCredentialRecord {
     origin: string;
     trustIdentity: string;
     credential: string;
+    clientId?: string | null;
+    serverCapabilities?: ServerCapability[];
+}
+export interface ActiveServerCredentialRecord {
+    origin: string;
+    trustIdentity: string;
+    credential: string;
+    clientId: string | null;
+    serverCapabilities: ServerCapability[];
+}
+export interface PendingServerEnrollmentRecord {
+    origin: string;
+    trustIdentity: string;
+    invitation: string;
+    retryKey: string;
+    credential: string;
+    clientName?: string;
+}
+export interface PendingServerCubeCreationRecord {
+    origin: string;
+    trustIdentity: string;
+    clientId: string;
+    repositoryBinding: string;
+    retryKey: string;
+    name: string;
+    template: 'default';
 }
 export interface ServerSessionCredentialRecord {
     origin: string;
@@ -70,8 +97,42 @@ export declare function storeRefreshToken(refreshToken: string): Promise<void>;
  * not credential sources.
  */
 export declare function storeServerCredential(record: ServerCredentialRecord): Promise<void>;
-/** Read an authority-bound self-hosted credential, failing closed on corruption. */
+/** Read an authority-bound active client record, failing closed on corruption. */
+export declare function getServerCredentialRecord(origin: string, trustIdentity: string): Promise<ActiveServerCredentialRecord | null>;
+/** Read only the bearer for existing call sites that do not need capability metadata. */
 export declare function getServerCredential(origin: string, trustIdentity: string): Promise<string | null>;
+/**
+ * Generate and persist an exact enrollment tuple before network I/O. A
+ * pre-existing PENDING tuple must match the invitation and presentation name;
+ * this makes response-loss retries exact without minting a second bearer.
+ */
+export declare function getOrCreatePendingServerEnrollment(input: {
+    origin: string;
+    trustIdentity: string;
+    invitation: string;
+    clientName?: string;
+}): Promise<PendingServerEnrollmentRecord>;
+/** Activate the exact pending tuple only after a verified server response. */
+export declare function activatePendingServerEnrollment(input: {
+    origin: string;
+    trustIdentity: string;
+    retryKey: string;
+    credential: string;
+    clientId: string;
+    serverCapabilities: ServerCapability[];
+}): Promise<void>;
+/** Delete only the exact definitively rejected pending attempt. */
+export declare function clearPendingServerEnrollment(origin: string, trustIdentity: string, retryKey: string): Promise<void>;
+/** Persist one repository-scoped cube-create idempotency key in the keychain. */
+export declare function getOrCreatePendingServerCubeCreation(input: {
+    origin: string;
+    trustIdentity: string;
+    clientId: string;
+    projectRoot: string;
+    name: string;
+    template: 'default';
+}): Promise<PendingServerCubeCreationRecord>;
+export declare function clearPendingServerCubeCreation(record: PendingServerCubeCreationRecord): Promise<void>;
 export declare function clearServerCredential(origin: string, trustIdentity: string): Promise<void>;
 /**
  * Write one rotated local drone-session bearer to a generation-specific

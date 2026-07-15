@@ -26,7 +26,7 @@ export function topLevelHelpText(version) {
         `  borg setup               Set up OAuth + register MCP server\n` +
         `  borg setup --no-browser  Set up from SSH/headless terminals\n` +
         `  borg assimilate [role]   Join or create a Borg Cloud cube\n` +
-        `  borg assimilate --host <host>   Attach to a pre-provisioned self-hosted cube (preview)\n` +
+        `  borg assimilate --host <host>   Join or create on an explicit self-hosted server (preview)\n` +
         `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
         `  borg sync [--prune]      Sync this worktree's branch to origin/main\n` +
         `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
@@ -48,22 +48,23 @@ export function assimilateHelpText(version) {
         `  borg assimilate [role] --worktree <name>   Spawn the drone in an isolated git worktree\n` +
         `                                       (~/.borg/worktrees/<repo>/<name>)\n` +
         `  borg assimilate --here               Assimilate in the current worktree (no sibling spawn)\n` +
-        `  borg assimilate --host <host>        Attach to a pre-provisioned authorized cube and role\n` +
-        `  borg assimilate --host <host> --enroll   Preview via hidden invitation prompt; not release-ready\n` +
+        `  borg assimilate --host <host>        Join an authorized self-hosted cube\n` +
+        `  borg assimilate --host <host> --enroll   Enroll via hidden invitation, then create/join (preview)\n` +
         `  borg assimilate --help               Show this help\n\n` +
         `Flags:\n` +
         `  --worktree <name>          Create + launch the drone in a sibling git worktree\n` +
         `  --here                     Stay in the current worktree (no sibling spawn)\n` +
         `  --cube-name <name>         Borg Cloud cube to join/create (default: repo basename)\n` +
         `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
-        `  --enroll                   Preview held local enrollment; invitation is never an argument\n` +
+        `  --enroll                   Retry-safe local enrollment; invitation is never an argument\n` +
         `  --template <name>          Bootstrap a new Borg Cloud cube from a bundled role template\n` +
         `  --no-template              Create the Borg Cloud cube with no template roles\n` +
         `  --cli claude|codex|opencode         Agent CLI to launch (default: claude)\n` +
         `  --model claude:<model>   Legacy Claude model override (configure models in the agent CLI)\n` +
         `  --yes, -y                  Skip confirmation prompts\n\n` +
-        `Self-hosted --host never creates a cube or falls back to Borg Cloud. It requires a\n` +
-        `pre-provisioned grant; local enrollment is not dogfood/release-ready. See docs/LOCAL_SERVER.md.\n\n` +
+        `Self-hosted --host never falls back to Borg Cloud. An enrolled owner may create an\n` +
+        `idempotent repository cube; ordinary clients require an explicit grant. Preview only.\n` +
+        `See docs/LOCAL_SERVER.md for current release blockers.\n\n` +
         `For local or provider-specific models, configure the selected agent CLI directly.\n` +
         `OpenCode supports Ollama and other providers through its own model configuration.\n`);
 }

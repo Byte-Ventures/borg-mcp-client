@@ -173,7 +173,7 @@ export interface AssimilateDeps {
   createCube: (
     apiUrl: string,
     token: string,
-    params: { name?: string; template?: string },
+    params: { name?: string; template?: string; projectRoot?: string },
     serverTrustIdentity?: string,
   ) => Promise<CubeDetail>;
   assimilate: (
@@ -497,7 +497,16 @@ export async function runAssimilate(
   } else {
     // ----- Step 4a: First-drone bootstrap (template selection) -----
     let chosenTemplate: string | undefined;
-    if (args.flags.template) {
+    if (authority.kind === 'server') {
+      if (args.flags.noTemplate ||
+          (args.flags.template !== undefined && args.flags.template !== 'default')) {
+        deps.stderr(
+          'Local Borg server cube creation supports the server-owned default template only.\n',
+        );
+        return 1;
+      }
+      chosenTemplate = 'default';
+    } else if (args.flags.template) {
       chosenTemplate = args.flags.template;
     } else if (args.flags.noTemplate) {
       chosenTemplate = undefined;
@@ -519,7 +528,6 @@ export async function runAssimilate(
           ? await deps.listTemplates(auth.apiUrl, auth.token)
           : await deps.listTemplates(auth.apiUrl, auth.token, auth.serverTrustIdentity);
       } catch (error) {
-        if (authority.kind === 'server') return reportServerFailure(deps, authority.apiUrl, error);
         throw error;
       }
       const lines = ['First drone joining a new cube. Apply a template?'];
@@ -541,7 +549,11 @@ export async function runAssimilate(
     deps.stderr(cubeName ? `Creating cube '${cubeName}'…\n` : 'Creating your cube…\n');
     try {
       const createParams = chosenTemplate
-        ? { name: cubeName ?? undefined, template: chosenTemplate }
+        ? {
+          name: cubeName ?? undefined,
+          template: chosenTemplate,
+          ...(authority.kind === 'server' ? { projectRoot } : {}),
+        }
         : { name: cubeName ?? undefined };
       cubeDetail = auth.serverTrustIdentity === undefined
         ? await deps.createCube(auth.apiUrl, auth.token, createParams)

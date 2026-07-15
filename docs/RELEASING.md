@@ -18,10 +18,10 @@ reviewed and satisfied:
 - an operator verifies in Google Console that the four pinned OAuth values are
   Byte Ventures Desktop and TVs/Limited Input public-client distribution
   material, including consent-screen and redirect policy, and records approval;
-- the separately reviewed local enrollment redesign replaces the current
-  server-generated bearer response before local dogfood release;
+- audited registry `borgmcp-shared@0.3.0` replaces the temporary exact-Git WIP
+  pin, and the matching server passes the process-level local dogfood gate;
 - an unused stable package version is selected and authorized separately;
-- registry package `borgmcp-shared@^0.2.0` remains bound to one canonical
+- registry package `borgmcp-shared@^0.3.0` remains bound to one canonical
   lockfile resolution and SHA-512 integrity;
 - the client package passes its full tests, type checks, build, clean packed
   installation, MCP stdio, and local-server/Cloud compatibility gates;
