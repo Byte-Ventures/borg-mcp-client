@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const HOSTED_API_URL = 'https://api.borgmcp.ai';
+
 vi.mock('../src/config.js', () => ({
   getIdToken: vi.fn(async () => 'id-token'),
   getRefreshToken: vi.fn(async () => null),
@@ -66,7 +68,7 @@ describe('assimilate() model on the /api/assimilate POST body (gh#890)', () => {
 
     await assimilate(
       { cube_id: 'cube-1', role_id: 'role-1', model: 'ollama:qwen3:q4_K_M' },
-      'https://api.example.test',
+      HOSTED_API_URL,
       null,
       'claude'
     );
@@ -81,7 +83,7 @@ describe('assimilate() model on the /api/assimilate POST body (gh#890)', () => {
 
     await assimilate(
       { cube_id: 'cube-1', role_id: 'role-1' },
-      'https://api.example.test',
+      HOSTED_API_URL,
       null,
       'claude'
     );
@@ -96,7 +98,7 @@ describe('assimilate() model on the /api/assimilate POST body (gh#890)', () => {
 
     await assimilate(
       { cube_id: 'cube-1', role_id: 'role-1', model: null },
-      'https://api.example.test',
+      HOSTED_API_URL,
       null,
       'claude'
     );
@@ -114,7 +116,7 @@ describe('assimilate() model on the /api/assimilate POST body (gh#890)', () => {
     await expect(
       assimilate(
         { cube_id: 'cube-1', role_id: 'role-1', model: 'garbage-no-colon' },
-        'https://api.example.test',
+        HOSTED_API_URL,
         null,
         'claude'
       )
@@ -127,7 +129,7 @@ describe('assimilate() model on the /api/assimilate POST body (gh#890)', () => {
 
     await assimilate(
       { cube_id: 'cube-1', role_id: 'role-1', model: 'claude:claude-opus-4-8' },
-      'https://api.example.test',
+      HOSTED_API_URL,
       null,
       'claude'
     );

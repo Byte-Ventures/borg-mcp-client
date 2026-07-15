@@ -60,6 +60,25 @@ describe('canonical hosted authority boundary', () => {
       const remote = await import(${JSON.stringify(moduleUrl('remote-client.js'))});
       const stream = await import(${JSON.stringify(moduleUrl('log-stream.js'))});
       const health = await import(${JSON.stringify(moduleUrl('health-beat.js'))});
+      for (const request of [
+        () => remote.listCubes(),
+        () => remote.listTemplates(),
+        () => remote.fetchReports(),
+      ]) {
+        try {
+          await request();
+        } catch {
+          rejected++;
+        }
+      }
+      try {
+        await remote.listCubes({
+          apiUrl: endpoint,
+          authToken: 'caller-managed-cloud-token',
+        });
+      } catch {
+        rejected++;
+      }
       for (const trust of [undefined, 'malformed-trust']) {
         try {
           await remote.getRoster('legacy-local-session', endpoint, undefined, trust);
@@ -117,6 +136,6 @@ describe('canonical hosted authority boundary', () => {
       },
     }));
 
-    expect(result).toEqual({ oauthReads: 0, fetchCalls: 0, rejected: 4 });
+    expect(result).toEqual({ oauthReads: 0, fetchCalls: 0, rejected: 8 });
   });
 });

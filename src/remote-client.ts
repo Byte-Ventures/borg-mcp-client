@@ -603,6 +603,13 @@ async function authedFetch(
     if (active?.apiUrl === baseUrl) serverTrustIdentity = active.serverTrustIdentity;
   }
   const hasServerAuthority = serverTrustIdentity !== undefined;
+  // BORG_API_URL is only routing configuration. It cannot authorize either a
+  // keychain-sourced Cloud bearer or a caller-supplied token for an arbitrary
+  // endpoint. Every noncanonical destination must instead arrive through the
+  // separately verified local-server trust path below.
+  if (!hasServerAuthority && !isCanonicalHostedApiUrl(baseUrl)) {
+    throw new Error('Selected Borg server authority state is missing or unreadable');
+  }
   if (hasServerAuthority && !/^\/api\/cubes(?:\/|$)/.test(path)) {
     localUnsupported(`the ${path} capability`);
   }
