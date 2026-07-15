@@ -1,5 +1,5 @@
 import { type CreateCubeResponse, type ProtocolInfo, type ServerCapability } from 'borgmcp-shared/protocol';
-import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, storeServerSessionCredential } from './config.js';
+import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, storeServerSessionCredential } from './config.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
 type FetchLike = typeof fetch;
@@ -74,6 +74,13 @@ export declare function enrollBorgServer(origin: string, trustIdentity: string, 
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     clientName?: string;
 }): Promise<NewServerEnrollment>;
+/** Resume an exact durable enrollment tuple without asking for the invitation again. */
+export declare function resumeBorgServerEnrollment(origin: string, trustIdentity: string, deps?: {
+    fetchImpl?: FetchLike;
+    loadPendingEnrollment?: typeof getPendingServerEnrollment;
+    activateEnrollment?: typeof activatePendingServerEnrollment;
+    clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+}): Promise<NewServerEnrollment | null>;
 /**
  * Create one repository cube through the narrow owner capability. The retry
  * key is persisted in the OS keychain before network I/O and reused exactly
@@ -125,6 +132,11 @@ export declare function enrollLocalBorgServer(origin: string, invitation: string
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     clientName?: string;
 }): Promise<NewServerEnrollment>;
+/** Load verified trust and resume a prior ambiguous enrollment before prompting. */
+export declare function resumeLocalBorgServerEnrollment(origin: string, deps?: {
+    loadTrust?: typeof loadBorgServerTrust;
+    loadPendingEnrollment?: typeof getPendingServerEnrollment;
+}): Promise<NewServerEnrollment | null>;
 /** Advisory discovery that still verifies the server-owned CA. */
 export declare function probeLocalBorgServer(origin: string): Promise<boolean>;
 export {};

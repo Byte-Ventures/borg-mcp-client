@@ -244,7 +244,7 @@ async function classifyWorktree(deps, worktreePath, actualBranch, seat) {
         return { reason: 'SURVIVES-unmerged', detail: `${actualBranch} not merged into ${DEFAULT_REF}` };
     }
     // (5) ONLY now probe eviction with the worktree's OWN seat token (S1).
-    const status = await deps.probeSeat(seat.sessionToken, seat.apiUrl);
+    const status = await deps.probeSeat(seat.sessionToken, seat.apiUrl, seat.serverTrustIdentity);
     switch (status) {
         case 'evicted':
             return { reason: 'PRUNABLE', detail: '410 DRONE_EVICTED (clean + merged)' };

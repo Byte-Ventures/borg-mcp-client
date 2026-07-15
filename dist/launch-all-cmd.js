@@ -229,7 +229,7 @@ export async function runLaunchAll(args, deps, opts = {}) {
     for (const c of lockLaunchable) {
         let status;
         try {
-            status = await deps.probeSeat(c.sessionToken, c.apiUrl);
+            status = await deps.probeSeat(c.sessionToken, c.apiUrl, c.serverTrustIdentity);
         }
         catch {
             status = 'indeterminate';

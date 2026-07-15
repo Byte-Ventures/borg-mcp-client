@@ -7,6 +7,7 @@ import {
   clearServerCredential,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
+  getPendingServerEnrollment,
   getServerSessionCredential,
   getServerCredential,
   getServerCredentialRecord,
@@ -129,6 +130,46 @@ describe('self-hosted server credential storage', () => {
       serverCapabilities: ['create_cube'],
     });
     expect([...values.keys()].some((key) => key.includes('enrollment-pending'))).toBe(false);
+  });
+
+  it('serializes N concurrent enrollment and cube-create tuple initializations', async () => {
+    const values = new Map<string, string>();
+    const backend: TokenBackend = {
+      name: 'keychain',
+      get: async (account) => values.get(account) ?? null,
+      set: async (account, value) => {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 2));
+        values.set(account, value);
+      },
+      delete: async (account) => { values.delete(account); },
+    };
+    __setServerCredentialBackendForTest(backend);
+    const enrollmentInput = {
+      origin,
+      trustIdentity,
+      invitation: 'i'.repeat(43),
+      clientName: 'operator-laptop',
+    };
+    const enrollments = await Promise.all(Array.from({ length: 16 }, () =>
+      getOrCreatePendingServerEnrollment(enrollmentInput)));
+    expect([...new Set(enrollments.map((record) => record.retryKey))]).toHaveLength(1);
+    expect([...new Set(enrollments.map((record) => record.credential))]).toHaveLength(1);
+    await expect(getPendingServerEnrollment(origin, trustIdentity)).resolves
+      .toEqual(enrollments[0]);
+
+    const cubeInput = {
+      origin,
+      trustIdentity,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      projectRoot: '/work/project-concurrent',
+      name: 'project-concurrent',
+      template: 'default' as const,
+    };
+    const creations = await Promise.all(Array.from({ length: 16 }, () =>
+      getOrCreatePendingServerCubeCreation(cubeInput)));
+    expect([...new Set(creations.map((record) => record.retryKey))]).toHaveLength(1);
+    expect(creations.every((record) => record.repositoryBinding === creations[0].repositoryBinding))
+      .toBe(true);
   });
 
   it('keeps repository cube retry keys stable and isolates multiple repositories', async () => {

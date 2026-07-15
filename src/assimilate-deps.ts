@@ -31,6 +31,7 @@ import {
   createLocalBorgServerCube,
   enrollLocalBorgServer,
   probeLocalBorgServer,
+  resumeLocalBorgServerEnrollment,
   attachBorgServer,
 } from './server-handshake.js';
 import { getOrCreateLocalAttachRetryKey } from './server-attach-state.js';
@@ -142,6 +143,8 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
       }
       return connectLocalBorgServer(apiUrl);
     },
+    resumeServerEnrollment: async (apiUrl) =>
+      resumeLocalBorgServerEnrollment(apiUrl),
 
     listCubes: async (apiUrl, token, serverTrustIdentity) => {
       const { cubes } = await remoteListCubes({

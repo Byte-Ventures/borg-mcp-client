@@ -53,6 +53,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       token: 'server-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
     })),
+    resumeServerEnrollment: vi.fn(async () => null),
     listCubes: vi.fn(async () => []),
     getCube: vi.fn(async () => { throw new Error('not called in this scenario'); }),
     createCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [
@@ -1812,6 +1813,36 @@ describe('runAssimilate: #1015 authority selection', () => {
       { invitation },
     );
     expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it('resumes a durable pending enrollment before prompting for another invitation', async () => {
+    const promptSecret = vi.fn(async () => 'must-not-prompt');
+    const connectServer = vi.fn(async () => {
+      throw new Error('must not start a new enrollment');
+    });
+    const resumeServerEnrollment = vi.fn(async () => ({
+      token: 'resumed-server-token',
+      trustIdentity: SERVER_TRUST_IDENTITY,
+    }));
+    const deps = makeStubDeps({
+      promptSecret,
+      connectServer,
+      resumeServerEnrollment,
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', enroll: true, yes: true },
+    }, deps)).toBe(0);
+
+    expect(resumeServerEnrollment).toHaveBeenCalledWith('https://localhost:8787');
+    expect(promptSecret).not.toHaveBeenCalled();
+    expect(connectServer).not.toHaveBeenCalled();
+    expect(deps.listCubes).toHaveBeenCalledWith(
+      'https://localhost:8787',
+      'resumed-server-token',
+      SERVER_TRUST_IDENTITY,
+    );
   });
 
   it('refuses enrollment without a TTY before reading or sending a secret', async () => {

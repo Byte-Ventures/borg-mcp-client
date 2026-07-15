@@ -14,6 +14,7 @@ export interface DroneCandidate {
   droneLabel: string;
   sessionToken: string;
   apiUrl: string;
+  serverTrustIdentity?: string;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -108,6 +109,9 @@ export async function discoverDroneCandidates(
       droneLabel: cube.droneLabel,
       sessionToken: cube.sessionToken,
       apiUrl: cube.apiUrl,
+      ...(cube.serverTrustIdentity === undefined
+        ? {}
+        : { serverTrustIdentity: cube.serverTrustIdentity }),
     });
   }
   return candidates;

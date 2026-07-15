@@ -95,6 +95,10 @@ export interface AssimilateDeps {
         token: string;
         trustIdentity: string;
     }>;
+    resumeServerEnrollment: (apiUrl: string) => Promise<{
+        token: string;
+        trustIdentity: string;
+    } | null>;
     listCubes: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<CubeSummary[]>;
     getCube: (apiUrl: string, token: string, cubeId: string, serverTrustIdentity?: string) => Promise<CubeDetail>;
     createCube: (apiUrl: string, token: string, params: {

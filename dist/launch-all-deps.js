@@ -79,7 +79,7 @@ export function buildDefaultLaunchAllDeps() {
         getRoster: (token, apiUrl, since) => getRoster(token, apiUrl, since),
         // getCube uses the user OAuth token via authedFetch (cubeId-only); apiUrl/token unused.
         getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
-        probeSeat: (sessionToken, apiUrl) => defaultProbeSeat(sessionToken, apiUrl),
+        probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
         getCliPreferenceForPath: (projectPath) => getProjectCliPreferenceForPath(projectPath),
         readAllProjectIdentities: () => cubesReadAllProjectIdentities(),
         findProjectRoot: (dir) => findProjectRoot(dir),

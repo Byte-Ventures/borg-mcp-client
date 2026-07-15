@@ -167,6 +167,9 @@ export interface AssimilateDeps {
     apiUrl: string,
     enrollment?: { invitation: string },
   ) => Promise<{ token: string; trustIdentity: string }>;
+  resumeServerEnrollment: (
+    apiUrl: string,
+  ) => Promise<{ token: string; trustIdentity: string } | null>;
 
   listCubes: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<CubeSummary[]>;
   getCube: (apiUrl: string, token: string, cubeId: string, serverTrustIdentity?: string) => Promise<CubeDetail>;
@@ -349,30 +352,35 @@ export async function runAssimilate(
     try {
       let serverAuth: { token: string; trustIdentity: string };
       if (args.flags.enroll) {
-        if (!deps.isTTY()) {
-          deps.stderr(
-            `Secure enrollment for ${authority.apiUrl} requires an interactive terminal. ` +
-              'Borg did not connect to borgmcp.ai.\n',
+        const resumed = await deps.resumeServerEnrollment(authority.apiUrl);
+        if (resumed) {
+          serverAuth = resumed;
+        } else {
+          if (!deps.isTTY()) {
+            deps.stderr(
+              `Secure enrollment for ${authority.apiUrl} requires an interactive terminal. ` +
+                'Borg did not connect to borgmcp.ai.\n',
+            );
+            return 1;
+          }
+          let invitation = await deps.promptSecret(
+            `Single-use invitation for ${authority.apiUrl}: `,
           );
-          return 1;
-        }
-        let invitation = await deps.promptSecret(
-          `Single-use invitation for ${authority.apiUrl}: `,
-        );
-        if (!invitation) {
-          deps.stderr(
-            `No invitation was entered for ${authority.apiUrl}. ` +
-              'Borg did not connect to borgmcp.ai.\n',
-          );
-          return 1;
-        }
-        try {
-          serverAuth = await deps.connectServer(authority.apiUrl, { invitation });
-        } finally {
-          // Strings cannot be zeroized in JavaScript, but drop this command's
-          // reference immediately after the exchange instead of retaining the
-          // invitation through the rest of assimilation/agent launch.
-          invitation = '';
+          if (!invitation) {
+            deps.stderr(
+              `No invitation was entered for ${authority.apiUrl}. ` +
+                'Borg did not connect to borgmcp.ai.\n',
+            );
+            return 1;
+          }
+          try {
+            serverAuth = await deps.connectServer(authority.apiUrl, { invitation });
+          } finally {
+            // Strings cannot be zeroized in JavaScript, but drop this command's
+            // reference immediately after the exchange instead of retaining the
+            // invitation through the rest of assimilation/agent launch.
+            invitation = '';
+          }
         }
       } else {
         serverAuth = await deps.connectServer(authority.apiUrl);

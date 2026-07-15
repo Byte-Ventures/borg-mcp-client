@@ -183,13 +183,21 @@ export async function retryOn429(
 async function localAuthorityContext(
   sessionToken: string,
   apiUrl: string,
+  expectedServerTrustIdentity?: string,
 ): Promise<ActiveCube | null> {
   const active = await getActiveCube();
-  return active?.serverTrustIdentity !== undefined &&
+  const matched = active?.serverTrustIdentity !== undefined &&
     active.apiUrl === apiUrl &&
     active.sessionToken === sessionToken
     ? active
     : null;
+  if (expectedServerTrustIdentity !== undefined) {
+    if (!matched || matched.serverTrustIdentity !== expectedServerTrustIdentity) {
+      throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
+    return matched;
+  }
+  return matched;
 }
 
 function localUnsupported(capability: string): never {
@@ -804,9 +812,10 @@ export async function assimilate(
  */
 export async function getCubeInfo(
   sessionToken: string,
-  apiUrl: string
+  apiUrl: string,
+  serverTrustIdentity?: string,
 ): Promise<{ cube: any; roles: any[] }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   if (local) {
     const composed = await localCubeComposition(local);
     return { cube: composed.cube, roles: composed.roles };
@@ -815,6 +824,7 @@ export async function getCubeInfo(
     method: 'GET',
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
   });
   return await response.json() as any;
 }
@@ -824,14 +834,16 @@ export async function getCubeInfo(
  */
 export async function getRoleInfo(
   sessionToken: string,
-  apiUrl: string
+  apiUrl: string,
+  serverTrustIdentity?: string,
 ): Promise<{ role: any }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   if (local) return { role: (await localCubeComposition(local)).role };
   const response = await authedFetch('/api/drone/role', {
     method: 'GET',
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
   });
   return await response.json() as any;
 }
@@ -844,9 +856,10 @@ export async function getRoleInfo(
 export async function getRoleInfoByName(
   sessionToken: string,
   apiUrl: string,
-  role: string
+  role: string,
+  serverTrustIdentity?: string,
 ): Promise<{ role: any }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   if (local) {
     const roles = (await localCubeComposition(local)).roles;
     const matched = roles.find((candidate) =>
@@ -860,15 +873,17 @@ export async function getRoleInfoByName(
     method: 'GET',
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
   });
   return await response.json() as any;
 }
 
 export async function whoami(
   sessionToken: string,
-  apiUrl: string
+  apiUrl: string,
+  serverTrustIdentity?: string,
 ): Promise<{ cube_id: string; cube_name: string; drone_id: string; drone_label: string; role_id: string; role_name: string }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   if (local) {
     const composed = await localCubeComposition(local);
     return {
@@ -884,6 +899,7 @@ export async function whoami(
     method: 'GET',
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
   });
   return await response.json() as any;
 }
@@ -903,9 +919,10 @@ export async function whoami(
 export async function getRoster(
   sessionToken: string,
   apiUrl: string,
-  since?: string
+  since?: string,
+  serverTrustIdentity?: string,
 ): Promise<{ drones: any[]; roles: any[]; message_taxonomy?: MessageTaxonomy | null; since?: string | null }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   if (local) {
     if (since !== undefined) localUnsupported('roster liveness filtering');
     const composed = await localCubeComposition(local);
@@ -916,6 +933,7 @@ export async function getRoster(
     method: 'GET',
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
   });
   return await response.json() as any;
 }
@@ -926,9 +944,18 @@ export async function getRoster(
 export async function readLog(
   sessionToken: string,
   apiUrl: string,
-  opts: { since?: string; limit?: number; unreadOnly?: boolean } = {}
+  opts: {
+    since?: string;
+    limit?: number;
+    unreadOnly?: boolean;
+    serverTrustIdentity?: string;
+  } = {}
 ): Promise<{ entries: any[]; drones: any[]; roles: any[]; behind_by?: number; has_more?: boolean }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(
+    sessionToken,
+    apiUrl,
+    opts.serverTrustIdentity,
+  );
   if (local) {
     let cursor: LocalServerCursor | null = null;
     if (opts.unreadOnly) cursor = await getLocalServerCursor(localCursorBinding(local));
@@ -959,6 +986,7 @@ export async function readLog(
       method: 'GET',
       droneSession: sessionToken,
       apiUrl,
+      serverTrustIdentity: opts.serverTrustIdentity,
     }
   );
   return await response.json() as any;
@@ -976,9 +1004,10 @@ export async function ackLogEntry(
   sessionToken: string,
   apiUrl: string,
   entryId: string,
-  kind: 'ack' | 'claim' = 'ack'
+  kind: 'ack' | 'claim' = 'ack',
+  serverTrustIdentity?: string,
 ): Promise<void> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   if (local) {
     await localServerRequest(
       local,
@@ -993,6 +1022,7 @@ export async function ackLogEntry(
     body: JSON.stringify({ kind }),
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
   });
 }
 
@@ -1003,9 +1033,10 @@ export async function ackLogEntry(
 export async function recordDecision(
   sessionToken: string,
   apiUrl: string,
-  input: { topic: string; decision: string; rationale?: string }
+  input: { topic: string; decision: string; rationale?: string },
+  serverTrustIdentity?: string,
 ): Promise<{ decision: any }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   if (local) {
     const payload = await localServerRequest<{ decision: any }>(
       local,
@@ -1021,6 +1052,7 @@ export async function recordDecision(
     body: JSON.stringify(input),
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
   });
   return (await response.json()) as { decision: any };
 }
@@ -1032,9 +1064,10 @@ export async function recordDecision(
 export async function listDecisions(
   sessionToken: string,
   apiUrl: string,
-  topic?: string
+  topic?: string,
+  serverTrustIdentity?: string,
 ): Promise<{ decisions: any[] }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   if (local) {
     const payload = await localServerRequest<{ decisions: any[] }>(
       local,
@@ -1054,6 +1087,7 @@ export async function listDecisions(
     method: 'GET',
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
   });
   return (await response.json()) as { decisions: any[] };
 }
@@ -1062,9 +1096,10 @@ export async function listDecisions(
 export async function removeDecision(
   sessionToken: string,
   apiUrl: string,
-  selector: { topic: string } | { decision_id: string }
+  selector: { topic: string } | { decision_id: string },
+  serverTrustIdentity?: string,
 ): Promise<{ decision: any }> {
-  if (await localAuthorityContext(sessionToken, apiUrl)) {
+  if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
     localUnsupported('decision removal');
   }
   const response = await authedFetch('/api/drone/decisions', {
@@ -1072,6 +1107,7 @@ export async function removeDecision(
     body: JSON.stringify(selector),
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
   });
   return (await response.json()) as { decision: any };
 }
@@ -1101,6 +1137,8 @@ export async function regen(
     reportedModel?: string;
     /** Current cwd-derived identity; refreshed each regen to avoid stale routing data. */
     workingRepo?: WorkingRepo;
+    /** Verified self-hosted authority from the caller's first active-state read. */
+    serverTrustIdentity?: string;
   } = {}
 ): Promise<{
   cube: any;
@@ -1115,7 +1153,11 @@ export async function regen(
   recentLog?: any[];
   behind_by?: number;
 }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(
+    sessionToken,
+    apiUrl,
+    opts.serverTrustIdentity,
+  );
   if (local) {
     const composed = await localCubeComposition(local);
     const cursor = opts.since === undefined
@@ -1149,6 +1191,7 @@ export async function regen(
       method: 'GET',
       droneSession: sessionToken,
       apiUrl,
+      serverTrustIdentity: opts.serverTrustIdentity,
     }
   );
   return await response.json() as any;
@@ -1158,9 +1201,10 @@ export async function roleRationale(
   sessionToken: string,
   apiUrl: string,
   role: string,
-  section: string
+  section: string,
+  serverTrustIdentity?: string,
 ): Promise<{ role: string; section: string; body: string }> {
-  if (await localAuthorityContext(sessionToken, apiUrl)) {
+  if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
     localUnsupported('role rationale sections');
   }
   const params = new URLSearchParams({ role, section });
@@ -1170,6 +1214,7 @@ export async function roleRationale(
       method: 'GET',
       droneSession: sessionToken,
       apiUrl,
+      serverTrustIdentity,
     }
   );
   return await response.json() as any;
@@ -1187,6 +1232,7 @@ export async function appendLog(
     recipientDroneIds?: string[];
     class?: string;
     to?: string[];
+    serverTrustIdentity?: string;
   } = {}
 ): Promise<{
   entry: {
@@ -1207,7 +1253,11 @@ export async function appendLog(
   // (wake-path:deaf). Empty/absent for broadcast or all-reachable sends.
   unreachableRecipients?: { id: string; label: string }[];
 }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl);
+  const local = await localAuthorityContext(
+    sessionToken,
+    apiUrl,
+    opts.serverTrustIdentity,
+  );
   if (local) {
     if (opts.class !== undefined || opts.to !== undefined) {
       localUnsupported('message taxonomy routing');
@@ -1239,6 +1289,7 @@ export async function appendLog(
     headers: { 'Content-Type': 'application/json' },
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity: opts.serverTrustIdentity,
     body: JSON.stringify(body),
   });
   return await response.json() as any;

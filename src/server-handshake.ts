@@ -21,6 +21,7 @@ import {
   clearPendingServerEnrollment,
   getServerCredential,
   getServerCredentialRecord,
+  getPendingServerEnrollment,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
   storeServerSessionCredential,
@@ -346,7 +347,6 @@ export async function enrollBorgServer(
   });
   const fetchImpl = deps.fetchImpl ?? fetch;
   let response: Response | null = null;
-  let responseController: AbortController | null = null;
   let lastTransportError: unknown;
   for (let attempt = 0; attempt < 2 && response === null; attempt += 1) {
     const controller = new AbortController();
@@ -362,14 +362,13 @@ export async function enrollBorgServer(
         },
         body: JSON.stringify(createProtocolEnvelope(randomUUID(), request)),
       });
-      responseController = controller;
     } catch (error) {
       lastTransportError = error;
     } finally {
       clearTimeout(timeout);
     }
   }
-  if (!response || !responseController) throw lastTransportError;
+  if (!response) throw lastTransportError;
 
   if (response.status === 401 || response.status === 403) {
     await (deps.clearPendingEnrollment ?? clearPendingServerEnrollment)(
@@ -411,6 +410,35 @@ export async function enrollBorgServer(
     clientId: decoded.payload.client_id,
     serverCapabilities: decoded.payload.server_capabilities,
   };
+}
+
+/** Resume an exact durable enrollment tuple without asking for the invitation again. */
+export async function resumeBorgServerEnrollment(
+  origin: string,
+  trustIdentity: string,
+  deps: {
+    fetchImpl?: FetchLike;
+    loadPendingEnrollment?: typeof getPendingServerEnrollment;
+    activateEnrollment?: typeof activatePendingServerEnrollment;
+    clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+  } = {},
+): Promise<NewServerEnrollment | null> {
+  const pending = await (deps.loadPendingEnrollment ?? getPendingServerEnrollment)(
+    origin,
+    trustIdentity,
+  );
+  if (!pending) return null;
+  return enrollBorgServer(origin, trustIdentity, pending.invitation, {
+    ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
+    prepareEnrollment: async () => pending,
+    ...(deps.activateEnrollment === undefined
+      ? {}
+      : { activateEnrollment: deps.activateEnrollment }),
+    ...(deps.clearPendingEnrollment === undefined
+      ? {}
+      : { clearPendingEnrollment: deps.clearPendingEnrollment }),
+    ...(pending.clientName === undefined ? {} : { clientName: pending.clientName }),
+  });
 }
 
 /**
@@ -632,6 +660,23 @@ export async function enrollLocalBorgServer(
       ? {}
       : { clearPendingEnrollment: deps.clearPendingEnrollment }),
     ...(deps.clientName === undefined ? {} : { clientName: deps.clientName }),
+  });
+}
+
+/** Load verified trust and resume a prior ambiguous enrollment before prompting. */
+export async function resumeLocalBorgServerEnrollment(
+  origin: string,
+  deps: {
+    loadTrust?: typeof loadBorgServerTrust;
+    loadPendingEnrollment?: typeof getPendingServerEnrollment;
+  } = {},
+): Promise<NewServerEnrollment | null> {
+  const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+  return resumeBorgServerEnrollment(origin, trust.identity, {
+    fetchImpl: trust.fetchImpl,
+    ...(deps.loadPendingEnrollment === undefined
+      ? {}
+      : { loadPendingEnrollment: deps.loadPendingEnrollment }),
   });
 }
 

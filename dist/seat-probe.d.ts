@@ -15,5 +15,5 @@ export type SeatStatus = 'evicted' | 'frozen' | 'live' | 'indeterminate';
  * INDETERMINATE — and (for the destructive cleanup path) must NEVER authorize a
  * delete. The launch path treats indeterminate as launch-anyway (fail-OPEN).
  */
-export declare function defaultProbeSeat(sessionToken: string, apiUrl: string): Promise<SeatStatus>;
+export declare function defaultProbeSeat(sessionToken: string, apiUrl: string, serverTrustIdentity?: string): Promise<SeatStatus>;
 //# sourceMappingURL=seat-probe.d.ts.map

@@ -35,6 +35,9 @@ const SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 1;
 const SERVER_CUBE_RETRY_RECORD_VERSION = 1;
 const SERVER_SESSION_RECORD_VERSION = 1;
 const SERVER_KEYCHAIN_SERVICE = 'borg-mcp-local-server';
+const SERVER_KEYCHAIN_LOCK_STALE_MS = 30_000;
+const SERVER_KEYCHAIN_LOCK_WAIT_MS = 10;
+const SERVER_KEYCHAIN_LOCK_ATTEMPTS = 500;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function validateServerCredentialBinding(origin, trustIdentity) {
     let parsed;
@@ -61,6 +64,84 @@ function serverCredentialAccount(origin, trustIdentity) {
         .update(trustIdentity)
         .digest('hex');
     return `borg-server-credential:${binding}`;
+}
+async function withServerKeychainLock(account, operation) {
+    const lockDirectory = path.join(os.homedir(), '.config', 'borgmcp', 'local-keychain-locks');
+    const lockName = createHash('sha256').update(account).digest('hex');
+    const lockPath = path.join(lockDirectory, `${lockName}.lock`);
+    await fsp.mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+    for (let attempt = 0; attempt < SERVER_KEYCHAIN_LOCK_ATTEMPTS; attempt += 1) {
+        let handle;
+        try {
+            handle = await fsp.open(lockPath, 'wx', 0o600);
+        }
+        catch (error) {
+            if (error.code !== 'EEXIST')
+                throw error;
+            try {
+                const metadata = await fsp.stat(lockPath);
+                if (Date.now() - metadata.mtimeMs > SERVER_KEYCHAIN_LOCK_STALE_MS) {
+                    let holderAlive = false;
+                    try {
+                        const holderPid = Number(await fsp.readFile(lockPath, 'utf8'));
+                        if (Number.isSafeInteger(holderPid) && holderPid > 0) {
+                            try {
+                                process.kill(holderPid, 0);
+                                holderAlive = true;
+                            }
+                            catch (probeError) {
+                                holderAlive = probeError.code === 'EPERM';
+                            }
+                        }
+                    }
+                    catch (readError) {
+                        if (readError.code === 'ENOENT')
+                            continue;
+                        throw readError;
+                    }
+                    if (!holderAlive) {
+                        try {
+                            await fsp.unlink(lockPath);
+                        }
+                        catch (unlinkError) {
+                            if (unlinkError.code !== 'ENOENT')
+                                throw unlinkError;
+                        }
+                        continue;
+                    }
+                }
+            }
+            catch (inspectionError) {
+                if (inspectionError.code === 'ENOENT')
+                    continue;
+                throw inspectionError;
+            }
+            await new Promise((resolvePromise) => setTimeout(resolvePromise, SERVER_KEYCHAIN_LOCK_WAIT_MS));
+            continue;
+        }
+        try {
+            await handle.writeFile(String(process.pid));
+        }
+        catch (error) {
+            await handle.close().catch(() => { });
+            await fsp.unlink(lockPath).catch(() => { });
+            throw error;
+        }
+        try {
+            return await operation();
+        }
+        finally {
+            await handle.close();
+            try {
+                await fsp.unlink(lockPath);
+            }
+            catch (error) {
+                if (error.code !== 'ENOENT')
+                    throw error;
+            }
+        }
+    }
+    throw new Error('Borg server keychain state is busy');
 }
 function serverPendingEnrollmentAccount(origin, trustIdentity) {
     validateServerCredentialBinding(origin, trustIdentity);
@@ -426,6 +507,46 @@ export async function getServerCredentialRecord(origin, trustIdentity) {
 export async function getServerCredential(origin, trustIdentity) {
     return (await getServerCredentialRecord(origin, trustIdentity))?.credential ?? null;
 }
+function decodePendingServerEnrollment(stored, origin, trustIdentity) {
+    const record = JSON.parse(stored);
+    if (record.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION ||
+        record.state !== 'pending' ||
+        record.origin !== origin ||
+        record.trustIdentity !== trustIdentity ||
+        typeof record.invitation !== 'string' ||
+        typeof record.retryKey !== 'string' || !UUID_RE.test(record.retryKey) ||
+        typeof record.credential !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(record.credential) ||
+        (record.clientName !== undefined && typeof record.clientName !== 'string')) {
+        throw new Error('invalid');
+    }
+    validateInvitation(record.invitation);
+    validateClientName(record.clientName);
+    return {
+        origin,
+        trustIdentity,
+        invitation: record.invitation,
+        retryKey: record.retryKey,
+        credential: record.credential,
+        ...(record.clientName === undefined ? {} : { clientName: record.clientName }),
+    };
+}
+/** Load an exact durable PENDING tuple so a new process can resume it. */
+export async function getPendingServerEnrollment(origin, trustIdentity) {
+    validateServerCredentialBinding(origin, trustIdentity);
+    const backend = await getServerCredentialBackend();
+    const account = serverPendingEnrollmentAccount(origin, trustIdentity);
+    return withServerKeychainLock(account, async () => {
+        const stored = await backend.get(account);
+        if (!stored)
+            return null;
+        try {
+            return decodePendingServerEnrollment(stored, origin, trustIdentity);
+        }
+        catch {
+            throw new Error('pending Borg server enrollment is corrupt');
+        }
+    });
+}
 /**
  * Generate and persist an exact enrollment tuple before network I/O. A
  * pre-existing PENDING tuple must match the invitation and presentation name;
@@ -437,48 +558,37 @@ export async function getOrCreatePendingServerEnrollment(input) {
     validateClientName(input.clientName);
     const backend = await getServerCredentialBackend();
     const account = serverPendingEnrollmentAccount(input.origin, input.trustIdentity);
-    const stored = await backend.get(account);
-    if (stored) {
-        try {
-            const record = JSON.parse(stored);
-            if (record.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION ||
-                record.state !== 'pending' ||
-                record.origin !== input.origin ||
-                record.trustIdentity !== input.trustIdentity ||
-                record.invitation !== input.invitation ||
-                record.clientName !== input.clientName ||
-                typeof record.retryKey !== 'string' || !UUID_RE.test(record.retryKey) ||
-                typeof record.credential !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(record.credential)) {
-                throw new Error('mismatch');
+    return withServerKeychainLock(account, async () => {
+        const stored = await backend.get(account);
+        if (stored) {
+            try {
+                const record = decodePendingServerEnrollment(stored, input.origin, input.trustIdentity);
+                if (record.invitation !== input.invitation ||
+                    record.clientName !== input.clientName) {
+                    throw new Error('mismatch');
+                }
+                return record;
             }
-            return {
-                origin: input.origin,
-                trustIdentity: input.trustIdentity,
-                invitation: input.invitation,
-                retryKey: record.retryKey,
-                credential: record.credential,
-                ...(input.clientName === undefined ? {} : { clientName: input.clientName }),
-            };
+            catch {
+                throw new Error('pending Borg server enrollment does not match this request');
+            }
         }
-        catch {
-            throw new Error('pending Borg server enrollment does not match this request');
-        }
-    }
-    const record = {
-        origin: input.origin,
-        trustIdentity: input.trustIdentity,
-        invitation: input.invitation,
-        retryKey: randomUUID(),
-        credential: randomBytes(32).toString('base64url'),
-        ...(input.clientName === undefined ? {} : { clientName: input.clientName }),
-    };
-    validateEnrollmentCredential(record.credential);
-    await backend.set(account, JSON.stringify({
-        version: SERVER_PENDING_ENROLLMENT_RECORD_VERSION,
-        state: 'pending',
-        ...record,
-    }));
-    return record;
+        const record = {
+            origin: input.origin,
+            trustIdentity: input.trustIdentity,
+            invitation: input.invitation,
+            retryKey: randomUUID(),
+            credential: randomBytes(32).toString('base64url'),
+            ...(input.clientName === undefined ? {} : { clientName: input.clientName }),
+        };
+        validateEnrollmentCredential(record.credential);
+        await backend.set(account, JSON.stringify({
+            version: SERVER_PENDING_ENROLLMENT_RECORD_VERSION,
+            state: 'pending',
+            ...record,
+        }));
+        return record;
+    });
 }
 /** Activate the exact pending tuple only after a verified server response. */
 export async function activatePendingServerEnrollment(input) {
@@ -489,49 +599,48 @@ export async function activatePendingServerEnrollment(input) {
     const serverCapabilities = validateServerCapabilities(input.serverCapabilities);
     const backend = await getServerCredentialBackend();
     const pendingAccount = serverPendingEnrollmentAccount(input.origin, input.trustIdentity);
-    const stored = await backend.get(pendingAccount);
-    if (!stored)
-        throw new Error('pending Borg server enrollment is missing');
-    try {
-        const pending = JSON.parse(stored);
-        if (pending.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION ||
-            pending.state !== 'pending' ||
-            pending.origin !== input.origin ||
-            pending.trustIdentity !== input.trustIdentity ||
-            pending.retryKey !== input.retryKey ||
-            pending.credential !== input.credential) {
-            throw new Error('mismatch');
+    await withServerKeychainLock(pendingAccount, async () => {
+        const stored = await backend.get(pendingAccount);
+        if (!stored)
+            throw new Error('pending Borg server enrollment is missing');
+        try {
+            const pending = decodePendingServerEnrollment(stored, input.origin, input.trustIdentity);
+            if (pending.retryKey !== input.retryKey || pending.credential !== input.credential) {
+                throw new Error('mismatch');
+            }
         }
-    }
-    catch {
-        throw new Error('pending Borg server enrollment does not match the verified response');
-    }
-    await storeServerCredential({
-        origin: input.origin,
-        trustIdentity: input.trustIdentity,
-        credential: input.credential,
-        clientId: input.clientId,
-        serverCapabilities,
+        catch {
+            throw new Error('pending Borg server enrollment does not match the verified response');
+        }
+        await storeServerCredential({
+            origin: input.origin,
+            trustIdentity: input.trustIdentity,
+            credential: input.credential,
+            clientId: input.clientId,
+            serverCapabilities,
+        });
+        await backend.delete(pendingAccount);
     });
-    await backend.delete(pendingAccount);
 }
 /** Delete only the exact definitively rejected pending attempt. */
 export async function clearPendingServerEnrollment(origin, trustIdentity, retryKey) {
     validateUuid(retryKey, 'enrollment retry key');
     const backend = await getServerCredentialBackend();
     const account = serverPendingEnrollmentAccount(origin, trustIdentity);
-    const stored = await backend.get(account);
-    if (!stored)
-        return;
-    try {
-        const pending = JSON.parse(stored);
-        if (pending.retryKey !== retryKey)
+    await withServerKeychainLock(account, async () => {
+        const stored = await backend.get(account);
+        if (!stored)
             return;
-    }
-    catch {
-        return;
-    }
-    await backend.delete(account);
+        try {
+            const pending = decodePendingServerEnrollment(stored, origin, trustIdentity);
+            if (pending.retryKey !== retryKey)
+                return;
+        }
+        catch {
+            return;
+        }
+        await backend.delete(account);
+    });
 }
 /** Persist one repository-scoped cube-create idempotency key in the keychain. */
 export async function getOrCreatePendingServerCubeCreation(input) {
@@ -547,71 +656,78 @@ export async function getOrCreatePendingServerCubeCreation(input) {
     const repositoryBinding = createHash('sha256').update(input.projectRoot).digest('hex');
     const backend = await getServerCredentialBackend();
     const account = serverCubeRetryAccount(input.origin, input.trustIdentity, input.clientId, repositoryBinding);
-    const stored = await backend.get(account);
-    if (stored) {
-        try {
-            const record = JSON.parse(stored);
-            if (record.version !== SERVER_CUBE_RETRY_RECORD_VERSION ||
-                record.state !== 'pending' ||
-                record.origin !== input.origin ||
-                record.trustIdentity !== input.trustIdentity ||
-                record.clientId !== input.clientId ||
-                record.repositoryBinding !== repositoryBinding ||
-                record.name !== input.name ||
-                record.template !== input.template ||
-                typeof record.retryKey !== 'string' || !UUID_RE.test(record.retryKey)) {
-                throw new Error('mismatch');
+    return withServerKeychainLock(account, async () => {
+        const stored = await backend.get(account);
+        if (stored) {
+            try {
+                const record = JSON.parse(stored);
+                if (record.version !== SERVER_CUBE_RETRY_RECORD_VERSION ||
+                    record.state !== 'pending' ||
+                    record.origin !== input.origin ||
+                    record.trustIdentity !== input.trustIdentity ||
+                    record.clientId !== input.clientId ||
+                    record.repositoryBinding !== repositoryBinding ||
+                    record.name !== input.name ||
+                    record.template !== input.template ||
+                    typeof record.retryKey !== 'string' || !UUID_RE.test(record.retryKey)) {
+                    throw new Error('mismatch');
+                }
+                return {
+                    origin: input.origin,
+                    trustIdentity: input.trustIdentity,
+                    clientId: input.clientId,
+                    repositoryBinding,
+                    retryKey: record.retryKey,
+                    name: input.name,
+                    template: input.template,
+                };
             }
-            return {
-                origin: input.origin,
-                trustIdentity: input.trustIdentity,
-                clientId: input.clientId,
-                repositoryBinding,
-                retryKey: record.retryKey,
-                name: input.name,
-                template: input.template,
-            };
+            catch {
+                throw new Error('pending Borg server cube creation does not match this repository');
+            }
         }
-        catch {
-            throw new Error('pending Borg server cube creation does not match this repository');
-        }
-    }
-    const record = {
-        origin: input.origin,
-        trustIdentity: input.trustIdentity,
-        clientId: input.clientId,
-        repositoryBinding,
-        retryKey: randomUUID(),
-        name: input.name,
-        template: input.template,
-    };
-    await backend.set(account, JSON.stringify({
-        version: SERVER_CUBE_RETRY_RECORD_VERSION,
-        state: 'pending',
-        ...record,
-    }));
-    return record;
+        const record = {
+            origin: input.origin,
+            trustIdentity: input.trustIdentity,
+            clientId: input.clientId,
+            repositoryBinding,
+            retryKey: randomUUID(),
+            name: input.name,
+            template: input.template,
+        };
+        await backend.set(account, JSON.stringify({
+            version: SERVER_CUBE_RETRY_RECORD_VERSION,
+            state: 'pending',
+            ...record,
+        }));
+        return record;
+    });
 }
 export async function clearPendingServerCubeCreation(record) {
     const backend = await getServerCredentialBackend();
     const account = serverCubeRetryAccount(record.origin, record.trustIdentity, record.clientId, record.repositoryBinding);
-    const stored = await backend.get(account);
-    if (!stored)
-        return;
-    try {
-        const pending = JSON.parse(stored);
-        if (pending.retryKey !== record.retryKey)
+    await withServerKeychainLock(account, async () => {
+        const stored = await backend.get(account);
+        if (!stored)
             return;
-    }
-    catch {
-        return;
-    }
-    await backend.delete(account);
+        try {
+            const pending = JSON.parse(stored);
+            if (pending.retryKey !== record.retryKey)
+                return;
+        }
+        catch {
+            return;
+        }
+        await backend.delete(account);
+    });
 }
 export async function clearServerCredential(origin, trustIdentity) {
     const backend = await getServerCredentialBackend();
-    await backend.delete(serverCredentialAccount(origin, trustIdentity));
-    await backend.delete(serverPendingEnrollmentAccount(origin, trustIdentity));
+    const pendingAccount = serverPendingEnrollmentAccount(origin, trustIdentity);
+    await withServerKeychainLock(pendingAccount, async () => {
+        await backend.delete(serverCredentialAccount(origin, trustIdentity));
+        await backend.delete(pendingAccount);
+    });
 }
 /**
  * Write one rotated local drone-session bearer to a generation-specific

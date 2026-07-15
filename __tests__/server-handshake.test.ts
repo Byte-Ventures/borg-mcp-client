@@ -7,6 +7,7 @@ import {
   enrollBorgServer,
   probeBorgServer,
   negotiateBorgServer,
+  resumeBorgServerEnrollment,
 } from '../src/server-handshake.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
@@ -317,6 +318,55 @@ describe('self-hosted server handshake', () => {
       client_name: pending.clientName,
     });
     expect(activateEnrollment).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes a persisted enrollment after restart with its exact stored tuple', async () => {
+    const pending = {
+      origin: 'https://server.example.com',
+      trustIdentity: 'sha256:server-a',
+      invitation: 'i'.repeat(43),
+      retryKey: '55555555-5555-4555-8555-555555555555',
+      credential: 'c'.repeat(43),
+      clientName: 'operator-laptop',
+    };
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        protocol_version: '1',
+        request_id: 'enroll-resume-1',
+        payload: {
+          purpose: 'owner',
+          client_id: '66666666-6666-4666-8666-666666666666',
+          server_capabilities: ['create_cube'],
+        },
+      }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        protocol_version: '1',
+        request_id: 'protocol-resume-1',
+        payload: protocolInfo,
+      }), { status: 200 }));
+    const activateEnrollment = vi.fn(async () => {});
+
+    await expect(resumeBorgServerEnrollment(
+      pending.origin,
+      pending.trustIdentity,
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadPendingEnrollment: vi.fn(async () => pending),
+        activateEnrollment,
+      },
+    )).resolves.toMatchObject({ token: pending.credential });
+
+    const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+    expect(request.payload).toEqual({
+      invitation: pending.invitation,
+      retry_key: pending.retryKey,
+      client_credential: pending.credential,
+      client_name: pending.clientName,
+    });
+    expect(activateEnrollment).toHaveBeenCalledWith(expect.objectContaining({
+      retryKey: pending.retryKey,
+      credential: pending.credential,
+    }));
   });
 
   it('creates a cube idempotently for an owner and rejects ordinary clients before network', async () => {

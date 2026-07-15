@@ -273,7 +273,7 @@ export async function runLaunchAll(
   for (const c of lockLaunchable) {
     let status: SeatStatus;
     try {
-      status = await deps.probeSeat(c.sessionToken, c.apiUrl);
+      status = await deps.probeSeat(c.sessionToken, c.apiUrl, c.serverTrustIdentity);
     } catch {
       status = 'indeterminate';
     }

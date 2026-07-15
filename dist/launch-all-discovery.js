@@ -80,6 +80,9 @@ export async function discoverDroneCandidates(opts, deps) {
             droneLabel: cube.droneLabel,
             sessionToken: cube.sessionToken,
             apiUrl: cube.apiUrl,
+            ...(cube.serverTrustIdentity === undefined
+                ? {}
+                : { serverTrustIdentity: cube.serverTrustIdentity }),
         });
     }
     return candidates;

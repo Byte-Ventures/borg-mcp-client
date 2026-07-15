@@ -14,7 +14,7 @@ import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { API_URL, getValidToken, listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
-import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, attachBorgServer, } from './server-handshake.js';
+import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, attachBorgServer, } from './server-handshake.js';
 import { getOrCreateLocalAttachRetryKey } from './server-attach-state.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
@@ -112,6 +112,7 @@ export function buildDefaultAssimilateDeps() {
             }
             return connectLocalBorgServer(apiUrl);
         },
+        resumeServerEnrollment: async (apiUrl) => resumeLocalBorgServerEnrollment(apiUrl),
         listCubes: async (apiUrl, token, serverTrustIdentity) => {
             const { cubes } = await remoteListCubes({
                 apiUrl,
