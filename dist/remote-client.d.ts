@@ -301,7 +301,7 @@ export declare function submitReport(sessionToken: string, apiUrl: string, input
     kind?: 'friction' | 'bug';
     message: string;
     metadata?: Record<string, string>;
-}): Promise<{
+}, serverTrustIdentity?: string): Promise<{
     ok: boolean;
 }>;
 export interface TriageReport {

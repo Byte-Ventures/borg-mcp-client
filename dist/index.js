@@ -692,7 +692,7 @@ export async function main() {
                         ? args.metadata
                         : undefined;
                     // Server scrubs secrets + stamps reporter_user_id; the response is opaque {ok}.
-                    const result = await submitReport(active.sessionToken, active.apiUrl, { kind, message, metadata });
+                    const result = await submitReport(active.sessionToken, active.apiUrl, { kind, message, metadata }, active.serverTrustIdentity);
                     const text = result.ok
                         ? 'Report submitted — thank you. The borgmcp team will see it. (Write-only: you cannot read reports back.)'
                         : 'Report did not submit. Try again, or raise it in the cube log.';

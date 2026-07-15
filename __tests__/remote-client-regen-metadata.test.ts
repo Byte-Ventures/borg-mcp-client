@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const HOSTED_API_URL = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
+
 vi.mock('../src/config.js', () => ({
   getIdToken: vi.fn(async () => 'id-token'),
   getRefreshToken: vi.fn(async () => null),
@@ -31,7 +33,7 @@ describe('regen() metadata query', () => {
   it('sends advisory model and current working-repository identity on regen', async () => {
     const { regen } = await import('../src/remote-client.js');
 
-    await regen('session-token', 'https://api.example.test', {
+    await regen('session-token', HOSTED_API_URL, {
       since: '2026-07-13T18:00:00Z',
       reportedModel: 'gpt-5',
       workingRepo: {
@@ -54,7 +56,7 @@ describe('regen() metadata query', () => {
   it('omits optional metadata so legacy callers preserve prior server values', async () => {
     const { regen } = await import('../src/remote-client.js');
 
-    await regen('session-token', 'https://api.example.test');
+    await regen('session-token', HOSTED_API_URL);
 
     const [url] = fetchSpy.mock.calls[0];
     expect(new URL(String(url)).search).toBe('');
@@ -63,7 +65,7 @@ describe('regen() metadata query', () => {
   it('canonicalizes a directly supplied raw origin before it reaches the regen query string', async () => {
     const { regen } = await import('../src/remote-client.js');
 
-    await regen('session-token', 'https://api.example.test', {
+    await regen('session-token', HOSTED_API_URL, {
       workingRepo: {
         name: 'attacker-controlled',
         origin: 'ssh://git:ssh-secret@github.com/borgmcp/private-repo.git?token=query-secret#fragment-secret',

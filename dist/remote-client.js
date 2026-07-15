@@ -142,6 +142,15 @@ async function localAuthorityContext(sessionToken, apiUrl, expectedServerTrustId
         }
         return matched;
     }
+    // An explicit drone-session endpoint outside the configured hosted
+    // authority is self-hosted by definition. Missing/removed trust metadata
+    // must never downgrade that request into the Cloud OAuth path: cubes.json is
+    // mutable local state, and a legacy-looking sessionToken is not proof that a
+    // loopback/custom endpoint is hosted. A matching hydrated local ActiveCube
+    // carries the verified trust anchor; otherwise fail before OAuth or network.
+    if (!matched && apiUrl !== API_URL) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
     return matched;
 }
 function localUnsupported(capability) {
@@ -450,6 +459,12 @@ async function authedFetch(path, init = {}) {
     const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, headers, ...rest } = init;
     const hasExplicitAuth = authToken !== undefined;
     const baseUrl = apiUrl ?? API_URL;
+    if (droneSession !== undefined &&
+        apiUrl !== undefined &&
+        suppliedTrustIdentity === undefined &&
+        baseUrl !== API_URL) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
     let serverTrustIdentity = suppliedTrustIdentity;
     if (apiUrl === undefined && droneSession === undefined && authToken === undefined) {
         const active = await getActiveCube();
@@ -987,7 +1002,10 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
  * persist and stamps reporter_user_id from the authenticated session (never client input).
  * Drone-session authed (POST /api/drone/report). Opaque `{ ok: true }` response.
  */
-export async function submitReport(sessionToken, apiUrl, input) {
+export async function submitReport(sessionToken, apiUrl, input, serverTrustIdentity) {
+    if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
+        localUnsupported('friction reports');
+    }
     const body = {
         kind: input.kind ?? 'friction',
         message: input.message,
@@ -998,6 +1016,7 @@ export async function submitReport(sessionToken, apiUrl, input) {
         headers: { 'Content-Type': 'application/json' },
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
         body: JSON.stringify(body),
     });
     return await response.json();

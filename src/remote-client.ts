@@ -197,6 +197,15 @@ async function localAuthorityContext(
     }
     return matched;
   }
+  // An explicit drone-session endpoint outside the configured hosted
+  // authority is self-hosted by definition. Missing/removed trust metadata
+  // must never downgrade that request into the Cloud OAuth path: cubes.json is
+  // mutable local state, and a legacy-looking sessionToken is not proof that a
+  // loopback/custom endpoint is hosted. A matching hydrated local ActiveCube
+  // carries the verified trust anchor; otherwise fail before OAuth or network.
+  if (!matched && apiUrl !== API_URL) {
+    throw new Error('Selected Borg server authority state is missing or unreadable');
+  }
   return matched;
 }
 
@@ -569,6 +578,14 @@ async function authedFetch(
   } = init;
   const hasExplicitAuth = authToken !== undefined;
   const baseUrl = apiUrl ?? API_URL;
+  if (
+    droneSession !== undefined &&
+    apiUrl !== undefined &&
+    suppliedTrustIdentity === undefined &&
+    baseUrl !== API_URL
+  ) {
+    throw new Error('Selected Borg server authority state is missing or unreadable');
+  }
   let serverTrustIdentity = suppliedTrustIdentity;
   if (apiUrl === undefined && droneSession === undefined && authToken === undefined) {
     const active = await getActiveCube();
@@ -1304,8 +1321,12 @@ export async function appendLog(
 export async function submitReport(
   sessionToken: string,
   apiUrl: string,
-  input: { kind?: 'friction' | 'bug'; message: string; metadata?: Record<string, string> }
+  input: { kind?: 'friction' | 'bug'; message: string; metadata?: Record<string, string> },
+  serverTrustIdentity?: string,
 ): Promise<{ ok: boolean }> {
+  if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
+    localUnsupported('friction reports');
+  }
   const body = {
     kind: input.kind ?? 'friction',
     message: input.message,
@@ -1316,6 +1337,7 @@ export async function submitReport(
     headers: { 'Content-Type': 'application/json' },
     droneSession: sessionToken,
     apiUrl,
+    serverTrustIdentity,
     body: JSON.stringify(body),
   });
   return await response.json() as { ok: boolean };

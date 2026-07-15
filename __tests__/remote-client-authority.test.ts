@@ -202,4 +202,53 @@ describe('remote-client explicit authority connection', () => {
     expect(getRefreshToken).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it.each([
+    'https://127.0.0.1:7091',
+    'https://borg.internal.example:9443',
+  ])('rejects downgraded trust metadata for explicit endpoint %s before OAuth/network', async (apiUrl) => {
+    const getIdToken = vi.fn(async () => 'cloud-token-proof');
+    const getRefreshToken = vi.fn(async () => 'cloud-refresh-proof');
+    vi.doMock('../src/config.js', () => ({
+      getIdToken,
+      getRefreshToken,
+      clearTokens: vi.fn(async () => {}),
+      getServerCredential: vi.fn(async () => null),
+    }));
+    vi.doMock('../src/auth.js', () => ({
+      refreshIdToken: vi.fn(async () => {}),
+      RefreshTokenInvalidError: class extends Error {},
+      RefreshTransientError: class extends Error {},
+    }));
+    vi.doMock('../src/cubes.js', () => ({
+      getActiveCube: vi.fn(async () => ({
+        cubeId: CUBE_ID,
+        droneId: DRONE_ID,
+        sessionToken: 'legacy-local-session',
+        apiUrl,
+        // Deliberately removed: serverTrustIdentity.
+      })),
+    }));
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => {
+        throw new Error('trust lookup must not run for downgraded metadata');
+      }),
+    }));
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { getRoster, submitReport } = await import('../src/remote-client.js');
+
+    await expect(getRoster('legacy-local-session', apiUrl, undefined, undefined))
+      .rejects.toThrow(/authority state is missing or unreadable/i);
+    await expect(submitReport(
+      'legacy-local-session',
+      apiUrl,
+      { message: 'must not reach Cloud' },
+      undefined,
+    )).rejects.toThrow(/authority state is missing or unreadable/i);
+
+    expect(getIdToken).not.toHaveBeenCalled();
+    expect(getRefreshToken).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

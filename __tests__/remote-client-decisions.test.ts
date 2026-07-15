@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const HOSTED_API_URL = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
+
 vi.mock('../src/config.js', () => ({
   getIdToken: vi.fn(async () => 'id-token'),
   getRefreshToken: vi.fn(async () => null),
@@ -28,7 +30,7 @@ describe('decision registry request shapes', () => {
       })
     );
     const { recordDecision } = await import('../src/remote-client.js');
-    const out = await recordDecision('session-token', 'https://api.example.test', {
+    const out = await recordDecision('session-token', HOSTED_API_URL, {
       topic: 'pricing-model',
       decision: 'pooled',
       rationale: 'gh#738',
@@ -49,7 +51,7 @@ describe('decision registry request shapes', () => {
       new Response(JSON.stringify({ decisions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     );
     const { listDecisions } = await import('../src/remote-client.js');
-    await listDecisions('session-token', 'https://api.example.test');
+    await listDecisions('session-token', HOSTED_API_URL);
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain('/api/drone/decisions');
     expect(String(url)).not.toContain('?topic=');
@@ -61,7 +63,7 @@ describe('decision registry request shapes', () => {
       new Response(JSON.stringify({ decisions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     );
     const { listDecisions } = await import('../src/remote-client.js');
-    await listDecisions('session-token', 'https://api.example.test', 'release cadence');
+    await listDecisions('session-token', HOSTED_API_URL, 'release cadence');
     const [url] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain('/api/drone/decisions?topic=release%20cadence');
   });
@@ -75,7 +77,7 @@ describe('decision registry request shapes', () => {
     );
     const { removeDecision } = await import('../src/remote-client.js');
 
-    await removeDecision('session-token', 'https://api.example.test', { topic: 'release-cadence' });
+    await removeDecision('session-token', HOSTED_API_URL, { topic: 'release-cadence' });
 
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain('/api/drone/decisions');

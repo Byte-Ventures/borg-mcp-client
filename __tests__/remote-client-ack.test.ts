@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const HOSTED_API_URL = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
+
 vi.mock('../src/config.js', () => ({
   getIdToken: vi.fn(async () => 'id-token'),
   getRefreshToken: vi.fn(async () => null),
@@ -31,7 +33,7 @@ describe('ackLogEntry request body (gh#418 claim kind)', () => {
 
   it('defaults to { kind: "ack" } and hits the entry ack route (back-compat)', async () => {
     const { ackLogEntry } = await import('../src/remote-client.js');
-    await ackLogEntry('session-token', 'https://api.example.test', 'entry-1');
+    await ackLogEntry('session-token', HOSTED_API_URL, 'entry-1');
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain('/api/drone/log/entry-1/ack');
     expect(init!.method).toBe('POST');
@@ -40,7 +42,7 @@ describe('ackLogEntry request body (gh#418 claim kind)', () => {
 
   it('sends { kind: "claim" } when claiming', async () => {
     const { ackLogEntry } = await import('../src/remote-client.js');
-    await ackLogEntry('session-token', 'https://api.example.test', 'entry-1', 'claim');
+    await ackLogEntry('session-token', HOSTED_API_URL, 'entry-1', 'claim');
     const [, init] = fetchSpy.mock.calls[0];
     expect(JSON.parse(init!.body as string)).toEqual({ kind: 'claim' });
   });
