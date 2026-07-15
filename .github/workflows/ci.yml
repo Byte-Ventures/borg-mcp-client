@@ -49,3 +49,67 @@ jobs:
         run: |
           test "$(npm --version)" = "11.18.0"
           node --test test/release-lane.test.mjs
+
+  client:
+    name: client source (22)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Reject checked-out repository npm config
+        shell: bash
+        run: test ! -e .npmrc
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.2
+
+      - name: Set up exact npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_prefix="${RUNNER_TEMP}/npm-11.18.0"
+          bootstrap_userconfig="${RUNNER_TEMP}/npm-bootstrap.npmrc"
+          bootstrap_cache="${RUNNER_TEMP}/npm-bootstrap-cache"
+          printf '%s\n' 'registry=https://registry.npmjs.org/' > "${bootstrap_userconfig}"
+          NPM_CONFIG_USERCONFIG="${bootstrap_userconfig}" NPM_CONFIG_CACHE="${bootstrap_cache}" \
+            npm install --prefix "${npm_prefix}" --ignore-scripts --no-save \
+            --registry=https://registry.npmjs.org npm@11.18.0
+          exact_npm="${npm_prefix}/node_modules/.bin/npm"
+          test "$(NPM_CONFIG_USERCONFIG="${bootstrap_userconfig}" "${exact_npm}" --version)" = "11.18.0"
+          test "$(NPM_CONFIG_USERCONFIG="${bootstrap_userconfig}" "${exact_npm}" config get registry)" = "https://registry.npmjs.org/"
+          echo "${npm_prefix}/node_modules/.bin" >> "${GITHUB_PATH}"
+          echo "NPM_CONFIG_USERCONFIG=${bootstrap_userconfig}" >> "${GITHUB_ENV}"
+          echo "NPM_CONFIG_CACHE=${bootstrap_cache}" >> "${GITHUB_ENV}"
+
+      - name: Verify source and registry locks
+        run: |
+          node scripts/verify-public-source.mjs
+          node scripts/verify-release-readiness.mjs
+          node scripts/verify-lock-registry.mjs
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - name: Check source types
+        run: npm run check
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build readable artifacts
+        run: npm run build
+
+      - name: Exercise onboarding
+        run: npm run onboarding:smoke
+
+      - name: Verify installed package artifact
+        run: npm run verify:package
+
+      - name: Reject generated-output drift
+        run: git diff --exit-code -- dist

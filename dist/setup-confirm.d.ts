@@ -1,0 +1,108 @@
+/**
+ * gh#818 P3 — disclose + confirm the `borg setup` global-config mutation.
+ *
+ * Step-1 of the setup wizard writes the user's GLOBAL agent config
+ * (registers the borg MCP server + hooks). Before gh#818 this happened
+ * silently on first run. This module adds informed-consent disclosure:
+ * it lists WHICH files will be written (well-known `os.homedir()` paths)
+ * and asks to continue before the first mutation.
+ *
+ * Pure / dep-injected (mirrors `resolveCliChoice` + `setup-action.ts`) so
+ * the decision is unit-testable without spawning a prompt or touching argv.
+ *
+ * SECURITY (SR-light, gh#818 221c43df): the disclosure lists file PATHS +
+ * at most the PUBLIC `BORG_API_URL` — there is NO token/secret in the
+ * written config to echo. Tokens live in the AES-256-GCM keychain, and
+ * Step-1 runs BEFORE OAuth, so at mutation time no token even exists.
+ */
+export interface ConfigMutationTarget {
+    /** Human-readable config file path (tilde form). */
+    file: string;
+    /** What is added to it. */
+    change: string;
+}
+/**
+ * The set of global config files Step-1 writes, scoped to the detected
+ * agent CLIs. Paths mirror `config-utils.ts`:
+ *   Claude Code: ~/.claude.json (MCP server) + ~/.claude/settings.json (hook)
+ *   Codex:       ~/.codex/config.toml (MCP server) + ~/.codex/hooks.json (hooks)
+ *   OpenCode:    ~/.config/opencode/opencode.json (MCP server)
+ */
+export declare function configMutationTargets(deps: {
+    claude: boolean;
+    codex: boolean;
+    opencode?: boolean;
+}): ConfigMutationTarget[];
+/**
+ * Disclosure text: the files Step-1 will write + an undo note. Pure so SR
+ * can pin "lists paths only, no secret". Lists the public `BORG_API_URL`
+ * only by reference (the MCP-server registration env), never a credential.
+ */
+export declare function formatConfigMutationDisclosure(targets: ConfigMutationTarget[]): string;
+export type ConfirmDecision = 'proceed' | 'abort';
+export interface ConfirmConfigMutationDeps {
+    /** `process.stdin.isTTY === true`. */
+    isTTY: boolean;
+    /** `--yes` / `-y` present in argv. */
+    yes: boolean;
+    /**
+     * Injected interactive confirm — returns the user's yes(true)/no(false).
+     * Only invoked in the TTY-and-not-`--yes` path; NEVER called otherwise
+     * (so a non-TTY never reads stdin — see item 1 below).
+     */
+    confirm: () => Promise<boolean>;
+}
+/**
+ * Decide whether to proceed with the Step-1 config mutation.
+ *
+ * The six CR-binding build-gate items (gh#818, 3b3e85a5) live here:
+ *   1. (THE load-bearing headless no-regress) non-TTY → 'proceed' WITHOUT
+ *      prompting. We return before touching `confirm`, so a non-TTY run
+ *      (CI / pipe / headless) never reads stdin → no hang.
+ *   2. `--yes`/`-y` → 'proceed' without prompting (scripted-but-TTY +
+ *      explicit non-interactive). No collision with --no-browser/--device.
+ *   3. TTY + interactive → ask; decline → 'abort' (the caller exits BEFORE
+ *      any write).
+ *   6. This dep-injected shape IS the testable seam.
+ */
+export declare function confirmConfigMutation(deps: ConfirmConfigMutationDeps): Promise<ConfirmDecision>;
+/**
+ * Scan argv for the `--yes` / `-y` bypass. Kept separate so the flag set
+ * is pinned in tests (item 2 — no collision with the existing
+ * --no-browser/--device scan in setup.ts).
+ */
+export declare function parseYesFlag(argv: string[]): boolean;
+/**
+ * gh#844 — whether Step-1 has ANY config mutation worth disclosing.
+ *
+ * The disclosure + confirm prompt exists to obtain informed consent for the
+ * config writes Step-1 performs (gh#818). On a pure refresh — the normal
+ * OAuth-refresh re-run where every DETECTED agent CLI already has the full
+ * borg setup (MCP server registered AND every hook write already applied) —
+ * there is no mutation to consent to, so the prompt is redundant and skipped.
+ *
+ * CRITICAL (gh#844 SR finding 8d9c732e): the gate must cover the FULL disclosed
+ * mutation set — MCP registration AND every hook write (claude UserPromptSubmit
+ * + the legacy SessionStart removal; codex SessionStart + UserPromptSubmit) —
+ * not MCP registration alone. Otherwise an MCP-configured user with a pending
+ * hook write (e.g. a pre-gh#673 upgrader whose legacy global hook must be
+ * removed) would have settings.json mutated with consent silently skipped.
+ * Caller derives `claudeHookPending`/`codexHookPending` from the SAME peeks
+ * that gate the individual writers, so the gate and the writers cannot drift.
+ *
+ * Scoped to DETECTED CLIs: a claude-only user is never gated on codex config
+ * state (and vice-versa). A naive `!isMcpServerConfigured() ||
+ * !isCodexMcpServerConfigured()` gate would mis-fire for single-CLI users —
+ * the absent CLI's config is unconfigured, so the OR would always be true.
+ */
+export declare function setupMutationPending(deps: {
+    claude: boolean;
+    codex: boolean;
+    opencode: boolean;
+    claudeMcpConfigured: boolean;
+    codexMcpConfigured: boolean;
+    opencodeMcpConfigured: boolean;
+    claudeHookPending: boolean;
+    codexHookPending: boolean;
+}): boolean;
+//# sourceMappingURL=setup-confirm.d.ts.map

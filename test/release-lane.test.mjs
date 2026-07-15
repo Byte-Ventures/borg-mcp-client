@@ -192,8 +192,9 @@ test('release attempt guard rejects reruns of an immutable tag workflow', () => 
   }));
 });
 
-test('release readiness fails closed for the current extraction scaffold', async () => {
-  await assert.rejects(() => verifyReleaseReadiness(root), /missing (?:CONTRIBUTING\.md|SECURITY\.md|package-lock\.json|package\.json)/);
+test('release readiness accepts the extracted standalone client', async () => {
+  const report = await verifyReleaseReadiness(root);
+  assert.deepEqual(report, { name: 'borgmcp', version: '1.1.15', shared: '0.2.2' });
 });
 
 test('release readiness accepts one canonical registry-resolved shared dependency', async (t) => {

@@ -7,16 +7,20 @@ runbook is an operator procedure; it does not authorize a tag or publication.
 
 ## Current Release Blockers
 
-The repository is an extraction scaffold. A release remains blocked until all
-of these conditions are independently reviewed and satisfied:
+The standalone client source was extracted from private-monorepo commit
+`17ff8ce14e12122a8cc9089f6b94174c02fa2a04` without importing its Git history.
+A release remains blocked until all of these conditions are independently
+reviewed and satisfied:
 
-- the complete client source, tests, package metadata, lockfile, public
-  documentation, `SECURITY.md`, and `CONTRIBUTING.md` have been extracted;
-- the extraction review confirms no private backend, credentials, deployment
+- the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- `borgmcp-shared` has been published and cryptographically verified, and the
-  client depends on registry package `borgmcp-shared@^0.2.0` with one canonical
+- Security explicitly reviews the installed-application OAuth identifiers and
+  public-client credentials already distributed in prior `borgmcp` artifacts;
+- the separately reviewed local enrollment redesign replaces the current
+  server-generated bearer response before local dogfood release;
+- an unused stable package version is selected and authorized separately;
+- registry package `borgmcp-shared@^0.2.0` remains bound to one canonical
   lockfile resolution and SHA-512 integrity;
 - the client package passes its full tests, type checks, build, clean packed
   installation, MCP stdio, and local-server/Cloud compatibility gates;

@@ -1,0 +1,1 @@
+{"version":3,"file":"claude-launch-args.js","sourceRoot":"","sources":["../src/claude-launch-args.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;GAeG;AAEH,4EAA4E;AAC5E,MAAM,CAAC,MAAM,sBAAsB,GAAG,cAAc,CAAC;AAErD;;;;;;;;;;;GAWG;AACH,MAAM,UAAU,qBAAqB,CAAC,eAAyB,EAAE,OAAe;IAC9E,OAAO,CAAC,GAAG,eAAe,EAAE,OAAO,EAAE,gBAAgB,EAAE,sBAAsB,CAAC,CAAC;AACjF,CAAC"}

@@ -1,0 +1,1 @@
+{"version":3,"file":"setup-action.js","sourceRoot":"","sources":["../src/setup-action.ts"],"names":[],"mappings":"AAoBA,MAAM,UAAU,qBAAqB,CAAC,KAAmB;IACvD,QAAQ,KAAK,EAAE,CAAC;QACd,KAAK,OAAO;YACV,OAAO,MAAM,CAAC;QAChB,KAAK,WAAW;YACd,OAAO,OAAO,CAAC;QACjB,KAAK,MAAM,CAAC;QACZ;YACE,OAAO,QAAQ,CAAC;IACpB,CAAC;AACH,CAAC"}
