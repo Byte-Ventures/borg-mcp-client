@@ -1,0 +1,195 @@
+import { createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
+import { request as httpsRequest } from 'node:https';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { Readable } from 'node:stream';
+
+export type ServerFetch = typeof fetch;
+
+export interface BorgServerTrust {
+  identity: string;
+  fetchImpl: ServerFetch;
+}
+
+interface ServerTrustConfig {
+  ca_spki_sha256: string;
+}
+
+const trustCache = new Map<string, Promise<BorgServerTrust>>();
+
+function serverDataDirectory(): string {
+  return resolve(process.env.BORG_SERVER_DATA_DIR ?? join(homedir(), '.borg', 'server'));
+}
+
+async function readTrustFile(path: string): Promise<string> {
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error('Borg server trust files were not found');
+    }
+    throw new Error('Borg server trust files could not be opened safely');
+  }
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) {
+      throw new Error('Borg server trust files must be private regular files');
+    }
+    if (typeof process.getuid === 'function' && metadata.uid !== process.getuid()) {
+      throw new Error('Borg server trust files must be owned by the current user');
+    }
+    return await handle.readFile('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
+function decodeTrustConfig(value: string): ServerTrustConfig {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('Borg server trust metadata is invalid');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Borg server trust metadata is invalid');
+  }
+  const fingerprint = (parsed as Record<string, unknown>).ca_spki_sha256;
+  if (typeof fingerprint !== 'string' || !/^[a-f0-9]{64}$/i.test(fingerprint)) {
+    throw new Error('Borg server trust metadata is missing a valid CA identity');
+  }
+  return { ca_spki_sha256: fingerprint.toLowerCase() };
+}
+
+function verifyCaIdentity(certificate: string, expected: string): string {
+  let parsed: X509Certificate;
+  try {
+    parsed = new X509Certificate(certificate);
+  } catch {
+    throw new Error('Borg server CA certificate is invalid');
+  }
+  if (!parsed.ca) throw new Error('Borg server trust anchor is not a CA certificate');
+  const actual = createHash('sha256')
+    .update(parsed.publicKey.export({ type: 'spki', format: 'der' }))
+    .digest();
+  const expectedBytes = Buffer.from(expected, 'hex');
+  if (expectedBytes.length !== actual.length || !timingSafeEqual(actual, expectedBytes)) {
+    throw new Error('Borg server CA certificate does not match its pinned identity');
+  }
+  return `spki-sha256:${actual.toString('hex')}`;
+}
+
+function responseHeaders(rawHeaders: string[]): Headers {
+  const headers = new Headers();
+  for (let index = 0; index < rawHeaders.length; index += 2) {
+    const name = rawHeaders[index];
+    const value = rawHeaders[index + 1];
+    if (name !== undefined && value !== undefined) headers.append(name, value);
+  }
+  return headers;
+}
+
+function requestBody(value: unknown): string | Uint8Array | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string') return value;
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  throw new Error('Borg server transport received an unsupported request body');
+}
+
+/**
+ * Minimal fetch-compatible HTTPS transport bound to one origin and one
+ * explicit local CA. Node's global fetch cannot consume the server-owned CA,
+ * and disabling certificate validation would collapse the authority boundary.
+ */
+export function createPinnedServerFetch(origin: string, caCertificate: string): ServerFetch {
+  const authority = new URL(origin);
+  if (authority.protocol !== 'https:' || authority.origin !== origin) {
+    throw new Error('Borg server trust requires a canonical HTTPS origin');
+  }
+
+  return (async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
+    const url = input instanceof Request ? new URL(input.url) : new URL(input.toString());
+    if (url.origin !== authority.origin || url.protocol !== 'https:') {
+      throw new Error('Borg server transport refused a cross-authority request');
+    }
+    if (input instanceof Request) {
+      throw new Error('Borg server transport requires an explicit URL and request options');
+    }
+    if (init.signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
+
+    const body = requestBody(init.body);
+    const headers = new Headers(init.headers);
+    return await new Promise<Response>((resolvePromise, rejectPromise) => {
+      const request = httpsRequest({
+        protocol: 'https:',
+        hostname: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+        port: url.port || 443,
+        path: `${url.pathname}${url.search}`,
+        method: init.method ?? 'GET',
+        headers: Object.fromEntries(headers.entries()),
+        ca: caCertificate,
+        rejectUnauthorized: true,
+        minVersion: 'TLSv1.3',
+      }, (incoming) => {
+        const status = incoming.statusCode ?? 500;
+        if (init.redirect === 'error' && status >= 300 && status < 400) {
+          incoming.resume();
+          rejectPromise(new Error('Borg server redirect refused'));
+          return;
+        }
+        const noBody = init.method === 'HEAD' || status === 204 || status === 304;
+        const stream = noBody
+          ? null
+          : Readable.toWeb(incoming) as ReadableStream<Uint8Array>;
+        if (noBody) incoming.resume();
+        resolvePromise(new Response(stream, {
+          status,
+          statusText: incoming.statusMessage,
+          headers: responseHeaders(incoming.rawHeaders),
+        }));
+      });
+
+      const abort = (): void => {
+        request.destroy(new DOMException('This operation was aborted', 'AbortError'));
+      };
+      init.signal?.addEventListener('abort', abort, { once: true });
+      request.once('close', () => init.signal?.removeEventListener('abort', abort));
+      request.once('error', rejectPromise);
+      if (body !== undefined) request.write(body);
+      request.end();
+    });
+  }) as ServerFetch;
+}
+
+export async function loadBorgServerTrust(
+  origin: string,
+  dataDirectory = serverDataDirectory(),
+): Promise<BorgServerTrust> {
+  const key = `${dataDirectory}\0${origin}`;
+  let pending = trustCache.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const [certificate, configText] = await Promise.all([
+        readTrustFile(join(dataDirectory, 'ca.crt')),
+        readTrustFile(join(dataDirectory, 'server.json')),
+      ]);
+      const config = decodeTrustConfig(configText);
+      const identity = verifyCaIdentity(certificate, config.ca_spki_sha256);
+      return {
+        identity,
+        fetchImpl: createPinnedServerFetch(origin, certificate),
+      };
+    })();
+    trustCache.set(key, pending);
+    pending.catch(() => trustCache.delete(key));
+  }
+  return pending;
+}
+
+export function __clearServerTrustCacheForTest(): void {
+  trustCache.clear();
+}

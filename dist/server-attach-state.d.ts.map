@@ -1,0 +1,1 @@
+{"version":3,"file":"server-attach-state.d.ts","sourceRoot":"","sources":["../src/server-attach-state.ts"],"names":[],"mappings":"AAiBA,MAAM,WAAW,kBAAkB;IACjC,MAAM,EAAE,MAAM,CAAC;IACf,aAAa,EAAE,MAAM,CAAC;IACtB,MAAM,EAAE,MAAM,CAAC;IACf,MAAM,EAAE,MAAM,CAAC;CAChB;AA8GD;;;GAGG;AACH,wBAAsB,8BAA8B,CAClD,OAAO,EAAE,kBAAkB,EAC3B,WAAW,SAAoB,GAC9B,OAAO,CAAC,MAAM,CAAC,CAuBjB"}

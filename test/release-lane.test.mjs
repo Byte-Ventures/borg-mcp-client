@@ -192,8 +192,65 @@ test('release attempt guard rejects reruns of an immutable tag workflow', () => 
   }));
 });
 
-test('release readiness fails closed for the current extraction scaffold', async () => {
-  await assert.rejects(() => verifyReleaseReadiness(root), /missing (?:CONTRIBUTING\.md|SECURITY\.md|package-lock\.json|package\.json)/);
+test('release readiness accepts the extracted standalone client', async () => {
+  const report = await verifyReleaseReadiness(root);
+  assert.deepEqual(report, { name: 'borgmcp', version: '1.1.15', shared: '0.2.2' });
+});
+
+test('public-source scan ignores a linked-worktree .git file', async (t) => {
+  const worktree = await mkdtemp(join(tmpdir(), 'borgmcp-client-linked-worktree-'));
+  t.after(() => rm(worktree, { recursive: true, force: true }));
+  await mkdir(join(worktree, 'src'));
+  await mkdir(join(worktree, 'dist'));
+  await cp(join(root, 'src', 'auth.ts'), join(worktree, 'src', 'auth.ts'));
+  await cp(join(root, 'dist', 'auth.js'), join(worktree, 'dist', 'auth.js'));
+  await writeFile(join(worktree, '.git'), 'gitdir: /Users/private/repository/.git/worktrees/client\n');
+
+  assert.doesNotThrow(() => execFileSync(
+    process.execPath,
+    [join(root, 'scripts', 'verify-public-source.mjs')],
+    { cwd: worktree, stdio: 'pipe' },
+  ));
+
+  const authPath = join(worktree, 'src', 'auth.ts');
+  const authSource = await readFile(authPath, 'utf8');
+  const [clientId] = authSource.match(/\b[A-Za-z0-9_-]+\.apps\.googleusercontent\.com\b/) ?? [];
+  assert.ok(clientId);
+  await writeFile(authPath, authSource.replace(clientId, `x${clientId.slice(1)}`));
+  assert.throws(() => execFileSync(
+    process.execPath,
+    [join(root, 'scripts', 'verify-public-source.mjs')],
+    { cwd: worktree, stdio: 'pipe' },
+  ));
+});
+
+test('public-source scan rejects repeated OAuth tokens before spawning helpers', async (t) => {
+  const fixture = await mkdtemp(join(tmpdir(), 'borgmcp-client-oauth-cap-'));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  await mkdir(join(fixture, 'scripts'));
+  await cp(
+    join(root, 'scripts', 'verify-public-source.mjs'),
+    join(fixture, 'scripts', 'verify-public-source.mjs'),
+  );
+  const token = ['GOCSPX-', 'a'.repeat(32)].join('');
+  const hostile = Array(128).fill(token).join('\n');
+  assert.ok(Buffer.byteLength(hostile) < 4 * 1024 * 1024);
+  await writeFile(join(fixture, 'repeated-token.txt'), hostile);
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [join(fixture, 'scripts', 'verify-public-source.mjs')],
+      { cwd: fixture, encoding: 'utf8', stdio: 'pipe' },
+    ),
+    (error) => {
+      const diagnostic = `${error.stderr ?? ''}`;
+      assert.match(diagnostic, /repeated-token\.txt: OAuth match cap exceeded \(128 > 4\)/);
+      assert.match(diagnostic, /global OAuth match cap exceeded \(128 > 8\)/);
+      assert.doesNotMatch(diagnostic, /sha256-stdin|MODULE_NOT_FOUND/);
+      return true;
+    },
+  );
 });
 
 test('release readiness accepts one canonical registry-resolved shared dependency', async (t) => {
@@ -217,12 +274,16 @@ test('workflow guards reruns and hostile source config before trusted npm bootst
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { packageRoot } = await validPackage(directory);
   const runnerConfig = join(directory, 'runner.npmrc');
-  const readinessScript = join(root, 'scripts', 'verify-release-readiness.mjs');
+  await mkdir(join(packageRoot, 'scripts'));
+  await cp(
+    join(root, 'scripts', 'verify-release-readiness.mjs'),
+    join(packageRoot, 'scripts', 'verify-release-readiness.mjs'),
+  );
   const workflowSteps = `set -euo pipefail
 test "\${GITHUB_RUN_ATTEMPT}" = "1"
 test ! -e .npmrc
 printf '%s\\n' 'registry=https://registry.npmjs.org/' > "\${NPM_CONFIG_USERCONFIG}"
-node "${readinessScript}"
+node scripts/verify-release-readiness.mjs
 `;
   const runWorkflowSteps = (attempt) => execFileSync('bash', ['-c', workflowSteps], {
     cwd: packageRoot,
