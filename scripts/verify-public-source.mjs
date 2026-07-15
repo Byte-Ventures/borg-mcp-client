@@ -14,6 +14,8 @@ const expectedOAuthFingerprints = [
 const oauthFingerprintsByPath = new Map();
 
 function fingerprint(value) {
+  // lgtm[js/insufficient-password-hash] These are equality fingerprints for
+  // operator-verified public OAuth identifiers, never password verifiers.
   return createHash('sha256').update(value).digest('hex');
 }
 

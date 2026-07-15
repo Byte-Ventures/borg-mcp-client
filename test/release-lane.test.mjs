@@ -234,12 +234,16 @@ test('workflow guards reruns and hostile source config before trusted npm bootst
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { packageRoot } = await validPackage(directory);
   const runnerConfig = join(directory, 'runner.npmrc');
-  const readinessScript = join(root, 'scripts', 'verify-release-readiness.mjs');
+  await mkdir(join(packageRoot, 'scripts'));
+  await cp(
+    join(root, 'scripts', 'verify-release-readiness.mjs'),
+    join(packageRoot, 'scripts', 'verify-release-readiness.mjs'),
+  );
   const workflowSteps = `set -euo pipefail
 test "\${GITHUB_RUN_ATTEMPT}" = "1"
 test ! -e .npmrc
 printf '%s\\n' 'registry=https://registry.npmjs.org/' > "\${NPM_CONFIG_USERCONFIG}"
-node "${readinessScript}"
+node scripts/verify-release-readiness.mjs
 `;
   const runWorkflowSteps = (attempt) => execFileSync('bash', ['-c', workflowSteps], {
     cwd: packageRoot,
