@@ -224,6 +224,35 @@ test('public-source scan ignores a linked-worktree .git file', async (t) => {
   ));
 });
 
+test('public-source scan rejects repeated OAuth tokens before spawning helpers', async (t) => {
+  const fixture = await mkdtemp(join(tmpdir(), 'borgmcp-client-oauth-cap-'));
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  await mkdir(join(fixture, 'scripts'));
+  await cp(
+    join(root, 'scripts', 'verify-public-source.mjs'),
+    join(fixture, 'scripts', 'verify-public-source.mjs'),
+  );
+  const token = ['GOCSPX-', 'a'.repeat(32)].join('');
+  const hostile = Array(128).fill(token).join('\n');
+  assert.ok(Buffer.byteLength(hostile) < 4 * 1024 * 1024);
+  await writeFile(join(fixture, 'repeated-token.txt'), hostile);
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [join(fixture, 'scripts', 'verify-public-source.mjs')],
+      { cwd: fixture, encoding: 'utf8', stdio: 'pipe' },
+    ),
+    (error) => {
+      const diagnostic = `${error.stderr ?? ''}`;
+      assert.match(diagnostic, /repeated-token\.txt: OAuth match cap exceeded \(128 > 4\)/);
+      assert.match(diagnostic, /global OAuth match cap exceeded \(128 > 8\)/);
+      assert.doesNotMatch(diagnostic, /sha256-stdin|MODULE_NOT_FOUND/);
+      return true;
+    },
+  );
+});
+
 test('release readiness accepts one canonical registry-resolved shared dependency', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'borgmcp-client-readiness-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

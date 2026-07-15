@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 const root = resolve('.');
 const excluded = new Set(['.git', '.claude', '.opencode', 'coverage', 'node_modules', 'release']);
 const findings = [];
+const maxOAuthMatchesPerFile = 4;
+const maxOAuthMatchesGlobal = 8;
 const expectedOAuthFingerprints = [
   'fe93485615a89f3db7132351877d7215b69de3ba5bc25bed32a28c08697f7242',
   'ae958146e8947f46544e8e162f9d0b157cac29cd4d4854cf9e295f3f0b6b115f',
@@ -13,7 +15,8 @@ const expectedOAuthFingerprints = [
   '6915f25f028886263d0d4a649a1d1c4135413ce3c75fb3abd4dbe5916d804031',
 ].sort();
 const sha256StdinScript = fileURLToPath(new URL('./sha256-stdin.mjs', import.meta.url));
-const oauthFingerprintsByPath = new Map();
+const oauthValuesByPath = new Map();
+let oauthMatchCount = 0;
 
 function fingerprint(value) {
   return execFileSync(process.execPath, [sha256StdinScript], {
@@ -53,12 +56,26 @@ async function walk(directory) {
       ...(content.match(/\b[A-Za-z0-9_-]+\.apps\.googleusercontent\.com\b/g) ?? []),
     ];
     if (oauthMatches.length > 0) {
-      oauthFingerprintsByPath.set(name, oauthMatches.map(fingerprint).sort());
+      oauthMatchCount += oauthMatches.length;
+      if (oauthMatches.length > maxOAuthMatchesPerFile) {
+        findings.push(`${name}: OAuth match cap exceeded (${oauthMatches.length} > ${maxOAuthMatchesPerFile})`);
+      }
+      oauthValuesByPath.set(name, [...new Set(oauthMatches)]);
     }
   }
 }
 
 await walk(root);
+if (oauthMatchCount > maxOAuthMatchesGlobal) {
+  findings.push(`global OAuth match cap exceeded (${oauthMatchCount} > ${maxOAuthMatchesGlobal})`);
+}
+// Do not fork the fingerprint helper until the whole tree is known to be
+// within both caps and free of other sensitivity findings.
+if (findings.length > 0) throw new Error(`Public-source sensitivity scan failed:\n${findings.join('\n')}`);
+
+const oauthFingerprintsByPath = new Map(
+  [...oauthValuesByPath].map(([path, values]) => [path, values.map(fingerprint).sort()]),
+);
 for (const path of ['src/auth.ts', 'dist/auth.js']) {
   const actual = oauthFingerprintsByPath.get(path) ?? [];
   if (JSON.stringify(actual) !== JSON.stringify(expectedOAuthFingerprints)) {
