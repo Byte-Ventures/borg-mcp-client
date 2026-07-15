@@ -438,7 +438,10 @@ describe('self-hosted server handshake', () => {
           serverCapabilities: [],
         })),
       },
-    )).rejects.toThrow(/not authorized to create cubes/i);
+    )).rejects.toMatchObject({
+      code: 'CREATE_CUBE_DENIED',
+      message: expect.stringMatching(/not authorized to create cubes/i),
+    });
     expect(deniedFetch).not.toHaveBeenCalled();
   });
 

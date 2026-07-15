@@ -76,6 +76,11 @@ async function selectAssimilationAuthority(flags, deps) {
 }
 function reportServerFailure(deps, apiUrl, error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof BorgServerError && error.code === 'CREATE_CUBE_DENIED') {
+        deps.stderr(`This client is enrolled with Borg server ${apiUrl}, but it lacks the create_cube capability. ` +
+            'Ask the server operator for a cube grant, or join a cube already accessible to this client.\n');
+        return 1;
+    }
     if (error instanceof BorgServerError && error.code === 'NOT_ENROLLED') {
         deps.stderr(`Not enrolled with Borg server ${apiUrl}. Borg did not connect to borgmcp.ai. ` +
             `Ask this server's operator for a single-use invitation, then run: ` +
@@ -94,13 +99,41 @@ function reportServerFailure(deps, apiUrl, error) {
             'Ask the server operator for a new invitation; Borg did not connect to borgmcp.ai.\n');
         return 1;
     }
+    if (/HTTP 40[13]|auth(?:entication|orization)|credential.*(?:invalid|rejected)/i.test(message)) {
+        deps.stderr(`Your saved enrollment for ${apiUrl} was rejected. ` +
+            `Run borg assimilate --host ${apiUrl} --enroll to replace it; ` +
+            'Borg did not connect to borgmcp.ai.\n');
+        return 1;
+    }
+    if (/^Borg server keychain state is busy$/i.test(message)) {
+        deps.stderr(`Another Borg process is creating or resuming secure state for ${apiUrl}. ` +
+            'Wait for that process to finish, then retry this command.\n');
+        return 1;
+    }
+    if (/keychain|secure credential (?:store|storage)/i.test(message)) {
+        deps.stderr(`Borg could not access the OS keychain for ${apiUrl}. ` +
+            'Unlock or enable the keychain, then retry this command; ' +
+            'Borg will resume any pending operation safely.\n');
+        return 1;
+    }
+    if (/trust|certificate|\bCA\b|authority state|pinned identity|cross-authority/i.test(message)) {
+        deps.stderr(`Borg could not verify the identity of ${apiUrl}. ` +
+            "Restore this server's same-user trust files or confirm its expected certificate, then retry. " +
+            'Borg did not fall back to Cloud.\n');
+        return 1;
+    }
+    if (/connect|fetch|network|timed? ?out|timeout|ECONN|ENOTFOUND|EHOST|unreachable|aborted|socket/i.test(message)) {
+        deps.stderr(`Could not reach Borg server at ${apiUrl}. ` +
+            'Check that the server is running at this exact endpoint, then retry. ' +
+            'Borg did not fall back to Cloud.\n');
+        return 1;
+    }
     const safeMessage = safeStderr(message)
         .replace(/[A-Za-z0-9_-]{43,}/g, '[redacted]')
         .slice(0, 240);
-    deps.stderr(`Could not connect to Borg server at ${apiUrl}: ${safeMessage || 'connection failed'}\n` +
-        `Borg did not connect to borgmcp.ai. Check that the server is running and trusted. ` +
-        `If enrollment is missing or rejected, ask its operator for a single-use invitation, ` +
-        `then run \`borg assimilate --host ${apiUrl} --enroll\`.\n`);
+    deps.stderr(`Borg server at ${apiUrl} returned an unexpected response: ` +
+        `${safeMessage || 'request failed'}. ` +
+        'Check client/server compatibility, then retry. Borg did not fall back to Cloud.\n');
     return 1;
 }
 export async function runAssimilate(args, deps) {

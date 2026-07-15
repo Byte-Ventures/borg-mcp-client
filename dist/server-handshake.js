@@ -319,7 +319,7 @@ export async function createBorgServerCube(origin, trustIdentity, parentCredenti
         throw new BorgServerError('CREDENTIAL_REJECTED', 'stored Borg server credential was rejected');
     }
     if (!active.clientId || !active.serverCapabilities.includes('create_cube')) {
-        throw new Error('This Borg server client is not authorized to create cubes');
+        throw new BorgServerError('CREATE_CUBE_DENIED', 'This Borg server client is not authorized to create cubes');
     }
     const pending = await (deps.prepareCubeCreation ?? getOrCreatePendingServerCubeCreation)({
         origin,
@@ -366,7 +366,7 @@ export async function createBorgServerCube(origin, trustIdentity, parentCredenti
         throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
     }
     if (response.status === 404) {
-        throw new Error('This Borg server client is not authorized to create cubes');
+        throw new BorgServerError('CREATE_CUBE_DENIED', 'This Borg server client is not authorized to create cubes');
     }
     if (response.status === 409) {
         throw new Error('Borg server cube creation retry state conflicted');
