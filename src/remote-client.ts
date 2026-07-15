@@ -37,12 +37,16 @@ import {
   type LocalServerCursor,
 } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
+import {
+  CANONICAL_HOSTED_API_URL,
+  isCanonicalHostedApiUrl,
+} from './authority.js';
 
 // Compatibility validation for the deprecated request field. The CLI no longer
 // offers provider configuration, but older callers may still send this shape.
 const LEGACY_MODEL_DESCRIPTOR_REGEX = /^(claude|ollama):[A-Za-z0-9._:\/-]+$/;
 
-export const API_URL = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
+export const API_URL = process.env.BORG_API_URL || CANONICAL_HOSTED_API_URL;
 
 export interface RemoteConnection {
   apiUrl: string;
@@ -197,13 +201,14 @@ async function localAuthorityContext(
     }
     return matched;
   }
-  // An explicit drone-session endpoint outside the configured hosted
+  // An explicit drone-session endpoint outside the canonical hosted
   // authority is self-hosted by definition. Missing/removed trust metadata
   // must never downgrade that request into the Cloud OAuth path: cubes.json is
-  // mutable local state, and a legacy-looking sessionToken is not proof that a
-  // loopback/custom endpoint is hosted. A matching hydrated local ActiveCube
-  // carries the verified trust anchor; otherwise fail before OAuth or network.
-  if (!matched && apiUrl !== API_URL) {
+  // mutable local state and BORG_API_URL is mutable process configuration.
+  // Neither a legacy-looking sessionToken nor an environment endpoint override
+  // proves Cloud authority. A matching hydrated local ActiveCube carries the
+  // verified trust anchor; otherwise fail before OAuth or network.
+  if (!matched && !isCanonicalHostedApiUrl(apiUrl)) {
     throw new Error('Selected Borg server authority state is missing or unreadable');
   }
   return matched;
@@ -582,7 +587,7 @@ async function authedFetch(
     droneSession !== undefined &&
     apiUrl !== undefined &&
     suppliedTrustIdentity === undefined &&
-    baseUrl !== API_URL
+    !isCanonicalHostedApiUrl(baseUrl)
   ) {
     throw new Error('Selected Borg server authority state is missing or unreadable');
   }

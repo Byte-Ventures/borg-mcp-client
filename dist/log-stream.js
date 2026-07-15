@@ -37,6 +37,7 @@ import { getValidToken } from './remote-client.js';
 import { recordEventReceipt, emitHealthBeat, getCachedMonitorHealthy, getCachedWakeArmed, } from './health-beat.js';
 import { getPackageVersion } from './version.js';
 import { readBoundedResponseBody } from './server-response.js';
+import { isCanonicalHostedApiUrl } from './authority.js';
 import { acquireStreamLease, readOwnershipSnapshot, } from './stream-owner.js';
 // ------------------------------------------------------------------
 // Tuning constants
@@ -441,6 +442,13 @@ export function __runLoopForTest(testDeps) {
 export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     const { fetchImpl, appendLine, hasInboxEntryId, getToken, wakeCodex, heartbeatTimeoutMs, hwmDivergenceGraceMs, abortSignal, onInboxReceipt, injectOpenCode, } = { ...defaultDeps, ...deps };
     const isLocal = active.serverTrustIdentity !== undefined;
+    // An environment-selected BORG_API_URL is routing configuration, not proof
+    // of Borg Cloud authority. A drone session aimed anywhere except the
+    // canonical hosted origin must carry hydrated local trust before either the
+    // OAuth token getter or the SSE transport is touched.
+    if (!isLocal && !isCanonicalHostedApiUrl(active.apiUrl)) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
     const token = isLocal ? active.sessionToken : await getToken();
     const headers = {
         Authorization: `Bearer ${token}`,

@@ -23,6 +23,8 @@
  * injected so the producer is unit-tested without real network/keychain/pgrep.
  */
 
+import { isCanonicalHostedApiUrl } from './authority.js';
+
 /** The cube context needed to address + auth a beat (subset of ActiveCube). */
 export interface HealthBeatActive {
   cubeId: string;
@@ -160,7 +162,10 @@ export async function postHealthBeat(
   // The local server protocol has no health-beat capability. Never aim the
   // hosted `/api/drone/health` shape at a selected local authority and never
   // fall back to the hosted API.
-  if (active.serverTrustIdentity !== undefined) return;
+  if (
+    active.serverTrustIdentity !== undefined ||
+    !isCanonicalHostedApiUrl(active.apiUrl)
+  ) return;
   try {
     const token = await deps.getToken();
     await deps.fetchImpl(`${active.apiUrl}/api/drone/health`, {
@@ -235,7 +240,10 @@ export async function runHealthBeatOnce(deps: HealthBeatTickDeps): Promise<void>
   try {
     const active = await deps.getActiveCube();
     if (!active) return;
-    if (active.serverTrustIdentity !== undefined) return;
+    if (
+      active.serverTrustIdentity !== undefined ||
+      !isCanonicalHostedApiUrl(active.apiUrl)
+    ) return;
     const connected = deps.getStreamConnected();
     const healthy = deps.checkMonitor(deps.getInboxPath(active));
     cachedMonitorHealthy = healthy;

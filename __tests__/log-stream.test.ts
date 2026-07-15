@@ -38,14 +38,14 @@ const ACTIVE_CUBE = {
   cubeId: 'cube-1',
   droneId: 'drone-1',
   sessionToken: 'token-1',
-  apiUrl: 'https://test.example.com',
+  apiUrl: 'https://api.borgmcp.ai',
 };
 
 const UUID_ACTIVE_CUBE = {
   cubeId: '11111111-1111-4111-8111-111111111111',
   droneId: '22222222-2222-4222-8222-222222222222',
   sessionToken: 'token-1',
-  apiUrl: 'https://test.example.com',
+  apiUrl: 'https://api.borgmcp.ai',
 };
 
 /**

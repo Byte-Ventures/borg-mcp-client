@@ -30,7 +30,7 @@ const ACTIVE: HealthBeatActive = {
   cubeId: 'cube-1',
   droneId: 'drone-1',
   sessionToken: 'sess-tok-xyz',
-  apiUrl: 'https://api.example.invalid',
+  apiUrl: 'https://api.borgmcp.ai',
 };
 
 beforeEach(() => {
@@ -129,7 +129,7 @@ describe('postHealthBeat (gh#541 WU-2)', () => {
     await postHealthBeat(ACTIVE, payload, { fetchImpl, getToken: async () => 'id-token-abc' });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe('https://api.example.invalid/api/drone/health');
+    expect(calls[0].url).toBe('https://api.borgmcp.ai/api/drone/health');
     expect(calls[0].init.method).toBe('POST');
     expect(calls[0].init.headers['Authorization']).toBe('Bearer id-token-abc');
     expect(calls[0].init.headers['X-Drone-Session']).toBe('sess-tok-xyz');
@@ -222,6 +222,27 @@ describe('emitHealthBeat (gh#541 WU-2)', () => {
       ...ACTIVE,
       apiUrl: 'https://localhost:8787',
       serverTrustIdentity: 'spki-sha256:test-server',
+    }, {
+      sseConnected: true,
+      inboxMonitorHealthy: true,
+      wakeArmed: true,
+      agentKind: 'codex',
+      hostname: 'host-a',
+      version: '1.1.15',
+      fetchImpl: fetchImpl as typeof fetch,
+      getToken,
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(getToken).not.toHaveBeenCalled();
+  });
+
+  it('does not let a noncanonical endpoint without trust obtain Cloud auth', async () => {
+    const fetchImpl = vi.fn();
+    const getToken = vi.fn(async () => 'cloud-token');
+    await emitHealthBeat({
+      ...ACTIVE,
+      apiUrl: 'https://127.0.0.1:7091',
+      // Deliberately removed: serverTrustIdentity.
     }, {
       sseConnected: true,
       inboxMonitorHealthy: true,
