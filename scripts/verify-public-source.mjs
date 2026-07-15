@@ -1,10 +1,21 @@
+import { createHash } from 'node:crypto';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 
 const root = resolve('.');
-const excluded = new Set(['.git', '.claude', '.opencode', 'coverage', 'dist', 'node_modules', 'release']);
+const excluded = new Set(['.git', '.claude', '.opencode', 'coverage', 'node_modules', 'release']);
 const findings = [];
-let publicOAuthCredentialCount = 0;
+const expectedOAuthFingerprints = [
+  'fe93485615a89f3db7132351877d7215b69de3ba5bc25bed32a28c08697f7242',
+  'ae958146e8947f46544e8e162f9d0b157cac29cd4d4854cf9e295f3f0b6b115f',
+  '385408ac72401565fd40515635041d4bd33d9e8bc19488bfc4b237605dcdffef',
+  '6915f25f028886263d0d4a649a1d1c4135413ce3c75fb3abd4dbe5916d804031',
+].sort();
+const oauthFingerprintsByPath = new Map();
+
+function fingerprint(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 async function walk(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -29,17 +40,26 @@ async function walk(directory) {
     for (const [pattern, description] of checks) {
       if (pattern.test(content)) findings.push(`${name}: ${description}`);
     }
-    const oauthMatches = content.match(/GOCSPX-[A-Za-z0-9_-]+/g) ?? [];
-    if (oauthMatches.length > 0 && name !== 'src/auth.ts') {
-      findings.push(`${name}: installed-application OAuth credential outside src/auth.ts`);
+    const oauthMatches = [
+      ...(content.match(/GOCSPX-[A-Za-z0-9_-]+/g) ?? []),
+      ...(content.match(/\b[A-Za-z0-9_-]+\.apps\.googleusercontent\.com\b/g) ?? []),
+    ];
+    if (oauthMatches.length > 0) {
+      oauthFingerprintsByPath.set(name, oauthMatches.map(fingerprint).sort());
     }
-    publicOAuthCredentialCount += oauthMatches.length;
   }
 }
 
 await walk(root);
-if (publicOAuthCredentialCount !== 2) {
-  findings.push(`expected exactly two installed-application OAuth credentials, found ${publicOAuthCredentialCount}`);
+for (const path of ['src/auth.ts', 'dist/auth.js']) {
+  const actual = oauthFingerprintsByPath.get(path) ?? [];
+  if (JSON.stringify(actual) !== JSON.stringify(expectedOAuthFingerprints)) {
+    findings.push(`${path}: installed-application OAuth public-client allowlist mismatch`);
+  }
+  oauthFingerprintsByPath.delete(path);
+}
+for (const path of oauthFingerprintsByPath.keys()) {
+  findings.push(`${path}: Google OAuth client material outside the two allowed files`);
 }
 if (findings.length > 0) throw new Error(`Public-source sensitivity scan failed:\n${findings.join('\n')}`);
-console.log(JSON.stringify({ files: 'scanned', publicOAuthCredentialsPendingSecurityReview: publicOAuthCredentialCount }));
+console.log(JSON.stringify({ files: 'scanned', allowedGoogleOAuthPublicClientValues: 4, copies: 2 }));

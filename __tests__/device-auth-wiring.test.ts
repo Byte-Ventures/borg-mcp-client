@@ -38,9 +38,9 @@ describe('buildDeviceAuthConfig (gh#557 ESCALATION-1 — baked-in device client)
     // Secret pairs with the id SOURCE: overriding the id but not the secret
     // must yield no secret, never the baked-in client's secret (mismatch).
     const config = buildDeviceAuthConfig({
-      GOOGLE_DEVICE_CLIENT_ID: 'device-client.apps.googleusercontent.com',
+      GOOGLE_DEVICE_CLIENT_ID: 'device-client.example.test',
     });
-    expect(config.clientId).toBe('device-client.apps.googleusercontent.com');
+    expect(config.clientId).toBe('device-client.example.test');
     expect(config.scopes).toContain('openid');
     expect(config.scopes).toContain('email');
     expect(config.clientSecret).toBeUndefined();

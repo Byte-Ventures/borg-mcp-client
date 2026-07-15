@@ -15,8 +15,9 @@ reviewed and satisfied:
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- Security explicitly reviews the installed-application OAuth identifiers and
-  public-client credentials already distributed in prior `borgmcp` artifacts;
+- an operator verifies in Google Console that the four pinned OAuth values are
+  Byte Ventures Desktop and TVs/Limited Input public-client distribution
+  material, including consent-screen and redirect policy, and records approval;
 - the separately reviewed local enrollment redesign replaces the current
   server-generated bearer response before local dogfood release;
 - an unused stable package version is selected and authorized separately;
@@ -60,6 +61,20 @@ tag. Repository settings are operator-owned; source changes do not apply them.
 6. Enable private vulnerability reporting, secret scanning, push protection,
    and Dependabot security updates. Enable validity checks and non-provider
    patterns when the organization plan supports them.
+
+## OAuth Public-Client Controls
+
+Before allowing a push-protection exception or publishing, compare the four
+SHA-256 fingerprints and paths in `docs/EXTRACTION_PROVENANCE.md` with Google
+Console. Verify the project, application types, consent screen, scopes, and
+Desktop redirect policy. Permit only those exact source literals and generated
+copies; never disable the provider pattern or repository push protection.
+
+Configure quota alerts for both clients. If either client is misclassified,
+transferred, abused, or unexpectedly consumes quota, revoke it in Google
+Console, replace both the source value and generated output, rerun the full
+release checks, and ship only after a new Security review. Treat the embedded
+values as public identifiers and never as client-authentication proof.
 
 Immediately after checkout, both jobs reject immutable reruns and then reject a
 checked-out root `.npmrc`, before `setup-node` or any npm command. The exact npm

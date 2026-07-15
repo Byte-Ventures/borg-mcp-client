@@ -24,7 +24,7 @@ import {
 } from '../src/device-auth.js';
 
 const CONFIG: DeviceAuthConfig = {
-  clientId: 'device-client.apps.googleusercontent.com',
+  clientId: 'device-client.example.test',
   clientSecret: 'device-secret',
   scopes: ['openid', 'email', 'profile'],
 };

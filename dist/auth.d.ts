@@ -7,7 +7,7 @@
  * 2. Start local HTTP server for callback
  * 3. Open browser to Google authorization URL
  * 4. User authorizes in browser
- * 5. Receive authorization code via localhost callback
+ * 5. Receive authorization code via an IPv4 loopback callback
  * 6. Exchange code for tokens
  * 7. Store tokens securely in OS keychain
  */
@@ -43,6 +43,16 @@ export declare class RefreshTokenInvalidError extends Error {
 export declare class RefreshTransientError extends Error {
     constructor(message: string);
 }
+/**
+ * Start local HTTP server to receive OAuth callback
+ * Exported for executable loopback-boundary tests.
+ */
+export declare function startCallbackServer(expectedState: string): Promise<{
+    host: string;
+    port: number;
+    codePromise: Promise<string>;
+    close: () => Promise<void>;
+}>;
 /**
  * Decide whether to use the no-browser device-grant flow. An explicit
  * `--no-browser`/`--device` (surfaced as opts.noBrowser) wins; otherwise

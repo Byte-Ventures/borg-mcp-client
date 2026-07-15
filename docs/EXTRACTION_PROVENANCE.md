@@ -14,10 +14,20 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 - Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
 - Added standalone source typecheck, unit/release tests, readable build, onboarding smoke, artifact verification, and public-source sensitivity scanning.
 - Made the package root export side-effect-free while retaining `borg-mcp` executable behavior.
+- Hardened the Desktop OAuth callback to an exact IPv4 loopback binding with
+  transaction state, bounded static responses, and adversarial callback tests;
+  test-only Google client-ID lookalikes use the reserved `.test` domain.
 - Retained the existing package version `1.1.15`; extraction does not authorize a version bump or release.
 
 ## Review Holds
 
-The installed-application OAuth credentials in `src/auth.ts` were already distributed in prior npm artifacts and are intentionally classified by the source as public-client credentials. Public-source Security review must confirm that classification before release.
+The installed-application OAuth credentials in `src/auth.ts` were already distributed in prior npm artifacts. Security classified them as public-client distribution material only if an operator verifies in Google Console that the exact clients belong to the Byte Ventures project and are registered respectively as Desktop and TVs/Limited Input clients. `scripts/verify-public-source.mjs` permits only the four pinned values in `src/auth.ts` and their generated copies in `dist/auth.js`; any additional Google OAuth client ID or `GOCSPX` value fails the scan.
+
+The pinned SHA-256 fingerprints, in Desktop client ID, Desktop public-client value, TVs/Limited Input client ID, and TVs/Limited Input public-client value order, are:
+
+- `fe93485615a89f3db7132351877d7215b69de3ba5bc25bed32a28c08697f7242`
+- `ae958146e8947f46544e8e162f9d0b157cac29cd4d4854cf9e295f3f0b6b115f`
+- `385408ac72401565fd40515635041d4bd33d9e8bc19488bfc4b237605dcdffef`
+- `6915f25f028886263d0d4a649a1d1c4135413ce3c75fb3abd4dbe5916d804031`
 
 Local enrollment still uses the pre-redesign server-generated bearer response. The reviewed shared contract must move to client-generated credential plus retry key, a pre-request `PENDING` keychain record, exact-tuple ambiguous retry, verified activation, and no file fallback before local dogfood release.

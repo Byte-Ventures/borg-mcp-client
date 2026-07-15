@@ -245,16 +245,16 @@
     {
       "source": "client/__tests__/device-auth-wiring.test.ts",
       "destination": "__tests__/device-auth-wiring.test.ts",
-      "status": "copied-byte-identical",
+      "status": "transformed-for-standalone-boundary",
       "source_sha256": "9bcd8154153a2ecee6241274327ec998dd3787b9b31177a6b7c96c28c5a28c1a",
-      "destination_sha256": "9bcd8154153a2ecee6241274327ec998dd3787b9b31177a6b7c96c28c5a28c1a"
+      "destination_sha256": "58cfadcb8475fa255f92a000284a6ff3a3b739f37f45c1869797b2481d503753"
     },
     {
       "source": "client/__tests__/device-auth.test.ts",
       "destination": "__tests__/device-auth.test.ts",
-      "status": "copied-byte-identical",
+      "status": "transformed-for-standalone-boundary",
       "source_sha256": "40716f554b53c91acbecd8cfbebbbfc3dd6774a52103ef3b92e122bd75ed6cf1",
-      "destination_sha256": "40716f554b53c91acbecd8cfbebbbfc3dd6774a52103ef3b92e122bd75ed6cf1"
+      "destination_sha256": "60d610aabe51dc19575d52bc0b4be5e6403a5d3f4bd1653f0d875a954e63506c"
     },
     {
       "source": "client/__tests__/direct-log.test.ts",
@@ -924,9 +924,9 @@
     {
       "source": "client/src/auth.ts",
       "destination": "src/auth.ts",
-      "status": "copied-byte-identical",
+      "status": "transformed-for-standalone-boundary",
       "source_sha256": "7da4b43f15d1cf8326916ef8577698d8de4e3fbe39ce841b5054ddefd1b555e4",
-      "destination_sha256": "7da4b43f15d1cf8326916ef8577698d8de4e3fbe39ce841b5054ddefd1b555e4"
+      "destination_sha256": "4dfd298681d026b6e31197e7c6d8b7e053d7a9168aafe306ab0853b403b3f358"
     },
     {
       "source": "client/src/backends/launch-all-pastelist.ts",

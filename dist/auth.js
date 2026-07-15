@@ -7,7 +7,7 @@
  * 2. Start local HTTP server for callback
  * 3. Open browser to Google authorization URL
  * 4. User authorizes in browser
- * 5. Receive authorization code via localhost callback
+ * 5. Receive authorization code via an IPv4 loopback callback
  * 6. Exchange code for tokens
  * 7. Store tokens securely in OS keychain
  */
@@ -82,9 +82,10 @@ const GOOGLE_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 const SCOPES = ['openid', 'email', 'profile'];
-// Port range for dynamic port selection (8000-9000)
-const PORT_RANGE_START = 8000;
-const PORT_RANGE_END = 9000;
+const AUTH_CALLBACK_HOST = '127.0.0.1';
+const AUTH_CALLBACK_PATH = '/callback';
+const MAX_AUTH_CALLBACK_URL_LENGTH = 2048;
+const MAX_AUTH_CODE_LENGTH = 1024;
 // gh#653 B3: how long the local OAuth callback server waits for the browser
 // redirect before giving up. Named so the user-facing "up to N minutes" copy
 // and the actual timeout can't drift apart.
@@ -104,104 +105,132 @@ function generatePKCE() {
         .digest('base64url');
     return { verifier, challenge };
 }
-/**
- * Find an available port in the specified range
- */
-async function findAvailablePort() {
-    return new Promise((resolve, reject) => {
-        // Try to bind to port 0 to let the OS assign a free port
-        const testServer = createServer();
-        testServer.listen(0, () => {
-            const address = testServer.address();
-            if (address && typeof address === 'object') {
-                const port = address.port;
-                testServer.close(() => resolve(port));
-            }
-            else {
-                testServer.close(() => reject(new Error('Failed to get assigned port')));
-            }
-        });
-        testServer.on('error', reject);
+const CALLBACK_SUCCESS_HTML = '<!doctype html><title>Authentication successful</title><h1>Authentication successful</h1><p>You can close this window and return to your terminal.</p>';
+const CALLBACK_INVALID_HTML = '<!doctype html><title>Invalid authentication response</title><h1>Invalid authentication response</h1><p>Return to your terminal and try again.</p>';
+function stateMatches(received, expected) {
+    if (received === null)
+        return false;
+    const receivedBytes = Buffer.from(received);
+    const expectedBytes = Buffer.from(expected);
+    return receivedBytes.length === expectedBytes.length &&
+        crypto.timingSafeEqual(receivedBytes, expectedBytes);
+}
+function sendCallbackHtml(res, status, body) {
+    res.writeHead(status, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Content-Security-Policy': "default-src 'none'",
+        'X-Content-Type-Options': 'nosniff',
     });
+    res.end(body);
 }
 /**
  * Start local HTTP server to receive OAuth callback
- * Returns { server, port, codePromise }
+ * Exported for executable loopback-boundary tests.
  */
-async function startCallbackServer() {
-    // Find available port first
-    const port = await findAvailablePort();
+export async function startCallbackServer(expectedState) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(expectedState)) {
+        throw new Error('OAuth callback state must contain 256 bits of base64url entropy');
+    }
+    let resolveCode;
+    let rejectCode;
+    let settled = false;
+    let timeout;
     const codePromise = new Promise((resolve, reject) => {
-        const server = createServer((req, res) => {
-            const url = new URL(req.url, `http://localhost:${port}`);
-            if (url.pathname === '/callback') {
-                const code = url.searchParams.get('code');
-                const error = url.searchParams.get('error');
-                if (error) {
-                    res.writeHead(400, { 'Content-Type': 'text/html' });
-                    res.end(`
-            <html>
-              <body>
-                <h1>◼ Authentication Failed</h1>
-                <p>Error: ${error}</p>
-                <p>You can close this window.</p>
-              </body>
-            </html>
-          `);
-                    server.close();
-                    reject(new Error(`OAuth error: ${error}`));
-                    return;
-                }
-                if (code) {
-                    res.writeHead(200, { 'Content-Type': 'text/html' });
-                    res.end(`
-            <html>
-              <body>
-                <h1>◼ Authentication Successful!</h1>
-                <p>You can close this window and return to your terminal.</p>
-              </body>
-            </html>
-          `);
-                    server.close();
-                    resolve(code);
-                    return;
-                }
-                res.writeHead(400, { 'Content-Type': 'text/html' });
-                res.end(`
-          <html>
-            <body>
-              <h1>◼ Invalid Request</h1>
-              <p>Missing authorization code.</p>
-            </body>
-          </html>
-        `);
-                server.close();
-                reject(new Error('Missing authorization code'));
-            }
-        });
-        server.listen(port, () => {
-            cerr(`Callback server listening on http://localhost:${port}`);
-        });
-        // Timeout after AUTH_CALLBACK_TIMEOUT_MS. .unref() so the timer doesn't
-        // keep the Node event loop alive after auth succeeds — without it,
-        // borg-setup appears to hang for 5 minutes after printing "Setup
-        // complete!" even though all real work is done.
-        setTimeout(() => {
-            server.close();
-            // gh#653 B3: actionable timeout — name the cause + the recovery path
-            // instead of a bare "no response received".
-            reject(new Error(`Authentication timed out after ${AUTH_CALLBACK_TIMEOUT_MIN} minutes — ` +
-                `no authorization received from the browser. Re-run \`borg setup\` and ` +
-                `complete the Google sign-in in the page that opens.`));
-        }, AUTH_CALLBACK_TIMEOUT_MS).unref();
+        resolveCode = resolve;
+        rejectCode = reject;
     });
-    return { port, codePromise };
+    const server = createServer((req, res) => {
+        const rawUrl = req.url ?? '';
+        if (req.method !== 'GET' || !rawUrl.startsWith('/') || rawUrl.length > MAX_AUTH_CALLBACK_URL_LENGTH) {
+            sendCallbackHtml(res, 400, CALLBACK_INVALID_HTML);
+            return;
+        }
+        let url;
+        try {
+            url = new URL(rawUrl, `http://${AUTH_CALLBACK_HOST}`);
+        }
+        catch {
+            sendCallbackHtml(res, 400, CALLBACK_INVALID_HTML);
+            return;
+        }
+        if (url.pathname !== AUTH_CALLBACK_PATH) {
+            sendCallbackHtml(res, 404, CALLBACK_INVALID_HTML);
+            return;
+        }
+        const states = url.searchParams.getAll('state');
+        if (states.length !== 1 || !stateMatches(states[0], expectedState)) {
+            sendCallbackHtml(res, 400, CALLBACK_INVALID_HTML);
+            return;
+        }
+        if (settled) {
+            sendCallbackHtml(res, 409, CALLBACK_INVALID_HTML);
+            return;
+        }
+        settled = true;
+        if (timeout)
+            clearTimeout(timeout);
+        const codes = url.searchParams.getAll('code');
+        const hasError = url.searchParams.has('error');
+        if (hasError || codes.length !== 1 || codes[0].length === 0 || codes[0].length > MAX_AUTH_CODE_LENGTH) {
+            sendCallbackHtml(res, 400, CALLBACK_INVALID_HTML);
+            server.close();
+            rejectCode(new Error(hasError ? 'OAuth authorization was rejected' : 'Invalid OAuth authorization response'));
+            return;
+        }
+        sendCallbackHtml(res, 200, CALLBACK_SUCCESS_HTML);
+        server.close();
+        resolveCode(codes[0]);
+    });
+    server.on('error', (error) => {
+        if (settled)
+            return;
+        settled = true;
+        if (timeout)
+            clearTimeout(timeout);
+        rejectCode(error);
+    });
+    await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, AUTH_CALLBACK_HOST, () => {
+            server.off('error', reject);
+            resolve();
+        });
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string' || address.address !== AUTH_CALLBACK_HOST) {
+        server.close();
+        throw new Error('OAuth callback server did not bind to the IPv4 loopback interface');
+    }
+    timeout = setTimeout(() => {
+        if (settled)
+            return;
+        settled = true;
+        server.close();
+        rejectCode(new Error(`Authentication timed out after ${AUTH_CALLBACK_TIMEOUT_MIN} minutes — ` +
+            `no authorization received from the browser. Re-run \`borg setup\` and ` +
+            `complete the Google sign-in in the page that opens.`));
+    }, AUTH_CALLBACK_TIMEOUT_MS);
+    timeout.unref();
+    cerr(`Callback server listening on http://${AUTH_CALLBACK_HOST}:${address.port}`);
+    return {
+        host: address.address,
+        port: address.port,
+        codePromise,
+        close: () => new Promise((resolve) => {
+            if (timeout)
+                clearTimeout(timeout);
+            if (!server.listening)
+                return resolve();
+            server.close(() => resolve());
+        }),
+    };
 }
 /**
  * Exchange authorization code for tokens
  */
 async function exchangeCodeForTokens(code, codeVerifier, port) {
-    const redirectUri = `http://localhost:${port}/callback`;
+    const redirectUri = `http://${AUTH_CALLBACK_HOST}:${port}${AUTH_CALLBACK_PATH}`;
     const response = await fetch(GOOGLE_TOKEN_URL, {
         method: 'POST',
         headers: {
@@ -280,11 +309,12 @@ async function authenticateWithBrowser() {
     // Step 1: Generate PKCE pair
     cerr('Generating PKCE challenge...');
     const pkce = generatePKCE();
+    const state = crypto.randomBytes(32).toString('base64url');
     // Step 2: Start local callback server (gets dynamic port)
     cerr('Starting local callback server...');
-    const { port, codePromise } = await startCallbackServer();
+    const { port, codePromise } = await startCallbackServer(state);
     // Step 3: Build authorization URL with dynamic redirect URI
-    const redirectUri = `http://localhost:${port}/callback`;
+    const redirectUri = `http://${AUTH_CALLBACK_HOST}:${port}${AUTH_CALLBACK_PATH}`;
     const authUrl = new URL(GOOGLE_AUTHORIZE_URL);
     authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID);
     authUrl.searchParams.set('redirect_uri', redirectUri);
@@ -292,6 +322,7 @@ async function authenticateWithBrowser() {
     authUrl.searchParams.set('scope', SCOPES.join(' '));
     authUrl.searchParams.set('code_challenge', pkce.challenge);
     authUrl.searchParams.set('code_challenge_method', 'S256');
+    authUrl.searchParams.set('state', state);
     authUrl.searchParams.set('access_type', 'offline'); // Request refresh token
     // Multi-value prompt forces both consent screen AND account picker. Combined
     // with the pre-revocation step above, this reliably forces Google to issue
