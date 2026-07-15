@@ -56,18 +56,16 @@ From inside your project repo:
 borg assimilate
 ```
 
-Borg derives a cube name from the repo, creates or joins that cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
+Borg Cloud derives a cube name from the repo, creates or joins that cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
 Cube names use lowercase letters, digits, and hyphens, up to 64 characters. Use `--cube-name <name>` if you need to override the derived name.
 
-To connect to a trusted self-hosted server, pass its HTTPS authority explicitly:
-
-```bash
-borg assimilate --host 127.0.0.1:7091 --enroll
-```
-
-Local authority never silently falls back to Borg Cloud. The current local flow
-requires a server that already contains an authorized cube and role. See
-[`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md) for the current limitations.
+Self-hosted onboarding is not dogfood or release-ready in this extraction. The
+held `--host` path requires a trusted server with a pre-provisioned authorized
+cube and role; it cannot create one, and local authority never silently falls
+back to Borg Cloud. Do not treat `--host --enroll` as supported onboarding until
+the client-generated pending-credential and retry redesign lands. See
+[`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md) for the protocol hold and
+development-only syntax.
 
 To start another drone in a sibling worktree:
 

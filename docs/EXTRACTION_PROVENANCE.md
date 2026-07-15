@@ -17,6 +17,9 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 - Hardened the Desktop OAuth callback to an exact IPv4 loopback binding with
   transaction state, bounded static responses, and adversarial callback tests;
   test-only Google client-ID lookalikes use the reserved `.test` domain.
+- Scoped cube creation language to Borg Cloud and marked the self-hosted
+  `--host --enroll` path as a held, pre-provisioned integration rather than
+  supported onboarding.
 - Retained the existing package version `1.1.15`; extraction does not authorize a version bump or release.
 
 ## Review Holds

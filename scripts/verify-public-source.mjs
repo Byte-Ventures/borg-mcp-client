@@ -19,7 +19,7 @@ function fingerprint(value) {
 
 async function walk(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (entry.isDirectory() && excluded.has(entry.name)) continue;
+    if (excluded.has(entry.name)) continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
       await walk(path);

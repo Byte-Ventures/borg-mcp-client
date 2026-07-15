@@ -126,9 +126,9 @@
     {
       "source": "client/__tests__/cli-help.test.ts",
       "destination": "__tests__/cli-help.test.ts",
-      "status": "copied-byte-identical",
+      "status": "transformed-for-standalone-boundary",
       "source_sha256": "058fa2e0db8be7ec7ff984819fbfc86577e58e7f50408291282c3ed775129d7d",
-      "destination_sha256": "058fa2e0db8be7ec7ff984819fbfc86577e58e7f50408291282c3ed775129d7d"
+      "destination_sha256": "36d9c3716dd8ab7d881d3e0931e869030630b5dc7d187d216689a1b021f5eb84"
     },
     {
       "source": "client/__tests__/cli-platform.test.ts",
@@ -994,9 +994,9 @@
     {
       "source": "client/src/cli-help.ts",
       "destination": "src/cli-help.ts",
-      "status": "copied-byte-identical",
+      "status": "transformed-for-standalone-boundary",
       "source_sha256": "dd3264bb29575c37dba8426775add5d715f64b4f9fca9680f1c7e40dd09c7bd2",
-      "destination_sha256": "dd3264bb29575c37dba8426775add5d715f64b4f9fca9680f1c7e40dd09c7bd2"
+      "destination_sha256": "4247a9f711b1d181cea37074defe3768d059e4cdff421a7b2a5660b61f3ad8cc"
     },
     {
       "source": "client/src/cli-platform.ts",

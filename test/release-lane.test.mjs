@@ -197,6 +197,22 @@ test('release readiness accepts the extracted standalone client', async () => {
   assert.deepEqual(report, { name: 'borgmcp', version: '1.1.15', shared: '0.2.2' });
 });
 
+test('public-source scan ignores a linked-worktree .git file', async (t) => {
+  const worktree = await mkdtemp(join(tmpdir(), 'borgmcp-client-linked-worktree-'));
+  t.after(() => rm(worktree, { recursive: true, force: true }));
+  await mkdir(join(worktree, 'src'));
+  await mkdir(join(worktree, 'dist'));
+  await cp(join(root, 'src', 'auth.ts'), join(worktree, 'src', 'auth.ts'));
+  await cp(join(root, 'dist', 'auth.js'), join(worktree, 'dist', 'auth.js'));
+  await writeFile(join(worktree, '.git'), 'gitdir: /Users/private/repository/.git/worktrees/client\n');
+
+  assert.doesNotThrow(() => execFileSync(
+    process.execPath,
+    [join(root, 'scripts', 'verify-public-source.mjs')],
+    { cwd: worktree, stdio: 'pipe' },
+  ));
+});
+
 test('release readiness accepts one canonical registry-resolved shared dependency', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'borgmcp-client-readiness-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
