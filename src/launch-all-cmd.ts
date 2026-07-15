@@ -129,6 +129,7 @@ async function reconcileRoster(
   deps: LaunchAllDeps,
   token: string,
   apiUrl: string,
+  serverTrustIdentity: string | undefined,
   launchStartISO: string,
   launchedDroneIds: string[],
   now: () => number = Date.now,
@@ -143,7 +144,12 @@ async function reconcileRoster(
     if (now() >= deadline) break;
     let roster: { drones: Array<{ id: string; seen_since?: boolean }> };
     try {
-      roster = await deps.getRoster(token, apiUrl, launchStartISO);
+      roster = await deps.getRoster(
+        token,
+        apiUrl,
+        launchStartISO,
+        serverTrustIdentity,
+      );
     } catch (err) {
       // gh#850: the roster-reconcile token can rotate mid-launch — authedFetch
       // throws "Authentication required" on a terminal 401. A bare `break` left
@@ -355,12 +361,14 @@ export async function runLaunchAll(
   // 9. roster reconciliation (best-effort; uses the OLD saved token from the first candidate)
   const reconToken = launchable[0].sessionToken;
   const reconApiUrl = launchable[0].apiUrl;
+  const reconServerTrustIdentity = launchable[0].serverTrustIdentity;
   let statuses: Map<string, 'verified' | 'unconfirmed'> | null = null;
   if (reconToken && reconApiUrl) {
     statuses = await reconcileRoster(
       deps,
       reconToken,
       reconApiUrl,
+      reconServerTrustIdentity,
       launchStartISO,
       launchable.map((c) => c.droneId),
       opts.now,

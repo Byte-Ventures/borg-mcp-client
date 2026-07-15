@@ -66,7 +66,8 @@ export interface LaunchAllDeps {
   getRoster: (
     token: string,
     apiUrl: string,
-    since?: string
+    since?: string,
+    serverTrustIdentity?: string,
   ) => Promise<{ drones: Array<{ id: string; seen_since?: boolean }> }>;
   /** getCube for --only tier-2 role-name resolution (best-effort). */
   getCube: (
@@ -165,7 +166,8 @@ export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
         return null;
       }
     },
-    getRoster: (token, apiUrl, since) => getRoster(token, apiUrl, since),
+    getRoster: (token, apiUrl, since, serverTrustIdentity) =>
+      getRoster(token, apiUrl, since, serverTrustIdentity),
     // getCube uses the user OAuth token via authedFetch (cubeId-only); apiUrl/token unused.
     getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
     probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>

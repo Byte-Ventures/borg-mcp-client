@@ -40,7 +40,7 @@ export interface LaunchAllDeps {
         apiUrl: string;
     } | null>;
     /** Roster call (wraps getRoster from remote-client.ts). */
-    getRoster: (token: string, apiUrl: string, since?: string) => Promise<{
+    getRoster: (token: string, apiUrl: string, since?: string, serverTrustIdentity?: string) => Promise<{
         drones: Array<{
             id: string;
             seen_since?: boolean;
