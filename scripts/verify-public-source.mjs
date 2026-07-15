@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const root = resolve('.');
 const excluded = new Set(['.git', '.claude', '.opencode', 'coverage', 'node_modules', 'release']);
@@ -11,12 +12,17 @@ const expectedOAuthFingerprints = [
   '385408ac72401565fd40515635041d4bd33d9e8bc19488bfc4b237605dcdffef',
   '6915f25f028886263d0d4a649a1d1c4135413ce3c75fb3abd4dbe5916d804031',
 ].sort();
+const sha256StdinScript = fileURLToPath(new URL('./sha256-stdin.mjs', import.meta.url));
 const oauthFingerprintsByPath = new Map();
 
 function fingerprint(value) {
-  // This is an equality fingerprint for operator-verified public OAuth
-  // identifiers, never a password verifier.
-  return createHash('sha256').update(value).digest('hex'); // lgtm[js/insufficient-password-hash]
+  return execFileSync(process.execPath, [sha256StdinScript], {
+    input: value,
+    encoding: 'utf8',
+    maxBuffer: 1024,
+    timeout: 5_000,
+    windowsHide: true,
+  }).trim();
 }
 
 async function walk(directory) {

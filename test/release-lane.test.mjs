@@ -211,6 +211,17 @@ test('public-source scan ignores a linked-worktree .git file', async (t) => {
     [join(root, 'scripts', 'verify-public-source.mjs')],
     { cwd: worktree, stdio: 'pipe' },
   ));
+
+  const authPath = join(worktree, 'src', 'auth.ts');
+  const authSource = await readFile(authPath, 'utf8');
+  const [clientId] = authSource.match(/\b[A-Za-z0-9_-]+\.apps\.googleusercontent\.com\b/) ?? [];
+  assert.ok(clientId);
+  await writeFile(authPath, authSource.replace(clientId, `x${clientId.slice(1)}`));
+  assert.throws(() => execFileSync(
+    process.execPath,
+    [join(root, 'scripts', 'verify-public-source.mjs')],
+    { cwd: worktree, stdio: 'pipe' },
+  ));
 });
 
 test('release readiness accepts one canonical registry-resolved shared dependency', async (t) => {
