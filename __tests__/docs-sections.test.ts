@@ -45,6 +45,15 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(matchDocsSections('rotate revoke credentials').map((s) => s.slug)).toContain('self-hosting');
     expect(matchDocsSections('enroll invitation')[0]?.slug).toBe('enroll');
     expect(matchDocsSections('assimilate host enroll').map((s) => s.slug)).toContain('enroll');
+    expect(matchDocsSections('listen port 7091').map((s) => s.slug)).toContain('run-server');
+  });
+
+  it('server keywords do not hijack established topics (CR 8b474dc2 reciprocal-substring pins)', () => {
+    expect(matchDocsSections('prune')[0]?.slug).toBe('cli');
+    expect(matchDocsSections('prune').map((s) => s.slug)).not.toContain('run-server');
+    expect(matchDocsSections('reporting')[0]?.slug).toBe('faq');
+    expect(matchDocsSections('reporting').map((s) => s.slug)).not.toContain('run-server');
+    expect(matchDocsSections('plan the sprint').map((s) => s.slug)).not.toContain('run-server');
   });
 
   it('borg_docs is registered with the optional topic param', () => {

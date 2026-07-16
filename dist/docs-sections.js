@@ -39,8 +39,8 @@ export const DOCS_SECTIONS = [
         title: "Run server",
         url: `${DOCS_BASE_URL}/run-server`,
         page: "run-server",
-        summary: "Run the self-hosted borgmcp-server: setup, start, endpoint, and network configuration.",
-        keywords: ["server", "self-hosted", "borgmcp-server", "borg-mcp-server", "setup", "start", "run", "port", "7091", "local server", "lan", "tls"],
+        summary: "Run a self-hosted borgmcp-server: setup, start, endpoint, network configuration.",
+        keywords: ["server", "self-hosted", "borgmcp-server", "borg-mcp-server", "setup", "start", "listen port", "7091", "local server", "--lan", "tls"],
     },
     {
         slug: "enroll",
@@ -48,7 +48,7 @@ export const DOCS_SECTIONS = [
         url: `${DOCS_BASE_URL}/enroll`,
         page: "enroll",
         summary: "Connect a client to a self-hosted server: invitations, assimilate --host --enroll, credentials.",
-        keywords: ["enroll", "enrollment", "invitation", "invite", "assimilate", "host", "credential", "credentials", "owner", "join server"],
+        keywords: ["enroll", "enrollment", "invitation", "invite", "assimilate", "--host", "credential", "credentials", "owner", "join server"],
     },
     {
         slug: "self-hosting",
