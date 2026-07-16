@@ -70,7 +70,6 @@ describe('appendLog directed-message request body', () => {
     await appendLog('session-token', HOSTED_API_URL, 'STARTING: work', {
       class: 'status-claim',
       to: ['Coordinator'],
-      visibility: 'broadcast',
     });
 
     const [, init] = fetchSpy.mock.calls[0];
@@ -78,7 +77,6 @@ describe('appendLog directed-message request body', () => {
       message: 'STARTING: work',
       class: 'status-claim',
       to: ['Coordinator'],
-      visibility: 'broadcast',
     });
   });
 
@@ -94,5 +92,18 @@ describe('appendLog directed-message request body', () => {
       message: 'hello',
       to: [],
     });
+  });
+
+  it('rejects contradictory hosted to: plus broadcast before token lookup or fetch', async () => {
+    const { appendLog } = await import('../src/remote-client.js');
+
+    await expect(appendLog('session-token', HOSTED_API_URL, 'contradictory routing', {
+      to: ['Coordinator'],
+      visibility: 'broadcast',
+    })).rejects.toThrow(
+      /Remove visibility to direct to recipients, or remove to: to broadcast/,
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

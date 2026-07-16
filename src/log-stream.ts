@@ -1047,6 +1047,24 @@ export async function streamOnce(
           continue;
         }
 
+        // Local-server ActivityHub publishes the transparent shared log to
+        // every cube stream. `visibility:direct` is routing/wake metadata, not
+        // a read ACL: borg_read-log still returns the entry to every member,
+        // while only an addressed drone writes it to its inbox and wakes. A
+        // malformed direct frame with no matching recipient fails closed in
+        // the wake direction (cursor advances; no cube-wide wake storm).
+        if (isLocal && event.data?.visibility === 'direct') {
+          const recipients = Array.isArray(event.data?.recipient_drone_ids)
+            ? event.data.recipient_drone_ids.filter(
+              (recipient: unknown): recipient is string => typeof recipient === 'string',
+            )
+            : [];
+          if (!recipients.includes(active.droneId)) {
+            await recordSeen(event);
+            continue;
+          }
+        }
+
         if (event.data?.drone_id === active.droneId && !isHeartbeatPing) {
           // Own post: silent-self (no inbox echo — already on disk via
           // appendLog). recordSeen still advances BOTH cursors, including the

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const DRONE_ID = '22222222-2222-4222-8222-222222222222';
 const LOG_ID = '33333333-3333-4333-8333-333333333333';
+const OTHER_RECIPIENT_ID = '55555555-5555-4555-8555-555555555555';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -31,7 +32,7 @@ describe('local server SSE adapter', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('uses the local stream route, direct drone Bearer, and durable tuple cursor', async () => {
+  it('advances the local stream cursor without waking for a direct entry addressed elsewhere', async () => {
     const cursor = { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' };
     const advanceCursor = vi.fn(async () => {});
     vi.doMock('../src/local-server-cursor.js', () => ({
@@ -55,11 +56,11 @@ describe('local server SSE adapter', () => {
           cube_id: CUBE_ID,
           drone_id: '44444444-4444-4444-8444-444444444444',
           message: 'local stream entry',
-          visibility: 'broadcast',
+          visibility: 'direct',
           created_at: cursor.created_at,
           drone_label: 'peer-1',
           role_name: 'Builder',
-          recipient_drone_ids: [],
+          recipient_drone_ids: [OTHER_RECIPIENT_ID],
         },
       })}`,
       '',
@@ -99,15 +100,73 @@ describe('local server SSE adapter', () => {
     const headers = new Headers(fetchImpl.mock.calls[0][1]?.headers);
     expect(headers.has('X-Drone-Session')).toBe(false);
     expect(getToken).not.toHaveBeenCalled();
-    expect(appendLine).toHaveBeenCalledWith(
-      CUBE_ID,
-      DRONE_ID,
-      expect.stringContaining('local stream entry'),
-    );
+    expect(appendLine).not.toHaveBeenCalled();
     expect(advanceCursor).toHaveBeenCalledWith(
       expect.objectContaining({ cubeId: CUBE_ID, droneId: DRONE_ID }),
       cursor,
     );
+  });
+
+  it.each([
+    ['direct entry addressed to the active drone', 'direct', [DRONE_ID]],
+    ['broadcast entry', 'broadcast', []],
+  ] as const)('writes and wakes for a local %s', async (_case, visibility, recipients) => {
+    const cursor = { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' };
+    vi.doMock('../src/local-server-cursor.js', () => ({
+      getLocalServerCursor: vi.fn(async () => null),
+      encodeLocalServerCursor: vi.fn(),
+      advanceLocalServerCursor: vi.fn(async () => {}),
+    }));
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => {
+        throw new Error('injected stream transport should avoid trust-file IO');
+      }),
+    }));
+    const wire = [
+      'event: log',
+      `id: ${LOG_ID}`,
+      `data: ${JSON.stringify({
+        cursor,
+        entry: {
+          id: LOG_ID,
+          cube_id: CUBE_ID,
+          drone_id: OTHER_RECIPIENT_ID,
+          message: 'wake intended recipient',
+          visibility,
+          created_at: cursor.created_at,
+          recipient_drone_ids: recipients,
+        },
+      })}`,
+      '',
+    ].join('\n');
+    const appendLine = vi.fn(async () => {});
+    const onInboxReceipt = vi.fn();
+    const { streamOnce } = await import('../src/log-stream.js');
+
+    await streamOnce({
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      sessionToken: 's'.repeat(43),
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+    }, null, vi.fn(), {
+      fetchImpl: vi.fn(async () => new Response(wire, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })) as typeof fetch,
+      appendLine,
+      hasInboxEntryId: vi.fn(async () => false),
+      getToken: vi.fn(async () => 'cloud-token-must-not-be-read'),
+      onInboxReceipt,
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(appendLine).toHaveBeenCalledWith(
+      CUBE_ID,
+      DRONE_ID,
+      expect.stringContaining('wake intended recipient'),
+    );
+    expect(onInboxReceipt).toHaveBeenCalledTimes(1);
   });
 
   it.each([
