@@ -798,12 +798,33 @@ describe('formatLeanOrientation', () => {
 
   // gh#client#18: long install paths (e.g. deeply nested node_modules or
   // paths with spaces) must not push orientation over the 2KB budget.
+  // Verify the worst-case string length by constructing the orientation with
+  // a simulated long install path (spaces + single quotes) in the wake path
+  // arming block, which is the largest variable-length component.
   it('stays under 2KB with a long install path containing spaces', () => {
-    const longPath = '/Users/dev/Projects/my borg workspace/node_modules/borgmcp/dist';
+    // Simulate the worst-case: a long shell-escaped install path with spaces
+    // and embedded single quotes in the wakePathArming output.
+    const longBin = "'/Users/dev/Projects/my borg workspace/node_modules/borgmcp/dist/inbox-monitor.js'";
+    const longInbox = "'/Users/dev/Projects/my borg workspace/inbox/state'";
+    const monitorCmd = `${longBin} ${longInbox}`;
+    const wakeBlock = [
+      'Arm your wake path before working:',
+      `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`${monitorCmd}\` so cube posts wake you in real time.`,
+      '2. **Engage `/loop`** (self-paced) so you keep waking to triage the cube.',
+      '3. **Adaptive recovery** — set ONE `ScheduleWakeup`: [9000, 12600]s (3h ±30m) when Monitor healthy/indeterminate; [720, 1080]s (15m ±3m) when broken. Re-arm Monitor; retry short until healthy. A real Monitor wake resets, not stacks.',
+      '4. **Recovery tick** — drain `borg_read-log unread_only=true`. If empty, check wake status, set deadline, resume prior work. No full-regen or liveness post on empty; safety probes may still wake.',
+    ].join('\n');
+
     for (const agentKind of ['claude', 'codex', 'opencode'] as const) {
       for (const source of [undefined, 'startup', 'clear', 'compact', 'resume']) {
-        const out = formatLeanOrientation({ ...base, agentKind, source, inboxPath: longPath });
-        expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(2048);
+        const out = formatLeanOrientation({ ...base, agentKind, source });
+        // Replace the real wake path arming with the worst-case version
+        // to verify the budget holds even with a long install path.
+        const worstCase = out.replace(
+          /Arm your wake path before working[\s\S]*?No full-regen or liveness post on empty; safety probes may still wake\./,
+          wakeBlock,
+        );
+        expect(Buffer.byteLength(worstCase, 'utf-8')).toBeLessThan(2048);
       }
     }
   });

@@ -119,7 +119,7 @@ describe('addProjectSessionStartHook', () => {
       hooks: { SessionStart: [
         { matcher: '*', hooks: [{ type: 'command', command: '/old/node_modules/borgmcp/dist/regen.js' }] },
         { matcher: '*', hooks: [{ type: 'command', command: 'borg-regen' }] },
-        { matcher: 'clear', hooks: [{ type: 'command', command: '/other/.../clear-rewake.js', asyncRewake: true }] },
+        { matcher: 'clear', hooks: [{ type: 'command', command: '/other/node_modules/borgmcp/dist/clear-rewake.js', asyncRewake: true }] },
       ] },
     }));
 
@@ -131,6 +131,45 @@ describe('addProjectSessionStartHook', () => {
     expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command.includes('/old/')))).toBe(false);
     expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === 'borg-regen'))).toBe(false);
     expect(entries).toHaveLength(2);
+  });
+
+  // gh#client#18: absolute paths without a borg package marker are NOT owned.
+  // /opt/custom-tool/regen.js must NOT be rewritten to borg canonical.
+  it('does not claim unrelated scripts sharing a basename', () => {
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath(), JSON.stringify({
+      hooks: { SessionStart: [
+        { matcher: '*', hooks: [{ type: 'command', command: '/opt/custom-tool/regen.js' }] },
+      ] },
+    }));
+
+    expect(addProjectSessionStartHook(root)).toBe(true);
+    const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
+    // Unrelated script preserved as-is.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === '/opt/custom-tool/regen.js'))).toBe(true);
+    // Canonical regen still appended (unrelated script doesn't count).
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+  });
+
+  // gh#client#18: when an entry has both an owned hook and an unrelated
+  // sibling, dedup removes only the owned hook and preserves the sibling.
+  it('preserves unrelated siblings when deduplicating owned hooks', () => {
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath(), JSON.stringify({
+      hooks: { SessionStart: [
+        { matcher: '*', hooks: [
+          { type: 'command', command: 'borg-regen' },
+          { type: 'command', command: 'my-custom-tool' },
+        ] },
+      ] },
+    }));
+
+    expect(addProjectSessionStartHook(root)).toBe(true);
+    const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
+    // Bare borg-regen migrated to canonical.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toBe(true);
+    // Unrelated sibling preserved.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === 'my-custom-tool'))).toBe(true);
   });
 
   it('repairs a partial install without duplicating the existing clear-rewake hook', () => {

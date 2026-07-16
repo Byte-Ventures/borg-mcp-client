@@ -108,20 +108,10 @@ function addSessionStartHookAt(settingsFile, includeClearRewake = false) {
     settings.hooks ??= {};
     settings.hooks.SessionStart ??= [];
     let changed = false;
-    // gh#client#18: migrate bare/stale-absolute orientation hooks to canonical form.
-    for (const entry of settings.hooks.SessionStart) {
-        if (!Array.isArray(entry?.hooks))
-            continue;
-        for (const hook of entry.hooks) {
-            if (hook?.type !== 'command' || typeof hook?.command !== 'string')
-                continue;
-            if (commandMatches(hook.command, BARE_BORG_REGEN, resolveRegenPath()) &&
-                !isCanonicalCommand(hook.command, HOOK_COMMAND)) {
-                hook.command = HOOK_COMMAND;
-                changed = true;
-            }
-        }
-    }
+    // gh#client#18: migrate owned hooks to canonical form and deduplicate
+    // (exactly one canonical hook per owned command, preserving unrelated
+    // siblings and entry metadata).
+    changed = migrateAndDedupOwnedHooks(settings.hooks.SessionStart) || changed;
     if (!hasCommandHook(settings.hooks.SessionStart, HOOK_COMMAND)) {
         settings.hooks.SessionStart.push({
             matcher: '*',
@@ -149,14 +139,104 @@ function addSessionStartHookAt(settingsFile, includeClearRewake = false) {
 // installations), shell-escaped canonical paths, and unescaped canonical paths.
 function commandMatches(entryCommand, bareName, absolutePath) {
     const escaped = shellEscape(absolutePath);
-    return entryCommand === escaped
-        || entryCommand === absolutePath
-        || entryCommand === bareName
-        || entryCommand.endsWith(`/${bareName}`);
+    if (entryCommand === escaped || entryCommand === absolutePath || entryCommand === bareName)
+        return true;
+    // gh#client#18: stale prior-install absolute paths (e.g.
+    // /old/.../dist/regen.js) end with the same basename. Only match
+    // when the command IS an absolute path ending with the bare name to
+    // avoid false positives on unrelated commands like "run regen.js".
+    if (entryCommand.startsWith('/') && entryCommand.endsWith(`/${bareName}`))
+        return true;
+    return false;
 }
-/** Strict canonical match: only the shell-escaped or exact unescaped canonical path. */
+/** gh#client#18: map an owned hook command to its canonical shell-escaped form.
+ *  Returns null for non-owned commands. Ownership requires ONE of:
+ *  - Exact borg bare bin name (borg-regen, borg-clear-rewake, borg-log-audit)
+ *  - Absolute path containing a borg package marker (borgmcp or borg-mcp)
+ *    AND ending with an owned basename (regen.js, clear-rewake.js, log-audit.js)
+ *  This prevents false-positive ownership of unrelated scripts that happen
+ *  to share a basename (e.g. /opt/custom-tool/regen.js). */
+function ownedCanonical(command) {
+    const stripped = command.replace(/^'|'$/g, '');
+    const name = stripped.split('/').pop() ?? '';
+    // Exact bare name matches — always owned
+    if (name === BARE_BORG_REGEN)
+        return HOOK_COMMAND;
+    if (name === BARE_CLEAR_REWAKE)
+        return CLEAR_REWAKE_HOOK_COMMAND;
+    if (name === BARE_LOG_AUDIT)
+        return AUDIT_HOOK_COMMAND;
+    // Absolute paths — only owned if they contain a borg package marker
+    if (stripped.startsWith('/') && (stripped.includes('borgmcp') || stripped.includes('borg-mcp'))) {
+        if (name === 'regen.js')
+            return HOOK_COMMAND;
+        if (name === 'clear-rewake.js')
+            return CLEAR_REWAKE_HOOK_COMMAND;
+        if (name === 'log-audit.js')
+            return AUDIT_HOOK_COMMAND;
+    }
+    return null;
+}
+/**
+ * gh#client#18: migrate owned hooks to canonical form and deduplicate:
+ * exactly one canonical hook per owned command. Removes only duplicate owned
+ * hook objects within entries, preserving unrelated siblings and entry metadata.
+ * Mutates the entries array in place. Returns true if any change was made.
+ */
+function migrateAndDedupOwnedHooks(entries) {
+    let changed = false;
+    // Phase 1: Migrate owned hooks to canonical form
+    for (const entry of entries) {
+        if (!Array.isArray(entry?.hooks))
+            continue;
+        for (const hook of entry.hooks) {
+            if (hook?.type !== 'command' || typeof hook?.command !== 'string')
+                continue;
+            const canonical = ownedCanonical(hook.command);
+            if (canonical && hook.command !== canonical) {
+                hook.command = canonical;
+                changed = true;
+            }
+        }
+    }
+    // Phase 2: Deduplicate — for each canonical command, keep exactly one hook
+    // object across all entries. Remove only the duplicate hook objects, not
+    // entire entries (preserving unrelated siblings and entry metadata).
+    const seenCanonicals = new Set();
+    for (const entry of entries) {
+        if (!Array.isArray(entry?.hooks))
+            continue;
+        const before = entry.hooks.length;
+        entry.hooks = entry.hooks.filter((hook) => {
+            if (hook?.type !== 'command' || typeof hook?.command !== 'string')
+                return true;
+            const canonical = ownedCanonical(hook.command);
+            if (!canonical)
+                return true;
+            if (seenCanonicals.has(canonical)) {
+                changed = true;
+                return false;
+            }
+            seenCanonicals.add(canonical);
+            return true;
+        });
+        if (entry.hooks.length !== before)
+            changed = true;
+    }
+    // Phase 3: Remove entries that became empty after dedup
+    for (let i = entries.length - 1; i >= 0; i--) {
+        if (!Array.isArray(entries[i]?.hooks) || entries[i].hooks.length === 0) {
+            entries.splice(i, 1);
+            changed = true;
+        }
+    }
+    return changed;
+}
+/** Strict canonical match: only the shell-escaped canonical form.
+ *  gh#client#18: raw unescaped paths are NOT canonical — a path with spaces
+ *  or metacharacters would break at shell-fire time if not escaped. */
 function isCanonicalCommand(entryCommand, canonical) {
-    return entryCommand === canonical || entryCommand === canonical.replace(/^'|'$/g, '');
+    return entryCommand === canonical;
 }
 const BARE_BORG_REGEN = 'borg-regen';
 const BARE_CLEAR_REWAKE = 'borg-clear-rewake';
@@ -166,12 +246,13 @@ function hasCommandHook(entries, command) {
         entry.hooks.some((h) => {
             if (h?.type !== 'command' || typeof h?.command !== 'string')
                 return false;
-            if (command === HOOK_COMMAND)
-                return commandMatches(h.command, BARE_BORG_REGEN, resolveRegenPath());
-            if (command === CLEAR_REWAKE_HOOK_COMMAND)
-                return commandMatches(h.command, BARE_CLEAR_REWAKE, resolveClearRewakePath());
-            if (command === AUDIT_HOOK_COMMAND)
-                return commandMatches(h.command, BARE_LOG_AUDIT, resolveLogAuditPath());
+            // gh#client#18: for known owned commands, check if this hook's command
+            // maps to the SAME canonical as the target. This correctly distinguishes
+            // regen from clear-rewake from audit — a clear-rewake hook does NOT
+            // satisfy the dedup check for a regen target, and vice versa.
+            if (command === HOOK_COMMAND || command === CLEAR_REWAKE_HOOK_COMMAND || command === AUDIT_HOOK_COMMAND) {
+                return ownedCanonical(h.command) === command;
+            }
             return h.command === command;
         }));
 }
@@ -355,21 +436,10 @@ export function addUserPromptSubmitHook() {
     }
     settings.hooks ??= {};
     settings.hooks.UserPromptSubmit ??= [];
-    // gh#client#18: migrate bare/stale-absolute audit hooks to canonical form.
-    let changed = false;
-    for (const entry of settings.hooks.UserPromptSubmit) {
-        if (!Array.isArray(entry?.hooks))
-            continue;
-        for (const hook of entry.hooks) {
-            if (hook?.type !== 'command' || typeof hook?.command !== 'string')
-                continue;
-            if (commandMatches(hook.command, BARE_LOG_AUDIT, resolveLogAuditPath()) &&
-                !isCanonicalCommand(hook.command, AUDIT_HOOK_COMMAND)) {
-                hook.command = AUDIT_HOOK_COMMAND;
-                changed = true;
-            }
-        }
-    }
+    // gh#client#18: migrate owned hooks to canonical form and deduplicate
+    // (exactly one canonical hook per owned command, preserving unrelated
+    // siblings and entry metadata).
+    let changed = migrateAndDedupOwnedHooks(settings.hooks.UserPromptSubmit);
     if (!hasCanonicalCommandHook(settings.hooks.UserPromptSubmit, AUDIT_HOOK_COMMAND)) {
         settings.hooks.UserPromptSubmit.push({
             matcher: '*',
@@ -571,28 +641,10 @@ function addCodexHook(eventName, command, options = {}) {
     const entries = hooksFile.hooks[eventName];
     if (!Array.isArray(entries))
         return false;
-    // gh#client#18: migrate bare/stale-absolute hooks to canonical form.
-    let changed = false;
-    for (const entry of entries) {
-        if (!Array.isArray(entry?.hooks))
-            continue;
-        for (const hook of entry.hooks) {
-            if (hook?.type !== 'command' || typeof hook?.command !== 'string')
-                continue;
-            if (command === HOOK_COMMAND &&
-                commandMatches(hook.command, BARE_BORG_REGEN, resolveRegenPath()) &&
-                !isCanonicalCommand(hook.command, command)) {
-                hook.command = command;
-                changed = true;
-            }
-            if (command === AUDIT_HOOK_COMMAND &&
-                commandMatches(hook.command, BARE_LOG_AUDIT, resolveLogAuditPath()) &&
-                !isCanonicalCommand(hook.command, command)) {
-                hook.command = command;
-                changed = true;
-            }
-        }
-    }
+    // gh#client#18: migrate owned hooks to canonical form and deduplicate
+    // (exactly one canonical hook per owned command, preserving unrelated
+    // siblings and entry metadata).
+    let changed = migrateAndDedupOwnedHooks(entries);
     if (!hasCanonicalCommandHook(entries, command)) {
         const entry = {
             hooks: [{ type: 'command', command }],
