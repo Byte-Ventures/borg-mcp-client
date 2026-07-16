@@ -44,7 +44,7 @@ import { fetchLatestBorgmcpVersion, compareVersionsForStaleness } from './stale-
 import { defaultCliChoiceDeps, detectCliAvailability, installedCliNames, parseCliFlag, resolveCliChoice } from './cli-platform.js';
 import { getRefreshToken, getIdToken } from './config.js';
 import { composeGetStarted, shouldShowGetStarted } from './get-started.js';
-import { prepareCodexRemoteLaunch, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
+import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
 import { BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
 import { findLoadedCodexThread } from './codex-app-server.js';
 import { buildAgentKickoffPrompt, buildKickoffWakePathClause, recordCodexWakeTarget, socketPathFromRemoteArgs, } from './codex-launch.js';
@@ -53,6 +53,7 @@ import { addCodexSessionStartHook, addCodexUserPromptSubmitHook, addProjectSessi
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { connectOpenCodeDrone, computeOpenCodePort, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
+import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 async function main() {
     // `--debug` / BORG_DEBUG: enable HTTP request/response logging to stderr
     // (observability for failures like the cross-account assimilate 404).
@@ -248,6 +249,20 @@ async function main() {
         // preference is changed only via `borg --cli <agent>`).
         cli = action.cli;
     }
+    // client#20: inspect only the SELECTED harness after the one-shot launch
+    // menu choice. Explicit consent enables a narrow per-process override;
+    // Borg never rewrites the user's approval policy here.
+    const approvalCwd = cli === 'codex'
+        ? resolveCodexLaunchCwd(parsedCli.rest, process.cwd())
+        : process.cwd();
+    const launchApproval = await resolveLaunchBorgApprovals(cli, defaultApprovalIo(prompt, () => process.stdin.isTTY === true, {
+        cwd: approvalCwd,
+        env: process.env,
+        codexArgs: parsedCli.rest,
+    }));
+    if (launchApproval.warning) {
+        console.error(`${consolePrefix()}${chalk.yellow(`warning: ${launchApproval.warning}`)}`);
+    }
     // Forward any user-supplied flags (e.g. --resume <id>, --cwd, etc.) to
     // the selected agent CLI unchanged.
     //
@@ -296,6 +311,9 @@ async function main() {
     // Codex remote-wake transport. In particular, clear a stale Codex marker
     // before a Codex -> Claude relaunch can reach its MCP child.
     let launchEnv = { ...withAgentRuntimeEnv(process.env, cli), BORG_SESSION: '1' };
+    if (cli === 'opencode' && launchApproval.openCodePermission) {
+        launchEnv.OPENCODE_PERMISSION = launchApproval.openCodePermission;
+    }
     let codexSocketPath = null;
     let codexServerCleanup = null;
     if (cli === 'codex' && !passthroughArgs.includes('--remote')) {
@@ -349,9 +367,10 @@ async function main() {
         // -c overrides instead (V2b-proven). Remote wake remains a separate
         // transport capability, explicitly disabled when this launch has no
         // socket so legacy static config cannot spuriously arm a bridge.
-        // gh#702: codex auto-allow is a SEPARATE follow-up (different permission
-        // model) — intentionally not handled here.
+        // client#20: the exact approval overrides above are launch-scoped and
+        // consented. They remain separate from activation/identity/wake config.
         launchArgs = [
+            ...launchApproval.codexArgs,
             ...codexBorgSessionConfigArgs(),
             ...codexAgentKindConfigArgs(),
             ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
@@ -369,7 +388,7 @@ async function main() {
             : 14096;
         installBorgPlugin();
         openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
-        launchArgs = [process.cwd(), '--port', String(dronePort), '--auto', '--prompt', openCodeKickoff.prompt, ...passthroughArgs];
+        launchArgs = buildOpenCodeLaunchArgs(process.cwd(), dronePort, openCodeKickoff.prompt, passthroughArgs);
     }
     else {
         // gh#702: borg-launched claude drones auto-allow ONLY mcp__borg__* so they

@@ -48,6 +48,7 @@ import type {
   LocalAttachCompletion,
   LocalAttachOperation,
 } from './server-attach-state.js';
+import { buildOpenCodeLaunchArgs, type LaunchApprovalDecision } from './cli-tool-approval.js';
 
 export interface AssimilateFlags {
   worktree?: string;
@@ -139,6 +140,8 @@ export interface AssimilateDeps {
   prompt: (message: string) => Promise<string>;
   promptSecret: (message: string) => Promise<string>;
   isTTY: () => boolean;
+  /** Selected-harness approval inspection/consent (client#20). */
+  resolveCliApprovals?: (cli: BorgCli, cwd: string) => Promise<LaunchApprovalDecision>;
 
   // CR-PD-F1 (drone-2 Phase D review 2026-05-18T04:13Z) — gh#104
   // captured os.hostname() at assimilate-time as load-bearing for
@@ -1363,6 +1366,10 @@ export async function runAssimilate(
   let launchArgs: string[];
   let codexSocketPath: string | null = null;
   let codexServerCleanup: (() => void) | null = null;
+  const launchApproval = deps.resolveCliApprovals
+    ? await deps.resolveCliApprovals(cli, agentCwd)
+    : { codexArgs: [] };
+  if (launchApproval.warning) deps.stderr(`warning: ${launchApproval.warning}\n`);
 
   // Temporary Claude-only model compatibility. Local/provider models are
   // configured by the selected agent CLI and are never rewritten by Borg.
@@ -1372,6 +1379,9 @@ export async function runAssimilate(
     ...modelEnv.set,
     BORG_SESSION: '1',
   };
+  if (cli === 'opencode' && launchApproval.openCodePermission) {
+    childEnv.OPENCODE_PERMISSION = launchApproval.openCodePermission;
+  }
   for (const key of modelEnv.unset) {
     delete childEnv[key];
   }
@@ -1413,6 +1423,7 @@ export async function runAssimilate(
     // off when no socket is available, overriding legacy static configs that
     // formerly used this transport marker as Codex identity.
     launchArgs = [
+      ...launchApproval.codexArgs,
       ...codexBorgSessionConfigArgs(),
       ...codexAgentKindConfigArgs(),
       ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
@@ -1428,7 +1439,7 @@ export async function runAssimilate(
     installBorgPlugin();
     const cwd = agentCwd;
     openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
-    launchArgs = [cwd, '--port', String(dronePort), '--auto', '--prompt', openCodeKickoff.prompt];
+    launchArgs = buildOpenCodeLaunchArgs(cwd, dronePort, openCodeKickoff.prompt);
   }
   // gh#673 P1: mark the launched agent session as borg-launched so the
   // MCP child + hook bins activate (launch-gate.ts). childEnv is the

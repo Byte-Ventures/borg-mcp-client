@@ -100,9 +100,29 @@ To join under a specific role:
 borg assimilate code-reviewer --cli codex
 ```
 
-For Claude Code launches, Borg adds `--allowedTools mcp__borg__*` so Borg
-coordination tools can run without repeated permission prompts. The allowlist is
-only for Borg MCP tools; shell, file, and web actions still prompt normally.
+### Agent CLI approval policy
+
+Borg removes repeated approval prompts for its coordination tool set. This set
+includes `borg_tool`, the deferred-tool dispatcher: approving it also approves
+any Borg operation invoked through that dispatcher. Direct shell, file, and web
+actions remain outside Borg's allowlist.
+
+- Claude Code launches receive `--allowedTools mcp__borg__*`.
+- Codex launches query Codex's native effective-config resolver at the launch
+  directory, including system/managed, user, selected profile, project, and
+  command-line layers. If coordination tools are restrictive, an interactive
+  launch asks before applying exact, launch-only `approval_mode="auto"`
+  overrides. The consent prompt explicitly discloses the dispatcher's
+  transitive scope. Declining or launching non-interactively changes nothing
+  and prints the exact TOML needed for a global repair.
+- OpenCode launches do not use its broad `--auto` switch. Borg queries
+  `opencode debug config` for its resolved JSONC/managed/global/custom/project/
+  inline configuration and, with interactive consent, supplies
+  exact launch-only `allow` rules through `OPENCODE_PERMISSION`. Other OpenCode
+  permission rules remain in force.
+
+`borg setup` performs the same inspection and prints exact global repair
+snippets. Borg never silently rewrites approval policy.
 
 ## Core MCP tools
 

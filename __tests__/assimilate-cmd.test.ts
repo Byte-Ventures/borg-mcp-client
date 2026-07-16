@@ -280,13 +280,23 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     openCodeDroneMocks.createOpenCodeLaunchKickoff.mockClear();
     openCodeDroneMocks.injectInitialKickoff.mockClear();
     const exec = vi.fn(async () => 0);
-    const deps = makeStubDeps({ exec });
+    const deps = makeStubDeps({
+      exec,
+      resolveCliApprovals: vi.fn(async () => ({
+        codexArgs: [],
+        openCodePermission: '{"borg_borg_regen":"allow"}',
+      })),
+    });
 
     await runAssimilate({ role: undefined, flags: { yes: true, cli: 'opencode' } }, deps);
     await Promise.resolve();
 
     expect(exec).toHaveBeenCalledWith('opencode', expect.any(Array), '/work/myrepo', expect.any(Object));
     const launchArgs = exec.mock.calls[0][1] as string[];
+    expect(launchArgs).not.toContain('--auto');
+    expect(exec.mock.calls[0][3]).toEqual(expect.objectContaining({
+      OPENCODE_PERMISSION: '{"borg_borg_regen":"allow"}',
+    }));
     const promptIndex = launchArgs.indexOf('--prompt');
     const openCodePrompt = launchArgs[promptIndex + 1];
     expect(openCodePrompt).toContain('Call borg_regen and follow the playbook');
@@ -459,6 +469,9 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     );
     const deps = makeStubDeps({
       exec, runSync,
+      resolveCliApprovals: vi.fn(async () => ({
+        codexArgs: ['-c', 'mcp_servers.borg.tools."borg:regen".approval_mode="auto"'],
+      })),
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
       getCube: vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] })),
     });
@@ -477,6 +490,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     // identity, and transport are all independently present before the TUI
     // remote arguments and kickoff positional.
     expect(kickoffArgs).toEqual(expect.arrayContaining([
+      '-c', 'mcp_servers.borg.tools."borg:regen".approval_mode="auto"',
       '-c', 'mcp_servers.borg.env.BORG_SESSION="1"',
       '-c', 'mcp_servers.borg.env.BORG_AGENT_KIND="codex"',
       '-c', 'mcp_servers.borg.env.BORG_CODEX_REMOTE_WAKE="1"',
