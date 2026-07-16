@@ -40,19 +40,37 @@ export interface EffectiveConfigOptions {
     env: NodeJS.ProcessEnv;
     /** User-selected Codex profile/config flags, in their launch precedence. */
     codexArgs: string[];
-    loadCodex?: (args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown>;
+    loadCodex?: (args: string[], cwd: string, env: NodeJS.ProcessEnv, profile?: string) => Promise<unknown>;
     loadOpenCode?: (cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown> | unknown;
 }
 export interface CodexEffectiveConfigRuntime {
     spawnProcess?: typeof spawn;
     timeoutMs?: number;
     maxResponseBytes?: number;
+    profile?: string;
 }
-/** Keep only flags that participate in Codex config resolution. They are
- * replayed after Borg's hypothetical approval flags, matching real launch
- * precedence without passing prompts/images/remote-control flags to the
- * config-reader process. */
+/** Keep only flags that app-server supports and that participate in config
+ * resolution. Runtime-only --profile/-p is resolved separately because Codex
+ * rejects it on the app-server subcommand. */
 export declare function codexEffectiveConfigArgs(args: string[]): string[];
+/** Resolve Codex's selected runtime profile. Short attached forms are accepted
+ * by Codex/clap; the final occurrence before -- wins. */
+export declare function codexSelectedProfile(args: string[]): string | undefined;
+interface CodexConfigLayer {
+    name?: {
+        type?: string;
+        profile?: string | null;
+    };
+    config?: unknown;
+    disabledReason?: string | null;
+}
+interface CodexConfigSnapshot {
+    config?: unknown;
+    layers?: CodexConfigLayer[] | null;
+}
+/** Rebuild the native ordered layer stack with the selected profile inserted
+ * immediately above the base user layer, matching Codex's runtime loader. */
+export declare function composeCodexProfileConfig(snapshot: CodexConfigSnapshot, profileConfig: unknown): unknown;
 export declare function readCodexEffectiveConfig(args: string[], cwd: string, env: NodeJS.ProcessEnv, runtime?: CodexEffectiveConfigRuntime): Promise<unknown>;
 export declare function readOpenCodeEffectiveConfig(cwd: string, env: NodeJS.ProcessEnv): unknown;
 export declare function defaultApprovalIo(confirm: (message: string) => Promise<string>, isTTY: () => boolean, options?: Partial<EffectiveConfigOptions>): ApprovalIo;

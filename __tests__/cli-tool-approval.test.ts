@@ -6,6 +6,8 @@ import {
   buildOpenCodeLaunchArgs,
   codexBorgApprovalArgs,
   codexEffectiveConfigArgs,
+  codexSelectedProfile,
+  composeCodexProfileConfig,
   defaultApprovalIo,
   inspectCodexBorgApprovals,
   inspectOpenCodeBorgApprovals,
@@ -103,14 +105,35 @@ default_tools_approval_mode = "approve"
     expect(args[1]).not.toContain('tools."borg:');
   });
 
-  it('replays only selected profile/config flags into native effective-config resolution', () => {
+  it('separates runtime-only profiles from app-server config flags', () => {
     expect(codexEffectiveConfigArgs([
       '--model', 'gpt-5', '-p', 'team', '--config', 'mcp_servers.borg.default_tools_approval_mode="approve"',
       '--remote', 'unix:///tmp/codex.sock', '--strict-config', '--enable=hooks',
     ])).toEqual([
-      '-p', 'team', '--config', 'mcp_servers.borg.default_tools_approval_mode="approve"',
+      '--config', 'mcp_servers.borg.default_tools_approval_mode="approve"',
       '--strict-config', '--enable=hooks',
     ]);
+    expect(codexSelectedProfile([
+      '--profile', 'first', '-psecond', '--profile=third', '-p=fourth', '--', '-pfifth',
+    ])).toBe('fourth');
+  });
+
+  it('inserts the selected profile between base-user and project/runtime layers', () => {
+    const snapshot = {
+      layers: [
+        { name: { type: 'project' }, config: codexEffective('auto'), disabledReason: null },
+        { name: { type: 'user', profile: null }, config: codexEffective('auto'), disabledReason: null },
+        { name: { type: 'system' }, config: codexEffective('approve'), disabledReason: null },
+      ],
+    };
+    expect(inspectCodexBorgApprovals(
+      composeCodexProfileConfig(snapshot, codexEffective('approve'))
+    ).restrictiveTools).toEqual([]);
+
+    snapshot.layers[0].config = {};
+    expect(inspectCodexBorgApprovals(
+      composeCodexProfileConfig(snapshot, codexEffective('approve'))
+    ).restrictiveTools).toHaveLength(CODEX_BORG_COORDINATION_TOOLS.length);
   });
 
   it('uses the native resolver result: project deny wins over clean global; project allow wins over global deny', () => {
@@ -325,11 +348,30 @@ describe('launch consent', () => {
     await approvalIo.readCodexConfig();
     await approvalIo.readOpenCodeConfig();
     expect(loadCodex).toHaveBeenCalledWith(
-      ['--profile', 'team'], '/repo/subdir', expect.objectContaining({ OPENCODE_CONFIG_CONTENT: expect.any(String) })
+      [], '/repo/subdir', expect.objectContaining({ OPENCODE_CONFIG_CONTENT: expect.any(String) }), 'team'
     );
     expect(loadOpenCode).toHaveBeenCalledWith(
       '/repo/subdir', expect.objectContaining({ OPENCODE_CONFIG_CONTENT: expect.any(String) })
     );
+  });
+
+  it('detects a restrictive selected profile and verifies the launch-only override in the same profile', async () => {
+    const loadCodex = vi.fn(async (args: string[], _cwd: string, _env: NodeJS.ProcessEnv, profile?: string) => {
+      expect(profile).toBe('team');
+      return args.some((arg) => arg.includes('approval_mode="auto"'))
+        ? codexEffective('auto')
+        : codexEffective('approve');
+    });
+    const approvalIo = defaultApprovalIo(async () => 'yes', () => true, {
+      cwd: '/repo',
+      env: {},
+      codexArgs: ['-pteam'],
+      loadCodex,
+    });
+    const result = await resolveLaunchBorgApprovals('codex', approvalIo);
+    expect(result.codexArgs).toHaveLength(2);
+    expect(loadCodex).toHaveBeenCalledTimes(2);
+    expect(loadCodex.mock.calls.every((call) => call[3] === 'team')).toBe(true);
   });
 
   it('inspects the explicit restrictive Codex project instead of a clean wrapper cwd', async () => {
@@ -339,9 +381,9 @@ describe('launch consent', () => {
       args.length > 0 || cwd === wrapperCwd ? codexEffective('auto') : codexEffective('approve')
     );
     const approvalIo = defaultApprovalIo(async () => 'yes', () => true, {
-      cwd: resolveCodexLaunchCwd(['--cd', targetCwd], wrapperCwd),
+      cwd: resolveCodexLaunchCwd([`-C${targetCwd}`], wrapperCwd),
       env: {},
-      codexArgs: ['--cd', targetCwd],
+      codexArgs: [`-C${targetCwd}`],
       loadCodex,
     });
     const result = await resolveLaunchBorgApprovals('codex', approvalIo);
@@ -357,9 +399,9 @@ describe('launch consent', () => {
     );
     const confirm = vi.fn(async () => 'yes');
     const approvalIo = defaultApprovalIo(confirm, () => true, {
-      cwd: resolveCodexLaunchCwd(['-C', targetCwd], wrapperCwd),
+      cwd: resolveCodexLaunchCwd([`-C=${targetCwd}`], wrapperCwd),
       env: {},
-      codexArgs: ['-C', targetCwd],
+      codexArgs: [`-C=${targetCwd}`],
       loadCodex,
     });
     expect(await resolveLaunchBorgApprovals('codex', approvalIo)).toEqual({ codexArgs: [] });

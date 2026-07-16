@@ -259,6 +259,8 @@ describe('withCodexCwdArg', () => {
   it('preserves user-supplied --cd or -C overrides', () => {
     expect(withCodexCwdArg(['--cd', '/manual', 'prompt'], '/work/coord')).toEqual(['--cd', '/manual', 'prompt']);
     expect(withCodexCwdArg(['-C', '/manual', 'prompt'], '/work/coord')).toEqual(['-C', '/manual', 'prompt']);
+    expect(withCodexCwdArg(['-C/manual', 'prompt'], '/work/coord')).toEqual(['-C/manual', 'prompt']);
+    expect(withCodexCwdArg(['-C=/manual', 'prompt'], '/work/coord')).toEqual(['-C=/manual', 'prompt']);
   });
 
   it('does not mistake prompt arguments after -- for a Codex cwd option', () => {
@@ -271,7 +273,11 @@ describe('withCodexCwdArg', () => {
     expect(resolveCodexLaunchCwd(['--cd', '../target'], '/work/wrapper')).toBe('/work/target');
     expect(resolveCodexLaunchCwd(['--cd=relative/project'], '/work/wrapper')).toBe('/work/wrapper/relative/project');
     expect(resolveCodexLaunchCwd(['-C', '/manual'], '/work/wrapper')).toBe('/manual');
+    expect(resolveCodexLaunchCwd(['-C/manual'], '/work/wrapper')).toBe('/manual');
+    expect(resolveCodexLaunchCwd(['-C=/manual'], '/work/wrapper')).toBe('/manual');
     expect(resolveCodexLaunchCwd(['--cd', '/first', '-C', '/last'], '/work/wrapper')).toBe('/last');
+    expect(resolveCodexLaunchCwd(['-C/first', '--cd=/last'], '/work/wrapper')).toBe('/last');
+    expect(resolveCodexLaunchCwd(['-C/first', '--', '-C/ignored'], '/work/wrapper')).toBe('/first');
   });
 });
 

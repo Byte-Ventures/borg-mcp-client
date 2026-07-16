@@ -1,4 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import type { BorgCli } from './cubes.js';
 
 /**
@@ -227,7 +230,12 @@ export interface EffectiveConfigOptions {
   env: NodeJS.ProcessEnv;
   /** User-selected Codex profile/config flags, in their launch precedence. */
   codexArgs: string[];
-  loadCodex?: (args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown>;
+  loadCodex?: (
+    args: string[],
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+    profile?: string
+  ) => Promise<unknown>;
   loadOpenCode?: (cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown> | unknown;
 }
 
@@ -235,35 +243,165 @@ export interface CodexEffectiveConfigRuntime {
   spawnProcess?: typeof spawn;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  profile?: string;
 }
 
-/** Keep only flags that participate in Codex config resolution. They are
- * replayed after Borg's hypothetical approval flags, matching real launch
- * precedence without passing prompts/images/remote-control flags to the
- * config-reader process. */
+/** Keep only flags that app-server supports and that participate in config
+ * resolution. Runtime-only --profile/-p is resolved separately because Codex
+ * rejects it on the app-server subcommand. */
 export function codexEffectiveConfigArgs(args: string[]): string[] {
   const out: string[] = [];
-  const paired = new Set(['-p', '--profile', '-c', '--config', '--enable', '--disable']);
+  const paired = new Set(['-c', '--config', '--enable', '--disable']);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
+    if (arg === '--') break;
+    if (arg === '-p' || arg === '--profile') {
+      if (args[i + 1] !== undefined) i += 1;
+      continue;
+    }
+    if (arg.startsWith('--profile=') || (arg.startsWith('-p') && arg.length > 2)) {
+      continue;
+    }
     if (paired.has(arg)) {
       if (args[i + 1] !== undefined) out.push(arg, args[++i]);
       continue;
     }
-    if (/^--(?:profile|config|enable|disable)=/.test(arg) || arg === '--strict-config') {
+    if (/^--(?:config|enable|disable)=/.test(arg) || arg === '--strict-config') {
       out.push(arg);
     }
   }
   return out;
 }
 
-export async function readCodexEffectiveConfig(
+/** Resolve Codex's selected runtime profile. Short attached forms are accepted
+ * by Codex/clap; the final occurrence before -- wins. */
+export function codexSelectedProfile(args: string[]): string | undefined {
+  let selected: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--') break;
+    if (arg === '-p' || arg === '--profile') {
+      const value = args[index + 1];
+      if (value !== undefined && value.length > 0) {
+        selected = value;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--profile=')) {
+      const value = arg.slice('--profile='.length);
+      if (value.length > 0) selected = value;
+      continue;
+    }
+    if (arg.startsWith('-p') && arg.length > 2) {
+      const value = arg.slice(2).replace(/^=/, '');
+      if (value.length > 0) selected = value;
+    }
+  }
+  return selected;
+}
+
+interface CodexConfigLayer {
+  name?: { type?: string; profile?: string | null };
+  config?: unknown;
+  disabledReason?: string | null;
+}
+
+interface CodexConfigSnapshot {
+  config?: unknown;
+  layers?: CodexConfigLayer[] | null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function mergeConfigValue(base: unknown, overlay: unknown): unknown {
+  if (!isRecord(base) || !isRecord(overlay)) return structuredClone(overlay);
+  const merged: Record<string, unknown> = structuredClone(base);
+  for (const [key, value] of Object.entries(overlay)) {
+    merged[key] = key in merged ? mergeConfigValue(merged[key], value) : structuredClone(value);
+  }
+  return merged;
+}
+
+function borgConfigFragment(config: unknown): unknown {
+  if (!isRecord(config) || !isRecord(config.mcp_servers)) return {};
+  const borg = config.mcp_servers.borg;
+  return isRecord(borg) ? borg : {};
+}
+
+/** Rebuild the native ordered layer stack with the selected profile inserted
+ * immediately above the base user layer, matching Codex's runtime loader. */
+export function composeCodexProfileConfig(
+  snapshot: CodexConfigSnapshot,
+  profileConfig: unknown
+): unknown {
+  const layers = snapshot.layers;
+  if (!Array.isArray(layers)) throw new Error('Codex effective-config layers were unavailable');
+  let mergedBorg: unknown = {};
+  let inserted = false;
+  // config/read returns highest precedence first; Codex's merge runs from
+  // system/base-user upward, so replay the array in reverse.
+  for (const layer of [...layers].reverse()) {
+    if (layer.disabledReason) continue;
+    mergedBorg = mergeConfigValue(mergedBorg, borgConfigFragment(layer.config));
+    if (!inserted && layer.name?.type === 'user' && layer.name.profile == null) {
+      mergedBorg = mergeConfigValue(mergedBorg, borgConfigFragment(profileConfig));
+      inserted = true;
+    }
+  }
+  if (!inserted) throw new Error('Codex base user config layer was unavailable');
+  return { mcp_servers: { borg: mergedBorg } };
+}
+
+async function withNativeCodexProfileLayer<T>(
+  profile: string,
+  env: NodeJS.ProcessEnv,
+  query: (profileCwd: string, trustOverride: string) => Promise<CodexConfigSnapshot>
+): Promise<T> {
+  const codexHome = resolve(env.CODEX_HOME || join(homedir(), '.codex'));
+  const profilePath = resolve(codexHome, `${profile}.config.toml`);
+  if (dirname(profilePath) !== codexHome) {
+    throw new Error('Codex profile path was invalid');
+  }
+  const temporaryHome = await mkdtemp(join(tmpdir(), 'borg-codex-profile-'));
+  try {
+    const dotCodex = join(temporaryHome, '.codex');
+    const temporaryConfig = join(dotCodex, 'config.toml');
+    await mkdir(dotCodex, { mode: 0o700 });
+    // Codex discovers project config from its configured project-root markers;
+    // an empty .git directory is sufficient and never invokes Git itself.
+    await mkdir(join(temporaryHome, '.git'), { mode: 0o700 });
+    try {
+      await copyFile(profilePath, temporaryConfig);
+      await chmod(temporaryConfig, 0o600);
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+      // Codex treats a selected but absent profile as an empty layer.
+      await writeFile(temporaryConfig, '', { mode: 0o600 });
+    }
+    const trustOverride = `projects={${JSON.stringify(temporaryHome)}={trust_level="trusted"}}`;
+    const snapshot = await query(temporaryHome, trustOverride);
+    const profileLayer = snapshot.layers?.find(
+      (layer) => !layer.disabledReason && layer.name?.type === 'project'
+    );
+    if (!profileLayer) throw new Error('Codex profile layer was unavailable');
+    return profileLayer.config as T;
+  } catch {
+    throw new Error('Codex selected-profile query failed');
+  } finally {
+    await rm(temporaryHome, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function readCodexConfigSnapshot(
   args: string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
-  runtime: CodexEffectiveConfigRuntime = {}
-): Promise<unknown> {
-  return new Promise((resolve, reject) => {
+  runtime: CodexEffectiveConfigRuntime
+): Promise<CodexConfigSnapshot> {
+  return new Promise((resolveSnapshot, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
       child = (runtime.spawnProcess ?? spawn)(
@@ -301,7 +439,7 @@ export async function readCodexEffectiveConfig(
         // The query is already settled; process teardown is best-effort.
       }
       if (error) reject(error);
-      else resolve(value);
+      else resolveSnapshot(value as CodexConfigSnapshot);
     };
     const fail = () => finish(new Error('Codex effective-config query failed'));
     const safeWrite = (payload: string): boolean => {
@@ -357,7 +495,7 @@ export async function readCodexEffectiveConfig(
           })}\n`);
         } else if (message.id === 2) {
           if (message.error) finish(new Error('Codex effective-config query was rejected'));
-          else finish(undefined, message.result?.config ?? null);
+          else finish(undefined, message.result ?? {});
         }
       }
     });
@@ -370,6 +508,27 @@ export async function readCodexEffectiveConfig(
       },
     })}\n`);
   });
+}
+
+export async function readCodexEffectiveConfig(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  runtime: CodexEffectiveConfigRuntime = {}
+): Promise<unknown> {
+  const snapshot = await readCodexConfigSnapshot(args, cwd, env, runtime);
+  if (!runtime.profile) return snapshot.config ?? null;
+  const profileConfig = await withNativeCodexProfileLayer<unknown>(
+    runtime.profile,
+    env,
+    (profileCwd, trustOverride) => readCodexConfigSnapshot(
+      [...args.filter((arg) => arg === '--strict-config'), '-c', trustOverride],
+      profileCwd,
+      env,
+      { ...runtime, profile: undefined }
+    )
+  );
+  return composeCodexProfileConfig(snapshot, profileConfig);
 }
 
 export function readOpenCodeEffectiveConfig(
@@ -397,11 +556,19 @@ export function defaultApprovalIo(
   const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env;
   const selectedCodexArgs = codexEffectiveConfigArgs(options.codexArgs ?? []);
-  const loadCodex = options.loadCodex ?? readCodexEffectiveConfig;
+  const selectedCodexProfile = codexSelectedProfile(options.codexArgs ?? []);
+  const loadCodex = options.loadCodex ?? (
+    (args: string[], loadCwd: string, loadEnv: NodeJS.ProcessEnv, profile?: string) =>
+      readCodexEffectiveConfig(args, loadCwd, loadEnv, { profile })
+  );
   const loadOpenCode = options.loadOpenCode ?? readOpenCodeEffectiveConfig;
   return {
-    readCodexConfig: (approvalArgs = []) =>
-      loadCodex([...approvalArgs, ...selectedCodexArgs], cwd, env),
+    readCodexConfig: (approvalArgs = []) => {
+      const args = [...approvalArgs, ...selectedCodexArgs];
+      return selectedCodexProfile === undefined
+        ? loadCodex(args, cwd, env)
+        : loadCodex(args, cwd, env, selectedCodexProfile);
+    },
     readOpenCodeConfig: (permissionOverride) =>
       loadOpenCode(cwd, {
         ...env,

@@ -142,6 +142,11 @@ export function resolveCodexLaunchCwd(args: string[], fallbackCwd: string): stri
     if (arg.startsWith('--cd=')) {
       const value = arg.slice('--cd='.length);
       if (value.length > 0) selected = resolve(baseCwd, value);
+      continue;
+    }
+    if (arg.startsWith('-C') && arg.length > 2) {
+      const value = arg.slice(2).replace(/^=/, '');
+      if (value.length > 0) selected = resolve(baseCwd, value);
     }
   }
   return selected;
@@ -150,7 +155,9 @@ export function resolveCodexLaunchCwd(args: string[], fallbackCwd: string): stri
 function hasCodexCwdArg(args: string[]): boolean {
   for (const arg of args) {
     if (arg === '--') return false;
-    if (arg === '--cd' || arg.startsWith('--cd=') || arg === '-C') return true;
+    if (arg === '--cd' || arg.startsWith('--cd=') || arg === '-C' || (arg.startsWith('-C') && arg.length > 2)) {
+      return true;
+    }
   }
   return false;
 }
