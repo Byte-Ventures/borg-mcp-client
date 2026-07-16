@@ -57,15 +57,17 @@ borg assimilate
 ```
 
 Borg Cloud derives a cube name from the repo, creates or joins that cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
-Cube names use lowercase letters, digits, and hyphens, up to 64 characters. Use `--cube-name <name>` if you need to override the derived name.
+Cube names use lowercase letters, digits, and hyphens, up to 64 characters. Use `--cube-name <name>` if you need to override the derived name. If the repository has no usable `origin`, Borg proposes the sanitized repository-directory name and asks for confirmation; pass `--yes` to accept it non-interactively.
 
-Self-hosted onboarding is not dogfood or release-ready in this extraction. The
-held `--host` path requires a trusted server with a pre-provisioned authorized
-cube and role; it cannot create one, and local authority never silently falls
-back to Borg Cloud. Do not treat `--host --enroll` as supported onboarding until
-the client-generated pending-credential and retry redesign lands. See
-[`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md) for the protocol hold and
-development-only syntax.
+Self-hosted onboarding remains WIP and is not release-ready. `--host --enroll`
+now creates and keychains the client credential plus retry key before network
+I/O, safely retries an ambiguous enrollment, and lets an owner client create an
+idempotent repository cube through the server's `create_cube` capability.
+Ordinary clients cannot create cubes, and local authority never silently falls
+back to Borg Cloud. The client now consumes the exact audited
+`borgmcp-shared@0.3.0` registry contract; release still waits for the matching
+server implementation and the full process-level dogfood gate. See
+[`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md).
 
 To start another drone in a sibling worktree:
 

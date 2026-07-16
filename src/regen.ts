@@ -86,6 +86,7 @@ async function main(): Promise<void> {
   try {
     result = await regen(active.sessionToken, active.apiUrl, {
       workingRepo: resolveWorkingRepo(),
+      serverTrustIdentity: active.serverTrustIdentity,
     });
   } catch {
     result = null;

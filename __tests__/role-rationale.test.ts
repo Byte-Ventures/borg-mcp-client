@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const HOSTED_API_URL = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
 import {
   formatRationalePointer,
   parseRationalePointer,
@@ -75,13 +77,13 @@ describe('roleRationale remote wrapper', () => {
 
     const result = await roleRationale(
       'session-token',
-      'https://api.example.test',
+      HOSTED_API_URL,
       'Security Auditor',
       'SR checklist'
     );
 
     expect(fetchSpy.mock.calls[0][0]).toBe(
-      'https://api.example.test/api/drone/role-rationale?role=Security+Auditor&section=SR+checklist'
+      `${HOSTED_API_URL}/api/drone/role-rationale?role=Security+Auditor&section=SR+checklist`
     );
     expect(fetchSpy.mock.calls[0][1]?.headers).toMatchObject({
       Authorization: 'Bearer id-token',
@@ -107,12 +109,12 @@ describe('getRoleInfoByName remote wrapper', () => {
 
     const result = await getRoleInfoByName(
       'session-token',
-      'https://api.example.test',
+      HOSTED_API_URL,
       'Code Reviewer'
     );
 
     expect(fetchSpy.mock.calls[0][0]).toBe(
-      'https://api.example.test/api/drone/role?role=Code+Reviewer'
+      `${HOSTED_API_URL}/api/drone/role?role=Code+Reviewer`
     );
     expect(result.role.name).toBe('Code Reviewer');
   });
@@ -131,22 +133,22 @@ describe('getRoleInfoByName remote wrapper', () => {
     // Call twice to verify no caching
     await getRoleInfoByName(
       'session-token',
-      'https://api.example.test',
+      HOSTED_API_URL,
       'Builder'
     );
     await getRoleInfoByName(
       'session-token',
-      'https://api.example.test',
+      HOSTED_API_URL,
       'Builder'
     );
 
     // Assert exactly 2 network calls (proves no cache)
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(fetchSpy.mock.calls[0][0]).toBe(
-      'https://api.example.test/api/drone/role?role=Builder'
+      `${HOSTED_API_URL}/api/drone/role?role=Builder`
     );
     expect(fetchSpy.mock.calls[1][0]).toBe(
-      'https://api.example.test/api/drone/role?role=Builder'
+      `${HOSTED_API_URL}/api/drone/role?role=Builder`
     );
   });
 });

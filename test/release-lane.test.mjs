@@ -16,6 +16,9 @@ import {
 import { smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
+const SHARED_VERSION = '0.3.0';
+const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.3.0.tgz';
+const SHARED_INTEGRITY = 'sha512-vXY4kZLBlyS0nqnveLAiAhbkc4pzP2C/V9nDRZ80lmv1z389A3yGLLSKx+ZHBb3qI17bTuDg1ILYN2qIVLWIIw==';
 
 async function validPackage(directory) {
   const packageRoot = join(directory, 'package');
@@ -45,18 +48,18 @@ async function validPackage(directory) {
       test: 'node --test',
       'verify:artifact': 'node scripts/verify-packed-artifact.mjs',
     },
-    dependencies: { 'borgmcp-shared': '^0.2.0' },
+    dependencies: { 'borgmcp-shared': SHARED_VERSION },
   };
   const lock = {
     name: 'borgmcp',
     version: '2.0.0',
     lockfileVersion: 3,
     packages: {
-      '': { name: 'borgmcp', version: '2.0.0', dependencies: { 'borgmcp-shared': '^0.2.0' } },
+      '': { name: 'borgmcp', version: '2.0.0', dependencies: { 'borgmcp-shared': SHARED_VERSION } },
       'node_modules/borgmcp-shared': {
-        version: '0.2.1',
-        resolved: 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.2.1.tgz',
-        integrity: `sha512-${Buffer.alloc(64).toString('base64')}`,
+        version: SHARED_VERSION,
+        resolved: SHARED_TARBALL,
+        integrity: SHARED_INTEGRITY,
       },
     },
   };
@@ -194,7 +197,7 @@ test('release attempt guard rejects reruns of an immutable tag workflow', () => 
 
 test('release readiness accepts the extracted standalone client', async () => {
   const report = await verifyReleaseReadiness(root);
-  assert.deepEqual(report, { name: 'borgmcp', version: '1.1.15', shared: '0.2.2' });
+  assert.deepEqual(report, { name: 'borgmcp', version: '1.1.15', shared: SHARED_VERSION });
 });
 
 test('public-source scan ignores a linked-worktree .git file', async (t) => {
@@ -258,7 +261,7 @@ test('release readiness accepts one canonical registry-resolved shared dependenc
   t.after(() => rm(directory, { recursive: true, force: true }));
   await validPackage(directory);
   const report = await verifyReleaseReadiness(join(directory, 'package'));
-  assert.deepEqual(report, { name: 'borgmcp', version: '2.0.0', shared: '0.2.1' });
+  assert.deepEqual(report, { name: 'borgmcp', version: '2.0.0', shared: SHARED_VERSION });
 });
 
 test('repository npm config is rejected before any release bootstrap may run', async (t) => {
@@ -360,8 +363,8 @@ test('lock binding rejects wrong identity, version, host tricks, suffixes, and m
     const { lock } = await validPackage(directory);
     const canonical = lock.packages['node_modules/borgmcp-shared'].resolved;
     const hostile = [
-      { resolved: 'https://registry.npmjs.org/other/-/other-0.2.1.tgz' },
-      { resolved: 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.2.2.tgz' },
+      { resolved: 'https://registry.npmjs.org/other/-/other-0.3.0.tgz' },
+      { resolved: 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.3.1.tgz' },
       { resolved: canonical.replace('registry.npmjs.org', 'registry.npmjs.org.evil.example') },
       { resolved: canonical.replace('https://', 'https://user@') },
       { resolved: `${canonical}?download=1` },
@@ -437,8 +440,8 @@ test('official registry metadata must match the reviewed lock URL and integrity'
   const integrity = `sha512-${Buffer.alloc(64).toString('base64')}`;
   const entry = {
     name: 'borgmcp-shared',
-    version: '0.2.1',
-    tarball: 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.2.1.tgz',
+    version: SHARED_VERSION,
+    tarball: SHARED_TARBALL,
     integrity,
   };
   assert.doesNotThrow(() => verifyRegistryMetadata(entry, {
@@ -470,7 +473,7 @@ test('official metadata validation checks every duplicate lock entry regardless 
   const lockPath = join(directory, 'duplicate-lock.json');
   const metadata = {
     name: 'borgmcp-shared',
-    version: '0.2.1',
+    version: SHARED_VERSION,
     dist: { tarball: canonical.resolved, integrity: canonical.integrity },
   };
   const fetchImpl = async () => ({ ok: true, json: async () => metadata });
@@ -514,9 +517,9 @@ test('official metadata validation includes platform-skipped optional lock entri
       ok: true,
       json: async () => ({
         name: 'borgmcp-shared',
-        version: '0.2.1',
+        version: SHARED_VERSION,
         dist: {
-          tarball: 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.2.1.tgz',
+          tarball: SHARED_TARBALL,
           integrity: lock.packages['node_modules/borgmcp-shared'].integrity,
         },
       }),

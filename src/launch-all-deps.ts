@@ -66,7 +66,8 @@ export interface LaunchAllDeps {
   getRoster: (
     token: string,
     apiUrl: string,
-    since?: string
+    since?: string,
+    serverTrustIdentity?: string,
   ) => Promise<{ drones: Array<{ id: string; seen_since?: boolean }> }>;
   /** getCube for --only tier-2 role-name resolution (best-effort). */
   getCube: (
@@ -79,7 +80,11 @@ export interface LaunchAllDeps {
    * reuse via seat-probe.ts). Lets launch-all skip evicted/frozen seats instead
    * of relaunching them (which silently re-mints a fresh drone — resurrection).
    */
-  probeSeat: (sessionToken: string, apiUrl: string) => Promise<SeatStatus>;
+  probeSeat: (
+    sessionToken: string,
+    apiUrl: string,
+    serverTrustIdentity?: string,
+  ) => Promise<SeatStatus>;
   /** Saved CLI preference for a worktree path (launch.json). */
   getCliPreferenceForPath: (projectPath: string) => Promise<'claude' | 'codex' | 'opencode' | null>;
   /** All persisted project identities from cubes.json. */
@@ -161,10 +166,12 @@ export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
         return null;
       }
     },
-    getRoster: (token, apiUrl, since) => getRoster(token, apiUrl, since),
+    getRoster: (token, apiUrl, since, serverTrustIdentity) =>
+      getRoster(token, apiUrl, since, serverTrustIdentity),
     // getCube uses the user OAuth token via authedFetch (cubeId-only); apiUrl/token unused.
     getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
-    probeSeat: (sessionToken, apiUrl) => defaultProbeSeat(sessionToken, apiUrl),
+    probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>
+      defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
     getCliPreferenceForPath: (projectPath) => getProjectCliPreferenceForPath(projectPath),
     readAllProjectIdentities: () => cubesReadAllProjectIdentities(),
     findProjectRoot: (dir) => findProjectRoot(dir),

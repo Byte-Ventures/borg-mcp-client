@@ -60,9 +60,11 @@ import {
 } from './health-beat.js';
 import { getPackageVersion } from './version.js';
 import { readBoundedResponseBody } from './server-response.js';
+import { isCanonicalHostedApiUrl } from './authority.js';
 import {
   acquireStreamLease,
   readOwnershipSnapshot,
+  STREAM_OWNER_STALE_MS,
   type StreamLease,
   type StreamOwnershipSnapshot,
 } from './stream-owner.js';
@@ -78,6 +80,15 @@ const HWM_DIVERGENCE_GRACE_MS = 2_000;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 30_000;
 export const LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES = 64 * 1024;
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 /**
  * gh#opencode: module-level mutable opencode entry injector. Set after
  * startup (from index.ts) once the opencode drone module is initialized.
@@ -429,6 +440,7 @@ function defaultOnInboxReceipt(active: ActiveCube, token: string): void {
 export interface RunLoopTestDeps {
   getActiveCube?: typeof getActiveCube;
   acquireStreamLease?: typeof acquireStreamLease;
+  streamOnce?: typeof streamOnce;
   sleep?: (ms: number) => Promise<void>;
   maxIterations?: number;
 }
@@ -436,6 +448,7 @@ export interface RunLoopTestDeps {
 async function runLoop(testDeps: RunLoopTestDeps = {}): Promise<void> {
   const _getActiveCube = testDeps.getActiveCube ?? getActiveCube;
   const _acquireStreamLease = testDeps.acquireStreamLease ?? acquireStreamLease;
+  const _streamOnce = testDeps.streamOnce ?? streamOnce;
   const _sleep = testDeps.sleep ?? sleep;
   const _maxIterations = testDeps.maxIterations ?? Infinity;
   let _iterations = 0;
@@ -446,7 +459,8 @@ async function runLoop(testDeps: RunLoopTestDeps = {}): Promise<void> {
   let lease: StreamLease | null = null;
   let leaseKey: string | null = null;
 
-  while (_iterations < _maxIterations) {
+  try {
+    while (_iterations < _maxIterations) {
     _iterations += 1;
     const active = await _getActiveCube();
     if (!active) {
@@ -484,7 +498,12 @@ async function runLoop(testDeps: RunLoopTestDeps = {}): Promise<void> {
     }
 
     if (!lease) {
-      lease = await _acquireStreamLease(active.cubeId, active.droneId);
+      lease = await _acquireStreamLease(
+        active.cubeId,
+        active.droneId,
+        STREAM_OWNER_STALE_MS,
+        { isPidAlive: isProcessAlive },
+      );
       leaseKey = lease ? nextLeaseKey : null;
     }
 
@@ -518,7 +537,7 @@ async function runLoop(testDeps: RunLoopTestDeps = {}): Promise<void> {
         Math.max(1000, Math.floor(HEARTBEAT_TIMEOUT_MS / 2))
       );
       try {
-        await streamOnce(
+        await _streamOnce(
           active,
           lastEventId,
           (id) => {
@@ -577,6 +596,10 @@ async function runLoop(testDeps: RunLoopTestDeps = {}): Promise<void> {
       streamState.reconnectAttempts = attempt;
       await _sleep(delay);
     }
+    }
+  } finally {
+    if (lease) await lease.release().catch(() => {});
+    streamState.connected = false;
   }
 }
 
@@ -626,6 +649,13 @@ export async function streamOnce(
   } = { ...defaultDeps, ...deps };
 
   const isLocal = active.serverTrustIdentity !== undefined;
+  // An environment-selected BORG_API_URL is routing configuration, not proof
+  // of Borg Cloud authority. A drone session aimed anywhere except the
+  // canonical hosted origin must carry hydrated local trust before either the
+  // OAuth token getter or the SSE transport is touched.
+  if (!isLocal && !isCanonicalHostedApiUrl(active.apiUrl)) {
+    throw new Error('Selected Borg server authority state is missing or unreadable');
+  }
   const token = isLocal ? active.sessionToken : await getToken();
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,

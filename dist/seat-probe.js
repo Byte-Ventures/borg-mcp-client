@@ -13,9 +13,9 @@ import { DroneEvictedError, DroneFrozenError } from './drone-lifecycle.js';
  * INDETERMINATE — and (for the destructive cleanup path) must NEVER authorize a
  * delete. The launch path treats indeterminate as launch-anyway (fail-OPEN).
  */
-export async function defaultProbeSeat(sessionToken, apiUrl) {
+export async function defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity) {
     try {
-        await whoami(sessionToken, apiUrl);
+        await whoami(sessionToken, apiUrl, serverTrustIdentity);
         return 'live';
     }
     catch (err) {

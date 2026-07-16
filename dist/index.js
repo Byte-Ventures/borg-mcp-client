@@ -269,6 +269,7 @@ export async function main() {
                         since,
                         reportedModel,
                         workingRepo: resolveWorkingRepo(),
+                        serverTrustIdentity: active.serverTrustIdentity,
                     });
                     const freshActive = activeCubeWithFreshRegenIdentity(active, result);
                     if (freshActive !== active) {
@@ -393,6 +394,7 @@ export async function main() {
                     try {
                         const result = await regen(active.sessionToken, active.apiUrl, {
                             workingRepo: resolveWorkingRepo(),
+                            serverTrustIdentity: active.serverTrustIdentity,
                         });
                         const freshActive = activeCubeWithFreshRegenIdentity(active, result);
                         if (freshActive !== active) {
@@ -444,7 +446,7 @@ export async function main() {
                 }
                 case 'borg_whoami': {
                     const active = await requireActiveCube();
-                    const result = await whoami(active.sessionToken, active.apiUrl);
+                    const result = await whoami(active.sessionToken, active.apiUrl, active.serverTrustIdentity);
                     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
                 }
                 case 'borg_cube': {
@@ -461,8 +463,8 @@ export async function main() {
                     // 06:00:31 finding for the original incident trace.
                     const active = await requireActiveCube();
                     const [{ cube, roles }] = await Promise.all([
-                        getCubeInfo(active.sessionToken, active.apiUrl),
-                        getRoleInfo(active.sessionToken, active.apiUrl),
+                        getCubeInfo(active.sessionToken, active.apiUrl, active.serverTrustIdentity),
+                        getRoleInfo(active.sessionToken, active.apiUrl, active.serverTrustIdentity),
                     ]);
                     const lines = [];
                     lines.push(`# Cube: ${cube.name}`);
@@ -506,7 +508,7 @@ export async function main() {
                     const active = await requireActiveCube();
                     const requested = typeof args?.role === 'string' ? args.role.trim() : '';
                     if (requested) {
-                        const { role } = await getRoleInfoByName(active.sessionToken, active.apiUrl, requested);
+                        const { role } = await getRoleInfoByName(active.sessionToken, active.apiUrl, requested, active.serverTrustIdentity);
                         assertRoleMatches(requested, role);
                         const text = [
                             `# Role: ${role.name}`,
@@ -515,7 +517,7 @@ export async function main() {
                         ].join('\n');
                         return { content: [{ type: 'text', text }] };
                     }
-                    const { role } = await getRoleInfo(active.sessionToken, active.apiUrl);
+                    const { role } = await getRoleInfo(active.sessionToken, active.apiUrl, active.serverTrustIdentity);
                     const text = [
                         `# Your role: ${role.name}`,
                         ``,
@@ -527,7 +529,7 @@ export async function main() {
                     const active = await requireActiveCube();
                     const role = typeof args?.role === 'string' ? args.role : '';
                     const section = typeof args?.section === 'string' ? args.section : '';
-                    const result = await roleRationale(active.sessionToken, active.apiUrl, role, section);
+                    const result = await roleRationale(active.sessionToken, active.apiUrl, role, section, active.serverTrustIdentity);
                     const text = [
                         `# Role rationale: ${result.role} — ${result.section}`,
                         '',
@@ -538,7 +540,7 @@ export async function main() {
                 case 'borg_roster': {
                     const active = await requireActiveCube();
                     const since = typeof args?.since === 'string' ? args.since : undefined;
-                    const { drones, roles, since: resolvedSince } = await getRoster(active.sessionToken, active.apiUrl, since);
+                    const { drones, roles, since: resolvedSince } = await getRoster(active.sessionToken, active.apiUrl, since, active.serverTrustIdentity);
                     const text = renderRoster({
                         cubeName: active.name,
                         drones,
@@ -596,6 +598,7 @@ export async function main() {
                         since,
                         limit,
                         unreadOnly,
+                        serverTrustIdentity: active.serverTrustIdentity,
                     });
                     const droneById = new Map();
                     for (const d of drones)
@@ -659,6 +662,9 @@ export async function main() {
                         ...(explicitClass ? { class: explicitClass } : {}),
                         ...(hasTo ? { to: recipients ?? [] } : {}),
                         ...(visibility ? { visibility } : {}),
+                        ...(active.serverTrustIdentity === undefined
+                            ? {}
+                            : { serverTrustIdentity: active.serverTrustIdentity }),
                     };
                     const result = await appendLog(active.sessionToken, active.apiUrl, message, appendOpts);
                     await recordLifecycleLog(active, message);
@@ -686,7 +692,7 @@ export async function main() {
                         ? args.metadata
                         : undefined;
                     // Server scrubs secrets + stamps reporter_user_id; the response is opaque {ok}.
-                    const result = await submitReport(active.sessionToken, active.apiUrl, { kind, message, metadata });
+                    const result = await submitReport(active.sessionToken, active.apiUrl, { kind, message, metadata }, active.serverTrustIdentity);
                     const text = result.ok
                         ? 'Report submitted — thank you. The borgmcp team will see it. (Write-only: you cannot read reports back.)'
                         : 'Report did not submit. Try again, or raise it in the cube log.';
@@ -745,7 +751,7 @@ export async function main() {
                     // rejected server-side, but normalize here to keep the wire clean.
                     const kind = args?.kind === 'claim' ? 'claim' : 'ack';
                     const active = await requireActiveCube();
-                    await ackLogEntry(active.sessionToken, active.apiUrl, entryId, kind);
+                    await ackLogEntry(active.sessionToken, active.apiUrl, entryId, kind, active.serverTrustIdentity);
                     return {
                         content: [
                             {
@@ -770,7 +776,7 @@ export async function main() {
                         topic,
                         decision,
                         ...(rationale !== undefined ? { rationale } : {}),
-                    });
+                    }, active.serverTrustIdentity);
                     const superseded = row?.supersedes ? ' (superseded the prior decision on this topic)' : '';
                     return {
                         content: [
@@ -784,7 +790,7 @@ export async function main() {
                 case 'borg_decisions': {
                     const topic = typeof args?.topic === 'string' ? args.topic : undefined;
                     const active = await requireActiveCube();
-                    const { decisions } = await listDecisions(active.sessionToken, active.apiUrl, topic);
+                    const { decisions } = await listDecisions(active.sessionToken, active.apiUrl, topic, active.serverTrustIdentity);
                     const text = decisions.length === 0
                         ? topic
                             ? `No active ratified decision on "${topic}" in cube "${active.name}".`
@@ -802,7 +808,7 @@ export async function main() {
                     }
                     const active = await requireActiveCube();
                     const selector = topic !== undefined ? { topic } : { decision_id: decisionId };
-                    const { decision } = await removeDecision(active.sessionToken, active.apiUrl, selector);
+                    const { decision } = await removeDecision(active.sessionToken, active.apiUrl, selector, active.serverTrustIdentity);
                     return {
                         content: [{
                                 type: 'text',

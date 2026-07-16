@@ -93,12 +93,12 @@ describe('deriveCubeName', () => {
     expect(deriveCubeName('/work/myrepo', 'git@github.com:org/cool-repo.git')).toBe('cool-repo');
   });
 
-  it('returns null when remote is null (server auto-generates)', () => {
-    expect(deriveCubeName('/work/My_Repo', null)).toBeNull();
+  it('falls back to the normalized project-root basename when remote is null', () => {
+    expect(deriveCubeName('/work/My_Repo', null)).toBe('my-repo');
   });
 
-  it('returns null when remote URL is sanitized to null', () => {
-    expect(deriveCubeName('/work/myrepo', 'git@host:org/repo.git\x00bad')).toBeNull();
+  it('falls back to the basename when the remote URL is rejected', () => {
+    expect(deriveCubeName('/work/myrepo', 'git@host:org/repo.git\x00bad')).toBe('myrepo');
   });
 
   it('returns null when remote is unparseable', () => {

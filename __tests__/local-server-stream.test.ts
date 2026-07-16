@@ -4,9 +4,33 @@ const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const DRONE_ID = '22222222-2222-4222-8222-222222222222';
 const LOG_ID = '33333333-3333-4333-8333-333333333333';
 
-afterEach(() => vi.resetModules());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.resetModules();
+});
 
 describe('local server SSE adapter', () => {
+  it.each([
+    ['missing active state', async () => null, false],
+    ['keychain hydration failure', async () => { throw new Error('keychain locked'); }, true],
+  ] as const)('does not reach OAuth or network after %s', async (_case, getActiveCube, rejects) => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+    const acquireStreamLease = vi.fn();
+    const sleep = vi.fn(async () => {});
+    const { __runLoopForTest } = await import('../src/log-stream.js');
+    const run = __runLoopForTest({
+      getActiveCube,
+      acquireStreamLease,
+      sleep,
+      maxIterations: 1,
+    });
+    if (rejects) await expect(run).rejects.toThrow('keychain locked');
+    else await expect(run).resolves.toBeUndefined();
+    expect(acquireStreamLease).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('uses the local stream route, direct drone Bearer, and durable tuple cursor', async () => {
     const cursor = { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' };
     const advanceCursor = vi.fn(async () => {});

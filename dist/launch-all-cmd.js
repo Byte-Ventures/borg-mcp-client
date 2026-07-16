@@ -108,7 +108,7 @@ function sanitizeSessionName(cubeName) {
     return `borg-${cubeName.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 }
 /** Roster reconciliation (spec §7.2). Returns droneId → 'verified'|'unconfirmed'. */
-async function reconcileRoster(deps, token, apiUrl, launchStartISO, launchedDroneIds, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
+async function reconcileRoster(deps, token, apiUrl, serverTrustIdentity, launchStartISO, launchedDroneIds, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
     const result = new Map();
     for (const id of launchedDroneIds)
         result.set(id, 'unconfirmed');
@@ -120,7 +120,7 @@ async function reconcileRoster(deps, token, apiUrl, launchStartISO, launchedDron
             break;
         let roster;
         try {
-            roster = await deps.getRoster(token, apiUrl, launchStartISO);
+            roster = await deps.getRoster(token, apiUrl, launchStartISO, serverTrustIdentity);
         }
         catch (err) {
             // gh#850: the roster-reconcile token can rotate mid-launch — authedFetch
@@ -229,7 +229,7 @@ export async function runLaunchAll(args, deps, opts = {}) {
     for (const c of lockLaunchable) {
         let status;
         try {
-            status = await deps.probeSeat(c.sessionToken, c.apiUrl);
+            status = await deps.probeSeat(c.sessionToken, c.apiUrl, c.serverTrustIdentity);
         }
         catch {
             status = 'indeterminate';
@@ -303,9 +303,10 @@ export async function runLaunchAll(args, deps, opts = {}) {
     // 9. roster reconciliation (best-effort; uses the OLD saved token from the first candidate)
     const reconToken = launchable[0].sessionToken;
     const reconApiUrl = launchable[0].apiUrl;
+    const reconServerTrustIdentity = launchable[0].serverTrustIdentity;
     let statuses = null;
     if (reconToken && reconApiUrl) {
-        statuses = await reconcileRoster(deps, reconToken, reconApiUrl, launchStartISO, launchable.map((c) => c.droneId), opts.now, opts.sleep);
+        statuses = await reconcileRoster(deps, reconToken, reconApiUrl, reconServerTrustIdentity, launchStartISO, launchable.map((c) => c.droneId), opts.now, opts.sleep);
     }
     else {
         deps.stderr('roster reconciliation skipped — no session token available\n');

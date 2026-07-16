@@ -60,7 +60,7 @@ export interface CleanupDeps {
         cube: ActiveCube;
     }>>;
     /** Probe ONE seat's eviction status using ITS OWN token (gh#877). */
-    probeSeat?: (sessionToken: string, apiUrl: string) => Promise<SeatStatus>;
+    probeSeat?: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
     /** realpath resolver — injected so tests can model symlink escape. */
     realpath?: (p: string) => string;
     stdout?: (line: string) => void;

@@ -1,6 +1,7 @@
 export declare const STREAM_OWNER_STALE_MS = 70000;
 /** Grace window for mkdir→owner.json initialization before an empty lock is reclaimable. */
 export declare const STREAM_OWNER_INIT_STALE_MS = 5000;
+export declare const STREAM_OWNER_TAKEOVER_STALE_MS = 5000;
 export interface StreamOwnerRecord {
     schemaVersion: number;
     pid: number;
@@ -18,8 +19,9 @@ export interface StreamOwnershipSnapshot {
     heartbeatAt?: string;
     ageMs?: number;
     lockPath?: string;
-    /** Directory mtime used to compare-before-reap an orphaned initialization. */
-    lockMtimeMs?: number;
+    /** Opened-directory identity used to bind inspection to later takeover. */
+    lockDev?: number;
+    lockIno?: number;
 }
 export interface StreamLease {
     lockPath: string;
@@ -36,6 +38,8 @@ export interface StreamOwnerDeps {
     processStartedAt?: string;
     isPidAlive?: (pid: number) => boolean;
     beforeTakeoverVerify?: (takeoverPath: string) => Promise<void>;
+    beforeLeaseRefreshMutation?: (lockPath: string) => Promise<void>;
+    beforeLeaseReleaseMutation?: (lockPath: string) => Promise<void>;
     /** Initialization/refresh writer seam for failure-path regression tests. */
     writeRecord?: (lockPath: string, record: StreamOwnerRecord) => Promise<void>;
 }

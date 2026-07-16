@@ -139,6 +139,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
 
   it('roster reconcile: seen_since true → VERIFIED in summary', async () => {
     const { paths, identities } = fleet(1);
+    identities[0].cube.serverTrustIdentity = 'spki-sha256:local-server';
     const deps = makeStubDeps({
       getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
       runSync: vi.fn(() => porcelainFor(paths)),
@@ -147,6 +148,12 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     });
     expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
     expect(stdoutOf(deps)).toContain('VERIFIED');
+    expect(deps.getRoster).toHaveBeenCalledWith(
+      'sess',
+      'http://api.test',
+      '2026-06-13T12:00:00.000Z',
+      'spki-sha256:local-server',
+    );
   });
 
   it('roster reconcile: getRoster throws → skipped, still exit 0', async () => {

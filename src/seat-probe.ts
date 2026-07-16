@@ -28,10 +28,11 @@ export type SeatStatus = 'evicted' | 'frozen' | 'live' | 'indeterminate';
  */
 export async function defaultProbeSeat(
   sessionToken: string,
-  apiUrl: string
+  apiUrl: string,
+  serverTrustIdentity?: string,
 ): Promise<SeatStatus> {
   try {
-    await whoami(sessionToken, apiUrl);
+    await whoami(sessionToken, apiUrl, serverTrustIdentity);
     return 'live';
   } catch (err) {
     if (err instanceof DroneEvictedError) return 'evicted';

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const HOSTED_API_URL = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
+
 vi.mock('../src/config.js', () => ({
   getIdToken: vi.fn(async () => 'id-token'),
   getRefreshToken: vi.fn(async () => null),
@@ -40,7 +42,7 @@ describe('appendLog directed-message request body', () => {
   it('omits visibility fields for default broadcast back-compat', async () => {
     const { appendLog } = await import('../src/remote-client.js');
 
-    await appendLog('session-token', 'https://api.example.test', 'hello');
+    await appendLog('session-token', HOSTED_API_URL, 'hello');
 
     const [, init] = fetchSpy.mock.calls[0];
     expect(JSON.parse(init!.body as string)).toEqual({ message: 'hello' });
@@ -49,7 +51,7 @@ describe('appendLog directed-message request body', () => {
   it('sends direct visibility and recipient ids when requested', async () => {
     const { appendLog } = await import('../src/remote-client.js');
 
-    await appendLog('session-token', 'https://api.example.test', 'secret', {
+    await appendLog('session-token', HOSTED_API_URL, 'secret', {
       visibility: 'direct',
       recipientDroneIds: ['drone-2'],
     });
@@ -65,7 +67,7 @@ describe('appendLog directed-message request body', () => {
   it('sends raw server-routing tokens without resolving them client-side', async () => {
     const { appendLog } = await import('../src/remote-client.js');
 
-    await appendLog('session-token', 'https://api.example.test', 'STARTING: work', {
+    await appendLog('session-token', HOSTED_API_URL, 'STARTING: work', {
       class: 'status-claim',
       to: ['Coordinator'],
       visibility: 'broadcast',
@@ -83,7 +85,7 @@ describe('appendLog directed-message request body', () => {
   it('preserves an explicit empty to array for the server D3 path', async () => {
     const { appendLog } = await import('../src/remote-client.js');
 
-    await appendLog('session-token', 'https://api.example.test', 'hello', {
+    await appendLog('session-token', HOSTED_API_URL, 'hello', {
       to: [],
     });
 

@@ -6,6 +6,7 @@ export interface DroneCandidate {
     droneLabel: string;
     sessionToken: string;
     apiUrl: string;
+    serverTrustIdentity?: string;
 }
 /**
  * --only TIER-1 (local, no server call): exact case-insensitive droneLabel match,

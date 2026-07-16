@@ -22,6 +22,7 @@
  * Side-effecting deps (fetch, token, cube/status/monitor probes, clock) are
  * injected so the producer is unit-tested without real network/keychain/pgrep.
  */
+import { isCanonicalHostedApiUrl } from './authority.js';
 // ─── Module state (process-singleton, like the SSE stream state) ─────────
 let lastEventReceivedAt = null;
 // Cached monitor-health, refreshed by the ~60s tick so per-event beats don't
@@ -92,7 +93,8 @@ export async function postHealthBeat(active, payload, deps) {
     // The local server protocol has no health-beat capability. Never aim the
     // hosted `/api/drone/health` shape at a selected local authority and never
     // fall back to the hosted API.
-    if (active.serverTrustIdentity !== undefined)
+    if (active.serverTrustIdentity !== undefined ||
+        !isCanonicalHostedApiUrl(active.apiUrl))
         return;
     try {
         const token = await deps.getToken();
@@ -126,7 +128,8 @@ export async function runHealthBeatOnce(deps) {
         const active = await deps.getActiveCube();
         if (!active)
             return;
-        if (active.serverTrustIdentity !== undefined)
+        if (active.serverTrustIdentity !== undefined ||
+            !isCanonicalHostedApiUrl(active.apiUrl))
             return;
         const connected = deps.getStreamConnected();
         const healthy = deps.checkMonitor(deps.getInboxPath(active));

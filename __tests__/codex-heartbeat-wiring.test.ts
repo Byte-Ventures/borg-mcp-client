@@ -155,7 +155,11 @@ describe('gh#866 item 2 — runLoop heartbeat teardown / re-arm lifecycle', () =
     // (lease acquisition sits outside its try/catch); swallow only that sentinel.
     const sentinel = new Error('gh866-stop-after-rearm');
     await __runLoopForTest({
-      getActiveCube: async () => ACTIVE,
+      getActiveCube: async () => ({
+        ...ACTIVE,
+        cubeId: '11111111-1111-4111-8111-111111111111',
+        droneId: '22222222-2222-4222-8222-222222222222',
+      }),
       acquireStreamLease: async () => {
         throw sentinel;
       },
@@ -171,6 +175,44 @@ describe('gh#866 item 2 — runLoop heartbeat teardown / re-arm lifecycle', () =
     const postSpy = vi.fn(() => null);
     ensureCodexHeartbeatStarted(postSpy);
     expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('releases stream ownership when the run loop exits', async () => {
+    const release = vi.fn(async () => {});
+    const refresh = vi.fn(async () => true);
+    const acquire = vi.fn(async () => ({
+      lockPath: '/tmp/borg-stream-owner-test',
+      record: {
+        schemaVersion: 1,
+        pid: process.pid,
+        processNonce: 'run-loop-test',
+        cwd: process.cwd(),
+        startedAt: new Date(0).toISOString(),
+        heartbeatAt: new Date(0).toISOString(),
+      },
+      refresh,
+      release,
+    }));
+
+    await __runLoopForTest({
+      getActiveCube: async () => ({
+        ...ACTIVE,
+        cubeId: '11111111-1111-4111-8111-111111111111',
+        droneId: '22222222-2222-4222-8222-222222222222',
+      }),
+      acquireStreamLease: acquire,
+      streamOnce: async () => {},
+      sleep: async () => {},
+      maxIterations: 1,
+    });
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(acquire).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      70_000,
+      { isPidAlive: expect.any(Function) },
+    );
   });
 });
 

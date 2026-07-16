@@ -131,14 +131,14 @@ export declare function assimilate(cubeNameOrSelector: string | {
 /**
  * Get the active cube's directive + role registry.
  */
-export declare function getCubeInfo(sessionToken: string, apiUrl: string): Promise<{
+export declare function getCubeInfo(sessionToken: string, apiUrl: string, serverTrustIdentity?: string): Promise<{
     cube: any;
     roles: any[];
 }>;
 /**
  * Get this drone's assigned role (with detailed_description).
  */
-export declare function getRoleInfo(sessionToken: string, apiUrl: string): Promise<{
+export declare function getRoleInfo(sessionToken: string, apiUrl: string, serverTrustIdentity?: string): Promise<{
     role: any;
 }>;
 /**
@@ -146,10 +146,10 @@ export declare function getRoleInfo(sessionToken: string, apiUrl: string): Promi
  * the cube may read any role. `role` is a role name (case-insensitive)
  * or role id.
  */
-export declare function getRoleInfoByName(sessionToken: string, apiUrl: string, role: string): Promise<{
+export declare function getRoleInfoByName(sessionToken: string, apiUrl: string, role: string, serverTrustIdentity?: string): Promise<{
     role: any;
 }>;
-export declare function whoami(sessionToken: string, apiUrl: string): Promise<{
+export declare function whoami(sessionToken: string, apiUrl: string, serverTrustIdentity?: string): Promise<{
     cube_id: string;
     cube_name: string;
     drone_id: string;
@@ -169,7 +169,7 @@ export declare function whoami(sessionToken: string, apiUrl: string): Promise<{
  *     (echoed back so the renderer can label the column accurately
  *     even when the caller passed an entry-id)
  */
-export declare function getRoster(sessionToken: string, apiUrl: string, since?: string): Promise<{
+export declare function getRoster(sessionToken: string, apiUrl: string, since?: string, serverTrustIdentity?: string): Promise<{
     drones: any[];
     roles: any[];
     message_taxonomy?: MessageTaxonomy | null;
@@ -182,6 +182,7 @@ export declare function readLog(sessionToken: string, apiUrl: string, opts?: {
     since?: string;
     limit?: number;
     unreadOnly?: boolean;
+    serverTrustIdentity?: string;
 }): Promise<{
     entries: any[];
     drones: any[];
@@ -196,7 +197,7 @@ export declare function readLog(sessionToken: string, apiUrl: string, opts?: {
  * flag on activity_log_acks. Idempotent — the server INSERT uses ON
  * CONFLICT DO NOTHING. 204 No Content on success.
  */
-export declare function ackLogEntry(sessionToken: string, apiUrl: string, entryId: string, kind?: 'ack' | 'claim'): Promise<void>;
+export declare function ackLogEntry(sessionToken: string, apiUrl: string, entryId: string, kind?: 'ack' | 'claim', serverTrustIdentity?: string): Promise<void>;
 /**
  * gh#740: record a ratified cube decision (seat-holder only — the worker
  * enforces the seat gate). Supersedes the active decision on the same topic.
@@ -205,14 +206,14 @@ export declare function recordDecision(sessionToken: string, apiUrl: string, inp
     topic: string;
     decision: string;
     rationale?: string;
-}): Promise<{
+}, serverTrustIdentity?: string): Promise<{
     decision: any;
 }>;
 /**
  * gh#740: list active ratified decisions for the cube (any member). With
  * `topic`, returns that topic's active decision.
  */
-export declare function listDecisions(sessionToken: string, apiUrl: string, topic?: string): Promise<{
+export declare function listDecisions(sessionToken: string, apiUrl: string, topic?: string, serverTrustIdentity?: string): Promise<{
     decisions: any[];
 }>;
 /** Remove one active ratified decision. The worker enforces the seat gate. */
@@ -220,7 +221,7 @@ export declare function removeDecision(sessionToken: string, apiUrl: string, sel
     topic: string;
 } | {
     decision_id: string;
-}): Promise<{
+}, serverTrustIdentity?: string): Promise<{
     decision: any;
 }>;
 /**
@@ -245,6 +246,8 @@ export declare function regen(sessionToken: string, apiUrl: string, opts?: {
     reportedModel?: string;
     /** Current cwd-derived identity; refreshed each regen to avoid stale routing data. */
     workingRepo?: WorkingRepo;
+    /** Verified self-hosted authority from the caller's first active-state read. */
+    serverTrustIdentity?: string;
 }): Promise<{
     cube: any;
     role: any;
@@ -254,7 +257,7 @@ export declare function regen(sessionToken: string, apiUrl: string, opts?: {
     recentLog?: any[];
     behind_by?: number;
 }>;
-export declare function roleRationale(sessionToken: string, apiUrl: string, role: string, section: string): Promise<{
+export declare function roleRationale(sessionToken: string, apiUrl: string, role: string, section: string, serverTrustIdentity?: string): Promise<{
     role: string;
     section: string;
     body: string;
@@ -267,6 +270,7 @@ export declare function appendLog(sessionToken: string, apiUrl: string, message:
     recipientDroneIds?: string[];
     class?: string;
     to?: string[];
+    serverTrustIdentity?: string;
 }): Promise<{
     entry: {
         id: string;
@@ -297,7 +301,7 @@ export declare function submitReport(sessionToken: string, apiUrl: string, input
     kind?: 'friction' | 'bug';
     message: string;
     metadata?: Record<string, string>;
-}): Promise<{
+}, serverTrustIdentity?: string): Promise<{
     ok: boolean;
 }>;
 export interface TriageReport {

@@ -20,10 +20,11 @@ import { loadBorgServerTrust } from './server-trust.js';
 import { getActiveCube } from './cubes.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
+import { CANONICAL_HOSTED_API_URL, isCanonicalHostedApiUrl, } from './authority.js';
 // Compatibility validation for the deprecated request field. The CLI no longer
 // offers provider configuration, but older callers may still send this shape.
 const LEGACY_MODEL_DESCRIPTOR_REGEX = /^(claude|ollama):[A-Za-z0-9._:\/-]+$/;
-export const API_URL = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
+export const API_URL = process.env.BORG_API_URL || CANONICAL_HOSTED_API_URL;
 // gh#330: honor the server's Retry-After on 429 instead of failing the
 // (often required) coordination signal outright. Bounded so a CLI call
 // never blocks unboundedly; capped per attempt so a large window-reset
@@ -129,13 +130,30 @@ export async function retryOn429(initialResponse, doRequest, opts) {
     }
     return response;
 }
-async function localAuthorityContext(sessionToken, apiUrl) {
+async function localAuthorityContext(sessionToken, apiUrl, expectedServerTrustIdentity) {
     const active = await getActiveCube();
-    return active?.serverTrustIdentity !== undefined &&
+    const matched = active?.serverTrustIdentity !== undefined &&
         active.apiUrl === apiUrl &&
         active.sessionToken === sessionToken
         ? active
         : null;
+    if (expectedServerTrustIdentity !== undefined) {
+        if (!matched || matched.serverTrustIdentity !== expectedServerTrustIdentity) {
+            throw new Error('Selected Borg server authority state is missing or unreadable');
+        }
+        return matched;
+    }
+    // An explicit drone-session endpoint outside the canonical hosted
+    // authority is self-hosted by definition. Missing/removed trust metadata
+    // must never downgrade that request into the Cloud OAuth path: cubes.json is
+    // mutable local state and BORG_API_URL is mutable process configuration.
+    // Neither a legacy-looking sessionToken nor an environment endpoint override
+    // proves Cloud authority. A matching hydrated local ActiveCube carries the
+    // verified trust anchor; otherwise fail before OAuth or network.
+    if (!matched && !isCanonicalHostedApiUrl(apiUrl)) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
+    return matched;
 }
 function localUnsupported(capability) {
     throw new Error(`Local Borg server does not support ${capability}`);
@@ -443,6 +461,12 @@ async function authedFetch(path, init = {}) {
     const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, headers, ...rest } = init;
     const hasExplicitAuth = authToken !== undefined;
     const baseUrl = apiUrl ?? API_URL;
+    if (droneSession !== undefined &&
+        apiUrl !== undefined &&
+        suppliedTrustIdentity === undefined &&
+        !isCanonicalHostedApiUrl(baseUrl)) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
     let serverTrustIdentity = suppliedTrustIdentity;
     if (apiUrl === undefined && droneSession === undefined && authToken === undefined) {
         const active = await getActiveCube();
@@ -456,6 +480,13 @@ async function authedFetch(path, init = {}) {
             serverTrustIdentity = active.serverTrustIdentity;
     }
     const hasServerAuthority = serverTrustIdentity !== undefined;
+    // BORG_API_URL is only routing configuration. It cannot authorize either a
+    // keychain-sourced Cloud bearer or a caller-supplied token for an arbitrary
+    // endpoint. Every noncanonical destination must instead arrive through the
+    // separately verified local-server trust path below.
+    if (!hasServerAuthority && !isCanonicalHostedApiUrl(baseUrl)) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
     if (hasServerAuthority && !/^\/api\/cubes(?:\/|$)/.test(path)) {
         localUnsupported(`the ${path} capability`);
     }
@@ -643,8 +674,8 @@ cubeNameOrSelector, apiUrl, hostname, agentKind, authToken, serverTrustIdentity)
 /**
  * Get the active cube's directive + role registry.
  */
-export async function getCubeInfo(sessionToken, apiUrl) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+export async function getCubeInfo(sessionToken, apiUrl, serverTrustIdentity) {
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
         const composed = await localCubeComposition(local);
         return { cube: composed.cube, roles: composed.roles };
@@ -653,20 +684,22 @@ export async function getCubeInfo(sessionToken, apiUrl) {
         method: 'GET',
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
     return await response.json();
 }
 /**
  * Get this drone's assigned role (with detailed_description).
  */
-export async function getRoleInfo(sessionToken, apiUrl) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+export async function getRoleInfo(sessionToken, apiUrl, serverTrustIdentity) {
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local)
         return { role: (await localCubeComposition(local)).role };
     const response = await authedFetch('/api/drone/role', {
         method: 'GET',
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
     return await response.json();
 }
@@ -675,8 +708,8 @@ export async function getRoleInfo(sessionToken, apiUrl) {
  * the cube may read any role. `role` is a role name (case-insensitive)
  * or role id.
  */
-export async function getRoleInfoByName(sessionToken, apiUrl, role) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+export async function getRoleInfoByName(sessionToken, apiUrl, role, serverTrustIdentity) {
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
         const roles = (await localCubeComposition(local)).roles;
         const matched = roles.find((candidate) => candidate.id === role || candidate.name.toLowerCase() === role.toLowerCase());
@@ -689,11 +722,12 @@ export async function getRoleInfoByName(sessionToken, apiUrl, role) {
         method: 'GET',
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
     return await response.json();
 }
-export async function whoami(sessionToken, apiUrl) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+export async function whoami(sessionToken, apiUrl, serverTrustIdentity) {
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
         const composed = await localCubeComposition(local);
         return {
@@ -709,6 +743,7 @@ export async function whoami(sessionToken, apiUrl) {
         method: 'GET',
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
     return await response.json();
 }
@@ -724,8 +759,8 @@ export async function whoami(sessionToken, apiUrl) {
  *     (echoed back so the renderer can label the column accurately
  *     even when the caller passed an entry-id)
  */
-export async function getRoster(sessionToken, apiUrl, since) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+export async function getRoster(sessionToken, apiUrl, since, serverTrustIdentity) {
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
         if (since !== undefined)
             localUnsupported('roster liveness filtering');
@@ -737,6 +772,7 @@ export async function getRoster(sessionToken, apiUrl, since) {
         method: 'GET',
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
     return await response.json();
 }
@@ -744,7 +780,7 @@ export async function getRoster(sessionToken, apiUrl, since) {
  * Read recent log entries for the cube.
  */
 export async function readLog(sessionToken, apiUrl, opts = {}) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+    const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     if (local) {
         let cursor = null;
         if (opts.unreadOnly)
@@ -777,6 +813,7 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
         method: 'GET',
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity: opts.serverTrustIdentity,
     });
     return await response.json();
 }
@@ -788,8 +825,8 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
  * CONFLICT DO NOTHING. 204 No Content on success.
  */
 // 'claim' is advisory review-gate ownership; 'ack' preserves the original wire default.
-export async function ackLogEntry(sessionToken, apiUrl, entryId, kind = 'ack') {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+export async function ackLogEntry(sessionToken, apiUrl, entryId, kind = 'ack', serverTrustIdentity) {
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
         await localServerRequest(local, `/api/cubes/${local.cubeId}/acks`, 'POST', { entry_id: entryId, kind });
         return;
@@ -799,14 +836,15 @@ export async function ackLogEntry(sessionToken, apiUrl, entryId, kind = 'ack') {
         body: JSON.stringify({ kind }),
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
 }
 /**
  * gh#740: record a ratified cube decision (seat-holder only — the worker
  * enforces the seat gate). Supersedes the active decision on the same topic.
  */
-export async function recordDecision(sessionToken, apiUrl, input) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+export async function recordDecision(sessionToken, apiUrl, input, serverTrustIdentity) {
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
         const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'POST', input);
         if (!payload)
@@ -818,6 +856,7 @@ export async function recordDecision(sessionToken, apiUrl, input) {
         body: JSON.stringify(input),
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
     return (await response.json());
 }
@@ -825,8 +864,8 @@ export async function recordDecision(sessionToken, apiUrl, input) {
  * gh#740: list active ratified decisions for the cube (any member). With
  * `topic`, returns that topic's active decision.
  */
-export async function listDecisions(sessionToken, apiUrl, topic) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+export async function listDecisions(sessionToken, apiUrl, topic, serverTrustIdentity) {
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
         const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'PUT', {});
         if (!payload)
@@ -842,12 +881,13 @@ export async function listDecisions(sessionToken, apiUrl, topic) {
         method: 'GET',
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
     return (await response.json());
 }
 /** Remove one active ratified decision. The worker enforces the seat gate. */
-export async function removeDecision(sessionToken, apiUrl, selector) {
-    if (await localAuthorityContext(sessionToken, apiUrl)) {
+export async function removeDecision(sessionToken, apiUrl, selector, serverTrustIdentity) {
+    if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
         localUnsupported('decision removal');
     }
     const response = await authedFetch('/api/drone/decisions', {
@@ -855,6 +895,7 @@ export async function removeDecision(sessionToken, apiUrl, selector) {
         body: JSON.stringify(selector),
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
     return (await response.json());
 }
@@ -875,7 +916,7 @@ export async function removeDecision(sessionToken, apiUrl, selector) {
  * payload, so `since` no longer affects what this client shows.
  */
 export async function regen(sessionToken, apiUrl, opts = {}) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+    const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     if (local) {
         const composed = await localCubeComposition(local);
         const cursor = opts.since === undefined
@@ -910,11 +951,12 @@ export async function regen(sessionToken, apiUrl, opts = {}) {
         method: 'GET',
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity: opts.serverTrustIdentity,
     });
     return await response.json();
 }
-export async function roleRationale(sessionToken, apiUrl, role, section) {
-    if (await localAuthorityContext(sessionToken, apiUrl)) {
+export async function roleRationale(sessionToken, apiUrl, role, section, serverTrustIdentity) {
+    if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
         localUnsupported('role rationale sections');
     }
     const params = new URLSearchParams({ role, section });
@@ -922,6 +964,7 @@ export async function roleRationale(sessionToken, apiUrl, role, section) {
         method: 'GET',
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
     });
     return await response.json();
 }
@@ -929,7 +972,7 @@ export async function roleRationale(sessionToken, apiUrl, role, section) {
  * Append a message to the cube's shared activity log.
  */
 export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
-    const local = await localAuthorityContext(sessionToken, apiUrl);
+    const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     if (local) {
         if (opts.class !== undefined || opts.to !== undefined) {
             localUnsupported('message taxonomy routing');
@@ -957,6 +1000,7 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
         headers: { 'Content-Type': 'application/json' },
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity: opts.serverTrustIdentity,
         body: JSON.stringify(body),
     });
     return await response.json();
@@ -967,7 +1011,10 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
  * persist and stamps reporter_user_id from the authenticated session (never client input).
  * Drone-session authed (POST /api/drone/report). Opaque `{ ok: true }` response.
  */
-export async function submitReport(sessionToken, apiUrl, input) {
+export async function submitReport(sessionToken, apiUrl, input, serverTrustIdentity) {
+    if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
+        localUnsupported('friction reports');
+    }
     const body = {
         kind: input.kind ?? 'friction',
         message: input.message,
@@ -978,6 +1025,7 @@ export async function submitReport(sessionToken, apiUrl, input) {
         headers: { 'Content-Type': 'application/json' },
         droneSession: sessionToken,
         apiUrl,
+        serverTrustIdentity,
         body: JSON.stringify(body),
     });
     return await response.json();

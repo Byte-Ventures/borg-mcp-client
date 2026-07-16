@@ -1,3 +1,5 @@
+import { basename } from 'node:path';
+
 const MAX_URL_LEN = 2048;
 const CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 
@@ -62,5 +64,6 @@ export function deriveCubeName(projectRoot: string, gitRemoteUrl: string | null)
       }
     }
   }
-  return null;
+  const fallback = normalizeCubeName(basename(projectRoot));
+  return fallback.length > 0 ? fallback : null;
 }

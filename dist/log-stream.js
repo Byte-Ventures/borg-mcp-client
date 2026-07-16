@@ -37,7 +37,8 @@ import { getValidToken } from './remote-client.js';
 import { recordEventReceipt, emitHealthBeat, getCachedMonitorHealthy, getCachedWakeArmed, } from './health-beat.js';
 import { getPackageVersion } from './version.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { acquireStreamLease, readOwnershipSnapshot, } from './stream-owner.js';
+import { isCanonicalHostedApiUrl } from './authority.js';
+import { acquireStreamLease, readOwnershipSnapshot, STREAM_OWNER_STALE_MS, } from './stream-owner.js';
 // ------------------------------------------------------------------
 // Tuning constants
 // ------------------------------------------------------------------
@@ -48,6 +49,15 @@ const HWM_DIVERGENCE_GRACE_MS = 2_000;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 30_000;
 export const LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES = 64 * 1024;
+function isProcessAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (error) {
+        return error.code === 'EPERM';
+    }
+}
 /**
  * gh#opencode: module-level mutable opencode entry injector. Set after
  * startup (from index.ts) once the opencode drone module is initialized.
@@ -300,6 +310,7 @@ function defaultOnInboxReceipt(active, token) {
 async function runLoop(testDeps = {}) {
     const _getActiveCube = testDeps.getActiveCube ?? getActiveCube;
     const _acquireStreamLease = testDeps.acquireStreamLease ?? acquireStreamLease;
+    const _streamOnce = testDeps.streamOnce ?? streamOnce;
     const _sleep = testDeps.sleep ?? sleep;
     const _maxIterations = testDeps.maxIterations ?? Infinity;
     let _iterations = 0;
@@ -308,121 +319,128 @@ async function runLoop(testDeps = {}) {
     let currentCubeId = null;
     let lease = null;
     let leaseKey = null;
-    while (_iterations < _maxIterations) {
-        _iterations += 1;
-        const active = await _getActiveCube();
-        if (!active) {
-            if (lease) {
+    try {
+        while (_iterations < _maxIterations) {
+            _iterations += 1;
+            const active = await _getActiveCube();
+            if (!active) {
+                if (lease) {
+                    await lease.release();
+                    lease = null;
+                    leaseKey = null;
+                }
+                streamState.connected = false;
+                streamState.ownership = { state: 'unowned' };
+                // gh#861 finding 3: active cube cleared → tear down the codex heartbeat
+                // (nothing to inject into); re-armed below once an active cube returns.
+                stopCodexHeartbeat();
+                await _sleep(5000);
+                continue;
+            }
+            // gh#861 finding 3: an active cube is present → ensure the codex heartbeat is
+            // running. Idempotent (no-op when already armed); re-arms after a prior
+            // teardown (cube-cleared / dead app-server socket).
+            ensureCodexHeartbeatStarted();
+            // Reset resume cursor on cube switch — entries from a prior cube
+            // mean nothing for the new cube's stream.
+            if (active.cubeId !== currentCubeId) {
+                currentCubeId = active.cubeId;
+                lastEventId = null;
+            }
+            const nextLeaseKey = `${active.cubeId}:${active.droneId}`;
+            if (lease && leaseKey !== nextLeaseKey) {
                 await lease.release();
                 lease = null;
                 leaseKey = null;
             }
-            streamState.connected = false;
-            streamState.ownership = { state: 'unowned' };
-            // gh#861 finding 3: active cube cleared → tear down the codex heartbeat
-            // (nothing to inject into); re-armed below once an active cube returns.
-            stopCodexHeartbeat();
-            await _sleep(5000);
-            continue;
-        }
-        // gh#861 finding 3: an active cube is present → ensure the codex heartbeat is
-        // running. Idempotent (no-op when already armed); re-arms after a prior
-        // teardown (cube-cleared / dead app-server socket).
-        ensureCodexHeartbeatStarted();
-        // Reset resume cursor on cube switch — entries from a prior cube
-        // mean nothing for the new cube's stream.
-        if (active.cubeId !== currentCubeId) {
-            currentCubeId = active.cubeId;
-            lastEventId = null;
-        }
-        const nextLeaseKey = `${active.cubeId}:${active.droneId}`;
-        if (lease && leaseKey !== nextLeaseKey) {
-            await lease.release();
-            lease = null;
-            leaseKey = null;
-        }
-        if (!lease) {
-            lease = await _acquireStreamLease(active.cubeId, active.droneId);
-            leaseKey = lease ? nextLeaseKey : null;
-        }
-        if (!lease) {
-            streamState.connected = false;
+            if (!lease) {
+                lease = await _acquireStreamLease(active.cubeId, active.droneId, STREAM_OWNER_STALE_MS, { isPidAlive: isProcessAlive });
+                leaseKey = lease ? nextLeaseKey : null;
+            }
+            if (!lease) {
+                streamState.connected = false;
+                streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
+                await _sleep(5000);
+                continue;
+            }
             streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
-            await _sleep(5000);
-            continue;
-        }
-        streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
-        let ownerLost = false;
-        try {
-            const ownerAbort = new AbortController();
-            const refresh = async () => {
-                try {
-                    if (!(await lease.refresh())) {
-                        ownerLost = true;
-                        ownerAbort.abort(new Error('stream ownership lost'));
-                    }
-                }
-                catch (err) {
-                    ownerLost = true;
-                    ownerAbort.abort(err instanceof Error ? err : new Error(String(err)));
-                }
-            };
-            const refreshTimer = setInterval(() => {
-                void refresh();
-            }, Math.max(1000, Math.floor(HEARTBEAT_TIMEOUT_MS / 2)));
+            let ownerLost = false;
             try {
-                await streamOnce(active, lastEventId, (id) => {
-                    lastEventId = id;
-                }, { abortSignal: ownerAbort.signal });
+                const ownerAbort = new AbortController();
+                const refresh = async () => {
+                    try {
+                        if (!(await lease.refresh())) {
+                            ownerLost = true;
+                            ownerAbort.abort(new Error('stream ownership lost'));
+                        }
+                    }
+                    catch (err) {
+                        ownerLost = true;
+                        ownerAbort.abort(err instanceof Error ? err : new Error(String(err)));
+                    }
+                };
+                const refreshTimer = setInterval(() => {
+                    void refresh();
+                }, Math.max(1000, Math.floor(HEARTBEAT_TIMEOUT_MS / 2)));
+                try {
+                    await _streamOnce(active, lastEventId, (id) => {
+                        lastEventId = id;
+                    }, { abortSignal: ownerAbort.signal });
+                }
+                finally {
+                    clearInterval(refreshTimer);
+                }
+                if (ownerLost) {
+                    lease = null;
+                    leaseKey = null;
+                    streamState.connected = false;
+                    streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
+                    await _sleep(5000);
+                    continue;
+                }
+                // Clean disconnect (e.g. server-side rollout). Reset backoff.
+                attempt = 0;
+                streamState.reconnectAttempts = 0;
             }
-            finally {
-                clearInterval(refreshTimer);
-            }
-            if (ownerLost) {
-                lease = null;
-                leaseKey = null;
+            catch (err) {
+                if (ownerLost) {
+                    lease = null;
+                    leaseKey = null;
+                    streamState.connected = false;
+                    streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
+                    await _sleep(5000);
+                    continue;
+                }
+                // gh#877 Path-B (B25): an authoritative DRONE_EVICTED is TERMINAL — the
+                // seat is gone. Stop reconnecting (do NOT back off and retry forever
+                // against a dead seat); release the lease and return so the child's SSE
+                // loop quiesces cleanly. The agent's graceful shutdown (TaskStop Monitor,
+                // no /loop reschedule) is driven separately by the EVICTED tool-result it
+                // already received on the authed call that produced this verdict.
+                if (err instanceof DroneEvictedError) {
+                    if (lease)
+                        await lease.release().catch(() => { });
+                    lease = null;
+                    leaseKey = null;
+                    streamState.connected = false;
+                    streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
+                    process.stderr.write(`[borg-mcp log stream] drone evicted — stream terminated (no reconnect).\n`);
+                    return;
+                }
                 streamState.connected = false;
-                streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
-                await _sleep(5000);
-                continue;
+                const delay = Math.min(RECONNECT_MIN_MS * 2 ** attempt, RECONNECT_MAX_MS) +
+                    Math.random() * 500;
+                process.stderr.write(`[borg-mcp log stream] reconnect in ${Math.round(delay)}ms: ${err?.message ?? err}\n`);
+                attempt += 1;
+                streamState.reconnectAttempts = attempt;
+                await _sleep(delay);
             }
-            // Clean disconnect (e.g. server-side rollout). Reset backoff.
-            attempt = 0;
-            streamState.reconnectAttempts = 0;
         }
-        catch (err) {
-            if (ownerLost) {
-                lease = null;
-                leaseKey = null;
-                streamState.connected = false;
-                streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
-                await _sleep(5000);
-                continue;
-            }
-            // gh#877 Path-B (B25): an authoritative DRONE_EVICTED is TERMINAL — the
-            // seat is gone. Stop reconnecting (do NOT back off and retry forever
-            // against a dead seat); release the lease and return so the child's SSE
-            // loop quiesces cleanly. The agent's graceful shutdown (TaskStop Monitor,
-            // no /loop reschedule) is driven separately by the EVICTED tool-result it
-            // already received on the authed call that produced this verdict.
-            if (err instanceof DroneEvictedError) {
-                if (lease)
-                    await lease.release().catch(() => { });
-                lease = null;
-                leaseKey = null;
-                streamState.connected = false;
-                streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
-                process.stderr.write(`[borg-mcp log stream] drone evicted — stream terminated (no reconnect).\n`);
-                return;
-            }
-            streamState.connected = false;
-            const delay = Math.min(RECONNECT_MIN_MS * 2 ** attempt, RECONNECT_MAX_MS) +
-                Math.random() * 500;
-            process.stderr.write(`[borg-mcp log stream] reconnect in ${Math.round(delay)}ms: ${err?.message ?? err}\n`);
-            attempt += 1;
-            streamState.reconnectAttempts = attempt;
-            await _sleep(delay);
-        }
+    }
+    finally {
+        if (lease)
+            await lease.release().catch(() => { });
+        streamState.connected = false;
     }
 }
 /**
@@ -441,6 +459,13 @@ export function __runLoopForTest(testDeps) {
 export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     const { fetchImpl, appendLine, hasInboxEntryId, getToken, wakeCodex, heartbeatTimeoutMs, hwmDivergenceGraceMs, abortSignal, onInboxReceipt, injectOpenCode, } = { ...defaultDeps, ...deps };
     const isLocal = active.serverTrustIdentity !== undefined;
+    // An environment-selected BORG_API_URL is routing configuration, not proof
+    // of Borg Cloud authority. A drone session aimed anywhere except the
+    // canonical hosted origin must carry hydrated local trust before either the
+    // OAuth token getter or the SSE transport is touched.
+    if (!isLocal && !isCanonicalHostedApiUrl(active.apiUrl)) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
     const token = isLocal ? active.sessionToken : await getToken();
     const headers = {
         Authorization: `Bearer ${token}`,

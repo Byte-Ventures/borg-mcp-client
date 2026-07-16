@@ -158,4 +158,97 @@ describe('remote-client explicit authority connection', () => {
     expect((error as Error).message).not.toContain(reflectedSecret);
     expect((error as Error).message).not.toContain('\u001b');
   });
+
+  it.each([
+    ['missing active state', async () => null],
+    ['keychain hydration failure', async () => { throw new Error('keychain locked'); }],
+  ])('fails closed before OAuth or network when local authority has %s', async (_case, getActive) => {
+    const getIdToken = vi.fn(async () => 'cloud-token-proof');
+    const getRefreshToken = vi.fn(async () => 'cloud-refresh-proof');
+    vi.doMock('../src/config.js', () => ({
+      getIdToken,
+      getRefreshToken,
+      clearTokens: vi.fn(async () => {}),
+      getServerCredential: vi.fn(async () => null),
+    }));
+    vi.doMock('../src/auth.js', () => ({
+      refreshIdToken: vi.fn(async () => {}),
+      RefreshTokenInvalidError: class extends Error {},
+      RefreshTransientError: class extends Error {},
+    }));
+    vi.doMock('../src/cubes.js', () => ({ getActiveCube: vi.fn(getActive) }));
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => {
+        throw new Error('trust lookup must not run after missing active state');
+      }),
+    }));
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { appendLog, readLog, regen } = await import('../src/remote-client.js');
+    const authority = { serverTrustIdentity: 'spki-sha256:test-server' };
+
+    await expect(regen('s'.repeat(43), 'https://127.0.0.1:7091', authority))
+      .rejects.toThrow(/authority state is missing or unreadable|keychain locked/i);
+    await expect(readLog('s'.repeat(43), 'https://127.0.0.1:7091', authority))
+      .rejects.toThrow(/authority state is missing or unreadable|keychain locked/i);
+    await expect(appendLog(
+      's'.repeat(43),
+      'https://127.0.0.1:7091',
+      'must stay local',
+      authority,
+    )).rejects.toThrow(/authority state is missing or unreadable|keychain locked/i);
+
+    expect(getIdToken).not.toHaveBeenCalled();
+    expect(getRefreshToken).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'https://127.0.0.1:7091',
+    'https://borg.internal.example:9443',
+  ])('rejects downgraded trust metadata for explicit endpoint %s before OAuth/network', async (apiUrl) => {
+    const getIdToken = vi.fn(async () => 'cloud-token-proof');
+    const getRefreshToken = vi.fn(async () => 'cloud-refresh-proof');
+    vi.doMock('../src/config.js', () => ({
+      getIdToken,
+      getRefreshToken,
+      clearTokens: vi.fn(async () => {}),
+      getServerCredential: vi.fn(async () => null),
+    }));
+    vi.doMock('../src/auth.js', () => ({
+      refreshIdToken: vi.fn(async () => {}),
+      RefreshTokenInvalidError: class extends Error {},
+      RefreshTransientError: class extends Error {},
+    }));
+    vi.doMock('../src/cubes.js', () => ({
+      getActiveCube: vi.fn(async () => ({
+        cubeId: CUBE_ID,
+        droneId: DRONE_ID,
+        sessionToken: 'legacy-local-session',
+        apiUrl,
+        // Deliberately removed: serverTrustIdentity.
+      })),
+    }));
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => {
+        throw new Error('trust lookup must not run for downgraded metadata');
+      }),
+    }));
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { getRoster, submitReport } = await import('../src/remote-client.js');
+
+    await expect(getRoster('legacy-local-session', apiUrl, undefined, undefined))
+      .rejects.toThrow(/authority state is missing or unreadable/i);
+    await expect(submitReport(
+      'legacy-local-session',
+      apiUrl,
+      { message: 'must not reach Cloud' },
+      undefined,
+    )).rejects.toThrow(/authority state is missing or unreadable/i);
+
+    expect(getIdToken).not.toHaveBeenCalled();
+    expect(getRefreshToken).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

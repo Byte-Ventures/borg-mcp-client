@@ -66,6 +66,12 @@ export declare function atomicWriteFile(filePath: string, data: string, opts?: {
  */
 export declare function getActiveCube(): Promise<ActiveCube | null>;
 /**
+ * Distinguish a genuinely new worktree from one whose persisted local seat can
+ * no longer be hydrated (for example, because its keychain item is missing).
+ * No authority-bearing fields are returned through this diagnostic seam.
+ */
+export declare function hasPersistedActiveCube(): Promise<boolean>;
+/**
  * Set the active cube for the current project. Preserves entries for all
  * other projects.
  */
