@@ -18,10 +18,11 @@ reviewed and satisfied:
 - an operator verifies in Google Console that the four pinned OAuth values are
   Byte Ventures Desktop and TVs/Limited Input public-client distribution
   material, including consent-screen and redirect policy, and records approval;
-- audited registry `borgmcp-shared@0.3.0` replaces the temporary exact-Git WIP
-  pin, and the matching server passes the process-level local dogfood gate;
+- the exact audited registry dependency `borgmcp-shared@0.3.0` remains locked
+  to its canonical tarball and integrity, and the matching server passes the
+  process-level local dogfood gate;
 - an unused stable package version is selected and authorized separately;
-- registry package `borgmcp-shared@^0.3.0` remains bound to one canonical
+- registry package `borgmcp-shared@0.3.0` remains bound to one canonical
   lockfile resolution and SHA-512 integrity;
 - the client package passes its full tests, type checks, build, clean packed
   installation, MCP stdio, and local-server/Cloud compatibility gates;
@@ -130,7 +131,7 @@ tracked output, and rejects drift. It then creates one npm tarball and enforces:
 - no credentials, keys, private service URLs, database URLs, local paths,
   `.npmrc`, environment files, symlinks, or special archive entries;
 - exact `borgmcp` identity and public provenance repository; and
-- registry-only dependencies with `borgmcp-shared@^0.2.0`.
+- registry-only dependencies with exact audited `borgmcp-shared@0.3.0`.
 
 Every lock entry is bound to its package-path identity, version, exact canonical
 npm tarball URL, and full SHA-512 SRI. The release gate fetches official

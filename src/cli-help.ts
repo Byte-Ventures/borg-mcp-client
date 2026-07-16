@@ -60,7 +60,7 @@ export function assimilateHelpText(version: string): string {
     `Flags:\n` +
     `  --worktree <name>          Create + launch the drone in a sibling git worktree\n` +
     `  --here                     Stay in the current worktree (no sibling spawn)\n` +
-    `  --cube-name <name>         Borg Cloud cube to join/create (default: repo basename)\n` +
+    `  --cube-name <name>         Cube to join/create (otherwise confirm repo basename)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
     `  --enroll                   Retry-safe local enrollment; invitation is never an argument\n` +
     `  --template <name>          Bootstrap a new Borg Cloud cube from a bundled role template\n` +

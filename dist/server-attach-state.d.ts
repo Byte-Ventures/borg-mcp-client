@@ -9,4 +9,20 @@ export interface LocalAttachBinding {
  * sent. A lost response therefore reuses the exact same server binding.
  */
 export declare function getOrCreateLocalAttachRetryKey(binding: LocalAttachBinding, projectRoot?: string): Promise<string>;
+/**
+ * Replace an evicted seat's retry correlator exactly once. Concurrent callers
+ * that all observed the same evicted seat converge on the first replacement
+ * instead of minting one correlator (and therefore one seat) each.
+ */
+export declare function replaceEvictedLocalAttachRetryKey(binding: LocalAttachBinding, expectedRetryKey: string, projectRoot?: string): Promise<string>;
+export interface PendingLocalAttach {
+    priorDroneId?: string;
+    remintInvalidPrior: boolean;
+}
+/** Persist the exact attach tuple as pending before any attach request. */
+export declare function prepareLocalAttachRetry(binding: LocalAttachBinding, pending: PendingLocalAttach, projectRoot?: string): Promise<string>;
+/** Return an exact unfinished attach, if one exists for this request binding. */
+export declare function getPendingLocalAttach(binding: LocalAttachBinding, projectRoot?: string): Promise<PendingLocalAttach | null>;
+/** Mark a pending attach complete only after cubes.json accepted its session. */
+export declare function completeLocalAttachRetry(binding: LocalAttachBinding, projectRoot?: string): Promise<void>;
 //# sourceMappingURL=server-attach-state.d.ts.map

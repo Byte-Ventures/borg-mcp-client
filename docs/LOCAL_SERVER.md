@@ -15,6 +15,12 @@ retries that tuple exactly; the credential becomes active only after the
 versioned response is decoded and the authenticated protocol handshake succeeds.
 There is no file fallback.
 
+`--cube-name <name>` explicitly selects the repository cube name. Without an
+explicit name, Borg uses the `origin` repository name or, when `origin` is
+absent, proposes the sanitized repository-directory basename before consuming
+an enrollment invitation. Confirm interactively or pass `--yes`; bare
+repositories fail closed.
+
 The connection is HTTPS-only. Borg validates the server trust material, stores enrollment and session credentials in the operating-system keychain, and persists only an opaque credential reference with the active cube. Local requests use the server's `/api/cubes/*` coordination routes and do not fall back to Google OAuth or Borg Cloud.
 
 The current client does not install or start `borgmcp-server`. The server must
@@ -26,12 +32,16 @@ create distinct bounded cubes. An ordinary enrolled client is denied before a
 create request is sent. Cloud-only capabilities fail explicitly rather than
 being redirected.
 
+An identical `--here` rerun validates the saved keychained seat and reattaches
+with its durable retry tuple instead of choosing another role and minting a new
+drone. Ambiguous liveness or transport results never authorize a replacement;
+only an authoritative eviction rotates the retry tuple and permits a remint.
+
 The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` values may include another port but must pass the same trust and endpoint policy.
 
 ## Release Blockers
 
-This WIP consumes the reviewed shared 0.3 contract from an exact Git commit.
-That dependency must be replaced by the audited `borgmcp-shared@0.3.0` registry
-release before the client can publish. The matching server #5 owner-enrollment,
+This WIP consumes the exact audited `borgmcp-shared@0.3.0` registry release.
+The matching server #5 owner-enrollment,
 cube-create, attach, restart, log, and SSE implementation must also pass the
 full process-level local dogfood gate. Until then this path remains preview-only.

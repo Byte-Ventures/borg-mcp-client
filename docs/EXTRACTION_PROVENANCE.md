@@ -8,7 +8,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 
 ## Deliberate Transformations
 
-- Replaced the monorepo dependency on `borgmcp-shared` with a standalone dependency and fresh lockfile. The retry-enrollment WIP temporarily pins the exact reviewed shared-contract Git commit; release requires audited registry `borgmcp-shared@0.3.0`.
+- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release `borgmcp-shared@0.3.0` and a fresh standalone lockfile.
 - Replaced local template, role-section, drone-address, and log high-water-mark implementations with `borgmcp-shared` exports.
 - Removed monorepo-only website anti-drift tests and re-anchored remaining filesystem tests to this repository.
 - Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
@@ -35,6 +35,6 @@ The pinned SHA-256 fingerprints, in Desktop client ID, Desktop public-client val
 
 Local enrollment now uses the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` keychain record, exact-tuple ambiguous
-retry, verified activation, and no file fallback. Release remains blocked until
-that contract is published as audited `borgmcp-shared@0.3.0` and the matching
-server passes the process-level setup→create→attach→restart→log/SSE gate.
+retry, verified activation, and no file fallback. The contract now resolves to
+the audited registry `borgmcp-shared@0.3.0`; release remains blocked until the
+matching server passes the process-level setup→create→attach→restart→log/SSE gate.

@@ -142,7 +142,7 @@ function serverCredentialAccount(origin: string, trustIdentity: string): string 
   return `borg-server-credential:${binding}`;
 }
 
-async function withServerKeychainLock<T>(
+export async function withServerKeychainLock<T>(
   account: string,
   operation: () => Promise<T>,
 ): Promise<T> {

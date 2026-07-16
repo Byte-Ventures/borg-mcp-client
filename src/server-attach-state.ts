@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { atomicWriteFile, findProjectRoot } from './cubes.js';
+import { withServerKeychainLock } from './config.js';
 
 const ATTACH_RETRIES_FILE = join(
   homedir(),
@@ -11,9 +12,7 @@ const ATTACH_RETRIES_FILE = join(
   'local-attach-retries.json',
 );
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const RETRY_LOCK_STALE_MS = 30_000;
-const RETRY_LOCK_WAIT_MS = 10;
-const RETRY_LOCK_ATTEMPTS = 200;
+const ATTACH_RETRY_LOCK_ACCOUNT = 'borg-server-local-attach-retries';
 
 export interface LocalAttachBinding {
   origin: string;
@@ -24,6 +23,10 @@ export interface LocalAttachBinding {
 
 interface LocalAttachRetryRecord extends LocalAttachBinding {
   retryKey: string;
+  pending?: {
+    priorDroneId?: string;
+    remintInvalidPrior: boolean;
+  };
 }
 
 interface LocalAttachRetriesFile {
@@ -94,40 +97,7 @@ async function readRetries(): Promise<LocalAttachRetriesFile> {
 }
 
 async function withRetryStateLock<T>(operation: () => Promise<T>): Promise<T> {
-  const lockPath = `${ATTACH_RETRIES_FILE}.lock`;
-  await mkdir(dirname(lockPath), { recursive: true });
-  for (let attempt = 0; attempt < RETRY_LOCK_ATTEMPTS; attempt += 1) {
-    let handle;
-    try {
-      handle = await open(lockPath, 'wx', 0o600);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      try {
-        const metadata = await stat(lockPath);
-        if (Date.now() - metadata.mtimeMs > RETRY_LOCK_STALE_MS) {
-          await unlink(lockPath);
-          continue;
-        }
-      } catch (inspectionError) {
-        if ((inspectionError as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw inspectionError;
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, RETRY_LOCK_WAIT_MS));
-      continue;
-    }
-
-    try {
-      return await operation();
-    } finally {
-      await handle.close();
-      try {
-        await unlink(lockPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-    }
-  }
-  throw new Error('Borg server attach retry state is busy');
+  return withServerKeychainLock(ATTACH_RETRY_LOCK_ACCOUNT, operation);
 }
 
 /**
@@ -159,5 +129,133 @@ export async function getOrCreateLocalAttachRetryKey(
     state.retries[key] = { ...binding, retryKey };
     await atomicWriteFile(ATTACH_RETRIES_FILE, JSON.stringify(state, null, 2) + '\n');
     return retryKey;
+  });
+}
+
+/**
+ * Replace an evicted seat's retry correlator exactly once. Concurrent callers
+ * that all observed the same evicted seat converge on the first replacement
+ * instead of minting one correlator (and therefore one seat) each.
+ */
+export async function replaceEvictedLocalAttachRetryKey(
+  binding: LocalAttachBinding,
+  expectedRetryKey: string,
+  projectRoot = findProjectRoot(),
+): Promise<string> {
+  if (!UUID_RE.test(expectedRetryKey)) {
+    throw new Error('Borg server attach retry state is invalid');
+  }
+  const key = bindingKey(projectRoot, binding);
+  return withRetryStateLock(async () => {
+    const state = await readRetries();
+    const existing = state.retries[key];
+    if (existing) {
+      if (
+        existing.origin !== binding.origin ||
+        existing.trustIdentity !== binding.trustIdentity ||
+        existing.cubeId !== binding.cubeId ||
+        existing.roleId !== binding.roleId ||
+        !UUID_RE.test(existing.retryKey)
+      ) {
+        throw new Error('Borg server attach retry state does not match its binding');
+      }
+      if (existing.retryKey !== expectedRetryKey) return existing.retryKey;
+    }
+
+    const retryKey = randomUUID();
+    state.retries[key] = { ...binding, retryKey };
+    await atomicWriteFile(ATTACH_RETRIES_FILE, JSON.stringify(state, null, 2) + '\n');
+    return retryKey;
+  });
+}
+
+export interface PendingLocalAttach {
+  priorDroneId?: string;
+  remintInvalidPrior: boolean;
+}
+
+function validateRetryRecord(
+  record: LocalAttachRetryRecord,
+  binding: LocalAttachBinding,
+): void {
+  if (
+    record.origin !== binding.origin ||
+    record.trustIdentity !== binding.trustIdentity ||
+    record.cubeId !== binding.cubeId ||
+    record.roleId !== binding.roleId ||
+    !UUID_RE.test(record.retryKey) ||
+    (record.pending !== undefined &&
+      (typeof record.pending.remintInvalidPrior !== 'boolean' ||
+        (record.pending.priorDroneId !== undefined &&
+          !UUID_RE.test(record.pending.priorDroneId))))
+  ) {
+    throw new Error('Borg server attach retry state does not match its binding');
+  }
+}
+
+/** Persist the exact attach tuple as pending before any attach request. */
+export async function prepareLocalAttachRetry(
+  binding: LocalAttachBinding,
+  pending: PendingLocalAttach,
+  projectRoot = findProjectRoot(),
+): Promise<string> {
+  if (pending.priorDroneId !== undefined && !UUID_RE.test(pending.priorDroneId)) {
+    throw new Error('Borg server saved seat identity is invalid');
+  }
+  const key = bindingKey(projectRoot, binding);
+  return withRetryStateLock(async () => {
+    const state = await readRetries();
+    const existing = state.retries[key];
+    if (existing) {
+      validateRetryRecord(existing, binding);
+      if (existing.pending) {
+        if (
+          existing.pending.priorDroneId !== pending.priorDroneId ||
+          existing.pending.remintInvalidPrior !== pending.remintInvalidPrior
+        ) {
+          throw new Error('pending Borg server attach does not match this request');
+        }
+        return existing.retryKey;
+      }
+    }
+
+    const retryKey = pending.remintInvalidPrior || !existing
+      ? randomUUID()
+      : existing.retryKey;
+    state.retries[key] = { ...binding, retryKey, pending: { ...pending } };
+    await atomicWriteFile(ATTACH_RETRIES_FILE, JSON.stringify(state, null, 2) + '\n');
+    return retryKey;
+  });
+}
+
+/** Return an exact unfinished attach, if one exists for this request binding. */
+export async function getPendingLocalAttach(
+  binding: LocalAttachBinding,
+  projectRoot = findProjectRoot(),
+): Promise<PendingLocalAttach | null> {
+  const key = bindingKey(projectRoot, binding);
+  return withRetryStateLock(async () => {
+    const state = await readRetries();
+    const existing = state.retries[key];
+    if (!existing) return null;
+    validateRetryRecord(existing, binding);
+    return existing.pending ? { ...existing.pending } : null;
+  });
+}
+
+/** Mark a pending attach complete only after cubes.json accepted its session. */
+export async function completeLocalAttachRetry(
+  binding: LocalAttachBinding,
+  projectRoot = findProjectRoot(),
+): Promise<void> {
+  const key = bindingKey(projectRoot, binding);
+  await withRetryStateLock(async () => {
+    const state = await readRetries();
+    const existing = state.retries[key];
+    if (!existing) throw new Error('pending Borg server attach state is missing');
+    validateRetryRecord(existing, binding);
+    if (!existing.pending) return;
+    delete existing.pending;
+    await atomicWriteFile(ATTACH_RETRIES_FILE, JSON.stringify(state, null, 2) + '\n');
   });
 }

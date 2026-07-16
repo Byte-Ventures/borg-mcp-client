@@ -50,6 +50,7 @@ export interface ServerSessionCredentialRecord {
     credential: string;
     expiresAt?: string | null;
 }
+export declare function withServerKeychainLock<T>(account: string, operation: () => Promise<T>): Promise<T>;
 /**
  * gh#860: is THIS process's selected persistent backend the OS keychain? The
  * runtime-fallback (auth.ts) gates on this so a keychain WRITE failure migrates

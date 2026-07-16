@@ -139,6 +139,7 @@ export interface StreamDeps {
 export interface RunLoopTestDeps {
     getActiveCube?: typeof getActiveCube;
     acquireStreamLease?: typeof acquireStreamLease;
+    streamOnce?: typeof streamOnce;
     sleep?: (ms: number) => Promise<void>;
     maxIterations?: number;
 }

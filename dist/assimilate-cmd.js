@@ -25,6 +25,10 @@ function affirmative(answer) {
     const normalized = answer.trim().toLowerCase();
     return normalized === '' || normalized === 'y' || normalized === 'yes';
 }
+function isLocalCubePresentationName(name) {
+    return name.length >= 1 && name.length <= 120 &&
+        /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(name);
+}
 async function selectAssimilationAuthority(flags, deps) {
     if (flags.server !== undefined) {
         try {
@@ -158,6 +162,57 @@ export async function runAssimilate(args, deps) {
     const authority = await selectAssimilationAuthority(args.flags, deps);
     if (!authority)
         return 1;
+    // ----- Repository + cube-name preflight -----
+    // Resolve and, where necessary, confirm local presentation data before an
+    // owner invitation can be consumed. A declined/underivable basename must
+    // not leave a successfully enrolled client behind.
+    const projectRoot = deps.findProjectRoot(deps.cwd());
+    let cubeName;
+    if (args.flags.cubeName) {
+        cubeName = args.flags.cubeName;
+    }
+    else {
+        const remoteResult = deps.runSync('git', ['remote', 'get-url', 'origin'], projectRoot);
+        const remoteUrl = remoteResult.status === 0 ? remoteResult.stdout : null;
+        const sanitizedRemote = remoteUrl ? sanitizeRemoteUrl(remoteUrl) : null;
+        const parsedRepo = sanitizedRemote ? parseGitRemote(sanitizedRemote) : null;
+        if (!parsedRepo) {
+            const bareResult = deps.runSync('git', ['rev-parse', '--is-bare-repository'], projectRoot);
+            if (bareResult.status === 0 && bareResult.stdout.trim() === 'true') {
+                deps.stderr('borg assimilate requires a non-bare repository worktree. ' +
+                    'Clone or check out the repository, then retry.\n');
+                return 1;
+            }
+        }
+        cubeName = deriveCubeName(projectRoot, remoteUrl);
+        if (!cubeName) {
+            deps.stderr('Could not derive a cube name from this repository. ' +
+                'Pass --cube-name <name> and retry.\n');
+            return 1;
+        }
+        if (!parsedRepo) {
+            if (sanitizedRemote) {
+                deps.stderr(`Could not parse the origin remote; using directory name '${cubeName}' as the cube name.\n`);
+            }
+            if (!args.flags.yes) {
+                if (!deps.isTTY()) {
+                    deps.stderr(`Using directory name '${cubeName}' as the cube name requires confirmation. ` +
+                        'Re-run with --cube-name <name> or --yes.\n');
+                    return 1;
+                }
+                const confirmed = await deps.prompt(`No usable origin remote was found. Use directory name '${cubeName}' as the cube name? [Y/n]: `);
+                if (!affirmative(confirmed)) {
+                    deps.stderr('Cube creation cancelled. Re-run with --cube-name <name> to choose a name.\n');
+                    return 1;
+                }
+            }
+        }
+    }
+    if (authority.kind === 'server' && !isLocalCubePresentationName(cubeName)) {
+        deps.stderr('Invalid local cube name. Use 1–120 letters, digits, spaces, dots, ' +
+            'underscores, or hyphens, starting with a letter or digit.\n');
+        return 1;
+    }
     let auth;
     if (authority.kind === 'server') {
         try {
@@ -213,27 +268,6 @@ export async function runAssimilate(args, deps) {
             cloudAuth = await deps.runSetup();
         }
         auth = cloudAuth;
-    }
-    // ----- Step 2: Cube-name derivation -----
-    const projectRoot = deps.findProjectRoot(deps.cwd());
-    let cubeName;
-    if (args.flags.cubeName) {
-        cubeName = args.flags.cubeName;
-    }
-    else {
-        const remoteResult = deps.runSync('git', ['remote', 'get-url', 'origin'], projectRoot);
-        const remoteUrl = remoteResult.status === 0 ? remoteResult.stdout : null;
-        cubeName = deriveCubeName(projectRoot, remoteUrl);
-        // UX-F4 (drone-7 Phase E review): emit a stderr nudge when the
-        // remote was readable but didn't parse, so the user has a signal
-        // that auto-derivation diverged from their git remote.
-        if (remoteUrl) {
-            const sanitized = sanitizeRemoteUrl(remoteUrl);
-            const parsedRepo = sanitized ? parseGitRemote(sanitized) : null;
-            if (sanitized && !parsedRepo && cubeName) {
-                deps.stderr(`couldn't parse git remote '${sanitized}' — using directory name '${cubeName}' as cube name\n`);
-            }
-        }
     }
     // gh#293: detect cross-account cube reference (owner-email:cube-name format).
     let crossAccountRef = null;
@@ -378,9 +412,93 @@ export async function runAssimilate(args, deps) {
         }
         isFirstDrone = true;
     }
+    // Read the worktree identity before role selection. A live local seat must
+    // retain its original role so the attach request reuses the exact durable
+    // retry binding instead of selecting another unoccupied role and minting a
+    // duplicate seat.
+    const existing = await deps.getActiveCube();
+    const hasPersistedIdentity = existing !== null || await deps.hasPersistedActiveCube();
+    let reattachPriorId;
+    let remintInvalidPrior = false;
+    let savedLocalRole;
+    if (existing && args.flags.here && existing.cubeId !== cubeDetail.id) {
+        deps.stderr('this directory already hosts an active drone; remove --here or run from a fresh worktree\n');
+        return 1;
+    }
+    if (authority.kind === 'server') {
+        if (!existing && hasPersistedIdentity) {
+            deps.stderr('This worktree has saved Borg server seat metadata, but its secure session ' +
+                'could not be loaded. No new seat was created. Unlock or restore the OS ' +
+                'keychain, then retry.\n');
+            return 1;
+        }
+        if (existing && args.flags.here &&
+            (existing.apiUrl !== auth.apiUrl ||
+                existing.serverTrustIdentity !== auth.serverTrustIdentity)) {
+            deps.stderr('This worktree\'s saved seat belongs to a different Borg server authority. ' +
+                'No new seat was created. Restore the saved authority or use a fresh worktree.\n');
+            return 1;
+        }
+        const pendingCandidates = (await Promise.all(cubeDetail.roles.map(async (role) => ({
+            role,
+            pending: await deps.getPendingLocalAttach(auth.apiUrl, auth.serverTrustIdentity, cubeDetail.id, role.id),
+        })))).filter((candidate) => candidate.pending !== null);
+        if (pendingCandidates.length > 1) {
+            deps.stderr('Multiple unfinished Borg server seat attachments exist for this repository. ' +
+                'No new seat was created; finish or repair the saved local state first.\n');
+            return 1;
+        }
+        const pendingCandidate = pendingCandidates[0];
+        if (pendingCandidate?.pending) {
+            if (existing && args.flags.here &&
+                pendingCandidate.pending.priorDroneId !== undefined &&
+                pendingCandidate.pending.priorDroneId !== existing.droneId) {
+                deps.stderr('The unfinished Borg server attachment does not match this worktree\'s saved seat. ' +
+                    'No new seat was created.\n');
+                return 1;
+            }
+            savedLocalRole = pendingCandidate.role;
+            reattachPriorId = pendingCandidate.pending.priorDroneId;
+            remintInvalidPrior = pendingCandidate.pending.remintInvalidPrior;
+        }
+        else if (existing && args.flags.here) {
+            savedLocalRole = existing.roleName
+                ? cubeDetail.roles.find((role) => role.name === existing.roleName)
+                : undefined;
+            const status = await deps.probeSeat(existing.sessionToken ?? '', auth.apiUrl, auth.serverTrustIdentity);
+            if (status === 'frozen') {
+                deps.stderr('This worktree\'s saved Borg server seat is temporarily frozen. ' +
+                    'No new seat was created; restore access and retry.\n');
+                return 1;
+            }
+            if (status === 'indeterminate') {
+                deps.stderr('Borg could not verify this worktree\'s saved server seat. ' +
+                    'No new seat was created; check the server connection and retry.\n');
+                return 1;
+            }
+            if (status === 'live' && !savedLocalRole) {
+                deps.stderr('Borg verified this worktree\'s saved seat, but its saved role is unavailable. ' +
+                    'No new seat was created; ask the server operator to restore the role.\n');
+                return 1;
+            }
+            reattachPriorId = existing.droneId;
+            remintInvalidPrior = status === 'evicted';
+        }
+    }
+    else if (existing && args.flags.here) {
+        if (existing.serverTrustIdentity !== undefined || existing.apiUrl !== auth.apiUrl) {
+            deps.stderr('This worktree\'s saved seat belongs to a different Borg authority. ' +
+                'No new seat was created; use a fresh worktree.\n');
+            return 1;
+        }
+        reattachPriorId = existing.droneId;
+    }
     // ----- Step 5: Role resolution -----
     let resolvedRole;
-    if (args.role !== undefined) {
+    if (savedLocalRole) {
+        resolvedRole = savedLocalRole;
+    }
+    else if (args.role !== undefined) {
         resolvedRole = matchRoleByName(cubeDetail.roles, args.role);
         if (!resolvedRole) {
             // Sprint 19 (gh#184) + drone-7 metaphor argument: include a
@@ -414,23 +532,10 @@ export async function runAssimilate(args, deps) {
     // the mint. (The full worktree DECISION stays in Step 7 by design — FS
     // state only after API success; this hoists only the abort case.)
     //
-    // PR-D refinement (approved fbf52eac): --here + existing + SAME cube is
-    // the broken-seat recovery flow — the saved identity's token is dead or
-    // displaced but the seat row lives. POST with prior_drone_id so the
-    // server RE-ATTACHES (rotates the token, returns the same identity; the
-    // PR-C ownership predicate gates it) instead of minting. A DIFFERENT
-    // cube still aborts: that needs its own worktree/seat.
-    const existing = await deps.getActiveCube();
-    let reattachPriorId;
-    if (existing && args.flags.here) {
-        if (existing.cubeId === cubeDetail.id) {
-            reattachPriorId = existing.droneId;
-        }
-        else {
-            deps.stderr(`this directory already hosts an active drone; remove --here or run from a fresh worktree\n`);
-            return 1;
-        }
-    }
+    // PR-D refinement: --here + existing + SAME authority/cube is the
+    // saved-seat recovery flow. Cloud passes prior_drone_id to its API. Local
+    // seats first prove liveness with their keychained session, then reuse the
+    // saved role/retry binding; only authoritative eviction rotates that retry.
     // Role defaults and local launch state do not select the model. The explicit
     // Claude-only flag remains temporarily for compatibility with existing
     // invocations.
@@ -458,6 +563,7 @@ export async function runAssimilate(args, deps) {
             agent_kind: cli,
             model: effectiveModel,
             ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
+            ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
         };
         result = auth.serverTrustIdentity === undefined
             ? await deps.assimilate(auth.apiUrl, auth.token, assimilateParams)
@@ -629,6 +735,12 @@ export async function runAssimilate(args, deps) {
             isHumanSeat: assignedRole.is_human_seat,
             ...(assignedRole.role_class ? { roleClass: assignedRole.role_class } : {}),
         });
+        if (auth.serverTrustIdentity !== undefined &&
+            result.local_attach_retry_key !== undefined) {
+            // cubes.json is now the durable consumer of the rotated session. Only
+            // now may a crash-safe attach tuple leave PENDING state.
+            await deps.completeLocalAttach(auth.apiUrl, auth.serverTrustIdentity, result.cube_id, result.role_id);
+        }
     }
     catch (err) {
         const message = err instanceof Error ? err.message : String(err);

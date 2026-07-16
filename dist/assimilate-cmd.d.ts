@@ -1,6 +1,7 @@
 import type { Role, RoleOccupant } from './role-resolver.js';
 import { type CodexRemoteLaunch } from './codex-remote.js';
 import type { BorgCli } from './cubes.js';
+import type { SeatStatus } from './seat-probe.js';
 export interface AssimilateFlags {
     worktree?: string;
     template?: string;
@@ -39,6 +40,8 @@ export interface AssimilateResult {
         expires_at: string | null;
     };
     reattached?: boolean;
+    /** Internal correlator used only to complete durable local attach state. */
+    local_attach_retry_key?: string;
 }
 export interface ActiveCube {
     cubeId: string;
@@ -76,6 +79,13 @@ export interface AssimilateDeps {
     getHostname: () => string;
     setTerminalTitle: (label: string, cubeName: string) => void;
     getActiveCube: () => Promise<ActiveCube | null>;
+    hasPersistedActiveCube: () => Promise<boolean>;
+    probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
+    getPendingLocalAttach: (apiUrl: string, serverTrustIdentity: string, cubeId: string, roleId: string) => Promise<{
+        priorDroneId?: string;
+        remintInvalidPrior: boolean;
+    } | null>;
+    completeLocalAttach: (apiUrl: string, serverTrustIdentity: string, cubeId: string, roleId: string) => Promise<void>;
     setActiveCube: (a: ActiveCube) => Promise<void>;
     findProjectRoot: (cwd: string) => string;
     installProjectSessionHook: (projectRoot: string) => void;
@@ -111,6 +121,7 @@ export interface AssimilateDeps {
         role_id: string;
         hostname?: string | null;
         prior_drone_id?: string;
+        remint_invalid_prior?: boolean;
         model?: string | null;
         agent_kind?: 'claude' | 'codex' | 'opencode' | null;
     }, serverTrustIdentity?: string) => Promise<AssimilateResult>;

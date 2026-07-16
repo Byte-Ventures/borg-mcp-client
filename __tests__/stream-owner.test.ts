@@ -1,4 +1,6 @@
 import { access, mkdir, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -241,6 +243,129 @@ describe('stream-owner lease', () => {
     expect(second).not.toBeNull();
   });
 
+  it('uses the production PID probe to reclaim a dead owner within one acquisition', async () => {
+    const locksDir = await tempLocksDir();
+    const first = await acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, {
+      locksDir,
+      pid: 99_999_999,
+      processNonce: 'dead-owner',
+      now: () => new Date('2026-05-28T12:00:00.000Z'),
+    });
+    expect(first).not.toBeNull();
+
+    const successor = await acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, {
+      locksDir,
+      now: () => new Date('2026-05-28T12:00:01.000Z'),
+    });
+
+    expect(successor).not.toBeNull();
+    expect(successor!.record.pid).toBe(process.pid);
+  });
+
+  it('lets a fresh process acquire immediately after the owning process is killed', async () => {
+    const locksDir = await tempLocksDir();
+    const child = spawn(process.execPath, [
+      '--import',
+      'tsx',
+      path.join(process.cwd(), '__tests__', 'fixtures', 'stream-owner-child.ts'),
+      CUBE_ID,
+      DRONE_ID,
+      locksDir,
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once('error', reject);
+        child.stdout!.on('data', (chunk) => {
+          if (String(chunk).includes('READY')) resolve();
+        });
+        child.once('exit', (code) => reject(new Error(`owner child exited early (${code})`)));
+      });
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+
+      expect(() => process.kill(child.pid!, 0)).toThrow();
+      const deadOwner = await readOwnershipSnapshot(CUBE_ID, DRONE_ID, { locksDir });
+      expect(deadOwner.pid).toBe(child.pid);
+
+      const successor = await acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, { locksDir });
+      expect(successor).not.toBeNull();
+      expect(successor!.record.pid).toBe(process.pid);
+      await successor!.release();
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+  });
+
+  it('recovers a takeover claimant that dies after publishing its durable claim', async () => {
+    const locksDir = await tempLocksDir();
+    await acquireStreamLease(CUBE_ID, DRONE_ID, 1_000, {
+      locksDir,
+      pid: 1001,
+      processNonce: 'dead-owner',
+      now: () => new Date('2026-05-28T12:00:00.000Z'),
+    });
+
+    await expect(acquireStreamLease(CUBE_ID, DRONE_ID, 1_000, {
+      locksDir,
+      pid: 1002,
+      processNonce: 'dead-claimant',
+      now: () => new Date('2026-05-28T12:00:03.000Z'),
+      isPidAlive: () => false,
+      beforeTakeoverVerify: async () => {
+        throw new Error('claimant crashed');
+      },
+    })).rejects.toThrow('claimant crashed');
+
+    const successor = await acquireStreamLease(CUBE_ID, DRONE_ID, 1_000, {
+      locksDir,
+      pid: 1003,
+      processNonce: 'successor',
+      now: () => new Date('2026-05-28T12:00:04.000Z'),
+      isPidAlive: (pid) => pid === 1003,
+    });
+    expect(successor).not.toBeNull();
+    expect(successor!.record.processNonce).toBe('successor');
+  });
+
+  it('does not bypass a live takeover claimant', async () => {
+    const locksDir = await tempLocksDir();
+    await acquireStreamLease(CUBE_ID, DRONE_ID, 1_000, {
+      locksDir,
+      pid: 1001,
+      processNonce: 'stale-owner',
+      now: () => new Date('2026-05-28T12:00:00.000Z'),
+    });
+
+    let releaseClaim!: () => void;
+    let markClaimReady!: () => void;
+    const claimReady = new Promise<void>((resolve) => { markClaimReady = resolve; });
+    const claimRelease = new Promise<void>((resolve) => { releaseClaim = resolve; });
+    const claimant = acquireStreamLease(CUBE_ID, DRONE_ID, 1_000, {
+      locksDir,
+      pid: 1002,
+      processNonce: 'live-claimant',
+      now: () => new Date('2026-05-28T12:00:03.000Z'),
+      isPidAlive: (pid) => pid === 1002,
+      beforeTakeoverVerify: async () => {
+        markClaimReady();
+        await claimRelease;
+      },
+    });
+    await claimReady;
+
+    await expect(acquireStreamLease(CUBE_ID, DRONE_ID, 1_000, {
+      locksDir,
+      pid: 1003,
+      processNonce: 'contender',
+      now: () => new Date('2026-05-28T12:00:03.500Z'),
+      isPidAlive: (pid) => pid === 1002 || pid === 1003,
+    })).resolves.toBeNull();
+
+    releaseClaim();
+    await expect(claimant).resolves.not.toBeNull();
+  });
+
   it('handles corrupt lease payload conservatively and reclaims it as stale', async () => {
     const locksDir = await tempLocksDir();
     const lockPath = streamLockPath(CUBE_ID, DRONE_ID, locksDir);
@@ -264,6 +389,28 @@ describe('stream-owner lease', () => {
       cwd: '/work/b',
     });
     expect(second).not.toBeNull();
+  });
+
+  it('rejects a structured lease with an invalid PID before liveness probing', async () => {
+    const locksDir = await tempLocksDir();
+    const lockPath = streamLockPath(CUBE_ID, DRONE_ID, locksDir);
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(path.join(lockPath, 'owner.json'), JSON.stringify({
+      schemaVersion: 1,
+      pid: 0,
+      processNonce: 'invalid-owner',
+      cwd: '/work/invalid',
+      startedAt: '2026-05-28T12:00:00.000Z',
+      heartbeatAt: '2026-05-28T12:00:00.000Z',
+    }) + '\n');
+
+    const snapshot = await readOwnershipSnapshot(CUBE_ID, DRONE_ID, { locksDir });
+    expect(snapshot.ageMs).toBe(Number.POSITIVE_INFINITY);
+    await expect(acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, {
+      locksDir,
+      pid: 1002,
+      processNonce: 'replacement',
+    })).resolves.not.toBeNull();
   });
 
   it('refreshes ownership with an atomic owner payload rewrite', async () => {

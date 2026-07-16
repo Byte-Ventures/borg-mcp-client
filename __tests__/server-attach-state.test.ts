@@ -72,6 +72,27 @@ describe('local attach retry persistence', () => {
     expect(new Set(keys).size).toBe(1);
   });
 
+  it('rotates an evicted correlator once and makes concurrent callers converge', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'borg-attach-state-'));
+    fixtures.push(fixture);
+    process.env.HOME = fixture;
+    vi.resetModules();
+    const {
+      getOrCreateLocalAttachRetryKey,
+      replaceEvictedLocalAttachRetryKey,
+    } = await import('../src/server-attach-state.js');
+
+    const prior = await getOrCreateLocalAttachRetryKey(binding, '/project/a');
+    const replacements = await Promise.all(Array.from({ length: 8 }, () =>
+      replaceEvictedLocalAttachRetryKey(binding, prior, '/project/a')
+    ));
+
+    expect(new Set(replacements).size).toBe(1);
+    expect(replacements[0]).not.toBe(prior);
+    await expect(getOrCreateLocalAttachRetryKey(binding, '/project/a'))
+      .resolves.toBe(replacements[0]);
+  });
+
   it('fails closed instead of replacing corrupt retry state', async () => {
     const fixture = mkdtempSync(join(tmpdir(), 'borg-attach-state-'));
     fixtures.push(fixture);

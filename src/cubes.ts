@@ -325,6 +325,17 @@ export async function getActiveCube(): Promise<ActiveCube | null> {
   return hydrateActiveCube(entry);
 }
 
+/**
+ * Distinguish a genuinely new worktree from one whose persisted local seat can
+ * no longer be hydrated (for example, because its keychain item is missing).
+ * No authority-bearing fields are returned through this diagnostic seam.
+ */
+export async function hasPersistedActiveCube(): Promise<boolean> {
+  const data = await readCubesFile();
+  if (!data) return false;
+  return Object.prototype.hasOwnProperty.call(data.projects, findProjectRoot());
+}
+
 async function hydrateActiveCube(entry: PersistedActiveCube): Promise<ActiveCube | null> {
   if (entry.serverTrustIdentity !== undefined) {
     if (

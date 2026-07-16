@@ -15,9 +15,11 @@ import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { API_URL, getValidToken, listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, attachBorgServer, } from './server-handshake.js';
-import { getOrCreateLocalAttachRetryKey } from './server-attach-state.js';
+import { completeLocalAttachRetry, getPendingLocalAttach, prepareLocalAttachRetry, } from './server-attach-state.js';
 import { loadBorgServerTrust } from './server-trust.js';
-import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
+import { defaultProbeSeat } from './seat-probe.js';
+import { BorgServerError } from './server-errors.js';
+import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
 import { authenticateWithGoogle } from './auth.js';
 import { addProjectSessionStartHook } from './config-utils.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
@@ -79,6 +81,20 @@ export function buildDefaultAssimilateDeps() {
             setTitle({ label, cubeName }, cubeName);
         },
         getActiveCube: () => cubesGetActive(),
+        hasPersistedActiveCube: () => cubesHasPersistedActive(),
+        probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
+        getPendingLocalAttach: (apiUrl, serverTrustIdentity, cubeId, roleId) => getPendingLocalAttach({
+            origin: apiUrl,
+            trustIdentity: serverTrustIdentity,
+            cubeId,
+            roleId,
+        }),
+        completeLocalAttach: (apiUrl, serverTrustIdentity, cubeId, roleId) => completeLocalAttachRetry({
+            origin: apiUrl,
+            trustIdentity: serverTrustIdentity,
+            cubeId,
+            roleId,
+        }),
         setActiveCube: (a) => cubesSetActive(a),
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
         // gh#673 P2 (WI-1): project-local SessionStart hook for the launch root.
@@ -169,11 +185,17 @@ export function buildDefaultAssimilateDeps() {
         },
         assimilate: async (apiUrl, token, params, serverTrustIdentity) => {
             if (serverTrustIdentity !== undefined) {
-                const retryKey = await getOrCreateLocalAttachRetryKey({
+                const binding = {
                     origin: apiUrl,
                     trustIdentity: serverTrustIdentity,
                     cubeId: params.cube_id,
                     roleId: params.role_id,
+                };
+                const retryKey = await prepareLocalAttachRetry(binding, {
+                    ...(params.prior_drone_id === undefined
+                        ? {}
+                        : { priorDroneId: params.prior_drone_id }),
+                    remintInvalidPrior: params.remint_invalid_prior === true,
                 });
                 const trust = await loadBorgServerTrust(apiUrl);
                 if (trust.identity !== serverTrustIdentity) {
@@ -184,12 +206,23 @@ export function buildDefaultAssimilateDeps() {
                     roleId: params.role_id,
                     retryKey,
                 }, { fetchImpl: trust.fetchImpl });
+                if (params.prior_drone_id) {
+                    if (params.remint_invalid_prior) {
+                        if (attached.drone.id === params.prior_drone_id) {
+                            throw new Error('Borg server returned the invalid saved seat during remint');
+                        }
+                    }
+                    else if (!attached.reattached || attached.drone.id !== params.prior_drone_id) {
+                        throw new BorgServerError('ATTACH_CONFLICT', 'Borg server did not reattach the saved seat');
+                    }
+                }
                 return {
                     cube_id: attached.cube.id,
                     drone_id: attached.drone.id,
                     drone_label: attached.drone.label,
                     role_id: attached.role.id,
                     reattached: attached.reattached,
+                    local_attach_retry_key: retryKey,
                     local_session: {
                         credential_ref: attached.session.credentialRef,
                         generation: attached.session.generation,

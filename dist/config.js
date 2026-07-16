@@ -70,7 +70,7 @@ function serverCredentialAccount(origin, trustIdentity) {
         .digest('hex');
     return `borg-server-credential:${binding}`;
 }
-async function withServerKeychainLock(account, operation) {
+export async function withServerKeychainLock(account, operation) {
     const lockDirectory = path.join(os.homedir(), '.config', 'borgmcp', 'local-keychain-locks');
     const lockName = createHash('sha256').update(account).digest('hex');
     const lockPath = path.join(lockDirectory, `${lockName}.lock`);
