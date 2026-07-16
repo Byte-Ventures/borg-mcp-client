@@ -1412,6 +1412,55 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(stderrPayload).toContain('work created in the primary won\'t reach your wt-branch without manual surgery (cherry-pick/merge)');
   });
 
+  it('starts a sibling from local HEAD when the repository has no usable origin', async () => {
+    const calls: string[][] = [];
+    const runSync = vi.fn((_cmd: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'remote' && args[1] === 'get-url') {
+        return { status: 2, stdout: '', stderr: 'error: No such remote origin' };
+      }
+      if (args.join(' ') === 'rev-parse --is-bare-repository') {
+        return { status: 0, stdout: 'false\n', stderr: '' };
+      }
+      if (args.join(' ') === 'rev-parse --verify HEAD') {
+        return { status: 0, stdout: '16c1405abcdef0123456789\n', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return { status: 0, stdout: '/work/myrepo\n', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && typeof args[3] === 'string' && args[3].startsWith('refs/heads/')) {
+        return { status: 1, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      runSync,
+      stderr,
+      cwd: () => '/work/myrepo',
+      findProjectRoot: () => '/work/myrepo',
+    });
+
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { yes: true, worktree: 'builder' },
+    }, deps)).resolves.toBe(0);
+
+    expect(calls).not.toContainEqual(['fetch', 'origin']);
+    expect(calls).not.toContainEqual(['rev-parse', '--verify', 'origin/main']);
+    expect(runSync).toHaveBeenCalledWith(
+      'git',
+      ['worktree', 'add', '-b', 'wt-builder', '/home/test/.borg/worktrees/myrepo/builder', 'HEAD'],
+      '/work/myrepo',
+    );
+    expect(stderr).toHaveBeenCalledWith(
+      'note: no usable origin; new worktree will start on local HEAD (16c1405)\n',
+    );
+  });
+
   // BUG-4 / gh#150 regression (Sprint 3): step 3 must detect unborn-HEAD
   // before calling `git worktree add --detach` and surface an actionable
   // error rather than git's cryptic "fatal: not a valid object name: 'HEAD'".
