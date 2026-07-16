@@ -10,12 +10,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { BORG_AGENT_KIND_ENV, BORG_CODEX_REMOTE_WAKE_ENV, withAgentRuntimeEnv, } from './agent-runtime.js';
+import { resolveMcpBinaryPath, resolveRegenPath, resolveClearRewakePath, resolveLogAuditPath, } from './self-path.js';
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const HOOK_COMMAND = 'borg-regen';
-const CLEAR_REWAKE_HOOK_COMMAND = 'borg-clear-rewake';
-const AUDIT_HOOK_COMMAND = 'borg-log-audit';
+// gh#client#18: resolve absolute paths from the running entrypoint so MCP
+// config and hook registrations always point to THIS installation — never
+// a bare PATH-resolved name that may resolve to a different version.
+const HOOK_COMMAND = resolveRegenPath();
+const CLEAR_REWAKE_HOOK_COMMAND = resolveClearRewakePath();
+const AUDIT_HOOK_COMMAND = resolveLogAuditPath();
+const MCP_BINARY = resolveMcpBinaryPath();
 /**
  * Claude Code CLI config path. The CLI reads `mcpServers.<name>` from
  * this file to discover registered MCP servers; `addMcpServer()` (below)
@@ -125,12 +130,35 @@ function addSessionStartHookAt(settingsFile, includeClearRewake = false) {
     writeJsonFile(settingsFile, settings);
     return true;
 }
+// gh#client#18: match both bare names (old configs) and absolute paths (new).
+// When a bare name is a suffix of the absolute path, we also match via
+// endsWith so a `node_modules/.bin/borg-regen` symlink path is recognized.
+function commandMatches(entryCommand, bareName, absolutePath) {
+    return entryCommand === absolutePath
+        || entryCommand === bareName
+        || entryCommand.endsWith(`/${bareName}`);
+}
+const BARE_BORG_REGEN = 'borg-regen';
+const BARE_CLEAR_REWAKE = 'borg-clear-rewake';
+const BARE_LOG_AUDIT = 'borg-log-audit';
 function hasCommandHook(entries, command) {
     return entries.some((entry) => Array.isArray(entry?.hooks) &&
-        entry.hooks.some((h) => h?.type === 'command' && h?.command === command));
+        entry.hooks.some((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return false;
+            if (command === HOOK_COMMAND)
+                return commandMatches(h.command, BARE_BORG_REGEN, command);
+            if (command === CLEAR_REWAKE_HOOK_COMMAND)
+                return commandMatches(h.command, BARE_CLEAR_REWAKE, command);
+            if (command === AUDIT_HOOK_COMMAND)
+                return commandMatches(h.command, BARE_LOG_AUDIT, command);
+            return h.command === command;
+        }));
 }
 function isClearRewakeCommand(hook) {
-    return hook?.type === 'command' && hook?.command === CLEAR_REWAKE_HOOK_COMMAND;
+    if (hook?.type !== 'command' || typeof hook?.command !== 'string')
+        return false;
+    return commandMatches(hook.command, BARE_CLEAR_REWAKE, CLEAR_REWAKE_HOOK_COMMAND);
 }
 function isCanonicalClearRewakeEntry(entry) {
     return entry?.matcher === 'clear' &&
@@ -191,7 +219,11 @@ export function isSessionStartHookRegistered() {
     if (!Array.isArray(arr))
         return false;
     return arr.some((entry) => Array.isArray(entry?.hooks) &&
-        entry.hooks.some((h) => h?.type === 'command' && h?.command === HOOK_COMMAND));
+        entry.hooks.some((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return false;
+            return commandMatches(h.command, BARE_BORG_REGEN, HOOK_COMMAND);
+        }));
 }
 /**
  * Peek: true iff the Claude UserPromptSubmit audit hook (`borg-log-audit`) is
@@ -210,7 +242,11 @@ export function isUserPromptSubmitHookRegistered() {
     if (!Array.isArray(arr))
         return false;
     return arr.some((entry) => Array.isArray(entry?.hooks) &&
-        entry.hooks.some((h) => h?.type === 'command' && h?.command === AUDIT_HOOK_COMMAND));
+        entry.hooks.some((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return false;
+            return commandMatches(h.command, BARE_LOG_AUDIT, AUDIT_HOOK_COMMAND);
+        }));
 }
 /**
  * Inverse of addSessionStartHook: remove any SessionStart hook entry whose
@@ -235,7 +271,11 @@ export function removeSessionStartHook() {
         .map((entry) => {
         if (!Array.isArray(entry?.hooks))
             return entry;
-        const filtered = entry.hooks.filter((h) => !(h?.type === 'command' && h?.command === HOOK_COMMAND));
+        const filtered = entry.hooks.filter((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return true;
+            return !commandMatches(h.command, BARE_BORG_REGEN, HOOK_COMMAND);
+        });
         if (filtered.length !== entry.hooks.length) {
             changed = true;
             return { ...entry, hooks: filtered };
@@ -303,7 +343,11 @@ export function removeUserPromptSubmitHook() {
         .map((entry) => {
         if (!Array.isArray(entry?.hooks))
             return entry;
-        const filtered = entry.hooks.filter((h) => !(h?.type === 'command' && h?.command === AUDIT_HOOK_COMMAND));
+        const filtered = entry.hooks.filter((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return true;
+            return !commandMatches(h.command, BARE_LOG_AUDIT, AUDIT_HOOK_COMMAND);
+        });
         if (filtered.length !== entry.hooks.length) {
             changed = true;
             return { ...entry, hooks: filtered };
@@ -402,8 +446,9 @@ export function addMcpServer() {
         catch {
             // Ignore - server might not exist yet
         }
-        // Run claude mcp add command (uses borg-mcp binary which points to index.js)
-        const command = `claude mcp add --scope user borg borg-mcp`;
+        // gh#client#18: use absolute path to THIS installation's binary so the
+        // registered server always matches the running client version.
+        const command = `claude mcp add --scope user borg ${shellQuote(MCP_BINARY)}`;
         execSync(command, {
             stdio: 'inherit', // Show output to user
             env: {
@@ -431,11 +476,12 @@ export function addCodexMcpServer() {
         // Identity is durable configuration; remote wake is a per-launch
         // transport capability. Do not persist a transport marker here: a future
         // Codex child may launch without a live --remote socket.
+        // gh#client#18: use absolute path to THIS installation's binary.
         const codexConfigEnv = withAgentRuntimeEnv(process.env, 'codex');
         execSync('codex mcp add borg --env BORG_API_URL=' +
             shellQuote(apiUrl) +
             ` --env ${BORG_AGENT_KIND_ENV}=codex` +
-            ' -- borg-mcp', {
+            ` -- ${shellQuote(MCP_BINARY)}`, {
             stdio: 'inherit',
             env: {
                 ...codexConfigEnv,
@@ -467,8 +513,17 @@ function addCodexHook(eventName, command, options = {}) {
     const entries = hooksFile.hooks[eventName];
     if (!Array.isArray(entries))
         return false;
+    // gh#client#18: detect both bare names (old configs) and absolute paths (new).
     const alreadyPresent = entries.some((entry) => Array.isArray(entry?.hooks) &&
-        entry.hooks.some((h) => h?.type === 'command' && h?.command === command));
+        entry.hooks.some((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return false;
+            if (command === HOOK_COMMAND)
+                return commandMatches(h.command, BARE_BORG_REGEN, command);
+            if (command === AUDIT_HOOK_COMMAND)
+                return commandMatches(h.command, BARE_LOG_AUDIT, command);
+            return h.command === command;
+        }));
     if (alreadyPresent)
         return false;
     const entry = {
@@ -495,7 +550,15 @@ export function isCodexHookRegistered(eventName, command, hooksPath = CODEX_HOOK
         if (!Array.isArray(arr))
             return false;
         return arr.some((entry) => Array.isArray(entry?.hooks) &&
-            entry.hooks.some((h) => h?.type === 'command' && h?.command === command));
+            entry.hooks.some((h) => {
+                if (h?.type !== 'command' || typeof h?.command !== 'string')
+                    return false;
+                if (command === HOOK_COMMAND)
+                    return commandMatches(h.command, BARE_BORG_REGEN, command);
+                if (command === AUDIT_HOOK_COMMAND)
+                    return commandMatches(h.command, BARE_LOG_AUDIT, command);
+                return h.command === command;
+            }));
     }
     catch {
         return false;
@@ -555,7 +618,8 @@ export function isOpenCodeMcpServerConfigured(configPath = OPENCODE_CONFIG_PATH)
 export function addOpenCodeMcpServer() {
     try {
         const apiUrl = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
-        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1 --env BORG_API_URL=${shellQuote(apiUrl)} -- borg-mcp`, { stdio: 'inherit' });
+        // gh#client#18: use absolute path to THIS installation's binary.
+        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1 --env BORG_API_URL=${shellQuote(apiUrl)} -- ${shellQuote(MCP_BINARY)}`, { stdio: 'inherit' });
     }
     catch (error) {
         if (error.message?.includes('command not found')) {

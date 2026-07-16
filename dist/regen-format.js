@@ -7,9 +7,10 @@
  */
 import { ROLE_SCOPED_SAFETY_DISCIPLINES, UNIVERSAL_SAFETY_DISCIPLINES, } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
-import { formatRoleAgentLabel } from './roster-render.js';
 import { formatDroneAddressToken } from 'borgmcp-shared/drone-address';
+import { formatRoleAgentLabel } from './roster-render.js';
 import { shellEscape } from './shell-escape.js';
+import { resolveInboxMonitorPath } from './self-path.js';
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
  *
@@ -74,9 +75,13 @@ export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
             'there is no tail-Monitor or `/loop` heartbeat to arm. Cube posts are delivered ' +
             'directly into your active session. Use \`borg_regen\` at any time for fresh context.');
     }
+    // gh#client#18: use absolute path to THIS installation's borg-inbox-monitor
+    // so the orientation command always resolves to the same version as the
+    // running client — never a different one via PATH.
+    const monitorBin = shellEscape(resolveInboxMonitorPath());
     const monitorCommand = monitorStateRoot
-        ? `borg-inbox-monitor --state-root ${shellEscape(monitorStateRoot)} ${shellEscape(inboxPath)}`
-        : `borg-inbox-monitor ${shellEscape(inboxPath)}`;
+        ? `${monitorBin} --state-root ${shellEscape(monitorStateRoot)} ${shellEscape(inboxPath)}`
+        : `${monitorBin} ${shellEscape(inboxPath)}`;
     return [
         'Arm your wake path before working:',
         `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`${monitorCommand}\` so cube posts wake you in real time.`,

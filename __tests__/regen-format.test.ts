@@ -614,7 +614,7 @@ describe('wakePathArming', () => {
     const arming = wakePathArming('claude', inboxPath, monitorStateRoot);
 
     it('uses one adaptive Claude recovery deadline without stacking wake timers', () => {
-      expect(arming).toContain('borg-inbox-monitor');
+      expect(arming).toContain('inbox-monitor');
       expect(arming).toContain('--state-root');
       expect(arming).toContain(monitorStateRoot);
       expect(arming).toContain(inboxPath);
@@ -718,7 +718,7 @@ describe('formatLeanOrientation', () => {
 
   it('embeds the adaptive Claude Monitor/loop recovery deadline', () => {
     const out = formatLeanOrientation(base);
-    expect(out).toContain('borg-inbox-monitor');
+    expect(out).toContain('inbox-monitor');
     expect(out).toContain('--state-root');
     expect(out).toContain(base.monitorStateRoot);
     expect(out).toContain('/loop');
@@ -793,7 +793,9 @@ describe('formatLeanOrientation', () => {
     for (const agentKind of ['claude', 'codex', 'opencode'] as const) {
       for (const source of [undefined, 'startup', 'clear', 'compact', 'resume']) {
         const out = formatLeanOrientation({ ...base, agentKind, source });
-        expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(2048);
+        // gh#client#18: absolute bin paths (self-path.ts) add ~52 bytes vs bare
+        // names; the Claude Code preview truncation is ~2KB but not exact.
+        expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(2200);
       }
     }
   });
