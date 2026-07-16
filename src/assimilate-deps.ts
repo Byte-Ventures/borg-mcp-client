@@ -14,6 +14,7 @@ import { hostname as osHostname, homedir as osHomedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
+import { resolveMcpBinaryPath } from './self-path.js';
 
 import type { AssimilateDeps } from './assimilate-cmd.js';
 import {
@@ -342,7 +343,9 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
     // ToolSearch recovery clause.
     probeMcpReady: () =>
       new Promise<boolean>((resolveProbe) => {
-        const child = spawnChild('borg-mcp', [], {
+        // gh#client#18: use absolute path to THIS installation's binary so the
+        // readiness probe starts the same server version that will be registered.
+        const child = spawnChild(resolveMcpBinaryPath(), [], {
           stdio: ['pipe', 'pipe', 'pipe'],
           shell: false,
           env: readinessProbeEnv(),

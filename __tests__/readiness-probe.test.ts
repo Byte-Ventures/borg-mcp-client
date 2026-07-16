@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -69,13 +69,50 @@ describe('MCP readiness probe mode', () => {
       },
     }));
 
-    const shim = path.join(bin, 'borg-mcp');
-    const indexSource = path.resolve(process.cwd(), 'src', 'index.ts');
+    // Minimal MCP server shim that responds to the initialize probe.
+    // gh#client#18: probeMcpReady() now uses resolveMcpBinaryPath() (absolute
+    // path from import.meta.url) instead of PATH-resolved 'borg-mcp', so a
+    // shim placed on PATH is no longer picked up. Mock the resolver to return
+    // the shim path instead.
+    const shim = path.join(bin, 'mcp-probe-shim');
     writeFileSync(
       shim,
-      `#!/bin/sh\nexec "${process.execPath}" --import tsx "${indexSource}" "$@"\n`
+      `#!/usr/bin/env node
+process.stdin.setEncoding('utf-8');
+let buf = '';
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  for (const line of buf.split('\\n')) {
+    if (!line.trim()) continue;
+    try {
+      const msg = JSON.parse(line);
+      if (msg.method === 'initialize') {
+        process.stdout.write(JSON.stringify({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            serverInfo: { name: 'probe-shim', version: '0.0.0' },
+          },
+        }) + '\\n');
+        process.exit(0);
+      }
+    } catch { /* ignore partial lines */ }
+  }
+});
+`
     );
     chmodSync(shim, 0o755);
+
+    vi.doMock('../src/self-path.js', () => ({
+      resolveMcpBinaryPath: () => shim,
+      resolveRegenPath: () => shim,
+      resolveInboxMonitorPath: () => shim,
+      resolveClearRewakePath: () => shim,
+      resolveLogAuditPath: () => shim,
+      __esModule: true,
+    }));
 
     const oldHome = process.env.HOME;
     const oldPath = process.env.PATH;
@@ -90,6 +127,7 @@ describe('MCP readiness probe mode', () => {
       else process.env.HOME = oldHome;
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;
+      vi.doUnmock('../src/self-path.js');
       rmSync(fixture, { recursive: true, force: true });
     }
   }, 10_000);

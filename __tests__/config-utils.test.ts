@@ -30,6 +30,11 @@ import {
   isCodexUserPromptSubmitHookRegistered,
   isMcpServerConfigured,
 } from '../src/config-utils';
+import { resolveRegenPath, resolveLogAuditPath } from '../src/self-path';
+import { shellEscape } from '../src/shell-escape';
+
+const CANONICAL_REGEN = shellEscape(resolveRegenPath());
+const CANONICAL_AUDIT = shellEscape(resolveLogAuditPath());
 
 let tmpDir: string;
 let tmpConfig: string;
@@ -225,8 +230,14 @@ describe('isCodexHookRegistered', () => {
 describe('gh#844 codex hook peeks (gate the writers + the consent disclosure)', () => {
   it('isCodexSessionStartHookRegistered true iff the borg-regen SessionStart hook is present', () => {
     const p = path.join(tmpDir, 'hooks.json');
+    // Write bare name — peek should NOT match (requires canonical).
     fs.writeFileSync(p, JSON.stringify({
       hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'borg-regen' }] }] },
+    }));
+    expect(isCodexSessionStartHookRegistered(p)).toBe(false);
+    // Write canonical (shell-escaped) form — peek should match.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: CANONICAL_REGEN }] }] },
     }));
     expect(isCodexSessionStartHookRegistered(p)).toBe(true);
     fs.writeFileSync(p, JSON.stringify({ hooks: {} }));
@@ -235,13 +246,51 @@ describe('gh#844 codex hook peeks (gate the writers + the consent disclosure)', 
 
   it('isCodexUserPromptSubmitHookRegistered true iff the borg-log-audit UPS hook is present', () => {
     const p = path.join(tmpDir, 'hooks.json');
+    // Write bare name — peek should NOT match (requires canonical).
     fs.writeFileSync(p, JSON.stringify({
       hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'borg-log-audit' }] }] },
+    }));
+    expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
+    // Write canonical form — peek should match.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: CANONICAL_AUDIT }] }] },
     }));
     expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(true);
     // SessionStart present but NOT UPS → still false (each hook gated independently).
     fs.writeFileSync(p, JSON.stringify({
-      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'borg-regen' }] }] },
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: CANONICAL_REGEN }] }] },
+    }));
+    expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
+  });
+
+  // gh#client#18: raw canonical (unescaped) path must NOT pass strict peek —
+  // it needs shell-escaping before it is a valid canonical form.
+  it('raw unescaped canonical path does NOT pass strict peek', () => {
+    const p = path.join(tmpDir, 'hooks.json');
+    // Raw path without shell-escaping (e.g. user hand-edited the config).
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: resolveRegenPath() }] }] },
+    }));
+    expect(isCodexSessionStartHookRegistered(p)).toBe(false);
+    // Raw audit path without shell-escaping.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: resolveLogAuditPath() }] }] },
+    }));
+    expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
+  });
+
+  // gh#client#18: stale prior-install absolute paths must NOT pass strict
+  // canonical peek — they need migration to shell-escaped canonical form.
+  it('stale prior-install path does NOT pass strict peek', () => {
+    const p = path.join(tmpDir, 'hooks.json');
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: '/old/node_modules/borgmcp/dist/regen.js' }] }] },
+    }));
+    // Strict peek requires escaped canonical — stale path does NOT pass.
+    expect(isCodexSessionStartHookRegistered(p)).toBe(false);
+    // Stale audit path also does not pass.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: '/old/.../log-audit.js' }] }] },
     }));
     expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
   });

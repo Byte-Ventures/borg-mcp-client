@@ -65,7 +65,7 @@ describe('codex launch helpers', () => {
     const stateRoot = '/home/u/repo/.borgmcp/inbox-monitor';
     const clause = buildKickoffWakePathClause('claude', inboxPath, stateRoot);
     // shared wake-path arming (same core the SessionStart hook uses)
-    expect(clause).toContain('borg-inbox-monitor');
+    expect(clause).toContain('inbox-monitor');
     expect(clause).toContain('--state-root');
     expect(clause).toContain(stateRoot);
     expect(clause).toContain(inboxPath);

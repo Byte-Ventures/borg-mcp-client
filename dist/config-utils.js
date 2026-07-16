@@ -10,12 +10,18 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { BORG_AGENT_KIND_ENV, BORG_CODEX_REMOTE_WAKE_ENV, withAgentRuntimeEnv, } from './agent-runtime.js';
+import { resolveMcpBinaryPath, resolveRegenPath, resolveClearRewakePath, resolveLogAuditPath, } from './self-path.js';
+import { shellEscape } from './shell-escape.js';
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const HOOK_COMMAND = 'borg-regen';
-const CLEAR_REWAKE_HOOK_COMMAND = 'borg-clear-rewake';
-const AUDIT_HOOK_COMMAND = 'borg-log-audit';
+// gh#client#18: canonical hook commands stored in JSON are shell-escaped
+// absolute paths. Bare names and stale/other-install absolute paths are
+// migrated to this form on every hook write.
+const HOOK_COMMAND = shellEscape(resolveRegenPath());
+const CLEAR_REWAKE_HOOK_COMMAND = shellEscape(resolveClearRewakePath());
+const AUDIT_HOOK_COMMAND = shellEscape(resolveLogAuditPath());
+const MCP_BINARY = resolveMcpBinaryPath();
 /**
  * Claude Code CLI config path. The CLI reads `mcpServers.<name>` from
  * this file to discover registered MCP servers; `addMcpServer()` (below)
@@ -102,6 +108,10 @@ function addSessionStartHookAt(settingsFile, includeClearRewake = false) {
     settings.hooks ??= {};
     settings.hooks.SessionStart ??= [];
     let changed = false;
+    // gh#client#18: migrate owned hooks to canonical form and deduplicate
+    // (exactly one canonical hook per owned command, preserving unrelated
+    // siblings and entry metadata).
+    changed = migrateAndDedupOwnedHooks(settings.hooks.SessionStart) || changed;
     if (!hasCommandHook(settings.hooks.SessionStart, HOOK_COMMAND)) {
         settings.hooks.SessionStart.push({
             matcher: '*',
@@ -125,18 +135,157 @@ function addSessionStartHookAt(settingsFile, includeClearRewake = false) {
     writeJsonFile(settingsFile, settings);
     return true;
 }
+// gh#client#18: match bare names (old configs), stale absolute paths (other
+// installations), shell-escaped canonical paths, and unescaped canonical paths.
+function commandMatches(entryCommand, bareName, absolutePath) {
+    const escaped = shellEscape(absolutePath);
+    if (entryCommand === escaped || entryCommand === absolutePath || entryCommand === bareName)
+        return true;
+    // gh#client#18: stale prior-install absolute paths (e.g.
+    // /old/.../dist/regen.js) end with the same basename. Only match
+    // when the command IS an absolute path ending with the bare name to
+    // avoid false positives on unrelated commands like "run regen.js".
+    if (entryCommand.startsWith('/') && entryCommand.endsWith(`/${bareName}`))
+        return true;
+    return false;
+}
+/** gh#client#18: map an owned hook command to its canonical shell-escaped form.
+ *  Returns null for non-owned commands. Ownership requires EXACTLY ONE of:
+ *  (a) Exact bare bin name (borg-regen, borg-clear-rewake, borg-log-audit)
+ *  (b) Exact match (raw or shell-escaped) of THIS installation's canonical
+ *      absolute command — always owned, no marker required (fixes neutral-path
+ *      false negatives that broke idempotency)
+ *  (c) Foreign-install heuristic: absolute path ending in an owned basename
+ *      AND containing a borg package marker (borgmcp|borg-mcp) in the path
+ *  This prevents false-positive ownership of unrelated scripts that happen
+ *  to share a basename (e.g. /opt/custom-tool/regen.js). */
+function ownedCanonical(command) {
+    const stripped = command.replace(/^'|'$/g, '');
+    // (a) Exact bare name — always owned
+    if (stripped === BARE_BORG_REGEN)
+        return HOOK_COMMAND;
+    if (stripped === BARE_CLEAR_REWAKE)
+        return CLEAR_REWAKE_HOOK_COMMAND;
+    if (stripped === BARE_LOG_AUDIT)
+        return AUDIT_HOOK_COMMAND;
+    // (b) Exact match of THIS installation's canonical command (raw or escaped)
+    // — always owned, no marker check required
+    if (command === HOOK_COMMAND || stripped === resolveRegenPath())
+        return HOOK_COMMAND;
+    if (command === CLEAR_REWAKE_HOOK_COMMAND || stripped === resolveClearRewakePath())
+        return CLEAR_REWAKE_HOOK_COMMAND;
+    if (command === AUDIT_HOOK_COMMAND || stripped === resolveLogAuditPath())
+        return AUDIT_HOOK_COMMAND;
+    // (c) Foreign-install heuristic: absolute path + owned basename + borg marker
+    if (stripped.startsWith('/') && (stripped.includes('borgmcp') || stripped.includes('borg-mcp'))) {
+        const name = stripped.split('/').pop() ?? '';
+        if (name === 'regen.js')
+            return HOOK_COMMAND;
+        if (name === 'clear-rewake.js')
+            return CLEAR_REWAKE_HOOK_COMMAND;
+        if (name === 'log-audit.js')
+            return AUDIT_HOOK_COMMAND;
+    }
+    return null;
+}
+/**
+ * gh#client#18: migrate owned hooks to canonical form and deduplicate:
+ * exactly one canonical hook per owned command. Removes only duplicate owned
+ * hook objects within entries, preserving unrelated siblings and entry metadata.
+ * Mutates the entries array in place. Returns true if any change was made.
+ */
+function migrateAndDedupOwnedHooks(entries) {
+    let changed = false;
+    // Phase 1: Migrate owned hooks to canonical form
+    for (const entry of entries) {
+        if (!Array.isArray(entry?.hooks))
+            continue;
+        for (const hook of entry.hooks) {
+            if (hook?.type !== 'command' || typeof hook?.command !== 'string')
+                continue;
+            const canonical = ownedCanonical(hook.command);
+            if (canonical && hook.command !== canonical) {
+                hook.command = canonical;
+                changed = true;
+            }
+        }
+    }
+    // Phase 2: Deduplicate — for each canonical command, keep exactly one hook
+    // object across all entries. Remove only the duplicate hook objects, not
+    // entire entries (preserving unrelated siblings and entry metadata).
+    const seenCanonicals = new Set();
+    for (const entry of entries) {
+        if (!Array.isArray(entry?.hooks))
+            continue;
+        const before = entry.hooks.length;
+        entry.hooks = entry.hooks.filter((hook) => {
+            if (hook?.type !== 'command' || typeof hook?.command !== 'string')
+                return true;
+            const canonical = ownedCanonical(hook.command);
+            if (!canonical)
+                return true;
+            if (seenCanonicals.has(canonical)) {
+                changed = true;
+                return false;
+            }
+            seenCanonicals.add(canonical);
+            return true;
+        });
+        if (entry.hooks.length !== before)
+            changed = true;
+    }
+    // Phase 3: Remove entries that became empty after dedup
+    for (let i = entries.length - 1; i >= 0; i--) {
+        if (!Array.isArray(entries[i]?.hooks) || entries[i].hooks.length === 0) {
+            entries.splice(i, 1);
+            changed = true;
+        }
+    }
+    return changed;
+}
+/** Strict canonical match: only the shell-escaped canonical form.
+ *  gh#client#18: raw unescaped paths are NOT canonical — a path with spaces
+ *  or metacharacters would break at shell-fire time if not escaped. */
+function isCanonicalCommand(entryCommand, canonical) {
+    return entryCommand === canonical;
+}
+const BARE_BORG_REGEN = 'borg-regen';
+const BARE_CLEAR_REWAKE = 'borg-clear-rewake';
+const BARE_LOG_AUDIT = 'borg-log-audit';
 function hasCommandHook(entries, command) {
     return entries.some((entry) => Array.isArray(entry?.hooks) &&
-        entry.hooks.some((h) => h?.type === 'command' && h?.command === command));
+        entry.hooks.some((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return false;
+            // gh#client#18: for known owned commands, check if this hook's command
+            // maps to the SAME canonical as the target. This correctly distinguishes
+            // regen from clear-rewake from audit — a clear-rewake hook does NOT
+            // satisfy the dedup check for a regen target, and vice versa.
+            if (command === HOOK_COMMAND || command === CLEAR_REWAKE_HOOK_COMMAND || command === AUDIT_HOOK_COMMAND) {
+                return ownedCanonical(h.command) === command;
+            }
+            return h.command === command;
+        }));
+}
+/** Strict: only the shell-escaped canonical form (no bare-name fallback). */
+function hasCanonicalCommandHook(entries, command) {
+    return entries.some((entry) => Array.isArray(entry?.hooks) &&
+        entry.hooks.some((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return false;
+            return isCanonicalCommand(h.command, command);
+        }));
 }
 function isClearRewakeCommand(hook) {
-    return hook?.type === 'command' && hook?.command === CLEAR_REWAKE_HOOK_COMMAND;
+    if (hook?.type !== 'command' || typeof hook?.command !== 'string')
+        return false;
+    return commandMatches(hook.command, BARE_CLEAR_REWAKE, resolveClearRewakePath());
 }
 function isCanonicalClearRewakeEntry(entry) {
     return entry?.matcher === 'clear' &&
         Array.isArray(entry?.hooks) &&
         entry.hooks.length === 1 &&
-        isClearRewakeCommand(entry.hooks[0]) &&
+        isCanonicalCommand(entry.hooks[0].command, CLEAR_REWAKE_HOOK_COMMAND) &&
         entry.hooks[0].asyncRewake === true;
 }
 /**
@@ -146,10 +295,24 @@ function isCanonicalClearRewakeEntry(entry) {
  * entry once.
  */
 function normalizeClearRewakeHook(entries) {
-    const commandCount = entries.reduce((count, entry) => count + (Array.isArray(entry?.hooks) ? entry.hooks.filter(isClearRewakeCommand).length : 0), 0);
-    if (commandCount === 1 && entries.some(isCanonicalClearRewakeEntry))
-        return null;
-    const withoutOwnedCommand = entries.flatMap((entry) => {
+    let migrated = false;
+    const result = entries.map((entry) => {
+        if (!Array.isArray(entry?.hooks))
+            return entry;
+        const hooks = entry.hooks.map((hook) => {
+            if (isClearRewakeCommand(hook) && !isCanonicalCommand(hook.command, CLEAR_REWAKE_HOOK_COMMAND)) {
+                migrated = true;
+                return { ...hook, command: CLEAR_REWAKE_HOOK_COMMAND };
+            }
+            return hook;
+        });
+        return hooks === entry.hooks ? entry : { ...entry, hooks };
+    });
+    const commandCount = result.reduce((count, entry) => count + (Array.isArray(entry?.hooks) ? entry.hooks.filter(isClearRewakeCommand).length : 0), 0);
+    if (commandCount === 1 && result.some(isCanonicalClearRewakeEntry)) {
+        return migrated ? result : null;
+    }
+    const withoutOwnedCommand = result.flatMap((entry) => {
         if (!Array.isArray(entry?.hooks))
             return [entry];
         const hooks = entry.hooks.filter((hook) => !isClearRewakeCommand(hook));
@@ -172,7 +335,7 @@ function sessionStartHookRegisteredAt(settingsFile, includeClearRewake = false) 
     const arr = settings?.hooks?.SessionStart;
     if (!Array.isArray(arr))
         return false;
-    return hasCommandHook(arr, HOOK_COMMAND) &&
+    return hasCanonicalCommandHook(arr, HOOK_COMMAND) &&
         (!includeClearRewake || normalizeClearRewakeHook(arr) === null);
 }
 /**
@@ -191,7 +354,11 @@ export function isSessionStartHookRegistered() {
     if (!Array.isArray(arr))
         return false;
     return arr.some((entry) => Array.isArray(entry?.hooks) &&
-        entry.hooks.some((h) => h?.type === 'command' && h?.command === HOOK_COMMAND));
+        entry.hooks.some((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return false;
+            return isCanonicalCommand(h.command, HOOK_COMMAND);
+        }));
 }
 /**
  * Peek: true iff the Claude UserPromptSubmit audit hook (`borg-log-audit`) is
@@ -210,7 +377,11 @@ export function isUserPromptSubmitHookRegistered() {
     if (!Array.isArray(arr))
         return false;
     return arr.some((entry) => Array.isArray(entry?.hooks) &&
-        entry.hooks.some((h) => h?.type === 'command' && h?.command === AUDIT_HOOK_COMMAND));
+        entry.hooks.some((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return false;
+            return isCanonicalCommand(h.command, AUDIT_HOOK_COMMAND);
+        }));
 }
 /**
  * Inverse of addSessionStartHook: remove any SessionStart hook entry whose
@@ -235,7 +406,11 @@ export function removeSessionStartHook() {
         .map((entry) => {
         if (!Array.isArray(entry?.hooks))
             return entry;
-        const filtered = entry.hooks.filter((h) => !(h?.type === 'command' && h?.command === HOOK_COMMAND));
+        const filtered = entry.hooks.filter((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return true;
+            return !commandMatches(h.command, BARE_BORG_REGEN, HOOK_COMMAND);
+        });
         if (filtered.length !== entry.hooks.length) {
             changed = true;
             return { ...entry, hooks: filtered };
@@ -272,16 +447,20 @@ export function addUserPromptSubmitHook() {
     }
     settings.hooks ??= {};
     settings.hooks.UserPromptSubmit ??= [];
-    const alreadyPresent = settings.hooks.UserPromptSubmit.some((entry) => Array.isArray(entry?.hooks) &&
-        entry.hooks.some((h) => h?.type === 'command' && h?.command === AUDIT_HOOK_COMMAND));
-    if (alreadyPresent)
-        return false;
-    settings.hooks.UserPromptSubmit.push({
-        matcher: '*',
-        hooks: [{ type: 'command', command: AUDIT_HOOK_COMMAND }],
-    });
-    writeSettings(settings);
-    return true;
+    // gh#client#18: migrate owned hooks to canonical form and deduplicate
+    // (exactly one canonical hook per owned command, preserving unrelated
+    // siblings and entry metadata).
+    let changed = migrateAndDedupOwnedHooks(settings.hooks.UserPromptSubmit);
+    if (!hasCanonicalCommandHook(settings.hooks.UserPromptSubmit, AUDIT_HOOK_COMMAND)) {
+        settings.hooks.UserPromptSubmit.push({
+            matcher: '*',
+            hooks: [{ type: 'command', command: AUDIT_HOOK_COMMAND }],
+        });
+        changed = true;
+    }
+    if (changed)
+        writeSettings(settings);
+    return changed;
 }
 /**
  * Inverse of addUserPromptSubmitHook: remove any UserPromptSubmit hook
@@ -303,7 +482,11 @@ export function removeUserPromptSubmitHook() {
         .map((entry) => {
         if (!Array.isArray(entry?.hooks))
             return entry;
-        const filtered = entry.hooks.filter((h) => !(h?.type === 'command' && h?.command === AUDIT_HOOK_COMMAND));
+        const filtered = entry.hooks.filter((h) => {
+            if (h?.type !== 'command' || typeof h?.command !== 'string')
+                return true;
+            return !commandMatches(h.command, BARE_LOG_AUDIT, AUDIT_HOOK_COMMAND);
+        });
         if (filtered.length !== entry.hooks.length) {
             changed = true;
             return { ...entry, hooks: filtered };
@@ -402,8 +585,9 @@ export function addMcpServer() {
         catch {
             // Ignore - server might not exist yet
         }
-        // Run claude mcp add command (uses borg-mcp binary which points to index.js)
-        const command = `claude mcp add --scope user borg borg-mcp`;
+        // gh#client#18: use absolute path to THIS installation's binary so the
+        // registered server always matches the running client version.
+        const command = `claude mcp add --scope user borg ${shellQuote(MCP_BINARY)}`;
         execSync(command, {
             stdio: 'inherit', // Show output to user
             env: {
@@ -431,11 +615,12 @@ export function addCodexMcpServer() {
         // Identity is durable configuration; remote wake is a per-launch
         // transport capability. Do not persist a transport marker here: a future
         // Codex child may launch without a live --remote socket.
+        // gh#client#18: use absolute path to THIS installation's binary.
         const codexConfigEnv = withAgentRuntimeEnv(process.env, 'codex');
         execSync('codex mcp add borg --env BORG_API_URL=' +
             shellQuote(apiUrl) +
             ` --env ${BORG_AGENT_KIND_ENV}=codex` +
-            ' -- borg-mcp', {
+            ` -- ${shellQuote(MCP_BINARY)}`, {
             stdio: 'inherit',
             env: {
                 ...codexConfigEnv,
@@ -467,20 +652,24 @@ function addCodexHook(eventName, command, options = {}) {
     const entries = hooksFile.hooks[eventName];
     if (!Array.isArray(entries))
         return false;
-    const alreadyPresent = entries.some((entry) => Array.isArray(entry?.hooks) &&
-        entry.hooks.some((h) => h?.type === 'command' && h?.command === command));
-    if (alreadyPresent)
-        return false;
-    const entry = {
-        hooks: [{ type: 'command', command }],
-    };
-    if (options.matcher)
-        entry.matcher = options.matcher;
-    if (typeof options.timeout === 'number')
-        entry.hooks[0].timeout = options.timeout;
-    entries.push(entry);
-    writeJsonFile(CODEX_HOOKS_PATH, hooksFile);
-    return true;
+    // gh#client#18: migrate owned hooks to canonical form and deduplicate
+    // (exactly one canonical hook per owned command, preserving unrelated
+    // siblings and entry metadata).
+    let changed = migrateAndDedupOwnedHooks(entries);
+    if (!hasCanonicalCommandHook(entries, command)) {
+        const entry = {
+            hooks: [{ type: 'command', command }],
+        };
+        if (options.matcher)
+            entry.matcher = options.matcher;
+        if (typeof options.timeout === 'number')
+            entry.hooks[0].timeout = options.timeout;
+        entries.push(entry);
+        changed = true;
+    }
+    if (changed)
+        writeJsonFile(CODEX_HOOKS_PATH, hooksFile);
+    return changed;
 }
 export function addCodexSessionStartHook() {
     return addCodexHook('SessionStart', HOOK_COMMAND, { matcher: 'startup|resume', timeout: 30 });
@@ -495,7 +684,15 @@ export function isCodexHookRegistered(eventName, command, hooksPath = CODEX_HOOK
         if (!Array.isArray(arr))
             return false;
         return arr.some((entry) => Array.isArray(entry?.hooks) &&
-            entry.hooks.some((h) => h?.type === 'command' && h?.command === command));
+            entry.hooks.some((h) => {
+                if (h?.type !== 'command' || typeof h?.command !== 'string')
+                    return false;
+                if (command === HOOK_COMMAND)
+                    return isCanonicalCommand(h.command, command);
+                if (command === AUDIT_HOOK_COMMAND)
+                    return isCanonicalCommand(h.command, command);
+                return h.command === command;
+            }));
     }
     catch {
         return false;
@@ -555,7 +752,8 @@ export function isOpenCodeMcpServerConfigured(configPath = OPENCODE_CONFIG_PATH)
 export function addOpenCodeMcpServer() {
     try {
         const apiUrl = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
-        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1 --env BORG_API_URL=${shellQuote(apiUrl)} -- borg-mcp`, { stdio: 'inherit' });
+        // gh#client#18: use absolute path to THIS installation's binary.
+        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1 --env BORG_API_URL=${shellQuote(apiUrl)} -- ${shellQuote(MCP_BINARY)}`, { stdio: 'inherit' });
     }
     catch (error) {
         if (error.message?.includes('command not found')) {

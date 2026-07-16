@@ -13,6 +13,7 @@ import { hostname as osHostname, homedir as osHomedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
+import { resolveMcpBinaryPath } from './self-path.js';
 import { API_URL, getValidToken, listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, attachBorgServer, } from './server-handshake.js';
 import { completeLocalAttachRetry, getPendingLocalAttach, prepareLocalAttachRetry, } from './server-attach-state.js';
@@ -271,7 +272,9 @@ export function buildDefaultAssimilateDeps() {
         // session will hit the race and need the kickoff prompt's
         // ToolSearch recovery clause.
         probeMcpReady: () => new Promise((resolveProbe) => {
-            const child = spawnChild('borg-mcp', [], {
+            // gh#client#18: use absolute path to THIS installation's binary so the
+            // readiness probe starts the same server version that will be registered.
+            const child = spawnChild(resolveMcpBinaryPath(), [], {
                 stdio: ['pipe', 'pipe', 'pipe'],
                 shell: false,
                 env: readinessProbeEnv(),

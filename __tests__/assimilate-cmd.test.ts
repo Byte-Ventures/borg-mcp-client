@@ -270,7 +270,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     expect(getInboxPath).toHaveBeenCalledWith('cube-1', 'drone-uuid-1');
     const [, kickoffArgs] = exec.mock.calls[0];
     const kickoff = (kickoffArgs as string[])[0];
-    expect(kickoff).toContain('borg-inbox-monitor --state-root');
+    expect(kickoff).toContain('inbox-monitor');
     expect(kickoff).toContain('/work/myrepo/.borgmcp/inbox-monitor');
     expect(kickoff).toContain('/test-inboxes/cube-1/drone-uuid-1.log');
     expect(kickoff).not.toContain('borg-opencode-correlation:');

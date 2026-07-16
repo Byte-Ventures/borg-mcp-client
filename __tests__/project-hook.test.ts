@@ -19,6 +19,8 @@ import {
   addProjectSessionStartHook,
   isProjectSessionStartHookRegistered,
 } from '../src/config-utils';
+import { resolveRegenPath, resolveClearRewakePath } from '../src/self-path';
+import { shellEscape } from '../src/shell-escape';
 
 let root: string;
 
@@ -42,11 +44,11 @@ describe('addProjectSessionStartHook', () => {
     expect(Array.isArray(entries)).toBe(true);
     expect(entries).toContainEqual({
       matcher: '*',
-      hooks: [{ type: 'command', command: 'borg-regen' }],
+      hooks: [{ type: 'command', command: shellEscape(resolveRegenPath()) }],
     });
     expect(entries).toContainEqual({
       matcher: 'clear',
-      hooks: [{ type: 'command', command: 'borg-clear-rewake', asyncRewake: true }],
+      hooks: [{ type: 'command', command: shellEscape(resolveClearRewakePath()), asyncRewake: true }],
     });
   });
 
@@ -81,8 +83,93 @@ describe('addProjectSessionStartHook', () => {
 
     expect(addProjectSessionStartHook(root)).toBe(true);
     const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
-    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === 'borg-regen'))).toHaveLength(1);
-    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === 'borg-clear-rewake'))).toHaveLength(1);
+    // Bare name is migrated to shell-escaped canonical form.
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveClearRewakePath())))).toHaveLength(1);
+    expect(entries).toHaveLength(2);
+  });
+
+  // gh#client#18: stale prior-install absolute paths (e.g. from a different
+  // node_modules location) must be migrated to canonical and must NOT produce
+  // a duplicate entry.
+  it('migrates stale prior-install absolute paths without duplicating', () => {
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath(), JSON.stringify({
+      hooks: { SessionStart: [
+        { matcher: '*', hooks: [{ type: 'command', command: '/old/node_modules/borgmcp/dist/regen.js' }] },
+        { matcher: 'clear', hooks: [{ type: 'command', command: '/old/node_modules/borgmcp/dist/clear-rewake.js', asyncRewake: true }] },
+      ] },
+    }));
+
+    expect(addProjectSessionStartHook(root)).toBe(true);
+    const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
+    // Stale absolute paths migrated to shell-escaped canonical form.
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveClearRewakePath())))).toHaveLength(1);
+    // No stale or bare-name leftovers.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command.includes('/old/')))).toBe(false);
+    expect(entries).toHaveLength(2);
+  });
+
+  // gh#client#18: mixed stale + bare name in same config must all converge to
+  // exactly one canonical handler per command.
+  it('deduplicates mixed stale and bare-name entries', () => {
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath(), JSON.stringify({
+      hooks: { SessionStart: [
+        { matcher: '*', hooks: [{ type: 'command', command: '/old/node_modules/borgmcp/dist/regen.js' }] },
+        { matcher: '*', hooks: [{ type: 'command', command: 'borg-regen' }] },
+        { matcher: 'clear', hooks: [{ type: 'command', command: '/other/node_modules/borgmcp/dist/clear-rewake.js', asyncRewake: true }] },
+      ] },
+    }));
+
+    expect(addProjectSessionStartHook(root)).toBe(true);
+    const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveClearRewakePath())))).toHaveLength(1);
+    // All stale/bare forms gone.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command.includes('/old/')))).toBe(false);
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === 'borg-regen'))).toBe(false);
+    expect(entries).toHaveLength(2);
+  });
+
+  // gh#client#18: absolute paths without a borg package marker are NOT owned.
+  // /opt/custom-tool/regen.js must NOT be rewritten to borg canonical.
+  it('does not claim unrelated scripts sharing a basename', () => {
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath(), JSON.stringify({
+      hooks: { SessionStart: [
+        { matcher: '*', hooks: [{ type: 'command', command: '/opt/custom-tool/regen.js' }] },
+      ] },
+    }));
+
+    expect(addProjectSessionStartHook(root)).toBe(true);
+    const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
+    // Unrelated script preserved as-is.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === '/opt/custom-tool/regen.js'))).toBe(true);
+    // Canonical regen still appended (unrelated script doesn't count).
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+  });
+
+  // gh#client#18: when an entry has both an owned hook and an unrelated
+  // sibling, dedup removes only the owned hook and preserves the sibling.
+  it('preserves unrelated siblings when deduplicating owned hooks', () => {
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath(), JSON.stringify({
+      hooks: { SessionStart: [
+        { matcher: '*', hooks: [
+          { type: 'command', command: 'borg-regen' },
+          { type: 'command', command: 'my-custom-tool' },
+        ] },
+      ] },
+    }));
+
+    expect(addProjectSessionStartHook(root)).toBe(true);
+    const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
+    // Bare borg-regen migrated to canonical.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toBe(true);
+    // Unrelated sibling preserved.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === 'my-custom-tool'))).toBe(true);
   });
 
   it('repairs a partial install without duplicating the existing clear-rewake hook', () => {
@@ -96,8 +183,10 @@ describe('addProjectSessionStartHook', () => {
 
     expect(addProjectSessionStartHook(root)).toBe(true);
     const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
-    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === 'borg-regen'))).toHaveLength(1);
-    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === 'borg-clear-rewake'))).toHaveLength(1);
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+    // Bare name clear-rewake is migrated to shell-escaped canonical form.
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveClearRewakePath())))).toHaveLength(1);
+    expect(entries).toHaveLength(2);
   });
 
   it.each([
@@ -117,11 +206,11 @@ describe('addProjectSessionStartHook', () => {
     expect(addProjectSessionStartHook(root)).toBe(true);
     const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
     const clearEntries = entries.filter((entry: any) =>
-      entry.hooks?.some((hook: any) => hook.command === 'borg-clear-rewake')
+      entry.hooks?.some((hook: any) => hook.command === shellEscape(resolveClearRewakePath()))
     );
     expect(clearEntries).toEqual([{
       matcher: 'clear',
-      hooks: [{ type: 'command', command: 'borg-clear-rewake', asyncRewake: true }],
+      hooks: [{ type: 'command', command: shellEscape(resolveClearRewakePath()), asyncRewake: true }],
     }]);
     expect(entries.some((entry: any) => entry.hooks?.some((hook: any) => hook.command === 'other-tool'))).toBe(true);
     expect(addProjectSessionStartHook(root)).toBe(false);
@@ -134,10 +223,10 @@ describe('addProjectSessionStartHook', () => {
       .filter((entry: any) => entry.matcher === '*' || entry.matcher === source)
       .flatMap((entry: any) => entry.hooks.map((hook: any) => hook.command));
 
-    expect(commandsFor('clear')).toEqual(['borg-regen', 'borg-clear-rewake']);
-    expect(commandsFor('startup')).toEqual(['borg-regen']);
-    expect(commandsFor('resume')).toEqual(['borg-regen']);
-    expect(commandsFor('compact')).toEqual(['borg-regen']);
+    expect(commandsFor('clear')).toEqual([shellEscape(resolveRegenPath()), shellEscape(resolveClearRewakePath())]);
+    expect(commandsFor('startup')).toEqual([shellEscape(resolveRegenPath())]);
+    expect(commandsFor('resume')).toEqual([shellEscape(resolveRegenPath())]);
+    expect(commandsFor('compact')).toEqual([shellEscape(resolveRegenPath())]);
   });
 
   it('returns false (no write) on unparseable existing settings instead of clobbering', () => {
