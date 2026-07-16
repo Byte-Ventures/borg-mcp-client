@@ -18,10 +18,18 @@ if (!stateFile || !['enrollment', 'cube', 'ambiguous', 'resume'].includes(mode ?
 const hookDirectory = process.env.BORG_TEST_LOCK_HOOK_DIR;
 const hookRelease = process.env.BORG_TEST_LOCK_HOOK_RELEASE;
 const hookStage = process.env.BORG_TEST_LOCK_HOOK_STAGE;
-if (hookDirectory && hookRelease && ['stale', 'cleanup'].includes(hookStage ?? '')) {
-  const pause = async () => {
+if (
+  hookDirectory &&
+  ['stat', 'stale', 'cleanup', 'owner-crash', 'claim-crash', 'active-crash']
+    .includes(hookStage ?? '')
+) {
+  const markReady = async () => {
     await mkdir(hookDirectory, { recursive: true });
     await writeFile(join(hookDirectory, `${hookStage}-${process.pid}`), 'ready');
+  };
+  const pause = async () => {
+    await markReady();
+    if (!hookRelease) throw new Error('lock hook release path is required');
     for (;;) {
       try {
         await access(hookRelease);
@@ -31,9 +39,21 @@ if (hookDirectory && hookRelease && ['stale', 'cleanup'].includes(hookStage ?? '
       }
     }
   };
-  __setServerKeychainLockHooksForTest(hookStage === 'stale'
-    ? { afterStaleInspection: pause }
-    : { beforeOwnerCleanup: pause });
+  const crash = async () => {
+    await markReady();
+    process.exit(0);
+  };
+  __setServerKeychainLockHooksForTest(hookStage === 'stat'
+    ? { afterStaleStat: pause }
+    : hookStage === 'stale'
+      ? { afterStaleInspection: pause }
+      : hookStage === 'cleanup'
+        ? { beforeOwnerCleanup: pause }
+        : hookStage === 'owner-crash'
+          ? { beforeOwnerCleanup: crash }
+          : hookStage === 'claim-crash'
+            ? { afterReaperClaim: crash }
+            : { afterActiveReaperElection: crash });
 }
 
 async function readState(): Promise<Record<string, string>> {

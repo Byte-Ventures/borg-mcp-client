@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   access,
+  link,
   mkdir,
   mkdtemp,
+  readFile,
   readdir,
   rm,
   stat,
@@ -12,7 +14,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -186,4 +188,137 @@ describe('cross-process pending tuple serialization', () => {
     expect(secondOutput).toEqual(firstOutput);
     await expect(access(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it('binds stale metadata and lease bytes across canonical replacement', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'borg-pending-stat-read-'));
+    fixtures.push(fixture);
+    const stateFile = join(fixture, 'keychain.json');
+    const lockPath = enrollmentLockPath(fixture);
+    const lockDirectory = dirname(lockPath);
+    const lockName = basename(lockPath, '.lock');
+    const oldOwnerId = randomUUID();
+    const oldOwnerPath = join(lockDirectory, `${lockName}.${oldOwnerId}.owner`);
+    await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(oldOwnerPath, JSON.stringify({
+      version: 1,
+      pid: 99999999,
+      ownerId: oldOwnerId,
+    }), { mode: 0o600 });
+    await link(oldOwnerPath, lockPath);
+    const stale = new Date(Date.now() - 60_000);
+    await Promise.all([
+      utimes(oldOwnerPath, stale, stale),
+      utimes(lockPath, stale, stale),
+    ]);
+
+    const inspectorHook = join(fixture, 'stat-inspector');
+    const inspectorRelease = join(fixture, 'release-inspector');
+    const inspector = runChild('enrollment', fixture, stateFile, {
+      BORG_TEST_LOCK_HOOK_DIR: inspectorHook,
+      BORG_TEST_LOCK_HOOK_RELEASE: inspectorRelease,
+      BORG_TEST_LOCK_HOOK_STAGE: 'stat',
+    });
+    await waitForMarkers(inspectorHook, 1);
+
+    // This process reaps old inode O, publishes successor N, persists the
+    // tuple, then exits before cleanup so N is a genuine crashed stale lease.
+    const crashHook = join(fixture, 'crashed-successor');
+    const crashedSuccessor = runChild('enrollment', fixture, stateFile, {
+      BORG_TEST_LOCK_HOOK_DIR: crashHook,
+      BORG_TEST_LOCK_HOOK_STAGE: 'owner-crash',
+    }).catch(() => null);
+    await waitForMarkers(crashHook, 1);
+    await crashedSuccessor;
+
+    const successorLease = JSON.parse(await readFile(lockPath, 'utf8')) as {
+      ownerId: string;
+    };
+    const successorOwnerPath = join(
+      lockDirectory,
+      `${lockName}.${successorLease.ownerId}.owner`,
+    );
+    await Promise.all([
+      utimes(successorOwnerPath, stale, stale),
+      utimes(lockPath, stale, stale),
+    ]);
+
+    // The paused inspector must read O from its already-open descriptor, not
+    // ownerIdN from the replaced pathname. It then loops, safely reaps N, and
+    // returns the one tuple already persisted by the crashed successor.
+    await writeFile(inspectorRelease, 'go');
+    const output = await inspector as { retryKey: string; credential: string };
+    const stored = Object.values(JSON.parse(await readFile(stateFile, 'utf8')) as Record<string, string>)
+      .map((value) => JSON.parse(value) as { retryKey?: string; credential?: string })
+      .find((value) => value.retryKey === output.retryKey);
+    expect(stored).toMatchObject(output);
+    await expect(access(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(lockDirectory)).filter((name) =>
+      name.endsWith('.owner') || name.includes('.reaping'))).toEqual([]);
+  });
+
+  it.each([
+    ['owner-inode', 'claim-crash'],
+    ['legacy-pid', 'claim-crash'],
+    ['owner-inode', 'active-crash'],
+    ['legacy-pid', 'active-crash'],
+  ] as const)(
+    'recovers a %s stale lease after a %s process death',
+    async (format, crashStage) => {
+      const fixture = await mkdtemp(join(tmpdir(), `borg-pending-${format}-${crashStage}-`));
+      fixtures.push(fixture);
+      const stateFile = join(fixture, 'keychain.json');
+      const lockPath = enrollmentLockPath(fixture);
+      const lockDirectory = dirname(lockPath);
+      const lockName = basename(lockPath, '.lock');
+      await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+
+      if (format === 'owner-inode') {
+        const ownerId = randomUUID();
+        const ownerPath = join(lockDirectory, `${lockName}.${ownerId}.owner`);
+        await writeFile(ownerPath, JSON.stringify({
+          version: 1,
+          pid: 99999999,
+          ownerId,
+        }), { mode: 0o600 });
+        await link(ownerPath, lockPath);
+      } else {
+        await writeFile(lockPath, '99999999', { mode: 0o600 });
+      }
+      const stale = new Date(Date.now() - 60_000);
+      await utimes(lockPath, stale, stale);
+
+      const crashHook = join(fixture, `${format}-${crashStage}`);
+      const crashedReaper = runChild('enrollment', fixture, stateFile, {
+        BORG_TEST_LOCK_HOOK_DIR: crashHook,
+        BORG_TEST_LOCK_HOOK_STAGE: crashStage,
+      }).catch(() => null);
+      await waitForMarkers(crashHook, 1);
+      await crashedReaper;
+
+      const pendingClaimPath = `${lockPath}.reaping`;
+      const activeClaimPath = `${lockPath}.reaping-active`;
+      if (crashStage === 'claim-crash') {
+        await expect(stat(pendingClaimPath)).resolves.toBeDefined();
+        await expect(access(activeClaimPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      } else {
+        await expect(stat(activeClaimPath)).resolves.toBeDefined();
+        await expect(access(pendingClaimPath)).rejects.toMatchObject({ code: 'ENOENT' });
+        // Advance the deterministic crash-recovery clock without a 30-second
+        // wall-clock delay. A live active completer is never stolen early.
+        await utimes(activeClaimPath, stale, stale);
+      }
+
+      const outputs = await Promise.all(Array.from({ length: 3 }, async () => {
+        return await runChild('enrollment', fixture, stateFile) as {
+          retryKey: string;
+          credential: string;
+        };
+      }));
+      expect([...new Set(outputs.map((output) => output.retryKey))]).toHaveLength(1);
+      expect([...new Set(outputs.map((output) => output.credential))]).toHaveLength(1);
+      await expect(access(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await readdir(lockDirectory)).filter((name) =>
+        name.endsWith('.owner') || name.includes('.reaping'))).toEqual([]);
+    },
+  );
 });

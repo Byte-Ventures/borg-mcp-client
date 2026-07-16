@@ -51,7 +51,10 @@ const SERVER_KEYCHAIN_LOCK_ATTEMPTS = 500;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 interface ServerKeychainLockTestHooks {
+  afterStaleStat?: () => Promise<void>;
   afterStaleInspection?: () => Promise<void>;
+  afterReaperClaim?: () => Promise<void>;
+  afterActiveReaperElection?: () => Promise<void>;
   beforeOwnerCleanup?: () => Promise<void>;
 }
 
@@ -145,6 +148,8 @@ async function withServerKeychainLock<T>(
   const lockDirectory = path.join(os.homedir(), '.config', 'borgmcp', 'local-keychain-locks');
   const lockName = createHash('sha256').update(account).digest('hex');
   const lockPath = path.join(lockDirectory, `${lockName}.lock`);
+  const reaperClaimPath = `${lockPath}.reaping`;
+  const activeReaperPath = `${lockPath}.reaping-active`;
   await fsp.mkdir(lockDirectory, { recursive: true, mode: 0o700 });
 
   const sameFile = (
@@ -178,6 +183,33 @@ async function withServerKeychainLock<T>(
     return { pid: Number(raw) };
   };
 
+  const parseReaperClaim = (raw: string): {
+    dev: number;
+    ino: number;
+    ownerId?: string;
+  } => {
+    const parsed = JSON.parse(raw) as {
+      version?: unknown;
+      dev?: unknown;
+      ino?: unknown;
+      ownerId?: unknown;
+    };
+    if (
+      parsed.version !== 1 ||
+      !Number.isSafeInteger(parsed.dev) ||
+      !Number.isSafeInteger(parsed.ino) ||
+      (parsed.ownerId !== undefined &&
+        (typeof parsed.ownerId !== 'string' || !UUID_RE.test(parsed.ownerId)))
+    ) {
+      throw new Error('Invalid Borg server keychain reaper claim');
+    }
+    return {
+      dev: parsed.dev as number,
+      ino: parsed.ino as number,
+      ...(parsed.ownerId === undefined ? {} : { ownerId: parsed.ownerId as string }),
+    };
+  };
+
   const removeIfOwned = async (ownerPath: string): Promise<void> => {
     await serverKeychainLockTestHooks?.beforeOwnerCleanup?.();
     try {
@@ -195,73 +227,186 @@ async function withServerKeychainLock<T>(
     }
   };
 
+  const pathExists = async (filePath: string): Promise<boolean> => {
+    try {
+      await fsp.access(filePath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw error;
+    }
+  };
+
+  const reaperClaimExists = async (): Promise<boolean> => {
+    // Election transitions pending→active. Recheck active after observing no
+    // pending name so that transition cannot momentarily look claim-free.
+    if (await pathExists(activeReaperPath)) return true;
+    if (await pathExists(reaperClaimPath)) return true;
+    return await pathExists(activeReaperPath);
+  };
+
+  const completeReaperClaim = async (
+    expected?: { dev: number; ino: number },
+  ): Promise<'none' | 'blocked' | 'completed'> => {
+    // `.reaping-active` elects exactly one completer. Its hard-link mtime is
+    // refreshed on election; a crashed completer becomes recoverable after the
+    // same bounded stale interval. Acquisition blocks on BOTH claim names.
+    let activeStat: { dev: number; ino: number; mtimeMs: number } | null = null;
+    try {
+      activeStat = await fsp.stat(activeReaperPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (activeStat) {
+      if (Date.now() - activeStat.mtimeMs <= SERVER_KEYCHAIN_LOCK_STALE_MS) {
+        return 'blocked';
+      }
+      // Recover active→pending. When both names exist (crash after link but
+      // before pending unlink), removing active is safe because pending still
+      // blocks successor publication. Otherwise atomically recreate pending
+      // first; only the process that wins O_EXCL removes active.
+      if (await pathExists(reaperClaimPath)) {
+        await fsp.unlink(activeReaperPath).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      } else {
+        try {
+          await fsp.link(activeReaperPath, reaperClaimPath);
+          await fsp.unlink(activeReaperPath).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== 'ENOENT') throw error;
+          });
+        } catch (error) {
+          if (!['EEXIST', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+            throw error;
+          }
+        }
+      }
+      return 'completed';
+    }
+
+    let pendingHandle;
+    try {
+      pendingHandle = await fsp.open(reaperClaimPath, 'r');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'none';
+      throw error;
+    }
+    let pendingClaim: { dev: number; ino: number; ownerId?: string };
+    try {
+      pendingClaim = parseReaperClaim(await pendingHandle.readFile('utf8'));
+      if (expected && !sameFile(pendingClaim, expected)) return 'blocked';
+      // Refresh the claim inode before publishing the active name, so another
+      // contender cannot mistake this live completer for a crashed one.
+      const now = new Date();
+      await pendingHandle.utimes(now, now);
+    } finally {
+      await pendingHandle.close();
+    }
+
+    try {
+      await fsp.link(reaperClaimPath, activeReaperPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return 'blocked';
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'completed';
+      throw error;
+    }
+    await fsp.unlink(reaperClaimPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    await serverKeychainLockTestHooks?.afterActiveReaperElection?.();
+
+    let claimHandle;
+    try {
+      claimHandle = await fsp.open(activeReaperPath, 'r');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'completed';
+      throw error;
+    }
+    let claim: { dev: number; ino: number; ownerId?: string };
+    try {
+      claim = parseReaperClaim(await claimHandle.readFile('utf8'));
+    } finally {
+      await claimHandle.close();
+    }
+
+    try {
+      const canonicalStat = await fsp.stat(lockPath);
+      if (sameFile(claim, canonicalStat)) {
+        await fsp.unlink(lockPath).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+
+    if (claim.ownerId !== undefined) {
+      const ownerPath = path.join(lockDirectory, `${lockName}.${claim.ownerId}.owner`);
+      try {
+        if (sameFile(claim, await fsp.stat(ownerPath))) await fsp.unlink(ownerPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+
+    await fsp.unlink(activeReaperPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    return 'completed';
+  };
+
   const claimAndRemoveStale = async (
     inspected: { dev: number; ino: number },
     ownerId?: string,
   ): Promise<boolean> => {
-    if (ownerId !== undefined) {
-      const ownerPath = path.join(lockDirectory, `${lockName}.${ownerId}.owner`);
-      const claimPath = `${ownerPath}.reaping-${randomUUID()}`;
+    const candidatePath = `${reaperClaimPath}.candidate-${randomUUID()}`;
+    let createdClaim = false;
+    try {
+      // Publish only already-verified metadata. A canonical replacement after
+      // inspection cannot make another helper reap that successor: every
+      // deletion remains bound to the recorded device/inode pair. The fully
+      // written private candidate is hard-linked into place, so a process
+      // death cannot expose a truncated claim at the authoritative name.
+      const candidateHandle = await fsp.open(candidatePath, 'wx', 0o600);
       try {
-        // The unique owner path names the inspected lease's inode. Renaming it
-        // is an atomic claim: only one stale reaper can succeed, and no later
-        // successor ever reuses this path.
-        await fsp.rename(ownerPath, claimPath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-        throw error;
-      }
-      try {
-        const claimedStat = await fsp.stat(claimPath);
-        if (!sameFile(claimedStat, inspected)) return false;
-        try {
-          const canonicalStat = await fsp.stat(lockPath);
-          if (!sameFile(claimedStat, canonicalStat)) return false;
-          await fsp.unlink(lockPath);
-          return true;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
-          throw error;
-        }
+        await candidateHandle.writeFile(JSON.stringify({
+          version: 1,
+          dev: inspected.dev,
+          ino: inspected.ino,
+          ...(ownerId === undefined ? {} : { ownerId }),
+        }));
+        await candidateHandle.sync();
       } finally {
-        await fsp.unlink(claimPath).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== 'ENOENT') throw error;
-        });
+        await candidateHandle.close();
       }
-    }
-
-    // Compatibility for locks written before owner-inode leases. The fixed
-    // O_EXCL hard-link is the reaper claim: contenders cannot both delete the
-    // canonical path after inspecting the same legacy inode.
-    const claimPath = `${lockPath}.legacy-reaping`;
-    try {
-      await fsp.link(lockPath, claimPath);
+      await fsp.link(candidatePath, reaperClaimPath);
+      createdClaim = true;
     } catch (error) {
-      if (['EEXIST', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-        return false;
-      }
-      throw error;
-    }
-    try {
-      const claimedStat = await fsp.stat(claimPath);
-      if (!sameFile(claimedStat, inspected)) return false;
-      try {
-        const canonicalStat = await fsp.stat(lockPath);
-        if (!sameFile(claimedStat, canonicalStat)) return false;
-        await fsp.unlink(lockPath);
-        return true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
-        throw error;
-      }
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     } finally {
-      await fsp.unlink(claimPath).catch((error: NodeJS.ErrnoException) => {
+      await fsp.unlink(candidatePath).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== 'ENOENT') throw error;
       });
     }
+
+    if (createdClaim) {
+      await serverKeychainLockTestHooks?.afterReaperClaim?.();
+    }
+    return (await completeReaperClaim(inspected)) === 'completed';
   };
 
   for (let attempt = 0; attempt < SERVER_KEYCHAIN_LOCK_ATTEMPTS; attempt += 1) {
+    // Recover a prior process that died after publishing a verified reaper
+    // claim. This is safe for both owner-inode and legacy PID-only locks.
+    const recoveredClaim = await completeReaperClaim();
+    if (recoveredClaim !== 'none') {
+      if (recoveredClaim === 'blocked') {
+        await new Promise((resolvePromise) =>
+          setTimeout(resolvePromise, SERVER_KEYCHAIN_LOCK_WAIT_MS));
+      }
+      continue;
+    }
+
     const ownerId = randomUUID();
     const ownerPath = path.join(lockDirectory, `${lockName}.${ownerId}.owner`);
     let acquired = false;
@@ -284,25 +429,46 @@ async function withServerKeychainLock<T>(
       throw error;
     }
 
+    if (acquired) {
+      if (await reaperClaimExists()) {
+        // A reaper won between our pre-check and publication. Withdraw only
+        // our own canonical inode, then let the deterministic claim complete.
+        await removeIfOwned(ownerPath);
+        continue;
+      }
+    }
+
     if (!acquired) {
       await fsp.unlink(ownerPath).catch(() => {});
+      let inspected:
+        | { metadata: { dev: number; ino: number; mtimeMs: number }; lease: { pid: number; ownerId?: string } }
+        | null = null;
       try {
-        const metadata = await fsp.stat(lockPath);
-        if (Date.now() - metadata.mtimeMs > SERVER_KEYCHAIN_LOCK_STALE_MS) {
-          try {
-            const lease = parseLease(await fsp.readFile(lockPath, 'utf8'));
-            await serverKeychainLockTestHooks?.afterStaleInspection?.();
-            if (!holderIsAlive(lease.pid)) {
-              if (await claimAndRemoveStale(metadata, lease.ownerId)) continue;
-            }
-          } catch (readError) {
-            if ((readError as NodeJS.ErrnoException).code === 'ENOENT') continue;
-            throw readError;
+        // fstat + read through one descriptor bind lease bytes to the exact
+        // inode being judged stale. A canonical-path replacement between the
+        // two operations cannot substitute a successor's ownerId.
+        const inspectedHandle = await fsp.open(lockPath, 'r');
+        try {
+          const metadata = await inspectedHandle.stat();
+          if (Date.now() - metadata.mtimeMs > SERVER_KEYCHAIN_LOCK_STALE_MS) {
+            await serverKeychainLockTestHooks?.afterStaleStat?.();
+            inspected = {
+              metadata,
+              lease: parseLease(await inspectedHandle.readFile('utf8')),
+            };
           }
+        } finally {
+          await inspectedHandle.close();
         }
       } catch (inspectionError) {
         if ((inspectionError as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw inspectionError;
+      }
+      if (inspected) {
+        await serverKeychainLockTestHooks?.afterStaleInspection?.();
+        if (!holderIsAlive(inspected.lease.pid)) {
+          if (await claimAndRemoveStale(inspected.metadata, inspected.lease.ownerId)) continue;
+        }
       }
       await new Promise((resolvePromise) =>
         setTimeout(resolvePromise, SERVER_KEYCHAIN_LOCK_WAIT_MS));

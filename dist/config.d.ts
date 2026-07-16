@@ -1,7 +1,10 @@
 import type { ServerCapability } from 'borgmcp-shared/protocol';
 import { type TokenBackend } from './token-store.js';
 interface ServerKeychainLockTestHooks {
+    afterStaleStat?: () => Promise<void>;
     afterStaleInspection?: () => Promise<void>;
+    afterReaperClaim?: () => Promise<void>;
+    afterActiveReaperElection?: () => Promise<void>;
     beforeOwnerCleanup?: () => Promise<void>;
 }
 /** @internal Process-race harness only; never wired by production callers. */
