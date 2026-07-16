@@ -187,10 +187,19 @@ export interface AssimilateDeps {
   connectServer: (
     apiUrl: string,
     enrollment?: { invitation: string },
-  ) => Promise<{ token: string; trustIdentity: string }>;
+  ) => Promise<{
+    token: string;
+    trustIdentity: string;
+    serverCapabilities?: readonly string[];
+  }>;
   resumeServerEnrollment: (
     apiUrl: string,
-  ) => Promise<{ token: string; trustIdentity: string } | null>;
+    onPending?: () => void,
+  ) => Promise<{
+    token: string;
+    trustIdentity: string;
+    serverCapabilities?: readonly string[];
+  } | null>;
 
   listCubes: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<CubeSummary[]>;
   getCube: (apiUrl: string, token: string, cubeId: string, serverTrustIdentity?: string) => Promise<CubeDetail>;
@@ -309,75 +318,86 @@ async function selectAssimilationAuthority(
   }
 }
 
-function reportServerFailure(deps: AssimilateDeps, apiUrl: string, error: unknown): number {
+function localAssimilateCommand(apiUrl: string, enroll = false): string {
+  return `\`borg assimilate --host ${apiUrl}${enroll ? ' --enroll' : ''}\``;
+}
+
+function reportServerFailure(
+  deps: AssimilateDeps,
+  apiUrl: string,
+  error: unknown,
+  enroll = false,
+): number {
   const message = error instanceof Error ? error.message : String(error);
+  const retryCommand = localAssimilateCommand(apiUrl, enroll);
   if (error instanceof BorgServerError && error.code === 'CREATE_CUBE_DENIED') {
     deps.stderr(
-      `This client is enrolled with Borg server ${apiUrl}, but it lacks the create_cube capability. ` +
-        'Ask the server operator for a cube grant, or join a cube already accessible to this client.\n',
+      `This enrolled client cannot create a cube on ${apiUrl}. ` +
+        'Ask the server operator to grant access to a cube, then rerun ' +
+        `${localAssimilateCommand(apiUrl)}.\n`,
     );
     return 1;
   }
   if (error instanceof BorgServerError && error.code === 'NOT_ENROLLED') {
     deps.stderr(
-      `Not enrolled with Borg server ${apiUrl}. Borg did not connect to borgmcp.ai. ` +
-        `Ask this server's operator for a single-use invitation, then run: ` +
-        `borg assimilate --host ${apiUrl} --enroll. ` +
-        'You will be prompted to paste the invitation securely.\n',
+      `No saved enrollment for ${apiUrl}. Run ` +
+        `${localAssimilateCommand(apiUrl, true)} from the operator’s terminal.\n`,
     );
     return 1;
   }
   if (error instanceof BorgServerError && error.code === 'CREDENTIAL_REJECTED') {
     deps.stderr(
-      `Your saved enrollment for ${apiUrl} was rejected. ` +
-        `Run borg assimilate --host ${apiUrl} --enroll to replace it; ` +
-        'Borg did not connect to borgmcp.ai.\n',
+      `The saved enrollment for ${apiUrl} was rejected. Re-run ` +
+        `${localAssimilateCommand(apiUrl, true)} from the operator’s terminal.\n`,
     );
     return 1;
   }
   if (error instanceof BorgServerError && error.code === 'INVITATION_REJECTED') {
     deps.stderr(
-      `The invitation for ${apiUrl} was rejected or expired. ` +
-        'Ask the server operator for a new invitation; Borg did not connect to borgmcp.ai.\n',
+      `The enrollment invitation for ${apiUrl} was rejected or expired. ` +
+        'Ask the server operator for a replacement enrollment invitation. ' +
+        'For an unclaimed owner client, stop the server and run `borg-mcp-server owner-invite`; ' +
+        'for an ordinary client, stop the server and run `borg-mcp-server client-invite`. ' +
+        'Restart it with `borg-mcp-server start`, then rerun ' +
+        `${localAssimilateCommand(apiUrl, true)}.\n`,
     );
     return 1;
   }
   if (/HTTP 40[13]|auth(?:entication|orization)|credential.*(?:invalid|rejected)/i.test(message)) {
     deps.stderr(
-      `Your saved enrollment for ${apiUrl} was rejected. ` +
-        `Run borg assimilate --host ${apiUrl} --enroll to replace it; ` +
-        'Borg did not connect to borgmcp.ai.\n',
+      `The saved enrollment for ${apiUrl} was rejected. Re-run ` +
+        `${localAssimilateCommand(apiUrl, true)} from the operator’s terminal.\n`,
     );
     return 1;
   }
   if (/^Borg server keychain state is busy$/i.test(message)) {
     deps.stderr(
-      `Another Borg process is creating or resuming secure state for ${apiUrl}. ` +
-        'Wait for that process to finish, then retry this command.\n',
+      `The OS keychain is busy for ${apiUrl} because another Borg process is ` +
+        `creating or resuming secure state. Wait for it to finish, then rerun ${retryCommand}.\n`,
     );
     return 1;
   }
   if (/keychain|secure credential (?:store|storage)/i.test(message)) {
     deps.stderr(
       `Borg could not access the OS keychain for ${apiUrl}. ` +
-        'Unlock or enable the keychain, then retry this command; ' +
-        'Borg will resume any pending operation safely.\n',
+        `Unlock or enable the keychain, then rerun ${retryCommand}.\n`,
     );
     return 1;
   }
   if (/trust|certificate|\bCA\b|authority state|pinned identity|cross-authority/i.test(message)) {
     deps.stderr(
-      `Borg could not verify the identity of ${apiUrl}. ` +
-        "Restore this server's same-user trust files or confirm its expected certificate, then retry. " +
-        'Borg did not fall back to Cloud.\n',
+      `Borg could not verify the expected server identity for ${apiUrl}. ` +
+        'Verify that this is the expected server. If it was re-initialized, stop it, ' +
+        'run `borg-mcp-server start`, then rerun ' +
+        `${retryCommand}.\n`,
     );
     return 1;
   }
   if (/connect|fetch|network|timed? ?out|timeout|ECONN|ENOTFOUND|EHOST|unreachable|aborted|socket/i.test(message)) {
     deps.stderr(
       `Could not reach Borg server at ${apiUrl}. ` +
-        'Check that the server is running at this exact endpoint, then retry. ' +
-        'Borg did not fall back to Cloud.\n',
+        'Start or restart it with `borg-mcp-server start`, then rerun ' +
+        `${retryCommand}.\n`,
     );
     return 1;
   }
@@ -387,7 +407,7 @@ function reportServerFailure(deps: AssimilateDeps, apiUrl: string, error: unknow
   deps.stderr(
     `Borg server at ${apiUrl} returned an unexpected response: ` +
       `${safeMessage || 'request failed'}. ` +
-      'Check client/server compatibility, then retry. Borg did not fall back to Cloud.\n',
+      `Check that the client and server versions are compatible, then rerun ${retryCommand}.\n`,
   );
   return 1;
 }
@@ -437,7 +457,9 @@ export async function runAssimilate(
       if (bareResult.status === 0 && bareResult.stdout.trim() === 'true') {
         deps.stderr(
           'borg assimilate requires a non-bare repository worktree. ' +
-            'Clone or check out the repository, then retry.\n',
+            (authority.kind === 'server'
+              ? `Clone or check out the repository, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`
+              : 'Clone or check out the repository, then retry.\n'),
         );
         return 1;
       }
@@ -447,7 +469,9 @@ export async function runAssimilate(
     if (!cubeName) {
       deps.stderr(
         'Could not derive a cube name from this repository. ' +
-          'Pass --cube-name <name> and retry.\n',
+          (authority.kind === 'server'
+            ? `Rerun ${localAssimilateCommand(authority.apiUrl)} with \`--cube-name <name>\`.\n`
+            : 'Pass --cube-name <name> and retry.\n'),
       );
       return 1;
     }
@@ -462,7 +486,9 @@ export async function runAssimilate(
         if (!deps.isTTY()) {
           deps.stderr(
             `Using directory name '${cubeName}' as the cube name requires confirmation. ` +
-              'Re-run with --cube-name <name> or --yes.\n',
+              (authority.kind === 'server'
+                ? `Rerun ${localAssimilateCommand(authority.apiUrl)} with \`--cube-name <name>\` or \`--yes\`.\n`
+                : 'Re-run with --cube-name <name> or --yes.\n'),
           );
           return 1;
         }
@@ -470,7 +496,12 @@ export async function runAssimilate(
           `No usable origin remote was found. Use directory name '${cubeName}' as the cube name? [Y/n]: `,
         );
         if (!affirmative(confirmed)) {
-          deps.stderr('Cube creation cancelled. Re-run with --cube-name <name> to choose a name.\n');
+          deps.stderr(
+            authority.kind === 'server'
+              ? `Cube creation for ${authority.apiUrl} was cancelled. Rerun ` +
+                `${localAssimilateCommand(authority.apiUrl)} with \`--cube-name <name>\`.\n`
+              : 'Cube creation cancelled. Re-run with --cube-name <name> to choose a name.\n',
+          );
           return 1;
         }
       }
@@ -479,8 +510,9 @@ export async function runAssimilate(
 
   if (authority.kind === 'server' && !isLocalCubePresentationName(cubeName)) {
     deps.stderr(
-      'Invalid local cube name. Use 1–120 letters, digits, spaces, dots, ' +
-        'underscores, or hyphens, starting with a letter or digit.\n',
+      `Invalid cube name for ${authority.apiUrl}. Use 1–120 letters, digits, spaces, dots, ` +
+        'underscores, or hyphens, starting with a letter or digit. Rerun ' +
+        `${localAssimilateCommand(authority.apiUrl)} with \`--cube-name <name>\`.\n`,
     );
     return 1;
   }
@@ -488,26 +520,35 @@ export async function runAssimilate(
   let auth: { token: string; apiUrl: string; serverTrustIdentity?: string };
   if (authority.kind === 'server') {
     try {
-      let serverAuth: { token: string; trustIdentity: string };
+      let serverAuth: {
+        token: string;
+        trustIdentity: string;
+        serverCapabilities?: readonly string[];
+      };
       if (args.flags.enroll) {
-        const resumed = await deps.resumeServerEnrollment(authority.apiUrl);
+        if (!deps.isTTY()) {
+          deps.stderr(
+            'Local enrollment requires an interactive operator terminal. ' +
+              `Re-run ${localAssimilateCommand(authority.apiUrl, true)} from the operator’s terminal.\n`,
+          );
+          return 1;
+        }
+        const resumed = await deps.resumeServerEnrollment(authority.apiUrl, () => {
+          deps.stderr(
+            `Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
+              'do not enter another invitation.\n',
+          );
+        });
         if (resumed) {
           serverAuth = resumed;
         } else {
-          if (!deps.isTTY()) {
-            deps.stderr(
-              `Secure enrollment for ${authority.apiUrl} requires an interactive terminal. ` +
-                'Borg did not connect to borgmcp.ai.\n',
-            );
-            return 1;
-          }
           let invitation = await deps.promptSecret(
-            `Single-use invitation for ${authority.apiUrl}: `,
+            `Enrollment invitation for \`${authority.apiUrl}\` (single-use; hidden input):`,
           );
           if (!invitation) {
             deps.stderr(
-              `No invitation was entered for ${authority.apiUrl}. ` +
-                'Borg did not connect to borgmcp.ai.\n',
+              `No enrollment invitation was entered for ${authority.apiUrl}. ` +
+                `Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true)}.\n`,
             );
             return 1;
           }
@@ -520,6 +561,17 @@ export async function runAssimilate(
             invitation = '';
           }
         }
+        if (serverAuth.serverCapabilities?.includes('create_cube')) {
+          deps.stderr(
+            `Owner client enrolled with \`${authority.apiUrl}\`. ` +
+              'Creating or joining this repository’s cube next.\n',
+          );
+        } else {
+          deps.stderr(
+            `Ordinary client enrolled with \`${authority.apiUrl}\`. ` +
+              'Checking for an accessible repository cube next.\n',
+          );
+        }
       } else {
         serverAuth = await deps.connectServer(authority.apiUrl);
       }
@@ -529,7 +581,7 @@ export async function runAssimilate(
         serverTrustIdentity: serverAuth.trustIdentity,
       };
     } catch (error) {
-      return reportServerFailure(deps, authority.apiUrl, error);
+      return reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true);
     }
   } else {
     let cloudAuth = await deps.getCachedAuth();
@@ -627,7 +679,8 @@ export async function runAssimilate(
       if (args.flags.noTemplate ||
           (args.flags.template !== undefined && args.flags.template !== 'default')) {
         deps.stderr(
-          'Local Borg server cube creation supports the server-owned default template only.\n',
+          `Borg server ${authority.apiUrl} supports its default cube template only. ` +
+            `Rerun ${localAssimilateCommand(authority.apiUrl)} without \`--template\` or \`--no-template\`.\n`,
         );
         return 1;
       }
@@ -720,16 +773,21 @@ export async function runAssimilate(
   let remintInvalidPrior = false;
   let savedLocalRole: Role | undefined;
   if (existing && args.flags.here && existing.cubeId !== cubeDetail.id) {
-    deps.stderr('this directory already hosts an active drone; remove --here or run from a fresh worktree\n');
+    deps.stderr(
+      authority.kind === 'server'
+        ? `This directory already hosts an active drone for another cube on ${authority.apiUrl}. ` +
+          `Remove \`--here\` or use a fresh worktree, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`
+        : 'this directory already hosts an active drone; remove --here or run from a fresh worktree\n',
+    );
     return 1;
   }
 
   if (authority.kind === 'server') {
     if (!existing && hasPersistedIdentity) {
       deps.stderr(
-        'This worktree has saved Borg server seat metadata, but its secure session ' +
+        `This worktree has saved seat metadata for ${authority.apiUrl}, but its secure session ` +
           'could not be loaded. No new seat was created. Unlock or restore the OS ' +
-          'keychain, then retry.\n',
+          `keychain, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
       );
       return 1;
     }
@@ -739,8 +797,9 @@ export async function runAssimilate(
         existing.serverTrustIdentity !== auth.serverTrustIdentity)
     ) {
       deps.stderr(
-        'This worktree\'s saved seat belongs to a different Borg server authority. ' +
-          'No new seat was created. Restore the saved authority or use a fresh worktree.\n',
+        `This worktree's saved seat does not match ${authority.apiUrl}. ` +
+          'No new seat was created. Restore the expected server identity or use a fresh ' +
+          `worktree, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
       );
       return 1;
     }
@@ -757,8 +816,9 @@ export async function runAssimilate(
     })))).filter((candidate) => candidate.pending !== null);
     if (pendingCandidates.length > 1) {
       deps.stderr(
-        'Multiple unfinished Borg server seat attachments exist for this repository. ' +
-          'No new seat was created; finish or repair the saved local state first.\n',
+        `Multiple unfinished seat attachments exist for ${authority.apiUrl}. ` +
+          'No new seat was created. Finish or repair the saved local state, then rerun ' +
+          `${localAssimilateCommand(authority.apiUrl)}.\n`,
       );
       return 1;
     }
@@ -770,8 +830,9 @@ export async function runAssimilate(
         pendingCandidate.pending.priorDroneId !== existing.droneId
       ) {
         deps.stderr(
-          'The unfinished Borg server attachment does not match this worktree\'s saved seat. ' +
-            'No new seat was created.\n',
+          `The unfinished attachment for ${authority.apiUrl} does not match this worktree's ` +
+            'saved seat. No new seat was created. Repair the saved local state, then rerun ' +
+            `${localAssimilateCommand(authority.apiUrl)}.\n`,
         );
         return 1;
       }
@@ -789,22 +850,25 @@ export async function runAssimilate(
       );
       if (status === 'frozen') {
         deps.stderr(
-          'This worktree\'s saved Borg server seat is temporarily frozen. ' +
-            'No new seat was created; restore access and retry.\n',
+          `This worktree's saved seat on ${authority.apiUrl} is temporarily frozen. ` +
+            'No new seat was created. Ask the server operator to restore access, then rerun ' +
+            `${localAssimilateCommand(authority.apiUrl)}.\n`,
         );
         return 1;
       }
       if (status === 'indeterminate') {
         deps.stderr(
-          'Borg could not verify this worktree\'s saved server seat. ' +
-            'No new seat was created; check the server connection and retry.\n',
+          `Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +
+            'No new seat was created. Start or restart the server with ' +
+            `\`borg-mcp-server start\`, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
         );
         return 1;
       }
       if (status === 'live' && !savedLocalRole) {
         deps.stderr(
-          'Borg verified this worktree\'s saved seat, but its saved role is unavailable. ' +
-            'No new seat was created; ask the server operator to restore the role.\n',
+          `Borg verified this worktree's saved seat on ${authority.apiUrl}, but its saved ` +
+            'role is unavailable. No new seat was created. Ask the server operator to restore ' +
+            `the role, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
         );
         return 1;
       }
@@ -932,11 +996,11 @@ export async function runAssimilate(
   }
 
   if (authority.kind === 'server' && result.local_session === undefined) {
-    deps.stderr(
-      `Borg server ${authority.apiUrl} did not return secure session metadata. ` +
-        'Borg did not connect to borgmcp.ai.\n',
+    return reportServerFailure(
+      deps,
+      authority.apiUrl,
+      new Error('Borg server did not return compatible secure session metadata'),
     );
-    return 1;
   }
   if (authority.kind === 'cloud' && !result.session_token) {
     deps.stderr('assimilate failed: Borg Cloud did not return a session token\n');
@@ -960,8 +1024,8 @@ export async function runAssimilate(
     );
   } else if (assignedRole.id !== resolvedRole.id) {
     deps.stderr(
-      `Note: your invite didn't grant the "${resolvedRole.name}" role — ` +
-      `assimilated as "${assignedRole.name}" instead.\n`
+      `The requested role "${resolvedRole.name}" was unavailable; ` +
+      `attached to the "${assignedRole.name}" seat instead.\n`
     );
   }
 
@@ -1177,7 +1241,14 @@ export async function runAssimilate(
   // gated on TTY + NO_COLOR/CI env-var conventions; the welcome shape
   // itself is cube-agnostic so non-default templates render identically.
   const useColor = deps.isTTY() && !process.env.NO_COLOR && !process.env.CI;
-  deps.stdout(renderAssimilationWelcome(assignedRole.name, cubeDetail.name, useColor));
+  deps.stdout(
+    renderAssimilationWelcome(
+      result.drone_label,
+      assignedRole.name,
+      cubeDetail.name,
+      useColor,
+    ),
+  );
 
   // gh#673 P2 (WI-1): install the project-local SessionStart orientation
   // hook into the launch root — covers BOTH the freshly-spawned sibling

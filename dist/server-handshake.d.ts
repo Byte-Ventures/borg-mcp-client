@@ -80,6 +80,7 @@ export declare function resumeBorgServerEnrollment(origin: string, trustIdentity
     loadPendingEnrollment?: typeof getPendingServerEnrollment;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+    onPending?: () => void;
 }): Promise<NewServerEnrollment | null>;
 /**
  * Create one repository cube through the narrow owner capability. The retry
@@ -124,7 +125,7 @@ export declare function connectLocalBorgServer(origin: string, deps?: {
     loadCredential?: typeof getServerCredential;
     loadCredentialRecord?: typeof getServerCredentialRecord;
 }): Promise<EnrolledServerConnection>;
-/** Load and verify the local CA before sending a single-use invitation. */
+/** Load and verify the local CA before sending an enrollment invitation. */
 export declare function enrollLocalBorgServer(origin: string, invitation: string, deps?: {
     loadTrust?: typeof loadBorgServerTrust;
     prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
@@ -136,6 +137,7 @@ export declare function enrollLocalBorgServer(origin: string, invitation: string
 export declare function resumeLocalBorgServerEnrollment(origin: string, deps?: {
     loadTrust?: typeof loadBorgServerTrust;
     loadPendingEnrollment?: typeof getPendingServerEnrollment;
+    onPending?: () => void;
 }): Promise<NewServerEnrollment | null>;
 /** Advisory discovery that still verifies the server-owned CA. */
 export declare function probeLocalBorgServer(origin: string): Promise<boolean>;

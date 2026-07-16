@@ -345,6 +345,7 @@ describe('self-hosted server handshake', () => {
         payload: protocolInfo,
       }), { status: 200 }));
     const activateEnrollment = vi.fn(async () => {});
+    const onPending = vi.fn();
 
     await expect(resumeBorgServerEnrollment(
       pending.origin,
@@ -353,9 +354,14 @@ describe('self-hosted server handshake', () => {
         fetchImpl: fetchImpl as typeof fetch,
         loadPendingEnrollment: vi.fn(async () => pending),
         activateEnrollment,
+        onPending,
       },
     )).resolves.toMatchObject({ token: pending.credential });
 
+    expect(onPending).toHaveBeenCalledOnce();
+    expect(onPending.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchImpl.mock.invocationCallOrder[0],
+    );
     const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
     expect(request.payload).toEqual({
       invitation: pending.invitation,

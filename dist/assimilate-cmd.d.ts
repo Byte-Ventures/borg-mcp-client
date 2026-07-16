@@ -105,10 +105,12 @@ export interface AssimilateDeps {
     }) => Promise<{
         token: string;
         trustIdentity: string;
+        serverCapabilities?: readonly string[];
     }>;
-    resumeServerEnrollment: (apiUrl: string) => Promise<{
+    resumeServerEnrollment: (apiUrl: string, onPending?: () => void) => Promise<{
         token: string;
         trustIdentity: string;
+        serverCapabilities?: readonly string[];
     } | null>;
     listCubes: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<CubeSummary[]>;
     getCube: (apiUrl: string, token: string, cubeId: string, serverTrustIdentity?: string) => Promise<CubeDetail>;

@@ -55,21 +55,21 @@ export function assimilateHelpText(version: string): string {
     `                                       (~/.borg/worktrees/<repo>/<name>)\n` +
     `  borg assimilate --here               Assimilate in the current worktree (no sibling spawn)\n` +
     `  borg assimilate --host <host>        Join an authorized self-hosted cube\n` +
-    `  borg assimilate --host <host> --enroll   Enroll via hidden invitation, then create/join (preview)\n` +
+    `  borg assimilate --host <host> --enroll   Operator-terminal enrollment, then create/join (preview)\n` +
     `  borg assimilate --help               Show this help\n\n` +
     `Flags:\n` +
     `  --worktree <name>          Create + launch the drone in a sibling git worktree\n` +
     `  --here                     Stay in the current worktree (no sibling spawn)\n` +
     `  --cube-name <name>         Cube to join/create (otherwise confirm repo basename)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
-    `  --enroll                   Retry-safe local enrollment; invitation is never an argument\n` +
+    `  --enroll                   Prompt for a hidden enrollment invitation in the operator terminal\n` +
     `  --template <name>          Bootstrap a new Borg Cloud cube from a bundled role template\n` +
     `  --no-template              Create the Borg Cloud cube with no template roles\n` +
     `  --cli claude|codex|opencode         Agent CLI to launch (default: claude)\n` +
     `  --model claude:<model>   Legacy Claude model override (configure models in the agent CLI)\n` +
     `  --yes, -y                  Skip confirmation prompts\n\n` +
-    `Self-hosted --host never falls back to Borg Cloud. An enrolled owner may create an\n` +
-    `idempotent repository cube; ordinary clients require an explicit grant. Preview only.\n` +
+    `An enrolled owner client may create an idempotent repository cube; ordinary clients\n` +
+    `require an explicit cube grant. Agent seats begin only after enrollment. Preview only.\n` +
     `See docs/LOCAL_SERVER.md for current release blockers.\n\n` +
     `For local or provider-specific models, configure the selected agent CLI directly.\n` +
     `OpenCode supports Ollama and other providers through its own model configuration.\n`

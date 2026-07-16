@@ -295,6 +295,7 @@ export async function resumeBorgServerEnrollment(origin, trustIdentity, deps = {
     const pending = await (deps.loadPendingEnrollment ?? getPendingServerEnrollment)(origin, trustIdentity);
     if (!pending)
         return null;
+    deps.onPending?.();
     return enrollBorgServer(origin, trustIdentity, pending.invitation, {
         ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
         prepareEnrollment: async () => pending,
@@ -446,7 +447,7 @@ export async function connectLocalBorgServer(origin, deps = {}) {
             : { loadCredentialRecord: deps.loadCredentialRecord }),
     });
 }
-/** Load and verify the local CA before sending a single-use invitation. */
+/** Load and verify the local CA before sending an enrollment invitation. */
 export async function enrollLocalBorgServer(origin, invitation, deps = {}) {
     const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
     return enrollBorgServer(origin, trust.identity, invitation, {
@@ -467,6 +468,7 @@ export async function resumeLocalBorgServerEnrollment(origin, deps = {}) {
         ...(deps.loadPendingEnrollment === undefined
             ? {}
             : { loadPendingEnrollment: deps.loadPendingEnrollment }),
+        ...(deps.onPending === undefined ? {} : { onPending: deps.onPending }),
     });
 }
 /** Advisory discovery that still verifies the server-owned CA. */
