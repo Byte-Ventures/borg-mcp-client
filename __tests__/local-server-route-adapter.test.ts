@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
+const COORDINATOR_ROLE_ID = '55555555-5555-4555-8555-555555555555';
+const COORDINATOR_DRONE_ID = '66666666-6666-4666-8666-666666666666';
 const LOG_ID = '44444444-4444-4444-8444-444444444444';
 const ORIGIN = 'https://localhost:8787';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
@@ -40,20 +42,36 @@ describe('local server route adapter', () => {
         } })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/roles` && method === 'GET') {
-        return new Response(JSON.stringify(envelope({ roles: [{
-          id: ROLE_ID,
-          name: 'Builder',
-          detailed_description: 'Build carefully.',
-          role_class: 'worker',
-          is_human_seat: false,
-        }] })), { status: 200 });
+        return new Response(JSON.stringify(envelope({ roles: [
+          {
+            id: ROLE_ID,
+            name: 'Builder',
+            detailed_description: 'Build carefully.',
+            role_class: 'worker',
+            is_human_seat: false,
+          },
+          {
+            id: COORDINATOR_ROLE_ID,
+            name: 'Release Coordinator',
+            detailed_description: 'Coordinate carefully.',
+            role_class: 'worker',
+            is_human_seat: true,
+          },
+        ] })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/drones` && method === 'GET') {
-        return new Response(JSON.stringify(envelope({ drones: [{
-          id: DRONE_ID,
-          label: 'builder-1',
-          role_id: ROLE_ID,
-        }] })), { status: 200 });
+        return new Response(JSON.stringify(envelope({ drones: [
+          {
+            id: DRONE_ID,
+            label: 'builder-1',
+            role_id: ROLE_ID,
+          },
+          {
+            id: COORDINATOR_DRONE_ID,
+            label: 'coordinator-1',
+            role_id: COORDINATOR_ROLE_ID,
+          },
+        ] })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/logs` && method === 'PUT') {
         return new Response(JSON.stringify(envelope({
@@ -62,7 +80,8 @@ describe('local server route adapter', () => {
             cube_id: CUBE_ID,
             drone_id: DRONE_ID,
             message: 'local log',
-            visibility: 'broadcast',
+            visibility: 'direct',
+            recipient_drone_ids: [DRONE_ID],
             created_at: '2026-07-14T14:00:00.000Z',
           }],
           cursor: { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' },
@@ -72,12 +91,14 @@ describe('local server route adapter', () => {
         })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/logs` && method === 'POST') {
+        const request = JSON.parse(String(init?.body)).payload;
         return new Response(JSON.stringify(envelope({ entry: {
           id: LOG_ID,
           cube_id: CUBE_ID,
           drone_id: DRONE_ID,
-          message: 'posted locally',
-          visibility: 'broadcast',
+          message: request.message,
+          visibility: request.visibility ?? 'broadcast',
+          recipient_drone_ids: request.recipientDroneIds ?? [],
           created_at: '2026-07-14T14:00:00.000Z',
         } })), { status: 201 });
       }
@@ -135,10 +156,11 @@ describe('local server route adapter', () => {
   it('composes core MCP reads and logs only through local cube routes', async () => {
     const remote = await import('../src/remote-client.js');
 
-    await expect(remote.getCubeInfo(SESSION, ORIGIN)).resolves.toMatchObject({
-      cube: { id: CUBE_ID },
-      roles: [{ id: ROLE_ID }],
-    });
+    const cubeInfo = await remote.getCubeInfo(SESSION, ORIGIN);
+    expect(cubeInfo.cube).toMatchObject({ id: CUBE_ID });
+    expect(cubeInfo.roles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: ROLE_ID }),
+    ]));
     await expect(remote.whoami(SESSION, ORIGIN)).resolves.toEqual({
       cube_id: CUBE_ID,
       cube_name: 'local-cube',
@@ -154,7 +176,14 @@ describe('local server route adapter', () => {
       behind_by: 1,
     });
     await expect(remote.readLog(SESSION, ORIGIN, { unreadOnly: true, limit: 20 }))
-      .resolves.toMatchObject({ entries: [{ id: LOG_ID }], behind_by: 0 });
+      .resolves.toMatchObject({
+        entries: [{
+          id: LOG_ID,
+          visibility: 'direct',
+          recipient_drone_ids: [DRONE_ID],
+        }],
+        behind_by: 0,
+      });
     await expect(remote.appendLog(SESSION, ORIGIN, 'posted locally'))
       .resolves.toMatchObject({ entry: { id: LOG_ID } });
     await remote.ackLogEntry(SESSION, ORIGIN, LOG_ID);
@@ -185,14 +214,62 @@ describe('local server route adapter', () => {
     await expect(remote.listCubes(connection)).resolves.toEqual({
       cubes: [{ id: CUBE_ID, name: 'local-cube' }],
     });
-    await expect(remote.getCube(CUBE_ID, connection)).resolves.toMatchObject({
-      id: CUBE_ID,
-      roles: [{ id: ROLE_ID }],
-      drones: [{ id: DRONE_ID }],
-    });
+    const cube = await remote.getCube(CUBE_ID, connection);
+    expect(cube).toMatchObject({ id: CUBE_ID });
+    expect(cube.roles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: ROLE_ID }),
+    ]));
+    expect(cube.drones).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: DRONE_ID }),
+    ]));
     expect(fetchSpy.mock.calls.every(([, init]) =>
       new Headers(init?.headers).get('Authorization') === `Bearer ${'p'.repeat(43)}`
     )).toBe(true);
+  });
+
+  it.each([
+    ['exact label', ['coordinator-1']],
+    ['displayed short UUID', ['`id:66666666`']],
+    ['role slug', ['release-coordinator']],
+  ])('maps local to: recipients by %s into the directed server contract', async (_case, to) => {
+    const remote = await import('../src/remote-client.js');
+
+    await expect(remote.appendLog(SESSION, ORIGIN, 'directed locally', {
+      to,
+      serverTrustIdentity: TRUST_IDENTITY,
+    })).resolves.toMatchObject({
+      entry: {
+        visibility: 'direct',
+        recipient_drone_ids: [COORDINATOR_DRONE_ID],
+      },
+    });
+
+    const post = fetchSpy.mock.calls.find(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` &&
+      init?.method === 'POST'
+    );
+    expect(post).toBeDefined();
+    expect(JSON.parse(String(post![1]?.body)).payload).toEqual({
+      message: 'directed locally',
+      visibility: 'direct',
+      recipientDroneIds: [COORDINATOR_DRONE_ID],
+    });
+    expect(getIdToken).not.toHaveBeenCalled();
+    expect(getRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on an unknown local recipient before log mutation', async () => {
+    const remote = await import('../src/remote-client.js');
+
+    await expect(remote.appendLog(SESSION, ORIGIN, 'must not broadcast', {
+      to: ['missing-seat'],
+      serverTrustIdentity: TRUST_IDENTITY,
+    })).rejects.toThrow(/Unknown direct-message recipient: missing-seat/);
+
+    expect(fetchSpy.mock.calls.some(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` &&
+      init?.method === 'POST'
+    )).toBe(false);
   });
 
   it('fails explicitly before any Cloud-only route is attempted', async () => {

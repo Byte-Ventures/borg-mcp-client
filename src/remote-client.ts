@@ -41,6 +41,7 @@ import {
   CANONICAL_HOSTED_API_URL,
   isCanonicalHostedApiUrl,
 } from './authority.js';
+import { resolveLocalLogRecipients } from './local-log-routing.js';
 
 // Compatibility validation for the deprecated request field. The CLI no longer
 // offers provider configuration, but older callers may still send this shape.
@@ -1288,8 +1289,30 @@ export async function appendLog(
     opts.serverTrustIdentity,
   );
   if (local) {
-    if (opts.class !== undefined || opts.to !== undefined) {
+    if (opts.class !== undefined) {
       localUnsupported('message taxonomy routing');
+    }
+    let visibility = opts.visibility;
+    let recipientDroneIds = opts.recipientDroneIds;
+    if (visibility !== 'broadcast' &&
+        (!recipientDroneIds || recipientDroneIds.length === 0) &&
+        opts.to !== undefined) {
+      const base = `/api/cubes/${local.cubeId}`;
+      const [rolePayload, dronePayload] = await Promise.all([
+        localServerRequest<{ roles: any[] }>(local, `${base}/roles`, 'GET'),
+        localServerRequest<{ drones: any[] }>(local, `${base}/drones`, 'GET'),
+      ]);
+      if (!rolePayload || !dronePayload) {
+        throw new Error('Local Borg server returned an incomplete cube roster');
+      }
+      recipientDroneIds = resolveLocalLogRecipients(
+        opts.to,
+        dronePayload.drones,
+        rolePayload.roles,
+      );
+      visibility = 'direct';
+    } else if (visibility === undefined && recipientDroneIds !== undefined) {
+      visibility = 'direct';
     }
     const payload = await localServerRequest<{ entry: any }>(
       local,
@@ -1297,9 +1320,9 @@ export async function appendLog(
       'POST',
       {
         message,
-        ...(opts.visibility ? { visibility: opts.visibility } : {}),
-        ...(opts.recipientDroneIds
-          ? { recipientDroneIds: opts.recipientDroneIds }
+        ...(visibility ? { visibility } : {}),
+        ...(visibility === 'direct' && recipientDroneIds
+          ? { recipientDroneIds }
           : {}),
       },
     );
