@@ -62,6 +62,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     getCachedAuth: vi.fn(async () => ({ token: 'test-token', apiUrl: 'http://api.test' })),
     runSetup: vi.fn(async () => ({ token: 'fresh-token', apiUrl: 'http://api.test' })),
     cloudApiUrl: 'http://api.test',
+    defaultAuthority: { kind: 'cloud', apiUrl: 'http://api.test' },
     detectLocalServer: vi.fn(async () => null),
     connectServer: vi.fn(async () => ({
       token: 'server-token',
@@ -1249,7 +1250,7 @@ describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
   });
 
   it('prompts interactively and applies user choice', async () => {
-    const answers = ['1', '2']; // Borg Cloud, then template option 2
+    const answers = ['2', '1']; // Borg server host is 1 (default), Borg Cloud is 2, then template option 1
     const prompt = vi.fn(async () => answers.shift() ?? '1');
     const createCube = vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
     const listTemplates = vi.fn(async () => [
@@ -1267,7 +1268,7 @@ describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
       ),
     });
     await runAssimilate({ role: undefined, flags: {} }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo', template: 'research' });
+    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo', template: 'software-dev' });
   });
 });
 
@@ -2441,7 +2442,7 @@ describe('runAssimilate: #1015 authority selection', () => {
   });
 
   it('allows declining detection and choosing Cloud explicitly', async () => {
-    const answers = ['n', '1', '1'];
+    const answers = ['n', '2', '1'];
     const prompt = vi.fn(async () => answers.shift() ?? '1');
     const getCachedAuth = vi.fn(async () => ({ token: 'cloud-token', apiUrl: 'https://api.borgmcp.ai' }));
     const connectServer = vi.fn(async () => ({
@@ -2463,7 +2464,7 @@ describe('runAssimilate: #1015 authority selection', () => {
   });
 
   it('prompts for a custom host when no local server is detected', async () => {
-    const answers = ['2', 'server.example.com', '1'];
+    const answers = ['1', 'server.example.com', '1'];
     const prompt = vi.fn(async () => answers.shift() ?? '1');
     const connectServer = vi.fn(async () => ({
       token: 'server-token',
@@ -2477,7 +2478,7 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(0);
 
-    expect(String(prompt.mock.calls[0][0])).toContain('Borg server host');
+    expect(String(prompt.mock.calls[0][0])).toContain('Connect this project to');
     expect(String(prompt.mock.calls[1][0])).toContain('host or URL');
     expect(connectServer).toHaveBeenCalledWith('https://server.example.com');
   });

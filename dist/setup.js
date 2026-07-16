@@ -3,9 +3,10 @@
  * Borg MCP Setup Wizard
  *
  * Interactive setup flow:
- * 1. Configure Claude Code MCP settings
- * 2. Google OAuth authentication
- * 3. Subscription setup (web dashboard or Stripe)
+ * 1. Configure agent CLI MCP settings
+ * 2. Choose authority: local server (default) or Cloud
+ * 3. [Cloud only] Google OAuth authentication
+ * 4. [Cloud only] Subscription setup
  */
 import prompts from 'prompts';
 import chalk from 'chalk';
@@ -186,166 +187,197 @@ async function main() {
         }
     }
     console.log('');
-    // Step 2: Authentication
-    console.log(chalk.blue('◼ Google Authentication'));
-    // gh#794: classify the saved session before deciding whether to re-auth.
-    // probeSession attempts a silent refresh, so an EXPIRED id_token with a still-
-    // VALID refresh_token resolves to 'valid' → we short-circuit the OAuth flow
-    // instead of forcing a full re-consent (the old isAuthenticated() = presence-
-    // only check forced one). SR#3: short-circuit ONLY on 'valid'; a 'dead'
-    // session DOES the full re-auth (never skips the exact failure #794 fixes).
-    const action = setupActionForSession(await probeSession());
-    if (action === 'skip') {
-        console.log(chalk.green('◼ Already signed in\n'));
+    // Step 2: Authority choice — local server (default) or Cloud
+    console.log(chalk.blue('◼ Server Connection'));
+    const { authority } = await prompts({
+        type: 'select',
+        name: 'authority',
+        message: 'Connect to:',
+        choices: [
+            {
+                title: '◼ Local server — no account required (recommended)',
+                value: 'local',
+                description: 'Run your own borg server on this machine or network'
+            },
+            {
+                title: '◼ Borg Cloud (borgmcp.ai)',
+                value: 'cloud',
+                description: 'Managed cloud service — requires Google sign-in and subscription'
+            }
+        ],
+        initial: 0,
+    });
+    if (authority === undefined) {
+        console.log(chalk.yellow('\n◼ No choice selected — defaulting to local server.\n'));
     }
-    else if (action === 'retry') {
-        // A network/Google-5xx blip couldn't confirm the session. Do NOT re-auth
-        // (it may be fine) and do NOT destroy the keychain (gh#34) — tell the user
-        // to retry rather than forcing a full re-consent on a transient failure.
-        console.error(chalk.yellow('\n◼ Could not reach Google to verify your session (network issue).'));
-        console.error(chalk.yellow('Re-run `borg setup` when your connection is back.\n'));
-        process.exit(1);
+    const useCloud = authority === 'cloud';
+    if (!useCloud) {
+        // Local server path: no OAuth, no subscription check
+        console.log(chalk.green('◼ Local server mode — no account or subscription needed.'));
+        console.log(chalk.gray('  To use a local server, run `borg assimilate --host <host>` in your project.\n'));
     }
     else {
-        // 'reauth' (dead) — never signed in, OR the saved login is dead
-        // (invalid_grant, already cleared by probeSession). Full re-auth — this is
-        // the path #794 exists to reach, so NEVER short-circuit past it (SR#3).
-        try {
-            await authenticateWithGoogle(noBrowser ? { noBrowser: true } : undefined);
+        // Step 3: Google Authentication (Cloud only)
+        console.log(chalk.blue('◼ Google Authentication'));
+        // gh#794: classify the saved session before deciding whether to re-auth.
+        // probeSession attempts a silent refresh, so an EXPIRED id_token with a still-
+        // VALID refresh_token resolves to 'valid' → we short-circuit the OAuth flow
+        // instead of forcing a full re-consent (the old isAuthenticated() = presence-
+        // only check forced one). SR#3: short-circuit ONLY on 'valid'; a 'dead'
+        // session DOES the full re-auth (never skips the exact failure #794 fixes).
+        const action = setupActionForSession(await probeSession());
+        if (action === 'skip') {
+            console.log(chalk.green('◼ Already signed in\n'));
         }
-        catch (error) {
-            console.error(chalk.red(`\n◼ Authentication failed: ${error.message}\n`));
-            // gh#557 NOTE-2: device-flow errors (access_denied / expired_token) and
-            // any other auth failure exit here — give the remote user a recovery
-            // path instead of a bare exit.
-            console.error(chalk.yellow('Re-run `borg setup` to try again.\n'));
+        else if (action === 'retry') {
+            // A network/Google-5xx blip couldn't confirm the session. Do NOT re-auth
+            // (it may be fine) and do NOT destroy the keychain (gh#34) — tell the user
+            // to retry rather than forcing a full re-consent on a transient failure.
+            console.error(chalk.yellow('\n◼ Could not reach Google to verify your session (network issue).'));
+            console.error(chalk.yellow('Re-run `borg setup` when your connection is back.\n'));
             process.exit(1);
         }
-    }
-    // Step 3: Subscription
-    console.log(chalk.blue('◼ Subscription Check'));
-    let status;
-    try {
-        status = await checkSubscriptionStatus();
-    }
-    catch (error) {
-        console.error(chalk.yellow(`\n◼ Subscription check failed: ${error.message}`));
-        console.error(chalk.gray('◼ Retrying before falling back to the Free tier...\n'));
-        status = { hasAccess: false };
-    }
-    // gh#521: a user who just subscribed via web hits propagation lag — retry a
-    // few times (non-alarmingly) before declaring no subscription, instead of
-    // flashing a scary "not found" immediately after payment.
-    status = await retrySubscriptionCheck(status, {
-        check: checkSubscriptionStatus,
-        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        onRetry: (attempt, total) => console.log(chalk.gray(`◼ Checking subscription... (attempt ${attempt}/${total})`)),
-    });
-    if (!status.hasAccess) {
-        // gh#687: a fresh user has no subscription BY DESIGN — the Free tier is the
-        // permanent entry point (no trial). Lead with that as a WIN, not a
-        // "not found" failure, and present upgrading as an OFFER (Continue on Free
-        // is the default). The gh#521 just-subscribed propagation-lag retry already
-        // ran above; the "I already subscribed — re-check" choice covers the tail.
-        console.log(chalk.green("◼ You're on the Free tier — permanent, no card needed: 1 cube + 3 agent sessions + 100 req/hr."));
-        console.log(chalk.gray('◼ Start using borgmcp right now. Upgrade any time: $1/month per cube, each cube adds 8 pooled agent sessions + 1000 req/hr.\n'));
-        const { subscribeMethod } = await prompts({
-            type: 'select',
-            name: 'subscribeMethod',
-            message: "You're ready on the Free tier. Want to do more?",
-            choices: [
-                {
-                    title: '◼ Continue on the Free tier (recommended)',
-                    value: 'skip',
-                    description: 'Start now — 1 cube, 3 agent sessions, 100 req/hr. No payment required.'
-                },
-                {
-                    title: '◼ Upgrade to Cube tier — $1/month per cube',
-                    value: 'web',
-                    description: 'Each cube adds 8 pooled agent sessions + 1000 req/hr. Opens the subscribe page in your browser.'
-                },
-                {
-                    title: '◼ Quick Stripe checkout',
-                    value: 'stripe',
-                    description: 'Fast upgrade checkout in the browser'
-                },
-                {
-                    title: '◼ I already subscribed — re-check',
-                    value: 'recheck',
-                    description: 'Re-check now — a just-completed subscription can take a moment to activate'
-                }
-            ]
+        else {
+            // 'reauth' (dead) — never signed in, OR the saved login is dead
+            // (invalid_grant, already cleared by probeSession). Full re-auth — this is
+            // the path #794 exists to reach, so NEVER short-circuit past it (SR#3).
+            try {
+                await authenticateWithGoogle(noBrowser ? { noBrowser: true } : undefined);
+            }
+            catch (error) {
+                console.error(chalk.red(`\n◼ Authentication failed: ${error.message}\n`));
+                // gh#557 NOTE-2: device-flow errors (access_denied / expired_token) and
+                // any other auth failure exit here — give the remote user a recovery
+                // path instead of a bare exit.
+                console.error(chalk.yellow('Re-run `borg setup` to try again.\n'));
+                process.exit(1);
+            }
+        }
+        // Step 3: Subscription
+        console.log(chalk.blue('◼ Subscription Check'));
+        let status;
+        try {
+            status = await checkSubscriptionStatus();
+        }
+        catch (error) {
+            console.error(chalk.yellow(`\n◼ Subscription check failed: ${error.message}`));
+            console.error(chalk.gray('◼ Retrying before falling back to the Free tier...\n'));
+            status = { hasAccess: false };
+        }
+        // gh#521: a user who just subscribed via web hits propagation lag — retry a
+        // few times (non-alarmingly) before declaring no subscription, instead of
+        // flashing a scary "not found" immediately after payment.
+        status = await retrySubscriptionCheck(status, {
+            check: checkSubscriptionStatus,
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+            onRetry: (attempt, total) => console.log(chalk.gray(`◼ Checking subscription... (attempt ${attempt}/${total})`)),
         });
-        if (subscribeMethod === undefined) {
-            console.log(chalk.yellow('\n◼ No subscription option selected — continuing on the Free tier.\n'));
-        }
-        switch (subscribeMethod) {
-            case 'web':
-                console.log(chalk.blue('\n◼ Opening: https://borgmcp.ai/subscribe'));
-                try {
-                    await open('https://borgmcp.ai/subscribe');
-                    console.log(chalk.gray('◼ Waiting for subscription (checking every 5s for 2 min)...\n'));
-                    await pollForSubscription();
-                }
-                catch (error) {
-                    console.error(chalk.yellow(`\n◼ ${error.message}`));
-                    console.log(chalk.green('◼ Continuing on the Free tier. Upgrade any time from https://borgmcp.ai/subscribe.\n'));
-                }
-                break;
-            case 'stripe':
-                try {
-                    const checkoutUrl = await createSubscription();
-                    console.log(chalk.blue(`\n◼ Opening Stripe: ${checkoutUrl}`));
-                    await open(checkoutUrl);
-                    console.log(chalk.gray('◼ Waiting for subscription...\n'));
-                    await pollForSubscription();
-                }
-                catch (error) {
-                    console.error(chalk.red(`\n◼ Failed to create checkout: ${error.message}\n`));
-                    console.log(chalk.green('◼ Continuing on the Free tier. Upgrade any time from https://borgmcp.ai/subscribe.\n'));
-                }
-                break;
-            case 'recheck':
-                try {
-                    let recheckStatus;
+        if (!status.hasAccess) {
+            // gh#687: a fresh user has no subscription BY DESIGN — the Free tier is the
+            // permanent entry point (no trial). Lead with that as a WIN, not a
+            // "not found" failure, and present upgrading as an OFFER (Continue on Free
+            // is the default). The gh#521 just-subscribed propagation-lag retry already
+            // ran above; the "I already subscribed — re-check" choice covers the tail.
+            console.log(chalk.green("◼ You're on the Free tier — permanent, no card needed: 1 cube + 3 agent sessions + 100 req/hr."));
+            console.log(chalk.gray('◼ Start using borgmcp right now. Upgrade any time: $1/month per cube, each cube adds 8 pooled agent sessions + 1000 req/hr.\n'));
+            const { subscribeMethod } = await prompts({
+                type: 'select',
+                name: 'subscribeMethod',
+                message: "You're ready on the Free tier. Want to do more?",
+                choices: [
+                    {
+                        title: '◼ Continue on the Free tier (recommended)',
+                        value: 'skip',
+                        description: 'Start now — 1 cube, 3 agent sessions, 100 req/hr. No payment required.'
+                    },
+                    {
+                        title: '◼ Upgrade to Cube tier — $1/month per cube',
+                        value: 'web',
+                        description: 'Each cube adds 8 pooled agent sessions + 1000 req/hr. Opens the subscribe page in your browser.'
+                    },
+                    {
+                        title: '◼ Quick Stripe checkout',
+                        value: 'stripe',
+                        description: 'Fast upgrade checkout in the browser'
+                    },
+                    {
+                        title: '◼ I already subscribed — re-check',
+                        value: 'recheck',
+                        description: 'Re-check now — a just-completed subscription can take a moment to activate'
+                    }
+                ]
+            });
+            if (subscribeMethod === undefined) {
+                console.log(chalk.yellow('\n◼ No subscription option selected — continuing on the Free tier.\n'));
+            }
+            switch (subscribeMethod) {
+                case 'web':
+                    console.log(chalk.blue('\n◼ Opening: https://borgmcp.ai/subscribe'));
                     try {
-                        recheckStatus = await checkSubscriptionStatus();
+                        await open('https://borgmcp.ai/subscribe');
+                        console.log(chalk.gray('◼ Waiting for subscription (checking every 5s for 2 min)...\n'));
+                        await pollForSubscription();
                     }
-                    catch {
-                        recheckStatus = { hasAccess: false };
+                    catch (error) {
+                        console.error(chalk.yellow(`\n◼ ${error.message}`));
+                        console.log(chalk.green('◼ Continuing on the Free tier. Upgrade any time from https://borgmcp.ai/subscribe.\n'));
                     }
-                    recheckStatus = await retrySubscriptionCheck(recheckStatus, {
-                        check: checkSubscriptionStatus,
-                        sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-                        onRetry: (attempt, total) => console.log(chalk.gray(`◼ Re-checking subscription... (attempt ${attempt}/${total})`)),
-                    });
-                    if (recheckStatus.hasAccess) {
-                        console.log(chalk.green('\n◼ Subscription found!\n'));
+                    break;
+                case 'stripe':
+                    try {
+                        const checkoutUrl = await createSubscription();
+                        console.log(chalk.blue(`\n◼ Opening Stripe: ${checkoutUrl}`));
+                        await open(checkoutUrl);
+                        console.log(chalk.gray('◼ Waiting for subscription...\n'));
+                        await pollForSubscription();
                     }
-                    else {
-                        console.log(chalk.yellow('\n◼ No subscription found — continuing on the Free tier.\n'));
+                    catch (error) {
+                        console.error(chalk.red(`\n◼ Failed to create checkout: ${error.message}\n`));
+                        console.log(chalk.green('◼ Continuing on the Free tier. Upgrade any time from https://borgmcp.ai/subscribe.\n'));
                     }
-                }
-                catch (error) {
-                    console.error(chalk.red(`\n◼ Failed to recheck: ${error.message}\n`));
-                    console.log(chalk.green('◼ Continuing on the Free tier.\n'));
-                }
-                break;
-            case 'skip':
-                console.log(chalk.green("\n◼ You're all set on the Free tier: 1 cube, 3 agent sessions, 100 req/hr.\n"));
-                break;
-        }
-    }
-    else {
-        console.log(chalk.green('◼ Active subscription found'));
-        if (status.expiresAt) {
-            const expiresAt = new Date(status.expiresAt);
-            console.log(chalk.gray(`  Expires: ${expiresAt.toLocaleDateString()}\n`));
+                    break;
+                case 'recheck':
+                    try {
+                        let recheckStatus;
+                        try {
+                            recheckStatus = await checkSubscriptionStatus();
+                        }
+                        catch {
+                            recheckStatus = { hasAccess: false };
+                        }
+                        recheckStatus = await retrySubscriptionCheck(recheckStatus, {
+                            check: checkSubscriptionStatus,
+                            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+                            onRetry: (attempt, total) => console.log(chalk.gray(`◼ Re-checking subscription... (attempt ${attempt}/${total})`)),
+                        });
+                        if (recheckStatus.hasAccess) {
+                            console.log(chalk.green('\n◼ Subscription found!\n'));
+                        }
+                        else {
+                            console.log(chalk.yellow('\n◼ No subscription found — continuing on the Free tier.\n'));
+                        }
+                    }
+                    catch (error) {
+                        console.error(chalk.red(`\n◼ Failed to recheck: ${error.message}\n`));
+                        console.log(chalk.green('◼ Continuing on the Free tier.\n'));
+                    }
+                    break;
+                case 'skip':
+                    console.log(chalk.green("\n◼ You're all set on the Free tier: 1 cube, 3 agent sessions, 100 req/hr.\n"));
+                    break;
+            }
         }
         else {
-            console.log('');
+            console.log(chalk.green('◼ Active subscription found'));
+            if (status.expiresAt) {
+                const expiresAt = new Date(status.expiresAt);
+                console.log(chalk.gray(`  Expires: ${expiresAt.toLocaleDateString()}\n`));
+            }
+            else {
+                console.log('');
+            }
         }
-    }
+    } // end useCloud
     // Success message
     console.log(chalk.green.bold('Setup complete!\n'));
     console.log(chalk.yellow('🔄 Restart Claude Code / Codex / OpenCode (or open a new session) for the changes to take effect.\n'));
@@ -355,7 +387,12 @@ async function main() {
     console.log(chalk.gray('◼ Next steps:'));
     console.log(chalk.gray('1. cd into your project, then run "borg assimilate" to join a cube'));
     console.log(chalk.gray('   (this creates/joins the cube and launches your agent)'));
-    console.log(chalk.gray('2. Manage cubes and subscription at https://borgmcp.ai/dashboard\n'));
+    if (useCloud) {
+        console.log(chalk.gray('2. Manage cubes and subscription at https://borgmcp.ai/dashboard\n'));
+    }
+    else {
+        console.log(chalk.gray('2. Use `borg assimilate --host <host>` to connect to your local server\n'));
+    }
 }
 /**
  * Poll for subscription activation

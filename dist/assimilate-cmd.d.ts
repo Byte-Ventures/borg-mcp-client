@@ -99,6 +99,9 @@ export interface AssimilateDeps {
         apiUrl: string;
     }>;
     cloudApiUrl: string;
+    /** gh#27: optional test seam — when set, selectAssimilationAuthority uses
+     *  this instead of prompting/failing. Not wired in production. */
+    defaultAuthority?: AssimilationAuthority;
     detectLocalServer: () => Promise<string | null>;
     connectServer: (apiUrl: string, enrollment?: {
         invitation: string;
@@ -148,6 +151,13 @@ export interface AssimilateDeps {
         updatedAfter: number;
     }) => Promise<string | null>;
 }
+type AssimilationAuthority = {
+    kind: 'cloud';
+    apiUrl: string;
+} | {
+    kind: 'server';
+    apiUrl: string;
+};
 export declare function runAssimilate(args: AssimilateArgs, deps: AssimilateDeps): Promise<number>;
 /**
  * Sprint 4 / gh#147 (drone-8 SR-PE-FINDING-1): strip ASCII control
@@ -175,4 +185,5 @@ export declare function safeStderr(msg: string): string;
  * is an additive nudge in the error message, not a fallback path.
  */
 export declare function suggestRoleName(input: string, candidates: string[]): string | null;
+export {};
 //# sourceMappingURL=assimilate-cmd.d.ts.map

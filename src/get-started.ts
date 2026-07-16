@@ -52,7 +52,7 @@ export function composeGetStarted(hasAgentCli: boolean): string {
   }
 
   lines.push(
-    `  ${step}. borg setup${' '.repeat(Math.max(1, 18 - 'borg setup'.length))}— sign in with Google`,
+    `  ${step}. borg setup${' '.repeat(Math.max(1, 18 - 'borg setup'.length))}— configure borg MCP`,
   );
   step++;
   lines.push(

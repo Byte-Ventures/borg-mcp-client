@@ -1262,7 +1262,7 @@ export async function main() {
     await initConsolePrefix();
     console.error(`${consolePrefix()}◼ Borg MCP Client started`);
     console.error(`${consolePrefix()}◼ Use borg_assimilate <cube-name> to join a cube as a drone`);
-    console.error(`${consolePrefix()}◼ Manage your cubes at https://borgmcp.ai/dashboard`);
+    console.error(`${consolePrefix()}◼ Manage your cubes with borg --help`);
 }
 if (isEntryInvocation(process.argv[1], import.meta.url)) {
     main().catch((error) => {

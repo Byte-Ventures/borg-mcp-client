@@ -3,9 +3,10 @@
  * Borg MCP Setup Wizard
  *
  * Interactive setup flow:
- * 1. Configure Claude Code MCP settings
- * 2. Google OAuth authentication
- * 3. Subscription setup (web dashboard or Stripe)
+ * 1. Configure agent CLI MCP settings
+ * 2. Choose authority: local server (default) or Cloud
+ * 3. [Cloud only] Google OAuth authentication
+ * 4. [Cloud only] Subscription setup
  */
 
 import prompts from 'prompts';
@@ -210,8 +211,41 @@ async function main() {
   }
   console.log('');
 
-  // Step 2: Authentication
-  console.log(chalk.blue('◼ Google Authentication'));
+  // Step 2: Authority choice — local server (default) or Cloud
+  console.log(chalk.blue('◼ Server Connection'));
+
+  const { authority } = await prompts({
+    type: 'select',
+    name: 'authority',
+    message: 'Connect to:',
+    choices: [
+      {
+        title: '◼ Local server — no account required (recommended)',
+        value: 'local',
+        description: 'Run your own borg server on this machine or network'
+      },
+      {
+        title: '◼ Borg Cloud (borgmcp.ai)',
+        value: 'cloud',
+        description: 'Managed cloud service — requires Google sign-in and subscription'
+      }
+    ],
+    initial: 0,
+  });
+
+  if (authority === undefined) {
+    console.log(chalk.yellow('\n◼ No choice selected — defaulting to local server.\n'));
+  }
+
+  const useCloud = authority === 'cloud';
+
+  if (!useCloud) {
+    // Local server path: no OAuth, no subscription check
+    console.log(chalk.green('◼ Local server mode — no account or subscription needed.'));
+    console.log(chalk.gray('  To use a local server, run `borg assimilate --host <host>` in your project.\n'));
+  } else {
+    // Step 3: Google Authentication (Cloud only)
+    console.log(chalk.blue('◼ Google Authentication'));
 
   // gh#794: classify the saved session before deciding whether to re-auth.
   // probeSession attempts a silent refresh, so an EXPIRED id_token with a still-
@@ -390,6 +424,7 @@ async function main() {
       console.log('');
     }
   }
+  } // end useCloud
 
   // Success message
   console.log(chalk.green.bold('Setup complete!\n'));
@@ -400,7 +435,11 @@ async function main() {
   console.log(chalk.gray('◼ Next steps:'));
   console.log(chalk.gray('1. cd into your project, then run "borg assimilate" to join a cube'));
   console.log(chalk.gray('   (this creates/joins the cube and launches your agent)'));
-  console.log(chalk.gray('2. Manage cubes and subscription at https://borgmcp.ai/dashboard\n'));
+  if (useCloud) {
+    console.log(chalk.gray('2. Manage cubes and subscription at https://borgmcp.ai/dashboard\n'));
+  } else {
+    console.log(chalk.gray('2. Use `borg assimilate --host <host>` to connect to your local server\n'));
+  }
 }
 
 /**

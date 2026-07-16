@@ -39,10 +39,13 @@ async function selectAssimilationAuthority(flags, deps) {
             return null;
         }
     }
-    // Preserve automation and --yes behavior: authority prompting is interactive
-    // guidance, never a new blocking prompt in CI or scripted cloud onboarding.
+    // gh#27: non-TTY and --yes must NOT infer Cloud — the user must explicitly
+    // choose an authority. Fail closed instead of silently routing to Cloud.
     if (!deps.isTTY() || flags.yes) {
-        return { kind: 'cloud', apiUrl: deps.cloudApiUrl };
+        if (deps.defaultAuthority)
+            return deps.defaultAuthority;
+        deps.stderr('No authority specified. Use --host <server> for local, or set BORG_API_URL for Cloud.\n');
+        return null;
     }
     let detected = null;
     try {
@@ -59,24 +62,24 @@ async function selectAssimilationAuthority(flags, deps) {
             return { kind: 'server', apiUrl: detected };
     }
     const choice = (await deps.prompt('Connect this project to:\n' +
-        '  1) Borg Cloud (borgmcp.ai; subscription required)\n' +
-        '  2) A Borg server host\n' +
+        '  1) A Borg server (local or self-hosted)\n' +
+        '  2) Borg Cloud (borgmcp.ai; subscription required)\n' +
         '[1]: ')).trim();
     if (choice === '' || choice === '1') {
-        return { kind: 'cloud', apiUrl: deps.cloudApiUrl };
+        const host = await deps.prompt('Borg server host or URL: ');
+        try {
+            return { kind: 'server', apiUrl: normalizeServerEndpoint(host) };
+        }
+        catch (error) {
+            deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
+            return null;
+        }
     }
     if (choice !== '2') {
         deps.stderr(`invalid authority choice ${JSON.stringify(choice)}\n`);
         return null;
     }
-    const host = await deps.prompt('Borg server host or URL: ');
-    try {
-        return { kind: 'server', apiUrl: normalizeServerEndpoint(host) };
-    }
-    catch (error) {
-        deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
-        return null;
-    }
+    return { kind: 'cloud', apiUrl: deps.cloudApiUrl };
 }
 function localAssimilateCommand(apiUrl, enroll = false) {
     return `\`borg assimilate --host ${apiUrl}${enroll ? ' --enroll' : ''}\``;
