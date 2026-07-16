@@ -342,12 +342,11 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     const stdoutPayload = stdout.mock.calls.map((c) => String(c[0])).join('');
-    expect(stdoutPayload).toContain('Joined as');
+    expect(stdoutPayload).toContain('Attached `drone-1`');
     expect(stdoutPayload).toContain('coordinator');
     expect(stdoutPayload).toContain('myrepo');
-    expect(stdoutPayload).toContain('borg_regen');
-    expect(stdoutPayload).toContain('borg_regen');
-    expect(stdoutPayload).toContain('You\'re set up');
+    expect(stdoutPayload).toContain('borg_whoami');
+    expect(stdoutPayload).toContain('borg_roster');
     // Welcome must be emitted before claude exec so it lands above the TUI.
     const stdoutCallOrder = stdout.mock.invocationCallOrder[0];
     const execCallOrder = exec.mock.invocationCallOrder[0];
@@ -373,7 +372,8 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     const stdoutPayload = stdout.mock.calls.map((c) => String(c[0])).join('');
     expect(stdoutPayload).toContain('fact-checker');
     expect(stdoutPayload).toContain('writers-room');
-    expect(stdoutPayload).toContain('borg_regen');
+    expect(stdoutPayload).toContain('borg_whoami');
+    expect(stdoutPayload).toContain('borg_roster');
   });
 
   // BUG-5 / v0.9.3 regression: orchestrator probes MCP readiness before
@@ -1649,7 +1649,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
       role: undefined,
       flags: { server: 'localhost:8787', enroll: true, cubeName: '../escape' },
     }, deps)).resolves.toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Invalid local cube name'));
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Invalid cube name for https://localhost:8787'));
     expect(connectServer).not.toHaveBeenCalled();
     expect(deps.promptSecret).not.toHaveBeenCalled();
   });
@@ -1705,7 +1705,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     const connectServer = vi.fn();
     const deps = makeStubDeps({ runSync, prompt, connectServer });
     await expect(runAssimilate({ role: undefined, flags: { server: 'localhost:8787', enroll: true } }, deps)).resolves.toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Cube creation cancelled'));
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Cube creation for https://localhost:8787 was cancelled'));
     expect(connectServer).not.toHaveBeenCalled();
     expect(deps.promptSecret).not.toHaveBeenCalled();
   });
@@ -1892,6 +1892,118 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(setActiveCube.mock.calls[0][0]).not.toHaveProperty('sessionToken');
   });
 
+  it('gives an endpoint-bound recovery command when a local role is unavailable', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [{ id: 'role-default', name: 'Builder', is_default: true, is_human_seat: false }],
+      })),
+    });
+
+    expect(await runAssimilate({
+      role: 'reviewer',
+      flags: { server: 'localhost:8787', yes: true },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('https://localhost:8787');
+    expect(output).toContain('`borg assimilate --host https://localhost:8787 <role>`');
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+  });
+
+  it('gives an endpoint-bound recovery command when a local cube has no default role', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [],
+      })),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('https://localhost:8787');
+    expect(output).toContain('`borg assimilate --host https://localhost:8787 <role>`');
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+  });
+
+  it('gives an endpoint-bound recovery command when local MCP setup fails', async () => {
+    const stderr = vi.fn();
+    mcpConfigMocks.ensureCliMcpConfigured.mockImplementationOnce(() => {
+      throw new Error('opencode CLI not found');
+    });
+    const deps = makeStubDeps({
+      stderr,
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [{ id: 'role-default', name: 'Builder', is_default: true, is_human_seat: false }],
+      })),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true, cli: 'opencode' },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('https://localhost:8787');
+    expect(output).toContain(
+      '`borg assimilate --host https://localhost:8787 --cli opencode`',
+    );
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+  });
+
+  it('gives an endpoint-bound fresh-worktree command when a local seat was evicted', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      getActiveCube: vi.fn(async () => ({
+        cubeId: 'cube-1',
+        droneId: 'drone-prior',
+        droneLabel: 'builder-1',
+        name: 'myrepo',
+        roleName: 'Builder',
+        apiUrl: 'https://localhost:8787',
+        serverTrustIdentity: SERVER_TRUST_IDENTITY,
+        localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64),
+        localSessionGeneration: 1,
+      })),
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [{ id: 'role-default', name: 'Builder', is_default: true, is_human_seat: false }],
+      })),
+      assimilate: vi.fn(async () => {
+        throw new DroneEvictedError('evicted');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true, here: true },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('https://localhost:8787');
+    expect(output).toContain('from a fresh worktree');
+    expect(output).toContain('`borg assimilate --host https://localhost:8787`');
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+  });
+
   it('reads an explicitly requested enrollment invitation through the hidden-input seam', async () => {
     const invitation = 'i'.repeat(43);
     const prompt = vi.fn(async () => 'must-not-prompt');
@@ -1899,6 +2011,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     const connectServer = vi.fn(async () => ({
       token: 'server-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
+      serverCapabilities: ['create_cube'],
     }));
     const deps = makeStubDeps({ prompt, promptSecret, connectServer });
 
@@ -1908,13 +2021,53 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(0);
 
     expect(promptSecret).toHaveBeenCalledWith(
-      'Single-use invitation for https://localhost:8787: ',
+      'Enrollment invitation for `https://localhost:8787` (single-use; hidden input):',
     );
     expect(connectServer).toHaveBeenCalledWith(
       'https://localhost:8787',
       { invitation },
     );
+    expect(deps.stderr).toHaveBeenCalledWith(
+      'Owner client enrolled with `https://localhost:8787`. ' +
+        'Creating or joining this repository’s cube next.\n',
+    );
     expect(prompt).not.toHaveBeenCalled();
+  });
+
+  it('gives an ordinary enrolled client a distinct next step without owner wording', async () => {
+    const invitation = 'i'.repeat(43);
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      promptSecret: vi.fn(async () => invitation),
+      connectServer: vi.fn(async () => ({
+        token: 'ordinary-token',
+        trustIdentity: SERVER_TRUST_IDENTITY,
+        serverCapabilities: [],
+      })),
+      createCube: vi.fn(async () => {
+        throw new BorgServerError(
+          'CREATE_CUBE_DENIED',
+          'This Borg server client is not authorized to create cubes',
+        );
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', enroll: true, yes: true },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain(
+      'Ordinary client enrolled with `https://localhost:8787`. ' +
+        'Checking for an accessible repository cube next.',
+    );
+    expect(output).toContain(
+      'This enrolled client cannot create a cube on https://localhost:8787.',
+    );
+    expect(output).not.toContain('Owner client enrolled');
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
   });
 
   it('resumes a durable pending enrollment before prompting for another invitation', async () => {
@@ -1922,10 +2075,13 @@ describe('runAssimilate: #1015 authority selection', () => {
     const connectServer = vi.fn(async () => {
       throw new Error('must not start a new enrollment');
     });
-    const resumeServerEnrollment = vi.fn(async () => ({
-      token: 'resumed-server-token',
-      trustIdentity: SERVER_TRUST_IDENTITY,
-    }));
+    const resumeServerEnrollment = vi.fn(async (_apiUrl: string, onPending?: () => void) => {
+      onPending?.();
+      return {
+        token: 'resumed-server-token',
+        trustIdentity: SERVER_TRUST_IDENTITY,
+      };
+    });
     const deps = makeStubDeps({
       promptSecret,
       connectServer,
@@ -1937,9 +2093,15 @@ describe('runAssimilate: #1015 authority selection', () => {
       flags: { server: 'localhost:8787', enroll: true, yes: true },
     }, deps)).toBe(0);
 
-    expect(resumeServerEnrollment).toHaveBeenCalledWith('https://localhost:8787');
+    expect(resumeServerEnrollment).toHaveBeenCalledWith(
+      'https://localhost:8787',
+      expect.any(Function),
+    );
     expect(promptSecret).not.toHaveBeenCalled();
     expect(connectServer).not.toHaveBeenCalled();
+    expect(deps.stderr).toHaveBeenCalledWith(
+      'Resuming the pending enrollment for `https://localhost:8787`; do not enter another invitation.\n',
+    );
     expect(deps.listCubes).toHaveBeenCalledWith(
       'https://localhost:8787',
       'resumed-server-token',
@@ -1950,6 +2112,7 @@ describe('runAssimilate: #1015 authority selection', () => {
   it('refuses enrollment without a TTY before reading or sending a secret', async () => {
     const stderr = vi.fn();
     const promptSecret = vi.fn(async () => 'i'.repeat(43));
+    const resumeServerEnrollment = vi.fn(async () => null);
     const connectServer = vi.fn(async () => ({
       token: 'server-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
@@ -1958,6 +2121,7 @@ describe('runAssimilate: #1015 authority selection', () => {
       stderr,
       promptSecret,
       connectServer,
+      resumeServerEnrollment,
       isTTY: () => false,
     });
 
@@ -1968,7 +2132,11 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(promptSecret).not.toHaveBeenCalled();
     expect(connectServer).not.toHaveBeenCalled();
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('requires an interactive terminal'));
+    expect(resumeServerEnrollment).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith(
+      'Local enrollment requires an interactive operator terminal. ' +
+        'Re-run `borg assimilate --host https://localhost:8787 --enroll` from the operator’s terminal.\n',
+    );
   });
 
   it('fails closed when an explicit server cannot connect', async () => {
@@ -1991,8 +2159,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(listCubes).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(
       'Could not reach Borg server at https://server.example.com. ' +
-        'Check that the server is running at this exact endpoint, then retry. ' +
-        'Borg did not fall back to Cloud.\n',
+        'Start or restart it with `borg-mcp-server start`, then rerun ' +
+        '`borg assimilate --host https://server.example.com`.\n',
     );
   });
 
@@ -2011,8 +2179,9 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'Another Borg process is creating or resuming secure state for https://localhost:8787. ' +
-        'Wait for that process to finish, then retry this command.\n',
+      'The OS keychain is busy for https://localhost:8787 because another Borg process is ' +
+        'creating or resuming secure state. Wait for it to finish, then rerun ' +
+        '`borg assimilate --host https://localhost:8787`.\n',
     );
   });
 
@@ -2032,8 +2201,8 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(stderr).toHaveBeenCalledWith(
       'Borg could not access the OS keychain for https://localhost:8787. ' +
-        'Unlock or enable the keychain, then retry this command; ' +
-        'Borg will resume any pending operation safely.\n',
+        'Unlock or enable the keychain, then rerun ' +
+        '`borg assimilate --host https://localhost:8787`.\n',
     );
   });
 
@@ -2052,9 +2221,10 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'Borg could not verify the identity of https://localhost:8787. ' +
-        "Restore this server's same-user trust files or confirm its expected certificate, then retry. " +
-        'Borg did not fall back to Cloud.\n',
+      'Borg could not verify the expected server identity for https://localhost:8787. ' +
+        'Verify that this is the expected server. If it was re-initialized, stop it, ' +
+        'run `borg-mcp-server start`, then rerun ' +
+        '`borg assimilate --host https://localhost:8787`.\n',
     );
   });
 
@@ -2076,9 +2246,9 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'This client is enrolled with Borg server https://localhost:8787, ' +
-        'but it lacks the create_cube capability. ' +
-        'Ask the server operator for a cube grant, or join a cube already accessible to this client.\n',
+      'This enrolled client cannot create a cube on https://localhost:8787. ' +
+        'Ask the server operator to grant access to a cube, then rerun ' +
+        '`borg assimilate --host https://localhost:8787`.\n',
     );
     const output = stderr.mock.calls.map((call) => String(call[0])).join('');
     expect(output).not.toMatch(/invitation|connectivity|borgmcp\.ai/i);
@@ -2120,11 +2290,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'Not enrolled with Borg server https://localhost:8787. ' +
-        'Borg did not connect to borgmcp.ai. ' +
-        "Ask this server's operator for a single-use invitation, then run: " +
-        'borg assimilate --host https://localhost:8787 --enroll. ' +
-        'You will be prompted to paste the invitation securely.\n',
+      'No saved enrollment for https://localhost:8787. Run ' +
+        '`borg assimilate --host https://localhost:8787 --enroll` from the operator’s terminal.\n',
     );
   });
 
@@ -2143,10 +2310,60 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'Your saved enrollment for https://server.example.com was rejected. ' +
-        'Run borg assimilate --host https://server.example.com --enroll to replace it; ' +
-        'Borg did not connect to borgmcp.ai.\n',
+      'The saved enrollment for https://server.example.com was rejected. Re-run ' +
+        '`borg assimilate --host https://server.example.com --enroll` from the operator’s terminal.\n',
     );
+  });
+
+  it('explains how the operator replaces a rejected enrollment invitation', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      promptSecret: vi.fn(async () => 'i'.repeat(43)),
+      connectServer: vi.fn(async () => {
+        throw new BorgServerError('INVITATION_REJECTED', 'invitation rejected');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', enroll: true, yes: true },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('replacement enrollment invitation');
+    expect(output).toContain('`borg-mcp-server owner-invite`');
+    expect(output).toContain('`borg-mcp-server client-invite`');
+    expect(output).toContain(
+      '`borg assimilate --host https://localhost:8787 --enroll`',
+    );
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+  });
+
+  it.each([
+    ['no saved enrollment', new BorgServerError('NOT_ENROLLED', 'not enrolled')],
+    ['saved credential rejected', new BorgServerError('CREDENTIAL_REJECTED', 'credential rejected')],
+    ['keychain busy', new Error('Borg server keychain state is busy')],
+    ['keychain unavailable', new Error('OS keychain unavailable for Borg server credentials')],
+    ['trust mismatch', new Error('Borg server CA certificate does not match its pinned identity')],
+    ['server unreachable', new Error('connect ECONNREFUSED')],
+    ['unexpected protocol', new Error('protocol response shape changed')],
+  ])('keeps the %s recovery local, endpoint-specific, and actionable', async (_label, failure) => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      connectServer: vi.fn(async () => { throw failure; }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('https://localhost:8787');
+    expect(output).toMatch(/`borg assimilate --host https:\/\/localhost:8787|`borg-mcp-server start`/);
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
   });
 
   it('offers a detected local server before the general authority choice', async () => {
@@ -2249,9 +2466,8 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(runSetup).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(
-      'Your saved enrollment for https://localhost:8787 was rejected. ' +
-        'Run borg assimilate --host https://localhost:8787 --enroll to replace it; ' +
-        'Borg did not connect to borgmcp.ai.\n',
+      'The saved enrollment for https://localhost:8787 was rejected. Re-run ' +
+        '`borg assimilate --host https://localhost:8787 --enroll` from the operator’s terminal.\n',
     );
   });
 });

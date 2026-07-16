@@ -161,8 +161,10 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
       }
       return connectLocalBorgServer(apiUrl);
     },
-    resumeServerEnrollment: async (apiUrl) =>
-      resumeLocalBorgServerEnrollment(apiUrl),
+    resumeServerEnrollment: async (apiUrl, onPending) =>
+      resumeLocalBorgServerEnrollment(apiUrl, {
+        ...(onPending === undefined ? {} : { onPending }),
+      }),
 
     listCubes: async (apiUrl, token, serverTrustIdentity) => {
       const { cubes } = await remoteListCubes({
