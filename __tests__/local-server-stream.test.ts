@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const DRONE_ID = '22222222-2222-4222-8222-222222222222';
 const LOG_ID = '33333333-3333-4333-8333-333333333333';
+const OTHER_RECIPIENT_ID = '55555555-5555-4555-8555-555555555555';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -31,7 +32,7 @@ describe('local server SSE adapter', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('uses the local stream route, direct drone Bearer, and durable tuple cursor', async () => {
+  it('uses the local stream route and renders server-returned direct entries without a client read ACL', async () => {
     const cursor = { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' };
     const advanceCursor = vi.fn(async () => {});
     vi.doMock('../src/local-server-cursor.js', () => ({
@@ -59,7 +60,7 @@ describe('local server SSE adapter', () => {
           created_at: cursor.created_at,
           drone_label: 'peer-1',
           role_name: 'Builder',
-          recipient_drone_ids: [DRONE_ID],
+          recipient_drone_ids: [OTHER_RECIPIENT_ID],
         },
       })}`,
       '',

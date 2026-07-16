@@ -81,7 +81,10 @@ describe('local server route adapter', () => {
             drone_id: DRONE_ID,
             message: 'local log',
             visibility: 'direct',
-            recipient_drone_ids: [DRONE_ID],
+            // `to:` is routing/wake metadata, not a client-side read ACL. The
+            // adapter must render every entry returned by the server even when
+            // the recipient metadata names another drone.
+            recipient_drone_ids: [COORDINATOR_DRONE_ID],
             created_at: '2026-07-14T14:00:00.000Z',
           }],
           cursor: { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' },
@@ -180,7 +183,7 @@ describe('local server route adapter', () => {
         entries: [{
           id: LOG_ID,
           visibility: 'direct',
-          recipient_drone_ids: [DRONE_ID],
+          recipient_drone_ids: [COORDINATOR_DRONE_ID],
         }],
         behind_by: 0,
       });
