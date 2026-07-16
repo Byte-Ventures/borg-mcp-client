@@ -73,6 +73,20 @@ async function waitForMarkers(directory: string, count: number): Promise<void> {
   throw new Error(`timed out waiting for ${count} lock-race markers`);
 }
 
+async function waitForMissing(filePath: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      await access(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+  }
+  throw new Error(`timed out waiting for ${filePath} to be removed`);
+}
+
 afterEach(async () => {
   await Promise.all(fixtures.splice(0).map((fixture) =>
     rm(fixture, { recursive: true, force: true })));
@@ -321,4 +335,153 @@ describe('cross-process pending tuple serialization', () => {
         name.endsWith('.owner') || name.includes('.reaping'))).toEqual([]);
     },
   );
+
+  it('preserves a live owner lease while completing an older legacy claim', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'borg-pending-legacy-owner-aba-'));
+    fixtures.push(fixture);
+    const stateFile = join(fixture, 'keychain.json');
+    const lockPath = enrollmentLockPath(fixture);
+    const lockDirectory = dirname(lockPath);
+    const lockName = basename(lockPath, '.lock');
+    await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(lockPath, '99999999', { mode: 0o600 });
+    const stale = new Date(Date.now() - 60_000);
+    await utimes(lockPath, stale, stale);
+
+    // Crash after electing an active legacy claim. That active name is a
+    // durable hard link to the inspected legacy inode, so the inode cannot be
+    // recycled even after its canonical name is removed.
+    const crashHook = join(fixture, 'legacy-active-crash');
+    const crashedReaper = runChild('enrollment', fixture, stateFile, {
+      BORG_TEST_LOCK_HOOK_DIR: crashHook,
+      BORG_TEST_LOCK_HOOK_STAGE: 'active-crash',
+    }).catch(() => null);
+    await waitForMarkers(crashHook, 1);
+    await crashedReaper;
+    const activeClaimPath = `${lockPath}.reaping-active`;
+    const oldIdentity = await stat(activeClaimPath);
+
+    await unlink(lockPath);
+    const successorOwnerId = randomUUID();
+    const successorOwnerPath = join(
+      lockDirectory,
+      `${lockName}.${successorOwnerId}.owner`,
+    );
+    await writeFile(successorOwnerPath, JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      ownerId: successorOwnerId,
+    }), { mode: 0o600 });
+    await link(successorOwnerPath, lockPath);
+    const successorIdentity = await stat(lockPath);
+    expect({ dev: successorIdentity.dev, ino: successorIdentity.ino }).not.toEqual({
+      dev: oldIdentity.dev,
+      ino: oldIdentity.ino,
+    });
+
+    // Recover the crashed claim while a contender is waiting. Completion must
+    // reject the new owner-format/ownerId identity, preserve its canonical
+    // lock, and keep the contender out of the keychain operation.
+    await utimes(activeClaimPath, stale, stale);
+    const contender = runChild('enrollment', fixture, stateFile);
+    await waitForMissing(activeClaimPath);
+    expect(JSON.parse(await readFile(lockPath, 'utf8'))).toMatchObject({
+      ownerId: successorOwnerId,
+    });
+    await expect(access(stateFile)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await unlink(lockPath);
+    await unlink(successorOwnerPath);
+    const output = await contender as { retryKey: string; credential: string };
+    expect(output.retryKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(output.credential).toHaveLength(43);
+    expect((await readdir(lockDirectory)).filter((name) =>
+      name.endsWith('.owner') || name.includes('.reaping'))).toEqual([]);
+  });
+
+  it('preserves one inode when its owner identity changes after claim read', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'borg-pending-owner-identity-aba-'));
+    fixtures.push(fixture);
+    const stateFile = join(fixture, 'keychain.json');
+    const lockPath = enrollmentLockPath(fixture);
+    const lockDirectory = dirname(lockPath);
+    const lockName = basename(lockPath, '.lock');
+    const inspectedOwnerId = randomUUID();
+    const inspectedOwnerPath = join(
+      lockDirectory,
+      `${lockName}.${inspectedOwnerId}.owner`,
+    );
+    await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(inspectedOwnerPath, JSON.stringify({
+      version: 1,
+      pid: 99999999,
+      ownerId: inspectedOwnerId,
+    }), { mode: 0o600 });
+    await link(inspectedOwnerPath, lockPath);
+    const stale = new Date(Date.now() - 60_000);
+    await utimes(lockPath, stale, stale);
+
+    const claimReadHook = join(fixture, 'claim-read');
+    const claimReadRelease = join(fixture, 'release-claim-read');
+    const contender = runChild('enrollment', fixture, stateFile, {
+      BORG_TEST_LOCK_HOOK_DIR: claimReadHook,
+      BORG_TEST_LOCK_HOOK_RELEASE: claimReadRelease,
+      BORG_TEST_LOCK_HOOK_STAGE: 'claim-read',
+    });
+    await waitForMarkers(claimReadHook, 1);
+
+    const sameInodeBefore = await stat(lockPath);
+    const replacementOwnerId = randomUUID();
+    // Mutate the shared inode after the active claim's lease bytes were read.
+    // Its dev/ino still match, but the cached and canonical owner identities do
+    // not; completion must therefore refuse the pathname unlink.
+    await writeFile(lockPath, JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      ownerId: replacementOwnerId,
+    }));
+    const sameInodeAfter = await stat(lockPath);
+    expect({ dev: sameInodeAfter.dev, ino: sameInodeAfter.ino }).toEqual({
+      dev: sameInodeBefore.dev,
+      ino: sameInodeBefore.ino,
+    });
+
+    await writeFile(claimReadRelease, 'go');
+    await waitForMissing(`${lockPath}.reaping-active`);
+    expect(JSON.parse(await readFile(lockPath, 'utf8'))).toMatchObject({
+      ownerId: replacementOwnerId,
+    });
+    await expect(access(stateFile)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await unlink(lockPath);
+    await unlink(inspectedOwnerPath);
+    const output = await contender as { retryKey: string; credential: string };
+    expect(output.retryKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(output.credential).toHaveLength(43);
+    expect((await readdir(lockDirectory)).filter((name) =>
+      name.endsWith('.owner') || name.includes('.reaping'))).toEqual([]);
+  });
+
+  it('removes a non-authoritative candidate left by a crashed reaper', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'borg-pending-candidate-crash-'));
+    fixtures.push(fixture);
+    const stateFile = join(fixture, 'keychain.json');
+    const lockPath = enrollmentLockPath(fixture);
+    const lockDirectory = dirname(lockPath);
+    await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(lockPath, '99999999', { mode: 0o600 });
+    const stale = new Date(Date.now() - 60_000);
+    await utimes(lockPath, stale, stale);
+    const abandonedCandidate = `${lockPath}.reaping.candidate-${Date.now() - 60_000}-${randomUUID()}`;
+    await link(lockPath, abandonedCandidate);
+
+    const output = await runChild('enrollment', fixture, stateFile) as {
+      retryKey: string;
+      credential: string;
+    };
+    expect(output.retryKey).toMatch(/^[0-9a-f-]{36}$/);
+    await expect(access(abandonedCandidate)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(lockDirectory)).filter((name) =>
+      name.endsWith('.owner') || name.includes('.reaping'))).toEqual([]);
+  });
 });

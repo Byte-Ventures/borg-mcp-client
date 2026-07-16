@@ -20,7 +20,7 @@ const hookRelease = process.env.BORG_TEST_LOCK_HOOK_RELEASE;
 const hookStage = process.env.BORG_TEST_LOCK_HOOK_STAGE;
 if (
   hookDirectory &&
-  ['stat', 'stale', 'cleanup', 'owner-crash', 'claim-crash', 'active-crash']
+  ['stat', 'stale', 'cleanup', 'claim-read', 'owner-crash', 'claim-crash', 'active-crash']
     .includes(hookStage ?? '')
 ) {
   const markReady = async () => {
@@ -49,6 +49,8 @@ if (
       ? { afterStaleInspection: pause }
       : hookStage === 'cleanup'
         ? { beforeOwnerCleanup: pause }
+        : hookStage === 'claim-read'
+          ? { afterActiveClaimRead: pause }
         : hookStage === 'owner-crash'
           ? { beforeOwnerCleanup: crash }
           : hookStage === 'claim-crash'

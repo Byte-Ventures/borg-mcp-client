@@ -5,6 +5,7 @@ interface ServerKeychainLockTestHooks {
     afterStaleInspection?: () => Promise<void>;
     afterReaperClaim?: () => Promise<void>;
     afterActiveReaperElection?: () => Promise<void>;
+    afterActiveClaimRead?: () => Promise<void>;
     beforeOwnerCleanup?: () => Promise<void>;
 }
 /** @internal Process-race harness only; never wired by production callers. */
