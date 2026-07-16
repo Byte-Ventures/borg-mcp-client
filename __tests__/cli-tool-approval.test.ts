@@ -12,6 +12,7 @@ import {
   resolveLaunchBorgApprovals,
   setupApprovalWarnings,
 } from '../src/cli-tool-approval.js';
+import { resolveCodexLaunchCwd } from '../src/codex-remote.js';
 
 function codexEffective(mode: 'auto' | 'approve') {
   return {
@@ -221,6 +222,41 @@ describe('launch consent', () => {
     expect(loadOpenCode).toHaveBeenCalledWith(
       '/repo/subdir', expect.objectContaining({ OPENCODE_CONFIG_CONTENT: expect.any(String) })
     );
+  });
+
+  it('inspects the explicit restrictive Codex project instead of a clean wrapper cwd', async () => {
+    const wrapperCwd = '/repo/clean-wrapper';
+    const targetCwd = '/repo/restrictive-project';
+    const loadCodex = vi.fn(async (args: string[], cwd: string) =>
+      args.length > 0 || cwd === wrapperCwd ? codexEffective('auto') : codexEffective('approve')
+    );
+    const approvalIo = defaultApprovalIo(async () => 'yes', () => true, {
+      cwd: resolveCodexLaunchCwd(['--cd', targetCwd], wrapperCwd),
+      env: {},
+      codexArgs: ['--cd', targetCwd],
+      loadCodex,
+    });
+    const result = await resolveLaunchBorgApprovals('codex', approvalIo);
+    expect(result.codexArgs).toHaveLength(2);
+    expect(loadCodex).toHaveBeenNthCalledWith(1, [], targetCwd, {});
+  });
+
+  it('does not report a restrictive wrapper when explicit -C selects a clean Codex project', async () => {
+    const wrapperCwd = '/repo/restrictive-wrapper';
+    const targetCwd = '/repo/clean-project';
+    const loadCodex = vi.fn(async (_args: string[], cwd: string) =>
+      cwd === wrapperCwd ? codexEffective('approve') : codexEffective('auto')
+    );
+    const confirm = vi.fn(async () => 'yes');
+    const approvalIo = defaultApprovalIo(confirm, () => true, {
+      cwd: resolveCodexLaunchCwd(['-C', targetCwd], wrapperCwd),
+      env: {},
+      codexArgs: ['-C', targetCwd],
+      loadCodex,
+    });
+    expect(await resolveLaunchBorgApprovals('codex', approvalIo)).toEqual({ codexArgs: [] });
+    expect(loadCodex).toHaveBeenCalledWith([], targetCwd, {});
+    expect(confirm).not.toHaveBeenCalled();
   });
 });
 

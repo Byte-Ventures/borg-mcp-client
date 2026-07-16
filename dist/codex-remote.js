@@ -1,6 +1,6 @@
 import { mkdirSync, chmodSync, readdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { CodexAppServerClient } from './codex-app-server.js';
@@ -30,8 +30,41 @@ export function withCodexCwdArg(args, cwd) {
         return args;
     return ['--cd', cwd, ...args];
 }
+/** Resolve the project directory Codex itself will use for this launch.
+ * Relative explicit paths are interpreted from the wrapper's current working
+ * directory, matching Codex's CLI path resolution. The final occurrence wins,
+ * matching clap's override behavior for repeated options. */
+export function resolveCodexLaunchCwd(args, fallbackCwd) {
+    const baseCwd = resolve(fallbackCwd);
+    let selected = baseCwd;
+    for (let index = 0; index < args.length; index += 1) {
+        const arg = args[index];
+        if (arg === '--')
+            break;
+        if (arg === '--cd' || arg === '-C') {
+            const value = args[index + 1];
+            if (value !== undefined && value.length > 0) {
+                selected = resolve(baseCwd, value);
+                index += 1;
+            }
+            continue;
+        }
+        if (arg.startsWith('--cd=')) {
+            const value = arg.slice('--cd='.length);
+            if (value.length > 0)
+                selected = resolve(baseCwd, value);
+        }
+    }
+    return selected;
+}
 function hasCodexCwdArg(args) {
-    return args.some((arg) => arg === '--cd' || arg.startsWith('--cd=') || arg === '-C');
+    for (const arg of args) {
+        if (arg === '--')
+            return false;
+        if (arg === '--cd' || arg.startsWith('--cd=') || arg === '-C')
+            return true;
+    }
+    return false;
 }
 export function defaultIsAlive(pid) {
     try {

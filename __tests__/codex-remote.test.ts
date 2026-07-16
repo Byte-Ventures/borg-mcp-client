@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   prepareCodexRemoteLaunch,
+  resolveCodexLaunchCwd,
   withCodexCwdArg,
   checkCodexBridgeHealthy,
 } from '../src/codex-remote';
@@ -258,6 +259,19 @@ describe('withCodexCwdArg', () => {
   it('preserves user-supplied --cd or -C overrides', () => {
     expect(withCodexCwdArg(['--cd', '/manual', 'prompt'], '/work/coord')).toEqual(['--cd', '/manual', 'prompt']);
     expect(withCodexCwdArg(['-C', '/manual', 'prompt'], '/work/coord')).toEqual(['-C', '/manual', 'prompt']);
+  });
+
+  it('does not mistake prompt arguments after -- for a Codex cwd option', () => {
+    expect(withCodexCwdArg(['--', '--cd', '/prompt-text'], '/work/coord')).toEqual([
+      '--cd', '/work/coord', '--', '--cd', '/prompt-text',
+    ]);
+  });
+
+  it('resolves explicit --cd/-C forms exactly as the Codex launch does', () => {
+    expect(resolveCodexLaunchCwd(['--cd', '../target'], '/work/wrapper')).toBe('/work/target');
+    expect(resolveCodexLaunchCwd(['--cd=relative/project'], '/work/wrapper')).toBe('/work/wrapper/relative/project');
+    expect(resolveCodexLaunchCwd(['-C', '/manual'], '/work/wrapper')).toBe('/manual');
+    expect(resolveCodexLaunchCwd(['--cd', '/first', '-C', '/last'], '/work/wrapper')).toBe('/last');
   });
 });
 

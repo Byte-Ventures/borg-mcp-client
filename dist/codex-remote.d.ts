@@ -56,6 +56,11 @@ export interface PrepareCodexRemoteDeps {
 }
 export declare const DEFAULT_CODEX_REMOTE_DIR: string;
 export declare function withCodexCwdArg(args: string[], cwd: string): string[];
+/** Resolve the project directory Codex itself will use for this launch.
+ * Relative explicit paths are interpreted from the wrapper's current working
+ * directory, matching Codex's CLI path resolution. The final occurrence wins,
+ * matching clap's override behavior for repeated options. */
+export declare function resolveCodexLaunchCwd(args: string[], fallbackCwd: string): string;
 export declare function defaultIsAlive(pid: number): boolean;
 /**
  * gh#633: process-liveness probe for the borg-owned codex app-server — the

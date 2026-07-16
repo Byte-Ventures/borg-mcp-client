@@ -50,7 +50,7 @@ import { fetchLatestBorgmcpVersion, compareVersionsForStaleness } from './stale-
 import { defaultCliChoiceDeps, detectCliAvailability, installedCliNames, parseCliFlag, resolveCliChoice } from './cli-platform.js';
 import { getRefreshToken, getIdToken } from './config.js';
 import { composeGetStarted, shouldShowGetStarted } from './get-started.js';
-import { prepareCodexRemoteLaunch, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
+import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
 import {
   BORG_CODEX_REMOTE_WAKE_ENV,
   codexAgentKindConfigArgs,
@@ -311,10 +311,13 @@ async function main() {
   // client#20: inspect only the SELECTED harness after the one-shot launch
   // menu choice. Explicit consent enables a narrow per-process override;
   // Borg never rewrites the user's approval policy here.
+  const approvalCwd = cli === 'codex'
+    ? resolveCodexLaunchCwd(parsedCli.rest, process.cwd())
+    : process.cwd();
   const launchApproval = await resolveLaunchBorgApprovals(
     cli,
     defaultApprovalIo(prompt, () => process.stdin.isTTY === true, {
-      cwd: process.cwd(),
+      cwd: approvalCwd,
       env: process.env,
       codexArgs: parsedCli.rest,
     })
