@@ -18,15 +18,22 @@ export function renderAssimilationWelcome(
   droneLabel: string,
   roleName: string,
   cubeName: string,
-  useColor: boolean
+  useColor: boolean,
+  localApiUrl?: string,
 ): string {
   const check = useColor ? `${GREEN}✓${RESET}` : '✓';
+  const teammateLines = localApiUrl === undefined
+    ? [`Add a teammate: run \`borg assimilate <role>\` in another terminal.`]
+    : [
+        `Add a teammate from the intended worktree:`,
+        `run \`borg assimilate --host ${localApiUrl} <role>\` in another terminal.`,
+      ];
   return [
     `${check} Attached \`${droneLabel}\` to \`${roleName}\` in cube \`${cubeName}\`.`,
     ``,
     `In the launched agent, run \`borg_whoami\` and \`borg_roster\` to verify the seat`,
     `and begin coordinating.`,
-    `Add a teammate: run \`borg assimilate <role>\` in another terminal.`,
+    ...teammateLines,
     ``,
   ].join('\n');
 }

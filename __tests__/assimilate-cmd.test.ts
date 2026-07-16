@@ -1892,6 +1892,118 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(setActiveCube.mock.calls[0][0]).not.toHaveProperty('sessionToken');
   });
 
+  it('gives an endpoint-bound recovery command when a local role is unavailable', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [{ id: 'role-default', name: 'Builder', is_default: true, is_human_seat: false }],
+      })),
+    });
+
+    expect(await runAssimilate({
+      role: 'reviewer',
+      flags: { server: 'localhost:8787', yes: true },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('https://localhost:8787');
+    expect(output).toContain('`borg assimilate --host https://localhost:8787 <role>`');
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+  });
+
+  it('gives an endpoint-bound recovery command when a local cube has no default role', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [],
+      })),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('https://localhost:8787');
+    expect(output).toContain('`borg assimilate --host https://localhost:8787 <role>`');
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+  });
+
+  it('gives an endpoint-bound recovery command when local MCP setup fails', async () => {
+    const stderr = vi.fn();
+    mcpConfigMocks.ensureCliMcpConfigured.mockImplementationOnce(() => {
+      throw new Error('opencode CLI not found');
+    });
+    const deps = makeStubDeps({
+      stderr,
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [{ id: 'role-default', name: 'Builder', is_default: true, is_human_seat: false }],
+      })),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true, cli: 'opencode' },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('https://localhost:8787');
+    expect(output).toContain(
+      '`borg assimilate --host https://localhost:8787 --cli opencode`',
+    );
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+  });
+
+  it('gives an endpoint-bound fresh-worktree command when a local seat was evicted', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      getActiveCube: vi.fn(async () => ({
+        cubeId: 'cube-1',
+        droneId: 'drone-prior',
+        droneLabel: 'builder-1',
+        name: 'myrepo',
+        roleName: 'Builder',
+        apiUrl: 'https://localhost:8787',
+        serverTrustIdentity: SERVER_TRUST_IDENTITY,
+        localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64),
+        localSessionGeneration: 1,
+      })),
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [{ id: 'role-default', name: 'Builder', is_default: true, is_human_seat: false }],
+      })),
+      assimilate: vi.fn(async () => {
+        throw new DroneEvictedError('evicted');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true, here: true },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('https://localhost:8787');
+    expect(output).toContain('from a fresh worktree');
+    expect(output).toContain('`borg assimilate --host https://localhost:8787`');
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+  });
+
   it('reads an explicitly requested enrollment invitation through the hidden-input seam', async () => {
     const invitation = 'i'.repeat(43);
     const prompt = vi.fn(async () => 'must-not-prompt');

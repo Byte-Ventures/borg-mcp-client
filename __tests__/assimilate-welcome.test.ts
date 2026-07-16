@@ -31,6 +31,21 @@ describe('renderAssimilationWelcome — structural shape', () => {
     expect(out).toContain('another terminal');
   });
 
+  it('keeps the next-seat command bound to the selected local authority', () => {
+    const out = renderAssimilationWelcome(
+      'one-of-one-coordinator',
+      'coordinator',
+      'my-project',
+      false,
+      'https://127.0.0.1:7091',
+    );
+    expect(out).toContain('from the intended worktree');
+    expect(out).toContain(
+      '`borg assimilate --host https://127.0.0.1:7091 <role>`',
+    );
+    expect(out).not.toContain('`borg assimilate <role>`');
+  });
+
   it('does not dump multiple tool names (gh#P1 info dump reduction)', () => {
     const out = renderAssimilationWelcome('one-of-one-coordinator', 'coordinator', 'my-project', false);
     expect(out).not.toContain('borg_role');

@@ -322,6 +322,14 @@ function localAssimilateCommand(apiUrl: string, enroll = false): string {
   return `\`borg assimilate --host ${apiUrl}${enroll ? ' --enroll' : ''}\``;
 }
 
+function localAssimilateRoleCommand(apiUrl: string): string {
+  return `\`borg assimilate --host ${apiUrl} <role>\``;
+}
+
+function localAssimilateCliCommand(apiUrl: string, cli: BorgCli): string {
+  return `\`borg assimilate --host ${apiUrl} --cli ${cli}\``;
+}
+
 function reportServerFailure(
   deps: AssimilateDeps,
   apiUrl: string,
@@ -901,21 +909,37 @@ export async function runAssimilate(
       const available = cubeDetail.roles.map((r) => r.name).join(', ');
       const suggestion = suggestRoleName(args.role, cubeDetail.roles.map((r) => r.name));
       const suggestionLine = suggestion ? ` Did you mean "${suggestion}"?` : '';
-      deps.stderr(
-        `no role matching "${args.role}" in cube "${cubeDetail.name}". Available: ${available}.${suggestionLine}\n` +
-        `(Use --template <name> on first-drone setup or run \`borg_create-role\` from inside Claude.)\n`
-      );
+      if (authority.kind === 'server') {
+        deps.stderr(
+          `No role matching "${args.role}" in cube "${cubeDetail.name}" on ${authority.apiUrl}. ` +
+            `Available: ${available}.${suggestionLine}\n` +
+            `Rerun ${localAssimilateRoleCommand(authority.apiUrl)} with one of the available roles.\n`,
+        );
+      } else {
+        deps.stderr(
+          `no role matching "${args.role}" in cube "${cubeDetail.name}". Available: ${available}.${suggestionLine}\n` +
+          `(Use --template <name> on first-drone setup or run \`borg_create-role\` from inside Claude.)\n`
+        );
+      }
       return 1;
     }
   } else {
     const occupiedRoleIds = occupiedRoleIdsForAutoRole(cubeDetail.drones ?? []);
     resolvedRole = pickDefaultRole(cubeDetail.roles, { isFirstDrone, occupiedRoleIds });
     if (!resolvedRole) {
-      deps.stderr(
-        `cube "${cubeDetail.name}" has no default or human-seat role; cannot infer a role. ` +
-        `Either pass a role argument explicitly (e.g. \`borg assimilate builder\`) or ` +
-        `run \`borg_create-role\` from inside Claude to set up roles.\n`
-      );
+      if (authority.kind === 'server') {
+        deps.stderr(
+          `Cube "${cubeDetail.name}" on ${authority.apiUrl} has no default or human-seat role. ` +
+            `Ask the server operator to configure a role, then rerun ` +
+            `${localAssimilateRoleCommand(authority.apiUrl)}.\n`,
+        );
+      } else {
+        deps.stderr(
+          `cube "${cubeDetail.name}" has no default or human-seat role; cannot infer a role. ` +
+          `Either pass a role argument explicitly (e.g. \`borg assimilate builder\`) or ` +
+          `run \`borg_create-role\` from inside Claude to set up roles.\n`
+        );
+      }
       return 1;
     }
   }
@@ -945,7 +969,15 @@ export async function runAssimilate(
     ensureCliMcpConfigured(cli);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    deps.stderr(`${cli} MCP configuration failed: ${message}\n`);
+    if (authority.kind === 'server') {
+      deps.stderr(
+        `${cli} MCP configuration failed for ${authority.apiUrl}: ${safeStderr(message)}. ` +
+          `Fix the ${cli} MCP configuration, then rerun ` +
+          `${localAssimilateCliCommand(authority.apiUrl, cli)}.\n`,
+      );
+    } else {
+      deps.stderr(`${cli} MCP configuration failed: ${message}\n`);
+    }
     return 1;
   }
 
@@ -981,10 +1013,18 @@ export async function runAssimilate(
     // "assimilate failed". Only on a reattach attempt (reattachPriorId set);
     // a non-reattach DroneEvictedError falls through to the generic message.
     if (err instanceof DroneEvictedError && reattachPriorId != null) {
-      deps.stderr(
-        `seat evicted — this worktree's saved seat was evicted from the cube. ` +
-          `Re-assimilate fresh from a terminal, or remove this worktree.\n`
-      );
+      if (authority.kind === 'server') {
+        deps.stderr(
+          `This worktree's saved seat on ${authority.apiUrl} was evicted. ` +
+            `Remove this worktree, or from a fresh worktree run ` +
+            `${localAssimilateCommand(authority.apiUrl)}.\n`,
+        );
+      } else {
+        deps.stderr(
+          `seat evicted — this worktree's saved seat was evicted from the cube. ` +
+            `Re-assimilate fresh from a terminal, or remove this worktree.\n`
+        );
+      }
       return 1;
     }
     if (authority.kind === 'server') {
@@ -1247,6 +1287,7 @@ export async function runAssimilate(
       assignedRole.name,
       cubeDetail.name,
       useColor,
+      authority.kind === 'server' ? authority.apiUrl : undefined,
     ),
   );
 

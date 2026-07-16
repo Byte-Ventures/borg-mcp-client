@@ -12,14 +12,20 @@
 // is hierarchy-cueing, not decoration.
 const GREEN = '\x1b[32m';
 const RESET = '\x1b[0m';
-export function renderAssimilationWelcome(droneLabel, roleName, cubeName, useColor) {
+export function renderAssimilationWelcome(droneLabel, roleName, cubeName, useColor, localApiUrl) {
     const check = useColor ? `${GREEN}✓${RESET}` : '✓';
+    const teammateLines = localApiUrl === undefined
+        ? [`Add a teammate: run \`borg assimilate <role>\` in another terminal.`]
+        : [
+            `Add a teammate from the intended worktree:`,
+            `run \`borg assimilate --host ${localApiUrl} <role>\` in another terminal.`,
+        ];
     return [
         `${check} Attached \`${droneLabel}\` to \`${roleName}\` in cube \`${cubeName}\`.`,
         ``,
         `In the launched agent, run \`borg_whoami\` and \`borg_roster\` to verify the seat`,
         `and begin coordinating.`,
-        `Add a teammate: run \`borg assimilate <role>\` in another terminal.`,
+        ...teammateLines,
         ``,
     ].join('\n');
 }
