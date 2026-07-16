@@ -89,6 +89,50 @@ describe('addProjectSessionStartHook', () => {
     expect(entries).toHaveLength(2);
   });
 
+  // gh#client#18: stale prior-install absolute paths (e.g. from a different
+  // node_modules location) must be migrated to canonical and must NOT produce
+  // a duplicate entry.
+  it('migrates stale prior-install absolute paths without duplicating', () => {
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath(), JSON.stringify({
+      hooks: { SessionStart: [
+        { matcher: '*', hooks: [{ type: 'command', command: '/old/node_modules/borgmcp/dist/regen.js' }] },
+        { matcher: 'clear', hooks: [{ type: 'command', command: '/old/node_modules/borgmcp/dist/clear-rewake.js', asyncRewake: true }] },
+      ] },
+    }));
+
+    expect(addProjectSessionStartHook(root)).toBe(true);
+    const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
+    // Stale absolute paths migrated to shell-escaped canonical form.
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveClearRewakePath())))).toHaveLength(1);
+    // No stale or bare-name leftovers.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command.includes('/old/')))).toBe(false);
+    expect(entries).toHaveLength(2);
+  });
+
+  // gh#client#18: mixed stale + bare name in same config must all converge to
+  // exactly one canonical handler per command.
+  it('deduplicates mixed stale and bare-name entries', () => {
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.writeFileSync(settingsPath(), JSON.stringify({
+      hooks: { SessionStart: [
+        { matcher: '*', hooks: [{ type: 'command', command: '/old/node_modules/borgmcp/dist/regen.js' }] },
+        { matcher: '*', hooks: [{ type: 'command', command: 'borg-regen' }] },
+        { matcher: 'clear', hooks: [{ type: 'command', command: '/other/.../clear-rewake.js', asyncRewake: true }] },
+      ] },
+    }));
+
+    expect(addProjectSessionStartHook(root)).toBe(true);
+    const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveClearRewakePath())))).toHaveLength(1);
+    // All stale/bare forms gone.
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command.includes('/old/')))).toBe(false);
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === 'borg-regen'))).toBe(false);
+    expect(entries).toHaveLength(2);
+  });
+
   it('repairs a partial install without duplicating the existing clear-rewake hook', () => {
     fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
     fs.writeFileSync(settingsPath(), JSON.stringify({

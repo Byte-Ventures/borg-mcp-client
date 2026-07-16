@@ -262,4 +262,36 @@ describe('gh#844 codex hook peeks (gate the writers + the consent disclosure)', 
     }));
     expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
   });
+
+  // gh#client#18: raw canonical (unescaped) path must NOT pass strict peek —
+  // it needs shell-escaping before it is a valid canonical form.
+  it('raw unescaped canonical path does NOT pass strict peek', () => {
+    const p = path.join(tmpDir, 'hooks.json');
+    // Raw path without shell-escaping (e.g. user hand-edited the config).
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: resolveRegenPath() }] }] },
+    }));
+    expect(isCodexSessionStartHookRegistered(p)).toBe(false);
+    // Raw audit path without shell-escaping.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: resolveLogAuditPath() }] }] },
+    }));
+    expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
+  });
+
+  // gh#client#18: stale prior-install absolute paths must NOT pass strict
+  // canonical peek — they need migration to shell-escaped canonical form.
+  it('stale prior-install path does NOT pass strict peek', () => {
+    const p = path.join(tmpDir, 'hooks.json');
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: '/old/node_modules/borgmcp/dist/regen.js' }] }] },
+    }));
+    // Strict peek requires escaped canonical — stale path does NOT pass.
+    expect(isCodexSessionStartHookRegistered(p)).toBe(false);
+    // Stale audit path also does not pass.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: '/old/.../log-audit.js' }] }] },
+    }));
+    expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
+  });
 });

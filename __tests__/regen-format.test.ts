@@ -795,6 +795,18 @@ describe('formatLeanOrientation', () => {
       }
     }
   });
+
+  // gh#client#18: long install paths (e.g. deeply nested node_modules or
+  // paths with spaces) must not push orientation over the 2KB budget.
+  it('stays under 2KB with a long install path containing spaces', () => {
+    const longPath = '/Users/dev/Projects/my borg workspace/node_modules/borgmcp/dist';
+    for (const agentKind of ['claude', 'codex', 'opencode'] as const) {
+      for (const source of [undefined, 'startup', 'clear', 'compact', 'resume']) {
+        const out = formatLeanOrientation({ ...base, agentKind, source, inboxPath: longPath });
+        expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(2048);
+      }
+    }
+  });
 });
 
 describe('resolveLeanIdentity', () => {
