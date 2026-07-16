@@ -22,6 +22,7 @@ export const CODEX_BORG_COORDINATION_TOOLS = BORG_COORDINATION_TOOLS.map((name) 
 // OpenCode sanitizes MCP tool names as <server>_<raw tool name>, preserving
 // hyphens. The Borg raw tool prefix is itself `borg_`.
 export const OPENCODE_BORG_COORDINATION_TOOLS = BORG_COORDINATION_TOOLS.map((name) => `borg_borg_${name}`);
+export const BORG_DISPATCHER_APPROVAL_DISCLOSURE = 'This set includes borg_tool: approving the dispatcher also approves any Borg operation invoked through it.';
 function parseCodexModes(text) {
     let section = 'other';
     let defaultMode;
@@ -170,7 +171,8 @@ export async function resolveLaunchBorgApprovals(cli, io) {
     }
     if (inspection.restrictiveTools.length === 0)
         return { codexArgs: [] };
-    const intro = `${cli === 'codex' ? 'Codex' : 'OpenCode'} requires approval for ${inspection.restrictiveTools.length} Borg coordination tool${inspection.restrictiveTools.length === 1 ? '' : 's'}.`;
+    const intro = `${cli === 'codex' ? 'Codex' : 'OpenCode'} requires approval for ${inspection.restrictiveTools.length} Borg tool${inspection.restrictiveTools.length === 1 ? '' : 's'}. ` +
+        BORG_DISPATCHER_APPROVAL_DISCLOSURE;
     if (!io.isTTY()) {
         return {
             codexArgs: [],
@@ -204,7 +206,7 @@ export function setupApprovalWarnings(deps) {
     try {
         const codex = inspectCodexBorgApprovals(deps.readCodexConfig());
         if (codex.restrictiveTools.length > 0) {
-            warnings.push(`Codex Borg coordination approvals are restrictive. Borg launches will offer a launch-only fix. Global repair:\n${codex.repairSnippet}`);
+            warnings.push(`Codex Borg approvals are restrictive. ${BORG_DISPATCHER_APPROVAL_DISCLOSURE} Borg launches will offer a launch-only fix. Global repair:\n${codex.repairSnippet}`);
         }
     }
     catch (error) {
@@ -213,7 +215,7 @@ export function setupApprovalWarnings(deps) {
     try {
         const opencode = inspectOpenCodeBorgApprovals(deps.readOpenCodeConfig());
         if (opencode.restrictiveTools.length > 0) {
-            warnings.push(`OpenCode Borg coordination approvals are restrictive. Borg launches will offer a launch-only fix. Global repair:\n${opencode.repairSnippet}`);
+            warnings.push(`OpenCode Borg approvals are restrictive. ${BORG_DISPATCHER_APPROVAL_DISCLOSURE} Borg launches will offer a launch-only fix. Global repair:\n${opencode.repairSnippet}`);
         }
     }
     catch (error) {

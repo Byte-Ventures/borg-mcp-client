@@ -8,6 +8,7 @@ import type { BorgCli } from './cubes.js';
 export declare const BORG_COORDINATION_TOOLS: readonly ["regen", "log", "read-log", "roster", "ack", "stream-status", "whoami", "tool", "describe-tool"];
 export declare const CODEX_BORG_COORDINATION_TOOLS: string[];
 export declare const OPENCODE_BORG_COORDINATION_TOOLS: string[];
+export declare const BORG_DISPATCHER_APPROVAL_DISCLOSURE = "This set includes borg_tool: approving the dispatcher also approves any Borg operation invoked through it.";
 type OpenCodePermissionAction = 'allow' | 'ask' | 'deny';
 export interface ApprovalInspection {
     restrictiveTools: string[];

@@ -102,14 +102,16 @@ borg assimilate code-reviewer --cli codex
 
 ### Agent CLI approval policy
 
-Borg removes repeated approval prompts only for its coordination channel. It
-does not auto-approve shell, file, web, or non-coordination Borg administration
-tools.
+Borg removes repeated approval prompts for its coordination tool set. This set
+includes `borg_tool`, the deferred-tool dispatcher: approving it also approves
+any Borg operation invoked through that dispatcher. Direct shell, file, and web
+actions remain outside Borg's allowlist.
 
 - Claude Code launches receive `--allowedTools mcp__borg__*`.
 - Codex launches inspect the Borg tool modes in `~/.codex/config.toml`. If
   coordination tools are restrictive, an interactive launch asks before
-  applying exact, launch-only `approval_mode="auto"` overrides. Declining or
+  applying exact, launch-only `approval_mode="auto"` overrides. The consent
+  prompt explicitly discloses the dispatcher's transitive scope. Declining or
   launching non-interactively changes nothing and prints the exact TOML needed
   for a global repair.
 - OpenCode launches do not use its broad `--auto` switch. Borg inspects

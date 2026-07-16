@@ -113,6 +113,9 @@ describe('launch consent', () => {
     const result = await resolveLaunchBorgApprovals('codex', deps);
     expect(result.codexArgs).toHaveLength(CODEX_BORG_COORDINATION_TOOLS.length * 2);
     expect(deps.confirm).toHaveBeenCalledOnce();
+    expect(deps.confirm).toHaveBeenCalledWith(expect.stringContaining(
+      'approving the dispatcher also approves any Borg operation invoked through it'
+    ));
   });
 
   it('does not prompt or override in a non-TTY and emits exact repair copy', async () => {
@@ -123,6 +126,7 @@ describe('launch consent', () => {
     const result = await resolveLaunchBorgApprovals('codex', deps);
     expect(result.codexArgs).toEqual([]);
     expect(result.warning).toContain('[mcp_servers.borg.tools."borg:regen"]');
+    expect(result.warning).toContain('approves any Borg operation invoked through it');
     expect(deps.confirm).not.toHaveBeenCalled();
   });
 
@@ -158,6 +162,7 @@ describe('setup diagnostics', () => {
     });
     expect(warnings).toHaveLength(2);
     expect(warnings[0]).toContain('borg:regen');
+    expect(warnings[0]).toContain('approves any Borg operation invoked through it');
     expect(warnings[1]).toContain('borg_borg_regen');
     expect(warnings[1]).toContain('"bash": "deny"');
   });
