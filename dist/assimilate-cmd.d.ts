@@ -3,6 +3,7 @@ import { type CodexRemoteLaunch } from './codex-remote.js';
 import type { BorgCli } from './cubes.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { LocalAttachCompletion, LocalAttachOperation } from './server-attach-state.js';
+import { type LaunchApprovalDecision } from './cli-tool-approval.js';
 export interface AssimilateFlags {
     worktree?: string;
     template?: string;
@@ -77,6 +78,8 @@ export interface AssimilateDeps {
     prompt: (message: string) => Promise<string>;
     promptSecret: (message: string) => Promise<string>;
     isTTY: () => boolean;
+    /** Selected-harness approval inspection/consent (client#20). */
+    resolveCliApprovals?: (cli: BorgCli) => Promise<LaunchApprovalDecision>;
     getHostname: () => string;
     setTerminalTitle: (label: string, cubeName: string) => void;
     getActiveCube: () => Promise<ActiveCube | null>;

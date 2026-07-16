@@ -39,6 +39,7 @@ import {
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { handleVersionFlag } from './version.js';
 import { initDebugFromArgv } from './debug.js';
+import { defaultApprovalIo, setupApprovalWarnings } from './cli-tool-approval.js';
 
 /**
  * Main setup wizard
@@ -207,6 +208,10 @@ async function main() {
       console.error(chalk.red(`\n◼ Failed to configure OpenCode: ${error.message}\n`));
       process.exit(1);
     }
+  }
+  const approvalIo = defaultApprovalIo(async () => '', () => false);
+  for (const warning of setupApprovalWarnings(approvalIo)) {
+    console.log(chalk.yellow(`warning: ${warning}`));
   }
   console.log('');
 

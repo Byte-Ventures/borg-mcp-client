@@ -57,6 +57,7 @@ import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
 import { findLoadedCodexThread } from './codex-app-server.js';
+import { defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 
 export function buildDefaultAssimilateDeps(): AssimilateDeps {
   return {
@@ -109,6 +110,20 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
       return typeof result.invitation === 'string' ? result.invitation : '';
     },
     isTTY: () => process.stdin.isTTY === true,
+    resolveCliApprovals: (cli) => resolveLaunchBorgApprovals(
+      cli,
+      defaultApprovalIo(
+        async (message) => {
+          const rl = createInterface({ input: process.stdin, output: process.stdout });
+          try {
+            return await rl.question(message);
+          } finally {
+            rl.close();
+          }
+        },
+        () => process.stdin.isTTY === true
+      )
+    ),
 
     getHostname: () => osHostname(),
     setTerminalTitle: (label, cubeName) => {
