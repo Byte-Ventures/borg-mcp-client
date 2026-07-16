@@ -421,6 +421,7 @@ export async function resumeBorgServerEnrollment(
     loadPendingEnrollment?: typeof getPendingServerEnrollment;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+    onPending?: () => void;
   } = {},
 ): Promise<NewServerEnrollment | null> {
   const pending = await (deps.loadPendingEnrollment ?? getPendingServerEnrollment)(
@@ -428,6 +429,7 @@ export async function resumeBorgServerEnrollment(
     trustIdentity,
   );
   if (!pending) return null;
+  deps.onPending?.();
   return enrollBorgServer(origin, trustIdentity, pending.invitation, {
     ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
     prepareEnrollment: async () => pending,
@@ -645,7 +647,7 @@ export async function connectLocalBorgServer(
   });
 }
 
-/** Load and verify the local CA before sending a single-use invitation. */
+/** Load and verify the local CA before sending an enrollment invitation. */
 export async function enrollLocalBorgServer(
   origin: string,
   invitation: string,
@@ -675,6 +677,7 @@ export async function resumeLocalBorgServerEnrollment(
   deps: {
     loadTrust?: typeof loadBorgServerTrust;
     loadPendingEnrollment?: typeof getPendingServerEnrollment;
+    onPending?: () => void;
   } = {},
 ): Promise<NewServerEnrollment | null> {
   const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
@@ -683,6 +686,7 @@ export async function resumeLocalBorgServerEnrollment(
     ...(deps.loadPendingEnrollment === undefined
       ? {}
       : { loadPendingEnrollment: deps.loadPendingEnrollment }),
+    ...(deps.onPending === undefined ? {} : { onPending: deps.onPending }),
   });
 }
 

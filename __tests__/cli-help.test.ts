@@ -111,12 +111,12 @@ describe('model configuration ownership', () => {
     ]) {
       expect(t).toContain(flag);
     }
-    expect(t).toContain('hidden invitation');
-    expect(t).toContain('invitation is never an argument');
+    expect(t).toContain('hidden enrollment invitation');
+    expect(t).toContain('operator terminal');
     expect(t).toContain('Cube to join/create');
-    expect(t).toContain('ordinary clients require an explicit grant');
+    expect(t).toContain('require an explicit cube grant');
     expect(t).toContain('Preview only');
-    expect(t).toContain('never falls back to Borg Cloud');
+    expect(t).not.toContain('falls back to Borg Cloud');
     expect(t).toContain('docs/LOCAL_SERVER.md');
     expect(t).not.toContain('--server');
   });
