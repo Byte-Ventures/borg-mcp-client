@@ -16,6 +16,7 @@ import {
 } from '../src/regen-format';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { formatWakePathPrefix } from '../src/stream-status';
+import { shellEscape } from '../src/shell-escape';
 import {
   GIT_OPERATIONAL_DISCIPLINE_BUILDER,
   GIT_OPERATIONAL_DISCIPLINE_COORDINATOR,
@@ -798,34 +799,48 @@ describe('formatLeanOrientation', () => {
 
   // gh#client#18: long install paths (e.g. deeply nested node_modules or
   // paths with spaces) must not push orientation over the 2KB budget.
-  // Verify the worst-case string length by constructing the orientation with
-  // a simulated long install path (spaces + single quotes) in the wake path
-  // arming block, which is the largest variable-length component.
-  it('stays under 2KB with a long install path containing spaces', () => {
-    // Simulate the worst-case: a long shell-escaped install path with spaces
-    // and embedded single quotes in the wakePathArming output.
-    const longBin = "'/Users/dev/Projects/my borg workspace/node_modules/borgmcp/dist/inbox-monitor.js'";
-    const longInbox = "'/Users/dev/Projects/my borg workspace/inbox/state'";
-    const monitorCmd = `${longBin} ${longInbox}`;
-    const wakeBlock = [
-      'Arm your wake path before working:',
-      `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`${monitorCmd}\` so cube posts wake you in real time.`,
-      '2. **Engage `/loop`** (self-paced) so you keep waking to triage the cube.',
-      '3. **Adaptive recovery** — set ONE `ScheduleWakeup`: [9000, 12600]s (3h ±30m) when Monitor healthy/indeterminate; [720, 1080]s (15m ±3m) when broken. Re-arm Monitor; retry short until healthy. A real Monitor wake resets, not stacks.',
-      '4. **Recovery tick** — drain `borg_read-log unread_only=true`. If empty, check wake status, set deadline, resume prior work. No full-regen or liveness post on empty; safety probes may still wake.',
-    ].join('\n');
+  // The self-path module is mocked to simulate a genuinely long install path
+  // with spaces and an embedded single quote, then wakePathArming is exercised
+  // via a fresh dynamic import to ensure the production code handles it.
+  it('stays under 2KB with a long install path containing spaces and an embedded single quote', async () => {
+    const longDir = '/Users/dev/Projects/my borg workspace/node_modules/borgmcp/dist';
+    const longBin = `${longDir}/inbox-monitor.js`;
+    const longRegen = `${longDir}/regen.js`;
+    const longClear = `${longDir}/clear-rewake.js`;
+    const longAudit = `${longDir}/log-audit.js`;
+    const longInbox = "/Users/dev/Projects/my borg workspace/inbox/state (it's complex)";
 
-    for (const agentKind of ['claude', 'codex', 'opencode'] as const) {
-      for (const source of [undefined, 'startup', 'clear', 'compact', 'resume']) {
-        const out = formatLeanOrientation({ ...base, agentKind, source });
-        // Replace the real wake path arming with the worst-case version
-        // to verify the budget holds even with a long install path.
-        const worstCase = out.replace(
-          /Arm your wake path before working[\s\S]*?No full-regen or liveness post on empty; safety probes may still wake\./,
-          wakeBlock,
-        );
-        expect(Buffer.byteLength(worstCase, 'utf-8')).toBeLessThan(2048);
+    vi.doMock('../src/self-path.js', () => ({
+      resolveInboxMonitorPath: () => longBin,
+      resolveRegenPath: () => longRegen,
+      resolveClearRewakePath: () => longClear,
+      resolveLogAuditPath: () => longAudit,
+      resolveMcpBinaryPath: () => `${longDir}/index.js`,
+      __esModule: true,
+    }));
+    vi.doMock('../src/stream-status.js', () => ({
+      formatWakePathPrefix: () => '',
+      __esModule: true,
+    }));
+    vi.resetModules();
+
+    try {
+      const mod = await import('../src/regen-format');
+      for (const agentKind of ['claude', 'codex', 'opencode'] as const) {
+        for (const source of [undefined, 'startup', 'clear', 'compact', 'resume']) {
+          const out = mod.formatLeanOrientation({ ...base, agentKind, source });
+          expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(2048);
+        }
       }
+      // Verify the long path appears in the output (production code ran).
+      // wakePathArming shell-escapes the path (wraps in single quotes),
+      // so check for the escaped form.
+      const sample = mod.formatLeanOrientation({ ...base, agentKind: 'claude', source: undefined });
+      expect(sample).toContain(shellEscape(longBin));
+    } finally {
+      vi.doUnmock('../src/self-path.js');
+      vi.doUnmock('../src/stream-status.js');
+      vi.resetModules();
     }
   });
 });

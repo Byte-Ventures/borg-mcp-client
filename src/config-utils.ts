@@ -174,23 +174,32 @@ function commandMatches(entryCommand: string, bareName: string, absolutePath: st
 }
 
 /** gh#client#18: map an owned hook command to its canonical shell-escaped form.
- *  Returns null for non-owned commands. Ownership requires ONE of:
- *  - Exact borg bare bin name (borg-regen, borg-clear-rewake, borg-log-audit)
- *  - Absolute path containing a borg package marker (borgmcp or borg-mcp)
- *    AND ending with an owned basename (regen.js, clear-rewake.js, log-audit.js)
+ *  Returns null for non-owned commands. Ownership requires EXACTLY ONE of:
+ *  (a) Exact bare bin name (borg-regen, borg-clear-rewake, borg-log-audit)
+ *  (b) Exact match (raw or shell-escaped) of THIS installation's canonical
+ *      absolute command — always owned, no marker required (fixes neutral-path
+ *      false negatives that broke idempotency)
+ *  (c) Foreign-install heuristic: absolute path ending in an owned basename
+ *      AND containing a borg package marker (borgmcp|borg-mcp) in the path
  *  This prevents false-positive ownership of unrelated scripts that happen
  *  to share a basename (e.g. /opt/custom-tool/regen.js). */
 function ownedCanonical(command: string): string | null {
   const stripped = command.replace(/^'|'$/g, '');
-  const name = stripped.split('/').pop() ?? '';
 
-  // Exact bare name matches — always owned
-  if (name === BARE_BORG_REGEN) return HOOK_COMMAND;
-  if (name === BARE_CLEAR_REWAKE) return CLEAR_REWAKE_HOOK_COMMAND;
-  if (name === BARE_LOG_AUDIT) return AUDIT_HOOK_COMMAND;
+  // (a) Exact bare name — always owned
+  if (stripped === BARE_BORG_REGEN) return HOOK_COMMAND;
+  if (stripped === BARE_CLEAR_REWAKE) return CLEAR_REWAKE_HOOK_COMMAND;
+  if (stripped === BARE_LOG_AUDIT) return AUDIT_HOOK_COMMAND;
 
-  // Absolute paths — only owned if they contain a borg package marker
+  // (b) Exact match of THIS installation's canonical command (raw or escaped)
+  // — always owned, no marker check required
+  if (command === HOOK_COMMAND || stripped === resolveRegenPath()) return HOOK_COMMAND;
+  if (command === CLEAR_REWAKE_HOOK_COMMAND || stripped === resolveClearRewakePath()) return CLEAR_REWAKE_HOOK_COMMAND;
+  if (command === AUDIT_HOOK_COMMAND || stripped === resolveLogAuditPath()) return AUDIT_HOOK_COMMAND;
+
+  // (c) Foreign-install heuristic: absolute path + owned basename + borg marker
   if (stripped.startsWith('/') && (stripped.includes('borgmcp') || stripped.includes('borg-mcp'))) {
+    const name = stripped.split('/').pop() ?? '';
     if (name === 'regen.js') return HOOK_COMMAND;
     if (name === 'clear-rewake.js') return CLEAR_REWAKE_HOOK_COMMAND;
     if (name === 'log-audit.js') return AUDIT_HOOK_COMMAND;
