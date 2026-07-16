@@ -620,11 +620,11 @@ describe('wakePathArming', () => {
       expect(arming).toContain(inboxPath);
       expect(arming).toContain('/loop');
       expect(arming).toContain('ScheduleWakeup');
-      expect(arming).toMatch(/adaptive recovery deadline/i);
+      expect(arming).toMatch(/adaptive recovery/i);
       expect(arming).toContain('[9000, 12600]');
       expect(arming).toContain('[720, 1080]');
-      expect(arming).toMatch(/healthy or indeterminate/i);
-      expect(arming).toMatch(/explicitly.*broken/i);
+      expect(arming).toMatch(/healthy.*indeterminate/i);
+      expect(arming).toMatch(/broken/i);
       expect(arming).toMatch(/resets.*not stacks/i);
       expect(arming).not.toContain('3600');
     });
@@ -632,11 +632,10 @@ describe('wakePathArming', () => {
     it('makes an empty recovery tick a cheap wake-status check before prior work resumes', () => {
       expect(arming).toContain('borg_read-log unread_only=true');
       expect(arming).toMatch(/if.*empty/i);
-      expect(arming).toMatch(/do not.*full-regen/i);
-      expect(arming).toMatch(/do not.*liveness post/i);
+      expect(arming).toMatch(/no full-regen/i);
+      expect(arming).toMatch(/liveness post/i);
       expect(arming).toMatch(/re-arm.*retry.*until healthy/i);
       expect(arming).toMatch(/resume prior work/i);
-      expect(arming).toContain('reduces client fallback churn');
       expect(arming).not.toContain('zero idle-wake cost');
     });
   });
@@ -705,11 +704,10 @@ describe('formatLeanOrientation', () => {
     expect(out).toMatch(/required before acting or posting/i);
     expect(out).toContain('borg_regen mode="full"');
     expect(out).toContain('borg_cube');
-    expect(out).toContain('cube directive');
+    expect(out).toContain('directive');
     expect(out).toContain('borg_role');
-    expect(out).toMatch(/own role (playbook|details)/i);
+    expect(out).toContain('role playbook');
     expect(out).toMatch(/borg_playbook.*once per session/i);
-    expect(out).toMatch(/do not proceed until/i);
 
     expect(out.indexOf('borg_regen mode="full"')).toBeLessThan(out.indexOf('borg_cube'));
     expect(out.indexOf('borg_cube')).toBeLessThan(out.indexOf('borg_role'));
@@ -793,9 +791,7 @@ describe('formatLeanOrientation', () => {
     for (const agentKind of ['claude', 'codex', 'opencode'] as const) {
       for (const source of [undefined, 'startup', 'clear', 'compact', 'resume']) {
         const out = formatLeanOrientation({ ...base, agentKind, source });
-        // gh#client#18: absolute bin paths (self-path.ts) add ~52 bytes vs bare
-        // names; the Claude Code preview truncation is ~2KB but not exact.
-        expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(2200);
+        expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(2048);
       }
     }
   });

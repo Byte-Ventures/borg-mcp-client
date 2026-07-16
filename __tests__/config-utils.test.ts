@@ -30,6 +30,11 @@ import {
   isCodexUserPromptSubmitHookRegistered,
   isMcpServerConfigured,
 } from '../src/config-utils';
+import { resolveRegenPath, resolveLogAuditPath } from '../src/self-path';
+import { shellEscape } from '../src/shell-escape';
+
+const CANONICAL_REGEN = shellEscape(resolveRegenPath());
+const CANONICAL_AUDIT = shellEscape(resolveLogAuditPath());
 
 let tmpDir: string;
 let tmpConfig: string;
@@ -225,8 +230,14 @@ describe('isCodexHookRegistered', () => {
 describe('gh#844 codex hook peeks (gate the writers + the consent disclosure)', () => {
   it('isCodexSessionStartHookRegistered true iff the borg-regen SessionStart hook is present', () => {
     const p = path.join(tmpDir, 'hooks.json');
+    // Write bare name — peek should NOT match (requires canonical).
     fs.writeFileSync(p, JSON.stringify({
       hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'borg-regen' }] }] },
+    }));
+    expect(isCodexSessionStartHookRegistered(p)).toBe(false);
+    // Write canonical (shell-escaped) form — peek should match.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: CANONICAL_REGEN }] }] },
     }));
     expect(isCodexSessionStartHookRegistered(p)).toBe(true);
     fs.writeFileSync(p, JSON.stringify({ hooks: {} }));
@@ -235,13 +246,19 @@ describe('gh#844 codex hook peeks (gate the writers + the consent disclosure)', 
 
   it('isCodexUserPromptSubmitHookRegistered true iff the borg-log-audit UPS hook is present', () => {
     const p = path.join(tmpDir, 'hooks.json');
+    // Write bare name — peek should NOT match (requires canonical).
     fs.writeFileSync(p, JSON.stringify({
       hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'borg-log-audit' }] }] },
+    }));
+    expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
+    // Write canonical form — peek should match.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: CANONICAL_AUDIT }] }] },
     }));
     expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(true);
     // SessionStart present but NOT UPS → still false (each hook gated independently).
     fs.writeFileSync(p, JSON.stringify({
-      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'borg-regen' }] }] },
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: CANONICAL_REGEN }] }] },
     }));
     expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
   });

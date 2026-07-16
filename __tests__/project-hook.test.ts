@@ -20,6 +20,7 @@ import {
   isProjectSessionStartHookRegistered,
 } from '../src/config-utils';
 import { resolveRegenPath, resolveClearRewakePath } from '../src/self-path';
+import { shellEscape } from '../src/shell-escape';
 
 let root: string;
 
@@ -43,11 +44,11 @@ describe('addProjectSessionStartHook', () => {
     expect(Array.isArray(entries)).toBe(true);
     expect(entries).toContainEqual({
       matcher: '*',
-      hooks: [{ type: 'command', command: resolveRegenPath() }],
+      hooks: [{ type: 'command', command: shellEscape(resolveRegenPath()) }],
     });
     expect(entries).toContainEqual({
       matcher: 'clear',
-      hooks: [{ type: 'command', command: resolveClearRewakePath(), asyncRewake: true }],
+      hooks: [{ type: 'command', command: shellEscape(resolveClearRewakePath()), asyncRewake: true }],
     });
   });
 
@@ -82,9 +83,9 @@ describe('addProjectSessionStartHook', () => {
 
     expect(addProjectSessionStartHook(root)).toBe(true);
     const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
-    // The existing bare-name entry is preserved (not rewritten to absolute path).
-    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === 'borg-regen'))).toHaveLength(1);
-    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === resolveClearRewakePath()))).toHaveLength(1);
+    // Bare name is migrated to shell-escaped canonical form.
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveClearRewakePath())))).toHaveLength(1);
     expect(entries).toHaveLength(2);
   });
 
@@ -99,10 +100,9 @@ describe('addProjectSessionStartHook', () => {
 
     expect(addProjectSessionStartHook(root)).toBe(true);
     const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
-    // The newly added orientation hook uses the absolute path.
-    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === resolveRegenPath()))).toHaveLength(1);
-    // The existing clear-rewake entry is preserved as-is.
-    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === 'borg-clear-rewake'))).toHaveLength(1);
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveRegenPath())))).toHaveLength(1);
+    // Bare name clear-rewake is migrated to shell-escaped canonical form.
+    expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === shellEscape(resolveClearRewakePath())))).toHaveLength(1);
     expect(entries).toHaveLength(2);
   });
 
@@ -123,11 +123,11 @@ describe('addProjectSessionStartHook', () => {
     expect(addProjectSessionStartHook(root)).toBe(true);
     const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
     const clearEntries = entries.filter((entry: any) =>
-      entry.hooks?.some((hook: any) => hook.command === resolveClearRewakePath())
+      entry.hooks?.some((hook: any) => hook.command === shellEscape(resolveClearRewakePath()))
     );
     expect(clearEntries).toEqual([{
       matcher: 'clear',
-      hooks: [{ type: 'command', command: resolveClearRewakePath(), asyncRewake: true }],
+      hooks: [{ type: 'command', command: shellEscape(resolveClearRewakePath()), asyncRewake: true }],
     }]);
     expect(entries.some((entry: any) => entry.hooks?.some((hook: any) => hook.command === 'other-tool'))).toBe(true);
     expect(addProjectSessionStartHook(root)).toBe(false);
@@ -140,10 +140,10 @@ describe('addProjectSessionStartHook', () => {
       .filter((entry: any) => entry.matcher === '*' || entry.matcher === source)
       .flatMap((entry: any) => entry.hooks.map((hook: any) => hook.command));
 
-    expect(commandsFor('clear')).toEqual([resolveRegenPath(), resolveClearRewakePath()]);
-    expect(commandsFor('startup')).toEqual([resolveRegenPath()]);
-    expect(commandsFor('resume')).toEqual([resolveRegenPath()]);
-    expect(commandsFor('compact')).toEqual([resolveRegenPath()]);
+    expect(commandsFor('clear')).toEqual([shellEscape(resolveRegenPath()), shellEscape(resolveClearRewakePath())]);
+    expect(commandsFor('startup')).toEqual([shellEscape(resolveRegenPath())]);
+    expect(commandsFor('resume')).toEqual([shellEscape(resolveRegenPath())]);
+    expect(commandsFor('compact')).toEqual([shellEscape(resolveRegenPath())]);
   });
 
   it('returns false (no write) on unparseable existing settings instead of clobbering', () => {

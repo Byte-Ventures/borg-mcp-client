@@ -21,17 +21,18 @@ import {
   resolveClearRewakePath,
   resolveLogAuditPath,
 } from './self-path.js';
+import { shellEscape } from './shell-escape.js';
 
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// gh#client#18: resolve absolute paths from the running entrypoint so MCP
-// config and hook registrations always point to THIS installation — never
-// a bare PATH-resolved name that may resolve to a different version.
-const HOOK_COMMAND = resolveRegenPath();
-const CLEAR_REWAKE_HOOK_COMMAND = resolveClearRewakePath();
-const AUDIT_HOOK_COMMAND = resolveLogAuditPath();
+// gh#client#18: canonical hook commands stored in JSON are shell-escaped
+// absolute paths. Bare names and stale/other-install absolute paths are
+// migrated to this form on every hook write.
+const HOOK_COMMAND = shellEscape(resolveRegenPath());
+const CLEAR_REWAKE_HOOK_COMMAND = shellEscape(resolveClearRewakePath());
+const AUDIT_HOOK_COMMAND = shellEscape(resolveLogAuditPath());
 const MCP_BINARY = resolveMcpBinaryPath();
 
 /**
@@ -127,6 +128,20 @@ function addSessionStartHookAt(settingsFile: string, includeClearRewake = false)
   settings.hooks.SessionStart ??= [];
 
   let changed = false;
+
+  // gh#client#18: migrate bare/stale-absolute orientation hooks to canonical form.
+  for (const entry of settings.hooks.SessionStart) {
+    if (!Array.isArray(entry?.hooks)) continue;
+    for (const hook of entry.hooks) {
+      if (hook?.type !== 'command' || typeof hook?.command !== 'string') continue;
+      if (commandMatches(hook.command, BARE_BORG_REGEN, resolveRegenPath()) &&
+          !isCanonicalCommand(hook.command, HOOK_COMMAND)) {
+        hook.command = HOOK_COMMAND;
+        changed = true;
+      }
+    }
+  }
+
   if (!hasCommandHook(settings.hooks.SessionStart, HOOK_COMMAND)) {
     settings.hooks.SessionStart.push({
       matcher: '*',
@@ -153,13 +168,19 @@ function addSessionStartHookAt(settingsFile: string, includeClearRewake = false)
   return true;
 }
 
-// gh#client#18: match both bare names (old configs) and absolute paths (new).
-// When a bare name is a suffix of the absolute path, we also match via
-// endsWith so a `node_modules/.bin/borg-regen` symlink path is recognized.
+// gh#client#18: match bare names (old configs), stale absolute paths (other
+// installations), shell-escaped canonical paths, and unescaped canonical paths.
 function commandMatches(entryCommand: string, bareName: string, absolutePath: string): boolean {
-  return entryCommand === absolutePath
+  const escaped = shellEscape(absolutePath);
+  return entryCommand === escaped
+    || entryCommand === absolutePath
     || entryCommand === bareName
     || entryCommand.endsWith(`/${bareName}`);
+}
+
+/** Strict canonical match: only the shell-escaped or exact unescaped canonical path. */
+function isCanonicalCommand(entryCommand: string, canonical: string): boolean {
+  return entryCommand === canonical || entryCommand === canonical.replace(/^'|'$/g, '');
 }
 
 const BARE_BORG_REGEN = 'borg-regen';
@@ -171,24 +192,35 @@ function hasCommandHook(entries: any[], command: string): boolean {
     Array.isArray(entry?.hooks) &&
     entry.hooks.some((h: any) => {
       if (h?.type !== 'command' || typeof h?.command !== 'string') return false;
-      if (command === HOOK_COMMAND) return commandMatches(h.command, BARE_BORG_REGEN, command);
-      if (command === CLEAR_REWAKE_HOOK_COMMAND) return commandMatches(h.command, BARE_CLEAR_REWAKE, command);
-      if (command === AUDIT_HOOK_COMMAND) return commandMatches(h.command, BARE_LOG_AUDIT, command);
+      if (command === HOOK_COMMAND) return commandMatches(h.command, BARE_BORG_REGEN, resolveRegenPath());
+      if (command === CLEAR_REWAKE_HOOK_COMMAND) return commandMatches(h.command, BARE_CLEAR_REWAKE, resolveClearRewakePath());
+      if (command === AUDIT_HOOK_COMMAND) return commandMatches(h.command, BARE_LOG_AUDIT, resolveLogAuditPath());
       return h.command === command;
+    })
+  );
+}
+
+/** Strict: only the shell-escaped canonical form (no bare-name fallback). */
+function hasCanonicalCommandHook(entries: any[], command: string): boolean {
+  return entries.some((entry: any) =>
+    Array.isArray(entry?.hooks) &&
+    entry.hooks.some((h: any) => {
+      if (h?.type !== 'command' || typeof h?.command !== 'string') return false;
+      return isCanonicalCommand(h.command, command);
     })
   );
 }
 
 function isClearRewakeCommand(hook: any): boolean {
   if (hook?.type !== 'command' || typeof hook?.command !== 'string') return false;
-  return commandMatches(hook.command, BARE_CLEAR_REWAKE, CLEAR_REWAKE_HOOK_COMMAND);
+  return commandMatches(hook.command, BARE_CLEAR_REWAKE, resolveClearRewakePath());
 }
 
 function isCanonicalClearRewakeEntry(entry: any): boolean {
   return entry?.matcher === 'clear' &&
     Array.isArray(entry?.hooks) &&
     entry.hooks.length === 1 &&
-    isClearRewakeCommand(entry.hooks[0]) &&
+    isCanonicalCommand(entry.hooks[0].command, CLEAR_REWAKE_HOOK_COMMAND) &&
     entry.hooks[0].asyncRewake === true;
 }
 
@@ -199,15 +231,30 @@ function isCanonicalClearRewakeEntry(entry: any): boolean {
  * entry once.
  */
 function normalizeClearRewakeHook(entries: any[]): any[] | null {
-  const commandCount = entries.reduce(
+  let migrated = false;
+  const result = entries.map((entry: any) => {
+    if (!Array.isArray(entry?.hooks)) return entry;
+    const hooks = entry.hooks.map((hook: any) => {
+      if (isClearRewakeCommand(hook) && !isCanonicalCommand(hook.command, CLEAR_REWAKE_HOOK_COMMAND)) {
+        migrated = true;
+        return { ...hook, command: CLEAR_REWAKE_HOOK_COMMAND };
+      }
+      return hook;
+    });
+    return hooks === entry.hooks ? entry : { ...entry, hooks };
+  });
+
+  const commandCount = result.reduce(
     (count, entry) => count + (
       Array.isArray(entry?.hooks) ? entry.hooks.filter(isClearRewakeCommand).length : 0
     ),
     0
   );
-  if (commandCount === 1 && entries.some(isCanonicalClearRewakeEntry)) return null;
+  if (commandCount === 1 && result.some(isCanonicalClearRewakeEntry)) {
+    return migrated ? result : null;
+  }
 
-  const withoutOwnedCommand = entries.flatMap((entry: any) => {
+  const withoutOwnedCommand = result.flatMap((entry: any) => {
     if (!Array.isArray(entry?.hooks)) return [entry];
     const hooks = entry.hooks.filter((hook: any) => !isClearRewakeCommand(hook));
     return hooks.length > 0 ? [{ ...entry, hooks }] : [];
@@ -228,7 +275,7 @@ function sessionStartHookRegisteredAt(settingsFile: string, includeClearRewake =
   }
   const arr = settings?.hooks?.SessionStart;
   if (!Array.isArray(arr)) return false;
-  return hasCommandHook(arr, HOOK_COMMAND) &&
+  return hasCanonicalCommandHook(arr, HOOK_COMMAND) &&
     (!includeClearRewake || normalizeClearRewakeHook(arr) === null);
 }
 
@@ -249,7 +296,7 @@ export function isSessionStartHookRegistered(): boolean {
     Array.isArray(entry?.hooks) &&
     entry.hooks.some((h: any) => {
       if (h?.type !== 'command' || typeof h?.command !== 'string') return false;
-      return commandMatches(h.command, BARE_BORG_REGEN, HOOK_COMMAND);
+      return isCanonicalCommand(h.command, HOOK_COMMAND);
     })
   );
 }
@@ -272,7 +319,7 @@ export function isUserPromptSubmitHookRegistered(): boolean {
     Array.isArray(entry?.hooks) &&
     entry.hooks.some((h: any) => {
       if (h?.type !== 'command' || typeof h?.command !== 'string') return false;
-      return commandMatches(h.command, BARE_LOG_AUDIT, AUDIT_HOOK_COMMAND);
+      return isCanonicalCommand(h.command, AUDIT_HOOK_COMMAND);
     })
   );
 }
@@ -341,19 +388,30 @@ export function addUserPromptSubmitHook(): boolean {
   settings.hooks ??= {};
   settings.hooks.UserPromptSubmit ??= [];
 
-  const alreadyPresent = settings.hooks.UserPromptSubmit.some((entry: any) =>
-    Array.isArray(entry?.hooks) &&
-    entry.hooks.some((h: any) => h?.type === 'command' && h?.command === AUDIT_HOOK_COMMAND)
-  );
-  if (alreadyPresent) return false;
+  // gh#client#18: migrate bare/stale-absolute audit hooks to canonical form.
+  let changed = false;
+  for (const entry of settings.hooks.UserPromptSubmit) {
+    if (!Array.isArray(entry?.hooks)) continue;
+    for (const hook of entry.hooks) {
+      if (hook?.type !== 'command' || typeof hook?.command !== 'string') continue;
+      if (commandMatches(hook.command, BARE_LOG_AUDIT, resolveLogAuditPath()) &&
+          !isCanonicalCommand(hook.command, AUDIT_HOOK_COMMAND)) {
+        hook.command = AUDIT_HOOK_COMMAND;
+        changed = true;
+      }
+    }
+  }
 
-  settings.hooks.UserPromptSubmit.push({
-    matcher: '*',
-    hooks: [{ type: 'command', command: AUDIT_HOOK_COMMAND }],
-  });
+  if (!hasCanonicalCommandHook(settings.hooks.UserPromptSubmit, AUDIT_HOOK_COMMAND)) {
+    settings.hooks.UserPromptSubmit.push({
+      matcher: '*',
+      hooks: [{ type: 'command', command: AUDIT_HOOK_COMMAND }],
+    });
+    changed = true;
+  }
 
-  writeSettings(settings);
-  return true;
+  if (changed) writeSettings(settings);
+  return changed;
 }
 
 /**
@@ -553,26 +611,38 @@ function addCodexHook(eventName: 'SessionStart' | 'UserPromptSubmit', command: s
   const entries = hooksFile.hooks[eventName];
   if (!Array.isArray(entries)) return false;
 
-  // gh#client#18: detect both bare names (old configs) and absolute paths (new).
-  const alreadyPresent = entries.some((entry: any) =>
-    Array.isArray(entry?.hooks) &&
-    entry.hooks.some((h: any) => {
-      if (h?.type !== 'command' || typeof h?.command !== 'string') return false;
-      if (command === HOOK_COMMAND) return commandMatches(h.command, BARE_BORG_REGEN, command);
-      if (command === AUDIT_HOOK_COMMAND) return commandMatches(h.command, BARE_LOG_AUDIT, command);
-      return h.command === command;
-    })
-  );
-  if (alreadyPresent) return false;
+  // gh#client#18: migrate bare/stale-absolute hooks to canonical form.
+  let changed = false;
+  for (const entry of entries) {
+    if (!Array.isArray(entry?.hooks)) continue;
+    for (const hook of entry.hooks) {
+      if (hook?.type !== 'command' || typeof hook?.command !== 'string') continue;
+      if (command === HOOK_COMMAND &&
+          commandMatches(hook.command, BARE_BORG_REGEN, resolveRegenPath()) &&
+          !isCanonicalCommand(hook.command, command)) {
+        hook.command = command;
+        changed = true;
+      }
+      if (command === AUDIT_HOOK_COMMAND &&
+          commandMatches(hook.command, BARE_LOG_AUDIT, resolveLogAuditPath()) &&
+          !isCanonicalCommand(hook.command, command)) {
+        hook.command = command;
+        changed = true;
+      }
+    }
+  }
 
-  const entry: any = {
-    hooks: [{ type: 'command', command }],
-  };
-  if (options.matcher) entry.matcher = options.matcher;
-  if (typeof options.timeout === 'number') entry.hooks[0].timeout = options.timeout;
-  entries.push(entry);
-  writeJsonFile(CODEX_HOOKS_PATH, hooksFile);
-  return true;
+  if (!hasCanonicalCommandHook(entries, command)) {
+    const entry: any = {
+      hooks: [{ type: 'command', command }],
+    };
+    if (options.matcher) entry.matcher = options.matcher;
+    if (typeof options.timeout === 'number') entry.hooks[0].timeout = options.timeout;
+    entries.push(entry);
+    changed = true;
+  }
+  if (changed) writeJsonFile(CODEX_HOOKS_PATH, hooksFile);
+  return changed;
 }
 
 export function addCodexSessionStartHook(): boolean {
@@ -596,8 +666,8 @@ export function isCodexHookRegistered(
       Array.isArray(entry?.hooks) &&
       entry.hooks.some((h: any) => {
         if (h?.type !== 'command' || typeof h?.command !== 'string') return false;
-        if (command === HOOK_COMMAND) return commandMatches(h.command, BARE_BORG_REGEN, command);
-        if (command === AUDIT_HOOK_COMMAND) return commandMatches(h.command, BARE_LOG_AUDIT, command);
+        if (command === HOOK_COMMAND) return isCanonicalCommand(h.command, command);
+        if (command === AUDIT_HOOK_COMMAND) return isCanonicalCommand(h.command, command);
         return h.command === command;
       })
     );

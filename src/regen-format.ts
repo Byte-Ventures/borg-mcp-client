@@ -99,8 +99,8 @@ export function wakePathArming(
     'Arm your wake path before working:',
     `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`${monitorCommand}\` so cube posts wake you in real time.`,
     '2. **Engage `/loop`** (self-paced) so you keep waking to triage the cube.',
-    '3. **Adaptive recovery deadline** — after wake/triage, set ONE `ScheduleWakeup`: [9000, 12600]s (3h ±30m) when Monitor is healthy or indeterminate; [720, 1080]s (15m ±3m) only when explicitly broken. Re-arm Monitor; retry short until healthy. A real Monitor wake resets—not stacks—it.',
-    '4. **Recovery tick** — drain `borg_read-log unread_only=true` first. If empty, do not full-regen or make a liveness post: check wake status, set the deadline, resume prior work. This reduces client fallback churn; safety probes may still wake.',
+    '3. **Adaptive recovery** — set ONE `ScheduleWakeup`: [9000, 12600]s (3h ±30m) when Monitor healthy/indeterminate; [720, 1080]s (15m ±3m) when broken. Re-arm Monitor; retry short until healthy. A real Monitor wake resets, not stacks.',
+    '4. **Recovery tick** — drain `borg_read-log unread_only=true`. If empty, check wake status, set deadline, resume prior work. No full-regen or liveness post on empty; safety probes may still wake.',
   ].join('\n');
 }
 
@@ -178,7 +178,7 @@ export function formatLeanOrientation(args: {
     '',
     wakePathArming(agentKind, inboxPath, monitorStateRoot),
     '',
-    'REQUIRED BEFORE ACTING OR POSTING: (1) call `borg_regen mode="full"`; (2) load the cube directive and conventions with `borg_cube`; (3) ensure your own role playbook/details are loaded — full regen normally supplies them, but call `borg_role` if missing or after compaction; (4) load `borg_playbook` once per session for the complete operating disciplines. Do not proceed until all four are in context. This orientation stays lean and does not inline them. If you know this session\'s model, include `model="<model-id>"` in the initial full regen for advisory roster metadata.',
+    'REQUIRED BEFORE ACTING OR POSTING: (1) `borg_regen mode="full"`; (2) `borg_cube` for directive + conventions; (3) confirm role playbook loaded — full regen supplies it, else `borg_role`; (4) `borg_playbook` once per session for operating disciplines. This orientation stays lean — they are not inlined. Include `model="<model-id>"` in initial regen when known.',
     '',
   ].join('\n');
 }
