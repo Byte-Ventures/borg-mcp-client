@@ -28,12 +28,32 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(matchDocsSections('opencode install').map((s) => s.slug)).toContain('install');
     expect(matchDocsSections('worktree')[0]?.slug).toBe('cli');
     expect(matchDocsSections('worktree cleanup')[0]?.slug).toBe('cli');
-    expect(matchDocsSections('setup assimilate')).toEqual([]);
+    // 'setup assimilate' routed nowhere while the server pages were skeletons;
+    // with run-server/enroll live it now routes to the self-hosted flow.
+    expect(matchDocsSections('setup assimilate').map((s) => s.slug)).toContain('enroll');
     expect(matchDocsSections('billing cancel subscription')).toEqual([]);
     expect(matchDocsSections('what is a cube').map((s) => s.slug)).toContain('concepts');
     expect(matchDocsSections('codex').map((s) => s.slug)).toContain('faq');
     expect(matchDocsSections('zzzznotarealtopic')).toEqual([]);
     expect(matchDocsSections('')).toEqual([]);
+  });
+
+  it('routes self-hosted server topics to run-server / self-hosting / enroll', () => {
+    expect(matchDocsSections('run a local server')[0]?.slug).toBe('run-server');
+    expect(matchDocsSections('borgmcp-server setup').map((s) => s.slug)).toContain('run-server');
+    expect(matchDocsSections('self-hosting backup')[0]?.slug).toBe('self-hosting');
+    expect(matchDocsSections('rotate revoke credentials').map((s) => s.slug)).toContain('self-hosting');
+    expect(matchDocsSections('enroll invitation')[0]?.slug).toBe('enroll');
+    expect(matchDocsSections('assimilate host enroll').map((s) => s.slug)).toContain('enroll');
+    expect(matchDocsSections('listen port 7091').map((s) => s.slug)).toContain('run-server');
+  });
+
+  it('server keywords do not hijack established topics (CR 8b474dc2 reciprocal-substring pins)', () => {
+    expect(matchDocsSections('prune')[0]?.slug).toBe('cli');
+    expect(matchDocsSections('prune').map((s) => s.slug)).not.toContain('run-server');
+    expect(matchDocsSections('reporting')[0]?.slug).toBe('faq');
+    expect(matchDocsSections('reporting').map((s) => s.slug)).not.toContain('run-server');
+    expect(matchDocsSections('plan the sprint').map((s) => s.slug)).not.toContain('run-server');
   });
 
   it('borg_docs is registered with the optional topic param', () => {
