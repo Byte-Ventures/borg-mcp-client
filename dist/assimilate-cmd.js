@@ -648,24 +648,34 @@ export async function runAssimilate(args, deps) {
                 `  OR:  pass --here to skip the sibling spawn and use the current directory\n`);
             return 1;
         }
-        // gh#238: fetch origin so the new worktree starts on the latest
-        // remote HEAD, not the (possibly stale) local HEAD.
-        deps.runSync('git', ['fetch', 'origin'], projectRoot);
-        // Resolve the default branch on origin (main or master).
-        let startRef = 'origin/main';
-        const mainProbe = deps.runSync('git', ['rev-parse', '--verify', 'origin/main'], projectRoot);
-        if (mainProbe.status !== 0) {
-            const masterProbe = deps.runSync('git', ['rev-parse', '--verify', 'origin/master'], projectRoot);
-            if (masterProbe.status === 0) {
-                startRef = 'origin/master';
+        const localHead = headProbe.stdout.trim();
+        const originProbe = deps.runSync('git', ['remote', 'get-url', 'origin'], projectRoot);
+        let startRef = 'HEAD';
+        if (originProbe.status === 0 && originProbe.stdout.trim().length > 0) {
+            // gh#238: when origin exists, fetch it so the new worktree starts on the
+            // latest remote default branch rather than a possibly stale local HEAD.
+            deps.runSync('git', ['fetch', 'origin'], projectRoot);
+            const mainProbe = deps.runSync('git', ['rev-parse', '--verify', 'origin/main'], projectRoot);
+            if (mainProbe.status === 0) {
+                startRef = 'origin/main';
+            }
+            else {
+                const masterProbe = deps.runSync('git', ['rev-parse', '--verify', 'origin/master'], projectRoot);
+                if (masterProbe.status === 0) {
+                    startRef = 'origin/master';
+                }
             }
         }
-        // Warn if local HEAD diverges from the remote default branch.
-        const localHead = headProbe.stdout.trim();
-        const remoteHead = deps.runSync('git', ['rev-parse', startRef], projectRoot).stdout.trim();
-        if (localHead !== remoteHead) {
-            deps.stderr(`note: local HEAD (${localHead.slice(0, 7)}) differs from ${startRef} (${remoteHead.slice(0, 7)}); ` +
-                `new worktree will start on ${startRef}\n`);
+        if (startRef === 'HEAD') {
+            deps.stderr(`note: no usable origin; new worktree will start on local HEAD (${localHead.slice(0, 7)})\n`);
+        }
+        else {
+            // Warn if local HEAD diverges from the remote default branch.
+            const remoteHead = deps.runSync('git', ['rev-parse', startRef], projectRoot).stdout.trim();
+            if (localHead !== remoteHead) {
+                deps.stderr(`note: local HEAD (${localHead.slice(0, 7)}) differs from ${startRef} (${remoteHead.slice(0, 7)}); ` +
+                    `new worktree will start on ${startRef}\n`);
+            }
         }
         const repoBase = basename(projectRoot);
         const suffix = args.flags.worktree ?? roleSlug(assignedRole.name);
