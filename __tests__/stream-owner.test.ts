@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rename as fsRename, utimes, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -429,5 +429,75 @@ describe('stream-owner lease', () => {
     await expect(lease!.refresh()).resolves.toBe(true);
     const raw = await readFile(path.join(lease!.lockPath, 'owner.json'), 'utf8');
     expect(JSON.parse(raw).heartbeatAt).toBe('2026-05-28T12:00:10.000Z');
+  });
+
+  it('does not delete a successor installed before an old owner releases', async () => {
+    const locksDir = await tempLocksDir();
+    const replacement = {
+      schemaVersion: 1,
+      pid: 1002,
+      processNonce: 'release-successor',
+      cwd: '/work/successor',
+      startedAt: '2026-05-28T12:00:01.000Z',
+      heartbeatAt: '2026-05-28T12:00:01.000Z',
+    };
+    const lease = await acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, {
+      locksDir,
+      pid: 1001,
+      processNonce: 'release-old-owner',
+      now: () => new Date('2026-05-28T12:00:00.000Z'),
+      beforeLeaseReleaseMutation: async (lockPath) => {
+        await fsRename(lockPath, `${lockPath}.displaced-old`);
+        await mkdir(lockPath, { mode: 0o700 });
+        await writeFile(path.join(lockPath, 'owner.json'), JSON.stringify(replacement) + '\n');
+      },
+    });
+    expect(lease).not.toBeNull();
+
+    await lease!.release();
+
+    const current = JSON.parse(await readFile(path.join(lease!.lockPath, 'owner.json'), 'utf8'));
+    expect(current).toEqual(replacement);
+    await expect(acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, {
+      locksDir,
+      pid: 1003,
+      processNonce: 'release-third-contender',
+      now: () => new Date('2026-05-28T12:00:02.000Z'),
+    })).resolves.toBeNull();
+  });
+
+  it('does not overwrite a successor installed before an old owner refreshes', async () => {
+    const locksDir = await tempLocksDir();
+    const replacement = {
+      schemaVersion: 1,
+      pid: 1002,
+      processNonce: 'refresh-successor',
+      cwd: '/work/successor',
+      startedAt: '2026-05-28T12:00:01.000Z',
+      heartbeatAt: '2026-05-28T12:00:01.000Z',
+    };
+    const lease = await acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, {
+      locksDir,
+      pid: 1001,
+      processNonce: 'refresh-old-owner',
+      now: () => new Date('2026-05-28T12:00:00.000Z'),
+      beforeLeaseRefreshMutation: async (lockPath) => {
+        await fsRename(lockPath, `${lockPath}.displaced-old`);
+        await mkdir(lockPath, { mode: 0o700 });
+        await writeFile(path.join(lockPath, 'owner.json'), JSON.stringify(replacement) + '\n');
+      },
+    });
+    expect(lease).not.toBeNull();
+
+    await expect(lease!.refresh()).resolves.toBe(false);
+
+    const current = JSON.parse(await readFile(path.join(lease!.lockPath, 'owner.json'), 'utf8'));
+    expect(current).toEqual(replacement);
+    await expect(acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, {
+      locksDir,
+      pid: 1003,
+      processNonce: 'refresh-third-contender',
+      now: () => new Date('2026-05-28T12:00:02.000Z'),
+    })).resolves.toBeNull();
   });
 });

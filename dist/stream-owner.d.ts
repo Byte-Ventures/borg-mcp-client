@@ -38,6 +38,8 @@ export interface StreamOwnerDeps {
     processStartedAt?: string;
     isPidAlive?: (pid: number) => boolean;
     beforeTakeoverVerify?: (takeoverPath: string) => Promise<void>;
+    beforeLeaseRefreshMutation?: (lockPath: string) => Promise<void>;
+    beforeLeaseReleaseMutation?: (lockPath: string) => Promise<void>;
     /** Initialization/refresh writer seam for failure-path regression tests. */
     writeRecord?: (lockPath: string, record: StreamOwnerRecord) => Promise<void>;
 }

@@ -56,6 +56,8 @@ export interface StreamOwnerDeps {
   processStartedAt?: string;
   isPidAlive?: (pid: number) => boolean;
   beforeTakeoverVerify?: (takeoverPath: string) => Promise<void>;
+  beforeLeaseRefreshMutation?: (lockPath: string) => Promise<void>;
+  beforeLeaseReleaseMutation?: (lockPath: string) => Promise<void>;
   /** Initialization/refresh writer seam for failure-path regression tests. */
   writeRecord?: (lockPath: string, record: StreamOwnerRecord) => Promise<void>;
 }
@@ -205,7 +207,21 @@ async function tryCreateLease(
     await cleanupFailedInitialization(lockPath, record).catch(() => {});
     throw err;
   }
-  return makeLease(lockPath, record, deps);
+  const created = await readBoundOwner(lockPath);
+  const createdRecord = created?.raw ? parseOwnershipRecord(created.raw) : null;
+  if (
+    !created || !createdRecord ||
+    !sameOwner(record, createdRecord)
+  ) {
+    await cleanupFailedInitialization(lockPath, record).catch(() => {});
+    throw new Error('Borg stream lease initialization lost ownership');
+  }
+  return makeLease(
+    lockPath,
+    record,
+    { dev: created.stat.dev, ino: created.stat.ino },
+    deps,
+  );
 }
 
 /**
@@ -437,33 +453,139 @@ function isPidAlive(pid: number, deps: StreamOwnerDeps): boolean {
 function makeLease(
   lockPath: string,
   record: StreamOwnerRecord,
+  identity: { dev: number; ino: number },
   deps: StreamOwnerDeps
 ): StreamLease {
+  let ownedRecord = record;
   return {
     lockPath,
     record,
     async refresh(): Promise<boolean> {
-      const current = await readOwnershipRecord(lockPath);
-      if (!current || current.pid !== record.pid || current.processNonce !== record.processNonce) {
-        return false;
-      }
-      const next = { ...record, heartbeatAt: (deps.now ?? (() => new Date()))().toISOString() };
-      await (deps.writeRecord ?? writeRecord)(lockPath, next);
+      await deps.beforeLeaseRefreshMutation?.(lockPath);
+      const next = { ...ownedRecord, heartbeatAt: (deps.now ?? (() => new Date()))().toISOString() };
+      const refreshed = await mutateClaimedLease(
+        lockPath,
+        identity,
+        ownedRecord,
+        deps,
+        async (claimPath) => {
+          await (deps.writeRecord ?? writeRecord)(claimPath, next);
+          return 'restore';
+        },
+      );
+      if (!refreshed) return false;
+      ownedRecord = next;
       this.record = next;
       return true;
     },
     async release(): Promise<void> {
-      const current = await readOwnershipRecord(lockPath);
-      if (current?.pid === record.pid && current.processNonce === record.processNonce) {
-        await fs.rm(lockPath, { recursive: true, force: true });
-      }
+      await deps.beforeLeaseReleaseMutation?.(lockPath);
+      await mutateClaimedLease(
+        lockPath,
+        identity,
+        ownedRecord,
+        deps,
+        async () => 'remove',
+      );
     },
   };
+}
+
+async function mutateClaimedLease(
+  lockPath: string,
+  identity: { dev: number; ino: number },
+  expected: StreamOwnerRecord,
+  deps: StreamOwnerDeps,
+  mutation: (claimPath: string) => Promise<'restore' | 'remove'>,
+): Promise<boolean> {
+  const claimPath = takeoverPath(lockPath);
+  try {
+    await fs.rename(lockPath, claimPath);
+  } catch (error: any) {
+    if (error?.code === 'ENOENT' || error?.code === 'EEXIST' || error?.code === 'ENOTEMPTY') {
+      return false;
+    }
+    throw error;
+  }
+
+  const movedStat = await fs.stat(claimPath).catch(() => null);
+  if (!movedStat || !sameIdentity(identity, movedStat)) {
+    await restoreClaimedLease(claimPath, lockPath);
+    return false;
+  }
+
+  const claimant = {
+    schemaVersion: 1,
+    pid: deps.pid ?? process.pid,
+    processNonce: deps.processNonce ?? processNonce,
+    claimedAt: (deps.now ?? (() => new Date()))().toISOString(),
+  };
+  await fs.writeFile(
+    path.join(claimPath, TAKEOVER_FILE),
+    JSON.stringify(claimant, null, 2) + '\n',
+    { flag: 'wx', mode: 0o600 },
+  );
+
+  const inspected = await readBoundOwner(claimPath);
+  const current = inspected?.raw ? parseOwnershipRecord(inspected.raw) : null;
+  if (
+    !inspected || !sameIdentity(identity, inspected.stat) || !current ||
+    !sameOwner(expected, current)
+  ) {
+    await fs.unlink(path.join(claimPath, TAKEOVER_FILE)).catch(() => {});
+    await restoreClaimedLease(claimPath, lockPath);
+    return false;
+  }
+
+  const disposition = await mutation(claimPath);
+  if (disposition === 'remove') {
+    await fs.rm(claimPath, { recursive: true, force: true });
+    return true;
+  }
+
+  await fs.unlink(path.join(claimPath, TAKEOVER_FILE)).catch(() => {});
+  return restoreClaimedLease(claimPath, lockPath);
+}
+
+async function restoreClaimedLease(claimPath: string, lockPath: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await fs.rename(claimPath, lockPath);
+      return true;
+    } catch (error: any) {
+      if (error?.code !== 'EEXIST' && error?.code !== 'ENOTEMPTY') {
+        if (error?.code === 'ENOENT') return false;
+        throw error;
+      }
+      // A creator that began just before the claim appeared must observe the
+      // fixed claim and clean its own initialization. Give it a bounded chance
+      // to do so without ever deleting that unverified canonical directory.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  return false;
+}
+
+function sameOwner(left: StreamOwnerRecord, right: StreamOwnerRecord): boolean {
+  return left.schemaVersion === right.schemaVersion &&
+    left.pid === right.pid &&
+    left.processNonce === right.processNonce &&
+    left.cwd === right.cwd &&
+    left.startedAt === right.startedAt &&
+    left.heartbeatAt === right.heartbeatAt;
 }
 
 async function readOwnershipRecord(lockPath: string): Promise<StreamOwnerRecord | null> {
   try {
     const raw = await fs.readFile(path.join(lockPath, OWNER_FILE), 'utf8');
+    return parseOwnershipRecord(raw);
+  } catch {
+    return null;
+  }
+}
+
+function parseOwnershipRecord(raw: string): StreamOwnerRecord | null {
+  try {
     const parsed = JSON.parse(raw);
     return isRecord(parsed) ? parsed : null;
   } catch {
