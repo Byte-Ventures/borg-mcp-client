@@ -107,7 +107,10 @@ describe('local server SSE adapter', () => {
     );
   });
 
-  it('writes and wakes for a local direct entry addressed to the active drone', async () => {
+  it.each([
+    ['direct entry addressed to the active drone', 'direct', [DRONE_ID]],
+    ['broadcast entry', 'broadcast', []],
+  ] as const)('writes and wakes for a local %s', async (_case, visibility, recipients) => {
     const cursor = { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' };
     vi.doMock('../src/local-server-cursor.js', () => ({
       getLocalServerCursor: vi.fn(async () => null),
@@ -129,9 +132,9 @@ describe('local server SSE adapter', () => {
           cube_id: CUBE_ID,
           drone_id: OTHER_RECIPIENT_ID,
           message: 'wake intended recipient',
-          visibility: 'direct',
+          visibility,
           created_at: cursor.created_at,
-          recipient_drone_ids: [DRONE_ID],
+          recipient_drone_ids: recipients,
         },
       })}`,
       '',

@@ -1294,8 +1294,7 @@ export async function appendLog(
     }
     let visibility = opts.visibility;
     let recipientDroneIds = opts.recipientDroneIds;
-    if (visibility !== 'broadcast' &&
-        (!recipientDroneIds || recipientDroneIds.length === 0) &&
+    if ((!recipientDroneIds || recipientDroneIds.length === 0) &&
         opts.to !== undefined) {
       const base = `/api/cubes/${local.cubeId}`;
       const [rolePayload, dronePayload] = await Promise.all([

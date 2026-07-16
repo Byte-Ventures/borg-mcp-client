@@ -261,6 +261,26 @@ describe('local server route adapter', () => {
     expect(getRefreshToken).not.toHaveBeenCalled();
   });
 
+  it('gives explicit local to: precedence over a broadcast visibility override', async () => {
+    const remote = await import('../src/remote-client.js');
+
+    await remote.appendLog(SESSION, ORIGIN, 'must stay directed', {
+      to: ['coordinator-1'],
+      visibility: 'broadcast',
+      serverTrustIdentity: TRUST_IDENTITY,
+    });
+
+    const post = fetchSpy.mock.calls.find(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` &&
+      init?.method === 'POST'
+    );
+    expect(JSON.parse(String(post![1]?.body)).payload).toEqual({
+      message: 'must stay directed',
+      visibility: 'direct',
+      recipientDroneIds: [COORDINATOR_DRONE_ID],
+    });
+  });
+
   it('fails closed on an unknown local recipient before log mutation', async () => {
     const remote = await import('../src/remote-client.js');
 
