@@ -958,7 +958,7 @@ export async function runAssimilate(args, deps) {
     let codexSocketPath = null;
     let codexServerCleanup = null;
     const launchApproval = deps.resolveCliApprovals
-        ? await deps.resolveCliApprovals(cli)
+        ? await deps.resolveCliApprovals(cli, agentCwd)
         : { codexArgs: [] };
     if (launchApproval.warning)
         deps.stderr(`warning: ${launchApproval.warning}\n`);

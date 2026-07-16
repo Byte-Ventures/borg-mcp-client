@@ -110,7 +110,7 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
       return typeof result.invitation === 'string' ? result.invitation : '';
     },
     isTTY: () => process.stdin.isTTY === true,
-    resolveCliApprovals: (cli) => resolveLaunchBorgApprovals(
+    resolveCliApprovals: (cli, cwd) => resolveLaunchBorgApprovals(
       cli,
       defaultApprovalIo(
         async (message) => {
@@ -121,7 +121,8 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
             rl.close();
           }
         },
-        () => process.stdin.isTTY === true
+        () => process.stdin.isTTY === true,
+        { cwd, env: process.env, codexArgs: [] }
       )
     ),
 

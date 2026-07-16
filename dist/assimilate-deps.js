@@ -78,7 +78,7 @@ export function buildDefaultAssimilateDeps() {
             return typeof result.invitation === 'string' ? result.invitation : '';
         },
         isTTY: () => process.stdin.isTTY === true,
-        resolveCliApprovals: (cli) => resolveLaunchBorgApprovals(cli, defaultApprovalIo(async (message) => {
+        resolveCliApprovals: (cli, cwd) => resolveLaunchBorgApprovals(cli, defaultApprovalIo(async (message) => {
             const rl = createInterface({ input: process.stdin, output: process.stdout });
             try {
                 return await rl.question(message);
@@ -86,7 +86,7 @@ export function buildDefaultAssimilateDeps() {
             finally {
                 rl.close();
             }
-        }, () => process.stdin.isTTY === true)),
+        }, () => process.stdin.isTTY === true, { cwd, env: process.env, codexArgs: [] })),
         getHostname: () => osHostname(),
         setTerminalTitle: (label, cubeName) => {
             setTitle({ label, cubeName }, cubeName);

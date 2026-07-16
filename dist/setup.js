@@ -186,8 +186,15 @@ async function main() {
             process.exit(1);
         }
     }
-    const approvalIo = defaultApprovalIo(async () => '', () => false);
-    for (const warning of setupApprovalWarnings(approvalIo)) {
+    const approvalIo = defaultApprovalIo(async () => '', () => false, {
+        cwd: process.cwd(),
+        env: process.env,
+        codexArgs: [],
+    });
+    for (const warning of await setupApprovalWarnings(approvalIo, {
+        codex: codexDetected,
+        opencode: opencodeDetected,
+    })) {
         console.log(chalk.yellow(`warning: ${warning}`));
     }
     console.log('');

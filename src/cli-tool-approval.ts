@@ -1,13 +1,11 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
 import type { BorgCli } from './cubes.js';
 
 /**
  * Client #20: the narrow coordination surface a borg-launched agent needs
- * without an approval round-trip. Keep this list deliberately smaller than
- * the complete Borg MCP surface: deferred product/admin tools still follow the
- * operator's normal agent policy.
+ * without an approval round-trip. Keep the direct-tool list deliberately
+ * smaller than the complete Borg MCP surface. borg_tool's transitive scope is
+ * disclosed separately before consent.
  */
 export const BORG_COORDINATION_TOOLS = [
   'regen',
@@ -17,6 +15,10 @@ export const BORG_COORDINATION_TOOLS = [
   'ack',
   'stream-status',
   'whoami',
+  // Required by the canonical lean orientation before acting/after compaction.
+  'cube',
+  'role',
+  'playbook',
   'tool',
   'describe-tool',
 ] as const;
@@ -93,8 +95,31 @@ export function codexApprovalRepairSnippet(tools = CODEX_BORG_COORDINATION_TOOLS
     .join('\n\n');
 }
 
-export function inspectCodexBorgApprovals(text: string): ApprovalInspection {
-  const { defaultMode, toolModes } = parseCodexModes(text);
+export function inspectCodexBorgApprovals(config: unknown): ApprovalInspection {
+  let defaultMode: ApprovalAction | undefined;
+  let toolModes = new Map<string, ApprovalAction>();
+  if (typeof config === 'string') {
+    ({ defaultMode, toolModes } = parseCodexModes(config));
+  } else if (config && typeof config === 'object' && !Array.isArray(config)) {
+    const servers = (config as Record<string, unknown>).mcp_servers;
+    const borg = servers && typeof servers === 'object' && !Array.isArray(servers)
+      ? (servers as Record<string, unknown>).borg
+      : undefined;
+    if (borg && typeof borg === 'object' && !Array.isArray(borg)) {
+      const record = borg as Record<string, unknown>;
+      if (typeof record.default_tools_approval_mode === 'string') {
+        defaultMode = record.default_tools_approval_mode as ApprovalAction;
+      }
+      if (record.tools && typeof record.tools === 'object' && !Array.isArray(record.tools)) {
+        toolModes = new Map(Object.entries(record.tools as Record<string, unknown>).flatMap(
+          ([tool, value]) => value && typeof value === 'object' &&
+            typeof (value as Record<string, unknown>).approval_mode === 'string'
+            ? [[tool, (value as Record<string, unknown>).approval_mode as ApprovalAction] as const]
+            : []
+        ));
+      }
+    }
+  }
   const restrictiveTools = CODEX_BORG_COORDINATION_TOOLS.filter((tool) => {
     const mode = toolModes.get(tool) ?? defaultMode;
     return mode !== undefined && mode !== 'auto';
@@ -179,40 +204,161 @@ export function inspectOpenCodeBorgApprovals(config: unknown): ApprovalInspectio
 }
 
 export function codexBorgApprovalArgs(tools = CODEX_BORG_COORDINATION_TOOLS): string[] {
-  return tools.flatMap((tool) => [
-    '-c',
-    `mcp_servers.borg.tools."${tool}".approval_mode="auto"`,
-  ]);
+  if (tools.length === 0) return [];
+  // Codex's dotted CLI override parser treats quotes in a segment literally,
+  // so `tools."borg:regen"` creates the wrong key. An inline TOML table is the
+  // supported way to address colon-named tools and deep-merges with the
+  // remaining effective tool config.
+  const toolTable = tools
+    .map((tool) => `${JSON.stringify(tool)}={approval_mode="auto"}`)
+    .join(',');
+  return ['-c', `mcp_servers.borg.tools={${toolTable}}`];
 }
 
 export interface ApprovalIo {
-  readCodexConfig: () => string;
-  readOpenCodeConfig: () => unknown;
+  readCodexConfig: (approvalArgs?: string[]) => Promise<unknown> | unknown;
+  readOpenCodeConfig: (permissionOverride?: string) => Promise<unknown> | unknown;
   isTTY: () => boolean;
   confirm: (message: string) => Promise<string>;
+}
+
+export interface EffectiveConfigOptions {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  /** User-selected Codex profile/config flags, in their launch precedence. */
+  codexArgs: string[];
+  loadCodex?: (args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown>;
+  loadOpenCode?: (cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown> | unknown;
+}
+
+/** Keep only flags that participate in Codex config resolution. They are
+ * replayed after Borg's hypothetical approval flags, matching real launch
+ * precedence without passing prompts/images/remote-control flags to the
+ * config-reader process. */
+export function codexEffectiveConfigArgs(args: string[]): string[] {
+  const out: string[] = [];
+  const paired = new Set(['-p', '--profile', '-c', '--config', '--enable', '--disable']);
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (paired.has(arg)) {
+      if (args[i + 1] !== undefined) out.push(arg, args[++i]);
+      continue;
+    }
+    if (/^--(?:profile|config|enable|disable)=/.test(arg) || arg === '--strict-config') {
+      out.push(arg);
+    }
+  }
+  return out;
+}
+
+export async function readCodexEffectiveConfig(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('codex', [...args, 'app-server', '--stdio'], {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    let buffer = '';
+    let settled = false;
+    const finish = (error?: Error, value?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const timer = setTimeout(
+      () => finish(new Error('Codex effective-config query timed out')),
+      5_000
+    );
+    child.on('error', () => finish(new Error('Codex effective-config query failed')));
+    child.on('exit', () => {
+      if (!settled) finish(new Error('Codex effective-config query exited before responding'));
+    });
+    child.stdout.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString('utf8');
+      if (buffer.length > 4 * 1024 * 1024) {
+        finish(new Error('Codex effective-config response exceeded 4 MiB'));
+        return;
+      }
+      for (;;) {
+        const newline = buffer.indexOf('\n');
+        if (newline < 0) break;
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        let message: any;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (message.id === 1) {
+          child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
+          child.stdin.write(`${JSON.stringify({
+            id: 2,
+            method: 'config/read',
+            params: { cwd, includeLayers: true },
+          })}\n`);
+        } else if (message.id === 2) {
+          if (message.error) finish(new Error('Codex effective-config query was rejected'));
+          else finish(undefined, message.result?.config ?? null);
+        }
+      }
+    });
+    child.stdin.write(`${JSON.stringify({
+      id: 1,
+      method: 'initialize',
+      params: {
+        clientInfo: { name: 'borgmcp', title: null, version: '0' },
+        capabilities: { experimentalApi: true },
+      },
+    })}\n`);
+  });
+}
+
+export function readOpenCodeEffectiveConfig(
+  cwd: string,
+  env: NodeJS.ProcessEnv
+): unknown {
+  const result = spawnSync('opencode', ['debug', 'config'], {
+    cwd,
+    env,
+    encoding: 'utf8',
+    timeout: 5_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.error || result.status !== 0 || !result.stdout.trim()) {
+    throw new Error('OpenCode effective-config query failed');
+  }
+  return JSON.parse(result.stdout);
 }
 
 export function defaultApprovalIo(
   confirm: (message: string) => Promise<string>,
   isTTY: () => boolean,
-  env: NodeJS.ProcessEnv = process.env
+  options: Partial<EffectiveConfigOptions> = {}
 ): ApprovalIo {
+  const cwd = options.cwd ?? process.cwd();
+  const env = options.env ?? process.env;
+  const selectedCodexArgs = codexEffectiveConfigArgs(options.codexArgs ?? []);
+  const loadCodex = options.loadCodex ?? readCodexEffectiveConfig;
+  const loadOpenCode = options.loadOpenCode ?? readOpenCodeEffectiveConfig;
   return {
-    readCodexConfig: () => {
-      const file = path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
-      return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-    },
-    readOpenCodeConfig: () => {
-      const file = env.OPENCODE_CONFIG || path.join(
-        env.OPENCODE_CONFIG_DIR || path.join(os.homedir(), '.config', 'opencode'),
-        'opencode.json'
-      );
-      const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-      if (env.OPENCODE_PERMISSION) {
-        config.permission = JSON.parse(env.OPENCODE_PERMISSION);
-      }
-      return config;
-    },
+    readCodexConfig: (approvalArgs = []) =>
+      loadCodex([...approvalArgs, ...selectedCodexArgs], cwd, env),
+    readOpenCodeConfig: (permissionOverride) =>
+      loadOpenCode(cwd, {
+        ...env,
+        ...(permissionOverride === undefined
+          ? {}
+          : { OPENCODE_PERMISSION: permissionOverride }),
+      }),
     isTTY,
     confirm,
   };
@@ -232,9 +378,9 @@ export async function resolveLaunchBorgApprovals(
   let openCodeConfig: unknown;
   try {
     if (cli === 'codex') {
-      inspection = inspectCodexBorgApprovals(io.readCodexConfig());
+      inspection = inspectCodexBorgApprovals(await io.readCodexConfig());
     } else {
-      openCodeConfig = io.readOpenCodeConfig();
+      openCodeConfig = await io.readOpenCodeConfig();
       inspection = inspectOpenCodeBorgApprovals(openCodeConfig);
     }
   } catch (error: any) {
@@ -255,7 +401,7 @@ export async function resolveLaunchBorgApprovals(
     };
   }
 
-  const answer = await io.confirm(`${intro} Allow only these Borg coordination tools for this launch? [y/N] `);
+  const answer = await io.confirm(`${intro} Apply this launch-only Borg approval set? [y/N] `);
   if (!accepted(answer)) {
     return {
       codexArgs: [],
@@ -264,16 +410,52 @@ export async function resolveLaunchBorgApprovals(
   }
 
   if (cli === 'codex') {
-    return { codexArgs: codexBorgApprovalArgs(inspection.restrictiveTools) };
+    const codexArgs = codexBorgApprovalArgs(inspection.restrictiveTools);
+    let effectiveWithOverride: ApprovalInspection;
+    try {
+      effectiveWithOverride = inspectCodexBorgApprovals(
+        await io.readCodexConfig(codexArgs)
+      );
+    } catch {
+      return {
+        codexArgs: [],
+        warning: 'Could not verify the Codex launch-only approval override against effective config. No override was applied.',
+      };
+    }
+    if (effectiveWithOverride.restrictiveTools.length > 0) {
+      return {
+        codexArgs: [],
+        warning: `Codex managed policy prevents the launch-only Borg approval override. Ask your Codex administrator to allow these tools:\n${effectiveWithOverride.repairSnippet}`,
+      };
+    }
+    return { codexArgs };
+  }
+  const openCodePermission = JSON.stringify(mergeOpenCodePermission(
+    openCodeConfig && typeof openCodeConfig === 'object'
+      ? (openCodeConfig as Record<string, unknown>).permission
+      : undefined,
+    inspection.restrictiveTools
+  ));
+  let effectiveWithOverride: ApprovalInspection;
+  try {
+    effectiveWithOverride = inspectOpenCodeBorgApprovals(
+      await io.readOpenCodeConfig(openCodePermission)
+    );
+  } catch {
+    return {
+      codexArgs: [],
+      warning: 'Could not verify the OpenCode launch-only approval override against effective config. No override was applied.',
+    };
+  }
+  if (effectiveWithOverride.restrictiveTools.length > 0) {
+    return {
+      codexArgs: [],
+      warning: `OpenCode managed policy prevents the launch-only Borg approval override. Ask your OpenCode administrator to allow these tools:\n${effectiveWithOverride.repairSnippet}`,
+    };
   }
   return {
     codexArgs: [],
-    openCodePermission: JSON.stringify(mergeOpenCodePermission(
-      openCodeConfig && typeof openCodeConfig === 'object'
-        ? (openCodeConfig as Record<string, unknown>).permission
-        : undefined,
-      inspection.restrictiveTools
-    )),
+    openCodePermission,
   };
 }
 
@@ -288,19 +470,26 @@ export function buildOpenCodeLaunchArgs(
   return [cwd, '--port', String(port), '--prompt', prompt, ...passthroughArgs];
 }
 
-export function setupApprovalWarnings(deps: Pick<ApprovalIo, 'readCodexConfig' | 'readOpenCodeConfig'>): string[] {
+export async function setupApprovalWarnings(
+  deps: Pick<ApprovalIo, 'readCodexConfig' | 'readOpenCodeConfig'>,
+  selected: { codex?: boolean; opencode?: boolean } = { codex: true, opencode: true }
+): Promise<string[]> {
   const warnings: string[] = [];
   try {
-    const codex = inspectCodexBorgApprovals(deps.readCodexConfig());
-    if (codex.restrictiveTools.length > 0) {
+    const codex = selected.codex
+      ? inspectCodexBorgApprovals(await deps.readCodexConfig())
+      : null;
+    if (codex && codex.restrictiveTools.length > 0) {
       warnings.push(`Codex Borg approvals are restrictive. ${BORG_DISPATCHER_APPROVAL_DISCLOSURE} Borg launches will offer a launch-only fix. Global repair:\n${codex.repairSnippet}`);
     }
   } catch (error: any) {
     warnings.push(`Could not inspect Codex Borg tool approvals: ${error?.message ?? error}`);
   }
   try {
-    const opencode = inspectOpenCodeBorgApprovals(deps.readOpenCodeConfig());
-    if (opencode.restrictiveTools.length > 0) {
+    const opencode = selected.opencode
+      ? inspectOpenCodeBorgApprovals(await deps.readOpenCodeConfig())
+      : null;
+    if (opencode && opencode.restrictiveTools.length > 0) {
       warnings.push(`OpenCode Borg approvals are restrictive. ${BORG_DISPATCHER_APPROVAL_DISCLOSURE} Borg launches will offer a launch-only fix. Global repair:\n${opencode.repairSnippet}`);
     }
   } catch (error: any) {

@@ -141,7 +141,7 @@ export interface AssimilateDeps {
   promptSecret: (message: string) => Promise<string>;
   isTTY: () => boolean;
   /** Selected-harness approval inspection/consent (client#20). */
-  resolveCliApprovals?: (cli: BorgCli) => Promise<LaunchApprovalDecision>;
+  resolveCliApprovals?: (cli: BorgCli, cwd: string) => Promise<LaunchApprovalDecision>;
 
   // CR-PD-F1 (drone-2 Phase D review 2026-05-18T04:13Z) — gh#104
   // captured os.hostname() at assimilate-time as load-bearing for
@@ -1367,7 +1367,7 @@ export async function runAssimilate(
   let codexSocketPath: string | null = null;
   let codexServerCleanup: (() => void) | null = null;
   const launchApproval = deps.resolveCliApprovals
-    ? await deps.resolveCliApprovals(cli)
+    ? await deps.resolveCliApprovals(cli, agentCwd)
     : { codexArgs: [] };
   if (launchApproval.warning) deps.stderr(`warning: ${launchApproval.warning}\n`);
 

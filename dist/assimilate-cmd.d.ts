@@ -79,7 +79,7 @@ export interface AssimilateDeps {
     promptSecret: (message: string) => Promise<string>;
     isTTY: () => boolean;
     /** Selected-harness approval inspection/consent (client#20). */
-    resolveCliApprovals?: (cli: BorgCli) => Promise<LaunchApprovalDecision>;
+    resolveCliApprovals?: (cli: BorgCli, cwd: string) => Promise<LaunchApprovalDecision>;
     getHostname: () => string;
     setTerminalTitle: (label: string, cubeName: string) => void;
     getActiveCube: () => Promise<ActiveCube | null>;

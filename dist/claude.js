@@ -252,7 +252,11 @@ async function main() {
     // client#20: inspect only the SELECTED harness after the one-shot launch
     // menu choice. Explicit consent enables a narrow per-process override;
     // Borg never rewrites the user's approval policy here.
-    const launchApproval = await resolveLaunchBorgApprovals(cli, defaultApprovalIo(prompt, () => process.stdin.isTTY === true));
+    const launchApproval = await resolveLaunchBorgApprovals(cli, defaultApprovalIo(prompt, () => process.stdin.isTTY === true, {
+        cwd: process.cwd(),
+        env: process.env,
+        codexArgs: parsedCli.rest,
+    }));
     if (launchApproval.warning) {
         console.error(`${consolePrefix()}${chalk.yellow(`warning: ${launchApproval.warning}`)}`);
     }

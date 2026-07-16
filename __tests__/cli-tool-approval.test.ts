@@ -4,12 +4,22 @@ import {
   OPENCODE_BORG_COORDINATION_TOOLS,
   buildOpenCodeLaunchArgs,
   codexBorgApprovalArgs,
+  codexEffectiveConfigArgs,
+  defaultApprovalIo,
   inspectCodexBorgApprovals,
   inspectOpenCodeBorgApprovals,
   mergeOpenCodePermission,
   resolveLaunchBorgApprovals,
   setupApprovalWarnings,
 } from '../src/cli-tool-approval.js';
+
+function codexEffective(mode: 'auto' | 'approve') {
+  return {
+    mcp_servers: {
+      borg: { default_tools_approval_mode: mode, tools: {} },
+    },
+  };
+}
 
 function io(overrides: Partial<Parameters<typeof resolveLaunchBorgApprovals>[1]> = {}) {
   return {
@@ -46,9 +56,30 @@ default_tools_approval_mode = "approve"
 
   it('builds exact per-tool launch overrides without broadening Borg admin tools', () => {
     const args = codexBorgApprovalArgs();
-    expect(args.filter((arg) => arg === '-c')).toHaveLength(CODEX_BORG_COORDINATION_TOOLS.length);
+    expect(args).toHaveLength(2);
+    expect(args[0]).toBe('-c');
     expect(args.join('\n')).toContain('borg:read-log');
+    expect(args.join('\n')).toContain('borg:cube');
+    expect(args.join('\n')).toContain('borg:role');
+    expect(args.join('\n')).toContain('borg:playbook');
     expect(args.join('\n')).not.toContain('borg:create-cube');
+    expect(args[1]).not.toContain('tools."borg:');
+  });
+
+  it('replays only selected profile/config flags into native effective-config resolution', () => {
+    expect(codexEffectiveConfigArgs([
+      '--model', 'gpt-5', '-p', 'team', '--config', 'mcp_servers.borg.default_tools_approval_mode="approve"',
+      '--remote', 'unix:///tmp/codex.sock', '--strict-config', '--enable=hooks',
+    ])).toEqual([
+      '-p', 'team', '--config', 'mcp_servers.borg.default_tools_approval_mode="approve"',
+      '--strict-config', '--enable=hooks',
+    ]);
+  });
+
+  it('uses the native resolver result: project deny wins over clean global; project allow wins over global deny', () => {
+    expect(inspectCodexBorgApprovals(codexEffective('approve')).restrictiveTools)
+      .toHaveLength(CODEX_BORG_COORDINATION_TOOLS.length);
+    expect(inspectCodexBorgApprovals(codexEffective('auto')).restrictiveTools).toEqual([]);
   });
 });
 
@@ -108,10 +139,11 @@ describe('launch consent', () => {
 
   it('applies a launch-only Codex fix only after explicit TTY consent', async () => {
     const deps = io({
-      readCodexConfig: () => '[mcp_servers.borg]\ndefault_tools_approval_mode = "approve"',
+      readCodexConfig: (approvalArgs = []) =>
+        approvalArgs.length > 0 ? codexEffective('auto') : codexEffective('approve'),
     });
     const result = await resolveLaunchBorgApprovals('codex', deps);
-    expect(result.codexArgs).toHaveLength(CODEX_BORG_COORDINATION_TOOLS.length * 2);
+    expect(result.codexArgs).toHaveLength(2);
     expect(deps.confirm).toHaveBeenCalledOnce();
     expect(deps.confirm).toHaveBeenCalledWith(expect.stringContaining(
       'approving the dispatcher also approves any Borg operation invoked through it'
@@ -130,6 +162,13 @@ describe('launch consent', () => {
     expect(deps.confirm).not.toHaveBeenCalled();
   });
 
+  it('fails closed when managed Codex policy rejects the hypothetical override', async () => {
+    const deps = io({ readCodexConfig: () => codexEffective('approve') });
+    const result = await resolveLaunchBorgApprovals('codex', deps);
+    expect(result.codexArgs).toEqual([]);
+    expect(result.warning).toContain('managed policy prevents');
+  });
+
   it('decline leaves policy unchanged and never broadens other OpenCode permissions', async () => {
     const deps = io({
       readOpenCodeConfig: () => ({ permission: { '*': 'ask', bash: 'deny' } }),
@@ -143,7 +182,9 @@ describe('launch consent', () => {
 
   it('consent produces only exact OpenCode Borg coordination allows', async () => {
     const deps = io({
-      readOpenCodeConfig: () => ({ permission: { 'borg_borg_*': 'ask', bash: 'deny' } }),
+      readOpenCodeConfig: (permissionOverride) => permissionOverride
+        ? ({ permission: JSON.parse(permissionOverride) })
+        : ({ permission: { 'borg_borg_*': 'ask', bash: 'deny' } }),
     });
     const result = await resolveLaunchBorgApprovals('opencode', deps);
     const parsed = JSON.parse(result.openCodePermission!);
@@ -152,11 +193,40 @@ describe('launch consent', () => {
       .filter(([key, action]) => key.startsWith('borg_borg_') && action === 'allow')
       .map(([key]) => key)).toEqual(OPENCODE_BORG_COORDINATION_TOOLS);
   });
+
+  it('fails closed when inline/managed OpenCode policy remains restrictive', async () => {
+    const deps = io({
+      readOpenCodeConfig: () => ({ permission: { 'borg_borg_*': 'deny', edit: 'ask' } }),
+    });
+    const result = await resolveLaunchBorgApprovals('opencode', deps);
+    expect(result.openCodePermission).toBeUndefined();
+    expect(result.warning).toContain('managed policy prevents');
+  });
+
+  it('passes actual cwd/profile/env to harness-native resolvers, including JSONC/inline layers', async () => {
+    const loadCodex = vi.fn(async () => codexEffective('auto'));
+    const loadOpenCode = vi.fn(() => ({ permission: { bash: 'deny' }, jsoncResolved: true }));
+    const approvalIo = defaultApprovalIo(async () => '', () => false, {
+      cwd: '/repo/subdir',
+      env: { OPENCODE_CONFIG_CONTENT: '{ /* jsonc */ "permission": {"bash":"deny"} }' },
+      codexArgs: ['--profile', 'team', '--model', 'gpt-5'],
+      loadCodex,
+      loadOpenCode,
+    });
+    await approvalIo.readCodexConfig();
+    await approvalIo.readOpenCodeConfig();
+    expect(loadCodex).toHaveBeenCalledWith(
+      ['--profile', 'team'], '/repo/subdir', expect.objectContaining({ OPENCODE_CONFIG_CONTENT: expect.any(String) })
+    );
+    expect(loadOpenCode).toHaveBeenCalledWith(
+      '/repo/subdir', expect.objectContaining({ OPENCODE_CONFIG_CONTENT: expect.any(String) })
+    );
+  });
 });
 
 describe('setup diagnostics', () => {
-  it('reports exact repair snippets without prompting or mutating config', () => {
-    const warnings = setupApprovalWarnings({
+  it('reports exact repair snippets without prompting or mutating config', async () => {
+    const warnings = await setupApprovalWarnings({
       readCodexConfig: () => '[mcp_servers.borg]\ndefault_tools_approval_mode = "approve"',
       readOpenCodeConfig: () => ({ permission: { 'borg_borg_*': 'ask', bash: 'deny' } }),
     });
@@ -165,5 +235,16 @@ describe('setup diagnostics', () => {
     expect(warnings[0]).toContain('approves any Borg operation invoked through it');
     expect(warnings[1]).toContain('borg_borg_regen');
     expect(warnings[1]).toContain('"bash": "deny"');
+  });
+
+  it('queries only installed harnesses', async () => {
+    const readCodexConfig = vi.fn(() => codexEffective('approve'));
+    const readOpenCodeConfig = vi.fn(() => ({ permission: 'ask' }));
+    await setupApprovalWarnings(
+      { readCodexConfig, readOpenCodeConfig },
+      { codex: true, opencode: false }
+    );
+    expect(readCodexConfig).toHaveBeenCalledOnce();
+    expect(readOpenCodeConfig).not.toHaveBeenCalled();
   });
 });

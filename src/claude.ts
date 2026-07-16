@@ -313,7 +313,11 @@ async function main() {
   // Borg never rewrites the user's approval policy here.
   const launchApproval = await resolveLaunchBorgApprovals(
     cli,
-    defaultApprovalIo(prompt, () => process.stdin.isTTY === true)
+    defaultApprovalIo(prompt, () => process.stdin.isTTY === true, {
+      cwd: process.cwd(),
+      env: process.env,
+      codexArgs: parsedCli.rest,
+    })
   );
   if (launchApproval.warning) {
     console.error(`${consolePrefix()}${chalk.yellow(`warning: ${launchApproval.warning}`)}`);
