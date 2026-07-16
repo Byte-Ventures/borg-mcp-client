@@ -32,7 +32,7 @@ describe('local server SSE adapter', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('uses the local stream route and renders server-returned direct entries without a client read ACL', async () => {
+  it('advances the local stream cursor without waking for a direct entry addressed elsewhere', async () => {
     const cursor = { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' };
     const advanceCursor = vi.fn(async () => {});
     vi.doMock('../src/local-server-cursor.js', () => ({
@@ -100,15 +100,70 @@ describe('local server SSE adapter', () => {
     const headers = new Headers(fetchImpl.mock.calls[0][1]?.headers);
     expect(headers.has('X-Drone-Session')).toBe(false);
     expect(getToken).not.toHaveBeenCalled();
-    expect(appendLine).toHaveBeenCalledWith(
-      CUBE_ID,
-      DRONE_ID,
-      expect.stringContaining('local stream entry'),
-    );
+    expect(appendLine).not.toHaveBeenCalled();
     expect(advanceCursor).toHaveBeenCalledWith(
       expect.objectContaining({ cubeId: CUBE_ID, droneId: DRONE_ID }),
       cursor,
     );
+  });
+
+  it('writes and wakes for a local direct entry addressed to the active drone', async () => {
+    const cursor = { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' };
+    vi.doMock('../src/local-server-cursor.js', () => ({
+      getLocalServerCursor: vi.fn(async () => null),
+      encodeLocalServerCursor: vi.fn(),
+      advanceLocalServerCursor: vi.fn(async () => {}),
+    }));
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => {
+        throw new Error('injected stream transport should avoid trust-file IO');
+      }),
+    }));
+    const wire = [
+      'event: log',
+      `id: ${LOG_ID}`,
+      `data: ${JSON.stringify({
+        cursor,
+        entry: {
+          id: LOG_ID,
+          cube_id: CUBE_ID,
+          drone_id: OTHER_RECIPIENT_ID,
+          message: 'wake intended recipient',
+          visibility: 'direct',
+          created_at: cursor.created_at,
+          recipient_drone_ids: [DRONE_ID],
+        },
+      })}`,
+      '',
+    ].join('\n');
+    const appendLine = vi.fn(async () => {});
+    const onInboxReceipt = vi.fn();
+    const { streamOnce } = await import('../src/log-stream.js');
+
+    await streamOnce({
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      sessionToken: 's'.repeat(43),
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+    }, null, vi.fn(), {
+      fetchImpl: vi.fn(async () => new Response(wire, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })) as typeof fetch,
+      appendLine,
+      hasInboxEntryId: vi.fn(async () => false),
+      getToken: vi.fn(async () => 'cloud-token-must-not-be-read'),
+      onInboxReceipt,
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(appendLine).toHaveBeenCalledWith(
+      CUBE_ID,
+      DRONE_ID,
+      expect.stringContaining('wake intended recipient'),
+    );
+    expect(onInboxReceipt).toHaveBeenCalledTimes(1);
   });
 
   it.each([
