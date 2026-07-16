@@ -418,6 +418,19 @@ export async function runAssimilate(args, deps) {
     // duplicate seat.
     const existing = await deps.getActiveCube();
     const hasPersistedIdentity = existing !== null || await deps.hasPersistedActiveCube();
+    const wantSibling = args.flags.worktree !== undefined || (existing !== null && !args.flags.here);
+    const localAttachOperation = {
+        // Capture the source repository before a successful attach changes cwd to
+        // the newly-created sibling. This is the stable state namespace for both
+        // preparation and completion.
+        projectRoot,
+        kind: wantSibling ? 'sibling' : 'seat',
+        operationKey: wantSibling
+            ? (args.flags.worktree === undefined
+                ? 'implicit-sibling'
+                : `named-sibling:${args.flags.worktree}`)
+            : 'current-worktree',
+    };
     let reattachPriorId;
     let remintInvalidPrior = false;
     let savedLocalRole;
@@ -441,7 +454,7 @@ export async function runAssimilate(args, deps) {
         }
         const pendingCandidates = (await Promise.all(cubeDetail.roles.map(async (role) => ({
             role,
-            pending: await deps.getPendingLocalAttach(auth.apiUrl, auth.serverTrustIdentity, cubeDetail.id, role.id),
+            pending: await deps.getPendingLocalAttach(auth.apiUrl, auth.serverTrustIdentity, cubeDetail.id, role.id, localAttachOperation),
         })))).filter((candidate) => candidate.pending !== null);
         if (pendingCandidates.length > 1) {
             deps.stderr('Multiple unfinished Borg server seat attachments exist for this repository. ' +
@@ -564,6 +577,9 @@ export async function runAssimilate(args, deps) {
             model: effectiveModel,
             ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
             ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
+            ...(authority.kind === 'server'
+                ? { local_attach_operation: localAttachOperation }
+                : {}),
         };
         result = auth.serverTrustIdentity === undefined
             ? await deps.assimilate(auth.apiUrl, auth.token, assimilateParams)
@@ -618,7 +634,6 @@ export async function runAssimilate(args, deps) {
     // already aborted there, pre-mint. The surviving --here + existing case
     // is the SAME-cube reattach — an in-place recovery, never a sibling
     // spawn.)
-    const wantSibling = args.flags.worktree !== undefined || (existing !== null && !args.flags.here);
     let spawnedWorktreePath = null;
     if (wantSibling) {
         // BUG-4 / gh#150 fix (v0.9.5): `git worktree add --detach <path>`
@@ -736,10 +751,10 @@ export async function runAssimilate(args, deps) {
             ...(assignedRole.role_class ? { roleClass: assignedRole.role_class } : {}),
         });
         if (auth.serverTrustIdentity !== undefined &&
-            result.local_attach_retry_key !== undefined) {
+            result.local_attach_completion !== undefined) {
             // cubes.json is now the durable consumer of the rotated session. Only
             // now may a crash-safe attach tuple leave PENDING state.
-            await deps.completeLocalAttach(auth.apiUrl, auth.serverTrustIdentity, result.cube_id, result.role_id);
+            await deps.completeLocalAttach(result.local_attach_completion);
         }
     }
     catch (err) {

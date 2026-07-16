@@ -44,6 +44,10 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { BorgServerError } from './server-errors.js';
 import type { SeatStatus } from './seat-probe.js';
+import type {
+  LocalAttachCompletion,
+  LocalAttachOperation,
+} from './server-attach-state.js';
 
 export interface AssimilateFlags {
   worktree?: string;
@@ -93,8 +97,8 @@ export interface AssimilateResult {
   // gh#780: true when the server re-attached an existing seat (token
   // rotated) instead of minting. Absent from pre-gh#780 workers.
   reattached?: boolean;
-  /** Internal correlator used only to complete durable local attach state. */
-  local_attach_retry_key?: string;
+  /** Exact prepared binding used only to complete durable local attach state. */
+  local_attach_completion?: LocalAttachCompletion;
 }
 
 export interface ActiveCube {
@@ -165,13 +169,9 @@ export interface AssimilateDeps {
     serverTrustIdentity: string,
     cubeId: string,
     roleId: string,
+    operation: LocalAttachOperation,
   ) => Promise<{ priorDroneId?: string; remintInvalidPrior: boolean } | null>;
-  completeLocalAttach: (
-    apiUrl: string,
-    serverTrustIdentity: string,
-    cubeId: string,
-    roleId: string,
-  ) => Promise<void>;
+  completeLocalAttach: (completion: LocalAttachCompletion) => Promise<void>;
   setActiveCube: (a: ActiveCube) => Promise<void>;
   findProjectRoot: (cwd: string) => string;
 
@@ -203,7 +203,7 @@ export interface AssimilateDeps {
   assimilate: (
     apiUrl: string,
     token: string,
-    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null },
+    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null; local_attach_operation?: LocalAttachOperation },
     serverTrustIdentity?: string,
   ) => Promise<AssimilateResult>;
   listTemplates: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<Array<{ name: string; description: string }>>;
@@ -702,6 +702,20 @@ export async function runAssimilate(
   // duplicate seat.
   const existing = await deps.getActiveCube();
   const hasPersistedIdentity = existing !== null || await deps.hasPersistedActiveCube();
+  const wantSibling =
+    args.flags.worktree !== undefined || (existing !== null && !args.flags.here);
+  const localAttachOperation: LocalAttachOperation = {
+    // Capture the source repository before a successful attach changes cwd to
+    // the newly-created sibling. This is the stable state namespace for both
+    // preparation and completion.
+    projectRoot,
+    kind: wantSibling ? 'sibling' : 'seat',
+    operationKey: wantSibling
+      ? (args.flags.worktree === undefined
+        ? 'implicit-sibling'
+        : `named-sibling:${args.flags.worktree}`)
+      : 'current-worktree',
+  };
   let reattachPriorId: string | undefined;
   let remintInvalidPrior = false;
   let savedLocalRole: Role | undefined;
@@ -738,6 +752,7 @@ export async function runAssimilate(
         auth.serverTrustIdentity!,
         cubeDetail.id,
         role.id,
+        localAttachOperation,
       ),
     })))).filter((candidate) => candidate.pending !== null);
     if (pendingCandidates.length > 1) {
@@ -883,6 +898,9 @@ export async function runAssimilate(
       model: effectiveModel,
       ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
       ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
+      ...(authority.kind === 'server'
+        ? { local_attach_operation: localAttachOperation }
+        : {}),
     };
     result = auth.serverTrustIdentity === undefined
       ? await deps.assimilate(auth.apiUrl, auth.token, assimilateParams)
@@ -952,8 +970,6 @@ export async function runAssimilate(
   // already aborted there, pre-mint. The surviving --here + existing case
   // is the SAME-cube reattach — an in-place recovery, never a sibling
   // spawn.)
-  const wantSibling =
-    args.flags.worktree !== undefined || (existing !== null && !args.flags.here);
   let spawnedWorktreePath: string | null = null;
 
   if (wantSibling) {
@@ -1087,16 +1103,11 @@ export async function runAssimilate(
     });
     if (
       auth.serverTrustIdentity !== undefined &&
-      result.local_attach_retry_key !== undefined
+      result.local_attach_completion !== undefined
     ) {
       // cubes.json is now the durable consumer of the rotated session. Only
       // now may a crash-safe attach tuple leave PENDING state.
-      await deps.completeLocalAttach(
-        auth.apiUrl,
-        auth.serverTrustIdentity,
-        result.cube_id,
-        result.role_id,
-      );
+      await deps.completeLocalAttach(result.local_attach_completion);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

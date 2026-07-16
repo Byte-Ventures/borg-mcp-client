@@ -107,4 +107,75 @@ describe('local attach retry persistence', () => {
       getOrCreateLocalAttachRetryKey(binding, '/project/a'),
     ).rejects.toThrow(/retry state is corrupt/i);
   });
+
+  it('gives each completed sibling a fresh seat while an ambiguous retry converges', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'borg-attach-state-'));
+    fixtures.push(fixture);
+    process.env.HOME = fixture;
+    vi.resetModules();
+    const {
+      completeLocalAttachRetry,
+      prepareLocalAttachRetry,
+    } = await import('../src/server-attach-state.js');
+    const operation = {
+      projectRoot: '/project/original',
+      kind: 'sibling' as const,
+      operationKey: 'named-sibling:review',
+    };
+    const pending = { remintInvalidPrior: false };
+
+    const first = await prepareLocalAttachRetry(binding, pending, operation);
+    await expect(prepareLocalAttachRetry(binding, pending, operation)).resolves.toBe(first);
+    await completeLocalAttachRetry({ binding, operation, retryKey: first });
+
+    const second = await prepareLocalAttachRetry(binding, pending, operation);
+    expect(second).not.toBe(first);
+    await expect(prepareLocalAttachRetry(binding, pending, operation)).resolves.toBe(second);
+  });
+
+  it('completes only the exact prepared sibling and cannot cross-clear the original seat', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'borg-attach-state-'));
+    fixtures.push(fixture);
+    process.env.HOME = fixture;
+    vi.resetModules();
+    const {
+      completeLocalAttachRetry,
+      getPendingLocalAttach,
+      prepareLocalAttachRetry,
+    } = await import('../src/server-attach-state.js');
+    const seatOperation = {
+      projectRoot: '/project/original',
+      kind: 'seat' as const,
+      operationKey: 'current-worktree',
+    };
+    const siblingOperation = {
+      projectRoot: '/project/original',
+      kind: 'sibling' as const,
+      operationKey: 'implicit-sibling',
+    };
+    const seatPending = {
+      priorDroneId: '33333333-3333-4333-8333-333333333333',
+      remintInvalidPrior: false,
+    };
+    const siblingPending = { remintInvalidPrior: false };
+
+    const seatRetry = await prepareLocalAttachRetry(binding, seatPending, seatOperation);
+    const siblingRetry = await prepareLocalAttachRetry(binding, siblingPending, siblingOperation);
+    expect(siblingRetry).not.toBe(seatRetry);
+
+    // Completion uses the captured source root even after the caller has
+    // changed cwd into the sibling, and removes only that sibling operation.
+    await completeLocalAttachRetry({
+      binding,
+      operation: siblingOperation,
+      retryKey: siblingRetry,
+    });
+    await expect(getPendingLocalAttach(binding, siblingOperation)).resolves.toBeNull();
+    await expect(getPendingLocalAttach(binding, seatOperation)).resolves.toEqual(seatPending);
+    await expect(completeLocalAttachRetry({
+      binding,
+      operation: seatOperation,
+      retryKey: siblingRetry,
+    })).rejects.toThrow(/retry identity changed/i);
+  });
 });

@@ -83,18 +83,13 @@ export function buildDefaultAssimilateDeps() {
         getActiveCube: () => cubesGetActive(),
         hasPersistedActiveCube: () => cubesHasPersistedActive(),
         probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
-        getPendingLocalAttach: (apiUrl, serverTrustIdentity, cubeId, roleId) => getPendingLocalAttach({
+        getPendingLocalAttach: (apiUrl, serverTrustIdentity, cubeId, roleId, operation) => getPendingLocalAttach({
             origin: apiUrl,
             trustIdentity: serverTrustIdentity,
             cubeId,
             roleId,
-        }),
-        completeLocalAttach: (apiUrl, serverTrustIdentity, cubeId, roleId) => completeLocalAttachRetry({
-            origin: apiUrl,
-            trustIdentity: serverTrustIdentity,
-            cubeId,
-            roleId,
-        }),
+        }, operation),
+        completeLocalAttach: (completion) => completeLocalAttachRetry(completion),
         setActiveCube: (a) => cubesSetActive(a),
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
         // gh#673 P2 (WI-1): project-local SessionStart hook for the launch root.
@@ -185,6 +180,9 @@ export function buildDefaultAssimilateDeps() {
         },
         assimilate: async (apiUrl, token, params, serverTrustIdentity) => {
             if (serverTrustIdentity !== undefined) {
+                if (params.local_attach_operation === undefined) {
+                    throw new Error('Borg server attach operation identity is missing');
+                }
                 const binding = {
                     origin: apiUrl,
                     trustIdentity: serverTrustIdentity,
@@ -196,7 +194,7 @@ export function buildDefaultAssimilateDeps() {
                         ? {}
                         : { priorDroneId: params.prior_drone_id }),
                     remintInvalidPrior: params.remint_invalid_prior === true,
-                });
+                }, params.local_attach_operation);
                 const trust = await loadBorgServerTrust(apiUrl);
                 if (trust.identity !== serverTrustIdentity) {
                     throw new Error('Borg server trust identity changed; refusing the attach');
@@ -222,7 +220,11 @@ export function buildDefaultAssimilateDeps() {
                     drone_label: attached.drone.label,
                     role_id: attached.role.id,
                     reattached: attached.reattached,
-                    local_attach_retry_key: retryKey,
+                    local_attach_completion: {
+                        binding,
+                        operation: params.local_attach_operation,
+                        retryKey,
+                    },
                     local_session: {
                         credential_ref: attached.session.credentialRef,
                         generation: attached.session.generation,

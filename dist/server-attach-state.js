@@ -26,10 +26,26 @@ function validateBinding(binding) {
         throw new Error('invalid Borg server attach binding');
     }
 }
-function bindingKey(projectRoot, binding) {
+function validateOperation(operation) {
+    if (operation.projectRoot.length < 1 ||
+        operation.projectRoot.length > 4096 ||
+        operation.operationKey.length < 1 ||
+        operation.operationKey.length > 1024 ||
+        /[\u0000-\u001f\u007f]/.test(operation.projectRoot) ||
+        /[\u0000-\u001f\u007f]/.test(operation.operationKey) ||
+        (operation.kind !== 'seat' && operation.kind !== 'sibling')) {
+        throw new Error('invalid Borg server attach operation');
+    }
+}
+function operationBindingKey(operation, binding) {
     validateBinding(binding);
+    validateOperation(operation);
     return createHash('sha256')
-        .update(projectRoot)
+        .update(operation.projectRoot)
+        .update('\0')
+        .update(operation.kind)
+        .update('\0')
+        .update(operation.operationKey)
         .update('\0')
         .update(binding.origin)
         .update('\0')
@@ -39,6 +55,13 @@ function bindingKey(projectRoot, binding) {
         .update('\0')
         .update(binding.roleId)
         .digest('hex');
+}
+function bindingKey(projectRoot, binding) {
+    return operationBindingKey({
+        projectRoot,
+        kind: 'seat',
+        operationKey: 'legacy-seat',
+    }, binding);
 }
 async function readRetries() {
     let raw;
@@ -137,11 +160,11 @@ function validateRetryRecord(record, binding) {
     }
 }
 /** Persist the exact attach tuple as pending before any attach request. */
-export async function prepareLocalAttachRetry(binding, pending, projectRoot = findProjectRoot()) {
+export async function prepareLocalAttachRetry(binding, pending, operation) {
     if (pending.priorDroneId !== undefined && !UUID_RE.test(pending.priorDroneId)) {
         throw new Error('Borg server saved seat identity is invalid');
     }
-    const key = bindingKey(projectRoot, binding);
+    const key = operationBindingKey(operation, binding);
     return withRetryStateLock(async () => {
         const state = await readRetries();
         const existing = state.retries[key];
@@ -155,7 +178,10 @@ export async function prepareLocalAttachRetry(binding, pending, projectRoot = fi
                 return existing.retryKey;
             }
         }
-        const retryKey = pending.remintInvalidPrior || !existing
+        // A completed in-place seat retains its correlator for later reattach.
+        // A deliberate sibling is a new seat operation: only an unfinished exact
+        // sibling retry may reuse its correlator; a later sibling starts fresh.
+        const retryKey = pending.remintInvalidPrior || !existing || operation.kind === 'sibling'
             ? randomUUID()
             : existing.retryKey;
         state.retries[key] = { ...binding, retryKey, pending: { ...pending } };
@@ -164,8 +190,8 @@ export async function prepareLocalAttachRetry(binding, pending, projectRoot = fi
     });
 }
 /** Return an exact unfinished attach, if one exists for this request binding. */
-export async function getPendingLocalAttach(binding, projectRoot = findProjectRoot()) {
-    const key = bindingKey(projectRoot, binding);
+export async function getPendingLocalAttach(binding, operation) {
+    const key = operationBindingKey(operation, binding);
     return withRetryStateLock(async () => {
         const state = await readRetries();
         const existing = state.retries[key];
@@ -176,17 +202,30 @@ export async function getPendingLocalAttach(binding, projectRoot = findProjectRo
     });
 }
 /** Mark a pending attach complete only after cubes.json accepted its session. */
-export async function completeLocalAttachRetry(binding, projectRoot = findProjectRoot()) {
-    const key = bindingKey(projectRoot, binding);
+export async function completeLocalAttachRetry(completion) {
+    if (!UUID_RE.test(completion.retryKey)) {
+        throw new Error('Borg server attach retry state is invalid');
+    }
+    const { binding, operation } = completion;
+    const key = operationBindingKey(operation, binding);
     await withRetryStateLock(async () => {
         const state = await readRetries();
         const existing = state.retries[key];
         if (!existing)
             throw new Error('pending Borg server attach state is missing');
         validateRetryRecord(existing, binding);
-        if (!existing.pending)
-            return;
-        delete existing.pending;
+        if (existing.retryKey !== completion.retryKey) {
+            throw new Error('pending Borg server attach retry identity changed');
+        }
+        if (!existing.pending) {
+            if (operation.kind === 'seat')
+                return;
+            throw new Error('pending Borg server sibling attach state is missing');
+        }
+        if (operation.kind === 'sibling')
+            delete state.retries[key];
+        else
+            delete existing.pending;
         await atomicWriteFile(ATTACH_RETRIES_FILE, JSON.stringify(state, null, 2) + '\n');
     });
 }

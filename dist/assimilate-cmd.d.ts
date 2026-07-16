@@ -2,6 +2,7 @@ import type { Role, RoleOccupant } from './role-resolver.js';
 import { type CodexRemoteLaunch } from './codex-remote.js';
 import type { BorgCli } from './cubes.js';
 import type { SeatStatus } from './seat-probe.js';
+import type { LocalAttachCompletion, LocalAttachOperation } from './server-attach-state.js';
 export interface AssimilateFlags {
     worktree?: string;
     template?: string;
@@ -40,8 +41,8 @@ export interface AssimilateResult {
         expires_at: string | null;
     };
     reattached?: boolean;
-    /** Internal correlator used only to complete durable local attach state. */
-    local_attach_retry_key?: string;
+    /** Exact prepared binding used only to complete durable local attach state. */
+    local_attach_completion?: LocalAttachCompletion;
 }
 export interface ActiveCube {
     cubeId: string;
@@ -81,11 +82,11 @@ export interface AssimilateDeps {
     getActiveCube: () => Promise<ActiveCube | null>;
     hasPersistedActiveCube: () => Promise<boolean>;
     probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
-    getPendingLocalAttach: (apiUrl: string, serverTrustIdentity: string, cubeId: string, roleId: string) => Promise<{
+    getPendingLocalAttach: (apiUrl: string, serverTrustIdentity: string, cubeId: string, roleId: string, operation: LocalAttachOperation) => Promise<{
         priorDroneId?: string;
         remintInvalidPrior: boolean;
     } | null>;
-    completeLocalAttach: (apiUrl: string, serverTrustIdentity: string, cubeId: string, roleId: string) => Promise<void>;
+    completeLocalAttach: (completion: LocalAttachCompletion) => Promise<void>;
     setActiveCube: (a: ActiveCube) => Promise<void>;
     findProjectRoot: (cwd: string) => string;
     installProjectSessionHook: (projectRoot: string) => void;
@@ -124,6 +125,7 @@ export interface AssimilateDeps {
         remint_invalid_prior?: boolean;
         model?: string | null;
         agent_kind?: 'claude' | 'codex' | 'opencode' | null;
+        local_attach_operation?: LocalAttachOperation;
     }, serverTrustIdentity?: string) => Promise<AssimilateResult>;
     listTemplates: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<Array<{
         name: string;
