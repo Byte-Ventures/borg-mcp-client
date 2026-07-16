@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import type { BorgCli } from './cubes.js';
 /**
  * Client #20: the narrow coordination surface a borg-launched agent needs
@@ -42,12 +43,17 @@ export interface EffectiveConfigOptions {
     loadCodex?: (args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown>;
     loadOpenCode?: (cwd: string, env: NodeJS.ProcessEnv) => Promise<unknown> | unknown;
 }
+export interface CodexEffectiveConfigRuntime {
+    spawnProcess?: typeof spawn;
+    timeoutMs?: number;
+    maxResponseBytes?: number;
+}
 /** Keep only flags that participate in Codex config resolution. They are
  * replayed after Borg's hypothetical approval flags, matching real launch
  * precedence without passing prompts/images/remote-control flags to the
  * config-reader process. */
 export declare function codexEffectiveConfigArgs(args: string[]): string[];
-export declare function readCodexEffectiveConfig(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<unknown>;
+export declare function readCodexEffectiveConfig(args: string[], cwd: string, env: NodeJS.ProcessEnv, runtime?: CodexEffectiveConfigRuntime): Promise<unknown>;
 export declare function readOpenCodeEffectiveConfig(cwd: string, env: NodeJS.ProcessEnv): unknown;
 export declare function defaultApprovalIo(confirm: (message: string) => Promise<string>, isTTY: () => boolean, options?: Partial<EffectiveConfigOptions>): ApprovalIo;
 export declare function resolveLaunchBorgApprovals(cli: BorgCli, io: ApprovalIo): Promise<LaunchApprovalDecision>;

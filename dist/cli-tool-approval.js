@@ -178,39 +178,86 @@ export function codexEffectiveConfigArgs(args) {
     }
     return out;
 }
-export async function readCodexEffectiveConfig(args, cwd, env) {
+export async function readCodexEffectiveConfig(args, cwd, env, runtime = {}) {
     return new Promise((resolve, reject) => {
-        const child = spawn('codex', [...args, 'app-server', '--stdio'], {
-            cwd,
-            env,
-            stdio: ['pipe', 'pipe', 'ignore'],
-        });
+        let child;
+        try {
+            child = (runtime.spawnProcess ?? spawn)('codex', [...args, 'app-server', '--stdio'], { cwd, env, stdio: ['pipe', 'pipe', 'ignore'] });
+        }
+        catch {
+            reject(new Error('Codex effective-config query failed'));
+            return;
+        }
+        if (!child.stdin || !child.stdout) {
+            try {
+                child.kill();
+            }
+            catch {
+                // No usable protocol streams exist; reject with a static failure.
+            }
+            reject(new Error('Codex effective-config query failed'));
+            return;
+        }
+        const stdin = child.stdin;
+        const stdout = child.stdout;
         let buffer = '';
+        let receivedBytes = 0;
+        let initialized = false;
         let settled = false;
+        let timer;
         const finish = (error, value) => {
             if (settled)
                 return;
             settled = true;
-            clearTimeout(timer);
-            child.kill();
+            if (timer)
+                clearTimeout(timer);
+            try {
+                child.kill();
+            }
+            catch {
+                // The query is already settled; process teardown is best-effort.
+            }
             if (error)
                 reject(error);
             else
                 resolve(value);
         };
-        const timer = setTimeout(() => finish(new Error('Codex effective-config query timed out')), 5_000);
-        child.on('error', () => finish(new Error('Codex effective-config query failed')));
+        const fail = () => finish(new Error('Codex effective-config query failed'));
+        const safeWrite = (payload) => {
+            if (settled)
+                return false;
+            try {
+                stdin.write(payload, (error) => {
+                    if (error)
+                        fail();
+                });
+                return true;
+            }
+            catch {
+                fail();
+                return false;
+            }
+        };
+        timer = setTimeout(() => finish(new Error('Codex effective-config query timed out')), runtime.timeoutMs ?? 5_000);
+        child.on('error', fail);
+        stdin.on('error', fail);
+        stdout.on('error', fail);
         child.on('exit', () => {
             if (!settled)
                 finish(new Error('Codex effective-config query exited before responding'));
         });
-        child.stdout.on('data', (chunk) => {
-            buffer += chunk.toString('utf8');
-            if (buffer.length > 4 * 1024 * 1024) {
+        stdout.on('data', (chunk) => {
+            if (settled)
+                return;
+            receivedBytes += chunk.length;
+            if (receivedBytes > (runtime.maxResponseBytes ?? 4 * 1024 * 1024)) {
                 finish(new Error('Codex effective-config response exceeded 4 MiB'));
                 return;
             }
+            buffer += chunk.toString('utf8');
             for (;;) {
+                if (settled)
+                    return;
                 const newline = buffer.indexOf('\n');
                 if (newline < 0)
                     break;
@@ -225,9 +272,11 @@ export async function readCodexEffectiveConfig(args, cwd, env) {
                 catch {
                     continue;
                 }
-                if (message.id === 1) {
-                    child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);
-                    child.stdin.write(`${JSON.stringify({
+                if (message.id === 1 && !initialized) {
+                    initialized = true;
+                    if (!safeWrite(`${JSON.stringify({ method: 'initialized', params: {} })}\n`))
+                        return;
+                    safeWrite(`${JSON.stringify({
                         id: 2,
                         method: 'config/read',
                         params: { cwd, includeLayers: true },
@@ -241,7 +290,7 @@ export async function readCodexEffectiveConfig(args, cwd, env) {
                 }
             }
         });
-        child.stdin.write(`${JSON.stringify({
+        safeWrite(`${JSON.stringify({
             id: 1,
             method: 'initialize',
             params: {

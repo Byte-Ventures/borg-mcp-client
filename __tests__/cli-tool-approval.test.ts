@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import {
   CODEX_BORG_COORDINATION_TOOLS,
   OPENCODE_BORG_COORDINATION_TOOLS,
@@ -9,6 +10,7 @@ import {
   inspectCodexBorgApprovals,
   inspectOpenCodeBorgApprovals,
   mergeOpenCodePermission,
+  readCodexEffectiveConfig,
   resolveLaunchBorgApprovals,
   setupApprovalWarnings,
 } from '../src/cli-tool-approval.js';
@@ -30,6 +32,40 @@ function io(overrides: Partial<Parameters<typeof resolveLaunchBorgApprovals>[1]>
     confirm: vi.fn(async () => 'yes'),
     ...overrides,
   };
+}
+
+function fakeCodexConfigChild() {
+  const child = new EventEmitter() as any;
+  child.stdin = new EventEmitter();
+  child.stdin.write = vi.fn((_payload: string, callback?: (error?: Error) => void) => {
+    callback?.();
+    return true;
+  });
+  child.stdout = new EventEmitter();
+  child.kill = vi.fn(() => true);
+  return child;
+}
+
+function codexQueryDecision(
+  child: ReturnType<typeof fakeCodexConfigChild>,
+  runtime: { timeoutMs?: number; maxResponseBytes?: number } = {}
+) {
+  return resolveLaunchBorgApprovals('codex', io({
+    readCodexConfig: () => readCodexEffectiveConfig([], '/repo', {}, {
+      spawnProcess: (() => child) as any,
+      timeoutMs: runtime.timeoutMs ?? 100,
+      ...(runtime.maxResponseBytes === undefined
+        ? {}
+        : { maxResponseBytes: runtime.maxResponseBytes }),
+    }),
+  }));
+}
+
+function expectStaticQueryFailure(result: Awaited<ReturnType<typeof codexQueryDecision>>) {
+  expect(result.codexArgs).toEqual([]);
+  expect(result.warning).toBe(
+    'Could not inspect codex Borg tool approvals: Codex effective-config query failed. No approval override was applied.'
+  );
 }
 
 describe('Codex Borg coordination approvals', () => {
@@ -81,6 +117,78 @@ default_tools_approval_mode = "approve"
     expect(inspectCodexBorgApprovals(codexEffective('approve')).restrictiveTools)
       .toHaveLength(CODEX_BORG_COORDINATION_TOOLS.length);
     expect(inspectCodexBorgApprovals(codexEffective('auto')).restrictiveTools).toEqual([]);
+  });
+});
+
+describe('Codex native effective-config query failures', () => {
+  it('fails closed when process creation throws synchronously', async () => {
+    const result = await resolveLaunchBorgApprovals('codex', io({
+      readCodexConfig: () => readCodexEffectiveConfig([], '/repo', {}, {
+        spawnProcess: (() => { throw new Error('spawn detail must not escape'); }) as any,
+      }),
+    }));
+    expectStaticQueryFailure(result);
+  });
+
+  it('fails closed on a process spawn error', async () => {
+    const child = fakeCodexConfigChild();
+    const decision = codexQueryDecision(child);
+    child.emit('error', new Error('host detail must not escape'));
+    expectStaticQueryFailure(await decision);
+  });
+
+  it('fails closed when the process exits before initialize', async () => {
+    const child = fakeCodexConfigChild();
+    const decision = codexQueryDecision(child);
+    child.emit('exit', 1, null);
+    const result = await decision;
+    expect(result.codexArgs).toEqual([]);
+    expect(result.warning).toBe(
+      'Could not inspect codex Borg tool approvals: Codex effective-config query exited before responding. No approval override was applied.'
+    );
+  });
+
+  it('handles stdin EPIPE after initialize without an unhandled stream error', async () => {
+    const child = fakeCodexConfigChild();
+    let writes = 0;
+    child.stdin.write.mockImplementation((_payload: string, callback?: (error?: Error) => void) => {
+      writes += 1;
+      if (writes > 1) {
+        const error = Object.assign(new Error('broken pipe detail'), { code: 'EPIPE' });
+        queueMicrotask(() => {
+          callback?.(error);
+          child.stdin.emit('error', error);
+        });
+      } else {
+        callback?.();
+      }
+      return true;
+    });
+    const decision = codexQueryDecision(child);
+    child.stdout.emit('data', Buffer.from('{"id":1,"result":{}}\n'));
+    expectStaticQueryFailure(await decision);
+    expect(writes).toBeGreaterThan(1);
+  });
+
+  it('ignores late initialize data after timeout and never writes to the killed child', async () => {
+    const child = fakeCodexConfigChild();
+    const decision = codexQueryDecision(child, { timeoutMs: 1 });
+    const result = await decision;
+    expect(result.codexArgs).toEqual([]);
+    expect(result.warning).toContain('query timed out');
+    const writesAtTimeout = child.stdin.write.mock.calls.length;
+    child.stdout.emit('data', Buffer.from('{"id":1,"result":{}}\n'));
+    await Promise.resolve();
+    expect(child.stdin.write).toHaveBeenCalledTimes(writesAtTimeout);
+  });
+
+  it('fails closed when cumulative response bytes exceed the bound', async () => {
+    const child = fakeCodexConfigChild();
+    const decision = codexQueryDecision(child, { maxResponseBytes: 16 });
+    child.stdout.emit('data', Buffer.alloc(17, 0x20));
+    const result = await decision;
+    expect(result.codexArgs).toEqual([]);
+    expect(result.warning).toContain('response exceeded 4 MiB');
   });
 });
 
