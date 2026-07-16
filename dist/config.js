@@ -39,6 +39,11 @@ const SERVER_KEYCHAIN_LOCK_STALE_MS = 30_000;
 const SERVER_KEYCHAIN_LOCK_WAIT_MS = 10;
 const SERVER_KEYCHAIN_LOCK_ATTEMPTS = 500;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+let serverKeychainLockTestHooks = null;
+/** @internal Process-race harness only; never wired by production callers. */
+export function __setServerKeychainLockHooksForTest(hooks) {
+    serverKeychainLockTestHooks = hooks;
+}
 function validateServerCredentialBinding(origin, trustIdentity) {
     let parsed;
     try {
@@ -70,44 +75,167 @@ async function withServerKeychainLock(account, operation) {
     const lockName = createHash('sha256').update(account).digest('hex');
     const lockPath = path.join(lockDirectory, `${lockName}.lock`);
     await fsp.mkdir(lockDirectory, { recursive: true, mode: 0o700 });
-    for (let attempt = 0; attempt < SERVER_KEYCHAIN_LOCK_ATTEMPTS; attempt += 1) {
-        let handle;
+    const sameFile = (left, right) => left.dev === right.dev && left.ino === right.ino;
+    const holderIsAlive = (pid) => {
+        if (!Number.isSafeInteger(pid) || pid < 1)
+            return false;
         try {
-            handle = await fsp.open(lockPath, 'wx', 0o600);
+            process.kill(pid, 0);
+            return true;
         }
         catch (error) {
-            if (error.code !== 'EEXIST')
+            return error.code === 'EPERM';
+        }
+    };
+    const parseLease = (raw) => {
+        try {
+            const parsed = JSON.parse(raw);
+            if (Number.isSafeInteger(parsed.pid) &&
+                typeof parsed.ownerId === 'string' &&
+                UUID_RE.test(parsed.ownerId)) {
+                return { pid: parsed.pid, ownerId: parsed.ownerId };
+            }
+        }
+        catch {
+            // Pre-owner-inode locks stored the PID as plain decimal text.
+        }
+        return { pid: Number(raw) };
+    };
+    const removeIfOwned = async (ownerPath) => {
+        await serverKeychainLockTestHooks?.beforeOwnerCleanup?.();
+        try {
+            const [ownerStat, canonicalStat] = await Promise.all([
+                fsp.stat(ownerPath),
+                fsp.stat(lockPath),
+            ]);
+            if (sameFile(ownerStat, canonicalStat))
+                await fsp.unlink(lockPath);
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT')
                 throw error;
+        }
+        finally {
+            await fsp.unlink(ownerPath).catch((error) => {
+                if (error.code !== 'ENOENT')
+                    throw error;
+            });
+        }
+    };
+    const claimAndRemoveStale = async (inspected, ownerId) => {
+        if (ownerId !== undefined) {
+            const ownerPath = path.join(lockDirectory, `${lockName}.${ownerId}.owner`);
+            const claimPath = `${ownerPath}.reaping-${randomUUID()}`;
+            try {
+                // The unique owner path names the inspected lease's inode. Renaming it
+                // is an atomic claim: only one stale reaper can succeed, and no later
+                // successor ever reuses this path.
+                await fsp.rename(ownerPath, claimPath);
+            }
+            catch (error) {
+                if (error.code === 'ENOENT')
+                    return false;
+                throw error;
+            }
+            try {
+                const claimedStat = await fsp.stat(claimPath);
+                if (!sameFile(claimedStat, inspected))
+                    return false;
+                try {
+                    const canonicalStat = await fsp.stat(lockPath);
+                    if (!sameFile(claimedStat, canonicalStat))
+                        return false;
+                    await fsp.unlink(lockPath);
+                    return true;
+                }
+                catch (error) {
+                    if (error.code === 'ENOENT')
+                        return true;
+                    throw error;
+                }
+            }
+            finally {
+                await fsp.unlink(claimPath).catch((error) => {
+                    if (error.code !== 'ENOENT')
+                        throw error;
+                });
+            }
+        }
+        // Compatibility for locks written before owner-inode leases. The fixed
+        // O_EXCL hard-link is the reaper claim: contenders cannot both delete the
+        // canonical path after inspecting the same legacy inode.
+        const claimPath = `${lockPath}.legacy-reaping`;
+        try {
+            await fsp.link(lockPath, claimPath);
+        }
+        catch (error) {
+            if (['EEXIST', 'ENOENT'].includes(error.code ?? '')) {
+                return false;
+            }
+            throw error;
+        }
+        try {
+            const claimedStat = await fsp.stat(claimPath);
+            if (!sameFile(claimedStat, inspected))
+                return false;
+            try {
+                const canonicalStat = await fsp.stat(lockPath);
+                if (!sameFile(claimedStat, canonicalStat))
+                    return false;
+                await fsp.unlink(lockPath);
+                return true;
+            }
+            catch (error) {
+                if (error.code === 'ENOENT')
+                    return true;
+                throw error;
+            }
+        }
+        finally {
+            await fsp.unlink(claimPath).catch((error) => {
+                if (error.code !== 'ENOENT')
+                    throw error;
+            });
+        }
+    };
+    for (let attempt = 0; attempt < SERVER_KEYCHAIN_LOCK_ATTEMPTS; attempt += 1) {
+        const ownerId = randomUUID();
+        const ownerPath = path.join(lockDirectory, `${lockName}.${ownerId}.owner`);
+        let acquired = false;
+        try {
+            await fsp.writeFile(ownerPath, JSON.stringify({ version: 1, pid: process.pid, ownerId }), { flag: 'wx', mode: 0o600 });
+            try {
+                // O_EXCL hard-link publication: the canonical name and owner path now
+                // identify the same inode. Successor leases always get a new ownerId.
+                await fsp.link(ownerPath, lockPath);
+                acquired = true;
+            }
+            catch (error) {
+                if (error.code !== 'EEXIST')
+                    throw error;
+            }
+        }
+        catch (error) {
+            await fsp.unlink(ownerPath).catch(() => { });
+            throw error;
+        }
+        if (!acquired) {
+            await fsp.unlink(ownerPath).catch(() => { });
             try {
                 const metadata = await fsp.stat(lockPath);
                 if (Date.now() - metadata.mtimeMs > SERVER_KEYCHAIN_LOCK_STALE_MS) {
-                    let holderAlive = false;
                     try {
-                        const holderPid = Number(await fsp.readFile(lockPath, 'utf8'));
-                        if (Number.isSafeInteger(holderPid) && holderPid > 0) {
-                            try {
-                                process.kill(holderPid, 0);
-                                holderAlive = true;
-                            }
-                            catch (probeError) {
-                                holderAlive = probeError.code === 'EPERM';
-                            }
+                        const lease = parseLease(await fsp.readFile(lockPath, 'utf8'));
+                        await serverKeychainLockTestHooks?.afterStaleInspection?.();
+                        if (!holderIsAlive(lease.pid)) {
+                            if (await claimAndRemoveStale(metadata, lease.ownerId))
+                                continue;
                         }
                     }
                     catch (readError) {
                         if (readError.code === 'ENOENT')
                             continue;
                         throw readError;
-                    }
-                    if (!holderAlive) {
-                        try {
-                            await fsp.unlink(lockPath);
-                        }
-                        catch (unlinkError) {
-                            if (unlinkError.code !== 'ENOENT')
-                                throw unlinkError;
-                        }
-                        continue;
                     }
                 }
             }
@@ -120,25 +248,10 @@ async function withServerKeychainLock(account, operation) {
             continue;
         }
         try {
-            await handle.writeFile(String(process.pid));
-        }
-        catch (error) {
-            await handle.close().catch(() => { });
-            await fsp.unlink(lockPath).catch(() => { });
-            throw error;
-        }
-        try {
             return await operation();
         }
         finally {
-            await handle.close();
-            try {
-                await fsp.unlink(lockPath);
-            }
-            catch (error) {
-                if (error.code !== 'ENOENT')
-                    throw error;
-            }
+            await removeIfOwned(ownerPath);
         }
     }
     throw new Error('Borg server keychain state is busy');

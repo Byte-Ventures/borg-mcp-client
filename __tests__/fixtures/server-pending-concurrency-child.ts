@@ -1,5 +1,7 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
+  __setServerKeychainLockHooksForTest,
   __setServerCredentialBackendForTest,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
@@ -11,6 +13,27 @@ const stateFile = process.env.BORG_TEST_KEYCHAIN_STATE;
 const mode = process.argv[2];
 if (!stateFile || !['enrollment', 'cube', 'ambiguous', 'resume'].includes(mode ?? '')) {
   throw new Error('invalid pending-concurrency child invocation');
+}
+
+const hookDirectory = process.env.BORG_TEST_LOCK_HOOK_DIR;
+const hookRelease = process.env.BORG_TEST_LOCK_HOOK_RELEASE;
+const hookStage = process.env.BORG_TEST_LOCK_HOOK_STAGE;
+if (hookDirectory && hookRelease && ['stale', 'cleanup'].includes(hookStage ?? '')) {
+  const pause = async () => {
+    await mkdir(hookDirectory, { recursive: true });
+    await writeFile(join(hookDirectory, `${hookStage}-${process.pid}`), 'ready');
+    for (;;) {
+      try {
+        await access(hookRelease);
+        return;
+      } catch {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
+      }
+    }
+  };
+  __setServerKeychainLockHooksForTest(hookStage === 'stale'
+    ? { afterStaleInspection: pause }
+    : { beforeOwnerCleanup: pause });
 }
 
 async function readState(): Promise<Record<string, string>> {

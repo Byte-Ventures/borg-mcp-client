@@ -1,5 +1,11 @@
 import type { ServerCapability } from 'borgmcp-shared/protocol';
 import { type TokenBackend } from './token-store.js';
+interface ServerKeychainLockTestHooks {
+    afterStaleInspection?: () => Promise<void>;
+    beforeOwnerCleanup?: () => Promise<void>;
+}
+/** @internal Process-race harness only; never wired by production callers. */
+export declare function __setServerKeychainLockHooksForTest(hooks: ServerKeychainLockTestHooks | null): void;
 export interface ServerCredentialRecord {
     origin: string;
     trustIdentity: string;
@@ -170,4 +176,5 @@ export declare function clearTokens(): Promise<void>;
  * Check if user has valid authentication.
  */
 export declare function isAuthenticated(): Promise<boolean>;
+export {};
 //# sourceMappingURL=config.d.ts.map
