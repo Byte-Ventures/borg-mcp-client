@@ -973,6 +973,10 @@ export async function roleRationale(sessionToken, apiUrl, role, section, serverT
  * Append a message to the cube's shared activity log.
  */
 export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
+    if (opts.visibility === 'broadcast' && (opts.to?.length ?? 0) > 0) {
+        throw new Error("Invalid input: visibility:'broadcast' cannot be combined with non-empty to:. " +
+            'Remove visibility to direct to recipients, or remove to: to broadcast.');
+    }
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     if (local) {
         if (opts.class !== undefined) {
@@ -980,7 +984,8 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
         }
         let visibility = opts.visibility;
         let recipientDroneIds = opts.recipientDroneIds;
-        if ((!recipientDroneIds || recipientDroneIds.length === 0) &&
+        if (visibility !== 'broadcast' &&
+            (!recipientDroneIds || recipientDroneIds.length === 0) &&
             opts.to !== undefined) {
             const base = `/api/cubes/${local.cubeId}`;
             const [rolePayload, dronePayload] = await Promise.all([

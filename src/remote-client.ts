@@ -1283,6 +1283,12 @@ export async function appendLog(
   // (wake-path:deaf). Empty/absent for broadcast or all-reachable sends.
   unreachableRecipients?: { id: string; label: string }[];
 }> {
+  if (opts.visibility === 'broadcast' && (opts.to?.length ?? 0) > 0) {
+    throw new Error(
+      "Invalid input: visibility:'broadcast' cannot be combined with non-empty to:. " +
+      'Remove visibility to direct to recipients, or remove to: to broadcast.',
+    );
+  }
   const local = await localAuthorityContext(
     sessionToken,
     apiUrl,
@@ -1294,7 +1300,8 @@ export async function appendLog(
     }
     let visibility = opts.visibility;
     let recipientDroneIds = opts.recipientDroneIds;
-    if ((!recipientDroneIds || recipientDroneIds.length === 0) &&
+    if (visibility !== 'broadcast' &&
+        (!recipientDroneIds || recipientDroneIds.length === 0) &&
         opts.to !== undefined) {
       const base = `/api/cubes/${local.cubeId}`;
       const [rolePayload, dronePayload] = await Promise.all([

@@ -261,24 +261,21 @@ describe('local server route adapter', () => {
     expect(getRefreshToken).not.toHaveBeenCalled();
   });
 
-  it('gives explicit local to: precedence over a broadcast visibility override', async () => {
+  it('rejects contradictory local to: plus broadcast before authority lookup or POST', async () => {
     const remote = await import('../src/remote-client.js');
+    const before = fetchSpy.mock.calls.length;
 
-    await remote.appendLog(SESSION, ORIGIN, 'must stay directed', {
+    await expect(remote.appendLog(SESSION, ORIGIN, 'contradictory routing', {
       to: ['coordinator-1'],
       visibility: 'broadcast',
       serverTrustIdentity: TRUST_IDENTITY,
-    });
-
-    const post = fetchSpy.mock.calls.find(([input, init]) =>
-      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` &&
-      init?.method === 'POST'
+    })).rejects.toThrow(
+      /Remove visibility to direct to recipients, or remove to: to broadcast/,
     );
-    expect(JSON.parse(String(post![1]?.body)).payload).toEqual({
-      message: 'must stay directed',
-      visibility: 'direct',
-      recipientDroneIds: [COORDINATOR_DRONE_ID],
-    });
+
+    expect(fetchSpy.mock.calls).toHaveLength(before);
+    expect(getIdToken).not.toHaveBeenCalled();
+    expect(getRefreshToken).not.toHaveBeenCalled();
   });
 
   it('fails closed on an unknown local recipient before log mutation', async () => {
