@@ -242,6 +242,10 @@ async function main() {
     {
       probeSession,
       authenticateWithGoogle,
+      checkSubscriptionStatus,
+      createSubscription,
+      openUrl: async (url: string) => { await open(url); },
+      sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
       log: (...args: unknown[]) => console.log(...args),
       logError: (...args: unknown[]) => console.error(...args),
     },
@@ -252,39 +256,16 @@ async function main() {
 
   if (!useCloud) {
     console.log(chalk.gray('  To use a local server, run `borg assimilate --host <host>` in your project.\n'));
-  } else if (authorityResult.authAction === 'skip') {
-    console.log(chalk.green('◼ Already signed in\n'));
   } else if (authorityResult.authAction === 'retry') {
     process.exit(1);
   }
-  // 'reauth' success: authenticateWithGoogle already handled its own errors
+  // 'skip' and 'reauth' (success) messages handled by the seam's log calls
 
   if (useCloud) {
-  // Step 3: Subscription
+  // Step 3: Subscription — status already resolved by the seam
   console.log(chalk.blue('◼ Subscription Check'));
 
-  let status: SubscriptionStatus;
-  try {
-    status = await checkSubscriptionStatus();
-  } catch (error: any) {
-    console.error(
-      chalk.yellow(`\n◼ Subscription check failed: ${error.message}`)
-    );
-    console.error(
-      chalk.gray('◼ Retrying before falling back to the Free tier...\n')
-    );
-    status = { hasAccess: false };
-  }
-
-  // gh#521: a user who just subscribed via web hits propagation lag — retry a
-  // few times (non-alarmingly) before declaring no subscription, instead of
-  // flashing a scary "not found" immediately after payment.
-  status = await retrySubscriptionCheck(status, {
-    check: checkSubscriptionStatus,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    onRetry: (attempt, total) =>
-      console.log(chalk.gray(`◼ Checking subscription... (attempt ${attempt}/${total})`)),
-  });
+  const status = authorityResult.subscriptionStatus!;
 
   if (!status.hasAccess) {
     // gh#687: a fresh user has no subscription BY DESIGN — the Free tier is the
@@ -373,8 +354,8 @@ async function main() {
           }
           recheckStatus = await retrySubscriptionCheck(recheckStatus, {
             check: checkSubscriptionStatus,
-            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-            onRetry: (attempt, total) =>
+            sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+            onRetry: (attempt: number, total: number) =>
               console.log(chalk.gray(`◼ Re-checking subscription... (attempt ${attempt}/${total})`)),
           });
           if (recheckStatus.hasAccess) {
