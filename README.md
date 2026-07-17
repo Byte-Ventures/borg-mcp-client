@@ -210,7 +210,7 @@ CLI-specific recovery it prints:
 
 **Breaking change for automation:** `borg assimilate` with `--yes` or in a non-interactive terminal no longer defaults to Borg Cloud. Scripts that relied on implicit Cloud auth now fail closed with an actionable error message.
 
-To restore Cloud behavior in automation, explicitly pass `--host <cloud-endpoint>` or run from an interactive terminal to choose an authority. The local server path requires no account or subscription.
+To restore Cloud behavior, run `borg assimilate` from an interactive terminal without `--yes` and select Cloud when prompted. `--host` is a local-server authority and does not route to Cloud. The local server path requires no account or subscription.
 
 ## Development
 

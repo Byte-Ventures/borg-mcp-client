@@ -21,11 +21,21 @@ const openCodeDroneMocks = vi.hoisted(() => ({
 const mcpConfigMocks = vi.hoisted(() => ({
   ensureCliMcpConfigured: vi.fn(),
 }));
+const setupCloudMocks = vi.hoisted(() => ({
+  probeSession: vi.fn(),
+  authenticateWithGoogle: vi.fn(),
+  checkSubscriptionStatus: vi.fn(),
+  createSubscription: vi.fn(),
+}));
 const SERVER_TRUST_IDENTITY = 'spki-sha256:test-server';
 
 vi.mock('../src/opencode-drone.js', () => openCodeDroneMocks);
 vi.mock('../src/opencode-plugin.js', () => ({ installBorgPlugin: vi.fn() }));
 vi.mock('../src/ensure-mcp-config.js', () => mcpConfigMocks);
+vi.mock('../src/setup.js', () => ({
+  ...setupCloudMocks,
+  default: {},
+}));
 
 beforeEach(() => {
   mcpConfigMocks.ensureCliMcpConfigured.mockReset();
@@ -2557,25 +2567,35 @@ describe('runAssimilate: #1015 authority selection', () => {
       trustIdentity: SERVER_TRUST_IDENTITY,
     }));
     const listCubes = vi.fn(async () => []);
+    const detectLocalServer = vi.fn(async () => 'https://localhost:8787');
+    const prompt = vi.fn(async () => 'Y');
     const stderr = vi.fn();
     const deps = makeStubDeps({
       getCachedAuth,
       runSetup,
       connectServer,
       listCubes,
+      detectLocalServer,
+      prompt,
       stderr,
-      defaultAuthority: { kind: 'server' as const, apiUrl: 'http://localhost:8787' },
+      isTTY: () => true,
+      defaultAuthority: undefined,
     });
 
     await runAssimilate(
-      { role: undefined, flags: { yes: true } },
+      { role: undefined, flags: {} },
       deps,
     );
 
+    expect(detectLocalServer).toHaveBeenCalled();
+    expect(connectServer).toHaveBeenCalled();
     expect(getCachedAuth).not.toHaveBeenCalled();
     expect(runSetup).not.toHaveBeenCalled();
-    expect(connectServer).toHaveBeenCalled();
     expect(listCubes).toHaveBeenCalled();
+    expect(setupCloudMocks.probeSession).not.toHaveBeenCalled();
+    expect(setupCloudMocks.authenticateWithGoogle).not.toHaveBeenCalled();
+    expect(setupCloudMocks.checkSubscriptionStatus).not.toHaveBeenCalled();
+    expect(setupCloudMocks.createSubscription).not.toHaveBeenCalled();
   });
 });
 
