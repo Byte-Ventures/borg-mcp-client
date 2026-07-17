@@ -15,7 +15,7 @@ import open from 'open';
 import which from 'which';
 import { authenticateWithGoogle } from './auth.js';
 import { checkSubscriptionStatus, createSubscription, probeSession } from './remote-client.js';
-import { setupActionForSession } from './setup-action.js';
+import { runSetupAuthority } from './setup-authority.js';
 import {
   confirmConfigMutation,
   configMutationTargets,
@@ -237,51 +237,29 @@ async function main() {
     console.log(chalk.yellow('\n◼ No choice selected — defaulting to local server.\n'));
   }
 
-  const useCloud = authority === 'cloud';
+  const authorityResult = await runSetupAuthority(
+    authority === 'cloud' ? 'cloud' : 'local',
+    {
+      probeSession,
+      authenticateWithGoogle,
+      log: (...args: unknown[]) => console.log(...args),
+      logError: (...args: unknown[]) => console.error(...args),
+    },
+    { noBrowser },
+  );
+
+  const useCloud = authorityResult.useCloud;
 
   if (!useCloud) {
-    // Local server path: no OAuth, no subscription check
-    console.log(chalk.green('◼ Local server mode — no account or subscription needed.'));
     console.log(chalk.gray('  To use a local server, run `borg assimilate --host <host>` in your project.\n'));
-  } else {
-    // Step 3: Google Authentication (Cloud only)
-    console.log(chalk.blue('◼ Google Authentication'));
-
-  // gh#794: classify the saved session before deciding whether to re-auth.
-  // probeSession attempts a silent refresh, so an EXPIRED id_token with a still-
-  // VALID refresh_token resolves to 'valid' → we short-circuit the OAuth flow
-  // instead of forcing a full re-consent (the old isAuthenticated() = presence-
-  // only check forced one). SR#3: short-circuit ONLY on 'valid'; a 'dead'
-  // session DOES the full re-auth (never skips the exact failure #794 fixes).
-  const action = setupActionForSession(await probeSession());
-
-  if (action === 'skip') {
+  } else if (authorityResult.authAction === 'skip') {
     console.log(chalk.green('◼ Already signed in\n'));
-  } else if (action === 'retry') {
-    // A network/Google-5xx blip couldn't confirm the session. Do NOT re-auth
-    // (it may be fine) and do NOT destroy the keychain (gh#34) — tell the user
-    // to retry rather than forcing a full re-consent on a transient failure.
-    console.error(
-      chalk.yellow('\n◼ Could not reach Google to verify your session (network issue).')
-    );
-    console.error(chalk.yellow('Re-run `borg setup` when your connection is back.\n'));
+  } else if (authorityResult.authAction === 'retry') {
     process.exit(1);
-  } else {
-    // 'reauth' (dead) — never signed in, OR the saved login is dead
-    // (invalid_grant, already cleared by probeSession). Full re-auth — this is
-    // the path #794 exists to reach, so NEVER short-circuit past it (SR#3).
-    try {
-      await authenticateWithGoogle(noBrowser ? { noBrowser: true } : undefined);
-    } catch (error: any) {
-      console.error(chalk.red(`\n◼ Authentication failed: ${error.message}\n`));
-      // gh#557 NOTE-2: device-flow errors (access_denied / expired_token) and
-      // any other auth failure exit here — give the remote user a recovery
-      // path instead of a bare exit.
-      console.error(chalk.yellow('Re-run `borg setup` to try again.\n'));
-      process.exit(1);
-    }
   }
+  // 'reauth' success: authenticateWithGoogle already handled its own errors
 
+  if (useCloud) {
   // Step 3: Subscription
   console.log(chalk.blue('◼ Subscription Check'));
 
