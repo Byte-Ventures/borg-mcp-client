@@ -19,6 +19,7 @@ import { addUserPromptSubmitHook, addCodexSessionStartHook, addCodexUserPromptSu
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { handleVersionFlag } from './version.js';
 import { initDebugFromArgv } from './debug.js';
+import { defaultApprovalIo, setupApprovalWarnings } from './cli-tool-approval.js';
 /**
  * Main setup wizard
  */
@@ -140,6 +141,17 @@ async function main() {
             console.error(chalk.red(`\n◼ Failed to configure OpenCode: ${error.message}\n`));
             process.exit(1);
         }
+    }
+    const approvalIo = defaultApprovalIo(async () => '', () => false, {
+        cwd: process.cwd(),
+        env: process.env,
+        codexArgs: [],
+    });
+    for (const warning of await setupApprovalWarnings(approvalIo, {
+        codex: codexDetected,
+        opencode: opencodeDetected,
+    })) {
+        console.log(chalk.yellow(`warning: ${warning}`));
     }
     console.log('');
     // Step 2: Authority choice — local server (default) or Cloud

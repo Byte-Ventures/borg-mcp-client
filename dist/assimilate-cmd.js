@@ -21,6 +21,7 @@ import { computeOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff,
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { BorgServerError } from './server-errors.js';
+import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
 function affirmative(answer) {
     const normalized = answer.trim().toLowerCase();
     return normalized === '' || normalized === 'y' || normalized === 'yes';
@@ -959,6 +960,11 @@ export async function runAssimilate(args, deps) {
     let launchArgs;
     let codexSocketPath = null;
     let codexServerCleanup = null;
+    const launchApproval = deps.resolveCliApprovals
+        ? await deps.resolveCliApprovals(cli, agentCwd)
+        : { codexArgs: [] };
+    if (launchApproval.warning)
+        deps.stderr(`warning: ${launchApproval.warning}\n`);
     // Temporary Claude-only model compatibility. Local/provider models are
     // configured by the selected agent CLI and are never rewritten by Borg.
     const modelEnv = resolveLaunchEnv(effectiveModel);
@@ -967,6 +973,9 @@ export async function runAssimilate(args, deps) {
         ...modelEnv.set,
         BORG_SESSION: '1',
     };
+    if (cli === 'opencode' && launchApproval.openCodePermission) {
+        childEnv.OPENCODE_PERMISSION = launchApproval.openCodePermission;
+    }
     for (const key of modelEnv.unset) {
         delete childEnv[key];
     }
@@ -1008,6 +1017,7 @@ export async function runAssimilate(args, deps) {
         // off when no socket is available, overriding legacy static configs that
         // formerly used this transport marker as Codex identity.
         launchArgs = [
+            ...launchApproval.codexArgs,
             ...codexBorgSessionConfigArgs(),
             ...codexAgentKindConfigArgs(),
             ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
@@ -1024,7 +1034,7 @@ export async function runAssimilate(args, deps) {
         installBorgPlugin();
         const cwd = agentCwd;
         openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
-        launchArgs = [cwd, '--port', String(dronePort), '--auto', '--prompt', openCodeKickoff.prompt];
+        launchArgs = buildOpenCodeLaunchArgs(cwd, dronePort, openCodeKickoff.prompt);
     }
     // gh#673 P1: mark the launched agent session as borg-launched so the
     // MCP child + hook bins activate (launch-gate.ts). childEnv is the
