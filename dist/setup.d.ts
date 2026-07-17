@@ -3,9 +3,9 @@
  * Borg MCP Setup Wizard
  *
  * Interactive setup flow:
- * 1. Configure Claude Code MCP settings
- * 2. Google OAuth authentication
- * 3. Subscription setup (web dashboard or Stripe)
+ * 1. Configure agent CLI MCP settings
+ * 2. Choose authority: local server (default) or Cloud
+ * 3. [Cloud only] Google OAuth authentication + subscription via seam
  */
 export {};
 //# sourceMappingURL=setup.d.ts.map

@@ -40,7 +40,7 @@ export function composeGetStarted(hasAgentCli) {
         lines.push(`  ${step}. Install an agent CLI first:`, '       Claude Code: https://claude.ai/download', '       Codex:       https://developers.openai.com/codex');
         step++;
     }
-    lines.push(`  ${step}. borg setup${' '.repeat(Math.max(1, 18 - 'borg setup'.length))}— sign in with Google`);
+    lines.push(`  ${step}. borg setup${' '.repeat(Math.max(1, 18 - 'borg setup'.length))}— configure borg MCP`);
     step++;
     lines.push(`  ${step}. cd into your project, then: borg assimilate — join/create a cube`, '', 'Then `borg` launches your agent in that cube. Run `borg --help` for more.', '');
     return lines.join('\n');

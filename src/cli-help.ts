@@ -26,10 +26,10 @@ export function topLevelHelpText(version: string): string {
     `type \`borg_...\` inside your agent session once you've joined a cube ("assimilate").\n\n` +
     `Usage:\n` +
     `  borg                     Launch your agent CLI; in a TTY, bare borg may show the launch menu\n` +
-    `  borg setup               Set up OAuth + register MCP server\n` +
+    `  borg setup               Set up borg MCP server + agent CLI integration\n` +
     `  borg setup --no-browser  Set up from SSH/headless terminals\n` +
-    `  borg assimilate [role]   Join or create a Borg Cloud cube\n` +
-    `  borg assimilate --host <host>   Join or create on an explicit self-hosted server (preview)\n` +
+    `  borg assimilate [role]   Join or create a cube\n` +
+    `  borg assimilate --host <host>   Join or create on an explicit server\n` +
     `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
     `  borg sync [--prune]      Sync this worktree's branch to origin/main\n` +
     `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
@@ -48,7 +48,7 @@ export function topLevelHelpText(version: string): string {
  */
 export function assimilateHelpText(version: string): string {
   return (
-    `borg assimilate (borgmcp ${version}) — join or create a Borg Cloud cube under a role\n\n` +
+    `borg assimilate (borgmcp ${version}) — join or create a cube under a role\n\n` +
     `Usage:\n` +
     `  borg assimilate [role]               Join the active cube under [role] (default role if omitted)\n` +
     `  borg assimilate [role] --worktree <name>   Spawn the drone in an isolated git worktree\n` +
@@ -63,8 +63,8 @@ export function assimilateHelpText(version: string): string {
     `  --cube-name <name>         Cube to join/create (otherwise confirm repo basename)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
     `  --enroll                   Prompt for a hidden enrollment invitation in the operator terminal\n` +
-    `  --template <name>          Bootstrap a new Borg Cloud cube from a bundled role template\n` +
-    `  --no-template              Create the Borg Cloud cube with no template roles\n` +
+    `  --template <name>          Bootstrap a new cube from a bundled role template\n` +
+    `  --no-template              Create the cube with no template roles\n` +
     `  --cli claude|codex|opencode         Agent CLI to launch (default: claude)\n` +
     `  --model claude:<model>   Legacy Claude model override (configure models in the agent CLI)\n` +
     `  --yes, -y                  Skip confirmation prompts\n\n` +
@@ -83,13 +83,12 @@ export function assimilateHelpText(version: string): string {
  */
 export function setupHelpText(version: string): string {
   return (
-    `borg setup (borgmcp ${version}) — set up OAuth + register the borg MCP server\n\n` +
+    `borg setup (borgmcp ${version}) — set up borg MCP server + agent CLI integration\n\n` +
     `Borg MCP needs Claude Code, Codex, or OpenCode installed first.\n\n` +
     `Usage:\n` +
-    `  borg setup               Run the interactive setup wizard (OAuth sign-in +\n` +
-    `                           register the borg MCP server with your agent CLI)\n` +
-    `  borg setup --no-browser  Sign in without a local browser (device-code flow)\n` +
-    `                           for SSH / headless / container terminals. Alias: --device.\n` +
+    `  borg setup               Run the interactive setup wizard\n` +
+    `  borg setup --no-browser  Use device-code flow for SSH / headless / container\n` +
+    `                           terminals when Cloud sign-in is selected. Alias: --device.\n` +
     `                           Auto-detected on SSH/headless; this forces it.\n` +
     `  borg setup --help        Show this help\n`
   );

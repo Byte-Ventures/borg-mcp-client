@@ -71,8 +71,8 @@ describe('gh#818 P2 — top-level --help leads with purpose + docs link', () => 
     const t = topLevelHelpText('9.9.9');
     expect(t).toContain('Usage:');
     expect(t).toContain('borg assimilate [role]');
-    expect(t).toContain('Join or create a Borg Cloud cube');
-    expect(t).toContain('explicit self-hosted server');
+    expect(t).toContain('Join or create a cube');
+    expect(t).toContain('explicit server');
     expect(t).not.toContain('Join a cube (creates one if needed)');
     expect(t).toContain('passed through to the selected agent CLI');
   });
