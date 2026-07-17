@@ -14,7 +14,7 @@ import open from 'open';
 import which from 'which';
 import { authenticateWithGoogle } from './auth.js';
 import { checkSubscriptionStatus, createSubscription, probeSession } from './remote-client.js';
-import { isAuthFailed, runSetupAuthority } from './setup-authority.js';
+import { handleAuthorityResult, runSetupAuthority } from './setup-authority.js';
 import {
   confirmConfigMutation,
   configMutationTargets,
@@ -230,11 +230,7 @@ async function main() {
     { noBrowser },
   );
 
-  if (!authorityResult.useCloud) {
-    console.log(chalk.gray('  To use a local server, run `borg assimilate --host <host>` in your project.\n'));
-  } else if (isAuthFailed(authorityResult)) {
-    process.exit(1);
-  } else if (authorityResult.authAction === 'retry') {
+  if (handleAuthorityResult(authorityResult, console.log, console.error) !== 0) {
     process.exit(1);
   }
 

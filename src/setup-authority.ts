@@ -90,6 +90,34 @@ export function isAuthRetry(r: SetupAuthorityResult): r is AuthRetryResult {
   return r.useCloud && 'authAction' in r && r.authAction === 'retry';
 }
 
+/**
+ * Evaluate the authority result and return the process exit code.
+ * 0 = continue to success message; 1 = exit (auth failure or network retry).
+ * This is the production-path caller decision from setup.ts — extracted
+ * so tests can assert exit code + logged output without mocking process.exit.
+ *
+ * On exit-code-1 paths the function also appends the actionable recovery
+ * message exactly once.  The caller MUST NOT append a generic "Setup failed"
+ * after this returns 1.
+ */
+export function handleAuthorityResult(
+  result: SetupAuthorityResult,
+  log: (...args: unknown[]) => void,
+  logError: (...args: unknown[]) => void,
+): number {
+  if (!result.useCloud) {
+    log('  To use a local server, run `borg assimilate --host <host>` in your project.\n');
+    return 0;
+  }
+  if (isAuthFailed(result)) {
+    return 1;
+  }
+  if (isAuthRetry(result)) {
+    return 1;
+  }
+  return 0;
+}
+
 // ── Private helpers ────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = 5000;

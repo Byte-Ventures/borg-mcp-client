@@ -5,8 +5,7 @@
  * Interactive setup flow:
  * 1. Configure agent CLI MCP settings
  * 2. Choose authority: local server (default) or Cloud
- * 3. [Cloud only] Google OAuth authentication
- * 4. [Cloud only] Subscription setup
+ * 3. [Cloud only] Google OAuth authentication + subscription via seam
  */
 import prompts from 'prompts';
 import chalk from 'chalk';
@@ -14,9 +13,8 @@ import open from 'open';
 import which from 'which';
 import { authenticateWithGoogle } from './auth.js';
 import { checkSubscriptionStatus, createSubscription, probeSession } from './remote-client.js';
-import { runSetupAuthority } from './setup-authority.js';
+import { handleAuthorityResult, runSetupAuthority } from './setup-authority.js';
 import { confirmConfigMutation, configMutationTargets, formatConfigMutationDisclosure, parseYesFlag, setupMutationPending, } from './setup-confirm.js';
-import { retrySubscriptionCheck } from './subscription-retry.js';
 import { addUserPromptSubmitHook, addCodexSessionStartHook, addCodexUserPromptSubmitHook, isMcpServerConfigured, isCodexMcpServerConfigured, isOpenCodeMcpServerConfigured, isSessionStartHookRegistered, isUserPromptSubmitHookRegistered, isCodexSessionStartHookRegistered, isCodexUserPromptSubmitHookRegistered, removeSessionStartHook, } from './config-utils.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { handleVersionFlag } from './version.js';
@@ -25,39 +23,25 @@ import { initDebugFromArgv } from './debug.js';
  * Main setup wizard
  */
 async function main() {
-    // `--debug` / BORG_DEBUG observability. Wired here as well as in the
-    // top-level dispatcher because `borg-setup` is its own bin (dist/setup.js)
-    // and can be invoked directly, not only via `borg setup`. Idempotent.
     initDebugFromArgv(process.argv);
     handleVersionFlag();
     console.log(chalk.blue.bold('\n◼ Borg MCP Setup Wizard ◼'));
-    // gh#557: `--no-browser` (alias `--device`) forces the device-code OAuth
-    // flow for SSH / headless / container terminals. Scanned from argv so it
-    // works both as `borg setup --no-browser` and `borg-setup --no-browser`.
-    // (SSH/headless are auto-detected too; the flag is the explicit override.)
     const noBrowser = process.argv.includes('--no-browser') || process.argv.includes('--device');
-    // Step 0: Check which agent CLIs exist
     let claudeCliPath = null;
     let codexCliPath = null;
     let opencodeCliPath = null;
     try {
         claudeCliPath = which.sync('claude');
     }
-    catch {
-        // Optional: Borg can also run with Codex or OpenCode.
-    }
+    catch { /* optional */ }
     try {
         codexCliPath = which.sync('codex');
     }
-    catch {
-        // Optional: Borg can also run with Claude Code or OpenCode.
-    }
+    catch { /* optional */ }
     try {
         opencodeCliPath = which.sync('opencode');
     }
-    catch {
-        // Optional: Borg can also run with Claude Code or Codex.
-    }
+    catch { /* optional */ }
     if (claudeCliPath)
         console.log(chalk.gray(`Found Claude CLI: ${claudeCliPath}`));
     if (codexCliPath)
@@ -74,45 +58,21 @@ async function main() {
         console.error(chalk.gray('  OpenCode: https://opencode.ai\n'));
         process.exit(1);
     }
-    // Step 1: Configure every detected agent CLI. Idempotent; re-running
-    // setup is the normal path for OAuth refresh and CLI self-healing.
+    // Step 1: Configure every detected agent CLI
     console.log(chalk.blue('◼ Agent CLI Integration'));
-    // gh#818 P3: disclose WHICH global config files Step-1 writes, then
-    // confirm before the first mutation. Disclosure-only — no token/secret is
-    // written here (tokens live in the keychain; this runs before OAuth).
-    // Non-TTY (CI/headless) and `--yes`/`-y` proceed WITHOUT prompting (the
-    // load-bearing headless no-regress — a stdin read in a non-TTY would hang);
-    // a TTY decline aborts cleanly BEFORE any addMcpServer/hook write.
     const yes = parseYesFlag(process.argv);
-    // gh#844 (+ SR finding 8d9c732e): compute the per-target PENDING-mutation set
-    // ONCE, from the same peeks that gate the writers below, and drive BOTH the
-    // disclosure/confirm gate AND each writer from it. Consent invariant: no
-    // config/hook target is mutated without prior disclosure+consent. On a pure
-    // refresh (nothing pending) the prompt is skipped AND no writer runs; when
-    // anything is pending the prompt fires (or --yes/headless bypasses) and only
-    // the pending writers run. Deriving the gate and the writers from one source
-    // means a future hook writer cannot silently re-open the consent gap.
     const claudeDetected = claudeCliPath !== null;
     const codexDetected = codexCliPath !== null;
     const opencodeDetected = opencodeCliPath !== null;
     const claudeMcpConfigured = isMcpServerConfigured();
     const codexMcpConfigured = isCodexMcpServerConfigured();
     const opencodeMcpConfigured = isOpenCodeMcpServerConfigured();
-    // claude hook writes Step-1 performs: remove the legacy global SessionStart
-    // hook (gh#673) if present, and add the UserPromptSubmit audit hook if absent.
     const claudeLegacyHookPending = claudeDetected && isSessionStartHookRegistered();
     const claudeUpsHookPending = claudeDetected && !isUserPromptSubmitHookRegistered();
     const codexSessionHookPending = codexDetected && !isCodexSessionStartHookRegistered();
     const codexUpsHookPending = codexDetected && !isCodexUserPromptSubmitHookRegistered();
     const claudeHookPending = claudeLegacyHookPending || claudeUpsHookPending;
     const codexHookPending = codexSessionHookPending || codexUpsHookPending;
-    // gh#818 P3: disclose WHICH global config files Step-1 writes, then confirm
-    // before the first mutation. Disclosure-only — no token/secret is written
-    // here (tokens live in the keychain; this runs before OAuth). Non-TTY
-    // (CI/headless) and `--yes`/`-y` proceed WITHOUT prompting (the load-bearing
-    // headless no-regress — a stdin read in a non-TTY would hang); a TTY decline
-    // aborts cleanly BEFORE any addMcpServer/hook write. gh#844: skipped entirely
-    // on a pure refresh (nothing pending).
     if (setupMutationPending({
         claude: claudeDetected,
         codex: codexDetected,
@@ -146,11 +106,6 @@ async function main() {
     if (claudeCliPath) {
         try {
             ensureCliMcpConfigured('claude');
-            // gh#673 P2 (WI-1): the SessionStart orientation hook is now
-            // PROJECT-LOCAL, installed by `borg assimilate` / ensured by the
-            // `borg` launcher — setup no longer writes the global hook (and
-            // cleans up a legacy one so old installs converge). gh#844: each write
-            // is gated on its pending flag so it never runs past a skipped consent.
             if (claudeLegacyHookPending)
                 removeSessionStartHook();
             if (claudeUpsHookPending)
@@ -217,29 +172,7 @@ async function main() {
         createSubscription,
         openUrl: async (url) => { await open(url); },
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        log: (...args) => console.log(...args),
-        logError: (...args) => console.error(...args),
-    }, { noBrowser });
-    const useCloud = authorityResult.useCloud;
-    if (!useCloud) {
-        console.log(chalk.gray('  To use a local server, run `borg assimilate --host <host>` in your project.\n'));
-    }
-    else if (authorityResult.authAction === 'retry') {
-        process.exit(1);
-    }
-    // 'skip' and 'reauth' (success) messages handled by the seam's log calls
-    if (useCloud) {
-        // Step 3: Subscription — status already resolved by the seam
-        console.log(chalk.blue('◼ Subscription Check'));
-        const status = authorityResult.subscriptionStatus;
-        if (!status.hasAccess) {
-            // gh#687: a fresh user has no subscription BY DESIGN — the Free tier is the
-            // permanent entry point (no trial). Lead with that as a WIN, not a
-            // "not found" failure, and present upgrading as an OFFER (Continue on Free
-            // is the default). The gh#521 just-subscribed propagation-lag retry already
-            // ran above; the "I already subscribed — re-check" choice covers the tail.
-            console.log(chalk.green("◼ You're on the Free tier — permanent, no card needed: 1 cube + 3 agent sessions + 100 req/hr."));
-            console.log(chalk.gray('◼ Start using borgmcp right now. Upgrade any time: $1/month per cube, each cube adds 8 pooled agent sessions + 1000 req/hr.\n'));
+        selectSubscribeMethod: async () => {
             const { subscribeMethod } = await prompts({
                 type: 'select',
                 name: 'subscribeMethod',
@@ -267,83 +200,18 @@ async function main() {
                     }
                 ]
             });
-            if (subscribeMethod === undefined) {
-                console.log(chalk.yellow('\n◼ No subscription option selected — continuing on the Free tier.\n'));
-            }
-            switch (subscribeMethod) {
-                case 'web':
-                    console.log(chalk.blue('\n◼ Opening: https://borgmcp.ai/subscribe'));
-                    try {
-                        await open('https://borgmcp.ai/subscribe');
-                        console.log(chalk.gray('◼ Waiting for subscription (checking every 5s for 2 min)...\n'));
-                        await pollForSubscription();
-                    }
-                    catch (error) {
-                        console.error(chalk.yellow(`\n◼ ${error.message}`));
-                        console.log(chalk.green('◼ Continuing on the Free tier. Upgrade any time from https://borgmcp.ai/subscribe.\n'));
-                    }
-                    break;
-                case 'stripe':
-                    try {
-                        const checkoutUrl = await createSubscription();
-                        console.log(chalk.blue(`\n◼ Opening Stripe: ${checkoutUrl}`));
-                        await open(checkoutUrl);
-                        console.log(chalk.gray('◼ Waiting for subscription...\n'));
-                        await pollForSubscription();
-                    }
-                    catch (error) {
-                        console.error(chalk.red(`\n◼ Failed to create checkout: ${error.message}\n`));
-                        console.log(chalk.green('◼ Continuing on the Free tier. Upgrade any time from https://borgmcp.ai/subscribe.\n'));
-                    }
-                    break;
-                case 'recheck':
-                    try {
-                        let recheckStatus;
-                        try {
-                            recheckStatus = await checkSubscriptionStatus();
-                        }
-                        catch {
-                            recheckStatus = { hasAccess: false };
-                        }
-                        recheckStatus = await retrySubscriptionCheck(recheckStatus, {
-                            check: checkSubscriptionStatus,
-                            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-                            onRetry: (attempt, total) => console.log(chalk.gray(`◼ Re-checking subscription... (attempt ${attempt}/${total})`)),
-                        });
-                        if (recheckStatus.hasAccess) {
-                            console.log(chalk.green('\n◼ Subscription found!\n'));
-                        }
-                        else {
-                            console.log(chalk.yellow('\n◼ No subscription found — continuing on the Free tier.\n'));
-                        }
-                    }
-                    catch (error) {
-                        console.error(chalk.red(`\n◼ Failed to recheck: ${error.message}\n`));
-                        console.log(chalk.green('◼ Continuing on the Free tier.\n'));
-                    }
-                    break;
-                case 'skip':
-                    console.log(chalk.green("\n◼ You're all set on the Free tier: 1 cube, 3 agent sessions, 100 req/hr.\n"));
-                    break;
-            }
-        }
-        else {
-            console.log(chalk.green('◼ Active subscription found'));
-            if (status.expiresAt) {
-                const expiresAt = new Date(status.expiresAt);
-                console.log(chalk.gray(`  Expires: ${expiresAt.toLocaleDateString()}\n`));
-            }
-            else {
-                console.log('');
-            }
-        }
-    } // end useCloud
+            return subscribeMethod;
+        },
+        log: (...args) => console.log(...args),
+        logError: (...args) => console.error(...args),
+    }, { noBrowser });
+    if (handleAuthorityResult(authorityResult, console.log, console.error) !== 0) {
+        process.exit(1);
+    }
     // Success message
     console.log(chalk.green.bold('Setup complete!\n'));
     console.log(chalk.yellow('🔄 Restart Claude Code / Codex / OpenCode (or open a new session) for the changes to take effect.\n'));
-    // gh#653 B2: after setup the user has NO cube yet, so "run borg" was a
-    // dead-end — `borg assimilate` (run in a project dir) is what joins/creates
-    // a cube AND launches the agent. Point them there first.
+    const useCloud = authorityResult.useCloud;
     console.log(chalk.gray('◼ Next steps:'));
     console.log(chalk.gray('1. cd into your project, then run "borg assimilate" to join a cube'));
     console.log(chalk.gray('   (this creates/joins the cube and launches your agent)'));
@@ -353,27 +221,6 @@ async function main() {
     else {
         console.log(chalk.gray('2. Use `borg assimilate --host <host>` to connect to your local server\n'));
     }
-}
-/**
- * Poll for subscription activation
- * Checks every 5 seconds for 2 minutes (24 attempts)
- */
-async function pollForSubscription() {
-    const maxAttempts = 24;
-    for (let i = 0; i < maxAttempts; i++) {
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        try {
-            const status = await checkSubscriptionStatus();
-            if (status.hasAccess) {
-                console.log(chalk.green('◼ Subscription activated!\n'));
-                return;
-            }
-        }
-        catch (error) {
-            // Continue polling even on errors
-        }
-    }
-    throw new Error('Timeout - Run setup again after subscribing');
 }
 // Run wizard
 main().catch((error) => {

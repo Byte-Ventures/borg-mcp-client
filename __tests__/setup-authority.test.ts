@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   runSetupAuthority,
+  handleAuthorityResult,
   isAuthFailed,
   type SetupAuthorityDeps,
 } from '../src/setup-authority.js';
@@ -211,7 +212,7 @@ describe('runSetupAuthority', () => {
       expect(deps.sleep).not.toHaveBeenCalled();
     });
 
-    it('caller regression: authFailed causes exit before subscription work', async () => {
+    it('caller regression: handleAuthorityResult returns exit 1, no success continuation, no generic failure', async () => {
       const deps = makeDeps({
         probeSession: vi.fn(async () => 'dead' as const),
         authenticateWithGoogle: vi.fn(async () => {
@@ -219,19 +220,63 @@ describe('runSetupAuthority', () => {
         }),
       });
       const result = await runSetupAuthority('cloud', deps);
+      const log = vi.fn();
+      const logError = vi.fn();
 
-      // Caller would do: if (isAuthFailed(result)) process.exit(1)
-      // Before that, zero subscription work must have happened:
-      expect(deps.checkSubscriptionStatus).not.toHaveBeenCalled();
-      expect(deps.selectSubscribeMethod).not.toHaveBeenCalled();
-      expect(deps.createSubscription).not.toHaveBeenCalled();
-      expect(deps.openUrl).not.toHaveBeenCalled();
+      const exitCode = handleAuthorityResult(result, log, logError);
 
-      // And no generic "Setup failed" should appear in the seam's output
-      const setupFailedCalls = deps.logError.mock.calls.filter(
+      // Exit code must be 1 — caller must process.exit(1)
+      expect(exitCode).toBe(1);
+
+      // No success message logged by the handler
+      const successCalls = log.mock.calls.filter(
+        (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('Setup complete'),
+      );
+      expect(successCalls).toHaveLength(0);
+
+      // No generic "Setup failed" from the handler
+      const genericFailCalls = logError.mock.calls.filter(
         (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('Setup failed'),
       );
-      expect(setupFailedCalls).toHaveLength(0);
+      expect(genericFailCalls).toHaveLength(0);
+    });
+
+    it('caller regression (retry): handleAuthorityResult returns exit 1', async () => {
+      const deps = makeDeps({ probeSession: vi.fn(async () => 'transient' as const) });
+      const result = await runSetupAuthority('cloud', deps);
+      const log = vi.fn();
+      const logError = vi.fn();
+
+      const exitCode = handleAuthorityResult(result, log, logError);
+
+      expect(exitCode).toBe(1);
+      const successCalls = log.mock.calls.filter(
+        (c: unknown[]) => typeof c[0] === 'string' && c[0].includes('Setup complete'),
+      );
+      expect(successCalls).toHaveLength(0);
+    });
+
+    it('caller regression (success): handleAuthorityResult returns exit 0', async () => {
+      const deps = makeDeps({
+        checkSubscriptionStatus: vi.fn(async () => ({ hasAccess: true, expiresAt: '2027-01-01T00:00:00Z' })),
+      });
+      const result = await runSetupAuthority('cloud', deps);
+      const log = vi.fn();
+      const logError = vi.fn();
+
+      const exitCode = handleAuthorityResult(result, log, logError);
+
+      expect(exitCode).toBe(0);
+    });
+
+    it('caller regression (local): handleAuthorityResult returns exit 0', async () => {
+      const result = await runSetupAuthority('local', makeDeps());
+      const log = vi.fn();
+      const logError = vi.fn();
+
+      const exitCode = handleAuthorityResult(result, log, logError);
+
+      expect(exitCode).toBe(0);
     });
   });
 

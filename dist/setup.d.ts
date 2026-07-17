@@ -5,8 +5,7 @@
  * Interactive setup flow:
  * 1. Configure agent CLI MCP settings
  * 2. Choose authority: local server (default) or Cloud
- * 3. [Cloud only] Google OAuth authentication
- * 4. [Cloud only] Subscription setup
+ * 3. [Cloud only] Google OAuth authentication + subscription via seam
  */
 export {};
 //# sourceMappingURL=setup.d.ts.map
