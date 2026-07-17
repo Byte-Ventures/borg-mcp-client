@@ -280,7 +280,7 @@ async function selectAssimilationAuthority(
   // choose an authority. Fail closed instead of silently routing to Cloud.
   if (!deps.isTTY() || flags.yes) {
     if (deps.defaultAuthority) return deps.defaultAuthority;
-    deps.stderr('No authority specified. Use --host <server> for local, or set BORG_API_URL for Cloud.\n');
+    deps.stderr('No authority specified. Use --host <server> to select a local server, or run without --yes from an interactive terminal to choose an authority.\n');
     return null;
   }
 

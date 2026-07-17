@@ -35,7 +35,7 @@ Run the setup wizard:
 borg setup
 ```
 
-The wizard signs you in to Borg Cloud and registers Borg MCP with the supported agent CLIs installed on your machine. Self-hosted server enrollment is selected explicitly during assimilation instead.
+The wizard configures Borg MCP with the supported agent CLIs installed on your machine. When prompted, choose **Local server** (no account required) for self-hosted or local deployments, or **Borg Cloud** for managed cloud service (requires Google sign-in and subscription).
 
 `borg ...` commands are terminal commands. `borg_...` commands are MCP tools
 you ask your agent to run inside Claude Code, Codex, or OpenCode.
@@ -56,8 +56,14 @@ From inside your project repo:
 borg assimilate
 ```
 
-Borg Cloud derives a cube name from the repo, creates or joins that cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
+You will be prompted to connect to a local server or Borg Cloud. Borg derives a cube name from the repo, creates or joins that cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
 Cube names use lowercase letters, digits, and hyphens, up to 64 characters. Use `--cube-name <name>` if you need to override the derived name. If the repository has no usable `origin`, Borg proposes the sanitized repository-directory name and asks for confirmation; pass `--yes` to accept it non-interactively.
+
+To connect directly to a local server (non-interactive):
+
+```bash
+borg assimilate --host 127.0.0.1:7091
+```
 
 Self-hosted onboarding is an operator-terminal journey. Install the server, set
 it up once, and keep it running:
@@ -199,6 +205,12 @@ CLI-specific recovery it prints:
 - Codex: check the remote-control socket status, relaunch with `borg --cli codex`
   or `borg assimilate --cli codex` if needed, and run `borg_regen` manually when
   returning to the session if no wake arrived.
+
+## Migration: local-first onboarding
+
+**Breaking change for automation:** `borg assimilate` with `--yes` or in a non-interactive terminal no longer defaults to Borg Cloud. Scripts that relied on implicit Cloud auth now fail closed with an actionable error message.
+
+To restore Cloud behavior in automation, explicitly pass `--host <cloud-endpoint>` or run from an interactive terminal to choose an authority. The local server path requires no account or subscription.
 
 ## Development
 

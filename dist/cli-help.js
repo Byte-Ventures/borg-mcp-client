@@ -78,8 +78,8 @@ export function setupHelpText(version) {
         `Borg MCP needs Claude Code, Codex, or OpenCode installed first.\n\n` +
         `Usage:\n` +
         `  borg setup               Run the interactive setup wizard\n` +
-        `  borg setup --no-browser  Sign in without a local browser (device-code flow)\n` +
-        `                           for SSH / headless / container terminals. Alias: --device.\n` +
+        `  borg setup --no-browser  Use device-code flow for SSH / headless / container\n` +
+        `                           terminals when Cloud sign-in is selected. Alias: --device.\n` +
         `                           Auto-detected on SSH/headless; this forces it.\n` +
         `  borg setup --help        Show this help\n`);
 }

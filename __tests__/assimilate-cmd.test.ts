@@ -2520,6 +2520,63 @@ describe('runAssimilate: #1015 authority selection', () => {
         '`borg assimilate --host https://localhost:8787 --enroll` from the operator’s terminal.\n',
     );
   });
+
+  it('non-TTY --yes without --host/--server emits recovery and makes zero auth/API calls', async () => {
+    const stderr = vi.fn();
+    const getCachedAuth = vi.fn();
+    const runSetup = vi.fn();
+    const connectServer = vi.fn();
+    const listCubes = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      getCachedAuth,
+      runSetup,
+      connectServer,
+      listCubes,
+      defaultAuthority: undefined,
+      isTTY: () => false,
+    });
+
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
+
+    expect(getCachedAuth).not.toHaveBeenCalled();
+    expect(runSetup).not.toHaveBeenCalled();
+    expect(connectServer).not.toHaveBeenCalled();
+    expect(listCubes).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith(
+      'No authority specified. Use --host <server> to select a local server, ' +
+        'or run without --yes from an interactive terminal to choose an authority.\n',
+    );
+  });
+
+  it('local server authority makes zero Cloud auth/API calls', async () => {
+    const getCachedAuth = vi.fn();
+    const runSetup = vi.fn();
+    const connectServer = vi.fn(async () => ({
+      token: 'local-token',
+      trustIdentity: SERVER_TRUST_IDENTITY,
+    }));
+    const listCubes = vi.fn(async () => []);
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      getCachedAuth,
+      runSetup,
+      connectServer,
+      listCubes,
+      stderr,
+      defaultAuthority: { kind: 'server' as const, apiUrl: 'http://localhost:8787' },
+    });
+
+    await runAssimilate(
+      { role: undefined, flags: { yes: true } },
+      deps,
+    );
+
+    expect(getCachedAuth).not.toHaveBeenCalled();
+    expect(runSetup).not.toHaveBeenCalled();
+    expect(connectServer).toHaveBeenCalled();
+    expect(listCubes).toHaveBeenCalled();
+  });
 });
 
 describe('runAssimilate: local saved-seat idempotency', () => {
