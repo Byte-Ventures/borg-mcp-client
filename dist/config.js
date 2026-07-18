@@ -627,6 +627,46 @@ export function serverSessionCredentialRef(input) {
     return serverPendingSessionAccount(input.origin, input.trustIdentity, input.cubeId, input.roleId, input.operation);
 }
 /**
+ * Pure PEEK: does a well-formed session record — PENDING or ACTIVE — exist at
+ * this per-seat ref for the given binding? No lock, no create, no mutate, no
+ * bearer returned. Lets the crash-in-gap resume path distinguish a resumable
+ * PENDING record (binding-present, credential non-hydratable because
+ * getActiveServerSessionCredential requires state=='active') from genuine
+ * keychain loss. Returns false for a missing/foreign/corrupt/mismatched record,
+ * so a genuine loss stays a truthful error and never becomes a new seat.
+ */
+export async function peekServerSessionRecord(credentialRef, binding) {
+    if (!/^borg-server-session:[a-f0-9]{64}$/.test(credentialRef))
+        return false;
+    const backend = await getServerCredentialBackend();
+    const stored = await backend.get(credentialRef);
+    if (!stored)
+        return false;
+    try {
+        const record = JSON.parse(stored);
+        const op = record.operation;
+        if (record.version !== SERVER_PENDING_SESSION_RECORD_VERSION ||
+            record.origin !== binding.origin ||
+            record.trustIdentity !== binding.trustIdentity ||
+            record.cubeId !== binding.cubeId ||
+            (record.state !== 'pending' && record.state !== 'active') ||
+            typeof record.credential !== 'string' ||
+            typeof record.roleId !== 'string' ||
+            op === undefined ||
+            op === null ||
+            typeof op !== 'object' ||
+            typeof op.projectRoot !== 'string' ||
+            typeof op.operationKey !== 'string' ||
+            (op.kind !== 'seat' && op.kind !== 'sibling')) {
+            return false;
+        }
+        return serverPendingSessionAccount(record.origin, record.trustIdentity, record.cubeId, record.roleId, op) === credentialRef;
+    }
+    catch {
+        return false;
+    }
+}
+/**
  * Resolve the active bearer stored at an opaque per-seat reference. The role is
  * not required from the caller — the reference itself binds the role, so the
  * stored record's own role must re-derive the exact same account. Returns null

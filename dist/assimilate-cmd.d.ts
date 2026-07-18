@@ -3,7 +3,7 @@ import { type CodexRemoteLaunch } from './codex-remote.js';
 import type { BorgCli } from './cubes.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { ServerSessionOperation } from './config.js';
-import type { ExpectedBinding, FinalizeServerSeatOutcome } from './cubes.js';
+import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } from './cubes.js';
 import { type LaunchApprovalDecision } from './cli-tool-approval.js';
 export interface AssimilateFlags {
     worktree?: string;
@@ -85,6 +85,19 @@ export interface AssimilateDeps {
     setTerminalTitle: (label: string, cubeName: string) => void;
     getActiveCube: () => Promise<ActiveCube | null>;
     hasPersistedActiveCube: () => Promise<boolean>;
+    /** Read the RAW persisted local seat for this worktree WITHOUT hydrating its
+     *  keychain credential — used to recover a crash-in-gap PENDING seat when
+     *  getActiveCube() returns null purely because the credential is non-hydratable
+     *  (binding written by FINALIZE, then a crash before the pending→ACTIVE flip). */
+    readPersistedLocalSeat?: () => Promise<PersistedLocalSeat | null>;
+    /** Pure PEEK: is a resumable session RECORD (pending or active) present at the
+     *  per-seat ref? Distinguishes a rerunnable crash-in-gap state from genuine
+     *  keychain loss without creating or mutating anything. */
+    peekServerSessionRecord?: (credentialRef: string, binding: {
+        origin: string;
+        trustIdentity: string;
+        cubeId: string;
+    }) => Promise<boolean>;
     /** Clear ONLY the current worktree's saved seat: its cubes.json binding and
      *  its keychain session credential. Keys on findProjectRoot() — never touches
      *  server trust anchors, other worktrees, or cube state. Returns whether a

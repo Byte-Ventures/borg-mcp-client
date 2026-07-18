@@ -120,6 +120,20 @@ export declare function serverSessionCredentialRef(input: {
     operation: ServerSessionOperation;
 }): string;
 /**
+ * Pure PEEK: does a well-formed session record — PENDING or ACTIVE — exist at
+ * this per-seat ref for the given binding? No lock, no create, no mutate, no
+ * bearer returned. Lets the crash-in-gap resume path distinguish a resumable
+ * PENDING record (binding-present, credential non-hydratable because
+ * getActiveServerSessionCredential requires state=='active') from genuine
+ * keychain loss. Returns false for a missing/foreign/corrupt/mismatched record,
+ * so a genuine loss stays a truthful error and never becomes a new seat.
+ */
+export declare function peekServerSessionRecord(credentialRef: string, binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+}): Promise<boolean>;
+/**
  * Resolve the active bearer stored at an opaque per-seat reference. The role is
  * not required from the caller — the reference itself binds the role, so the
  * stored record's own role must re-derive the exact same account. Returns null

@@ -463,6 +463,43 @@ export async function snapshotLocalSeat() {
     };
 }
 /**
+ * Read the RAW persisted local-server seat for the current worktree WITHOUT
+ * hydrating its keychain credential. The crash-in-gap resume path uses this to
+ * recover the seat identity (drone id, role, deterministic ref) when
+ * getActiveCube() returns null purely because the credential is still PENDING
+ * (non-hydratable) after the composite FINALIZE wrote the binding but a
+ * crash/throw preceded the pending→ACTIVE flip. Returns null when this worktree
+ * has no complete local-server binding — a genuine keychain loss stays a
+ * truthful error and never becomes a new seat.
+ */
+export async function readPersistedLocalSeat() {
+    const data = await readCubesFile();
+    if (!data)
+        return null;
+    const entry = data.projects[findProjectRoot()];
+    if (!entry)
+        return null;
+    if (entry.serverTrustIdentity === undefined ||
+        typeof entry.localSessionCredentialRef !== 'string' ||
+        typeof entry.cubeId !== 'string' || !entry.cubeId ||
+        typeof entry.droneId !== 'string' || !entry.droneId) {
+        return null;
+    }
+    return {
+        cubeId: entry.cubeId,
+        droneId: entry.droneId,
+        name: entry.name,
+        droneLabel: entry.droneLabel,
+        apiUrl: entry.apiUrl,
+        serverTrustIdentity: entry.serverTrustIdentity,
+        localSessionCredentialRef: entry.localSessionCredentialRef,
+        ...(entry.localSessionExpiresAt !== undefined ? { localSessionExpiresAt: entry.localSessionExpiresAt } : {}),
+        ...(entry.roleName !== undefined ? { roleName: entry.roleName } : {}),
+        ...(entry.roleClass !== undefined ? { roleClass: entry.roleClass } : {}),
+        ...(entry.isHumanSeat !== undefined ? { isHumanSeat: entry.isHumanSeat } : {}),
+    };
+}
+/**
  * S2/S3 of the ratified client-seat-reset-state-model. Re-acquires the cube
  * write lock (OUTER; the keychain lock is only ever taken INNER via
  * compareAndClearServerSessionCredential — never a keychain→cube inversion),

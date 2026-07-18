@@ -16,8 +16,8 @@ import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, prepareBorgServerAttach, } from './server-handshake.js';
-import { clearPendingServerSession, } from './config.js';
-import { finalizeServerSeatAttachment } from './cubes.js';
+import { clearPendingServerSession, peekServerSessionRecord, } from './config.js';
+import { finalizeServerSeatAttachment, readPersistedLocalSeat } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError } from './server-errors.js';
@@ -93,6 +93,8 @@ export function buildDefaultAssimilateDeps() {
         },
         getActiveCube: () => cubesGetActive(),
         hasPersistedActiveCube: () => cubesHasPersistedActive(),
+        readPersistedLocalSeat: () => readPersistedLocalSeat(),
+        peekServerSessionRecord: (credentialRef, binding) => peekServerSessionRecord(credentialRef, binding),
         clearActiveCube: (expected) => cubesClearActive(expected),
         probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
         setActiveCube: (a) => cubesSetActive(a),

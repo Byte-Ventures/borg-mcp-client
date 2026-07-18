@@ -56,6 +56,8 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     setTerminalTitle: vi.fn(),
     getActiveCube: vi.fn(async () => null),
     hasPersistedActiveCube: vi.fn(async () => false),
+    readPersistedLocalSeat: vi.fn(async () => null),
+    peekServerSessionRecord: vi.fn(async () => false),
     probeSeat: vi.fn(async () => 'live'),
     setActiveCube: vi.fn(async () => {}),
     clearActiveCube: vi.fn(async () => ({ removed: true, credentialRef: null })),
@@ -2881,11 +2883,49 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('could not verify'));
   });
 
-  it('never treats persisted local metadata with a missing keychain session as a new seat', async () => {
+  const persistedRawSeat = () => ({
+    cubeId: 'cube-1',
+    droneId: 'drone-saved',
+    name: 'myrepo',
+    droneLabel: 'one-of-one-drone',
+    apiUrl: 'https://localhost:8787',
+    serverTrustIdentity: SERVER_TRUST_IDENTITY,
+    localSessionCredentialRef: 'borg-server-session:' + 'b'.repeat(64),
+    roleName: 'Drone',
+    roleClass: 'worker' as const,
+    isHumanSeat: false,
+  });
+
+  it('RECORD-ABSENT: binding present but NO session record → truthful keychain-loss error, never a new seat', async () => {
     const assimilate = vi.fn();
+    const peekServerSessionRecord = vi.fn(async () => false); // genuine keychain loss
     const deps = makeStubDeps({
       getActiveCube: vi.fn(async () => null),
       hasPersistedActiveCube: vi.fn(async () => true),
+      readPersistedLocalSeat: vi.fn(async () => persistedRawSeat()),
+      peekServerSessionRecord,
+      assimilate: assimilate as AssimilateDeps['assimilate'],
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => localCube()),
+    });
+
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', here: true, yes: true, cubeName: 'myrepo' },
+    }, deps)).resolves.toBe(1);
+
+    expect(peekServerSessionRecord).toHaveBeenCalled();
+    expect(assimilate).not.toHaveBeenCalled();
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('secure session could not be loaded'));
+  });
+
+  it('never treats persisted local metadata with a missing keychain session as a new seat', async () => {
+    const assimilate = vi.fn();
+    // No raw seat readable → cannot resume → truthful error, unchanged.
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => null),
+      hasPersistedActiveCube: vi.fn(async () => true),
+      readPersistedLocalSeat: vi.fn(async () => null),
       assimilate: assimilate as AssimilateDeps['assimilate'],
       listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
       getCube: vi.fn(async () => localCube()),
@@ -2898,6 +2938,48 @@ describe('runAssimilate: local saved-seat idempotency', () => {
 
     expect(assimilate).not.toHaveBeenCalled();
     expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('secure session could not be loaded'));
+  });
+
+  it('CRASH-IN-GAP RESUME: binding present + a resumable PENDING record → resumes (no keychain-loss error), FINALIZE converges with EXACT-ref, exit 0', async () => {
+    const REF = 'borg-server-session:' + 'b'.repeat(64);
+    const activate = vi.fn(async () => {});
+    const scrubPending = vi.fn(async () => {});
+    // The re-sent attach resolves the SAME seat (bearer digest is the correlator);
+    // the composite FINALIZE flips the pending record to ACTIVE.
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'cube-1', drone_id: 'drone-saved', drone_label: 'one-of-one-drone',
+      result: 'reused' as const, role_id: 'role-default',
+      local_session: { credential_ref: REF, expires_at: '2026-07-20T00:00:00.000Z' },
+      finalize: { activate, scrubPending },
+    }));
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      getActiveCube: vi.fn(async () => null),                       // PENDING is non-hydratable
+      hasPersistedActiveCube: vi.fn(async () => true),
+      readPersistedLocalSeat: vi.fn(async () => persistedRawSeat()),
+      peekServerSessionRecord: vi.fn(async () => true),             // resumable record present
+      assimilate,
+      finalizeServerSeat,
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => localCube()),
+    });
+
+    // A fresh `borg assimilate` — no --here needed.
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true, cubeName: 'myrepo' },
+    }, deps)).toBe(0);
+
+    // NOT misdiagnosed as keychain loss.
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).not.toMatch(/secure session could not be loaded/);
+    // The identical seat is re-sent (resume), not a fresh mint.
+    expect(assimilate).toHaveBeenCalled();
+    // FINALIZE converges with EXACT-ref (no live-bearer digest — the credential is pending).
+    expect(finalizeServerSeat).toHaveBeenCalledTimes(1);
+    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({ kind: 'exact', credentialRef: REF });
+    expect(finalizeServerSeat.mock.calls[0][0].active).toMatchObject({ cubeId: 'cube-1', localSessionCredentialRef: REF });
   });
 
 });

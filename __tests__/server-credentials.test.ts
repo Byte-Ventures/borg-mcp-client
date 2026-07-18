@@ -14,6 +14,7 @@ import {
   getPendingServerEnrollment,
   getServerCredential,
   getServerCredentialRecord,
+  peekServerSessionRecord,
   serverSessionCredentialRef,
   storeServerCredential,
 } from '../src/config.js';
@@ -264,6 +265,47 @@ describe('compareAndClearPendingServerSession (composite abort-scrub, part C)', 
     const ref = serverSessionCredentialRef(seat);
     expect(await compareAndClearPendingServerSession(ref, binding, 'x')).toBe(false);
     expect(await compareAndClearPendingServerSession('not-a-ref', binding, 'x')).toBe(false);
+  });
+});
+
+describe('peekServerSessionRecord (crash-in-gap resume PEEK, part C fix)', () => {
+  const seat = {
+    origin: 'https://localhost:8787',
+    trustIdentity: 'sha256:server-a',
+    cubeId: '11111111-1111-4111-8111-111111111111',
+    roleId: '44444444-4444-4444-8444-444444444444',
+    operation: { projectRoot: '/work/repo', kind: 'seat' as const, operationKey: 'current-worktree' },
+  };
+  const binding = { origin: seat.origin, trustIdentity: seat.trustIdentity, cubeId: seat.cubeId };
+
+  it('true for a PENDING record (resumable crash-in-gap state)', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    await getOrCreatePendingServerSession(seat);
+    expect(await peekServerSessionRecord(serverSessionCredentialRef(seat), binding)).toBe(true);
+  });
+
+  it('true for an ACTIVE record', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    await getOrCreatePendingServerSession(seat);
+    await activatePendingServerSession({
+      ...seat,
+      droneId: '22222222-2222-4222-8222-222222222222',
+      sessionId: '33333333-3333-4333-8333-333333333333',
+      expiresAt: '2026-07-20T00:00:00.000Z',
+    });
+    expect(await peekServerSessionRecord(serverSessionCredentialRef(seat), binding)).toBe(true);
+  });
+
+  it('false for a missing record, a malformed ref, or a foreign binding (genuine loss stays a truthful error)', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const ref = serverSessionCredentialRef(seat);
+    expect(await peekServerSessionRecord(ref, binding)).toBe(false);
+    expect(await peekServerSessionRecord('not-a-ref', binding)).toBe(false);
+    await getOrCreatePendingServerSession(seat);
+    expect(await peekServerSessionRecord(ref, { ...binding, cubeId: '99999999-9999-4999-8999-999999999999' })).toBe(false);
   });
 });
 

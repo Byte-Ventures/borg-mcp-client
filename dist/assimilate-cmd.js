@@ -467,6 +467,11 @@ export async function runAssimilate(args, deps) {
     let reattachPriorId;
     let remintInvalidPrior = false;
     let savedLocalRole;
+    // Set when the pre-attach gate recovers a crash-in-gap PENDING seat: the
+    // composite FINALIZE must then declare EXACT-ref (the credential is pending,
+    // not active, so no live-bearer digest is pinned) so it re-persists the extant
+    // binding and flips pending→ACTIVE, rather than aborting on an ABSENT check.
+    let resumeCredentialRef;
     if (existing && args.flags.here && existing.cubeId !== cubeDetail.id) {
         deps.stderr(authority.kind === 'server'
             ? `This directory already hosts an active drone for another cube on ${authority.apiUrl}. ` +
@@ -476,10 +481,53 @@ export async function runAssimilate(args, deps) {
     }
     if (authority.kind === 'server') {
         if (!existing && hasPersistedIdentity) {
-            deps.stderr(`This worktree has saved seat metadata for ${authority.apiUrl}, but its secure session ` +
-                'could not be loaded. No new seat was created. Unlock or restore the OS ' +
-                `keychain, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`);
-            return 1;
+            // getActiveCube() is null AND metadata is persisted. Two distinct states:
+            //   (a) crash-in-gap RESUME — the composite FINALIZE wrote the binding, then
+            //       a crash/throw preceded the pending→ACTIVE flip. The credential is
+            //       still a PENDING record (non-hydratable → getActiveCube null), the
+            //       binding is intact, and re-sending the identical pending bearer
+            //       converges. Ratified clause 4: this state is RERUNNABLE and must be
+            //       truthfully reported, NOT misdiagnosed as keychain loss.
+            //   (b) genuine keychain loss/lock — no record at the ref. Truthful error,
+            //       and NEVER a new seat (record-absent invariant).
+            // A pure PEEK (no create/mutate) at the deterministic per-seat ref
+            // distinguishes them. Resume only applies to an in-place attach (a
+            // --worktree sibling is a NEW seat, not a resume of this worktree's seat).
+            const persisted = deps.readPersistedLocalSeat
+                ? await deps.readPersistedLocalSeat()
+                : null;
+            let resumeRole;
+            let recordPresent = false;
+            if (persisted &&
+                !wantSibling &&
+                persisted.apiUrl === auth.apiUrl &&
+                persisted.serverTrustIdentity === auth.serverTrustIdentity) {
+                recordPresent = deps.peekServerSessionRecord
+                    ? await deps.peekServerSessionRecord(persisted.localSessionCredentialRef, {
+                        origin: auth.apiUrl,
+                        trustIdentity: auth.serverTrustIdentity,
+                        cubeId: persisted.cubeId,
+                    })
+                    : false;
+                if (recordPresent && persisted.roleName) {
+                    resumeRole = cubeDetail.roles.find((role) => role.name === persisted.roleName);
+                }
+            }
+            if (persisted && recordPresent && resumeRole) {
+                // RESUME: reuse the persisted role (the ref binds the role, so a resume
+                // MUST re-derive the exact same account) and let FINALIZE converge with an
+                // EXACT-ref expectation. The seat operation is the in-place current-worktree
+                // seat (wantSibling is false here), so getOrCreatePendingServerSession
+                // re-resolves the existing pending record and re-sends the identical bearer.
+                savedLocalRole = resumeRole;
+                resumeCredentialRef = persisted.localSessionCredentialRef;
+            }
+            else {
+                deps.stderr(`This worktree has saved seat metadata for ${authority.apiUrl}, but its secure session ` +
+                    'could not be loaded. No new seat was created. Unlock or restore the OS ' +
+                    `keychain, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`);
+                return 1;
+            }
         }
         if (existing && args.flags.here &&
             (existing.apiUrl !== auth.apiUrl ||
@@ -837,7 +885,12 @@ export async function runAssimilate(args, deps) {
         result.finalize !== undefined &&
         deps.finalizeServerSeat !== undefined) {
         let expected;
-        if (remintInvalidPrior && existing?.localSessionCredentialRef) {
+        if (resumeCredentialRef) {
+            // Crash-in-gap resume: the extant binding must still hold, but the credential
+            // is PENDING (not active) so no live-bearer digest is pinned — EXACT ref only.
+            expected = { kind: 'exact', credentialRef: resumeCredentialRef };
+        }
+        else if (remintInvalidPrior && existing?.localSessionCredentialRef) {
             expected = { kind: 'exact', credentialRef: existing.localSessionCredentialRef };
         }
         else if (reattachPriorId != null && existing?.localSessionCredentialRef && existing.sessionToken) {

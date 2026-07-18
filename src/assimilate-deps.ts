@@ -35,9 +35,10 @@ import {
 } from './server-handshake.js';
 import {
   clearPendingServerSession,
+  peekServerSessionRecord,
   type ServerSessionOperation,
 } from './config.js';
-import { finalizeServerSeatAttachment } from './cubes.js';
+import { finalizeServerSeatAttachment, readPersistedLocalSeat } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError } from './server-errors.js';
@@ -131,6 +132,8 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
 
     getActiveCube: () => cubesGetActive(),
     hasPersistedActiveCube: () => cubesHasPersistedActive(),
+    readPersistedLocalSeat: () => readPersistedLocalSeat(),
+    peekServerSessionRecord: (credentialRef, binding) => peekServerSessionRecord(credentialRef, binding),
     clearActiveCube: (expected) => cubesClearActive(expected),
     probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>
       defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
