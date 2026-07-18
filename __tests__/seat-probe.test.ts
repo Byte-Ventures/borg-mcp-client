@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Executable production-chain regression (SR-six 02b6f245 / thirty-seven; CR #6):
 // the real defaultProbeSeat → whoami → localAuthorityContext → authedFetch path
@@ -115,6 +121,76 @@ describe('defaultProbeSeat production chain (real whoami → authedFetch verdict
 
   it('trust-mismatch: a pinned-identity mismatch is a TERMINAL typed trust verdict, not transient/indeterminate', async () => {
     await expect(probe(vi.fn(), 'spki-sha256:DIFFERENT')).resolves.toBe('trust-mismatch');
+  });
+});
+
+// CR5 TLS LATTICE — the LIVE wrong-cert case through the REAL probe chain: a raw
+// CA/cert/SAN failure from the pinned transport (createPinnedServerFetch, unmocked)
+// must surface as `trust-mismatch` (terminal), never `indeterminate`/`unreachable`;
+// a genuine connection refusal must stay `unreachable`.
+describe('defaultProbeSeat real wrong-cert chain (CR5 TLS lattice)', () => {
+  const dirs: string[] = [];
+  const servers: HttpsServer[] = [];
+  beforeEach(() => vi.resetModules());
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((s) => new Promise<void>((r) => s.close(() => r()))));
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+  function tmp(): string {
+    const d = mkdtempSync(join(tmpdir(), 'borg-probe-tls-'));
+    dirs.push(d);
+    return d;
+  }
+  function genSelfSigned(dir: string, name: string, subj: string, san?: string): { cert: string; key: string } {
+    const keyPath = join(dir, `${name}.key`);
+    const certPath = join(dir, `${name}.crt`);
+    const args = ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', keyPath, '-out', certPath, '-days', '2', '-nodes', '-subj', subj];
+    if (san) args.push('-addext', `subjectAltName=${san}`);
+    execFileSync('openssl', args, { stdio: 'ignore' });
+    return { cert: readFileSync(certPath, 'utf8'), key: readFileSync(keyPath, 'utf8') };
+  }
+  async function startTls(cert: string, key: string): Promise<string> {
+    const server = createHttpsServer({ cert, key }, (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+    });
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    return `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  // Wire the probe chain with the REAL createPinnedServerFetch (only loadBorgServerTrust
+  // is stubbed, to hand back the real pinned transport for `origin`).
+  async function probeRealPinned(origin: string, caPem: string): Promise<string> {
+    const actual = await vi.importActual<typeof import('../src/server-trust.js')>('../src/server-trust.js');
+    const pinned = actual.createPinnedServerFetch(origin, caPem);
+    vi.doMock('../src/config.js', () => ({ getServerCredential: vi.fn(async () => 'parent-enrollment-token') }));
+    vi.doMock('../src/cubes.js', () => ({ getActiveCube: vi.fn(async () => ({ ...ACTIVE_CUBE, apiUrl: origin })) }));
+    vi.doMock('../src/server-trust.js', () => ({ ...actual, loadBorgServerTrust: vi.fn(async () => ({ identity: TRUST, fetchImpl: pinned })) }));
+    const { defaultProbeSeat } = await import('../src/seat-probe.js');
+    return defaultProbeSeat(SESSION, origin, TRUST);
+  }
+
+  it('a live server presenting a WRONG cert (CA mismatch) → trust-mismatch through the real probe chain', async () => {
+    const dir = tmp();
+    const server = genSelfSigned(dir, 'srv', '/CN=127.0.0.1', 'IP:127.0.0.1');
+    const wrongCa = genSelfSigned(dir, 'wrongca', '/CN=wrong-ca');
+    const origin = await startTls(server.cert, server.key);
+    await expect(probeRealPinned(origin, wrongCa.cert)).resolves.toBe('trust-mismatch');
+  });
+
+  it('a live server that is DOWN (connection refused) → unreachable, never trust-mismatch', async () => {
+    const dir = tmp();
+    const ca = genSelfSigned(dir, 'ca', '/CN=ca');
+    // Bind then close to obtain a definitely-closed port on 127.0.0.1.
+    const probe = createHttpsServer({ cert: ca.cert, key: ca.key });
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', () => r()));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((r) => probe.close(() => r()));
+    const origin = `https://127.0.0.1:${port}`;
+    await expect(probeRealPinned(origin, ca.cert)).resolves.toBe('unreachable');
   });
 });
 
