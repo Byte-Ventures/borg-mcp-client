@@ -15,9 +15,6 @@ export interface AssimilateFlags {
     model?: string;
     server?: string;
     enroll?: boolean;
-    /** Destructive: non-interactively clear ONLY this worktree's saved local
-     *  seat on a pin-matched SESSION_REJECTED. Required in non-TTY contexts. */
-    resetLocalSeat?: boolean;
 }
 export interface AssimilateArgs {
     role: string | undefined;

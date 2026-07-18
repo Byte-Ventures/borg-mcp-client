@@ -41,15 +41,6 @@ export interface PendingServerCubeCreationRecord {
     name: string;
     template: 'default';
 }
-export interface ServerSessionCredentialRecord {
-    origin: string;
-    trustIdentity: string;
-    cubeId: string;
-    droneId: string;
-    generation: number;
-    credential: string;
-    expiresAt?: string | null;
-}
 /**
  * S1 clean-slate local drone-session record. The client CSPRNG-generates the
  * bearer and persists it PENDING (keyed by the stable per-seat attach identity
@@ -205,13 +196,14 @@ export declare function getOrCreatePendingServerCubeCreation(input: {
 export declare function clearPendingServerCubeCreation(record: PendingServerCubeCreationRecord): Promise<void>;
 export declare function clearServerCredential(origin: string, trustIdentity: string): Promise<void>;
 /**
- * Write one rotated local drone-session bearer to a generation-specific
- * keychain entry. The returned opaque reference is safe to persist in
- * cubes.json; the bearer itself never leaves the keychain record.
+ * Delete one drone-session record by its opaque reference. The backend.delete
+ * runs UNDER the same per-account keychain lock every session writer takes
+ * (getOrCreatePendingServerSession / activatePendingServerSession /
+ * compareAndClearServerSessionCredential), so a concurrent same-ref remint can
+ * never interleave between a reader's observation and this delete. This is the
+ * ONLY unpinned session-credential delete; the pinned reset path uses the
+ * atomic compareAndClearServerSessionCredential primitive instead.
  */
-export declare function storeServerSessionCredential(record: ServerSessionCredentialRecord): Promise<string>;
-/** Resolve an opaque local-session reference only when every binding matches. */
-export declare function getServerSessionCredential(credentialRef: string, binding: Omit<ServerSessionCredentialRecord, 'credential' | 'expiresAt'>): Promise<string | null>;
 export declare function clearServerSessionCredential(credentialRef: string): Promise<void>;
 export {};
 //# sourceMappingURL=config.d.ts.map

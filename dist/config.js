@@ -17,7 +17,6 @@ import { makeKeychainBackend, } from './token-store.js';
 const SERVER_CREDENTIAL_RECORD_VERSION = 2;
 const SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 1;
 const SERVER_CUBE_RETRY_RECORD_VERSION = 1;
-const SERVER_SESSION_RECORD_VERSION = 1;
 const SERVER_PENDING_SESSION_RECORD_VERSION = 1;
 const SERVER_KEYCHAIN_SERVICE = 'borg-mcp-local-server';
 const SERVER_KEYCHAIN_LOCK_STALE_MS = 30_000;
@@ -742,35 +741,6 @@ function serverCubeRetryAccount(origin, trustIdentity, clientId, repositoryBindi
         .digest('hex');
     return `borg-server-cube-pending:${binding}`;
 }
-function validateServerSessionBinding(record) {
-    validateServerCredentialBinding(record.origin, record.trustIdentity);
-    if (!UUID_RE.test(record.cubeId) || !UUID_RE.test(record.droneId)) {
-        throw new Error('invalid Borg server session identity');
-    }
-    if (!Number.isSafeInteger(record.generation) || record.generation < 1) {
-        throw new Error('invalid Borg server session generation');
-    }
-    if (record.expiresAt !== undefined &&
-        record.expiresAt !== null &&
-        (!Number.isFinite(Date.parse(record.expiresAt)) || record.expiresAt.length > 64)) {
-        throw new Error('invalid Borg server session expiry');
-    }
-}
-function serverSessionCredentialAccount(record) {
-    validateServerSessionBinding(record);
-    const binding = createHash('sha256')
-        .update(record.origin)
-        .update('\0')
-        .update(record.trustIdentity)
-        .update('\0')
-        .update(record.cubeId)
-        .update('\0')
-        .update(record.droneId)
-        .update('\0')
-        .update(record.generation.toString())
-        .digest('hex');
-    return `borg-server-session:${binding}`;
-}
 function validateServerSessionCredentialRef(credentialRef) {
     if (!/^borg-server-session:[a-f0-9]{64}$/.test(credentialRef)) {
         throw new Error('invalid Borg server session credential reference');
@@ -1084,55 +1054,19 @@ export async function clearServerCredential(origin, trustIdentity) {
     });
 }
 /**
- * Write one rotated local drone-session bearer to a generation-specific
- * keychain entry. The returned opaque reference is safe to persist in
- * cubes.json; the bearer itself never leaves the keychain record.
+ * Delete one drone-session record by its opaque reference. The backend.delete
+ * runs UNDER the same per-account keychain lock every session writer takes
+ * (getOrCreatePendingServerSession / activatePendingServerSession /
+ * compareAndClearServerSessionCredential), so a concurrent same-ref remint can
+ * never interleave between a reader's observation and this delete. This is the
+ * ONLY unpinned session-credential delete; the pinned reset path uses the
+ * atomic compareAndClearServerSessionCredential primitive instead.
  */
-export async function storeServerSessionCredential(record) {
-    validateServerSessionBinding(record);
-    if (record.credential.length < 43 ||
-        record.credential.length > 1024 ||
-        !/^[A-Za-z0-9_-]+$/.test(record.credential)) {
-        throw new Error('invalid Borg server session credential');
-    }
-    const credentialRef = serverSessionCredentialAccount(record);
-    const backend = await getServerCredentialBackend();
-    await backend.set(credentialRef, JSON.stringify({ version: SERVER_SESSION_RECORD_VERSION, ...record }));
-    return credentialRef;
-}
-/** Resolve an opaque local-session reference only when every binding matches. */
-export async function getServerSessionCredential(credentialRef, binding) {
-    validateServerSessionCredentialRef(credentialRef);
-    validateServerSessionBinding(binding);
-    if (serverSessionCredentialAccount(binding) !== credentialRef)
-        return null;
-    const backend = await getServerCredentialBackend();
-    const stored = await backend.get(credentialRef);
-    if (!stored)
-        return null;
-    try {
-        const record = JSON.parse(stored);
-        if (record.version !== SERVER_SESSION_RECORD_VERSION ||
-            record.origin !== binding.origin ||
-            record.trustIdentity !== binding.trustIdentity ||
-            record.cubeId !== binding.cubeId ||
-            record.droneId !== binding.droneId ||
-            record.generation !== binding.generation ||
-            typeof record.credential !== 'string' ||
-            record.credential.length < 43 ||
-            record.credential.length > 1024 ||
-            !/^[A-Za-z0-9_-]+$/.test(record.credential)) {
-            return null;
-        }
-        return record.credential;
-    }
-    catch {
-        return null;
-    }
-}
 export async function clearServerSessionCredential(credentialRef) {
     validateServerSessionCredentialRef(credentialRef);
     const backend = await getServerCredentialBackend();
-    await backend.delete(credentialRef);
+    await withServerKeychainLock(credentialRef, async () => {
+        await backend.delete(credentialRef);
+    });
 }
 //# sourceMappingURL=config.js.map

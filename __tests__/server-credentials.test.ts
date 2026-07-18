@@ -8,10 +8,8 @@ import {
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
   getPendingServerEnrollment,
-  getServerSessionCredential,
   getServerCredential,
   getServerCredentialRecord,
-  storeServerSessionCredential,
   storeServerCredential,
 } from '../src/config.js';
 import type { TokenBackend } from '../src/token-store.js';
@@ -210,77 +208,21 @@ describe('self-hosted server credential storage', () => {
   });
 });
 
-describe('self-hosted server session credential storage', () => {
-  const binding = {
-    origin: 'https://localhost:8787',
-    trustIdentity: 'spki-sha256:server-a',
-    cubeId: '11111111-1111-4111-8111-111111111111',
-    droneId: '22222222-2222-4222-8222-222222222222',
-    generation: 7,
-  };
-  const credential = 'd'.repeat(43);
+describe('self-hosted server session credential deletion', () => {
+  const credentialRef = `borg-server-session:${'a'.repeat(64)}`;
 
-  it('stores the bearer under an opaque generation-specific reference', async () => {
+  it('deletes the exact reference (under the per-account keychain lock)', async () => {
     const { backend, values } = memoryBackend();
     __setServerCredentialBackendForTest(backend);
+    values.set(credentialRef, JSON.stringify({ state: 'active' }));
 
-    const credentialRef = await storeServerSessionCredential({
-      ...binding,
-      credential,
-      expiresAt: '2026-07-14T15:00:00.000Z',
-    });
-
-    expect(credentialRef).toMatch(/^borg-server-session:[a-f0-9]{64}$/);
-    expect(credentialRef).not.toContain(binding.cubeId);
-    expect(credentialRef).not.toContain(binding.droneId);
-    await expect(getServerSessionCredential(credentialRef, binding)).resolves.toBe(credential);
-    expect([...values.values()].join('')).toContain(credential);
+    await clearServerSessionCredential(credentialRef);
+    expect(values.has(credentialRef)).toBe(false);
   });
 
-  it('fails closed when identity or generation does not match the reference', async () => {
+  it('rejects a malformed reference before touching the keychain', async () => {
     const { backend } = memoryBackend();
     __setServerCredentialBackendForTest(backend);
-    const credentialRef = await storeServerSessionCredential({ ...binding, credential });
-
-    await expect(getServerSessionCredential(credentialRef, {
-      ...binding,
-      generation: binding.generation + 1,
-    })).resolves.toBeNull();
-    await expect(getServerSessionCredential(credentialRef, {
-      ...binding,
-      droneId: '33333333-3333-4333-8333-333333333333',
-    })).resolves.toBeNull();
-  });
-
-  it('removes only the selected generation', async () => {
-    const { backend, values } = memoryBackend();
-    __setServerCredentialBackendForTest(backend);
-    const oldRef = await storeServerSessionCredential({ ...binding, credential });
-    const newRef = await storeServerSessionCredential({
-      ...binding,
-      generation: binding.generation + 1,
-      credential: 'e'.repeat(43),
-    });
-
-    await clearServerSessionCredential(oldRef);
-    expect(values.has(oldRef)).toBe(false);
-    expect(values.has(newRef)).toBe(true);
-  });
-
-  it('rejects malformed bindings before touching the keychain', async () => {
-    const { backend, values } = memoryBackend();
-    __setServerCredentialBackendForTest(backend);
-
-    await expect(storeServerSessionCredential({
-      ...binding,
-      generation: 0,
-      credential,
-    })).rejects.toThrow(/generation/i);
-    await expect(storeServerSessionCredential({
-      ...binding,
-      cubeId: '../cube',
-      credential,
-    })).rejects.toThrow(/identity/i);
-    expect(values.size).toBe(0);
+    await expect(clearServerSessionCredential('not-a-session-ref')).rejects.toThrow(/reference/i);
   });
 });

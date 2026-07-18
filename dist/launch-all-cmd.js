@@ -225,6 +225,8 @@ export async function runLaunchAll(args, deps, opts = {}) {
     //     server-authoritative gone, whereas --force only re-launches a
     //     LOCK-live (seemingly-running) session.
     const launchable = [];
+    let evictedCount = 0;
+    let rejectedCount = 0;
     for (const c of lockLaunchable) {
         let status;
         try {
@@ -234,14 +236,16 @@ export async function runLaunchAll(args, deps, opts = {}) {
             status = 'indeterminate';
         }
         if (status === 'evicted') {
+            evictedCount += 1;
             deps.stderr(`skipping ${c.droneLabel} (${c.worktreeDir}): seat no longer in cube (evicted) — ` +
                 `run \`borg cleanup --prune\` to remove the worktree, or \`borg assimilate\` to re-seat fresh.\n`);
             continue;
         }
         if (status === 'rejected') {
+            rejectedCount += 1;
             deps.stderr(`skipping ${c.droneLabel} (${c.worktreeDir}): saved seat no longer accepted (revoked or ` +
-                `taken over) — from that worktree run \`borg assimilate --host <host> --here\` ` +
-                `(add --reset-local-seat non-interactively) to reset ONLY that worktree's saved seat, ` +
+                `taken over) — from that worktree run \`borg reset-local-seat --host ${c.apiUrl}\` ` +
+                `(add --yes non-interactively) to clear ONLY that worktree's saved seat, ` +
                 `then ask the server operator for a new invitation and re-enroll.\n`);
             continue;
         }
@@ -251,8 +255,18 @@ export async function runLaunchAll(args, deps, opts = {}) {
         launchable.push(c);
     }
     if (launchable.length === 0) {
-        deps.stdout(`All ${lockLaunchable.length} discovered drone(s) for cube '${cubeName}' are not launchable ` +
-            `(evicted, or the saved seat is no longer accepted); nothing to launch.\n`);
+        // Accurate cause counts — an all-rejected sweep must NOT claim "evicted"
+        // (and vice-versa). Only name a cause when at least one seat hit it.
+        const causes = [];
+        if (evictedCount > 0) {
+            causes.push(`${evictedCount} evicted`);
+        }
+        if (rejectedCount > 0) {
+            causes.push(`${rejectedCount} with a saved seat no longer accepted (revoked/taken over)`);
+        }
+        const causeText = causes.length > 0 ? ` (${causes.join(', ')})` : '';
+        deps.stdout(`All ${lockLaunchable.length} discovered drone(s) for cube '${cubeName}' are not launchable` +
+            `${causeText}; nothing to launch.\n`);
         return 0;
     }
     // 5. --dry-run

@@ -93,6 +93,54 @@ export declare function clearActiveCube(expected?: {
     removed: boolean;
     credentialRef: string | null;
 }>;
+/**
+ * Typed token-safe observation of this worktree's saved local seat credential.
+ * The raw bearer is never surfaced past this module — PRESENT carries only its
+ * sha256 digest so the caller (the offline `borg reset-local-seat` command) can
+ * pin the exact credential it observed without ever handling the secret.
+ */
+export type LocalSeatObservation = {
+    kind: 'present';
+    sessionDigest: string;
+} | {
+    kind: 'absent';
+};
+export interface LocalSeatSnapshot {
+    apiUrl: string;
+    serverTrustIdentity: string;
+    cubeId: string;
+    credentialRef: string;
+    worktree: string;
+    observation: LocalSeatObservation;
+}
+export type ResetLocalSeatOutcome = {
+    outcome: 'reset';
+    credentialRef: string;
+} | {
+    outcome: 'no-binding';
+} | {
+    outcome: 'changed';
+};
+/**
+ * S0 of the ratified client-seat-reset-state-model: snapshot this worktree's
+ * exact local-seat binding plus a token-safe observation of its keychain
+ * credential (PRESENT+digest | ABSENT). Read-only — no lock is held past the
+ * read, and the authoritative re-check happens under the cube lock in
+ * resetLocalSeatBinding. Returns null when this worktree has no LOCAL-server
+ * seat to reset (no binding, or a non-local/legacy binding): an honest no-op.
+ */
+export declare function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null>;
+/**
+ * S2/S3 of the ratified client-seat-reset-state-model. Re-acquires the cube
+ * write lock (OUTER; the keychain lock is only ever taken INNER via
+ * compareAndClearServerSessionCredential — never a keychain→cube inversion),
+ * re-observes the typed union, and commits only when the current binding STILL
+ * matches the exact snapshot. Any change / missing / same-ref replacement is an
+ * honest no-op ('changed'). Ordering is CREDENTIAL-FIRST: the keychain bearer is
+ * deleted before the cube binding is removed, so the only surviving intermediate
+ * state is binding-present/credential-absent — safe, rerunnable, and truthful.
+ */
+export declare function resetLocalSeatBinding(expected: LocalSeatSnapshot): Promise<ResetLocalSeatOutcome>;
 export declare function getProjectCliPreference(): Promise<BorgCli | null>;
 /**
  * gh#556 Part 2 — like getProjectCliPreference, but keyed on an arbitrary

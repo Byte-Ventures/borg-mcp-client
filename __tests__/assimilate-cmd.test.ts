@@ -605,7 +605,11 @@ describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-u
   });
 });
 
-describe('runAssimilate: pin-matched SESSION_REJECTED performs a scoped worktree-only seat reset (#1082)', () => {
+describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)', () => {
+  // Ratified client-seat-reset-state-model clause 1: attach mutates NOTHING on a
+  // rejection — it diagnoses and points at the dedicated OFFLINE
+  // `borg reset-local-seat` command. No clearActiveCube / setActiveCube / any
+  // local write happens on the rejected path.
   const sameCubeSeat = () => vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone' }));
   const cubeResolves = {
     cwd: () => '/work/myrepo',
@@ -617,114 +621,69 @@ describe('runAssimilate: pin-matched SESSION_REJECTED performs a scoped worktree
   // THIS worktree's saved session bearer — a pin-matched SESSION_REJECTED.
   const rejectAttach = () => vi.fn(async () => { throw new BorgServerError('SESSION_REJECTED', 'session bearer no longer accepted'); });
 
-  it('TTY confirm (y) clears ONLY this worktree seat, audits, and gives live-safe re-enroll copy', async () => {
+  function assertNoMutation(deps: AssimilateDeps): void {
+    expect(deps.setActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(deps.clearActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  }
+
+  it('the attach-catch rejection diagnoses (recommends `borg reset-local-seat`) and mutates nothing', async () => {
     const stderr = vi.fn();
     const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
+    const setActiveCube = vi.fn(async () => {});
     const deps = makeStubDeps({
-      ...cubeResolves, stderr, clearActiveCube,
+      ...cubeResolves, stderr, clearActiveCube, setActiveCube,
       isTTY: () => true,
-      prompt: vi.fn(async () => 'y'),
+      probeSeat: vi.fn(async () => 'live'),
       getActiveCube: sameCubeSeat(),
       assimilate: rejectAttach(),
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
     expect(exit).toBe(1);
-    expect(clearActiveCube).toHaveBeenCalledTimes(1);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
     expect(out).toContain('no longer accepted');
-    expect(out).toContain("audit: cleared this worktree's saved local seat");
-    expect(out).toContain('server can stay running');
+    expect(out).toContain('borg reset-local-seat');
+    expect(out).toContain('No Borg state');
     expect(out).not.toMatch(/borgmcp\.ai|Cloud/i);
     expect(out).not.toMatch(/stop the server|restart it/i);
-    // Scoped: no server / trust / cube / other-worktree reset primitive is called.
-    expect((deps.setActiveCube as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    assertNoMutation(deps);
   });
 
-  it('TTY decline (empty → default No) makes NO changes and clears nothing', async () => {
+  it('CANONICAL PATH: a pin-matched probeSeat → rejected diagnoses BEFORE attach, no "restart" advice, no mutation', async () => {
     const stderr = vi.fn();
     const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
-    const deps = makeStubDeps({
-      ...cubeResolves, stderr, clearActiveCube,
-      isTTY: () => true,
-      prompt: vi.fn(async () => ''),
-      getActiveCube: sameCubeSeat(),
-      assimilate: rejectAttach(),
-    });
-    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
-    expect(exit).toBe(1);
-    expect(clearActiveCube).not.toHaveBeenCalled();
-    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('no changes made');
-  });
-
-  it('non-TTY without --reset-local-seat makes NO changes and directs to the destructive flag', async () => {
-    const stderr = vi.fn();
-    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
-    const deps = makeStubDeps({
-      ...cubeResolves, stderr, clearActiveCube,
-      isTTY: () => false,
-      getActiveCube: sameCubeSeat(),
-      assimilate: rejectAttach(),
-    });
-    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
-    expect(exit).toBe(1);
-    expect(clearActiveCube).not.toHaveBeenCalled();
-    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('--reset-local-seat');
-  });
-
-  it('non-TTY with --reset-local-seat clears ONLY this worktree seat and audits', async () => {
-    const stderr = vi.fn();
-    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
-    const deps = makeStubDeps({
-      ...cubeResolves, stderr, clearActiveCube,
-      isTTY: () => false,
-      getActiveCube: sameCubeSeat(),
-      assimilate: rejectAttach(),
-    });
-    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true, resetLocalSeat: true } }, deps);
-    expect(exit).toBe(1);
-    expect(clearActiveCube).toHaveBeenCalledTimes(1);
-    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain("audit: cleared this worktree's saved local seat");
-  });
-
-  it('CANONICAL PATH: a pin-matched whoami 401 (probeSeat → rejected) reaches the reset before any "restart" advice', async () => {
-    // The production defect CR caught: the pre-attach probe must classify a
-    // pin-matched 401 as `rejected` and route it to the reset — NOT collapse it
-    // to `indeterminate`/"restart the server". Here probeSeat returns 'rejected'
-    // and assimilate is NEVER reached (the seat is reset first).
-    const stderr = vi.fn();
-    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
+    const setActiveCube = vi.fn(async () => {});
     const assimilate = vi.fn(async () => { throw new Error('attach must not run after a rejected probe'); });
     const deps = makeStubDeps({
-      ...cubeResolves, stderr, clearActiveCube, assimilate,
+      ...cubeResolves, stderr, clearActiveCube, setActiveCube, assimilate,
       isTTY: () => false,
       probeSeat: vi.fn(async () => 'rejected'),
       getActiveCube: sameCubeSeat(),
     });
-    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true, resetLocalSeat: true } }, deps);
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
     expect(exit).toBe(1);
     expect(assimilate).not.toHaveBeenCalled();
-    expect(clearActiveCube).toHaveBeenCalledTimes(1);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toContain("audit: cleared this worktree's saved local seat");
+    expect(out).toContain('borg reset-local-seat');
     expect(out).not.toMatch(/Start or restart the server|borg-mcp-server start/i);
+    assertNoMutation(deps);
   });
 
-  it('NO-OP is not audited as success: when nothing was removed, fail closed without a false "cleared" audit', async () => {
+  it('the diagnosis is identical whether or not stdin is a TTY (no destructive prompt/flag path anymore)', async () => {
     const stderr = vi.fn();
-    // The destructive primitive reports an honest no-op (no binding for this worktree).
-    const clearActiveCube = vi.fn(async () => ({ removed: false, credentialRef: null }));
     const deps = makeStubDeps({
-      ...cubeResolves, stderr, clearActiveCube,
+      ...cubeResolves, stderr,
       isTTY: () => false,
-      probeSeat: vi.fn(async () => 'rejected'),
+      probeSeat: vi.fn(async () => 'live'),
       getActiveCube: sameCubeSeat(),
+      assimilate: rejectAttach(),
     });
-    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true, resetLocalSeat: true } }, deps);
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
     expect(exit).toBe(1);
-    expect(clearActiveCube).toHaveBeenCalledTimes(1);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toContain('audit: no changes made');
-    expect(out).not.toContain("audit: cleared this worktree's saved local seat");
+    expect(out).toContain('borg reset-local-seat');
+    // Offline command guidance mentions --yes for non-interactive use.
+    expect(out).toContain('--yes');
+    assertNoMutation(deps);
   });
 });
 
@@ -2463,11 +2422,11 @@ describe('runAssimilate: #1015 authority selection', () => {
     // Distinct copy: names the worktree's local seat, not a version/protocol mismatch.
     expect(output).toContain("This worktree's saved local seat on https://server.example.com is no longer accepted");
     expect(output).toContain('revoked or taken over by another session');
-    // Confirms no other Borg state changed.
-    expect(output).toContain('No other Borg state changed');
-    // Points at the scoped reset (interactive, or --reset-local-seat non-interactively).
-    expect(output).toContain("reset ONLY this worktree's saved seat");
-    expect(output).toContain('--reset-local-seat');
+    // Confirms no Borg state changed (attach is pure diagnosis).
+    expect(output).toContain('No Borg state changed');
+    // Points at the dedicated OFFLINE reset command (no attach-path mutation).
+    expect(output).toContain("clear ONLY this worktree's saved seat");
+    expect(output).toContain('borg reset-local-seat');
     // Live-safe recovery: new invitation, server stays running, re-enroll from this worktree.
     expect(output).toContain('`borg assimilate --host https://server.example.com --enroll`');
     expect(output).toContain('server can stay running');

@@ -30,6 +30,7 @@ export function topLevelHelpText(version: string): string {
     `  borg assimilate [role]   Join or create a cube\n` +
     `  borg assimilate --host <host>   Join or create on an explicit server\n` +
     `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
+    `  borg reset-local-seat    Clear ONLY this worktree's saved local seat (offline; after a rejection)\n` +
     `  borg sync [--prune]      Sync this worktree's branch to origin/main\n` +
     `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
     `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
@@ -62,8 +63,6 @@ export function assimilateHelpText(version: string): string {
     `  --cube-name <name>         Cube to join/create (otherwise confirm repo basename)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
     `  --enroll                   Prompt for a hidden enrollment invitation in the operator terminal\n` +
-    `  --reset-local-seat         Non-interactively clear ONLY this worktree's saved seat when it was\n` +
-    `                             revoked/taken over (pin-matched rejection). TTY confirms instead.\n` +
     `  --template <name>          Bootstrap a new cube from a bundled role template\n` +
     `  --no-template              Create the cube with no template roles\n` +
     `  --cli claude|codex|opencode         Agent CLI to launch (default: claude)\n` +
@@ -74,6 +73,29 @@ export function assimilateHelpText(version: string): string {
     `See docs/LOCAL_SERVER.md for current release blockers.\n\n` +
     `For local or provider-specific models, configure the selected agent CLI directly.\n` +
     `OpenCode supports Ollama and other providers through its own model configuration.\n`
+  );
+}
+
+/**
+ * Help text for `borg reset-local-seat --help`. The offline, network-free seat
+ * reset recommended by the pin-matched SESSION_REJECTED diagnostic (#1082).
+ */
+export function resetLocalSeatHelpText(version: string): string {
+  return (
+    `borg reset-local-seat (borgmcp ${version}) — clear ONLY this worktree's saved local seat\n\n` +
+    `Offline and network-free: it contacts no server and revokes nothing server-side. It clears\n` +
+    `just this worktree's cubes.json binding + its keychain session credential (keyed on the\n` +
+    `worktree root). Server, trust anchor, cube, and every sibling worktree are left untouched.\n\n` +
+    `Use it after \`borg assimilate\` reports this worktree's seat was revoked or taken over\n` +
+    `(a pin-matched rejection), then ask the operator for a new invitation and re-enroll.\n\n` +
+    `Usage:\n` +
+    `  borg reset-local-seat                 Reset this worktree's saved seat (TTY confirms [y/N])\n` +
+    `  borg reset-local-seat --host <host>   No-op unless this worktree's seat is on <host>\n` +
+    `  borg reset-local-seat --yes           Reset without a prompt (required when non-interactive)\n` +
+    `  borg reset-local-seat --help          Show this help\n\n` +
+    `Flags:\n` +
+    `  --host <host>              Only act if this worktree's saved seat is on <host> (else no-op)\n` +
+    `  --yes, -y                  Skip the confirmation prompt (required in non-TTY contexts)\n`
   );
 }
 

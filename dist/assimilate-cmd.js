@@ -1,5 +1,5 @@
 import { dirname, basename } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { roleSlug, matchRoleByName, occupiedRoleIdsForAutoRole, pickDefaultRole, } from './role-resolver.js';
 import { deriveCubeName, parseGitRemote, sanitizeRemoteUrl } from './cube-name.js';
 import { validateName } from './name-validator.js';
@@ -106,16 +106,15 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
     // this worktree — no server/trust-anchor/cube/other-worktree reset, no restart
     // or version-alignment advice, and never a Cloud fallback (#1082).
     if (error instanceof BorgServerError && error.code === 'SESSION_REJECTED') {
-        // Defensive fallback copy only — the reachable pin-matched SESSION_REJECTED
-        // path (attach) routes to handleSessionRejectedReset, which performs the
-        // actual scoped reset. This copy claims NO mutation of its own; it points at
-        // the reset flow (re-run assimilate, which offers the scoped reset).
+        // Attach is PURE DIAGNOSIS on a rejection — it mutates nothing. This copy
+        // claims NO mutation of its own; it points at the dedicated OFFLINE
+        // `borg reset-local-seat` command (the only writer that clears a seat).
         deps.stderr(`This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
-            'revoked or taken over by another session. No other Borg state changed. Re-run ' +
-            `${localAssimilateCommand(apiUrl)} to reset ONLY this worktree's saved seat ` +
-            '(interactive confirmation, or pass --reset-local-seat when non-interactive), then ' +
-            'ask the server operator for a new invitation — the server can stay running — and ' +
-            `re-enroll with ${localAssimilateCommand(apiUrl, true)}.\n`);
+            'revoked or taken over by another session. No Borg state changed. Run ' +
+            `${resetLocalSeatCommand(apiUrl)} to clear ONLY this worktree's saved seat ` +
+            '(offline; add `--yes` when non-interactive), then ask the server operator for a new ' +
+            'invitation — the server can stay running — and re-enroll with ' +
+            `${localAssimilateCommand(apiUrl, true)}.\n`);
         return 1;
     }
     if (error instanceof BorgServerError && error.code === 'INVITATION_REJECTED') {
@@ -162,90 +161,31 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
         `Check that the client and server versions are compatible, then rerun ${retryCommand}.\n`);
     return 1;
 }
+function resetLocalSeatCommand(apiUrl) {
+    return `\`borg reset-local-seat --host ${apiUrl}\``;
+}
 /**
- * Pin-matched SESSION_REJECTED recovery (#1082). The local server verified its
- * OWN pinned identity (this is reached only after a successful pinned-TLS
- * attach — a pin MISMATCH throws a distinct trust error and never lands here),
- * then rejected THIS worktree's saved session bearer (revoked, or taken over by
- * another session). Offer a scoped reset that clears ONLY this worktree's saved
- * seat — its cubes.json binding + its keychain session credential (clearActiveCube
- * keys on findProjectRoot()) — and NOTHING else: server, trust anchor, cube, and
- * every other worktree are untouched. TTY confirms interactively defaulting to
- * No; non-TTY requires the explicit destructive --reset-local-seat flag. Every
- * outcome is audited to stderr, and the recovery is live-safe: the operator is
- * never told to stop/restart the server.
+ * Pin-matched SESSION_REJECTED diagnosis (#1082). PURE DIAGNOSIS — attach makes
+ * ZERO local mutation on a rejected seat (ratified client-seat-reset-state-model
+ * clause 1). The local server verified its OWN pinned identity (this is reached
+ * only after a successful pinned-TLS attach — a pin MISMATCH throws a distinct
+ * trust error and never lands here), then rejected THIS worktree's saved session
+ * bearer (revoked, or taken over by another session). We stop and recommend the
+ * dedicated OFFLINE `borg reset-local-seat` command, which is the ONLY writer
+ * that clears a worktree's saved seat. Nothing here contacts the server further,
+ * emits unselected/cloud egress, or touches local state. The recovery is
+ * live-safe: the operator is never told to stop/restart the server.
  */
-async function handleSessionRejectedReset(deps, apiUrl, flags, rejected) {
+function diagnoseSessionRejected(deps, apiUrl) {
     const worktree = deps.findProjectRoot(deps.cwd());
     deps.stderr(`This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
-        'revoked or taken over by another session. No other Borg state changed: your pinned ' +
-        'server trust, other worktrees, and their cubes are untouched.\n');
-    let doReset;
-    if (deps.isTTY()) {
-        const answer = await deps.prompt(`Reset ONLY this worktree's saved seat now? (host ${apiUrl}, worktree ${worktree}) ` +
-            "This deletes just this worktree's saved local session; server, trust anchor, cube, " +
-            'and other worktrees are left untouched. [y/N]: ');
-        // Destructive action: default is NO. Only an explicit yes proceeds — unlike
-        // the flow's ordinary confirmations, an empty answer must NOT reset.
-        const normalized = answer.trim().toLowerCase();
-        doReset = normalized === 'y' || normalized === 'yes';
-    }
-    else {
-        // Non-interactive: never destroy saved state without an explicit flag.
-        doReset = flags.resetLocalSeat === true;
-        if (!doReset) {
-            deps.stderr("audit: no changes made — non-interactive and --reset-local-seat not passed. To clear " +
-                "ONLY this worktree's saved seat, rerun with --reset-local-seat. Then ask the server " +
-                'operator for a new invitation (the server can stay running) and re-enroll with ' +
-                `${localAssimilateCommand(apiUrl, true)}.\n`);
-            return 1;
-        }
-    }
-    if (!doReset) {
-        deps.stderr("audit: no changes made — this worktree's saved seat was left in place. Re-run and " +
-            'confirm, or pass --reset-local-seat, to clear it.\n');
-        return 1;
-    }
-    // Scoped, worktree-only mutation: this worktree's cubes.json binding + its
-    // keychain session credential ONLY (clearActiveCube keys on findProjectRoot()).
-    // Pin the exact rejected seat: its credential ref AND an unforgeable digest of
-    // the exact bearer observed rejected (token-safe — the raw bearer is never
-    // logged). A same-ref re-enroll writes a fresh bearer → different digest → the
-    // clear is refused, so a concurrent replacement is not clobbered.
-    const expected = rejected === undefined ? undefined : {
-        credentialRef: rejected.credentialRef,
-        ...(rejected.sessionToken
-            ? { sessionDigest: createHash('sha256').update(rejected.sessionToken).digest('hex') }
-            : {}),
-    };
-    let cleared;
-    try {
-        cleared = await deps.clearActiveCube(expected);
-    }
-    catch {
-        // Keychain/credential-store failure during the scoped clear: fail closed
-        // with NO completion audit (SR: a keychain-delete failure cannot emit
-        // success). The bearer/credential text is never surfaced.
-        deps.stderr(`audit: no changes made — the scoped seat reset for ${apiUrl} (worktree ${worktree}) ` +
-            `could not complete (local credential store error). Retry, or ask the server operator ` +
-            `for a new invitation and enroll with ${localAssimilateCommand(apiUrl, true)}.\n`);
-        return 1;
-    }
-    if (!cleared.removed) {
-        // Fail closed: nothing was removed (no matching saved binding for this
-        // worktree), so never audit a reset that did not happen (SR: no
-        // copy-without-operation).
-        deps.stderr(`audit: no changes made — no matching saved local seat binding was found for this ` +
-            `worktree (${worktree}); nothing to reset. Ask the server operator for a new invitation ` +
-            `(the server can stay running) and enroll with ${localAssimilateCommand(apiUrl, true)}.\n`);
-        return 1;
-    }
-    deps.stderr(`audit: cleared this worktree's saved local seat for ${apiUrl} (worktree ${worktree}) — ` +
-        'local session binding + keychain session only; server, trust anchor, cube, and other ' +
-        'worktrees unchanged.\n');
-    deps.stderr('Done. To rejoin, ask the server operator for a new enrollment invitation — the server can ' +
-        'stay running (`borg-mcp-server client-invite`, or `owner-invite` for an owner) — then ' +
-        `re-enroll from this worktree with ${localAssimilateCommand(apiUrl, true)}.\n`);
+        'revoked or taken over by another session. No Borg state was changed: your pinned ' +
+        'server trust, this and every other worktree, and their cubes are all untouched.\n');
+    deps.stderr(`To clear ONLY this worktree's saved local seat (worktree ${worktree}), run ` +
+        `${resetLocalSeatCommand(apiUrl)} (add \`--yes\` when non-interactive). That command is ` +
+        'offline — it revokes nothing server-side. Then ask the server operator for a new ' +
+        'invitation (the server can stay running) and re-enroll with ' +
+        `${localAssimilateCommand(apiUrl, true)}.\n`);
     return 1;
 }
 export async function runAssimilate(args, deps) {
@@ -558,15 +498,12 @@ export async function runAssimilate(args, deps) {
                 : undefined;
             const status = await deps.probeSeat(existing.sessionToken ?? '', auth.apiUrl, auth.serverTrustIdentity);
             // Canonical rotated/revoked path: a pin-matched 401 on THIS worktree's
-            // saved bearer. The hydrated saved seat exists (this `existing && --here`
-            // branch), so route to the scoped worktree-only reset BEFORE the generic
-            // "restart the server" indeterminate exit below. Distinct from
-            // unreachable/404/5xx/trust-mismatch, which stay indeterminate.
+            // saved bearer. PURE DIAGNOSIS — attach never mutates local state on a
+            // rejection; it points at the offline `borg reset-local-seat` command.
+            // Distinct from unreachable/404/5xx/trust-mismatch, which stay
+            // indeterminate below.
             if (status === 'rejected') {
-                return await handleSessionRejectedReset(deps, auth.apiUrl, args.flags, {
-                    credentialRef: existing.localSessionCredentialRef ?? null,
-                    sessionToken: existing.sessionToken ?? null,
-                });
+                return diagnoseSessionRejected(deps, auth.apiUrl);
             }
             if (status === 'indeterminate') {
                 deps.stderr(`Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +
@@ -710,21 +647,16 @@ export async function runAssimilate(args, deps) {
             }
             return 1;
         }
-        // Pin-matched SESSION_REJECTED (revoked / taken-over seat): offer the
-        // scoped worktree-only reset. Reached only after a successful pinned-TLS
-        // attach, so it is pin-matched by construction — a pin mismatch throws a
-        // distinct trust error and never enters this branch.
+        // Pin-matched SESSION_REJECTED (revoked / taken-over seat): PURE DIAGNOSIS.
+        // Reached only after a successful pinned-TLS attach, so it is pin-matched by
+        // construction — a pin mismatch throws a distinct trust error and never
+        // enters this branch. Attach mutates NOTHING; it recommends the offline
+        // `borg reset-local-seat` command.
         if (err instanceof BorgServerError &&
             err.code === 'SESSION_REJECTED' &&
             authority.kind === 'server' &&
             reattachPriorId != null) {
-            // Only a hydrated reattach (this worktree HAD a saved seat) may enter the
-            // scoped reset. A first/pending attach that is rejected has no saved seat
-            // to clear and falls through to the generic credential-rejection report.
-            return await handleSessionRejectedReset(deps, authority.apiUrl, args.flags, {
-                credentialRef: existing?.localSessionCredentialRef ?? null,
-                sessionToken: existing?.sessionToken ?? null,
-            });
+            return diagnoseSessionRejected(deps, authority.apiUrl);
         }
         if (authority.kind === 'server') {
             return reportServerFailure(deps, authority.apiUrl, err);

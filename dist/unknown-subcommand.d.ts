@@ -11,7 +11,7 @@
  * (`--cli`, `--remote`, agent passthrough, …) still fall through to launch.
  */
 /** The subcommands the claude.ts router dispatches on (lines 107-176). */
-export declare const KNOWN_SUBCOMMANDS: readonly ["setup", "assimilate", "spawn", "sync", "cleanup", "launch-all"];
+export declare const KNOWN_SUBCOMMANDS: readonly ["setup", "assimilate", "reset-local-seat", "spawn", "sync", "cleanup", "launch-all"];
 /**
  * Returns the offending command string when argv[2] is an unknown non-flag
  * positional (caller should error + exit 1), or null when it's bare `borg`,

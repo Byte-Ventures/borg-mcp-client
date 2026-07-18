@@ -24,7 +24,7 @@ import chalk from 'chalk';
 import { findProjectRoot, getActiveCube, inboxPathForDrone, setCodexWakeTarget, pruneDeadCodexWakeTargets } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import { handleVersionFlag, getPackageVersion } from './version.js';
-import { isHelpFlag, setupHelpText, topLevelHelpText, assimilateHelpText } from './cli-help.js';
+import { isHelpFlag, setupHelpText, topLevelHelpText, assimilateHelpText, resetLocalSeatHelpText } from './cli-help.js';
 import { runSpawn } from './spawn.js';
 import { buildClaudeLaunchArgs } from './claude-launch-args.js';
 import { parseSyncArgs, runSync } from './sync.js';
@@ -32,6 +32,11 @@ import { parseCleanupArgs, runCleanup } from './cleanup-cmd.js';
 import { parseAssimilateArgs } from './parse-assimilate-args.js';
 import { runAssimilate } from './assimilate-cmd.js';
 import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
+import {
+  parseResetLocalSeatArgs,
+  runResetLocalSeat,
+  buildDefaultResetLocalSeatDeps,
+} from './reset-local-seat-cmd.js';
 import { parseLaunchAllArgs } from './parse-launch-all-args.js';
 import { unknownSubcommand } from './unknown-subcommand.js';
 import { runLaunchAll } from './launch-all-cmd.js';
@@ -128,6 +133,22 @@ async function main() {
     }
     const deps = buildDefaultAssimilateDeps();
     const code = await runAssimilate({ role: parsed.role, flags: parsed.flags }, deps);
+    process.exit(code);
+  }
+  if (process.argv[2] === 'reset-local-seat') {
+    if (process.argv.slice(3).some(isHelpFlag)) {
+      process.stdout.write(resetLocalSeatHelpText(getPackageVersion()));
+      process.exit(0);
+    }
+    const parsed = parseResetLocalSeatArgs(process.argv.slice(3));
+    if (!parsed.ok) {
+      process.stderr.write(
+        chalk.red(`${consolePrefix()}◼ borg reset-local-seat: ${parsed.error}\n`)
+      );
+      process.stderr.write(`Run \`borg --help\` for usage.\n`);
+      process.exit(1);
+    }
+    const code = await runResetLocalSeat(parsed.flags, buildDefaultResetLocalSeatDeps());
     process.exit(code);
   }
   if (process.argv[2] === 'spawn') {

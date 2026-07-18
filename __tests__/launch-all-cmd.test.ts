@@ -330,17 +330,20 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     expect(dispatched(deps)).toBe(true);
     const err = stderrOf(deps);
     expect(err).toMatch(/drone-b.*no longer accepted/);
-    expect(err).toContain('--reset-local-seat');
+    expect(err).toContain('borg reset-local-seat');
     expect(err).not.toMatch(/drone-b.*evicted/);
   });
 
-  it('ALL seats rejected → nothing launched, neutral summary (never called "evicted")', async () => {
+  it('ALL seats rejected → nothing launched, accurate summary (never called "evicted")', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async () => 'rejected');
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(false);
     const out = stdoutOf(deps);
     expect(out).toMatch(/are not launchable .*nothing to launch/);
+    // Accurate cause counts — an all-rejected sweep must NOT claim "evicted".
+    expect(out).toContain('no longer accepted');
+    expect(out).not.toMatch(/evicted/);
   });
 
   it('an INDETERMINATE (transient) seat is LAUNCHED (fail-OPEN) with a soft note', async () => {

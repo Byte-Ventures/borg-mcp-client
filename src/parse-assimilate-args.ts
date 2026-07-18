@@ -61,11 +61,6 @@ export function parseAssimilateArgs(rawArgs: string[]): ParseResult {
       flags.server = value;
     } else if (arg === '--enroll') {
       flags.enroll = true;
-    } else if (arg === '--reset-local-seat') {
-      // Destructive: non-interactively clear ONLY this worktree's saved local
-      // seat when a pin-matched SESSION_REJECTED is hit (revoked/taken-over
-      // seat). Required in non-TTY contexts; TTY confirms interactively instead.
-      flags.resetLocalSeat = true;
     } else if (arg === '--yes' || arg === '-y') {
       flags.yes = true;
     } else if (arg === '--cli') {
@@ -104,7 +99,7 @@ export function parseAssimilateArgs(rawArgs: string[]): ParseResult {
     } else if (arg.startsWith('--')) {
       return {
         ok: false,
-        error: `unknown flag: ${arg}. Supported: --worktree, --template, --no-template, --cube-name, --host, --enroll, --reset-local-seat, --here, --yes, --cli, --model`,
+        error: `unknown flag: ${arg}. Supported: --worktree, --template, --no-template, --cube-name, --host, --enroll, --here, --yes, --cli, --model`,
       };
     } else {
       if (role !== undefined) {

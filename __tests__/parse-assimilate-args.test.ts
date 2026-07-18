@@ -90,12 +90,11 @@ describe('parseAssimilateArgs', () => {
     });
   });
 
-  it('parses --reset-local-seat into flags.resetLocalSeat (explicit non-TTY scoped-reset opt-in)', () => {
+  it('rejects the retired --reset-local-seat flag (reset moved to `borg reset-local-seat`)', () => {
     const result = parseAssimilateArgs(['--host', 'localhost:7091', '--here', '--reset-local-seat']);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.flags.resetLocalSeat).toBe(true);
-      expect(result.flags.here).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('unknown flag: --reset-local-seat');
     }
   });
 

@@ -20,6 +20,11 @@ export declare function topLevelHelpText(version: string): string;
  */
 export declare function assimilateHelpText(version: string): string;
 /**
+ * Help text for `borg reset-local-seat --help`. The offline, network-free seat
+ * reset recommended by the pin-matched SESSION_REJECTED diagnostic (#1082).
+ */
+export declare function resetLocalSeatHelpText(version: string): string;
+/**
  * Help text for `borg setup --help` (gh#520 — previously this ran the setup
  * wizard instead of showing help). Mirrors the `borg setup` description in the
  * top-level `borg --help`.
