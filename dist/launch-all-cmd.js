@@ -244,9 +244,11 @@ export async function runLaunchAll(args, deps, opts = {}) {
         if (status === 'rejected') {
             rejectedCount += 1;
             deps.stderr(`skipping ${c.droneLabel} (${c.worktreeDir}): saved seat no longer accepted (revoked or ` +
-                `taken over) — from that worktree run \`borg reset-local-seat --host ${c.apiUrl}\` ` +
-                `(add --yes non-interactively) to clear ONLY that worktree's saved seat, ` +
-                `then ask the server operator for a new invitation and re-enroll.\n`);
+                `taken over). Recover from that worktree: ` +
+                `1) \`borg reset-local-seat --host ${c.apiUrl}\` (add --yes non-interactively) to clear ` +
+                `ONLY that worktree's saved seat; ` +
+                `2) ask the server operator to mint a fresh scoped invitation (the server stays running); ` +
+                `3) \`borg assimilate --host ${c.apiUrl} --enroll\`.\n`);
             continue;
         }
         if (status === 'indeterminate') {

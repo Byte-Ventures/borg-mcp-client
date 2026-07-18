@@ -322,7 +322,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     expect(dispatched(deps)).toBe(false);
   });
 
-  it('a REJECTED seat is SKIPPED (not launched, not pruned) with an explicit scoped-reset + re-enroll recovery', async () => {
+  it('a REJECTED seat is SKIPPED (not launched, not pruned) with the EXECUTABLE bound recovery (reset → scoped invite → assimilate --enroll)', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'rejected' : 'live'));
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
@@ -330,7 +330,12 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     expect(dispatched(deps)).toBe(true);
     const err = stderrOf(deps);
     expect(err).toMatch(/drone-b.*no longer accepted/);
+    // The full executable recovery contract — no inference required from the
+    // aggregate launch surface: reset THIS worktree → operator mints a scoped
+    // invitation while the server stays running → the exact assimilate command.
     expect(err).toContain('borg reset-local-seat');
+    expect(err).toMatch(/scoped invitation \(the server stays running\)/);
+    expect(err).toMatch(/borg assimilate --host \S+ --enroll/);
     expect(err).not.toMatch(/drone-b.*evicted/);
   });
 
