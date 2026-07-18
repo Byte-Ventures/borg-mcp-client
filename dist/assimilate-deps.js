@@ -283,6 +283,9 @@ export function buildDefaultAssimilateDeps() {
                     finalize: {
                         activate: prepared.activate,
                         scrubPending: prepared.scrubPending,
+                        // CR#2: bind the surviving PENDING record to the preserved worktree on an
+                        // activation failure so the rerun-from-there resumes the exact operation.
+                        bindPending: prepared.bindPending,
                     },
                 };
             }

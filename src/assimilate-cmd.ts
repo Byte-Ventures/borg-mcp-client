@@ -104,6 +104,11 @@ export interface AssimilateResult {
   finalize?: {
     activate: (binding: SeatBinding) => Promise<unknown>;
     scrubPending: () => Promise<unknown>;
+    // CR#2: on an activation failure, bind the surviving PENDING record to the
+    // preserved worktree (no activation) so a rerun FROM there resumes the exact
+    // pending operation and re-sends the identical bearer. Absent for the (severed)
+    // cloud path and for unit stubs that fully mock `assimilate`.
+    bindPending?: (binding: SeatBinding) => Promise<unknown>;
   };
   // CR #1: set when the cube-lock-held PREPARE revalidation aborted BEFORE any
   // credential was minted or sent (a reset/binding writer won before PREPARE).
@@ -793,7 +798,9 @@ export async function runAssimilate(
   const hasPersistedIdentity = existing !== null || await deps.hasPersistedActiveCube();
   const wantSibling =
     args.flags.worktree !== undefined || (existing !== null && !args.flags.here);
-  const sessionOperation: ServerSessionOperation = {
+  // `let`: the bound-pending resume path (CR#2) OVERRIDES this from the stored
+  // operation so a rerun re-derives the EXACT original sibling seat ref.
+  let sessionOperation: ServerSessionOperation = {
     // Capture the source repository before a successful sibling attach changes
     // cwd. This is the stable seat/sibling namespace for the pending bearer, so a
     // deliberate sibling never collides with the durable in-place seat's bearer.
@@ -821,6 +828,10 @@ export async function runAssimilate(
   // binding and flips pending→ACTIVE, rather than aborting on an ABSENT check.
   let resumeCredentialRef: string | undefined;
   let resumeDroneId: string | undefined;
+  // CR#2: 'pending' when the resumed record is a bound-PENDING sibling (activation
+  // failed) — it re-sends the identical bearer under an ABSENT/pending-reuse
+  // expectation; 'active' when resuming a live in-place seat (EXACT expectation).
+  let resumeState: 'pending' | 'active' | undefined;
   if (existing && args.flags.here && existing.cubeId !== cubeDetail.id) {
     deps.stderr(
       authority.kind === 'server'
@@ -868,14 +879,24 @@ export async function runAssimilate(
         }
       }
       if (persisted && recordPresent && resumeRole) {
-        // RESUME: reuse the persisted role (the ref binds the role, so a resume
-        // MUST re-derive the exact same account) and let FINALIZE converge with an
-        // EXACT-ref expectation. The seat operation is the in-place current-worktree
-        // seat (wantSibling is false here), so prepareSeat's idempotent mint-or-reuse
-        // re-resolves the existing pending record and re-sends the identical bearer.
+        // RESUME: reuse the persisted role (the ref binds the role, so a resume MUST
+        // re-derive the exact same account) and converge on the exact stored record.
         savedLocalRole = resumeRole;
         resumeCredentialRef = persisted.localSessionCredentialRef;
-        resumeDroneId = persisted.droneId;
+        resumeState = persisted.state;
+        // CR#2: re-derive the EXACT pending seat ref from the STORED operation. A
+        // bound-PENDING sibling's record still carries its ORIGINAL sibling operation
+        // (projectRoot+kind+operationKey), NOT the rerun worktree's derived
+        // current-worktree seat operation — overriding here makes the rerun
+        // re-mint-or-reuse the identical pending bearer at the original R_sib and
+        // converge (no ghost seat). For an ACTIVE in-place resume the stored operation
+        // equals the already-derived one, so this is a no-op.
+        sessionOperation = persisted.operation;
+        // Only an ACTIVE resume pins the drone id (EXACT expectation below). A
+        // bound-PENDING record declares ABSENT/pending-reuse and does not pin it.
+        if (persisted.state === 'active' && persisted.droneId !== undefined) {
+          resumeDroneId = persisted.droneId;
+        }
       } else {
         deps.stderr(
           `This worktree has saved seat metadata for ${authority.apiUrl}, but its local session ` +
@@ -1090,7 +1111,15 @@ export async function runAssimilate(
   // and FINALIZE. resume/reattach/remint pin the FULL prior binding (ref + drone
   // id [+ live digest]); fresh/sibling declare ABSENT.
   let sessionExpected: ExpectedBinding;
-  if (resumeCredentialRef) {
+  if (resumeCredentialRef && resumeState === 'pending') {
+    // CR#2: a bound-PENDING resume (a sibling whose activation failed) re-sends the
+    // identical pending bearer the server already digest-bound. A PENDING record is
+    // NOT a live binding, so it declares ABSENT (pending-reuse): prepareSeat REUSES
+    // the existing pending record (identical bearer). An EXACT expectation would be
+    // rejected by prepareSeat's `prior.state==='active'` guard and abort the only
+    // ghost-free recovery.
+    sessionExpected = { kind: 'absent' };
+  } else if (resumeCredentialRef) {
     sessionExpected = {
       kind: 'exact',
       credentialRef: resumeCredentialRef,
@@ -1424,11 +1453,28 @@ export async function runAssimilate(
     }
     if (!outcome.committed) {
       if (outcome.reason === 'activation-failed') {
-        // CR #5: the binding WAS persisted (this worktree OWNS it) but the keychain
-        // activation threw. The state is binding-present/credential-PENDING —
-        // non-hydratable and RERUNNABLE. Deleting the worktree here would orphan
-        // the binding + pending record and destroy the only discoverable recovery
-        // location, so the worktree is PRESERVED.
+        // CR #5: the atomic activate+bind did NOT commit (missing/replaced/threw), so
+        // the record stays PENDING with no worktree of its own. CR#2: bind that exact
+        // pending record to THIS preserved worktree WITHOUT activating it — the record
+        // stays pending (non-hydratable as a live seat) but becomes DISCOVERABLE from
+        // here, so a rerun FROM this worktree re-derives the exact original operation
+        // and re-sends the identical bearer, converging on the SAME seat (no ghost).
+        // Best-effort: even if the bind cannot be written the worktree is preserved and
+        // the pending record survives at its ref (recoverable, never a duplicate).
+        if (result.finalize?.bindPending) {
+          try {
+            await result.finalize.bindPending({
+              worktree: deps.findProjectRoot(deps.cwd()),
+              name: activeCube.name,
+              droneLabel: activeCube.droneLabel,
+              ...(activeCube.roleName !== undefined ? { roleName: activeCube.roleName } : {}),
+              ...(activeCube.roleClass !== undefined ? { roleClass: activeCube.roleClass } : {}),
+              ...(activeCube.isHumanSeat !== undefined ? { isHumanSeat: activeCube.isHumanSeat } : {}),
+            });
+          } catch {
+            /* best-effort — the pending record survives at its ref regardless */
+          }
+        }
         deps.stderr(
           `This worktree's seat binding on ${auth.apiUrl} was saved, but finalizing its ` +
             'secure session did not complete. This worktree was NOT removed and the state is ' +

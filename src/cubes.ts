@@ -23,6 +23,7 @@ import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
 import {
   getActiveSeatCredential,
   getActiveSeatForWorktree,
+  getSeatForWorktree,
   hasSeatForWorktree,
   observeSeat,
   readAllActiveSeats,
@@ -30,6 +31,7 @@ import {
   resetSeatForWorktree,
   seatRef,
   type SeatObservation,
+  type SeatOperation,
   type SeatRecord,
 } from './seats.js';
 
@@ -359,7 +361,9 @@ export async function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null> {
 
 export interface PersistedLocalSeat {
   cubeId: string;
-  droneId: string;
+  /** Optional: a bound-PENDING record (a sibling whose activation failed) may carry
+   *  no drone id yet — the ACTIVE resume path still has it. */
+  droneId?: string;
   name: string;
   droneLabel: string;
   apiUrl: string;
@@ -369,27 +373,42 @@ export interface PersistedLocalSeat {
   roleName?: string;
   roleClass?: 'queen' | 'worker';
   isHumanSeat?: boolean;
+  /** The STORED seat operation (projectRoot + kind + operationKey). The resume path
+   *  re-derives the EXACT seat ref from this: for a bound-PENDING sibling it is the
+   *  ORIGINAL sibling operation, NOT the rerun worktree's derived seat operation —
+   *  so the rerun re-mints-or-reuses the identical pending bearer and converges. */
+  operation: SeatOperation;
+  /** The record state: a bound-PENDING record resumes with an ABSENT/pending-reuse
+   *  expectation (re-send the identical bearer); an ACTIVE one resumes with EXACT. */
+  state: 'pending' | 'active';
 }
 
 /**
- * Read the RAW persisted ACTIVE local-server seat for the current worktree. Used
- * by the crash-in-gap resume path to recover the seat identity. In the collapsed
- * single store a crash-in-gap PENDING record carries no worktree binding and is
- * resumed automatically by prepareSeat's idempotent mint-or-reuse (the identical
- * bearer is re-sent), so this returns null for that case; a genuine absence is
- * likewise null and a fresh enroll mints correctly (no partial-loss error exists).
+ * Read the RAW persisted local-server seat bound to the current worktree — ACTIVE
+ * or a bound-PENDING record — WITHOUT hydrating its credential. Used by the resume
+ * path to recover the seat identity, its stored `operation`, and its `state`.
+ *
+ * CR#2: a SIBLING attach whose activation failed leaves a PENDING record BOUND to
+ * the preserved worktree (bindPendingSeatToWorktree). This surfaces it so the
+ * rerun-from-that-worktree re-derives the EXACT sibling ref and re-sends the
+ * identical bearer (ghost-free convergence). A crash-in-gap PENDING record that was
+ * NEVER bound to a worktree still returns null here (it carries no worktree locator)
+ * and is resumed by prepareSeat's idempotent mint-or-reuse; a genuine absence is
+ * likewise null and a fresh enroll mints correctly.
  */
 export async function readPersistedLocalSeat(): Promise<PersistedLocalSeat | null> {
-  const record = await getActiveSeatForWorktree(findProjectRoot());
-  if (!record || !record.cubeId || !record.droneId) return null;
+  const record = await getSeatForWorktree(findProjectRoot());
+  if (!record || !record.cubeId) return null;
   return {
     cubeId: record.cubeId,
-    droneId: record.droneId,
+    ...(record.droneId !== undefined ? { droneId: record.droneId } : {}),
     name: record.name ?? '',
     droneLabel: record.droneLabel ?? '',
     apiUrl: record.origin,
     serverTrustIdentity: record.trustIdentity,
     localSessionCredentialRef: seatRef(record),
+    operation: record.operation,
+    state: record.state,
     ...(record.expiresAt !== undefined ? { localSessionExpiresAt: record.expiresAt } : {}),
     ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
     ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),

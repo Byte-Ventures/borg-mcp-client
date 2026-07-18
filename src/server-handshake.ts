@@ -32,9 +32,11 @@ import {
 } from './config.js';
 import {
   activateAndBindSeat,
+  bindPendingSeatToWorktree,
   scrubPendingSeat,
   seatRef,
   type ActivateSeatOutcome,
+  type BindPendingSeatOutcome,
   type SeatBinding,
   type SeatOperation as ServerSessionOperation,
 } from './seats.js';
@@ -205,6 +207,12 @@ export interface PreparedServerAttach {
    *  outcome (`activated`/`missing`/`replaced`) — never throws for a race. */
   activate: (binding: SeatBinding) => Promise<ActivateSeatOutcome>;
   scrubPending: () => Promise<boolean>;
+  /** CR#2: bind the EXACT digest-matched PENDING record to the preserved worktree
+   *  WITHOUT activating (it stays pending). Invoked by the activation-failure path so
+   *  the preserved sibling worktree owns a discoverable, resumable pending record —
+   *  the rerun FROM there re-derives the exact ref and re-sends the identical bearer
+   *  (ghost-free convergence). Fail-closed typed outcome; never throws for a race. */
+  bindPending: (binding: SeatBinding) => Promise<BindPendingSeatOutcome>;
 }
 
 /**
@@ -228,6 +236,7 @@ export async function sendBorgServerAttach(
   deps: {
     fetchImpl?: FetchLike;
     activateAndBind?: typeof activateAndBindSeat;
+    bindPending?: typeof bindPendingSeatToWorktree;
     scrubPending?: typeof scrubPendingSeat;
     sessionCredentialRef?: typeof seatRef;
   } = {},
@@ -355,6 +364,22 @@ export async function sendBorgServerAttach(
         { origin, trustIdentity, cubeId: request.cubeId },
         pendingBearerDigest,
       ),
+      // CR#2: on activation failure, bind the EXACT digest-matched PENDING record to
+      // the preserved (spawned) worktree WITHOUT activating it — it stays pending, so
+      // it is non-hydratable as a live seat but IS discoverable/resumable from that
+      // worktree. The rerun re-sends the identical bearer and converges (no ghost).
+      bindPending: (binding: SeatBinding) =>
+        (deps.bindPending ?? bindPendingSeatToWorktree)({
+          ...seatInput,
+          expectedPendingDigest: pendingBearerDigest,
+          droneId: decoded.drone.id,
+          worktree: binding.worktree,
+          name: binding.name,
+          droneLabel: binding.droneLabel,
+          ...(binding.roleName !== undefined ? { roleName: binding.roleName } : {}),
+          ...(binding.roleClass !== undefined ? { roleClass: binding.roleClass } : {}),
+          ...(binding.isHumanSeat !== undefined ? { isHumanSeat: binding.isHumanSeat } : {}),
+        }),
     };
   } finally {
     clearTimeout(timeout);

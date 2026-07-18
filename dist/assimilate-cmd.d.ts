@@ -46,6 +46,7 @@ export interface AssimilateResult {
     finalize?: {
         activate: (binding: SeatBinding) => Promise<unknown>;
         scrubPending: () => Promise<unknown>;
+        bindPending?: (binding: SeatBinding) => Promise<unknown>;
     };
     prepareAborted?: boolean;
 }

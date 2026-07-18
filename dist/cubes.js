@@ -19,7 +19,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
-import { getActiveSeatCredential, getActiveSeatForWorktree, hasSeatForWorktree, observeSeat, readAllActiveSeats, refreshSeatMetadata, resetSeatForWorktree, seatRef, } from './seats.js';
+import { getActiveSeatCredential, getActiveSeatForWorktree, getSeatForWorktree, hasSeatForWorktree, observeSeat, readAllActiveSeats, refreshSeatMetadata, resetSeatForWorktree, seatRef, } from './seats.js';
 const CUBES_DIR = join(homedir(), '.config', 'borgmcp');
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
 const CODEX_WAKE_TARGETS_FILE = join(CUBES_DIR, 'codex-wake-targets.json');
@@ -251,25 +251,32 @@ export async function snapshotLocalSeat() {
     };
 }
 /**
- * Read the RAW persisted ACTIVE local-server seat for the current worktree. Used
- * by the crash-in-gap resume path to recover the seat identity. In the collapsed
- * single store a crash-in-gap PENDING record carries no worktree binding and is
- * resumed automatically by prepareSeat's idempotent mint-or-reuse (the identical
- * bearer is re-sent), so this returns null for that case; a genuine absence is
- * likewise null and a fresh enroll mints correctly (no partial-loss error exists).
+ * Read the RAW persisted local-server seat bound to the current worktree — ACTIVE
+ * or a bound-PENDING record — WITHOUT hydrating its credential. Used by the resume
+ * path to recover the seat identity, its stored `operation`, and its `state`.
+ *
+ * CR#2: a SIBLING attach whose activation failed leaves a PENDING record BOUND to
+ * the preserved worktree (bindPendingSeatToWorktree). This surfaces it so the
+ * rerun-from-that-worktree re-derives the EXACT sibling ref and re-sends the
+ * identical bearer (ghost-free convergence). A crash-in-gap PENDING record that was
+ * NEVER bound to a worktree still returns null here (it carries no worktree locator)
+ * and is resumed by prepareSeat's idempotent mint-or-reuse; a genuine absence is
+ * likewise null and a fresh enroll mints correctly.
  */
 export async function readPersistedLocalSeat() {
-    const record = await getActiveSeatForWorktree(findProjectRoot());
-    if (!record || !record.cubeId || !record.droneId)
+    const record = await getSeatForWorktree(findProjectRoot());
+    if (!record || !record.cubeId)
         return null;
     return {
         cubeId: record.cubeId,
-        droneId: record.droneId,
+        ...(record.droneId !== undefined ? { droneId: record.droneId } : {}),
         name: record.name ?? '',
         droneLabel: record.droneLabel ?? '',
         apiUrl: record.origin,
         serverTrustIdentity: record.trustIdentity,
         localSessionCredentialRef: seatRef(record),
+        operation: record.operation,
+        state: record.state,
         ...(record.expiresAt !== undefined ? { localSessionExpiresAt: record.expiresAt } : {}),
         ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
         ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),

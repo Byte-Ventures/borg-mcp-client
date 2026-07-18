@@ -182,9 +182,49 @@ export declare function activateAndBindSeat(input: {
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
 }): Promise<ActivateSeatOutcome>;
+export type BindPendingSeatOutcome = 'bound' | 'missing' | 'replaced';
+/**
+ * CR#2: bind an existing PENDING record to a worktree WITHOUT activating it. On a
+ * SIBLING attach whose atomic activate+bind failed, the spawned worktree is
+ * preserved for an operator-driven rerun (CR#5). This stamps the worktree locator +
+ * display (and, if known, the drone id) onto the EXACT digest-matched PENDING record
+ * so the rerun FROM that worktree can DISCOVER and RESUME it — re-sending the
+ * identical bearer the server already digest-bound, converging on the SAME seat (no
+ * ghost). The record STAYS `state:'pending'`: it is non-hydratable as a live seat
+ * (getActiveSeatForWorktree still requires state==='active'), so this introduces no
+ * ACTIVE-without-activation state. Under ONE store flock (CR#3), fail-closed (CR#4):
+ * a missing / already-ACTIVE / same-ref-replaced record is a typed no-op — never
+ * binds a worktree onto a different bearer, never mutates an ACTIVE record.
+ */
+export declare function bindPendingSeatToWorktree(input: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: SeatOperation;
+    expectedPendingDigest: string;
+    droneId?: string;
+    worktree: string;
+    name: string;
+    droneLabel: string;
+    roleName?: string;
+    roleClass?: 'queen' | 'worker';
+    isHumanSeat?: boolean;
+}): Promise<BindPendingSeatOutcome>;
 /** The exact ACTIVE seat bound to `worktree`, or null. A pending record (no
  *  worktree, or non-active) is NEVER surfaced as a live binding. */
 export declare function getActiveSeatForWorktree(worktree: string): Promise<SeatRecord | null>;
+/**
+ * CR#2: the seat bound to `worktree` regardless of state — an ACTIVE seat OR a
+ * bound-PENDING record (a sibling whose activation failed, bound to its preserved
+ * worktree by `bindPendingSeatToWorktree`). Used ONLY by the resume path to recover
+ * a bound-pending record's stored `operation` + `state` so the rerun can re-derive
+ * the EXACT seat ref and re-send the identical bearer. A bound-pending record is
+ * still NON-hydratable as a live seat — `getActiveSeatForWorktree` (and hence
+ * `getActiveCube`) still require state==='active', so this reader does NOT weaken
+ * the no-ACTIVE-without-binding / non-hydratable-pending invariants.
+ */
+export declare function getSeatForWorktree(worktree: string): Promise<SeatRecord | null>;
 /** True iff this worktree has ANY persisted seat record (active OR a bound
  *  pending), so a crash-in-gap PENDING seat is discoverable (not mislabeled). */
 export declare function hasSeatForWorktree(worktree: string): Promise<boolean>;

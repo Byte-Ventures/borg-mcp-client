@@ -1268,6 +1268,31 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     expect(out).toMatch(/re-run/i);
   });
 
+  it('CR#2: a spawned-sibling activation-failure BINDS the surviving pending record to the preserved worktree (rerun locator)', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'activation-failed' as const }));
+    const bindPending = vi.fn(async () => 'bound' as const);
+    // A finalize handle that also exposes the CR#2 bind-pending thunk.
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
+      local_session: { credential_ref: REF, expires_at: '2026-07-14T16:00:00.000Z' },
+      role_id: 'r',
+      finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}), bindPending },
+    }));
+    const deps = makeStubDeps({
+      assimilate, getCube: getCube(), finalizeServerSeat, stderr: vi.fn(), runSync,
+      cwd: () => '/home/test/.borg/worktrees/myrepo/drone-2',
+      findProjectRoot: () => '/home/test/.borg/worktrees/myrepo/drone-2',
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    // The preserved worktree now OWNS a discoverable, resumable pending record.
+    expect(bindPending).toHaveBeenCalledTimes(1);
+    expect(bindPending.mock.calls[0][0]).toMatchObject({ worktree: '/home/test/.borg/worktrees/myrepo/drone-2' });
+    // ...and the worktree that owns it was NOT removed.
+    expect(removedWorktree(calls)).toBe(false);
+  });
+
   it('CR #5: an expectation-mismatch on a spawned sibling DOES roll it back (the binding was never written)', async () => {
     const { calls, runSync } = spyRunSync();
     const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'expectation-mismatch' as const }));
@@ -3113,6 +3138,11 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     roleName: 'Drone',
     roleClass: 'worker' as const,
     isHumanSeat: false,
+    // CR#2: a resumable record carries its STORED operation + state. A bound-PENDING
+    // record resumes with an ABSENT/pending-reuse expectation (re-send the identical
+    // bearer) — an EXACT expectation would be rejected by prepareSeat's active-only guard.
+    operation: { projectRoot: '/work/myrepo', kind: 'seat' as const, operationKey: 'current-worktree' },
+    state: 'pending' as const,
   });
 
   it('RECORD-ABSENT: binding present but NO session record → truthful local-seat-load error, never a new seat', async () => {
@@ -3199,10 +3229,57 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     expect(stderr.mock.calls.map((c) => String(c[0])).join('')).not.toMatch(/local session credential could not be loaded/);
     // The identical seat is re-sent (resume), not a fresh mint.
     expect(assimilate).toHaveBeenCalled();
-    // FINALIZE converges with EXACT ref + prior drone id (no live-bearer digest — pending).
+    // CR#2: a bound-PENDING resume declares ABSENT (pending-reuse) — prepareSeat REUSES
+    // the pending record and re-sends the identical bearer. An EXACT expectation would
+    // be rejected by prepareSeat's `prior.state==='active'` guard and abort convergence.
     expect(finalizeServerSeat).toHaveBeenCalledTimes(1);
-    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({ kind: 'exact', credentialRef: REF, droneId: 'drone-saved' });
+    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({ kind: 'absent' });
     expect(finalizeServerSeat.mock.calls[0][0].active).toMatchObject({ cubeId: 'cube-1', localSessionCredentialRef: REF });
+  });
+
+  it('CR#2: a bound-PENDING SIBLING resume OVERRIDES session_operation from the stored record and declares ABSENT (re-derives the exact original ref)', async () => {
+    const REF = 'borg-server-session:' + 'b'.repeat(64);
+    // The stored record is a sibling whose activation failed, bound to THIS worktree.
+    // Its operation is the ORIGINAL sibling op (projectRoot = the source repo), NOT
+    // this worktree's derived current-worktree seat op.
+    const siblingOperation = { projectRoot: '/work/original', kind: 'sibling' as const, operationKey: 'implicit-sibling:run-1' };
+    const boundPendingSibling = () => ({
+      cubeId: 'cube-1', name: 'myrepo', droneLabel: 'one-of-one-drone',
+      apiUrl: 'https://localhost:8787', serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      localSessionCredentialRef: REF, roleName: 'Drone', roleClass: 'worker' as const, isHumanSeat: false,
+      operation: siblingOperation, state: 'pending' as const,
+    });
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'cube-1', drone_id: 'drone-saved', drone_label: 'one-of-one-drone',
+      result: 'reused' as const, role_id: 'role-default',
+      local_session: { credential_ref: REF, expires_at: '2026-07-20T00:00:00.000Z' },
+      finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}) },
+    }));
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => null),
+      hasPersistedActiveCube: vi.fn(async () => true),
+      readPersistedLocalSeat: vi.fn(async () => boundPendingSibling()),
+      peekServerSessionRecord: vi.fn(async () => true),
+      assimilate,
+      finalizeServerSeat,
+      cwd: () => '/work/myrepo', findProjectRoot: () => '/work/myrepo',
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => localCube()),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true, cubeName: 'myrepo' },
+    }, deps)).toBe(0);
+
+    // The rerun re-derives the EXACT original sibling operation from the stored
+    // record (override) — NOT this worktree's current-worktree seat op.
+    const params = assimilate.mock.calls[0][2] as { session_operation?: unknown; session_expected?: unknown };
+    expect(params.session_operation).toEqual(siblingOperation);
+    // A PENDING record resumes with ABSENT/pending-reuse (never EXACT).
+    expect(params.session_expected).toEqual({ kind: 'absent' });
+    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({ kind: 'absent' });
   });
 
 });
