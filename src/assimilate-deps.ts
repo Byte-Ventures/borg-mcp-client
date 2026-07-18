@@ -255,35 +255,28 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
         // typed prepare-time expectation BEFORE any credential is created or sent —
         // so a reset/binding writer that wins before PREPARE aborts the attach here,
         // not only at FINALIZE. Eviction-remint discards the known-invalid saved
-        // bearer as scrubBeforeMint, still under the same cube lock. A sibling spawn
-        // has no prior binding at its not-yet-created target key, so it mints
-        // directly (no in-place binding to revalidate against).
-        const mint = () => getOrCreatePendingServerSession(seatBinding);
-        let pending: PendingServerSessionRecord;
-        if (params.revalidate_at_prepare === true && params.session_expected !== undefined) {
-          const preparedMint = await prepareServerSeatAttachment<PendingServerSessionRecord>({
-            expected: params.session_expected,
-            ...(params.remint_invalid_prior === true
-              ? { scrubBeforeMint: () => clearPendingServerSession(seatBinding) }
-              : {}),
-            mint,
-          });
-          if (!preparedMint.ok) {
-            return {
-              cube_id: params.cube_id,
-              drone_id: '',
-              drone_label: '',
-              role_id: params.role_id,
-              prepareAborted: true,
-            };
-          }
-          pending = preparedMint.record;
-        } else {
-          if (params.remint_invalid_prior === true) {
-            await clearPendingServerSession(seatBinding);
-          }
-          pending = await mint();
+        // bearer as scrubBeforeMint, still under the same cube lock. EVERY mint runs
+        // INSIDE the composite (SR-seven c) — a fresh sibling spawn has no in-place
+        // binding to revalidate against, so it passes revalidate:false but still
+        // mints under the cube lock (never a bypass).
+        const preparedMint = await prepareServerSeatAttachment<PendingServerSessionRecord>({
+          expected: params.session_expected ?? { kind: 'absent' },
+          revalidate: params.revalidate_at_prepare === true && params.session_expected !== undefined,
+          ...(params.remint_invalid_prior === true
+            ? { scrubBeforeMint: () => clearPendingServerSession(seatBinding) }
+            : {}),
+          mint: () => getOrCreatePendingServerSession(seatBinding),
+        });
+        if (!preparedMint.ok) {
+          return {
+            cube_id: params.cube_id,
+            drone_id: '',
+            drone_label: '',
+            role_id: params.role_id,
+            prepareAborted: true,
+          };
         }
+        const pending: PendingServerSessionRecord = preparedMint.record;
         // Network only — the keychain pending→ACTIVE flip is deferred to the
         // cube-lock-held FINALIZE (finalizeServerSeatAttachment) so the binding
         // lands BEFORE the credential goes active (Race 2 / ACTIVE-without-binding).

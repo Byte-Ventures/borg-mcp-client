@@ -196,18 +196,23 @@ export type PrepareServerSeatOutcome<R> = {
     reason: 'expectation-mismatch';
 };
 /**
- * PREPARE-time revalidation + mint under the cube lock (CR #1 — the composite is
- * the SOLE prepare/writer authority, so a reset/binding writer that wins BEFORE
- * the mint aborts the attach BEFORE any credential is created or sent). Used for
- * IN-PLACE attaches (the target worktree is the current one, so its binding is
- * observable now); a sibling spawn has no prior binding at its not-yet-created
- * target key, so it mints without a prepare-check. The cube lock is held OUTER
- * across revalidate → optional scrub → mint; the keychain lock is taken INNER by
- * the injected scrubBeforeMint()/mint() config wrappers (no inversion). On an
- * expectation mismatch NOTHING is minted or scrubbed.
+ * PREPARE-time revalidation + mint under the cube lock (CR #1 / SR-seven (c) — the
+ * composite is the SOLE prepare authority, so EVERY mint (and eviction-remint
+ * scrub) happens INSIDE the cube lock; no mint runs outside it). For an IN-PLACE
+ * attach (`revalidate: true`) the typed expectation is checked against the current
+ * worktree binding and a reset/writer that won BEFORE the mint aborts the attach
+ * before any credential is created or sent. A sibling spawn (`revalidate: false`)
+ * has no prior binding at its not-yet-created target key, so there is nothing to
+ * revalidate — but it STILL mints under the cube lock (never a bypass). The cube
+ * lock is held OUTER across revalidate → optional scrub → mint; the keychain lock
+ * is taken INNER by the injected scrubBeforeMint()/mint() config wrappers (no
+ * inversion). On an expectation mismatch NOTHING is minted or scrubbed.
  */
 export declare function prepareServerSeatAttachment<R>(input: {
     expected: ExpectedBinding;
+    /** Default true. When false (a fresh sibling), the mint still runs under the
+     *  cube lock but no expectation is revalidated (no prior binding to race). */
+    revalidate?: boolean;
     scrubBeforeMint?: () => Promise<unknown>;
     mint: () => Promise<R>;
 }): Promise<PrepareServerSeatOutcome<R>>;

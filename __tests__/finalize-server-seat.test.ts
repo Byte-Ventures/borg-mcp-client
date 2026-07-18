@@ -286,4 +286,16 @@ describe('prepareServerSeatAttachment (CR #1 — PREPARE-time revalidation + min
     expect(res).toEqual({ ok: false, reason: 'expectation-mismatch' });
     expect(mint).not.toHaveBeenCalled();
   });
+
+  it('SR-seven (c): a fresh sibling (revalidate:false) STILL mints under the composite — no bypass, no abort even with a current-worktree binding', async () => {
+    const { cubes } = await setup();
+    // The CURRENT worktree has a binding (the sibling-spawn case), but the sibling
+    // target key does not exist yet — revalidate:false skips the check and mints
+    // under the cube lock regardless.
+    await cubes.setActiveCube({ ...meta, sessionToken: 'x' });
+    const mint = vi.fn(async () => ({ credential: 'minted' }));
+    const res = await cubes.prepareServerSeatAttachment({ expected: { kind: 'absent' }, revalidate: false, mint });
+    expect(res).toEqual({ ok: true, record: { credential: 'minted' } });
+    expect(mint).toHaveBeenCalledTimes(1);
+  });
 });
