@@ -1,21 +1,24 @@
 /**
- * gh#docs-site phase B — the single source for the in-product docs index.
+ * The single source for the in-product docs index.
  *
  * `borg_docs` (index.ts) returns these sections so an agent can route a "how
- * does borgmcp work / pricing / setup" question to the right page, then WebFetch
- * the URL for the content. Pure data + a lazy keyword match — NO server-side
- * fetch, NO RAG/embeddings.
+ * does borgmcp work / setup / concept / tool" question to the right
+ * repository-local document, then WebFetch the URL for the content. Pure data +
+ * a lazy keyword match — NO server-side fetch, NO RAG/embeddings.
  *
- * `page` is the public documentation slug each section maps to.
+ * This is a local-only client: every URL points at the public source repository
+ * (its README + `docs/`), never a hosted product site.
+ *
+ * `page` is the repository-local file each section maps to (anti-drift anchor).
  */
-export declare const DOCS_BASE_URL = "https://borgmcp.ai/docs";
+export declare const DOCS_BASE_URL = "https://github.com/Byte-Ventures/borg-mcp-client";
 export interface DocsSection {
     /** logical topic key */
     slug: string;
     title: string;
-    /** public page URL the agent should WebFetch */
+    /** repository-local document URL the agent should WebFetch */
     url: string;
-    /** the docs/<page>.astro file this section maps to (anti-drift anchor) */
+    /** the repository file this section maps to (anti-drift anchor) */
     page: string;
     summary: string;
     /** extra match terms for the topic lookup */

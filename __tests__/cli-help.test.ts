@@ -27,19 +27,20 @@ describe('gh#520 — borg setup --help', () => {
     expect(t).toContain('Usage:');
     expect(t).toContain('--help');
     expect(t).toContain('setup wizard');
-    // gh#557: the no-browser/device flow is documented for remote terminals.
-    expect(t).toContain('--no-browser');
+    // Local-only: no Cloud sign-in / device-code flow is offered any more.
+    expect(t).not.toMatch(/--no-browser|device-code|Cloud sign-in/i);
     // It is help, not a credential prompt / wizard step.
     expect(t).not.toMatch(/sign in to continue|enter your|paste/i);
   });
 });
 
 describe('gh#611 — top-level borg --help', () => {
-  it('surfaces setup --no-browser for SSH/headless discovery', () => {
+  it('surfaces borg setup (local MCP + agent CLI integration)', () => {
     const t = topLevelHelpText('9.9.9');
     expect(t).toContain('borgmcp 9.9.9');
-    expect(t).toContain('borg setup --no-browser');
-    expect(t).toContain('SSH/headless');
+    expect(t).toContain('borg setup');
+    // The removed Cloud device-code flow must not resurface in help.
+    expect(t).not.toContain('--no-browser');
   });
 });
 
@@ -54,11 +55,11 @@ describe('gh#818 P2 — top-level --help leads with purpose + docs link', () => 
     expect(cubeIdx).toBeGreaterThan(purposeIdx);
   });
 
-  it('includes a resolvable get-started docs link (never a /docs 404 path)', () => {
+  it('includes a resolvable repository-local docs link (no hosted product URL)', () => {
     const t = topLevelHelpText('9.9.9');
-    expect(t).toContain('https://borgmcp.ai/get-started');
-    // Guard the CR constraint: no bare /docs deep-link that 404s.
-    expect(t).not.toContain('borgmcp.ai/docs');
+    expect(t).toContain('https://github.com/Byte-Ventures/borg-mcp-client#readme');
+    // Local-only: no hosted product docs/get-started link.
+    expect(t).not.toContain('borgmcp.ai');
   });
 
   it('glosses the "assimilate" jargon rather than using it bare', () => {

@@ -263,40 +263,6 @@ export declare function appendLog(sessionToken: string, apiUrl: string, message:
     }[];
 }>;
 /**
- * gh#716 — submit a friction/bug report to the borgmcp dev team (borg_report-friction).
- * WRITE-ONLY: the caller never reads reports back. The server scrubs secrets before
- * persist and stamps reporter_user_id from the authenticated session (never client input).
- * Drone-session authed (POST /api/drone/report). Opaque `{ ok: true }` response.
- */
-export declare function submitReport(sessionToken: string, apiUrl: string, input: {
-    kind?: 'friction' | 'bug';
-    message: string;
-    metadata?: Record<string, string>;
-}, serverTrustIdentity?: string): Promise<{
-    ok: boolean;
-}>;
-export interface TriageReport {
-    id: string;
-    kind: 'friction' | 'bug';
-    message: string;
-    metadata: Record<string, string> | null;
-    redacted: boolean;
-    created_at: string;
-    reporter_email: string;
-}
-/**
- * gh#956: read counterpart to submitReport — fetch friction/bug reports for
- * triage. OAuth-only (mirrors listCubes; not cube-scoped). The server gates
- * non-builder callers with 403, surfaced here as `{ forbidden: true }` so the
- * tool can show a clear tier message instead of throwing.
- */
-export declare function fetchReports(): Promise<{
-    forbidden: true;
-} | {
-    forbidden: false;
-    reports: TriageReport[];
-}>;
-/**
  * List all cubes owned by the authenticated user. Owner-scoped via the
  * Bearer token alone; no drone session needed.
  */

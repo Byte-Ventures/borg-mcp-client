@@ -11,8 +11,8 @@ Borg MCP lets Claude Code, Codex, and OpenCode sessions join the same project co
 - Live activity log: post status, dispatches, review gates, and findings without copy-paste handoffs.
 - Wake-path support: inbox monitoring and stream diagnostics help keep agent sessions responsive.
 - Claude Code, Codex, and OpenCode launcher support: start one or more agent sessions from the same repo.
-- Hosted and self-hosted authorities: keep the existing Borg Cloud flow or
-  explicitly attach to a trusted `borgmcp-server` endpoint.
+- Self-hosted authority: attach to a trusted `borgmcp-server` endpoint you run
+  on localhost or your LAN. No account or subscription — local-only.
 
 ## Install
 
@@ -35,7 +35,7 @@ Run the setup wizard:
 borg setup
 ```
 
-The wizard configures Borg MCP with the supported agent CLIs installed on your machine. When prompted, choose **Local server** (no account required) for self-hosted or local deployments, or **Borg Cloud** for managed cloud service (requires Google sign-in and subscription).
+The wizard configures Borg MCP with the supported agent CLIs installed on your machine. This client is local-only: it connects to a self-hosted `borgmcp-server` you run on localhost or your LAN. No account, sign-in, or subscription is required.
 
 `borg ...` commands are terminal commands. `borg_...` commands are MCP tools
 you ask your agent to run inside Claude Code, Codex, or OpenCode.
@@ -56,7 +56,7 @@ From inside your project repo:
 borg assimilate
 ```
 
-You will be prompted to connect to a local server or Borg Cloud. Borg derives a cube name from the repo, creates or joins that cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
+You will be prompted for the self-hosted server to connect to. Borg derives a cube name from the repo, creates or joins that cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
 Cube names use lowercase letters, digits, and hyphens, up to 64 characters. Use `--cube-name <name>` if you need to override the derived name. If the repository has no usable `origin`, Borg proposes the sanitized repository-directory name and asks for confirmation; pass `--yes` to accept it non-interactively.
 
 To connect directly to a local server (non-interactive):
@@ -226,11 +226,9 @@ CLI-specific recovery it prints:
   or `borg assimilate --cli codex` if needed, and run `borg_regen` manually when
   returning to the session if no wake arrived.
 
-## Migration: local-first onboarding
+## Migration: local-only onboarding
 
-**Breaking change for automation:** `borg assimilate` with `--yes` or in a non-interactive terminal no longer defaults to Borg Cloud. Scripts that relied on implicit Cloud auth now fail closed with an actionable error message.
-
-To restore Cloud behavior, run `borg assimilate` from an interactive terminal without `--yes` and select Cloud when prompted. `--host` is a local-server authority and does not route to Cloud. The local server path requires no account or subscription.
+**Breaking change for automation:** this client is local-only. `borg assimilate` with `--yes` or in a non-interactive terminal requires an explicit `--host <server>`; without a selected local server it fails closed with an actionable error ("No local server selected"). There is no hosted authority — `--host` names a self-hosted `borgmcp-server` on localhost or your LAN, and needs no account or subscription.
 
 ## Development
 
@@ -250,7 +248,6 @@ Licensed under Apache-2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
 ## Links
 
-- Product site: <https://borgmcp.ai>
 - Client repository: <https://github.com/Byte-Ventures/borg-mcp-client>
 - Shared contracts: <https://github.com/Byte-Ventures/borg-mcp-shared>
 - Self-hosted server: <https://github.com/Byte-Ventures/borg-mcp-server>

@@ -159,7 +159,7 @@ export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
     },
     getRoster: (token, apiUrl, since, serverTrustIdentity) =>
       getRoster(token, apiUrl, since, serverTrustIdentity),
-    // getCube uses the user OAuth token via authedFetch (cubeId-only); apiUrl/token unused.
+    // getCube uses the drone session token via authedFetch (cubeId-only); apiUrl/token unused.
     getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
     probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>
       defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),

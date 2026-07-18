@@ -296,11 +296,7 @@ describe('local server route adapter', () => {
     const remote = await import('../src/remote-client.js');
     const before = fetchSpy.mock.calls.length;
 
-    await expect(remote.submitReport(SESSION, ORIGIN, { message: 'local report' }))
-      .rejects.toThrow(/Local Borg server does not support/);
     await expect(remote.roleRationale(SESSION, ORIGIN, 'Builder', 'Workflow'))
-      .rejects.toThrow(/Local Borg server does not support/);
-    await expect(remote.fetchReports())
       .rejects.toThrow(/Local Borg server does not support/);
     expect(fetchSpy.mock.calls).toHaveLength(before);
   });

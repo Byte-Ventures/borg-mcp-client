@@ -15,6 +15,9 @@ export interface AssimilateFlags {
     model?: string;
     server?: string;
     enroll?: boolean;
+    /** Destructive: non-interactively clear ONLY this worktree's saved local
+     *  seat on a pin-matched SESSION_REJECTED. Required in non-TTY contexts. */
+    resetLocalSeat?: boolean;
 }
 export interface AssimilateArgs {
     role: string | undefined;
@@ -49,7 +52,7 @@ export interface ActiveCube {
     sessionToken?: string;
     droneLabel: string;
     apiUrl: string;
-    /** Verified local-server CA identity; absent for Borg Cloud cubes. */
+    /** Verified local-server CA identity; absent until a local server is selected. */
     serverTrustIdentity?: string;
     localSessionCredentialRef?: string;
     localSessionExpiresAt?: string | null;
@@ -80,6 +83,10 @@ export interface AssimilateDeps {
     setTerminalTitle: (label: string, cubeName: string) => void;
     getActiveCube: () => Promise<ActiveCube | null>;
     hasPersistedActiveCube: () => Promise<boolean>;
+    /** Clear ONLY the current worktree's saved seat: its cubes.json binding and
+     *  its keychain session credential. Keys on findProjectRoot() — never touches
+     *  server trust anchors, other worktrees, or cube state. */
+    clearActiveCube: () => Promise<void>;
     probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
     setActiveCube: (a: ActiveCube) => Promise<void>;
     findProjectRoot: (cwd: string) => string;

@@ -13,7 +13,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
-import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, submitReport, fetchReports, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, reassignDrone, evictDrone, getCube, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
+import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, reassignDrone, evictDrone, getCube, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, setActiveCube, findProjectRoot, inboxPathForDrone, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
@@ -31,7 +31,6 @@ import { renderStreamStatus, checkInboxMonitorHealthy, formatWakePathPrefix, sho
 import { formatRoleAgentLabel, formatWorkingRepoLabel, renderRoster } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
 import { resolveDroneIdByLabel, isUuidShape } from './evict-drone.js';
-import { authRecoveryMessage } from './auth-recovery.js';
 import { DroneEvictedError, formatEvictedToolResult, } from './drone-lifecycle.js';
 import { classifyInSessionAssimilate, reattachOnlyRefusal, reattachFailureMessage, } from './assimilate-guard.js';
 import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
@@ -73,7 +72,7 @@ async function requireActiveCube() {
  */
 export async function main() {
     // Honor `--version` / `-v` BEFORE any side-effecting work (hooks,
-    // OAuth checks, stream consumer spawn, MCP handshake). Lets
+    // readiness checks, stream consumer spawn, MCP handshake). Lets
     // operators run `borg-mcp --version` cleanly to confirm the
     // installed client version.
     handleVersionFlag();
@@ -325,10 +324,6 @@ export async function main() {
                     }
                     catch (err) {
                         const failure = reattachFailureMessage(err ?? {});
-                        // Auth-class failures rethrow so the auth funnel below owns
-                        // the advice (borg setup / transient-wait), not this handler.
-                        if (!failure)
-                            throw err;
                         return { content: [{ type: 'text', text: failure }], isError: true };
                     }
                 }
@@ -590,67 +585,6 @@ export async function main() {
                         : '';
                     const text = `Logged to cube "${active.name}" as ${active.droneLabel}. (entry id: ${result.entry.id})${echo}${unreachable}`;
                     return { content: [{ type: 'text', text }] };
-                }
-                case 'borg_report-friction': {
-                    const message = args?.message;
-                    if (!message || typeof message !== 'string')
-                        throw new Error('message is required');
-                    const active = await getActiveCube();
-                    if (!active)
-                        throw new Error('Not assimilated to a cube. Use borg_assimilate <cube-name> first.');
-                    const kind = args?.kind === 'bug' ? 'bug' : 'friction';
-                    const metadata = args?.metadata && typeof args.metadata === 'object' && !Array.isArray(args.metadata)
-                        ? args.metadata
-                        : undefined;
-                    // Server scrubs secrets + stamps reporter_user_id; the response is opaque {ok}.
-                    const result = await submitReport(active.sessionToken, active.apiUrl, { kind, message, metadata }, active.serverTrustIdentity);
-                    const text = result.ok
-                        ? 'Report submitted — thank you. The borgmcp team will see it. (Write-only: you cannot read reports back.)'
-                        : 'Report did not submit. Try again, or raise it in the cube log.';
-                    return { content: [{ type: 'text', text }] };
-                }
-                case 'borg_reports': {
-                    // gh#956: builder/dogfooder-tier triage read. OAuth-only (not
-                    // cube-scoped); the server enforces the builder gate (403).
-                    const result = await fetchReports();
-                    if (result.forbidden) {
-                        return {
-                            content: [
-                                {
-                                    type: 'text',
-                                    text: 'Reports triage is builder/dogfooder-tier only. Your account is not on the dogfooder (builder) tier, so the friction-reports store is not readable. (Server-enforced gate.)',
-                                },
-                            ],
-                        };
-                    }
-                    if (!result.reports.length) {
-                        return {
-                            content: [
-                                {
-                                    type: 'text',
-                                    text: 'No reports yet. Submissions via borg_report-friction will appear here, newest first.',
-                                },
-                            ],
-                        };
-                    }
-                    const lines = result.reports.map((r) => {
-                        const meta = r.metadata && Object.keys(r.metadata).length
-                            ? ' · ' +
-                                Object.entries(r.metadata)
-                                    .map(([k, v]) => `${k}=${v}`)
-                                    .join(', ')
-                            : '';
-                        const scrub = r.redacted ? ' · [secrets-scrubbed]' : '';
-                        return `**[${r.kind}]** ${r.created_at} · ${r.reporter_email}${meta}${scrub}\n${r.message}`;
-                    });
-                    return {
-                        content: [
-                            {
-                                type: 'text',
-                                text: `Reports (${result.reports.length}, newest first):\n\n${lines.join('\n\n---\n\n')}`,
-                            },
-                        ],
-                    };
                 }
                 case 'borg_ack': {
                     const entryId = args?.entry_id;
@@ -1079,22 +1013,11 @@ export async function main() {
             // gh#877: the drone-lifecycle verdict returns a RECOGNIZABLE tool RESULT
             // (not a generic "Error: ..." the agent retries) so the /loop + role
             // playbook can branch deterministically. Checked FIRST: an evicted seat is
-            // a lifecycle terminal, not an auth blip — it must never fall into the
-            // auth-recovery "re-assimilate" advice below.
+            // a lifecycle terminal — it gets its own recognizable result rather than
+            // the generic error rendering below.
             if (error instanceof DroneEvictedError) {
                 return {
                     content: [{ type: 'text', text: formatEvictedToolResult(error.message) }],
-                    isError: true,
-                };
-            }
-            // gh#780: auth-class failures get the RIGHT recovery advice. The old
-            // funnel said "Run: borg assimilate" for every auth error — and the
-            // in-session borg_assimilate tool minted a NEW drone row, so each
-            // auth blip spawned an orphan seat. See auth-recovery.ts.
-            const authAdvice = authRecoveryMessage(error ?? {});
-            if (authAdvice) {
-                return {
-                    content: [{ type: 'text', text: authAdvice }],
                     isError: true,
                 };
             }

@@ -1,84 +1,89 @@
 /**
- * gh#docs-site phase B — the single source for the in-product docs index.
+ * The single source for the in-product docs index.
  *
  * `borg_docs` (index.ts) returns these sections so an agent can route a "how
- * does borgmcp work / pricing / setup" question to the right page, then WebFetch
- * the URL for the content. Pure data + a lazy keyword match — NO server-side
- * fetch, NO RAG/embeddings.
+ * does borgmcp work / setup / concept / tool" question to the right
+ * repository-local document, then WebFetch the URL for the content. Pure data +
+ * a lazy keyword match — NO server-side fetch, NO RAG/embeddings.
  *
- * `page` is the public documentation slug each section maps to.
+ * This is a local-only client: every URL points at the public source repository
+ * (its README + `docs/`), never a hosted product site.
+ *
+ * `page` is the repository-local file each section maps to (anti-drift anchor).
  */
-export const DOCS_BASE_URL = "https://borgmcp.ai/docs";
+export const DOCS_BASE_URL = "https://github.com/Byte-Ventures/borg-mcp-client";
+const README_URL = `${DOCS_BASE_URL}#readme`;
+const LOCAL_SERVER_URL = `${DOCS_BASE_URL}/blob/main/docs/LOCAL_SERVER.md`;
 export const DOCS_SECTIONS = [
     {
         slug: "overview",
         title: "Overview",
-        url: `${DOCS_BASE_URL}`,
-        page: "index",
+        url: README_URL,
+        page: "README.md",
         summary: "What Borg MCP is + the cube / drone / role / log mental model.",
         keywords: ["overview", "what is", "intro", "mental model", "how it works", "start"],
     },
     {
         slug: "concepts",
         title: "Core concepts",
-        url: `${DOCS_BASE_URL}/concepts`,
-        page: "concepts",
+        url: README_URL,
+        page: "README.md",
         summary: "Cubes, drones, roles, the activity log + signals, claims, decisions.",
         keywords: ["cube", "drone", "role", "log", "signal", "claim", "decision", "coordinate", "coordination"],
     },
     {
         slug: "install",
         title: "Install client",
-        url: `${DOCS_BASE_URL}/install-client`,
-        page: "install-client",
+        url: README_URL,
+        page: "README.md",
         summary: "Install the published Borg MCP client and verify the borg CLI.",
         keywords: ["install", "installation", "npm", "client", "borgmcp", "borg help", "claude code", "codex", "opencode"],
     },
     {
         slug: "run-server",
         title: "Run server",
-        url: `${DOCS_BASE_URL}/run-server`,
-        page: "run-server",
+        url: LOCAL_SERVER_URL,
+        page: "docs/LOCAL_SERVER.md",
         summary: "Run a self-hosted borgmcp-server: setup, start, endpoint, network configuration.",
         keywords: ["server", "self-hosted", "borgmcp-server", "borg-mcp-server", "setup", "start", "listen port", "7091", "local server", "--lan", "tls"],
     },
     {
         slug: "enroll",
         title: "Enroll",
-        url: `${DOCS_BASE_URL}/enroll`,
-        page: "enroll",
+        url: LOCAL_SERVER_URL,
+        page: "docs/LOCAL_SERVER.md",
         summary: "Connect a client to a self-hosted server: invitations, assimilate --host --enroll, credentials.",
         keywords: ["enroll", "enrollment", "invitation", "invite", "assimilate", "--host", "credential", "credentials", "owner", "join server"],
     },
     {
         slug: "self-hosting",
         title: "Self-hosting operations",
-        url: `${DOCS_BASE_URL}/self-hosting`,
-        page: "self-hosting",
+        url: LOCAL_SERVER_URL,
+        page: "docs/LOCAL_SERVER.md",
         summary: "Operate a self-hosted server: data directory, credential rotation and grants, capacity, backup, upgrades.",
         keywords: ["self-hosting", "operations", "operate", "backup", "restore", "upgrade", "rotate", "revoke", "grant", "capacity", "data directory", "license"],
     },
     {
         slug: "cli",
         title: "CLI commands",
-        url: `${DOCS_BASE_URL}/cli`,
-        page: "cli",
+        url: README_URL,
+        page: "README.md",
         summary: "Client launch, sync, cleanup, worktree maintenance, and launch-all reference.",
         keywords: ["cli", "command", "sync", "cleanup", "worktree", "launch", "launch-all", "terminal", "maintenance", "prune"],
     },
     {
         slug: "tools",
         title: "Tool reference",
-        url: `${DOCS_BASE_URL}/tools`,
-        page: "tools",
-        summary: "Every borg_* tool — name, description, params (auto-generated).",
+        url: README_URL,
+        page: "README.md",
+        summary: "Every borg_* tool — name, description, params.",
         keywords: ["tool", "tools", "api", "reference", "param", "borg_"],
     },
     {
         slug: "faq",
         title: "FAQ",
-        url: `${DOCS_BASE_URL}/faq`,
-        page: "faq",
+        url: README_URL,
+        page: "README.md",
         summary: "Common questions — agents, coordination, worktrees, docs maturity, security.",
         keywords: ["faq", "question", "agent", "claude", "codex", "opencode", "coordination", "worktree", "security", "reporting", "second agent"],
     },

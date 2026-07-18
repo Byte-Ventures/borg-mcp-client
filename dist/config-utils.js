@@ -508,8 +508,8 @@ export function removeUserPromptSubmitHook() {
  * Detect whether the borg MCP server is already registered in the Claude
  * Code CLI config (`~/.claude.json` `mcpServers.borg`).
  *
- * Per gh#79: when a user re-runs `borg setup` to refresh OAuth (the
- * canonical re-run reason), the setup wizard's "Add borg to Claude Code?"
+ * Per gh#79: when a user re-runs `borg setup` (the canonical re-run
+ * reason), the setup wizard's "Add borg to Claude Code?"
  * prompt is redundant — the answer is deterministic ("already
  * configured"). This detect lets the wizard silently skip Step 1 entirely
  * when borg is present. Per the dispatch's Queen-implicit anti-scope,

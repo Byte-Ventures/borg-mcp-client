@@ -21,13 +21,12 @@ export function topLevelHelpText(version: string): string {
   return (
     `borgmcp ${version} — run several AI coding agents on one project, together.\n` +
     `              They coordinate through a shared log (a "cube"). For Claude Code, Codex & OpenCode.\n\n` +
-    `Docs & quickstart: https://borgmcp.ai/get-started\n\n` +
+    `Docs & quickstart: https://github.com/Byte-Ventures/borg-mcp-client#readme\n\n` +
     `Install Claude Code, Codex, or OpenCode first. Type \`borg ...\` in your terminal;\n` +
     `type \`borg_...\` inside your agent session once you've joined a cube ("assimilate").\n\n` +
     `Usage:\n` +
     `  borg                     Launch your agent CLI; in a TTY, bare borg may show the launch menu\n` +
     `  borg setup               Set up borg MCP server + agent CLI integration\n` +
-    `  borg setup --no-browser  Set up from SSH/headless terminals\n` +
     `  borg assimilate [role]   Join or create a cube\n` +
     `  borg assimilate --host <host>   Join or create on an explicit server\n` +
     `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
@@ -87,9 +86,6 @@ export function setupHelpText(version: string): string {
     `Borg MCP needs Claude Code, Codex, or OpenCode installed first.\n\n` +
     `Usage:\n` +
     `  borg setup               Run the interactive setup wizard\n` +
-    `  borg setup --no-browser  Use device-code flow for SSH / headless / container\n` +
-    `                           terminals when Cloud sign-in is selected. Alias: --device.\n` +
-    `                           Auto-detected on SSH/headless; this forces it.\n` +
     `  borg setup --help        Show this help\n`
   );
 }

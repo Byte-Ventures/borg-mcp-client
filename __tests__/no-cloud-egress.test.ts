@@ -1,128 +1,150 @@
 /**
  * Egress guard — proves the Borg CLOUD surface is unreachable by construction
- * from the shipped runtime (blocker-2 severance).
+ * from the shipped artifact (blocker-2 severance).
  *
- * Scans every shipped `src/**\/*.ts` file (tests excluded) and asserts that no
- * hosted-URL literal, OAuth/device-flow import, subscription/dashboard/checkout
- * reference, health-beat wiring, or deleted-module import survives. If any of
- * these reappear, the cloud path has been re-linked and this test fails.
+ * Scans the shipped SOURCE (`src/**\/*.ts`), the shipped DOCS/METADATA
+ * (`README.md`, `docs/**\/*.md`, `package.json`), and — when a build is present
+ * — the built `dist/`, asserting that no hosted-URL literal, OAuth/device-flow
+ * import, subscription/dashboard/checkout reference, health-beat wiring, report
+ * tool, or deleted-module import/mirror survives. Content is scanned RAW (no
+ * comment stripping): stale Cloud/OAuth prose in comments is a finding too.
+ *
+ * The authoritative scan of the actually-packed tarball lives in
+ * scripts/verify-packed-artifact.mjs (post-build/pack); this unit test covers
+ * everything available without a build.
  */
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SRC_DIR = path.join(ROOT, 'src');
+const DOCS_DIR = path.join(ROOT, 'docs');
+const DIST_DIR = path.join(ROOT, 'dist');
 
-function listSrcFiles(dir: string): string[] {
+function listFiles(dir: string, exts: string[]): string[] {
   const out: string[] = [];
+  if (!existsSync(dir)) return out;
   for (const entry of readdirSync(dir)) {
     const full = path.join(dir, entry);
-    if (statSync(full).isDirectory()) {
-      out.push(...listSrcFiles(full));
-    } else if (entry.endsWith('.ts')) {
-      out.push(full);
-    }
+    if (statSync(full).isDirectory()) out.push(...listFiles(full, exts));
+    else if (exts.some((e) => entry.endsWith(e))) out.push(full);
   }
   return out;
 }
 
-const SRC_FILES = listSrcFiles(SRC_DIR);
-const readAll = () => SRC_FILES.map((f) => ({ file: path.relative(SRC_DIR, f), text: readFileSync(f, 'utf8') }));
+const SRC_FILES = listFiles(SRC_DIR, ['.ts']);
+const readAll = (files: string[], base: string) =>
+  files.map((f) => ({ file: path.relative(base, f), text: readFileSync(f, 'utf8') }));
 
-/** Strip block + line comments so scans target actual code, not documentation. */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+// Deleted cloud-only modules — must have NO import and NO dist mirror.
+const DELETED_MODULES = [
+  'auth',
+  'auth-recovery',
+  'authority',
+  'device-auth',
+  'health-beat',
+  'setup-authority',
+  'setup-action',
+  'subscription-retry',
+  'token-crypto',
+];
+
+// The hosted product URLs a local-only client must never link to or construct.
+const HOSTED_URL_NEEDLES = [
+  'api.borgmcp.ai',
+  'borgmcp.ai/dashboard',
+  'borgmcp.ai/get-started',
+  'borgmcp.ai/pricing',
+  'borgmcp.ai/account',
+  'borgmcp.ai/upgrade',
+  'borgmcp.ai/subscribe',
+];
+
+// Reachable-cloud identifiers (OAuth / billing / dashboard / reports).
+const CLOUD_SYMBOL_NEEDLES = [
+  'googleapis.com',
+  'accounts.google.com',
+  'authenticateWithGoogle',
+  'refreshIdToken',
+  'getValidToken',
+  'storeIdToken',
+  'storeRefreshToken',
+  'google-id-token',
+  'google-refresh-token',
+  'device_grant',
+  '/api/subscribe',
+  '/api/subscription',
+  'checkout_url',
+  'portal_url',
+  'stripe',
+  'Stripe',
+  'borg_subscribe',
+  'borg_upgrade',
+  'borg_subscription_status',
+  'borg_open_dashboard',
+  'borg_report-friction',
+  'borg_reports',
+  'submitReport',
+  'fetchReports',
+];
+
+function scan(entries: { file: string; text: string }[], needles: string[]): string[] {
+  const offenders: string[] = [];
+  for (const { file, text } of entries) {
+    for (const needle of needles) {
+      if (text.includes(needle)) offenders.push(`${file}: ${needle}`);
+    }
+  }
+  return offenders;
 }
-const readCode = () =>
-  SRC_FILES.map((f) => ({ file: path.relative(SRC_DIR, f), text: stripComments(readFileSync(f, 'utf8')) }));
 
-describe('no-cloud-egress guard (blocker-2)', () => {
+describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
   it('has source files to scan', () => {
     expect(SRC_FILES.length).toBeGreaterThan(20);
   });
 
-  it('the hosted API literal api.borgmcp.ai appears in ZERO shipped src files', () => {
-    const offenders = readAll().filter(({ text }) => text.includes('api.borgmcp.ai'));
-    expect(offenders.map((o) => o.file)).toEqual([]);
+  it('no hosted product URL appears in shipped src', () => {
+    expect(scan(readAll(SRC_FILES, SRC_DIR), HOSTED_URL_NEEDLES)).toEqual([]);
   });
 
-  it('no dashboard / subscription / checkout / Stripe reference on a runtime path', () => {
-    const forbidden = [
-      'borgmcp.ai/dashboard',
-      '/api/subscribe',
-      '/api/subscription',
-      'checkout_url',
-      'portal_url',
-      'stripe',
-      'Stripe',
-    ];
-    const offenders: string[] = [];
-    for (const { file, text } of readCode()) {
-      for (const needle of forbidden) {
-        if (text.includes(needle)) offenders.push(`${file}: ${needle}`);
-      }
-    }
-    expect(offenders).toEqual([]);
+  it('no OAuth / subscription / dashboard / report identifier appears in shipped src (raw, comments included)', () => {
+    expect(scan(readAll(SRC_FILES, SRC_DIR), CLOUD_SYMBOL_NEEDLES)).toEqual([]);
   });
 
-  it('no Google OAuth endpoint or deleted OAuth symbol on a runtime path', () => {
-    // Precise runtime signals (comment-stripped so docs/redaction regexes are
-    // not false-flagged). These are the actual reachable-cloud identifiers.
-    const forbidden = [
-      'googleapis.com',
-      'accounts.google.com',
-      'authenticateWithGoogle',
-      'refreshIdToken',
-      'getValidToken',
-      'storeIdToken',
-      'storeRefreshToken',
-      'google-id-token',
-      'google-refresh-token',
-      'device_grant',
-    ];
+  it('no import or reference to a deleted cloud-only module remains in src', () => {
     const offenders: string[] = [];
-    for (const { file, text } of readCode()) {
-      for (const needle of forbidden) {
-        if (text.includes(needle)) offenders.push(`${file}: ${needle}`);
-      }
-    }
-    expect(offenders).toEqual([]);
-  });
-
-  it('no import of a deleted cloud-only module remains in src', () => {
-    const deletedModules = [
-      './auth.js',
-      './device-auth.js',
-      './health-beat.js',
-      './setup-authority.js',
-      './setup-action.js',
-      './subscription-retry.js',
-      './token-crypto.js',
-      './authority.js',
-    ];
-    const offenders: string[] = [];
-    for (const { file, text } of readAll()) {
-      for (const mod of deletedModules) {
-        // Match `from './auth.js'` / `import('./auth.js')` style references.
-        if (text.includes(`'${mod}'`) || text.includes(`"${mod}"`)) {
-          offenders.push(`${file}: ${mod}`);
+    for (const { file, text } of readAll(SRC_FILES, SRC_DIR)) {
+      for (const mod of DELETED_MODULES) {
+        if (text.includes(`'./${mod}.js'`) || text.includes(`"./${mod}.js"`)) {
+          offenders.push(`${file}: ./${mod}.js`);
         }
       }
     }
     expect(offenders).toEqual([]);
   });
 
-  it('the MCP tool manifest contains no cloud tool', () => {
-    const manifest = readFileSync(path.join(SRC_DIR, 'tool-manifest.ts'), 'utf8');
-    for (const tool of ['borg_subscribe', 'borg_upgrade-subscription', 'borg_upgrade', 'borg_subscription_status', 'borg_open_dashboard']) {
-      expect(manifest).not.toContain(tool);
+  it('shipped docs + package metadata carry no hosted product URL or Cloud journey', () => {
+    const docFiles = [
+      path.join(ROOT, 'README.md'),
+      path.join(ROOT, 'package.json'),
+      ...listFiles(DOCS_DIR, ['.md']),
+    ].filter(existsSync);
+    // borgmcp.ai product links are forbidden; the GitHub repo is allowed. Assert
+    // no bare `//borgmcp.ai` host (the marketing/product/API site) survives.
+    const offenders: string[] = [];
+    for (const f of docFiles) {
+      const text = readFileSync(f, 'utf8');
+      const rel = path.relative(ROOT, f);
+      if (/\/\/borgmcp\.ai/.test(text) || /\/\/api\.borgmcp\.ai/.test(text)) {
+        offenders.push(`${rel}: borgmcp.ai host link`);
+      }
     }
+    expect(offenders).toEqual([]);
   });
 
-  it('remote-client.ts exports no cloud auth / subscription surface', () => {
+  it('remote-client.ts exports no cloud auth / subscription / report surface', () => {
     const remoteClient = readFileSync(path.join(SRC_DIR, 'remote-client.ts'), 'utf8');
     for (const symbol of [
       'export const API_URL',
@@ -131,6 +153,8 @@ describe('no-cloud-egress guard (blocker-2)', () => {
       'export async function createSubscription',
       'export async function checkSubscriptionStatus',
       'export async function createBillingPortalSession',
+      'export async function submitReport',
+      'export async function fetchReports',
     ]) {
       expect(remoteClient).not.toContain(symbol);
     }
@@ -142,5 +166,20 @@ describe('no-cloud-egress guard (blocker-2)', () => {
       expect(text).not.toContain('startHealthBeatTick');
       expect(text).not.toContain('healthBeat');
     }
+  });
+
+  // dist/ is a build artifact; scanned only when a build is present (always in
+  // release:check / CI, which build before this runs). The verify-packed-artifact
+  // script performs the authoritative post-pack scan regardless.
+  const distJs = listFiles(DIST_DIR, ['.js', '.d.ts']);
+  it.runIf(distJs.length > 0)('built dist carries no deleted-module mirror', () => {
+    const mirrors = DELETED_MODULES.flatMap((m) => ['js', 'd.ts'].map((e) => `${m}.${e}`))
+      .filter((name) => existsSync(path.join(DIST_DIR, name)));
+    expect(mirrors).toEqual([]);
+  });
+
+  it.runIf(distJs.length > 0)('built dist carries no hosted URL, OAuth, subscription, dashboard, or report residue', () => {
+    const entries = readAll(distJs, DIST_DIR);
+    expect(scan(entries, [...HOSTED_URL_NEEDLES, ...CLOUD_SYMBOL_NEEDLES])).toEqual([]);
   });
 });

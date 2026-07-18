@@ -28,6 +28,42 @@ const FORBIDDEN_CONTENT = [
   { pattern: /\bpostgres(?:ql)?:\/\//i, description: 'database connection URL' },
   { pattern: /\b[a-z0-9-]+\.workers\.dev\b/i, description: 'Worker service URL' },
   { pattern: /(?:^|[^A-Za-z])(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)/m, description: 'local absolute path' },
+  // Local-only client (server-client-localhost-lan-only-no-cloud): no hosted
+  // Borg API/product URL may appear in ANY shipped file (dist, src, docs, README).
+  { pattern: /\/\/api\.borgmcp\.ai/i, description: 'hosted Borg API URL' },
+  { pattern: /borgmcp\.ai\/(?:dashboard|get-started|pricing|account|upgrade|subscribe)/i, description: 'hosted Borg product URL' },
+];
+// Reachable-cloud runtime identifiers (OAuth / billing / dashboard / reports).
+// Checked ONLY in shipped code (dist `.js`/`.d.ts`, src `.ts`) — NOT in `.md`
+// docs, which legitimately DESCRIBE the removal of these surfaces.
+const CLOUD_RUNTIME_SYMBOLS = [
+  'authenticateWithGoogle',
+  'refreshIdToken',
+  'getValidToken',
+  'createSubscription',
+  'checkSubscriptionStatus',
+  'createBillingPortalSession',
+  'submitReport',
+  'fetchReports',
+  'startHealthBeatTick',
+  'borg_subscribe',
+  'borg_upgrade-subscription',
+  'borg_subscription_status',
+  'borg_open_dashboard',
+  'borg_report-friction',
+  'borg_reports',
+];
+// Deleted cloud-only modules — no source or built mirror may ship.
+const DELETED_MODULE_BASENAMES = [
+  'auth',
+  'auth-recovery',
+  'authority',
+  'device-auth',
+  'health-beat',
+  'setup-authority',
+  'setup-action',
+  'subscription-retry',
+  'token-crypto',
 ];
 
 async function walk(root, directory = root) {
@@ -148,12 +184,35 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
           throw new Error(`Packed artifact contains ${forbidden.description}: ${path}`);
         }
       }
+      // Reachable-cloud runtime symbols may only be absent from SHIPPED CODE.
+      // (.md docs describe the removal and are intentionally exempt here.)
+      if (/\.(?:js|ts)$/.test(path) || path.endsWith('.d.ts')) {
+        for (const symbol of CLOUD_RUNTIME_SYMBOLS) {
+          if (content.includes(symbol)) {
+            throw new Error(`Packed artifact ships a reachable-cloud runtime symbol '${symbol}': ${path}`);
+          }
+        }
+      }
       unpackedBytes += metadata.size;
       relativeFiles.add(path);
     }
     if (unpackedBytes > MAX_UNPACKED_BYTES) throw new Error(`Unpacked artifact exceeds ${MAX_UNPACKED_BYTES} bytes.`);
     for (const required of REQUIRED_FILES) {
       if (!relativeFiles.has(required)) throw new Error(`Packed artifact is missing ${required}.`);
+    }
+    // No deleted cloud-only module may ship as source or built mirror.
+    for (const base of DELETED_MODULE_BASENAMES) {
+      for (const candidate of [
+        `src/${base}.ts`,
+        `dist/${base}.js`,
+        `dist/${base}.d.ts`,
+        `dist/${base}.js.map`,
+        `dist/${base}.d.ts.map`,
+      ]) {
+        if (relativeFiles.has(candidate)) {
+          throw new Error(`Packed artifact ships a deleted cloud-only module: ${candidate}`);
+        }
+      }
     }
 
     const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));

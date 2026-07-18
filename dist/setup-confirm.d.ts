@@ -12,8 +12,8 @@
  *
  * SECURITY (SR-light, gh#818 221c43df): the disclosure lists file PATHS +
  * at most the PUBLIC `BORG_API_URL` — there is NO token/secret in the
- * written config to echo. Tokens live in the AES-256-GCM keychain, and
- * Step-1 runs BEFORE OAuth, so at mutation time no token even exists.
+ * written config to echo. Local credentials live in the OS keychain, and
+ * the written config never contains a token or secret.
  */
 export interface ConfigMutationTarget {
     /** Human-readable config file path (tilde form). */
@@ -77,7 +77,7 @@ export declare function parseYesFlag(argv: string[]): boolean;
  *
  * The disclosure + confirm prompt exists to obtain informed consent for the
  * config writes Step-1 performs (gh#818). On a pure refresh — the normal
- * OAuth-refresh re-run where every DETECTED agent CLI already has the full
+ * setup re-run where every DETECTED agent CLI already has the full
  * borg setup (MCP server registered AND every hook write already applied) —
  * there is no mutation to consent to, so the prompt is redundant and skipped.
  *

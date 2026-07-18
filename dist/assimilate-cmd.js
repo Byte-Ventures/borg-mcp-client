@@ -106,20 +106,23 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
     // this worktree — no server/trust-anchor/cube/other-worktree reset, no restart
     // or version-alignment advice, and never a Cloud fallback (#1082).
     if (error instanceof BorgServerError && error.code === 'SESSION_REJECTED') {
+        // Defensive fallback copy only — the reachable pin-matched SESSION_REJECTED
+        // path (attach) routes to handleSessionRejectedReset, which performs the
+        // actual scoped reset. This copy claims NO mutation of its own; it points at
+        // the reset flow (re-run assimilate, which offers the scoped reset).
         deps.stderr(`This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
-            'revoked or taken over by another session. No other Borg state changed: your ' +
-            'pinned server trust, other worktrees, and their cubes are untouched. Recover this ' +
-            'worktree alone by asking the server operator for a new enrollment invitation, then ' +
-            `re-enroll from this worktree with ${localAssimilateCommand(apiUrl, true)}; that ` +
-            "resets only this worktree's saved seat.\n");
+            'revoked or taken over by another session. No other Borg state changed. Re-run ' +
+            `${localAssimilateCommand(apiUrl)} to reset ONLY this worktree's saved seat ` +
+            '(interactive confirmation, or pass --reset-local-seat when non-interactive), then ' +
+            'ask the server operator for a new invitation — the server can stay running — and ' +
+            `re-enroll with ${localAssimilateCommand(apiUrl, true)}.\n`);
         return 1;
     }
     if (error instanceof BorgServerError && error.code === 'INVITATION_REJECTED') {
         deps.stderr(`The enrollment invitation for ${apiUrl} was rejected or expired. ` +
-            'Ask the server operator for a replacement enrollment invitation. ' +
-            'For an unclaimed owner client, stop the server and run `borg-mcp-server owner-invite`; ' +
-            'for an ordinary client, stop the server and run `borg-mcp-server client-invite`. ' +
-            'Restart it with `borg-mcp-server start`, then rerun ' +
+            'Ask the server operator for a replacement invitation — the server can stay running: ' +
+            'for an unclaimed owner client run `borg-mcp-server owner-invite`; for an ordinary ' +
+            'client run `borg-mcp-server client-invite`. Then rerun ' +
             `${localAssimilateCommand(apiUrl, true)}.\n`);
         return 1;
     }
@@ -157,6 +160,61 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
     deps.stderr(`Borg server at ${apiUrl} returned an unexpected response: ` +
         `${safeMessage || 'request failed'}. ` +
         `Check that the client and server versions are compatible, then rerun ${retryCommand}.\n`);
+    return 1;
+}
+/**
+ * Pin-matched SESSION_REJECTED recovery (#1082). The local server verified its
+ * OWN pinned identity (this is reached only after a successful pinned-TLS
+ * attach — a pin MISMATCH throws a distinct trust error and never lands here),
+ * then rejected THIS worktree's saved session bearer (revoked, or taken over by
+ * another session). Offer a scoped reset that clears ONLY this worktree's saved
+ * seat — its cubes.json binding + its keychain session credential (clearActiveCube
+ * keys on findProjectRoot()) — and NOTHING else: server, trust anchor, cube, and
+ * every other worktree are untouched. TTY confirms interactively defaulting to
+ * No; non-TTY requires the explicit destructive --reset-local-seat flag. Every
+ * outcome is audited to stderr, and the recovery is live-safe: the operator is
+ * never told to stop/restart the server.
+ */
+async function handleSessionRejectedReset(deps, apiUrl, flags) {
+    const worktree = deps.findProjectRoot(deps.cwd());
+    deps.stderr(`This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
+        'revoked or taken over by another session. No other Borg state changed: your pinned ' +
+        'server trust, other worktrees, and their cubes are untouched.\n');
+    let doReset;
+    if (deps.isTTY()) {
+        const answer = await deps.prompt(`Reset ONLY this worktree's saved seat now? (host ${apiUrl}, worktree ${worktree}) ` +
+            "This deletes just this worktree's saved local session; server, trust anchor, cube, " +
+            'and other worktrees are left untouched. [y/N]: ');
+        // Destructive action: default is NO. Only an explicit yes proceeds — unlike
+        // the flow's ordinary confirmations, an empty answer must NOT reset.
+        const normalized = answer.trim().toLowerCase();
+        doReset = normalized === 'y' || normalized === 'yes';
+    }
+    else {
+        // Non-interactive: never destroy saved state without an explicit flag.
+        doReset = flags.resetLocalSeat === true;
+        if (!doReset) {
+            deps.stderr("audit: no changes made — non-interactive and --reset-local-seat not passed. To clear " +
+                "ONLY this worktree's saved seat, rerun with --reset-local-seat. Then ask the server " +
+                'operator for a new invitation (the server can stay running) and re-enroll with ' +
+                `${localAssimilateCommand(apiUrl, true)}.\n`);
+            return 1;
+        }
+    }
+    if (!doReset) {
+        deps.stderr("audit: no changes made — this worktree's saved seat was left in place. Re-run and " +
+            'confirm, or pass --reset-local-seat, to clear it.\n');
+        return 1;
+    }
+    // Scoped, worktree-only mutation: this worktree's cubes.json binding + its
+    // keychain session credential ONLY (clearActiveCube keys on findProjectRoot()).
+    await deps.clearActiveCube();
+    deps.stderr(`audit: cleared this worktree's saved local seat for ${apiUrl} (worktree ${worktree}) — ` +
+        'local session binding + keychain session only; server, trust anchor, cube, and other ' +
+        'worktrees unchanged.\n');
+    deps.stderr('Done. To rejoin, ask the server operator for a new enrollment invitation — the server can ' +
+        'stay running (`borg-mcp-server client-invite`, or `owner-invite` for an owner) — then ' +
+        `re-enroll from this worktree with ${localAssimilateCommand(apiUrl, true)}.\n`);
     return 1;
 }
 export async function runAssimilate(args, deps) {
@@ -609,6 +667,15 @@ export async function runAssimilate(args, deps) {
                     `Re-assimilate fresh from a terminal, or remove this worktree.\n`);
             }
             return 1;
+        }
+        // Pin-matched SESSION_REJECTED (revoked / taken-over seat): offer the
+        // scoped worktree-only reset. Reached only after a successful pinned-TLS
+        // attach, so it is pin-matched by construction — a pin mismatch throws a
+        // distinct trust error and never enters this branch.
+        if (err instanceof BorgServerError &&
+            err.code === 'SESSION_REJECTED' &&
+            authority.kind === 'server') {
+            return await handleSessionRejectedReset(deps, authority.apiUrl, args.flags);
         }
         if (authority.kind === 'server') {
             return reportServerFailure(deps, authority.apiUrl, err);

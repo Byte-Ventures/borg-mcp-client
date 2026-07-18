@@ -55,6 +55,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     hasPersistedActiveCube: vi.fn(async () => false),
     probeSeat: vi.fn(async () => 'live'),
     setActiveCube: vi.fn(async () => {}),
+    clearActiveCube: vi.fn(async () => {}),
     findProjectRoot: vi.fn(() => '/work/myrepo'),
     installProjectSessionHook: vi.fn(),
     defaultAuthority: { kind: 'server', apiUrl: 'https://server.test' },
@@ -601,6 +602,88 @@ describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-u
     const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(1);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining('unexpected response'));
+  });
+});
+
+describe('runAssimilate: pin-matched SESSION_REJECTED performs a scoped worktree-only seat reset (#1082)', () => {
+  const sameCubeSeat = () => vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone' }));
+  const cubeResolves = {
+    cwd: () => '/work/myrepo',
+    findProjectRoot: () => '/work/myrepo',
+    listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    getCube: vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] })),
+  };
+  // The attach (pinned-TLS) succeeds its identity check, then the server rejects
+  // THIS worktree's saved session bearer — a pin-matched SESSION_REJECTED.
+  const rejectAttach = () => vi.fn(async () => { throw new BorgServerError('SESSION_REJECTED', 'session bearer no longer accepted'); });
+
+  it('TTY confirm (y) clears ONLY this worktree seat, audits, and gives live-safe re-enroll copy', async () => {
+    const stderr = vi.fn();
+    const clearActiveCube = vi.fn(async () => {});
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, clearActiveCube,
+      isTTY: () => true,
+      prompt: vi.fn(async () => 'y'),
+      getActiveCube: sameCubeSeat(),
+      assimilate: rejectAttach(),
+    });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
+    expect(exit).toBe(1);
+    expect(clearActiveCube).toHaveBeenCalledTimes(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('no longer accepted');
+    expect(out).toContain("audit: cleared this worktree's saved local seat");
+    expect(out).toContain('server can stay running');
+    expect(out).not.toMatch(/borgmcp\.ai|Cloud/i);
+    expect(out).not.toMatch(/stop the server|restart it/i);
+    // Scoped: no server / trust / cube / other-worktree reset primitive is called.
+    expect((deps.setActiveCube as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+  });
+
+  it('TTY decline (empty → default No) makes NO changes and clears nothing', async () => {
+    const stderr = vi.fn();
+    const clearActiveCube = vi.fn(async () => {});
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, clearActiveCube,
+      isTTY: () => true,
+      prompt: vi.fn(async () => ''),
+      getActiveCube: sameCubeSeat(),
+      assimilate: rejectAttach(),
+    });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
+    expect(exit).toBe(1);
+    expect(clearActiveCube).not.toHaveBeenCalled();
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('no changes made');
+  });
+
+  it('non-TTY without --reset-local-seat makes NO changes and directs to the destructive flag', async () => {
+    const stderr = vi.fn();
+    const clearActiveCube = vi.fn(async () => {});
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, clearActiveCube,
+      isTTY: () => false,
+      getActiveCube: sameCubeSeat(),
+      assimilate: rejectAttach(),
+    });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
+    expect(exit).toBe(1);
+    expect(clearActiveCube).not.toHaveBeenCalled();
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('--reset-local-seat');
+  });
+
+  it('non-TTY with --reset-local-seat clears ONLY this worktree seat and audits', async () => {
+    const stderr = vi.fn();
+    const clearActiveCube = vi.fn(async () => {});
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, clearActiveCube,
+      isTTY: () => false,
+      getActiveCube: sameCubeSeat(),
+      assimilate: rejectAttach(),
+    });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true, resetLocalSeat: true } }, deps);
+    expect(exit).toBe(1);
+    expect(clearActiveCube).toHaveBeenCalledTimes(1);
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain("audit: cleared this worktree's saved local seat");
   });
 });
 
@@ -2341,10 +2424,12 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(output).toContain('revoked or taken over by another session');
     // Confirms no other Borg state changed.
     expect(output).toContain('No other Borg state changed');
-    expect(output).toContain('other worktrees, and their cubes are untouched');
-    // Scoped recovery: new invitation + re-enroll from this worktree only.
+    // Points at the scoped reset (interactive, or --reset-local-seat non-interactively).
+    expect(output).toContain("reset ONLY this worktree's saved seat");
+    expect(output).toContain('--reset-local-seat');
+    // Live-safe recovery: new invitation, server stays running, re-enroll from this worktree.
     expect(output).toContain('`borg assimilate --host https://server.example.com --enroll`');
-    expect(output).toContain("resets only this worktree's saved seat");
+    expect(output).toContain('server can stay running');
     // Never advises restart / version alignment / Cloud, and leaks no bearer.
     expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
     expect(output).not.toMatch(/versions?\s+are\s+compatible|restart|version alignment/i);
@@ -2367,12 +2452,15 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     const output = stderr.mock.calls.map((call) => String(call[0])).join('');
-    expect(output).toContain('replacement enrollment invitation');
+    expect(output).toContain('replacement invitation');
     expect(output).toContain('`borg-mcp-server owner-invite`');
     expect(output).toContain('`borg-mcp-server client-invite`');
     expect(output).toContain(
       '`borg assimilate --host https://localhost:8787 --enroll`',
     );
+    // Live-safe: the server stays running — never tell the operator to stop/restart it.
+    expect(output).toContain('server can stay running');
+    expect(output).not.toMatch(/stop the server|restart it/i);
     expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
   });
 

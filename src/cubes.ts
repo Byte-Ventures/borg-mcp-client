@@ -77,7 +77,7 @@ export interface ActiveCube {
   sessionToken: string;
   droneLabel: string;
   apiUrl: string;
-  /** Verified local-server CA identity; absent for Borg Cloud cubes. */
+  /** Verified local-server CA identity; absent until a local server is selected. */
   serverTrustIdentity?: string;
   /** Opaque local-session keychain reference; never a bearer. */
   localSessionCredentialRef?: string;

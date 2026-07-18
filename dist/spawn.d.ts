@@ -3,8 +3,8 @@
  *
  * Replaced by `borg assimilate [role] --worktree <name>` (see
  * `assimilate-cmd.ts`). The new command folds worktree creation,
- * OAuth bootstrap, cube creation, template application, and drone
- * assimilation into one shell call. This file remains so existing
+ * cube creation, template application, and drone assimilation into one
+ * shell call. This file remains so existing
  * scripts and tab-completion entries fail loudly with an actionable
  * migration message rather than silently mis-routing.
  *

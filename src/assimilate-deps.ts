@@ -45,6 +45,7 @@ import {
   getActiveCube as cubesGetActive,
   hasPersistedActiveCube as cubesHasPersistedActive,
   setActiveCube as cubesSetActive,
+  clearActiveCube as cubesClearActive,
   inboxPathForDrone,
   setCodexWakeTarget,
 } from './cubes.js';
@@ -129,6 +130,7 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
 
     getActiveCube: () => cubesGetActive(),
     hasPersistedActiveCube: () => cubesHasPersistedActive(),
+    clearActiveCube: () => cubesClearActive(),
     probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>
       defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
     setActiveCube: (a) => cubesSetActive(a),

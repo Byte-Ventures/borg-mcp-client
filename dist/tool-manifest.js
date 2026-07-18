@@ -95,7 +95,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_docs',
-        description: 'Look up the Borg MCP documentation. Call this when the user asks how borgmcp works, or any feature / usage / setup / pricing / concept / tool question. Returns the docs index — each section\'s borgmcp.ai URL + a one-line summary. Pass `topic` (e.g. "pricing", "worktree", "roles", "codex") to get the best-matching section(s) instead of the full index. Then WebFetch the returned URL to read the page — borg_docs returns the index only, it does not fetch the page for you.',
+        description: 'Look up the Borg MCP documentation. Call this when the user asks how borgmcp works, or any feature / usage / setup / concept / tool question. Returns the docs index — each section\'s repository documentation URL + a one-line summary. Pass `topic` (e.g. "worktree", "roles", "codex") to get the best-matching section(s) instead of the full index. Then WebFetch the returned URL to read the page — borg_docs returns the index only, it does not fetch the page for you.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -282,34 +282,6 @@ export const TOOL_MANIFEST = [
             },
             required: ['message'],
         },
-    },
-    {
-        name: 'borg_report-friction',
-        description: 'Report friction or a bug directly to the borgmcp dev team. WRITE-ONLY — you cannot read reports back. Use it when something about borg itself slowed you down, confused you, or broke: awkward UX, an unclear playbook, a missing affordance, or a bug you hit while using borg. Secrets (tokens, keys) are auto-scrubbed server-side before storage, but avoid pasting them anyway.',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                message: {
-                    type: 'string',
-                    description: 'What hit you + what you expected instead (max 10KB). Concrete and specific helps the dev team most.',
-                },
-                kind: {
-                    type: 'string',
-                    enum: ['friction', 'bug'],
-                    description: "'friction' (default) for UX/workflow friction; 'bug' for something broken.",
-                },
-                metadata: {
-                    type: 'object',
-                    description: 'Optional non-secret context. Allowed keys only: version, cube_id, os. Any other key is rejected.',
-                },
-            },
-            required: ['message'],
-        },
-    },
-    {
-        name: 'borg_reports',
-        description: 'Read the friction/bug reports submitted via borg_report-friction, newest first, for triage. The READ counterpart to write-only borg_report-friction. Builder/dogfooder-tier only — the server gates non-builder callers with a clear message. Surfaces each report\'s kind, timestamp, reporter email, and non-secret metadata; secrets were scrubbed server-side before storage.',
-        inputSchema: { type: 'object', properties: {} },
     },
     {
         name: 'borg_list-cubes',

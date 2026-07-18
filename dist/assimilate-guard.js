@@ -10,7 +10,6 @@
  * Seat CREATION stays in the CLI (`borg assimilate` in a terminal), where
  * worktree spawn + identity persistence are handled coherently.
  */
-import { authRecoveryMessage } from './auth-recovery.js';
 /** Cube names are lowercase server-side; tolerate caller case/whitespace. */
 function normalizeCubeName(name) {
     return name.trim().toLowerCase();
@@ -46,16 +45,12 @@ export function reattachOnlyRefusal(decision, requestedCubeName) {
 /**
  * Failure advice when a re-attach's server-validated calls fail.
  *
- * Returns null for auth-class failures — the index.ts auth funnel
- * (auth-recovery.ts) owns that advice; the caller rethrows. For everything
- * else (evicted seat, revoked session, dead cube) the seat is unreachable:
+ * The seat is unreachable (evicted seat, revoked session, dead cube):
  * surface the server error verbatim plus CLI guidance. NEVER advise an
  * in-session re-mint (SR cond-4: no fabricated success, lean on server
  * re-validation).
  */
 export function reattachFailureMessage(error) {
-    if (authRecoveryMessage(error))
-        return null;
     const detail = error.message ?? String(error);
     return (`◼ Re-attach failed — this worktree's saved seat is unreachable (likely evicted or its ` +
         `session was revoked). Server said: ${detail}\n` +

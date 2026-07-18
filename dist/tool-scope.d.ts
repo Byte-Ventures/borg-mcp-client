@@ -16,7 +16,7 @@
 /** Always-present escape hatch — reaches any borg tool regardless of scope. */
 export declare const DISPATCHER_TOOLS: readonly ["borg_tool", "borg_describe-tool"];
 /** Every role needs these; pre-loaded natively for all roles. */
-export declare const UNIVERSAL_TOOLS: readonly ["borg_regen", "borg_log", "borg_read-log", "borg_roster", "borg_stream-status", "borg_whoami", "borg_ack", "borg_version", "borg_cube", "borg_role", "borg_role-rationale", "borg_report-friction", "borg_assimilate", "borg_playbook", "borg_docs", "borg_tool", "borg_describe-tool"];
+export declare const UNIVERSAL_TOOLS: readonly ["borg_regen", "borg_log", "borg_read-log", "borg_roster", "borg_stream-status", "borg_whoami", "borg_ack", "borg_version", "borg_cube", "borg_role", "borg_role-rationale", "borg_assimilate", "borg_playbook", "borg_docs", "borg_tool", "borg_describe-tool"];
 /** Cube/role/drone management — native for management seats, deferred for workers. */
 export declare const MANAGEMENT_TOOLS: readonly ["borg_create-cube", "borg_update-cube", "borg_delete-cube", "borg_create-role", "borg_update-role", "borg_delete-role", "borg_patch-role-section", "borg_patch-taxonomy-class", "borg_reassign-drone", "borg_evict-drone", "borg_sync-roles", "borg_apply-template", "borg_list-cubes", "borg_list-drones", "borg_list-roles", "borg_list-templates", "borg_remove-decision"];
 /**

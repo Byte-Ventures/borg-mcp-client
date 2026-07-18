@@ -69,13 +69,18 @@ describe('reattachOnlyRefusal', () => {
 });
 
 describe('reattachFailureMessage', () => {
-  it('auth-class failures return null so the auth funnel owns the advice', () => {
-    expect(
-      reattachFailureMessage({ message: 'Authentication required. Run: borg setup' })
-    ).toBeNull();
-    expect(
-      reattachFailureMessage({ name: 'RefreshTransientError', message: 'Failed to refresh' })
-    ).toBeNull();
+  it('surfaces seat-unreachable guidance for every failure, embedding the server detail', () => {
+    const authMsg = reattachFailureMessage({ message: 'Authentication required. Run: borg setup' });
+    expect(authMsg).toMatch(/seat/i);
+    expect(authMsg).toMatch(/borg assimilate/);
+    expect(authMsg).toContain('Authentication required. Run: borg setup');
+
+    const transientMsg = reattachFailureMessage({
+      name: 'RefreshTransientError',
+      message: 'Failed to refresh',
+    });
+    expect(transientMsg).toMatch(/seat/i);
+    expect(transientMsg).toContain('Failed to refresh');
   });
 
   it('non-auth failures surface seat-unreachable guidance without re-minting advice', () => {

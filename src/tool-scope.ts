@@ -30,7 +30,6 @@ export const UNIVERSAL_TOOLS = [
   'borg_cube',
   'borg_role',
   'borg_role-rationale',
-  'borg_report-friction',
   'borg_assimilate',
   'borg_playbook', // gh#912: on-demand operating-playbook chapter — every role needs it
   'borg_docs', // gh#docs-site B: in-product docs lookup — every role can answer "how does borgmcp work"

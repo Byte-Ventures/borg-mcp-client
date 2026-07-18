@@ -236,16 +236,10 @@ describe('remote-client explicit authority connection', () => {
     }));
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    const { getRoster, submitReport } = await import('../src/remote-client.js');
+    const { getRoster } = await import('../src/remote-client.js');
 
     await expect(getRoster('legacy-local-session', apiUrl, undefined, undefined))
       .rejects.toThrow(/authority state is missing or unreadable/i);
-    await expect(submitReport(
-      'legacy-local-session',
-      apiUrl,
-      { message: 'must not reach Cloud' },
-      undefined,
-    )).rejects.toThrow(/authority state is missing or unreadable/i);
 
     expect(getIdToken).not.toHaveBeenCalled();
     expect(getRefreshToken).not.toHaveBeenCalled();
