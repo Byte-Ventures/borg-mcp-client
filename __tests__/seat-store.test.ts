@@ -108,6 +108,35 @@ describe('seat-store single-lock RCW (checklist #4)', () => {
     expect(readdirSync(dir).filter((n) => n.endsWith('.lock'))).toEqual([]);
   });
 
+  it('CR4: a present-but-malformed store FAILS CLOSED and is never overwritten (byte-preservation)', async () => {
+    const dir = fixture();
+    const store = join(dir, 'seats.json');
+    const corrupt = '{ this is not valid json';
+    writeFileSync(store, corrupt);
+    // A malformed file must throw WITHOUT committing — never mapped to empty.
+    await expect(
+      withStore(store, empty, parse, async (txn) => { txn.data.n = 99; await txn.commit(); }),
+    ).rejects.toThrow(/malformed|unsupported version/i);
+    // The corrupt bytes are preserved exactly (no overwrite).
+    expect(await readFile(store, 'utf8')).toBe(corrupt);
+  });
+
+  it('CR4: a schema-invalid (parse→null) store FAILS CLOSED and is preserved', async () => {
+    const dir = fixture();
+    const store = join(dir, 'seats.json');
+    // Valid JSON, but the caller's parse rejects the shape (returns null).
+    const parseStrict = (raw: string): { n: number } | null => {
+      const p = JSON.parse(raw) as { n?: unknown };
+      return typeof p.n === 'number' ? { n: p.n } : null;
+    };
+    const wrongShape = JSON.stringify({ notN: true });
+    writeFileSync(store, wrongShape);
+    await expect(
+      withStore(store, empty, parseStrict, async (txn) => { txn.data.n = 5; await txn.commit(); }),
+    ).rejects.toThrow(/malformed|unsupported version/i);
+    expect(await readFile(store, 'utf8')).toBe(wrongShape);
+  });
+
   it('withStore returns null-state as empty and commits atomically at 0600', async () => {
     const dir = fixture();
     const store = join(dir, 'seats.json');

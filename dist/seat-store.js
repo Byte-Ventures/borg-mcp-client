@@ -128,16 +128,29 @@ export async function withStoreLock(lockPath, op) {
 export async function withStore(storePath, emptyState, parse, op) {
     return withStoreLock(`${storePath}.lock`, async () => {
         const raw = await readStoreFile(storePath);
-        let loaded = null;
-        if (raw !== null) {
+        // CR4 fail-closed: ONLY a missing file (ENOENT → readStoreFile returns null)
+        // may initialize an empty state. A present-but-malformed / wrong-version /
+        // schema-invalid store must NEVER be silently mapped to empty and then
+        // OVERWRITTEN by a subsequent commit — that erases every seat/credential and
+        // silently recreates authority. Throw WITHOUT writing so the corrupt bytes are
+        // preserved for recovery (parity with getServerCredentialRecord).
+        let data;
+        if (raw === null) {
+            data = emptyState();
+        }
+        else {
+            let loaded;
             try {
                 loaded = parse(raw);
             }
             catch {
                 loaded = null;
             }
+            if (loaded === null) {
+                throw new Error('Borg seat store is malformed or has an unsupported version; refusing to overwrite it');
+            }
+            data = loaded;
         }
-        const data = loaded ?? emptyState();
         const txn = {
             data,
             commit: () => atomicWrite0600(storePath, JSON.stringify(data, null, 2) + '\n'),

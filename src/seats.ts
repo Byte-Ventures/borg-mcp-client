@@ -96,28 +96,45 @@ function emptyStore(): SeatsFile {
   return { version: SEATS_VERSION, seats: {} };
 }
 
+/**
+ * CR4: parse + FULL version/schema validation. Returns null (→ fail closed at the
+ * caller) for any malformed JSON, wrong version, or invalid shape; never throws and
+ * never coerces a wrong-version file into a valid-looking empty store.
+ */
 function parseStore(raw: string): SeatsFile | null {
-  const parsed = JSON.parse(raw) as { version?: unknown; seats?: unknown };
-  if (
-    parsed &&
-    typeof parsed === 'object' &&
-    parsed.seats &&
-    typeof parsed.seats === 'object' &&
-    !Array.isArray(parsed.seats)
-  ) {
-    return { version: SEATS_VERSION, seats: parsed.seats as Record<string, SeatRecord> };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const candidate = parsed as { version?: unknown; seats?: unknown };
+    if (
+      candidate.version === SEATS_VERSION &&
+      candidate.seats &&
+      typeof candidate.seats === 'object' &&
+      !Array.isArray(candidate.seats)
+    ) {
+      return { version: SEATS_VERSION, seats: candidate.seats as Record<string, SeatRecord> };
+    }
   }
   return null;
 }
 
 async function readStore(): Promise<SeatsFile> {
   const raw = await readStoreFile(SEATS_FILE);
+  // CR4 fail-closed: ENOENT alone initializes empty. A present-but-malformed /
+  // wrong-version / schema-invalid store MUST NOT read as empty (a following commit
+  // would erase every seat); throw so the on-disk bytes are preserved.
   if (raw === null) return emptyStore();
-  try {
-    return parseStore(raw) ?? emptyStore();
-  } catch {
-    return emptyStore();
+  const parsed = parseStore(raw);
+  if (parsed === null) {
+    throw new Error(
+      'Borg seat store is malformed or has an unsupported version; refusing to read it',
+    );
   }
+  return parsed;
 }
 
 /** True iff `record` is a well-formed seat for `ref` + `binding` (origin/trust/cube). */

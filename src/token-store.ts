@@ -38,16 +38,32 @@ export interface TokenBackend {
 export function makeFileBackend(filePath: string): TokenBackend {
   const load = async (): Promise<Record<string, string>> => {
     const raw = await readStoreFile(filePath);
+    // CR4 fail-closed: ONLY a missing file initializes empty. A present-but-
+    // malformed / wrong-version / schema-invalid credential store MUST NOT read as
+    // empty — a subsequent set/delete would OVERWRITE it and erase every stored
+    // account (parent enrollment credentials + pending records). Throw WITHOUT
+    // writing so the corrupt bytes are preserved for recovery.
     if (raw === null) return {};
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(raw) as { accounts?: unknown };
-      if (parsed && typeof parsed === 'object' && parsed.accounts && typeof parsed.accounts === 'object') {
-        return { ...(parsed.accounts as Record<string, string>) };
-      }
+      parsed = JSON.parse(raw);
     } catch {
-      // A corrupt store reads as empty; a subsequent set rewrites it cleanly.
+      throw new Error('Borg credential store is malformed; refusing to overwrite it');
     }
-    return {};
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed) ||
+      (parsed as { version?: unknown }).version !== 1 ||
+      !(parsed as { accounts?: unknown }).accounts ||
+      typeof (parsed as { accounts?: unknown }).accounts !== 'object' ||
+      Array.isArray((parsed as { accounts?: unknown }).accounts)
+    ) {
+      throw new Error(
+        'Borg credential store is malformed or has an unsupported version; refusing to overwrite it',
+      );
+    }
+    return { ...((parsed as { accounts: Record<string, string> }).accounts) };
   };
   const save = (accounts: Record<string, string>): Promise<void> =>
     atomicWrite0600(filePath, JSON.stringify({ version: 1, accounts }, null, 2) + '\n');

@@ -23,18 +23,30 @@ import { atomicWrite0600, readStoreFile } from './seat-store.js';
 export function makeFileBackend(filePath) {
     const load = async () => {
         const raw = await readStoreFile(filePath);
+        // CR4 fail-closed: ONLY a missing file initializes empty. A present-but-
+        // malformed / wrong-version / schema-invalid credential store MUST NOT read as
+        // empty — a subsequent set/delete would OVERWRITE it and erase every stored
+        // account (parent enrollment credentials + pending records). Throw WITHOUT
+        // writing so the corrupt bytes are preserved for recovery.
         if (raw === null)
             return {};
+        let parsed;
         try {
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === 'object' && parsed.accounts && typeof parsed.accounts === 'object') {
-                return { ...parsed.accounts };
-            }
+            parsed = JSON.parse(raw);
         }
         catch {
-            // A corrupt store reads as empty; a subsequent set rewrites it cleanly.
+            throw new Error('Borg credential store is malformed; refusing to overwrite it');
         }
-        return {};
+        if (!parsed ||
+            typeof parsed !== 'object' ||
+            Array.isArray(parsed) ||
+            parsed.version !== 1 ||
+            !parsed.accounts ||
+            typeof parsed.accounts !== 'object' ||
+            Array.isArray(parsed.accounts)) {
+            throw new Error('Borg credential store is malformed or has an unsupported version; refusing to overwrite it');
+        }
+        return { ...(parsed.accounts) };
     };
     const save = (accounts) => atomicWrite0600(filePath, JSON.stringify({ version: 1, accounts }, null, 2) + '\n');
     return {

@@ -49,27 +49,42 @@ function digestOf(bearer) {
 function emptyStore() {
     return { version: SEATS_VERSION, seats: {} };
 }
+/**
+ * CR4: parse + FULL version/schema validation. Returns null (→ fail closed at the
+ * caller) for any malformed JSON, wrong version, or invalid shape; never throws and
+ * never coerces a wrong-version file into a valid-looking empty store.
+ */
 function parseStore(raw) {
-    const parsed = JSON.parse(raw);
-    if (parsed &&
-        typeof parsed === 'object' &&
-        parsed.seats &&
-        typeof parsed.seats === 'object' &&
-        !Array.isArray(parsed.seats)) {
-        return { version: SEATS_VERSION, seats: parsed.seats };
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    }
+    catch {
+        return null;
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const candidate = parsed;
+        if (candidate.version === SEATS_VERSION &&
+            candidate.seats &&
+            typeof candidate.seats === 'object' &&
+            !Array.isArray(candidate.seats)) {
+            return { version: SEATS_VERSION, seats: candidate.seats };
+        }
     }
     return null;
 }
 async function readStore() {
     const raw = await readStoreFile(SEATS_FILE);
+    // CR4 fail-closed: ENOENT alone initializes empty. A present-but-malformed /
+    // wrong-version / schema-invalid store MUST NOT read as empty (a following commit
+    // would erase every seat); throw so the on-disk bytes are preserved.
     if (raw === null)
         return emptyStore();
-    try {
-        return parseStore(raw) ?? emptyStore();
+    const parsed = parseStore(raw);
+    if (parsed === null) {
+        throw new Error('Borg seat store is malformed or has an unsupported version; refusing to read it');
     }
-    catch {
-        return emptyStore();
-    }
+    return parsed;
 }
 /** True iff `record` is a well-formed seat for `ref` + `binding` (origin/trust/cube). */
 function recordMatches(record, ref, binding) {

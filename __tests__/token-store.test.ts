@@ -4,7 +4,7 @@
  * rescope; local-server credentials now rest in the 0600 file store exclusively.
  */
 import { afterEach, describe, it, expect } from 'vitest';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeFileBackend } from '../src/token-store.js';
@@ -44,5 +44,26 @@ describe('makeFileBackend (0600 credential store — Queen rescope)', () => {
     const path = store();
     await makeFileBackend(path).set('borg-server-session:k', 'V');
     expect(await makeFileBackend(path).get('borg-server-session:k')).toBe('V');
+  });
+
+  it('CR4: a malformed store FAILS CLOSED on every op and is never overwritten (byte-preservation)', async () => {
+    const path = store();
+    const corrupt = 'not-json-at-all';
+    writeFileSync(path, corrupt);
+    const backend = makeFileBackend(path);
+    await expect(backend.get('borg-server-session:k')).rejects.toThrow(/malformed/i);
+    await expect(backend.set('borg-server-session:k', 'V')).rejects.toThrow(/malformed/i);
+    await expect(backend.delete('borg-server-session:k')).rejects.toThrow(/malformed/i);
+    // No op overwrote the corrupt bytes.
+    expect(readFileSync(path, 'utf8')).toBe(corrupt);
+  });
+
+  it('CR4: a wrong-version store FAILS CLOSED and is preserved', async () => {
+    const path = store();
+    const wrongVersion = JSON.stringify({ version: 2, accounts: { 'borg-server-session:k': 'V' } });
+    writeFileSync(path, wrongVersion);
+    const backend = makeFileBackend(path);
+    await expect(backend.set('borg-server-session:x', 'Y')).rejects.toThrow(/malformed|unsupported version/i);
+    expect(readFileSync(path, 'utf8')).toBe(wrongVersion);
   });
 });

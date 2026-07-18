@@ -7,7 +7,8 @@
  * resolves inside it.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -180,6 +181,34 @@ describe('seats store — observation + sole raw-bearer reader (CR#3, SR#5)', ()
     const active = await seats.observeSeat(ref, BIND);
     expect(active).toEqual({ state: 'active', digest: digestOf('secret-bearer-'.padEnd(43, 'z')), droneId: STAMP.droneId });
     expect(JSON.stringify(active)).not.toContain('secret-bearer');
+  });
+
+  it('CR4: a corrupt seats.json FAILS CLOSED — observation throws, mint never overwrites (byte-preservation)', async () => {
+    const { dir, seats } = await load();
+    const path = storeJson(dir);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const corrupt = '{ "seats": { truncated';
+    writeFileSync(path, corrupt);
+    const ref = seats.seatRef(SEAT);
+    // A lock-free observation over a malformed store fails closed (does not read empty).
+    await expect(seats.observeSeat(ref, BIND)).rejects.toThrow(/malformed|unsupported version/i);
+    // A mint under the flock also fails closed and never overwrites the corrupt bytes.
+    await expect(seats.mintPendingSeat({ ...SEAT, credential: 'k'.repeat(43) })).rejects.toThrow(
+      /malformed|unsupported version/i,
+    );
+    expect(readFileSync(path, 'utf8')).toBe(corrupt);
+  });
+
+  it('CR4: a wrong-version seats.json FAILS CLOSED and is preserved (never erased)', async () => {
+    const { dir, seats } = await load();
+    const path = storeJson(dir);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const wrongVersion = JSON.stringify({ version: 999, seats: {} });
+    writeFileSync(path, wrongVersion);
+    await expect(seats.mintPendingSeat({ ...SEAT, credential: 'k'.repeat(43) })).rejects.toThrow(
+      /malformed|unsupported version/i,
+    );
+    expect(readFileSync(path, 'utf8')).toBe(wrongVersion);
   });
 
   it('getActiveSeatCredential returns the bearer ONLY for an active, binding-matched record', async () => {
