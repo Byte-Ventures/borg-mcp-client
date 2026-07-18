@@ -18,8 +18,6 @@ import { resolveMcpBinaryPath } from './self-path.js';
 
 import type { AssimilateDeps } from './assimilate-cmd.js';
 import {
-  API_URL,
-  getValidToken,
   listCubes as remoteListCubes,
   getCube as remoteGetCube,
   createCube as remoteCreateCube,
@@ -50,7 +48,6 @@ import {
   inboxPathForDrone,
   setCodexWakeTarget,
 } from './cubes.js';
-import { authenticateWithGoogle } from './auth.js';
 import { addProjectSessionStartHook } from './config-utils.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
@@ -142,20 +139,6 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
       addProjectSessionStartHook(projectRoot);
     },
 
-    getCachedAuth: async () => {
-      try {
-        const token = await getValidToken();
-        return { token, apiUrl: API_URL };
-      } catch {
-        return null;
-      }
-    },
-    runSetup: async () => {
-      await authenticateWithGoogle();
-      const token = await getValidToken();
-      return { token, apiUrl: API_URL };
-    },
-    cloudApiUrl: API_URL,
     // #1015: discovery is advisory but still verifies the server-owned CA.
     detectLocalServer: async () =>
       (await probeLocalBorgServer(DEFAULT_LOCAL_SERVER_ORIGIN))

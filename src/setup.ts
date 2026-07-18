@@ -3,18 +3,16 @@
  * Borg MCP Setup Wizard
  *
  * Interactive setup flow:
- * 1. Configure agent CLI MCP settings
- * 2. Choose authority: local server (default) or Cloud
- * 3. [Cloud only] Google OAuth authentication + subscription via seam
+ * 1. Configure agent CLI MCP settings + orientation hooks
+ * 2. Print how to connect to a local self-hosted Borg server
+ *
+ * There is no cloud authority: setup offers/executes NO cloud auth, Google
+ * auth, subscription, or checkout.
  */
 
 import prompts from 'prompts';
 import chalk from 'chalk';
-import open from 'open';
 import which from 'which';
-import { authenticateWithGoogle } from './auth.js';
-import { checkSubscriptionStatus, createSubscription, probeSession } from './remote-client.js';
-import { handleAuthorityResult, runSetupAuthority } from './setup-authority.js';
 import {
   confirmConfigMutation,
   configMutationTargets,
@@ -47,9 +45,6 @@ async function main() {
   initDebugFromArgv(process.argv);
   handleVersionFlag();
   console.log(chalk.blue.bold('\n◼ Borg MCP Setup Wizard ◼'));
-
-  const noBrowser =
-    process.argv.includes('--no-browser') || process.argv.includes('--device');
 
   let claudeCliPath: string | null = null;
   let codexCliPath: string | null = null;
@@ -171,93 +166,17 @@ async function main() {
   }
   console.log('');
 
-  // Step 2: Authority choice — local server (default) or Cloud
+  // Step 2: Server connection — local self-hosted only.
   console.log(chalk.blue('◼ Server Connection'));
-
-  const { authority } = await prompts({
-    type: 'select',
-    name: 'authority',
-    message: 'Connect to:',
-    choices: [
-      {
-        title: '◼ Local server — no account required (recommended)',
-        value: 'local',
-        description: 'Run your own borg server on this machine or network'
-      },
-      {
-        title: '◼ Borg Cloud (borgmcp.ai)',
-        value: 'cloud',
-        description: 'Managed cloud service — requires Google sign-in and subscription'
-      }
-    ],
-    initial: 0,
-  });
-
-  if (authority === undefined) {
-    console.log(chalk.yellow('\n◼ No choice selected — defaulting to local server.\n'));
-  }
-
-  const authorityResult = await runSetupAuthority(
-    authority === 'cloud' ? 'cloud' : 'local',
-    {
-      probeSession,
-      authenticateWithGoogle,
-      checkSubscriptionStatus,
-      createSubscription,
-      openUrl: async (url: string) => { await open(url); },
-      sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
-      selectSubscribeMethod: async () => {
-        const { subscribeMethod } = await prompts({
-          type: 'select',
-          name: 'subscribeMethod',
-          message: "You're ready on the Free tier. Want to do more?",
-          choices: [
-            {
-              title: '◼ Continue on the Free tier (recommended)',
-              value: 'skip',
-              description: 'Start now — 1 cube, 3 agent sessions, 100 req/hr. No payment required.'
-            },
-            {
-              title: '◼ Upgrade to Cube tier — $1/month per cube',
-              value: 'web',
-              description: 'Each cube adds 8 pooled agent sessions + 1000 req/hr. Opens the subscribe page in your browser.'
-            },
-            {
-              title: '◼ Quick Stripe checkout',
-              value: 'stripe',
-              description: 'Fast upgrade checkout in the browser'
-            },
-            {
-              title: '◼ I already subscribed — re-check',
-              value: 'recheck',
-              description: 'Re-check now — a just-completed subscription can take a moment to activate'
-            }
-          ]
-        });
-        return subscribeMethod;
-      },
-      log: (...args: unknown[]) => console.log(...args),
-      logError: (...args: unknown[]) => console.error(...args),
-    },
-    { noBrowser },
-  );
-
-  if (handleAuthorityResult(authorityResult, console.log, console.error) !== 0) {
-    process.exit(1);
-  }
+  console.log(chalk.gray('Local self-hosted server mode — no account or subscription needed.'));
 
   // Success message
-  console.log(chalk.green.bold('Setup complete!\n'));
+  console.log(chalk.green.bold('\nSetup complete!\n'));
   console.log(chalk.yellow('🔄 Restart Claude Code / Codex / OpenCode (or open a new session) for the changes to take effect.\n'));
-  const useCloud = authorityResult.useCloud;
   console.log(chalk.gray('◼ Next steps:'));
-  console.log(chalk.gray('1. cd into your project, then run "borg assimilate" to join a cube'));
-  console.log(chalk.gray('   (this creates/joins the cube and launches your agent)'));
-  if (useCloud) {
-    console.log(chalk.gray('2. Manage cubes and subscription at https://borgmcp.ai/dashboard\n'));
-  } else {
-    console.log(chalk.gray('2. Use `borg assimilate --host <host>` to connect to your local server\n'));
-  }
+  console.log(chalk.gray('1. cd into your project, then run "borg assimilate --host <host>" to join a cube'));
+  console.log(chalk.gray('   (this connects to your local server and launches your agent)'));
+  console.log(chalk.gray('2. Use `borg assimilate --host <host> --enroll` from the operator terminal to enroll a new client\n'));
 }
 
 // Run wizard

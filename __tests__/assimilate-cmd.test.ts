@@ -57,10 +57,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     setActiveCube: vi.fn(async () => {}),
     findProjectRoot: vi.fn(() => '/work/myrepo'),
     installProjectSessionHook: vi.fn(),
-    getCachedAuth: vi.fn(async () => ({ token: 'test-token', apiUrl: 'http://api.test' })),
-    runSetup: vi.fn(async () => ({ token: 'fresh-token', apiUrl: 'http://api.test' })),
-    cloudApiUrl: 'http://api.test',
-    defaultAuthority: { kind: 'cloud', apiUrl: 'http://api.test' },
+    defaultAuthority: { kind: 'server', apiUrl: 'https://server.test' },
     detectLocalServer: vi.fn(async () => null),
     connectServer: vi.fn(async () => ({
       token: 'server-token',
@@ -200,7 +197,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
 
   it('fails before minting a seat when selected-CLI MCP configuration cannot be ensured', async () => {
     const assimilate = vi.fn(async () => ({
-      cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-1', session_token: 'sess', role_id: 'role-default',
+      cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'role-default',
     }));
     const exec = vi.fn(async () => 0);
     const probeMcpReady = vi.fn(async () => true);
@@ -211,7 +208,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
 
     await expect(runAssimilate({ role: undefined, flags: { yes: true, cli: 'opencode' } }, deps)).resolves.toBe(1);
 
-    expect(deps.stderr).toHaveBeenCalledWith('opencode MCP configuration failed: opencode CLI not found\n');
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('opencode MCP configuration failed'));
     expect(assimilate).not.toHaveBeenCalled();
     expect(probeMcpReady).not.toHaveBeenCalled();
     expect(exec).not.toHaveBeenCalled();
@@ -244,7 +241,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
   it('Claude kickoff passes an explicit worktree-local monitor root with the new drone inbox path', async () => {
     const exec = vi.fn(async () => 0);
     const assimilate = vi.fn(async () => ({
-      cube_id: 'cube-1', drone_id: 'drone-uuid-1', drone_label: 'drone-2', session_token: 's', role_id: 'r',
+      cube_id: 'cube-1', drone_id: 'drone-uuid-1', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r',
     }));
     const getInboxPath = vi.fn((c: string, d: string) => `/test-inboxes/${c}/${d}.log`);
     const runSync = vi.fn((cmd: string, args: string[]) =>
@@ -560,7 +557,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
 // Worktree rollback narrows to the single setActiveCube failure path
 // post-worktree-creation.
 describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-up)', () => {
-  const sameCubeSeat = vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', sessionToken: 's', droneLabel: 'l', apiUrl: 'http://api.test' }));
+  const sameCubeSeat = vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone' }));
   const cubeResolves = {
     cwd: () => '/work/myrepo',
     findProjectRoot: () => '/work/myrepo',
@@ -583,7 +580,7 @@ describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-u
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('seat evicted'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('was evicted'));
     expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining('assimilate failed')); // not the generic path
     const worktreeAdds = runSyncSpy.mock.calls.filter((c) => c[1][0] === 'worktree' && c[1][1] === 'add');
     expect(worktreeAdds).toHaveLength(0); // clean early-exit, no resurrection FS state
@@ -603,7 +600,7 @@ describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-u
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('assimilate failed'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('unexpected response'));
   });
 });
 
@@ -627,7 +624,7 @@ describe('runAssimilate: Sprint 19 (gh#184) strict-rollback semantics', () => {
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('assimilate failed: Cannot assimilate'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Cannot assimilate'));
     // No worktree-add was attempted (API failure stopped flow BEFORE worktree step).
     const worktreeAddCalls = runSyncSpy.mock.calls.filter(
       (call) => call[1][0] === 'worktree' && call[1][1] === 'add'
@@ -723,7 +720,7 @@ describe('runAssimilate: Sprint 19 (gh#184) strict-rollback semantics', () => {
     });
     const exit = await runAssimilate({ role: 'frobnicate', flags: { yes: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('no role matching "frobnicate"'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('role matching "frobnicate"'));
     // No worktree-add — gh#184 canonical assertion.
     const worktreeAddCalls = runSyncSpy.mock.calls.filter(
       (call) => call[1][0] === 'worktree' && call[1][1] === 'add'
@@ -771,7 +768,7 @@ describe('runAssimilate: Sprint 19 (gh#184) strict-rollback semantics', () => {
     const exit = await runAssimilate({ role: 'xyzzy', flags: { yes: true } }, deps);
     expect(exit).toBe(1);
     const stderrCalls = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(stderrCalls).toContain('no role matching "xyzzy"');
+    expect(stderrCalls).toContain('role matching "xyzzy"');
     expect(stderrCalls).not.toContain('Did you mean');
   });
 });
@@ -943,7 +940,7 @@ describe('runAssimilate: Sprint 18 (post-exit shell-cd hint)', () => {
 
 describe('runAssimilate: step 7 (assimilate + persist)', () => {
   it('calls assimilate with cube + role IDs and persists to cubes.json', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', session_token: 'tok', role_id: 'r' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r' }));
     const setActiveCube = vi.fn(async () => {});
     const getCube = vi.fn(async () => ({
       id: 'c', name: 'myrepo',
@@ -962,7 +959,6 @@ describe('runAssimilate: step 7 (assimilate + persist)', () => {
       cubeId: 'c',
       droneId: 'd',
       name: 'myrepo',
-      sessionToken: 'tok',
       droneLabel: 'drone-1',
     }));
   });
@@ -970,7 +966,7 @@ describe('runAssimilate: step 7 (assimilate + persist)', () => {
 
 describe('runAssimilate: step 6 (role resolution)', () => {
   it('first drone with no role → human-seat role', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', session_token: 's', role_id: 'r-coord' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coord' }));
     const createCube = vi.fn(async () => ({
       id: 'c', name: 'myrepo',
       roles: [
@@ -986,12 +982,13 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-coord' })
+      expect.objectContaining({ role_id: 'r-coord' }),
+      expect.any(String),
     );
   });
 
   it('falls through to the default worker once the mandatory Coordinator seat is occupied', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-build' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-build' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1011,7 +1008,8 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-build' })
+      expect.objectContaining({ role_id: 'r-build' }),
+      expect.any(String),
     );
   });
 
@@ -1020,7 +1018,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
   // assimilate (non-first-drone path — cube already has a drone) must skip
   // the occupied default and pick the unoccupied worker role instead.
   it('bare assimilate skips the occupied default and picks the next worker role', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-reviewer' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-reviewer' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1041,12 +1039,13 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-reviewer' })
+      expect.objectContaining({ role_id: 'r-reviewer' }),
+      expect.any(String),
     );
   });
 
   it('bare assimilate treats a presumed-abandoned role as fillable', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-builder' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-builder' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1069,11 +1068,12 @@ describe('runAssimilate: step 6 (role resolution)', () => {
       expect.any(String),
       expect.any(String),
       expect.objectContaining({ role_id: 'r-builder' }),
+      expect.any(String),
     );
   });
 
   it('a live occupant still blocks its role when abandoned rows are also present', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-3', session_token: 's', role_id: 'r-reviewer' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-reviewer' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1099,11 +1099,12 @@ describe('runAssimilate: step 6 (role resolution)', () => {
       expect.any(String),
       expect.any(String),
       expect.objectContaining({ role_id: 'r-reviewer' }),
+      expect.any(String),
     );
   });
 
   it('bare assimilate refills a mandatory role past the give-up advisory', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-coordinator' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coordinator' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1126,11 +1127,12 @@ describe('runAssimilate: step 6 (role resolution)', () => {
       expect.any(String),
       expect.any(String),
       expect.objectContaining({ role_id: 'r-coordinator' }),
+      expect.any(String),
     );
   });
 
   it('bare assimilate fills an unoccupied mandatory Coordinator before worker roles', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-coordinator' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coordinator' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1150,12 +1152,13 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-coordinator' })
+      expect.objectContaining({ role_id: 'r-coordinator' }),
+      expect.any(String),
     );
   });
 
   it('explicit role arg matched case-insensitively', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-3', session_token: 's', role_id: 'r-cr' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-cr' }));
     const getCube = vi.fn(async () => ({
       id: 'c', name: 'myrepo',
       roles: [
@@ -1175,7 +1178,8 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-cr' })
+      expect.objectContaining({ role_id: 'r-cr' }),
+      expect.any(String),
     );
   });
 
@@ -1194,12 +1198,15 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     });
     const exit = await runAssimilate({ role: 'nonexistent', flags: { yes: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('no role matching'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('role matching'));
   });
 });
 
 describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
-  it('applies starter silently with --yes when cube does not exist', async () => {
+  // A local (self-hosted) server supports its DEFAULT cube template only. The
+  // former cloud template-selection paths (arbitrary --template, --no-template,
+  // interactive template prompt) are removed with the cloud authority.
+  it('creates the cube with the default template on the server bootstrap path', async () => {
     const createCube = vi.fn(async () => ({
       id: 'c-new',
       name: 'myrepo',
@@ -1213,64 +1220,25 @@ describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
     );
     const deps = makeStubDeps({ createCube, runSync, listCubes: vi.fn(async () => []) });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo', template: 'starter' });
-  });
-
-  it('uses --template flag verbatim', async () => {
-    const createCube = vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
-    const runSync = vi.fn((cmd: string, args: string[]) =>
-      args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
+    expect(createCube).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ name: 'myrepo', template: 'default' }),
+      expect.any(String),
     );
-    const deps = makeStubDeps({ createCube, runSync, listCubes: vi.fn(async () => []) });
-    await runAssimilate({ role: undefined, flags: { yes: true, template: 'research' } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo', template: 'research' });
   });
 
-  it('passes no template with --no-template', async () => {
-    const createCube = vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
-    const runSync = vi.fn((cmd: string, args: string[]) =>
-      args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
-    );
-    const deps = makeStubDeps({ createCube, runSync, listCubes: vi.fn(async () => []) });
-    await runAssimilate({ role: undefined, flags: { yes: true, noTemplate: true } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo' });
-  });
-
-  it('fails non-TTY without --yes when prompt would be needed', async () => {
+  it('rejects a non-default template on the server bootstrap path', async () => {
     const stderr = vi.fn();
-    const deps = makeStubDeps({
-      stderr,
-      isTTY: () => false,
-      listCubes: vi.fn(async () => []),
-      runSync: vi.fn((cmd: string, args: string[]) =>
-        args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
-      ),
-    });
-    const exit = await runAssimilate({ role: undefined, flags: {} }, deps);
+    const createCube = vi.fn();
+    const runSync = vi.fn((cmd: string, args: string[]) =>
+      args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
+    );
+    const deps = makeStubDeps({ stderr, createCube: createCube as any, runSync, listCubes: vi.fn(async () => []) });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, template: 'research' } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('cube creation needs a template choice'));
-  });
-
-  it('prompts interactively and applies user choice', async () => {
-    const answers = ['2', '1']; // Borg server host is 1 (default), Borg Cloud is 2, then template option 1
-    const prompt = vi.fn(async () => answers.shift() ?? '1');
-    const createCube = vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
-    const listTemplates = vi.fn(async () => [
-      { name: 'software-dev', description: 'sw' },
-      { name: 'research', description: 'res' },
-    ]);
-    const deps = makeStubDeps({
-      prompt,
-      createCube,
-      listTemplates,
-      isTTY: () => true,
-      listCubes: vi.fn(async () => []),
-      runSync: vi.fn((cmd: string, args: string[]) =>
-        args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
-      ),
-    });
-    await runAssimilate({ role: undefined, flags: {} }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo', template: 'software-dev' });
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('supports its default cube template only'));
+    expect(createCube).not.toHaveBeenCalled();
   });
 });
 
@@ -1288,7 +1256,7 @@ describe('runAssimilate: step 4 (cube existence + detail)', () => {
     );
     const deps = makeStubDeps({ listCubes, getCube, createCube: createCube as any, runSync, getActiveCube: vi.fn(async () => null) });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(getCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'cube-existing');
+    expect(getCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'cube-existing', expect.any(String));
     expect(createCube).not.toHaveBeenCalled();
   });
 });
@@ -1621,17 +1589,17 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       cube_id: 'cube-1',
       drone_id: 'drone-prior',
       drone_label: 'one-of-one-builder',
-      session_token: 'rotated-token',
       role_id: 'role-builder',
       result: 'reused' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'b'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
     }));
     const deps = makeStubDeps({
       runSync,
       stderr,
       setActiveCube,
       assimilate: assimilateSpy as any,
-      // Saved identity for THIS worktree, SAME cube as the target.
-      getActiveCube: vi.fn(async () => ({ cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', sessionToken: 'dead-token', droneLabel: 'one-of-one-builder', apiUrl: 'http://api.test' })),
+      // Saved identity for THIS worktree, SAME cube + server authority as the target.
+      getActiveCube: vi.fn(async () => ({ cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', droneLabel: 'one-of-one-builder', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Builder' })),
       listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
       getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [
         { id: 'role-builder', name: 'Builder', is_default: false, is_human_seat: false },
@@ -1642,11 +1610,12 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(assimilateSpy).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ prior_drone_id: 'drone-prior' })
+      expect.objectContaining({ prior_drone_id: 'drone-prior' }),
+      expect.any(String),
     );
-    // The rotated identity is persisted: same seat, NEW token.
+    // The rotated identity is persisted: same seat, new local session reference.
     expect(setActiveCube).toHaveBeenCalledWith(
-      expect.objectContaining({ droneId: 'drone-prior', sessionToken: 'rotated-token' })
+      expect.objectContaining({ droneId: 'drone-prior', localSessionCredentialRef: 'borg-server-session:' + 'b'.repeat(64) })
     );
     // In-place recovery: no sibling worktree spawned.
     expect(runSync).not.toHaveBeenCalledWith('git', expect.arrayContaining(['worktree']), expect.anything());
@@ -1662,8 +1631,9 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       cube_id: 'cube-1',
       drone_id: 'drone-new',
       drone_label: 'one-of-one-builder',
-      session_token: 'sess',
       role_id: 'role-builder',
+      result: 'created' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
     }));
     const deps = makeStubDeps({
       assimilate: assimilateSpy as any,
@@ -1716,7 +1686,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     const createCube = vi.fn(async () => ({ id: 'c', name: 'cool-repo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
     const deps = makeStubDeps({ runSync, createCube });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'cool-repo' }));
+    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'cool-repo' }), expect.any(String));
   });
 
   it('uses the sanitized repository basename with --yes when no origin exists', async () => {
@@ -1725,7 +1695,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     const createCube = vi.fn(async () => ({ id: 'c', name: 'my-repo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
     const deps = makeStubDeps({ runSync, prompt, createCube, cwd: () => '/work/My_Repo', findProjectRoot: () => '/work/My_Repo' });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'my-repo' }));
+    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'my-repo' }), expect.any(String));
     expect(prompt).not.toHaveBeenCalled();
   });
 
@@ -1767,7 +1737,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     const createCube = vi.fn();
     const deps = makeStubDeps({ runSync, createCube, isTTY: () => false });
     await expect(runAssimilate({ role: undefined, flags: {} }, deps)).resolves.toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Re-run with --cube-name <name> or --yes'));
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('--cube-name <name>'));
     expect(createCube).not.toHaveBeenCalled();
   });
 
@@ -1823,7 +1793,7 @@ describe('runAssimilate: BUG-1 — UX-F4 stderr false positive', () => {
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     const stderrCalls = stderr.mock.calls.map((c) => String(c[0])).join('');
     expect(stderrCalls).toContain("Could not parse the origin remote; using directory name 'somerepo'");
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'somerepo' }));
+    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'somerepo' }), expect.any(String));
   });
 });
 
@@ -1844,7 +1814,7 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
       ],
     }));
     const assimilate = vi.fn(async () => ({
-      cube_id: 'c-new', drone_id: 'd', drone_label: 'drone-1', session_token: 's', role_id: 'r-coord',
+      cube_id: 'c-new', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coord',
     }));
     const runSync = vi.fn((cmd: string, args: string[]) =>
       args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
@@ -1855,7 +1825,8 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
     // Step 6 reached cubeDetail.roles.find without "Cannot read properties of undefined".
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String), expect.any(String),
-      expect.objectContaining({ role_id: 'r-coord' })
+      expect.objectContaining({ role_id: 'r-coord' }),
+      expect.any(String),
     );
   });
 
@@ -1867,7 +1838,7 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
       drones: [],
     }));
     const assimilate = vi.fn(async () => ({
-      cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-build',
+      cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-build',
     }));
     const runSync = vi.fn((cmd: string, args: string[]) =>
       args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
@@ -1880,29 +1851,14 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
     expect(exit).toBe(0);
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String), expect.any(String),
-      expect.objectContaining({ role_id: 'r-build' })
+      expect.objectContaining({ role_id: 'r-build' }),
+      expect.any(String),
     );
   });
 });
 
-describe('runAssimilate: step 1 (auth)', () => {
-  it('uses cached auth when available', async () => {
-    const getCachedAuth = vi.fn(async () => ({ token: 'cached', apiUrl: 'http://api.test' }));
-    const runSetup = vi.fn(async () => ({ token: 'fresh', apiUrl: 'http://api.test' }));
-    const deps = makeStubDeps({ getCachedAuth, runSetup });
-    await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(getCachedAuth).toHaveBeenCalled();
-    expect(runSetup).not.toHaveBeenCalled();
-  });
-
-  it('runs setup inline when no cached auth', async () => {
-    const getCachedAuth = vi.fn(async () => null);
-    const runSetup = vi.fn(async () => ({ token: 'fresh', apiUrl: 'http://api.test' }));
-    const deps = makeStubDeps({ getCachedAuth, runSetup });
-    await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(runSetup).toHaveBeenCalled();
-  });
-});
+// Cloud-auth (getCachedAuth / runSetup) step-1 tests removed: cloud authority
+// no longer exists — `borg assimilate` supports only local server authority.
 
 describe('runAssimilate: #1015 authority selection', () => {
   it('connects directly to an explicit server before touching cloud auth and persists its endpoint', async () => {
@@ -2367,6 +2323,34 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
+  it('surfaces a pin-matched SESSION_REJECTED takeover distinctly, scoped to this worktree, with no Cloud or restart advice', async () => {
+    const stderr = vi.fn();
+    const connectServer = vi.fn(async () => {
+      throw new BorgServerError('SESSION_REJECTED', 'session bearer no longer accepted');
+    });
+    const deps = makeStubDeps({ stderr, connectServer });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'server.example.com' },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    // Distinct copy: names the worktree's local seat, not a version/protocol mismatch.
+    expect(output).toContain("This worktree's saved local seat on https://server.example.com is no longer accepted");
+    expect(output).toContain('revoked or taken over by another session');
+    // Confirms no other Borg state changed.
+    expect(output).toContain('No other Borg state changed');
+    expect(output).toContain('other worktrees, and their cubes are untouched');
+    // Scoped recovery: new invitation + re-enroll from this worktree only.
+    expect(output).toContain('`borg assimilate --host https://server.example.com --enroll`');
+    expect(output).toContain("resets only this worktree's saved seat");
+    // Never advises restart / version alignment / Cloud, and leaks no bearer.
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+    expect(output).not.toMatch(/versions?\s+are\s+compatible|restart|version alignment/i);
+    expect(output).not.toMatch(/[A-Za-z0-9_-]{43,}/);
+  });
+
   it('explains how the operator replaces a rejected enrollment invitation', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
@@ -2395,6 +2379,7 @@ describe('runAssimilate: #1015 authority selection', () => {
   it.each([
     ['no saved enrollment', new BorgServerError('NOT_ENROLLED', 'not enrolled')],
     ['saved credential rejected', new BorgServerError('CREDENTIAL_REJECTED', 'credential rejected')],
+    ['session rejected takeover', new BorgServerError('SESSION_REJECTED', 'session rejected')],
     ['keychain busy', new Error('Borg server keychain state is busy')],
     ['keychain unavailable', new Error('OS keychain unavailable for Borg server credentials')],
     ['trust mismatch', new Error('Borg server CA certificate does not match its pinned identity')],
@@ -2443,31 +2428,12 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
-  it('allows declining detection and choosing Cloud explicitly', async () => {
-    const answers = ['n', '2', '1'];
-    const prompt = vi.fn(async () => answers.shift() ?? '1');
-    const getCachedAuth = vi.fn(async () => ({ token: 'cloud-token', apiUrl: 'https://api.borgmcp.ai' }));
-    const connectServer = vi.fn(async () => ({
-      token: 'local-token',
-      trustIdentity: SERVER_TRUST_IDENTITY,
-    }));
-    const deps = makeStubDeps({
-      prompt,
-      getCachedAuth,
-      detectLocalServer: vi.fn(async () => 'https://localhost:8787'),
-      connectServer,
-    });
-
-    expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(0);
-
-    expect(getCachedAuth).toHaveBeenCalledOnce();
-    expect(connectServer).not.toHaveBeenCalled();
-    expect(String(prompt.mock.calls[1][0])).toContain('Borg Cloud');
-  });
+  // 'declining detection and choosing Cloud explicitly' removed: there is no
+  // Cloud authority to choose — declining detection prompts for a local host.
 
   it('prompts for a custom host when no local server is detected', async () => {
-    const answers = ['1', 'server.example.com', '1'];
-    const prompt = vi.fn(async () => answers.shift() ?? '1');
+    const answers = ['server.example.com'];
+    const prompt = vi.fn(async () => answers.shift() ?? '');
     const connectServer = vi.fn(async () => ({
       token: 'server-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
@@ -2480,8 +2446,7 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(0);
 
-    expect(String(prompt.mock.calls[0][0])).toContain('Connect this project to');
-    expect(String(prompt.mock.calls[1][0])).toContain('host or URL');
+    expect(String(prompt.mock.calls[0][0])).toContain('host or URL');
     expect(connectServer).toHaveBeenCalledWith('https://server.example.com');
   });
 
@@ -2546,8 +2511,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(connectServer).not.toHaveBeenCalled();
     expect(listCubes).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(
-      'No authority specified. Use --host <server> to select a local server, ' +
-        'or run without --yes from an interactive terminal to choose an authority.\n',
+      'No local server selected. Use `borg assimilate --host <host> --here` to select a local server.\n',
     );
   });
 
@@ -2885,7 +2849,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
         cube_id: 'cube-1',
         drone_id: 'drone-x',
         drone_label: 'drone-1',
-        session_token: 'sess',
+        result: 'created' as const,
+        local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
         role_id: 'role-builder',
       })),
       runSync: gitRemoteRunSync,
@@ -2903,7 +2868,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
       cube_id: 'cube-1',
       drone_id: 'drone-x',
       drone_label: 'drone-1',
-      session_token: 'sess',
+      result: 'created' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
       role_id: 'role-builder',
     }));
     const exec = vi.fn(async () => 0);
@@ -2917,7 +2883,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ model: 'claude:claude-opus-4-8', agent_kind: 'claude' })
+      expect.objectContaining({ model: 'claude:claude-opus-4-8', agent_kind: 'claude' }),
+      expect.any(String),
     );
     const [, , , envArg] = exec.mock.calls[0] as [string, string[], string, Record<string, string>];
     expect(envArg.ANTHROPIC_MODEL).toBe('claude-opus-4-8');
@@ -2930,7 +2897,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
       cube_id: 'cube-1',
       drone_id: 'drone-x',
       drone_label: 'drone-1',
-      session_token: 'sess',
+      result: 'created' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
       role_id: 'role-builder',
     }));
     const deps = successDeps({
@@ -2952,7 +2920,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ model: null })
+      expect.objectContaining({ model: null }),
+      expect.any(String),
     );
   });
 

@@ -6,10 +6,9 @@
  * is identified by walking up from cwd to find a .git directory; if none is
  * found, cwd itself is used as the project key.
  *
- * Cloud session tokens retain their legacy plaintext persistence for rollout
- * compatibility. Local-server session tokens never enter this file: only an
- * opaque generation-specific keychain reference is stored and hydrated at
- * read time.
+ * Local-server session tokens never enter this file: only an opaque keychain
+ * reference is stored and hydrated at read time. An entry without verified
+ * local-server trust can no longer be hydrated (no cloud plaintext tokens).
  *
  * apiUrl is captured at assimilate time so subprocess invocations (e.g. the
  * SessionStart hook firing borg-regen) don't need BORG_API_URL in their env
@@ -292,9 +291,9 @@ async function hydrateActiveCube(entry) {
             return null;
         return { ...entry, sessionToken };
     }
-    if (typeof entry.sessionToken !== 'string' || !entry.sessionToken)
-        return null;
-    return entry;
+    // No cloud plaintext session tokens: an entry lacking verified local-server
+    // trust can no longer be hydrated.
+    return null;
 }
 let activeCubeWriteQueue = Promise.resolve();
 /**
@@ -333,11 +332,9 @@ export async function setActiveCube(active) {
             }
             return;
         }
-        if (typeof active.sessionToken !== 'string' || !active.sessionToken) {
-            throw new Error('Cloud cube session token is missing');
-        }
-        existing.projects[projectKey] = active;
-        await writeCubesFile(existing);
+        // No cloud plaintext session persistence: an active cube must carry
+        // verified local-server trust metadata.
+        throw new Error('local Borg server session metadata is incomplete');
     }));
     activeCubeWriteQueue = operation.catch(() => { });
     await operation;

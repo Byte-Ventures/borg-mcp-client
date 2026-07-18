@@ -8,14 +8,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   DroneEvictedError,
-  DroneFrozenError,
   DRONE_EVICTED_CODE,
-  DRONE_FROZEN_CODE,
   EVICTED_RESULT_MARKER,
-  FROZEN_RESULT_MARKER,
   errorCodeFromBody,
   formatEvictedToolResult,
-  formatFrozenToolResult,
 } from '../src/drone-lifecycle';
 
 describe('errorCodeFromBody', () => {
@@ -27,8 +23,8 @@ describe('errorCodeFromBody', () => {
 
   it('reads the nested { error: { code } } shape', () => {
     expect(
-      errorCodeFromBody(JSON.stringify({ error: { code: DRONE_FROZEN_CODE } }))
-    ).toBe(DRONE_FROZEN_CODE);
+      errorCodeFromBody(JSON.stringify({ error: { code: DRONE_EVICTED_CODE } }))
+    ).toBe(DRONE_EVICTED_CODE);
   });
 
   it('returns null for non-JSON, empty, or code-less bodies (no false authority)', () => {
@@ -48,12 +44,6 @@ describe('error classes', () => {
     expect(e).toBeInstanceOf(Error);
     expect(e.message).toMatch(/evicted/i);
   });
-
-  it('DroneFrozenError carries its name + reversible message', () => {
-    const e = new DroneFrozenError();
-    expect(e.name).toBe('DroneFrozenError');
-    expect(e.message).toMatch(/paused|frozen|billing/i);
-  });
 });
 
 describe('tool-result formatters', () => {
@@ -65,15 +55,4 @@ describe('tool-result formatters', () => {
     expect(text).toMatch(/410/);
   });
 
-  it('FROZEN result is explicitly NON-terminal (keep looping, do not TaskStop)', () => {
-    const text = formatFrozenToolResult('Drone paused.');
-    expect(text).toContain(FROZEN_RESULT_MARKER);
-    expect(text).toMatch(/do NOT shut down/i);
-    expect(text).toMatch(/do NOT TaskStop/i);
-    expect(text).toMatch(/423/);
-  });
-
-  it('markers are distinct so the agent never confuses terminal vs reversible', () => {
-    expect(EVICTED_RESULT_MARKER).not.toBe(FROZEN_RESULT_MARKER);
-  });
 });

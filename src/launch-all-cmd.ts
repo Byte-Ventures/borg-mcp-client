@@ -261,19 +261,18 @@ export async function runLaunchAll(
     return 0;
   }
 
-  // 4b. server-liveness skip — drop seats the server reports EVICTED (gone) or
-  //     FROZEN (paused). Reuses the gh#882 per-seat probe (each seat's OWN token
-  //     → 410 DRONE_EVICTED / 423 DRONE_FROZEN). Relaunching an evicted seat
-  //     silently re-mints a fresh drone (the resurrection bug); a frozen seat
-  //     would mint a DUPLICATE (assimilate --here cannot re-attach a frozen
-  //     prior). So SKIP both; LAUNCH 'live' + 'indeterminate'.
+  // 4b. server-liveness skip — drop seats the server reports EVICTED (gone).
+  //     Reuses the gh#882 per-seat probe (each seat's OWN token → 410
+  //     DRONE_EVICTED). Relaunching an evicted seat silently re-mints a fresh
+  //     drone (the resurrection bug). So SKIP evicted; LAUNCH 'live' +
+  //     'indeterminate'.
   //
   //     Launch-vs-delete asymmetry (vs `borg cleanup`, which fails SAFE): a
   //     LAUNCH is constructive — a transient probe failure must NOT silently
   //     omit a real seat (that is a new silent-stall class), so 'indeterminate'
-  //     fails OPEN (launch anyway, with a note). Only an AUTHORITATIVE 410/423
-  //     skips. --force does NOT override this skip: an evicted/frozen seat is
-  //     server-authoritative gone/paused, whereas --force only re-launches a
+  //     fails OPEN (launch anyway, with a note). Only an AUTHORITATIVE 410
+  //     skips. --force does NOT override this skip: an evicted seat is
+  //     server-authoritative gone, whereas --force only re-launches a
   //     LOCK-live (seemingly-running) session.
   const launchable: DroneCandidate[] = [];
   for (const c of lockLaunchable) {
@@ -290,13 +289,6 @@ export async function runLaunchAll(
       );
       continue;
     }
-    if (status === 'frozen') {
-      deps.stderr(
-        `skipping ${c.droneLabel} (${c.worktreeDir}): seat frozen (subscription downgrade) — ` +
-          `paused, not relaunching; it resumes automatically when billing is restored.\n`
-      );
-      continue;
-    }
     if (status === 'indeterminate') {
       deps.stderr(
         `note: could not confirm ${c.droneLabel}'s seat is live (network/transient) — launching anyway.\n`
@@ -306,7 +298,7 @@ export async function runLaunchAll(
   }
   if (launchable.length === 0) {
     deps.stdout(
-      `All ${lockLaunchable.length} discovered drone(s) for cube '${cubeName}' have evicted/frozen seats; nothing to launch.\n`
+      `All ${lockLaunchable.length} discovered drone(s) for cube '${cubeName}' have evicted seats; nothing to launch.\n`
     );
     return 0;
   }

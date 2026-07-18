@@ -108,12 +108,15 @@ describe('self-hosted server handshake', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('enrolls through a versioned body, preflights the tag, then stores the bound credential', async () => {
+  it('preflights the tag FIRST, then enrolls through a versioned body and stores the bound credential', async () => {
     const invitation = 'i'.repeat(43);
     const credential = 'c'.repeat(43);
     const retryKey = '55555555-5555-4555-8555-555555555555';
     const clientId = '66666666-6666-4666-8666-666666666666';
+    // CR fb4d6eba: the credential-free preflight is the FIRST call; the
+    // enrollment POST is the second, only after the exact-tag preflight passes.
     const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
       .mockResolvedValueOnce(new Response(JSON.stringify({
         protocol_version: '2',
         request_id: 'enroll-request-1',
@@ -122,8 +125,7 @@ describe('self-hosted server handshake', () => {
           client_id: clientId,
           server_capabilities: ['create_cube'],
         },
-      }), { status: 201 }))
-      .mockResolvedValueOnce(tagPreflightBody());
+      }), { status: 201 }));
     const prepareEnrollment = vi.fn(async () => ({
       origin: 'https://server.example.com',
       trustIdentity: 'sha256:server-a',
@@ -150,7 +152,13 @@ describe('self-hosted server handshake', () => {
       serverCapabilities: ['create_cube'],
     });
 
-    const [enrollmentUrl, enrollmentInit] = fetchImpl.mock.calls[0];
+    // Call 0 is the credential-free preflight.
+    const [protocolUrl, protocolInit] = fetchImpl.mock.calls[0];
+    expect(protocolUrl).toBe('https://server.example.com/api/protocol');
+    expect(protocolInit).toMatchObject({ method: 'GET', redirect: 'error' });
+    expect(protocolInit?.headers).not.toHaveProperty('Authorization');
+    // Call 1 is the enrollment POST.
+    const [enrollmentUrl, enrollmentInit] = fetchImpl.mock.calls[1];
     expect(enrollmentUrl).toBe('https://server.example.com/api/enrollment/exchange');
     expect(enrollmentInit).toMatchObject({ method: 'POST', redirect: 'error' });
     const body = JSON.parse(String(enrollmentInit?.body));
@@ -164,10 +172,6 @@ describe('self-hosted server handshake', () => {
       },
     });
     expect(String(enrollmentUrl)).not.toContain(invitation);
-    // The preflight is the second call and is credential-free.
-    const [protocolUrl, protocolInit] = fetchImpl.mock.calls[1];
-    expect(protocolUrl).toBe('https://server.example.com/api/protocol');
-    expect(protocolInit?.headers).not.toHaveProperty('Authorization');
     expect(activateEnrollment).toHaveBeenCalledWith({
       origin: 'https://server.example.com',
       trustIdentity: 'sha256:server-a',
@@ -176,20 +180,81 @@ describe('self-hosted server handshake', () => {
       clientId,
       serverCapabilities: ['create_cube'],
     });
+    // The preflight runs before the pending credential is prepared/persisted,
+    // which in turn runs before the enrollment POST; activation is last.
+    expect(fetchImpl.mock.invocationCallOrder[0]).toBeLessThan(
+      prepareEnrollment.mock.invocationCallOrder[0],
+    );
     expect(prepareEnrollment.mock.invocationCallOrder[0]).toBeLessThan(
-      fetchImpl.mock.invocationCallOrder[0],
+      fetchImpl.mock.invocationCallOrder[1],
     );
     expect(activateEnrollment.mock.invocationCallOrder[0]).toBeGreaterThan(
       fetchImpl.mock.invocationCallOrder[1],
     );
   });
 
-  it('does not send an invitation when the pending keychain write fails', async () => {
-    const fetchImpl = vi.fn();
+  it('rejects an incompatible server at the preflight before any credential prepare, POST, or activation (first enrollment)', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ protocol_version: '1' }), { status: 200 }));
+    const prepareEnrollment = vi.fn();
+    const activateEnrollment = vi.fn();
+    const clearPendingEnrollment = vi.fn();
+
     await expect(enrollBorgServer(
       'https://server.example.com',
       'sha256:server-a',
       'i'.repeat(43),
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        prepareEnrollment: prepareEnrollment as never,
+        activateEnrollment,
+        clearPendingEnrollment,
+      },
+    )).rejects.toThrow();
+
+    // Exactly one request — the preflight — and no credential/secret work.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    expect(prepareEnrollment).not.toHaveBeenCalled();
+    expect(activateEnrollment).not.toHaveBeenCalled();
+    expect(clearPendingEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('rejects an incompatible server at the preflight on resume, with zero POST/activation', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ protocol_version: '1' }), { status: 200 }));
+    const loadPendingEnrollment = vi.fn(async () => ({
+      origin: 'https://server.example.com',
+      trustIdentity: 'sha256:server-a',
+      invitation: 'i'.repeat(43),
+      retryKey: '55555555-5555-4555-8555-555555555555',
+      credential: 'c'.repeat(43),
+      clientName: 'operator-laptop',
+    }));
+    const activateEnrollment = vi.fn();
+
+    await expect(resumeBorgServerEnrollment(
+      'https://server.example.com',
+      'sha256:server-a',
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadPendingEnrollment,
+        activateEnrollment,
+      },
+    )).rejects.toThrow();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    expect(activateEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('does not send an invitation when the pending keychain write fails', async () => {
+    // The credential-free preflight is the only permitted request; when the
+    // pending keychain write then fails, no invitation-bearing POST is sent.
+    const invitation = 'i'.repeat(43);
+    const fetchImpl = vi.fn(async () => tagPreflightBody());
+    await expect(enrollBorgServer(
+      'https://server.example.com',
+      'sha256:server-a',
+      invitation,
       {
         fetchImpl: fetchImpl as typeof fetch,
         prepareEnrollment: vi.fn(async () => {
@@ -197,15 +262,22 @@ describe('self-hosted server handshake', () => {
         }),
       },
     )).rejects.toThrow('keychain locked');
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    for (const [, init] of fetchImpl.mock.calls) {
+      expect(String((init as RequestInit | undefined)?.body ?? '')).not.toContain(invitation);
+    }
   });
 
   it('classifies a rejected invitation without reading or storing the response body', async () => {
     const reflectedInvitation = 'i'.repeat(43);
-    const fetchImpl = vi.fn(async () => new Response(
-      `reflected ${reflectedInvitation}`,
-      { status: 401 },
-    ));
+    // Preflight succeeds first; the enrollment POST is then rejected 401.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
+      .mockResolvedValueOnce(new Response(
+        `reflected ${reflectedInvitation}`,
+        { status: 401 },
+      ));
     const pending = {
       origin: 'https://server.example.com',
       trustIdentity: 'sha256:server-a',
@@ -251,7 +323,9 @@ describe('self-hosted server handshake', () => {
       credential: 'c'.repeat(43),
       clientName: 'operator-laptop',
     };
+    // Preflight is call 0; the ambiguous enrollment POST is retried at calls 1-2.
     const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
       .mockRejectedValueOnce(new Error('response lost'))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         protocol_version: '2',
@@ -261,8 +335,7 @@ describe('self-hosted server handshake', () => {
           client_id: '66666666-6666-4666-8666-666666666666',
           server_capabilities: ['create_cube'],
         },
-      }), { status: 201 }))
-      .mockResolvedValueOnce(tagPreflightBody());
+      }), { status: 201 }));
     const activateEnrollment = vi.fn(async () => {});
 
     await enrollBorgServer(
@@ -277,8 +350,9 @@ describe('self-hosted server handshake', () => {
       },
     );
 
-    const first = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
-    const retry = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    const first = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
+    const retry = JSON.parse(String(fetchImpl.mock.calls[2][1]?.body));
     expect(retry.payload).toEqual(first.payload);
     expect(retry.payload).toEqual({
       invitation: pending.invitation,
@@ -298,7 +372,9 @@ describe('self-hosted server handshake', () => {
       credential: 'c'.repeat(43),
       clientName: 'operator-laptop',
     };
+    // Preflight is call 0 (credential-free GET); the enrollment POST is call 1.
     const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
       .mockResolvedValueOnce(new Response(JSON.stringify({
         protocol_version: '2',
         request_id: 'enroll-resume-1',
@@ -307,8 +383,7 @@ describe('self-hosted server handshake', () => {
           client_id: '66666666-6666-4666-8666-666666666666',
           server_capabilities: ['create_cube'],
         },
-      }), { status: 201 }))
-      .mockResolvedValueOnce(tagPreflightBody());
+      }), { status: 201 }));
     const activateEnrollment = vi.fn(async () => {});
     const onPending = vi.fn();
 
@@ -327,7 +402,8 @@ describe('self-hosted server handshake', () => {
     expect(onPending.mock.invocationCallOrder[0]).toBeLessThan(
       fetchImpl.mock.invocationCallOrder[0],
     );
-    const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    const request = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
     expect(request.payload).toEqual({
       invitation: pending.invitation,
       retry_key: pending.retryKey,

@@ -271,7 +271,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
   });
 });
 
-describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted/frozen seats)', () => {
+describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted seats)', () => {
   const stderrOf = (deps: LaunchAllDeps): string =>
     (deps.stderr as any).mock.calls.map((c: any[]) => c[0]).join('');
   const dispatched = (deps: LaunchAllDeps): boolean =>
@@ -318,15 +318,8 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted/f
     const deps = depsFor(identities, async () => 'evicted');
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     // 4b-specific phrasing — distinct from the 4a lock-live 'appear live; nothing to launch'.
-    expect(stdoutOf(deps)).toMatch(/have evicted\/frozen seats; nothing to launch/);
+    expect(stdoutOf(deps)).toMatch(/have evicted seats; nothing to launch/);
     expect(dispatched(deps)).toBe(false);
-  });
-
-  it('a FROZEN seat is SKIPPED (paused — avoids a duplicate mint; not relaunched)', async () => {
-    const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'frozen' : 'live'));
-    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
-    expect(stderrOf(deps)).toMatch(/seat frozen .* paused, not relaunching/);
   });
 
   it('an INDETERMINATE (transient) seat is LAUNCHED (fail-OPEN) with a soft note', async () => {
@@ -354,10 +347,10 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted/f
     expect(out).not.toContain('drone-b');
   });
 
-  it('a MIXED run (evicted + frozen + live + indeterminate) launches exactly live+indeterminate, skips evicted+frozen', async () => {
-    const labels = ['ev', 'fr', 'li', 'in'];
-    const statusByTok: Record<string, 'evicted' | 'frozen' | 'live' | 'indeterminate'> = {
-      'tok-ev': 'evicted', 'tok-fr': 'frozen', 'tok-li': 'live', 'tok-in': 'indeterminate',
+  it('a MIXED run (evicted + live + indeterminate) launches exactly live+indeterminate, skips evicted', async () => {
+    const labels = ['ev', 'li', 'in'];
+    const statusByTok: Record<string, 'evicted' | 'live' | 'indeterminate'> = {
+      'tok-ev': 'evicted', 'tok-li': 'live', 'tok-in': 'indeterminate',
     };
     const identities = labels.map((l, i) => ({
       projectPath: `/home/test/.borg/worktrees/myrepo/${l}`,
@@ -370,10 +363,8 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted/f
     expect(out).toContain('drone-li');
     expect(out).toContain('drone-in'); // indeterminate launches (fail-OPEN)
     expect(out).not.toContain('drone-ev'); // evicted skipped
-    expect(out).not.toContain('drone-fr'); // frozen skipped
     const err = stderrOf(deps);
     expect(err).toMatch(/drone-ev.*evicted/);
-    expect(err).toMatch(/drone-fr.*frozen .* paused, not relaunching/);
     expect(err).toMatch(/could not confirm drone-in.*launching anyway/);
   });
 

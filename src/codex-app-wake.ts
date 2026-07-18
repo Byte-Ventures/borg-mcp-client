@@ -1,7 +1,6 @@
 import { getActiveCube, getCodexWakeTarget, setCodexWakeTarget } from './cubes.js';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { checkCodexBridgeHealthy } from './codex-remote.js';
-import { recordEventReceipt } from './health-beat.js';
 import {
   BORG_CODEX_REMOTE_WAKE_ENV,
   resolveSessionAgentKind,
@@ -314,7 +313,6 @@ async function wakeCodexTargeted(reason: string, deps: CodexWakeDeps): Promise<v
         return;
       }
       await client.startTurn(threadId, reason);
-      recordEventReceipt();
       rememberDeliveredWake(wakeKey);
       markDelivered(deps);
     } finally {
@@ -381,7 +379,6 @@ async function runRetryDrainLoop(deps: CodexWakeDeps): Promise<void> {
           continue; // re-defer: still mid-turn (backoff before next poll)
         }
         await client.startTurn(threadId, CODEX_CATCHUP_PROMPT);
-        recordEventReceipt();
         markDelivered(deps);
         return; // drain delivered → server read-cursor drains all unread → done
       } finally {
@@ -445,14 +442,7 @@ export async function fireCodexHeartbeatTick(
       const thread = await client.readThread(resolved.threadId);
       if (thread?.status?.type === 'active') return; // mid-turn → skip; next tick retries
       await client.startTurn(resolved.threadId, CODEX_CATCHUP_PROMPT);
-      // gh#857 CR (7439f931): do NOT recordEventReceipt() here. The receipt
-      // watermark (last_event_received_at, gh#541) is evidence that the wake path
-      // DELIVERED a REAL inbound cube event — it feeds the deaf-detection
-      // classifier and must never be self-generated. This heartbeat is a
-      // synthetic, time-driven re-engagement with NO inbound event; recording a
-      // receipt here would fabricate liveness and mask a genuinely-deaf drone
-      // (the self-vs-receipt flaw). markDelivered (local heartbeat-gating state,
-      // NOT the receipt axis) is the only thing the heartbeat updates.
+      // markDelivered updates local heartbeat-gating state only.
       markDelivered(deps);
     } finally {
       client.close();

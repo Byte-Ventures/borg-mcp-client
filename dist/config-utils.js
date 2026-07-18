@@ -590,10 +590,9 @@ export function addMcpServer() {
         const command = `claude mcp add --scope user borg ${shellQuote(MCP_BINARY)}`;
         execSync(command, {
             stdio: 'inherit', // Show output to user
-            env: {
-                ...process.env,
-                BORG_API_URL: process.env.BORG_API_URL || 'https://api.borgmcp.ai'
-            }
+            // No hosted-URL injection: BORG_API_URL passes through from the
+            // environment only when the operator has explicitly set it.
+            env: process.env,
         });
     }
     catch (error) {
@@ -611,21 +610,21 @@ export function addCodexMcpServer() {
         catch {
             // Ignore - server might not exist yet.
         }
-        const apiUrl = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
+        // No hosted-URL fallback: only forward BORG_API_URL into the generated
+        // Codex MCP config when the operator has explicitly set it.
+        const apiUrl = process.env.BORG_API_URL;
         // Identity is durable configuration; remote wake is a per-launch
         // transport capability. Do not persist a transport marker here: a future
         // Codex child may launch without a live --remote socket.
         // gh#client#18: use absolute path to THIS installation's binary.
         const codexConfigEnv = withAgentRuntimeEnv(process.env, 'codex');
-        execSync('codex mcp add borg --env BORG_API_URL=' +
-            shellQuote(apiUrl) +
+        const apiUrlEnvArg = apiUrl ? ` --env BORG_API_URL=${shellQuote(apiUrl)}` : '';
+        execSync('codex mcp add borg' +
+            apiUrlEnvArg +
             ` --env ${BORG_AGENT_KIND_ENV}=codex` +
             ` -- ${shellQuote(MCP_BINARY)}`, {
             stdio: 'inherit',
-            env: {
-                ...codexConfigEnv,
-                BORG_API_URL: apiUrl,
-            },
+            env: codexConfigEnv,
         });
     }
     catch (error) {
@@ -751,9 +750,11 @@ export function isOpenCodeMcpServerConfigured(configPath = OPENCODE_CONFIG_PATH)
  */
 export function addOpenCodeMcpServer() {
     try {
-        const apiUrl = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
+        // No hosted-URL fallback: only forward BORG_API_URL when explicitly set.
+        const apiUrl = process.env.BORG_API_URL;
+        const apiUrlEnvArg = apiUrl ? ` --env BORG_API_URL=${shellQuote(apiUrl)}` : '';
         // gh#client#18: use absolute path to THIS installation's binary.
-        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1 --env BORG_API_URL=${shellQuote(apiUrl)} -- ${shellQuote(MCP_BINARY)}`, { stdio: 'inherit' });
+        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg} -- ${shellQuote(MCP_BINARY)}`, { stdio: 'inherit' });
     }
     catch (error) {
         if (error.message?.includes('command not found')) {

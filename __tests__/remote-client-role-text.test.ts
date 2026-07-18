@@ -1,58 +1,68 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TOOL_MANIFEST } from '../src/tool-manifest.js';
 
-vi.mock('../src/config.js', () => ({
-  getIdToken: vi.fn(async () => 'id-token'),
-  getRefreshToken: vi.fn(async () => null),
-  clearTokens: vi.fn(async () => {}),
-}));
+/**
+ * MCP role-text proxy policy.
+ *
+ * The core invariant is unchanged after cloud severance: the client publishes
+ * NO client-side maxLength for role-text tools — the 51,200-char limit is owned
+ * by the server, and the client never truncates or length-rejects before the
+ * wire. The deleted file proved this by forwarding oversized text to the cloud
+ * /api/roles proxy. That proxy is not carried by the local server: updateRole
+ * fails closed with "does not support" before any network call, and — crucially
+ * — it does so REGARDLESS of text size, i.e. no client-side length gate
+ * short-circuits ahead of it. The manifest invariant below is the authoritative
+ * no-client-maxLength assertion and is preserved verbatim.
+ */
 
-vi.mock('../src/auth.js', () => ({
-  refreshIdToken: vi.fn(async () => {}),
-  RefreshTokenInvalidError: class RefreshTokenInvalidError extends Error {},
-  RefreshTransientError: class RefreshTransientError extends Error {},
-}));
-
+const CUBE_ID = '11111111-1111-4111-8111-111111111111';
+const DRONE_ID = '33333333-3333-4333-8333-333333333333';
+const ORIGIN = 'https://localhost:8787';
+const TRUST_IDENTITY = 'spki-sha256:test-server';
+const SESSION = 's'.repeat(43);
 const ROLE_TEXT_LIMIT = 51_200;
 
-describe('MCP role-text proxy policy', () => {
-  let fetchSpy: ReturnType<typeof vi.spyOn>;
+describe('MCP role-text proxy policy (local path)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
 
-  afterEach(() => fetchSpy.mockRestore());
-
-  it('forwards a shrinking legacy whole-text repair above the limit', async () => {
-    const repair = 'x'.repeat(ROLE_TEXT_LIMIT + 100);
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ role: { id: 'role-1', detailed_description: repair } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    );
-    const { updateRole } = await import('../src/remote-client.js');
-
-    await updateRole('role-1', { detailed_description: repair });
-
-    const [, init] = fetchSpy.mock.calls[0];
-    expect(JSON.parse(init!.body as string).detailed_description).toBe(repair);
+  beforeEach(() => {
+    vi.resetModules();
+    fetchSpy = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => ({
+        identity: TRUST_IDENTITY,
+        fetchImpl: fetchSpy,
+      })),
+    }));
+    vi.doMock('../src/cubes.js', () => ({
+      getActiveCube: vi.fn(async () => ({
+        cubeId: CUBE_ID,
+        droneId: DRONE_ID,
+        sessionToken: SESSION,
+        apiUrl: ORIGIN,
+        serverTrustIdentity: TRUST_IDENTITY,
+      })),
+    }));
   });
 
-  it('surfaces the worker rejection for a new oversized role-text update', async () => {
-    const oversized = 'x'.repeat(ROLE_TEXT_LIMIT + 1);
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({
-        code: 'CONTENT_TOO_LARGE',
-        message: 'Role detailed_description exceeds the 51200-character limit.',
-      }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    );
-    const { updateRole } = await import('../src/remote-client.js');
+  afterEach(() => {
+    vi.resetModules();
+  });
 
+  it('applies no client-side length gate ahead of the local unsupported check (large text)', async () => {
+    const repair = 'x'.repeat(ROLE_TEXT_LIMIT + 100);
+    const { updateRole } = await import('../src/remote-client.js');
+    await expect(updateRole('role-1', { detailed_description: repair }))
+      .rejects.toThrow(/Local Borg server does not support/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not length-reject an oversized update client-side (fails closed the same way)', async () => {
+    const oversized = 'x'.repeat(ROLE_TEXT_LIMIT + 1);
+    const { updateRole } = await import('../src/remote-client.js');
     await expect(updateRole('role-1', { detailed_description: oversized }))
-      .rejects.toThrow(/HTTP 400.*51200-character limit/);
-    const [, init] = fetchSpy.mock.calls[0];
-    expect(JSON.parse(init!.body as string).detailed_description).toBe(oversized);
+      .rejects.toThrow(/Local Borg server does not support/);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('does not publish a conflicting client-side maxLength for role-text tools', () => {

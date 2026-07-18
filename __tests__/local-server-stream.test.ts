@@ -73,7 +73,6 @@ describe('local server SSE adapter', () => {
       headers: { 'Content-Type': 'text/event-stream' },
     }));
     const appendLine = vi.fn(async () => {});
-    const getToken = vi.fn(async () => 'cloud-token-must-not-be-read');
 
     const { streamOnce } = await import('../src/log-stream.js');
     await streamOnce({
@@ -86,8 +85,6 @@ describe('local server SSE adapter', () => {
       fetchImpl: fetchImpl as typeof fetch,
       appendLine,
       hasInboxEntryId: vi.fn(async () => false),
-      getToken,
-      onInboxReceipt: vi.fn(),
       abortSignal: new AbortController().signal,
     });
 
@@ -99,7 +96,6 @@ describe('local server SSE adapter', () => {
     );
     const headers = new Headers(fetchImpl.mock.calls[0][1]?.headers);
     expect(headers.has('X-Drone-Session')).toBe(false);
-    expect(getToken).not.toHaveBeenCalled();
     expect(appendLine).not.toHaveBeenCalled();
     expect(advanceCursor).toHaveBeenCalledWith(
       expect.objectContaining({ cubeId: CUBE_ID, droneId: DRONE_ID }),
@@ -140,7 +136,6 @@ describe('local server SSE adapter', () => {
       '',
     ].join('\n');
     const appendLine = vi.fn(async () => {});
-    const onInboxReceipt = vi.fn();
     const { streamOnce } = await import('../src/log-stream.js');
 
     await streamOnce({
@@ -156,8 +151,6 @@ describe('local server SSE adapter', () => {
       })) as typeof fetch,
       appendLine,
       hasInboxEntryId: vi.fn(async () => false),
-      getToken: vi.fn(async () => 'cloud-token-must-not-be-read'),
-      onInboxReceipt,
       abortSignal: new AbortController().signal,
     });
 
@@ -166,7 +159,6 @@ describe('local server SSE adapter', () => {
       DRONE_ID,
       expect.stringContaining('wake intended recipient'),
     );
-    expect(onInboxReceipt).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -228,7 +220,6 @@ describe('local server SSE adapter', () => {
       fetchImpl: fetchImpl as typeof fetch,
       appendLine: vi.fn(async () => {}),
       hasInboxEntryId: vi.fn(async () => false),
-      getToken: vi.fn(async () => 'cloud-token-must-not-be-read'),
       abortSignal: new AbortController().signal,
     })).rejects.toThrow(/SSE frame exceeded the response limit/i);
     expect(cancel).toHaveBeenCalled();

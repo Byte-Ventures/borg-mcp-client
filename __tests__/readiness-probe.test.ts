@@ -38,7 +38,6 @@ describe('MCP readiness probe mode', () => {
         sseFetchCount += 1;
       },
       openCode: () => { calls.push('opencode'); },
-      healthBeat: () => { calls.push('health-beat'); },
     };
     await runMcpStartupServices(true, services);
     expect(calls).toEqual([]);
@@ -139,14 +138,12 @@ process.stdin.on('data', (chunk) => {
       auditHook: () => { calls.push('audit-hook'); },
       sseStream: () => { calls.push('sse-stream'); },
       openCode: () => { calls.push('opencode'); },
-      healthBeat: () => { calls.push('health-beat'); },
     });
     expect(calls).toEqual([
       'session-hook',
       'audit-hook',
       'sse-stream',
       'opencode',
-      'health-beat',
     ]);
   });
 
@@ -157,8 +154,7 @@ process.stdin.on('data', (chunk) => {
       auditHook: () => { calls.push('audit-hook'); },
       sseStream: () => { calls.push('sse-stream'); },
       openCode: () => { calls.push('opencode'); },
-      healthBeat: () => { calls.push('health-beat'); },
     });
-    expect(calls).toEqual(['audit-hook', 'sse-stream', 'opencode', 'health-beat']);
+    expect(calls).toEqual(['audit-hook', 'sse-stream', 'opencode']);
   });
 });

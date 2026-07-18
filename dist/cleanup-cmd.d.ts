@@ -5,7 +5,7 @@
  * `autoEvictPresumedDead`, or gh#877 graceful self-shutdown) leaves its
  * worktree dir (`~/.borg/worktrees/<repo>/<name>`) + its `wt-<suffix>`
  * branch on disk. Nothing reclaims them. This command finds and SAFELY
- * removes worktrees orphaned by eviction — never destroying live, frozen,
+ * removes worktrees orphaned by eviction — never destroying live,
  * dirty, unmerged, or precious-local-state work.
  *
  * Pure composition over `worktree-lifecycle.ts` + the gh#877 per-seat
@@ -16,8 +16,8 @@
  * SEC gate (gh#882, S1–S5 — design entries 98e45fbf / acd76794):
  *   S1  Destructive prune authority = server 410 DRONE_EVICTED on the
  *       worktree's OWN saved-seat token, ONLY.
- *   S2  KEEP classes (any one → never prune, surface): 423 DRONE_FROZEN
- *       (reversible); dirty; unmerged; non-regenerable gitignored-local.
+ *   S2  KEEP classes (any one → never prune, surface): dirty; unmerged;
+ *       non-regenerable gitignored-local.
  *   S3  Report-only until gh#877 is DEPLOYED. The destructive path keys on
  *       the 410 CODE — pre-deploy the server returns 401 → probe resolves
  *       'indeterminate' → report-only → safe. No flag / deploy coupling;
@@ -37,7 +37,7 @@ import { type ActiveCube } from './cubes.js';
 import { type SeatStatus } from './seat-probe.js';
 export type { SeatStatus };
 /** Per-worktree classification outcome. PRUNABLE is the ONLY delete class. */
-export type CleanupReason = 'PRUNABLE' | 'SURVIVES-dirty' | 'SURVIVES-clobber' | 'SURVIVES-unmerged' | 'SURVIVES-detached' | 'SURVIVES-frozen' | 'SURVIVES-live' | 'SURVIVES-self' | 'UNKNOWN-indeterminate' | 'UNKNOWN-no-seat' | 'LEGACY-manual-review';
+export type CleanupReason = 'PRUNABLE' | 'SURVIVES-dirty' | 'SURVIVES-clobber' | 'SURVIVES-unmerged' | 'SURVIVES-detached' | 'SURVIVES-live' | 'SURVIVES-self' | 'UNKNOWN-indeterminate' | 'UNKNOWN-no-seat' | 'LEGACY-manual-review';
 export interface CleanupRow {
     worktreePath: string;
     wtBranch: string | null;

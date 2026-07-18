@@ -204,22 +204,27 @@ test('public-source scan ignores a linked-worktree .git file', async (t) => {
   const worktree = await mkdtemp(join(tmpdir(), 'borgmcp-client-linked-worktree-'));
   t.after(() => rm(worktree, { recursive: true, force: true }));
   await mkdir(join(worktree, 'src'));
-  await mkdir(join(worktree, 'dist'));
-  await cp(join(root, 'src', 'auth.ts'), join(worktree, 'src', 'auth.ts'));
-  await cp(join(root, 'dist', 'auth.js'), join(worktree, 'dist', 'auth.js'));
+  await writeFile(join(worktree, 'src', 'index.ts'), 'export const ok = true;\n');
+  // A linked worktree stores .git as a FILE (gitdir pointer), not a directory;
+  // the walk must skip it (it is in the excluded set) rather than scan its path.
   await writeFile(join(worktree, '.git'), 'gitdir: /Users/private/repository/.git/worktrees/client\n');
 
+  // A clean local-only tree scans without throwing.
   assert.doesNotThrow(() => execFileSync(
     process.execPath,
     [join(root, 'scripts', 'verify-public-source.mjs')],
     { cwd: worktree, stdio: 'pipe' },
   ));
 
-  const authPath = join(worktree, 'src', 'auth.ts');
-  const authSource = await readFile(authPath, 'utf8');
-  const [clientId] = authSource.match(/\b[A-Za-z0-9_-]+\.apps\.googleusercontent\.com\b/) ?? [];
-  assert.ok(clientId);
-  await writeFile(authPath, authSource.replace(clientId, `x${clientId.slice(1)}`));
+  // Any Google OAuth client material is forbidden in the local-only client.
+  // Build the client-id at runtime so THIS test source carries no literal,
+  // contiguous OAuth token for the repo-wide scan to flag (mirrors the token
+  // construction below).
+  const clientId = ['leaked-client', 'apps', 'googleusercontent', 'com'].join('.');
+  await writeFile(
+    join(worktree, 'src', 'leak.ts'),
+    `export const id = ${JSON.stringify(clientId)};\n`,
+  );
   assert.throws(() => execFileSync(
     process.execPath,
     [join(root, 'scripts', 'verify-public-source.mjs')],
@@ -227,8 +232,8 @@ test('public-source scan ignores a linked-worktree .git file', async (t) => {
   ));
 });
 
-test('public-source scan rejects repeated OAuth tokens before spawning helpers', async (t) => {
-  const fixture = await mkdtemp(join(tmpdir(), 'borgmcp-client-oauth-cap-'));
+test('public-source scan forbids Google OAuth client material anywhere (local-only)', async (t) => {
+  const fixture = await mkdtemp(join(tmpdir(), 'borgmcp-client-oauth-'));
   t.after(() => rm(fixture, { recursive: true, force: true }));
   await mkdir(join(fixture, 'scripts'));
   await cp(
@@ -236,9 +241,7 @@ test('public-source scan rejects repeated OAuth tokens before spawning helpers',
     join(fixture, 'scripts', 'verify-public-source.mjs'),
   );
   const token = ['GOCSPX-', 'a'.repeat(32)].join('');
-  const hostile = Array(128).fill(token).join('\n');
-  assert.ok(Buffer.byteLength(hostile) < 4 * 1024 * 1024);
-  await writeFile(join(fixture, 'repeated-token.txt'), hostile);
+  await writeFile(join(fixture, 'oauth-material.txt'), `${token}\n`);
 
   assert.throws(
     () => execFileSync(
@@ -248,9 +251,7 @@ test('public-source scan rejects repeated OAuth tokens before spawning helpers',
     ),
     (error) => {
       const diagnostic = `${error.stderr ?? ''}`;
-      assert.match(diagnostic, /repeated-token\.txt: OAuth match cap exceeded \(128 > 4\)/);
-      assert.match(diagnostic, /global OAuth match cap exceeded \(128 > 8\)/);
-      assert.doesNotMatch(diagnostic, /sha256-stdin|MODULE_NOT_FOUND/);
+      assert.match(diagnostic, /oauth-material\.txt: Google OAuth client material is forbidden/);
       return true;
     },
   );

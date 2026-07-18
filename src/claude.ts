@@ -48,8 +48,6 @@ import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
 import { fetchLatestBorgmcpVersion, compareVersionsForStaleness } from './stale-version-check.js';
 import { defaultCliChoiceDeps, detectCliAvailability, installedCliNames, parseCliFlag, resolveCliChoice } from './cli-platform.js';
-import { getRefreshToken, getIdToken } from './config.js';
-import { composeGetStarted, shouldShowGetStarted } from './get-started.js';
 import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
 import {
   BORG_CODEX_REMOTE_WAKE_ENV,
@@ -200,28 +198,6 @@ async function main() {
     );
     process.stderr.write(`Run \`borg --help\` for usage.\n`);
     process.exit(1);
-  }
-
-  // gh#817: a FRESH (not-yet-onboarded) user running bare `borg` needs the
-  // get-started breadcrumb on a USER-VISIBLE surface — npm v7+ suppresses the
-  // B1 postinstall banner, so it never reached them. This must run BEFORE
-  // resolveCliChoice so it short-circuits BOTH fresh-user failure modes: the
-  // multi-CLI "pass --cli" error AND the single-CLI silent agent launch.
-  //
-  // Presence-only check (SR gh#817 d2549b62): the token VALUE is never decoded,
-  // logged, or printed — only its existence gates the branch. Refresh-token
-  // presence is the durable setup-completion signal (it survives id_token
-  // expiry), so a configured user whose id_token has lapsed is NOT mistaken for
-  // fresh and their normal launch is preserved (no regression).
-  if (
-    shouldShowGetStarted(
-      (await getRefreshToken()) !== null,
-      (await getIdToken()) !== null
-    )
-  ) {
-    const hasAgentCli = installedCliNames(detectCliAvailability()).length > 0;
-    process.stdout.write(composeGetStarted(hasAgentCli));
-    process.exit(0);
   }
 
   const parsedCli = parseCliFlag(process.argv.slice(2));

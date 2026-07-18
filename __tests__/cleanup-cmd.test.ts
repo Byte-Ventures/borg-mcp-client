@@ -281,9 +281,6 @@ describe('buildCleanupReport classification', () => {
     const { rows } = await buildCleanupReport({ ...(deps as any) });
     expect(rows.find((r) => r.worktreePath === wt)?.reason).toBe('SURVIVES-detached');
   });
-  it('SURVIVES-frozen on 423 DRONE_FROZEN (reversible — never delete)', async () => {
-    expect(await reasonFor({}, 'frozen')).toBe('SURVIVES-frozen');
-  });
   it('SURVIVES-live when the seat resolves', async () => {
     expect(await reasonFor({}, 'live')).toBe('SURVIVES-live');
   });

@@ -20,42 +20,6 @@ export interface ToolManifestEntry {
 
 export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
-          name: 'borg_subscribe',
-          description: 'Create Stripe checkout session for Cube tier ($1/month per cube; each cube adds 8 pooled agent sessions + 1000 req/hr). Free tier is permanent (1 cube + 3 agent sessions + 100 req/hr); no trial.',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
-        },
-        {
-          name: 'borg_upgrade-subscription',
-          description: 'Open the Stripe Billing Portal to manage Cube tier quantity ($1/month per cube; each cube adds 8 pooled agent sessions + 1000 req/hr).',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
-        },
-        {
-          name: 'borg_subscription_status',
-          description: 'Check subscription status',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
-        },
-        {
-          name: 'borg_open_dashboard',
-          description: 'Open Borg MCP dashboard in browser to manage cubes, roles, and drones',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
-        },
-        {
           name: 'borg_regen',
           description:
             "Refresh your context as a Drone. Returns the active cube's directive, " +

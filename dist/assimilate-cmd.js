@@ -40,12 +40,12 @@ async function selectAssimilationAuthority(flags, deps) {
             return null;
         }
     }
-    // gh#27: non-TTY and --yes must NOT infer Cloud — the user must explicitly
-    // choose an authority. Fail closed instead of silently routing to Cloud.
+    // Only a local self-hosted server authority exists. Non-TTY and --yes must
+    // NOT infer an authority — fail closed with actionable guidance.
     if (!deps.isTTY() || flags.yes) {
         if (deps.defaultAuthority)
             return deps.defaultAuthority;
-        deps.stderr('No authority specified. Use --host <server> to select a local server, or run without --yes from an interactive terminal to choose an authority.\n');
+        deps.stderr('No local server selected. Use `borg assimilate --host <host> --here` to select a local server.\n');
         return null;
     }
     let detected = null;
@@ -62,25 +62,14 @@ async function selectAssimilationAuthority(flags, deps) {
         if (affirmative(answer))
             return { kind: 'server', apiUrl: detected };
     }
-    const choice = (await deps.prompt('Connect this project to:\n' +
-        '  1) A Borg server (local or self-hosted)\n' +
-        '  2) Borg Cloud (borgmcp.ai; subscription required)\n' +
-        '[1]: ')).trim();
-    if (choice === '' || choice === '1') {
-        const host = await deps.prompt('Borg server host or URL: ');
-        try {
-            return { kind: 'server', apiUrl: normalizeServerEndpoint(host) };
-        }
-        catch (error) {
-            deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
-            return null;
-        }
+    const host = await deps.prompt('Borg server host or URL: ');
+    try {
+        return { kind: 'server', apiUrl: normalizeServerEndpoint(host) };
     }
-    if (choice !== '2') {
-        deps.stderr(`invalid authority choice ${JSON.stringify(choice)}\n`);
+    catch (error) {
+        deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
         return null;
     }
-    return { kind: 'cloud', apiUrl: deps.cloudApiUrl };
 }
 function localAssimilateCommand(apiUrl, enroll = false) {
     return `\`borg assimilate --host ${apiUrl}${enroll ? ' --enroll' : ''}\``;
@@ -108,6 +97,21 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
     if (error instanceof BorgServerError && error.code === 'CREDENTIAL_REJECTED') {
         deps.stderr(`The saved enrollment for ${apiUrl} was rejected. Re-run ` +
             `${localAssimilateCommand(apiUrl, true)} from the operator’s terminal.\n`);
+        return 1;
+    }
+    // A pin-matched typed 401: the server verified its own identity but rejected
+    // THIS worktree's session bearer (revoked, or taken over by another session).
+    // Distinct from a protocol/version mismatch and from a rejected enrollment:
+    // only this worktree's saved local seat is affected, and recovery is scoped to
+    // this worktree — no server/trust-anchor/cube/other-worktree reset, no restart
+    // or version-alignment advice, and never a Cloud fallback (#1082).
+    if (error instanceof BorgServerError && error.code === 'SESSION_REJECTED') {
+        deps.stderr(`This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
+            'revoked or taken over by another session. No other Borg state changed: your ' +
+            'pinned server trust, other worktrees, and their cubes are untouched. Recover this ' +
+            'worktree alone by asking the server operator for a new enrollment invitation, then ' +
+            `re-enroll from this worktree with ${localAssimilateCommand(apiUrl, true)}; that ` +
+            "resets only this worktree's saved seat.\n");
         return 1;
     }
     if (error instanceof BorgServerError && error.code === 'INVITATION_REJECTED') {
@@ -239,7 +243,7 @@ export async function runAssimilate(args, deps) {
         return 1;
     }
     let auth;
-    if (authority.kind === 'server') {
+    {
         try {
             let serverAuth;
             if (args.flags.enroll) {
@@ -294,27 +298,6 @@ export async function runAssimilate(args, deps) {
             return reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true);
         }
     }
-    else {
-        let cloudAuth = await deps.getCachedAuth();
-        if (!cloudAuth) {
-            if (!deps.isTTY() && !args.flags.yes) {
-                deps.stderr('borg setup required and stdin is non-interactive. Run `borg setup` first in an interactive terminal, then `borg assimilate`.\n');
-                return 1;
-            }
-            cloudAuth = await deps.runSetup();
-        }
-        auth = cloudAuth;
-    }
-    // gh#293: detect cross-account cube reference (owner-email:cube-name format).
-    let crossAccountRef = null;
-    if (cubeName && cubeName.includes('@') && cubeName.includes(':')) {
-        const colonIdx = cubeName.lastIndexOf(':');
-        crossAccountRef = {
-            ownerEmail: cubeName.substring(0, colonIdx),
-            cubeName: cubeName.substring(colonIdx + 1),
-        };
-        cubeName = crossAccountRef.cubeName;
-    }
     // ----- Sprint 19 (gh#184): Reorder for strict-rollback semantics. -----
     // The previous flow created a sibling worktree (FS state) BEFORE
     // role resolution + API assimilate. Any early-return between
@@ -339,26 +322,9 @@ export async function runAssimilate(args, deps) {
             : await deps.listCubes(auth.apiUrl, auth.token, auth.serverTrustIdentity);
     }
     catch (err) {
-        if (authority.kind === 'server') {
-            return reportServerFailure(deps, authority.apiUrl, err);
-        }
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('Authentication required') || msg.includes('Authentication expired')) {
-            deps.stderr('Re-authenticating...\n');
-            auth = await deps.runSetup();
-            allCubes = await deps.listCubes(auth.apiUrl, auth.token);
-        }
-        else {
-            throw err;
-        }
+        return reportServerFailure(deps, authority.apiUrl, err);
     }
     const existingCube = allCubes.find((c) => c.name === cubeName);
-    // gh#312: cross-account typo guard. If the user typed owner@example.com:cube-name
-    // and the cube isn't found, error out — don't silently create a new cube.
-    if (!existingCube && crossAccountRef) {
-        deps.stderr(`No cube named '${crossAccountRef.cubeName}' accessible to you owned by '${crossAccountRef.ownerEmail}'. Did you accept their invite? See borgmcp.ai/dashboard.\n`);
-        return 1;
-    }
     // ----- Step 4: Fetch detail OR create cube -----
     let cubeDetail;
     let isFirstDrone;
@@ -502,12 +468,6 @@ export async function runAssimilate(args, deps) {
                 ? cubeDetail.roles.find((role) => role.name === existing.roleName)
                 : undefined;
             const status = await deps.probeSeat(existing.sessionToken ?? '', auth.apiUrl, auth.serverTrustIdentity);
-            if (status === 'frozen') {
-                deps.stderr(`This worktree's saved seat on ${authority.apiUrl} is temporarily frozen. ` +
-                    'No new seat was created. Ask the server operator to restore access, then rerun ' +
-                    `${localAssimilateCommand(authority.apiUrl)}.\n`);
-                return 1;
-            }
             if (status === 'indeterminate') {
                 deps.stderr(`Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +
                     'No new seat was created. Start or restart the server with ' +
@@ -659,10 +619,6 @@ export async function runAssimilate(args, deps) {
     }
     if (authority.kind === 'server' && result.local_session === undefined) {
         return reportServerFailure(deps, authority.apiUrl, new Error('Borg server did not return compatible secure session metadata'));
-    }
-    if (authority.kind === 'cloud' && !result.session_token) {
-        deps.stderr('assimilate failed: Borg Cloud did not return a session token\n');
-        return 1;
     }
     // The server may assimilate a member into a DIFFERENT role than the client's
     // auto-picked default (gh#700 fallback: when the member's invite doesn't

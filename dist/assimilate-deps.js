@@ -14,14 +14,13 @@ import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
-import { API_URL, getValidToken, listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
+import { listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, attachBorgServer, } from './server-handshake.js';
 import { clearPendingServerSession, } from './config.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError } from './server-errors.js';
 import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
-import { authenticateWithGoogle } from './auth.js';
 import { addProjectSessionStartHook } from './config-utils.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
@@ -100,21 +99,6 @@ export function buildDefaultAssimilateDeps() {
         installProjectSessionHook: (projectRoot) => {
             addProjectSessionStartHook(projectRoot);
         },
-        getCachedAuth: async () => {
-            try {
-                const token = await getValidToken();
-                return { token, apiUrl: API_URL };
-            }
-            catch {
-                return null;
-            }
-        },
-        runSetup: async () => {
-            await authenticateWithGoogle();
-            const token = await getValidToken();
-            return { token, apiUrl: API_URL };
-        },
-        cloudApiUrl: API_URL,
         // #1015: discovery is advisory but still verifies the server-owned CA.
         detectLocalServer: async () => (await probeLocalBorgServer(DEFAULT_LOCAL_SERVER_ORIGIN))
             ? DEFAULT_LOCAL_SERVER_ORIGIN

@@ -25,19 +25,14 @@
  */
 import { Buffer } from 'node:buffer';
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { compareBroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import { getActiveCube, inboxPathForDrone } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { advanceLocalServerCursor, encodeLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE, EVICTED_RESULT_MARKER, errorCodeFromBody, } from './drone-lifecycle.js';
-import { CODEX_HEARTBEAT_CADENCE_MS, fireCodexHeartbeatTick, formatCodexWakePrompt, resolveSessionAgentKind, startCodexHeartbeat, wakeCodexViaAppServer, } from './codex-app-wake.js';
-import { getValidToken } from './remote-client.js';
-import { recordEventReceipt, emitHealthBeat, getCachedMonitorHealthy, getCachedWakeArmed, } from './health-beat.js';
-import { getPackageVersion } from './version.js';
+import { CODEX_HEARTBEAT_CADENCE_MS, fireCodexHeartbeatTick, formatCodexWakePrompt, startCodexHeartbeat, wakeCodexViaAppServer, } from './codex-app-wake.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { isCanonicalHostedApiUrl } from './authority.js';
 import { acquireStreamLease, readOwnershipSnapshot, STREAM_OWNER_STALE_MS, } from './stream-owner.js';
 // ------------------------------------------------------------------
 // Tuning constants
@@ -77,15 +72,6 @@ export function setModuleInjectOpenCode(fn) {
 const RECENT_IDS_CAP = 50;
 export const INBOX_TAIL_LINES_CAP = 512;
 export const INBOX_TAIL_TRIM_THRESHOLD_LINES = INBOX_TAIL_LINES_CAP * 2;
-function resolveRuntimeHostname() {
-    try {
-        const h = os.hostname();
-        return h && h.trim() ? h.trim().slice(0, 255) : null;
-    }
-    catch {
-        return null;
-    }
-}
 const processStartMs = Date.now();
 const streamState = {
     connected: false,
@@ -273,40 +259,14 @@ const defaultDeps = {
     fetchImpl: globalThis.fetch.bind(globalThis),
     appendLine: defaultAppendLine,
     hasInboxEntryId: defaultHasInboxEntryId,
-    getToken: getValidToken,
     wakeCodex: wakeCodexViaAppServer,
     heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
     hwmDivergenceGraceMs: HWM_DIVERGENCE_GRACE_MS,
     abortSignal: new AbortController().signal,
     ownerDeps: {},
     ownerStaleMs: 70_000,
-    onInboxReceipt: defaultOnInboxReceipt,
     injectOpenCode: (text) => _moduleInjectOpenCode ? _moduleInjectOpenCode(text) : Promise.resolve(false),
 };
-/**
- * gh#541 WU-2 default receipt handler: record the wake-path receipt watermark
- * and fire a best-effort health beat below the agent classifier. Reuses the
- * SSE session's already-fetched token (no extra keychain read) and the cached
- * monitor-health from the periodic tick (no pgrep per inbound entry).
- */
-function defaultOnInboxReceipt(active, token) {
-    recordEventReceipt();
-    void emitHealthBeat(active, {
-        sseConnected: true,
-        inboxMonitorHealthy: getCachedMonitorHealthy(),
-        // gh#633: reuse the cached transport-agnostic wake-armed from the periodic
-        // tick (no bridge/Monitor re-probe per inbound entry).
-        wakeArmed: getCachedWakeArmed(),
-        // gh#634: live runtime agent_kind (cheap env read, constant per session).
-        agentKind: resolveSessionAgentKind(),
-        hostname: resolveRuntimeHostname(),
-        version: getPackageVersion(),
-        getToken: async () => token,
-        // The beat rides the real global fetch — its OWN child-process HTTP wire,
-        // independent of the SSE stream's (possibly test-injected) fetchImpl.
-        fetchImpl: globalThis.fetch.bind(globalThis),
-    });
-}
 async function runLoop(testDeps = {}) {
     const _getActiveCube = testDeps.getActiveCube ?? getActiveCube;
     const _acquireStreamLease = testDeps.acquireStreamLease ?? acquireStreamLease;
@@ -457,23 +417,18 @@ export function __runLoopForTest(testDeps) {
     return runLoop(testDeps);
 }
 export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
-    const { fetchImpl, appendLine, hasInboxEntryId, getToken, wakeCodex, heartbeatTimeoutMs, hwmDivergenceGraceMs, abortSignal, onInboxReceipt, injectOpenCode, } = { ...defaultDeps, ...deps };
+    const { fetchImpl, appendLine, hasInboxEntryId, wakeCodex, heartbeatTimeoutMs, hwmDivergenceGraceMs, abortSignal, injectOpenCode, } = { ...defaultDeps, ...deps };
     const isLocal = active.serverTrustIdentity !== undefined;
-    // An environment-selected BORG_API_URL is routing configuration, not proof
-    // of Borg Cloud authority. A drone session aimed anywhere except the
-    // canonical hosted origin must carry hydrated local trust before either the
-    // OAuth token getter or the SSE transport is touched.
-    if (!isLocal && !isCanonicalHostedApiUrl(active.apiUrl)) {
+    // There is no hosted authority: a stream must carry verified local server
+    // trust. Anything else fails closed before the transport is touched.
+    if (!isLocal) {
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
-    const token = isLocal ? active.sessionToken : await getToken();
+    const token = active.sessionToken;
     const headers = {
         Authorization: `Bearer ${token}`,
         Accept: 'text/event-stream',
-        ...(isLocal ? {} : { 'X-Drone-Session': active.sessionToken }),
     };
-    if (lastEventId && !isLocal)
-        headers['Last-Event-ID'] = lastEventId;
     let requestFetch = fetchImpl;
     let streamPath = '/api/drone/stream';
     if (isLocal) {
@@ -626,16 +581,10 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         // Monitor/tail-F path is unused for opencode). Falls through to inbox on
         // failure so the entry is never lost.
         if (await injectOpenCode(line)) {
-            if (!isLocal || deps.onInboxReceipt !== undefined)
-                onInboxReceipt(active, token);
             return 'written';
         }
         await appendLine(active.cubeId, active.droneId, line);
         wakeCodex(formatCodexWakePrompt(line));
-        // gh#541 WU-2: a fresh inbound entry just hit the inbox (the wake-path
-        // receipt). Record it + beat below the classifier (best-effort).
-        if (!isLocal || deps.onInboxReceipt !== undefined)
-            onInboxReceipt(active, token);
         return 'written';
     };
     // Record the event in the bounded recent-ids dedup set (FIFO-capped) and
@@ -687,9 +636,8 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         // returns the authoritative 410 DRONE_EVICTED. Surface it as the terminal
         // typed error so the reconnect loop stops retrying (B25) instead of backing
         // off forever against a dead seat. Keyed on the structured code, not the
-        // bare status (SEC R2). 423/DRONE_FROZEN is NOT terminal here — it falls
-        // through to the generic throw so the loop keeps reconnecting (resumes when
-        // billing is restored).
+        // bare status (SEC R2). Any other status falls through to the generic throw
+        // so the reconnect loop keeps retrying transient failures.
         if (response.status === 410) {
             const body = isLocal
                 ? await readBoundedResponseBody(response, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES, 'Local Borg server SSE response exceeded the response limit', ac.signal).catch(() => '')

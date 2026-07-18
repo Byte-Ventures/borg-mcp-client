@@ -5,13 +5,13 @@
 // ITS OWN token, without launch-all having to import cleanup-cmd's chalk/report
 // graph. cleanup-cmd re-exports `SeatStatus` for backwards compatibility.
 import { whoami } from './remote-client.js';
-import { DroneEvictedError, DroneFrozenError } from './drone-lifecycle.js';
+import { DroneEvictedError } from './drone-lifecycle.js';
 /**
  * Default seat probe: a lightweight drone-authed `whoami` with the seat's OWN
- * saved token. authedFetch throws the typed lifecycle errors on the structured
- * codes (410→DroneEvictedError, 423→DroneFrozenError); anything else is
- * INDETERMINATE — and (for the destructive cleanup path) must NEVER authorize a
- * delete. The launch path treats indeterminate as launch-anyway (fail-OPEN).
+ * saved token. authedFetch throws the typed lifecycle error on the structured
+ * code (410→DroneEvictedError); anything else is INDETERMINATE — and (for the
+ * destructive cleanup path) must NEVER authorize a delete. The launch path
+ * treats indeterminate as launch-anyway (fail-OPEN).
  */
 export async function defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity) {
     try {
@@ -21,8 +21,6 @@ export async function defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity
     catch (err) {
         if (err instanceof DroneEvictedError)
             return 'evicted';
-        if (err instanceof DroneFrozenError)
-            return 'frozen';
         return 'indeterminate';
     }
 }

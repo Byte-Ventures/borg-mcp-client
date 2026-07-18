@@ -102,8 +102,13 @@ if (mode === 'ambiguous') {
     await enrollBorgServer(common.origin, common.trustIdentity, enrollmentInput.invitation, {
       clientName: enrollmentInput.clientName,
       fetchImpl: (async (_input, init) => {
-        bodies.push(JSON.parse(String(init?.body)));
-        throw new Error('response lost');
+        // Preflight-first: the credential-free tag GET succeeds, then the
+        // enrollment POST is the ambiguous transport failure under test.
+        if (init?.method === 'POST') {
+          bodies.push(JSON.parse(String(init.body)));
+          throw new Error('response lost');
+        }
+        return new Response(JSON.stringify({ protocol_version: '2' }), { status: 200 });
       }) as typeof fetch,
     });
   } catch (error) {

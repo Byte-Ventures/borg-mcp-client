@@ -4,9 +4,8 @@
  *
  * stdio MCP server that:
  * 1. Connects to Claude Code via stdio transport
- * 2. Authenticates via Google OAuth device flow
- * 3. Proxies MCP tools to remote server at api.borgmcp.ai
- * 4. Provides the borg: cube tool surface (assimilate / cube / role /
+ * 2. Proxies MCP tools to a verified local (self-hosted) Borg server
+ * 3. Provides the borg: cube tool surface (assimilate / cube / role /
  *    roster / read-log) so Claude can act as a Drone in a hive of
  *    collaborating sessions.
  */
@@ -48,17 +47,11 @@ import {
   reassignDrone,
   evictDrone,
   getCube,
-  checkSubscriptionStatus,
-  createBillingPortalSession,
-  createSubscription,
   syncRoles,
   applyTemplate,
   whoami,
   roleRationale,
-  API_URL,
-  getValidToken,
 } from './remote-client.js';
-import { startHealthBeatTick } from './health-beat.js';
 import {
   getTemplate,
   listTemplateNames,
@@ -106,9 +99,7 @@ import { resolveDroneIdByLabel, isUuidShape } from './evict-drone.js';
 import { authRecoveryMessage } from './auth-recovery.js';
 import {
   DroneEvictedError,
-  DroneFrozenError,
   formatEvictedToolResult,
-  formatFrozenToolResult,
 } from './drone-lifecycle.js';
 import {
   classifyInSessionAssimilate,
@@ -119,14 +110,11 @@ import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
 import { renderSyncRolesResult } from './sync-roles-render.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import {
-  isCodexRemoteWakeEnabled,
   resolveSessionAgentKind,
-  probeCodexBridgeArmed,
 } from './codex-app-wake.js';
 import {
   connectOpenCodeDrone,
   injectOpenCodeEntry,
-  probeOpenCodeDroneArmed,
   computeOpenCodePort,
   getOpenCodeConnectionState,
 } from './opencode-drone.js';
@@ -140,18 +128,6 @@ import {
 import {
   normalizeDirectLogRecipients,
 } from './direct-log.js';
-import open from 'open';
-import os from 'os';
-
-function resolveRuntimeHostname(): string | null {
-  try {
-    const h = os.hostname();
-    return h && h.trim() ? h.trim().slice(0, 255) : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
@@ -244,37 +220,6 @@ export async function main() {
         });
         setModuleInjectOpenCode(injectOpenCodeEntry);
       }
-    },
-
-  // gh#541 WU-2: periodic client health beat. The MCP-client child POSTs its
-  // wake-path receipt + SSE/Monitor state to /api/drone/health every ~60s —
-  // below the agent classifier (independent of agent tool-calls), so the
-  // server can tell a DEAF seat (Monitor down) from a merely POST-BLOCKED one
-  // even during a classifier outage. Best-effort; never breaks the server.
-    healthBeat: () => {
-      startHealthBeatTick({
-      getActiveCube,
-      getStreamConnected: () => getStreamStatus().connected,
-      getInboxPath: (active) => inboxPathForDrone(active.cubeId, active.droneId),
-      checkMonitor: (inboxPath) =>
-        checkInboxMonitorHealthy(
-          inboxPath,
-          monitorStateRootForWorktree(findProjectRoot())
-        ),
-      // gh#633: agnostic wake_armed — codex drones probe the app-server bridge
-      // (no tail-F Monitor by design); claude falls through to checkMonitor.
-      isCodexRemoteWake: isCodexRemoteWakeEnabled,
-      probeBridgeArmed: (active) =>
-        probeCodexBridgeArmed({ cubeId: active.cubeId, droneId: active.droneId }),
-      // gh#opencode: opencode wake-path probe via SDK health endpoint.
-      probeOpenCodeDrone: () => probeOpenCodeDroneArmed(),
-      // gh#634: live runtime agent_kind, beated to self-heal the recorded column.
-      resolveAgentKind: resolveSessionAgentKind,
-      resolveHostname: resolveRuntimeHostname,
-      resolveVersion: getPackageVersion,
-      getToken: getValidToken,
-      fetchImpl: globalThis.fetch.bind(globalThis),
-      });
     },
   });
 
@@ -443,60 +388,6 @@ export async function main() {
           } catch { /* never break regen */ }
 
           return { content: [{ type: 'text', text: versionHeader + prefix + formatRegenMarkdown(result, { mode }) }] };
-        }
-
-        case 'borg_subscribe': {
-          const checkoutUrl = await createSubscription();
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Complete your subscription at: ${checkoutUrl}`,
-              },
-            ],
-          };
-        }
-
-        case 'borg_upgrade-subscription': {
-          const portalUrl = await createBillingPortalSession();
-          try {
-            await open(portalUrl);
-          } catch {
-            // Returning the URL is sufficient when a headless agent cannot open a browser.
-          }
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Manage your Borg MCP subscription at: ${portalUrl}`,
-              },
-            ],
-          };
-        }
-
-        case 'borg_subscription_status': {
-          const status = await checkSubscriptionStatus();
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(status, null, 2),
-              },
-            ],
-          };
-        }
-
-        case 'borg_open_dashboard': {
-          const dashboardUrl = 'https://borgmcp.ai/dashboard';
-          await open(dashboardUrl);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `◼ Opened dashboard in browser: ${dashboardUrl}`,
-              },
-            ],
-          };
         }
 
         case 'borg_assimilate': {
@@ -1347,20 +1238,14 @@ export async function main() {
           throw new Error(`Unknown tool: ${name}`);
       }
     } catch (error: any) {
-      // gh#877: drone-lifecycle verdicts return a RECOGNIZABLE tool RESULT (not
-      // a generic "Error: ..." the agent retries) so the /loop + role playbook
-      // can branch deterministically. Checked FIRST: an evicted/frozen seat is
-      // a lifecycle terminal/pause, not an auth blip — it must never fall into
-      // the auth-recovery "re-assimilate" advice below.
+      // gh#877: the drone-lifecycle verdict returns a RECOGNIZABLE tool RESULT
+      // (not a generic "Error: ..." the agent retries) so the /loop + role
+      // playbook can branch deterministically. Checked FIRST: an evicted seat is
+      // a lifecycle terminal, not an auth blip — it must never fall into the
+      // auth-recovery "re-assimilate" advice below.
       if (error instanceof DroneEvictedError) {
         return {
           content: [{ type: 'text', text: formatEvictedToolResult(error.message) }],
-          isError: true,
-        };
-      }
-      if (error instanceof DroneFrozenError) {
-        return {
-          content: [{ type: 'text', text: formatFrozenToolResult(error.message) }],
           isError: true,
         };
       }
@@ -1388,58 +1273,15 @@ export async function main() {
     }
   });
 
-  // Register prompts listing
+  // Register prompts listing — the client exposes no prompts.
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
-    return {
-      prompts: [
-        {
-          name: 'borg_subscribe',
-          description: 'Set up Borg MCP Cube tier subscription ($1/month per cube; each cube adds 8 pooled agent sessions + 1000 req/hr). Free tier is permanent (1 cube + 3 agent sessions + 100 req/hr); no trial.',
-        },
-        {
-          name: 'dashboard',
-          description: 'Open Borg MCP dashboard to manage cubes',
-        },
-      ],
-    };
+    return { prompts: [] };
   });
 
   // Register prompt getter
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     const { name } = request.params;
-
-    switch (name) {
-      case 'borg_subscribe':
-        return {
-          description: 'Set up Borg MCP Cube tier subscription ($1/month per cube; each cube adds 8 pooled agent sessions + 1000 req/hr). Free tier is permanent (1 cube + 3 agent sessions + 100 req/hr); no trial.',
-          messages: [
-            {
-              role: 'user',
-              content: {
-                type: 'text',
-                text: 'Please help me set up a Borg MCP subscription using the subscribe tool.',
-              },
-            },
-          ],
-        };
-
-      case 'dashboard':
-        return {
-          description: 'Open Borg MCP dashboard to manage cubes',
-          messages: [
-            {
-              role: 'user',
-              content: {
-                type: 'text',
-                text: 'Please open the Borg MCP dashboard using the borg_open_dashboard tool.',
-              },
-            },
-          ],
-        };
-
-      default:
-        throw new Error(`Unknown prompt: ${name}`);
-    }
+    throw new Error(`Unknown prompt: ${name}`);
   });
 
   // Create stdio transport

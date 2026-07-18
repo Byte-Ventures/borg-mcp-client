@@ -84,15 +84,6 @@ export interface AssimilateDeps {
     setActiveCube: (a: ActiveCube) => Promise<void>;
     findProjectRoot: (cwd: string) => string;
     installProjectSessionHook: (projectRoot: string) => void;
-    getCachedAuth: () => Promise<{
-        token: string;
-        apiUrl: string;
-    } | null>;
-    runSetup: () => Promise<{
-        token: string;
-        apiUrl: string;
-    }>;
-    cloudApiUrl: string;
     /** gh#27: optional test seam — when set, selectAssimilationAuthority uses
      *  this instead of prompting/failing. Not wired in production. */
     defaultAuthority?: AssimilationAuthority;
@@ -146,9 +137,6 @@ export interface AssimilateDeps {
     }) => Promise<string | null>;
 }
 type AssimilationAuthority = {
-    kind: 'cloud';
-    apiUrl: string;
-} | {
     kind: 'server';
     apiUrl: string;
 };

@@ -54,13 +54,6 @@ export const MANAGEMENT_TOOLS = [
     'borg_list-templates',
     'borg_remove-decision',
 ];
-/** Subscription/billing — native for management seats, deferred for workers. */
-export const BILLING_TOOLS = [
-    'borg_subscribe',
-    'borg_upgrade-subscription',
-    'borg_subscription_status',
-    'borg_open_dashboard',
-];
 /**
  * Highest-stakes subset of the management set — filtered from a worker's native
  * surface for context economy only. NOT an auth list: server enforcement is
@@ -90,7 +83,7 @@ export function deferredToolNames(scope) {
         return new Set(); // role unknown → full set
     if (isManagementSeat(scope))
         return new Set(); // management seat → full set
-    return new Set([...MANAGEMENT_TOOLS, ...BILLING_TOOLS]); // worker → defer
+    return new Set([...MANAGEMENT_TOOLS]); // worker → defer
 }
 /**
  * Filter a tool-definition array down to the native surface for this scope.

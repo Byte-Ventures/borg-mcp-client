@@ -201,6 +201,11 @@ export async function attachBorgServer(origin, trustIdentity, parentCredential, 
  * followed by an authenticated protocol proof activates the bearer.
  */
 export async function enrollBorgServer(origin, trustIdentity, invitation, deps = {}) {
+    const fetchImpl = deps.fetchImpl ?? fetch;
+    // Credential-free tag preflight FIRST (CR fb4d6eba): after pinned TLS, an
+    // incompatible server must be rejected before any credential is created or
+    // persisted and before any invitation/secret-bearing request is sent.
+    const protocol = await preflightBorgServerTag(origin, fetchImpl);
     const pending = await (deps.prepareEnrollment ?? getOrCreatePendingServerEnrollment)({
         origin,
         trustIdentity,
@@ -213,7 +218,6 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
         client_credential: pending.credential,
         ...(pending.clientName ? { client_name: pending.clientName } : {}),
     });
-    const fetchImpl = deps.fetchImpl ?? fetch;
     let response = null;
     let lastTransportError;
     for (let attempt = 0; attempt < 2 && response === null; attempt += 1) {
@@ -256,7 +260,6 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
             throw error;
         throw new Error('Borg server returned an invalid enrollment envelope');
     }
-    const protocol = await preflightBorgServerTag(origin, fetchImpl);
     await (deps.activateEnrollment ?? activatePendingServerEnrollment)({
         origin,
         trustIdentity,
