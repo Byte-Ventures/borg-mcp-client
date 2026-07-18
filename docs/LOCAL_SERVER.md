@@ -92,7 +92,7 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 
 ## Release Blockers
 
-This WIP consumes the exact audited `borgmcp-shared@0.3.0` registry release.
+This WIP consumes the exact audited `borgmcp-shared@0.4.0` registry release.
 The matching server #5 owner-enrollment,
 cube-create, attach, restart, log, and SSE implementation must also pass the
 full process-level local dogfood gate. Until then this path remains preview-only.
