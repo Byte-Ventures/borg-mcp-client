@@ -60,10 +60,14 @@ the operator runs the explicit local assimilation command from the intended
 worktree. A fresh worktree operation creates a distinct drone; an ambiguous
 retry of that same operation resumes the same drone.
 
-An identical `--here` rerun validates the saved local seat and reattaches
-with its durable retry tuple instead of choosing another role and minting a new
-drone. Ambiguous liveness or transport results never authorize a replacement;
-only an authoritative eviction rotates the retry tuple and permits a remint.
+An identical `--here` rerun validates the saved local seat and reattaches by
+re-sending the same client-generated session bearer — the sole server correlator —
+instead of choosing another role or minting a new drone. The bearer is REUSED, not
+rotated: the server binds only its digest, so a re-sent identical bearer resolves to
+the existing seat. Ambiguous liveness or transport results never authorize a
+replacement; only an authoritative eviction mints a fresh bearer and permits a
+remint. (The `retry_key` idempotency key applies to enrollment and cube-creation
+only — never to seat re-attach, which is idempotent through the bearer itself.)
 
 The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` values may include another port but must pass the same trust and endpoint policy.
 
@@ -90,9 +94,10 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 - Incompatible response: verify compatible client and server versions, then
   retry the same endpoint.
 
-## Release Blockers
+## Release status
 
-This WIP consumes the exact audited `borgmcp-shared@0.4.0` registry release.
-The matching server #5 owner-enrollment,
-cube-create, attach, restart, log, and SSE implementation must also pass the
-full process-level local dogfood gate. Until then this path remains preview-only.
+This self-hosted path consumes the published `borgmcp-shared@0.4.0` v2 registry
+release. The matching server owner-enrollment, cube-create, attach, restart, log,
+and SSE implementation must also pass the full process-level local dogfood gate.
+Until that gate opens the self-hosted path remains preview-only, and the client
+publish is deferred accordingly.

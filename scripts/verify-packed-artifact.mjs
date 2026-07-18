@@ -42,6 +42,20 @@ const DOCS_FORBIDDEN_CONTENT = [
   { pattern: /\bkeychain\b/i, description: 'retired OS-keychain seat guidance' },
   { pattern: /\bcubes\.json\b/i, description: 'retired cubes.json seat reference' },
 ];
+// Item 7 (release-integrity): shipped `.md` docs must describe the PUBLISHED
+// borgmcp-shared@<pin> v2 release — never a stale numbered-server (`server #N`)
+// attribution, WIP release framing, or the RETIRED re-attach retry-tuple ROTATION
+// claim (the client bearer is the sole correlator, REUSED not rotated). Precise: the
+// accurate publish-timing "preview-only" statement and the accurate enrollment/
+// cube-creation `retry_key` / retry-tuple line are NOT flagged (they never say
+// "rotate", never numberer a server release, never sit "retry tuple" beside
+// "reattach"). The shared-version mismatch check is enforced against the PIN below.
+const DOCS_STALE_RELEASE_FRAMING = [
+  { pattern: /server #\d+/i, description: 'stale numbered-server release attribution' },
+  { pattern: /\bWIP\b/, description: 'stale WIP release framing' },
+  { pattern: /\brotat\w*\b[^.\n]{0,40}\bretry\b/i, description: 'retired re-attach retry-tuple rotation claim' },
+  { pattern: /reattach\w*[^.\n]{0,60}retry tuple/i, description: 'retired re-attach retry-tuple rotation claim' },
+];
 // Reachable-cloud runtime identifiers (OAuth / billing / dashboard / reports).
 // Checked ONLY in shipped code (dist `.js`/`.d.ts`, src `.ts`) — NOT in `.md`
 // docs, which legitimately DESCRIBE the removal of these surfaces.
@@ -176,6 +190,18 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
     const files = await walk(root);
     if (files.length > MAX_FILES) throw new Error(`Packed artifact contains too many files: ${files.length}.`);
 
+    // Item 7: read the shared PIN from the packed manifest so the shipped-doc
+    // version-reference check auto-tracks the pin (a doc naming any other version fails).
+    let pinnedShared;
+    try {
+      pinnedShared = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).dependencies?.['borgmcp-shared'];
+    } catch {
+      pinnedShared = undefined;
+    }
+    if (typeof pinnedShared !== 'string' || !/^\d+\.\d+\.\d+$/.test(pinnedShared)) {
+      throw new Error('Packed package.json is missing a valid borgmcp-shared pin.');
+    }
+
     let unpackedBytes = 0;
     const relativeFiles = new Set();
     for (const file of files) {
@@ -203,6 +229,18 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
         for (const forbidden of DOCS_FORBIDDEN_CONTENT) {
           if (forbidden.pattern.test(content)) {
             throw new Error(`Packed artifact contains ${forbidden.description}: ${path}`);
+          }
+        }
+        // Item 7 release-integrity: no stale release framing, and every shipped
+        // `borgmcp-shared@X.Y.Z` reference must equal the pin.
+        for (const forbidden of DOCS_STALE_RELEASE_FRAMING) {
+          if (forbidden.pattern.test(content)) {
+            throw new Error(`Packed artifact contains ${forbidden.description}: ${path}`);
+          }
+        }
+        for (const match of content.matchAll(/borgmcp-shared@(\d+\.\d+\.\d+)/g)) {
+          if (match[1] !== pinnedShared) {
+            throw new Error(`Packed doc references borgmcp-shared@${match[1]} != pinned ${pinnedShared}: ${path}`);
           }
         }
       }

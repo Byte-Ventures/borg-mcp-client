@@ -70,7 +70,7 @@ export function assimilateHelpText(version: string): string {
     `  --yes, -y                  Skip confirmation prompts\n\n` +
     `An enrolled owner client may create an idempotent repository cube; ordinary clients\n` +
     `require an explicit cube grant. Agent seats begin only after enrollment. Preview only.\n` +
-    `See docs/LOCAL_SERVER.md for current release blockers.\n\n` +
+    `See docs/LOCAL_SERVER.md for self-hosted setup and current status.\n\n` +
     `For local or provider-specific models, configure the selected agent CLI directly.\n` +
     `OpenCode supports Ollama and other providers through its own model configuration.\n`
   );

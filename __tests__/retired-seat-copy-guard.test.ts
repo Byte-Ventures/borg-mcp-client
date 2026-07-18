@@ -122,3 +122,96 @@ describe('retired keychain / cubes.json copy contract', () => {
     }
   });
 });
+
+// Item 7 (release-integrity copy control): shipped operator surfaces must describe
+// the PUBLISHED `borgmcp-shared@<pin>` v2 release — never the stale 0.3.0 / `server
+// #N` / WIP-preview RELEASE attribution, and never the retired re-attach "retry
+// tuple" ROTATION claim (the client bearer is the sole correlator, REUSED not
+// rotated). Precise: the accurate publish-timing "preview-only" statement and the
+// accurate enrollment/cube-creation `retry_key` line are NOT flagged.
+describe('release-status + reattach copy contract (item 7)', () => {
+  // The pinned shared version, read from package.json so the guard auto-tracks it.
+  const pinnedShared: string = (() => {
+    const manifest = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const v = manifest.dependencies?.['borgmcp-shared'];
+    if (typeof v !== 'string') throw new Error('borgmcp-shared pin missing from package.json');
+    return v;
+  })();
+
+  // STALE RELEASE framing (never in accurate copy). `server #N` = a numbered
+  // pre-release server attribution; `\bWIP\b` = work-in-progress release framing.
+  const STALE_RELEASE_FRAMING: RegExp[] = [
+    /server #\d+/i,
+    /\bWIP\b/,
+  ];
+  // RETIRED re-attach ROTATION claim — scoped so it never matches the accurate
+  // enrollment/cube-creation `retry_key`/retry-tuple line (which never says
+  // "rotate", and never sits "retry tuple" beside "reattach").
+  const REATTACH_ROTATION: RegExp[] = [
+    /\brotat\w*\b[^.\n]{0,40}\bretry\b/i,
+    /reattach\w*[^.\n]{0,60}retry tuple/i,
+  ];
+
+  function surfaces(): Array<[string, string]> {
+    const out: Array<[string, string]> = [
+      ['topLevelHelpText', topLevelHelpText('9.9.9')],
+      ['assimilateHelpText', assimilateHelpText('9.9.9')],
+      ['resetLocalSeatHelpText', resetLocalSeatHelpText('9.9.9')],
+      ['setupHelpText', setupHelpText('9.9.9')],
+    ];
+    for (const file of [path.join(ROOT, 'README.md'), ...listFiles(path.join(ROOT, 'docs'), '.md')]) {
+      out.push([path.relative(ROOT, file), readFileSync(file, 'utf8')]);
+    }
+    return out;
+  }
+
+  it('every shipped `borgmcp-shared@X.Y.Z` reference equals the pinned version', () => {
+    for (const [name, text] of surfaces()) {
+      for (const m of text.matchAll(/borgmcp-shared@(\d+\.\d+\.\d+)/g)) {
+        expect(m[1], `${name} references borgmcp-shared@${m[1]} (pinned is ${pinnedShared})`).toBe(pinnedShared);
+      }
+    }
+  });
+
+  it('no shipped surface carries stale `server #N` / WIP release framing', () => {
+    for (const [name, text] of surfaces()) {
+      for (const term of STALE_RELEASE_FRAMING) {
+        expect(term.test(text), `${name} contains stale release framing ${term}`).toBe(false);
+      }
+    }
+  });
+
+  it('no shipped surface reintroduces the retired re-attach retry-tuple ROTATION claim', () => {
+    for (const [name, text] of surfaces()) {
+      for (const term of REATTACH_ROTATION) {
+        expect(term.test(text), `${name} contains the retired reattach-rotation claim ${term}`).toBe(false);
+      }
+    }
+  });
+
+  it('the guard does NOT flag the accurate publish-timing "preview" / enrollment retry_key copy', () => {
+    // Positive control: accurate phrases that MUST remain allowed.
+    for (const term of [...STALE_RELEASE_FRAMING, ...REATTACH_ROTATION]) {
+      expect(term.test('the self-hosted path remains preview-only, and the client publish is deferred')).toBe(false);
+      expect(term.test('the client generates a 256-bit credential and UUID retry key and persists the exact tuple')).toBe(false);
+      expect(term.test('the `retry_key` idempotency key applies to enrollment and cube-creation only')).toBe(false);
+    }
+    // And the accurate pinned version reference is allowed.
+    expect(new RegExp(`borgmcp-shared@${pinnedShared.replace(/\./g, '\\.')}`).test(
+      `consumes the published borgmcp-shared@${pinnedShared} v2 registry release`,
+    )).toBe(true);
+  });
+
+  it('negative control: the guard DOES fire on the stale framing it must catch', () => {
+    // server #N / WIP framing.
+    expect(STALE_RELEASE_FRAMING.some((r) => r.test('The matching server #5 owner-enrollment'))).toBe(true);
+    expect(STALE_RELEASE_FRAMING.some((r) => r.test('This WIP consumes the audited release'))).toBe(true);
+    // The retired re-attach ROTATION claim.
+    expect(REATTACH_ROTATION.some((r) => r.test('only an authoritative eviction rotates the retry tuple'))).toBe(true);
+    expect(REATTACH_ROTATION.some((r) => r.test('reattaches with its durable retry tuple instead of'))).toBe(true);
+    // A stale shared-version reference is != pin.
+    const stale = '0.3.0';
+    expect(stale).not.toBe(pinnedShared);
+    expect([...'consumes borgmcp-shared@0.3.0'.matchAll(/borgmcp-shared@(\d+\.\d+\.\d+)/g)][0][1]).toBe(stale);
+  });
+});

@@ -395,9 +395,9 @@ export async function sendBorgServerAttach(
 /**
  * Redeem one invitation after the caller has verified TLS and derived the
  * stable server/CA identity. The client-generated bearer + retry key are
- * persisted PENDING in the OS keychain before the first request. A transport-
- * ambiguous exchange is retried with that exact tuple; only a decoded response
- * followed by an authenticated protocol proof activates the bearer.
+ * persisted PENDING in the local 0600 file store before the first request. A
+ * transport-ambiguous exchange is retried with that exact tuple; only a decoded
+ * response followed by an authenticated protocol proof activates the bearer.
  */
 export async function enrollBorgServer(
   origin: string,
