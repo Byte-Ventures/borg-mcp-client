@@ -2541,6 +2541,11 @@ describe('runAssimilate: #1015 authority selection', () => {
         'creating or resuming saved seat state. Wait for it to finish, then rerun ' +
         '`borg assimilate --host https://localhost:8787`.\n',
     );
+    // RQ: a transient store-busy lock exhaustion must render the RETRY copy — never
+    // the misleading version-compatibility fall-through.
+    const output = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(output).not.toMatch(/versions? (?:are|is) compatible|version compatibility/i);
+    expect(output).not.toMatch(/unexpected response/i);
   });
 
   it('distinguishes an unavailable local seat store from trust, auth, and connectivity failures', async () => {
