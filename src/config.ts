@@ -778,6 +778,78 @@ export async function activatePendingServerSession(
   return account;
 }
 
+/** The outcome of an atomic compare-and-activate (CR #2). */
+export type ActivateSessionOutcome = 'activated' | 'missing' | 'replaced';
+
+/**
+ * Atomic compare-and-activate of the EXACT pending record that was sent (CR #2).
+ * The whole read → validate → DIGEST-compare → stamp runs under the per-account
+ * keychain lock, and it activates ONLY when the record still at the deterministic
+ * ref carries the exact bearer whose digest the caller sent (`expectedPendingDigest`).
+ *   - `missing`   — no record at the ref (a concurrent reset deleted it).
+ *   - `replaced`  — a record exists but its bearer digest differs (a same-ref
+ *                   replacement wrote a DIFFERENT bearer between send and FINALIZE);
+ *                   server metadata for bearer A must NEVER be stamped onto bearer B.
+ *   - `activated` — the exact sent bearer was stamped ACTIVE (idempotent for a
+ *                   retried FINALIZE whose record is already active with the same
+ *                   bearer). Returns the opaque ref via the account (deterministic).
+ * This SUPERSEDES the unguarded activatePendingServerSession on every production
+ * (composite) attach path; the raw activate remains only for lower-level tests.
+ */
+export async function compareAndActivatePendingServerSession(
+  input: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+    droneId: string;
+    sessionId: string;
+    expiresAt: string;
+    expectedPendingDigest: string;
+  },
+): Promise<ActivateSessionOutcome> {
+  validateUuid(input.droneId, 'drone identity');
+  validateUuid(input.sessionId, 'session identity');
+  if (typeof input.expiresAt !== 'string' || !Number.isFinite(Date.parse(input.expiresAt))) {
+    throw new Error('invalid Borg server session expiry');
+  }
+  const account = serverPendingSessionAccount(
+    input.origin,
+    input.trustIdentity,
+    input.cubeId,
+    input.roleId,
+    input.operation,
+  );
+  const backend = await getServerCredentialBackend();
+  return withServerKeychainLock(account, async () => {
+    const stored = await backend.get(account);
+    if (!stored) return 'missing';
+    let record: PendingServerSessionRecord;
+    try {
+      record = decodePendingServerSession(stored, input);
+    } catch {
+      // A corrupt/foreign record occupies the ref — treat as a replacement; never
+      // stamp server metadata onto it.
+      return 'replaced';
+    }
+    const digest = createHash('sha256').update(record.credential).digest('hex');
+    if (digest !== input.expectedPendingDigest) return 'replaced';
+    const next: PendingServerSessionRecord = {
+      ...record,
+      state: 'active',
+      droneId: input.droneId,
+      sessionId: input.sessionId,
+      expiresAt: input.expiresAt,
+    };
+    await backend.set(account, JSON.stringify({
+      version: SERVER_PENDING_SESSION_RECORD_VERSION,
+      ...next,
+    }));
+    return 'activated';
+  });
+}
+
 /**
  * The deterministic per-seat keychain reference for a pending/active session,
  * known at PREPARE time (from origin+trust+cube+role+operation, before any

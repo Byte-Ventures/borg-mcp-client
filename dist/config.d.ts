@@ -105,6 +105,34 @@ export declare function activatePendingServerSession(input: {
     sessionId: string;
     expiresAt: string;
 }): Promise<string>;
+/** The outcome of an atomic compare-and-activate (CR #2). */
+export type ActivateSessionOutcome = 'activated' | 'missing' | 'replaced';
+/**
+ * Atomic compare-and-activate of the EXACT pending record that was sent (CR #2).
+ * The whole read → validate → DIGEST-compare → stamp runs under the per-account
+ * keychain lock, and it activates ONLY when the record still at the deterministic
+ * ref carries the exact bearer whose digest the caller sent (`expectedPendingDigest`).
+ *   - `missing`   — no record at the ref (a concurrent reset deleted it).
+ *   - `replaced`  — a record exists but its bearer digest differs (a same-ref
+ *                   replacement wrote a DIFFERENT bearer between send and FINALIZE);
+ *                   server metadata for bearer A must NEVER be stamped onto bearer B.
+ *   - `activated` — the exact sent bearer was stamped ACTIVE (idempotent for a
+ *                   retried FINALIZE whose record is already active with the same
+ *                   bearer). Returns the opaque ref via the account (deterministic).
+ * This SUPERSEDES the unguarded activatePendingServerSession on every production
+ * (composite) attach path; the raw activate remains only for lower-level tests.
+ */
+export declare function compareAndActivatePendingServerSession(input: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+    droneId: string;
+    sessionId: string;
+    expiresAt: string;
+    expectedPendingDigest: string;
+}): Promise<ActivateSessionOutcome>;
 /**
  * The deterministic per-seat keychain reference for a pending/active session,
  * known at PREPARE time (from origin+trust+cube+role+operation, before any

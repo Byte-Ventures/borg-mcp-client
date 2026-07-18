@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   DEFAULT_LOCAL_SERVER_ORIGIN,
   attachBorgServer,
@@ -9,6 +10,7 @@ import {
   preflightBorgServerTag,
   resumeBorgServerEnrollment,
 } from '../src/server-handshake.js';
+import { serverSessionCredentialRef } from '../src/config.js';
 import type { PendingServerSessionRecord, ServerSessionOperation } from '../src/config.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
@@ -21,6 +23,15 @@ const OPERATION: ServerSessionOperation = {
   kind: 'seat',
   operationKey: 'current-worktree',
 };
+
+const SEAT_INPUT = {
+  origin: 'https://server.example.com',
+  trustIdentity: 'spki-sha256:server-a',
+  cubeId: CUBE_ID,
+  roleId: ROLE_ID,
+  operation: OPERATION,
+};
+const digestOf = (bearer: string) => createHash('sha256').update(bearer).digest('hex');
 
 // The credential-free protocol preflight returns ONLY the exact tag.
 const tagPreflightBody = () =>
@@ -517,7 +528,10 @@ describe('self-hosted server handshake', () => {
       state: 'pending',
     };
     const getPendingSession = vi.fn(async () => pendingRecord);
-    const activateSession = vi.fn(async () => credentialRef);
+    // CR #2: the composite activate is an atomic compare-and-activate returning a
+    // typed outcome, not a bare ref. The deterministic ref comes from the seat.
+    const activateSession = vi.fn(async () => 'activated' as const);
+    const expectedRef = serverSessionCredentialRef(SEAT_INPUT);
 
     await expect(attachBorgServer(
       'https://server.example.com',
@@ -528,7 +542,7 @@ describe('self-hosted server handshake', () => {
     )).resolves.toMatchObject({
       result: 'created',
       drone: { id: DRONE_ID },
-      session: { credentialRef, sessionId: SESSION_ID, expiresAt },
+      session: { credentialRef: expectedRef, sessionId: SESSION_ID, expiresAt },
     });
 
     const [url, init] = fetchImpl.mock.calls[0];
@@ -564,7 +578,38 @@ describe('self-hosted server handshake', () => {
       droneId: DRONE_ID,
       sessionId: SESSION_ID,
       expiresAt,
+      // CR #2: the EXACT bearer we sent is pinned by digest so a same-ref
+      // replacement cannot be activated with this response's server metadata.
+      expectedPendingDigest: digestOf(bearer),
     }));
+  });
+
+  it('CR #2: never binds server metadata onto a same-ref replacement — a `replaced`/`missing` activate aborts the attach', async () => {
+    const fetchImpl = (result: 'created' | 'reused' = 'created') => vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '2',
+      request_id: 'attach-r',
+      payload: {
+        result,
+        cube: { id: CUBE_ID, name: 'local-cube' },
+        role: { id: ROLE_ID, name: 'Builder' },
+        drone: { id: DRONE_ID, label: 'builder-1' },
+        session: { id: SESSION_ID, expires_at: '2026-07-20T00:00:00.000Z' },
+      },
+    }), { status: 201 }));
+    const pendingRecord: PendingServerSessionRecord = {
+      ...SEAT_INPUT, credential: 's'.repeat(43), state: 'pending',
+    };
+    const attachWith = (outcome: 'replaced' | 'missing') => attachBorgServer(
+      'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
+      { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      {
+        fetchImpl: fetchImpl() as typeof fetch,
+        getPendingSession: vi.fn(async () => pendingRecord),
+        activateSession: vi.fn(async () => outcome),
+      },
+    );
+    await expect(attachWith('replaced')).rejects.toThrow(/replaced.*no server metadata was bound/i);
+    await expect(attachWith('missing')).rejects.toThrow(/missing.*no server metadata was bound/i);
   });
 
   it('does not return attach metadata when the keychain activation fails', async () => {

@@ -1,6 +1,6 @@
 import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, createAttachRequestEnvelope, createProtocolEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, ErrorCode, } from 'borgmcp-shared/protocol';
 import { createHash, randomUUID } from 'node:crypto';
-import { activatePendingServerEnrollment, activatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, serverSessionCredentialRef, } from './config.js';
+import { activatePendingServerEnrollment, compareAndActivatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, serverSessionCredentialRef, } from './config.js';
 import { BorgServerError } from './server-errors.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { loadBorgServerTrust, } from './server-trust.js';
@@ -181,12 +181,24 @@ export async function prepareBorgServerAttach(origin, trustIdentity, parentCrede
             pendingBearerDigest,
             // The single keychain pending→ACTIVE flip — invoked LAST by the FINALIZE
             // composite, after the cubes binding is persisted, under the cube lock.
-            activate: () => (deps.activateSession ?? activatePendingServerSession)({
-                ...seatInput,
-                droneId: decoded.drone.id,
-                sessionId: decoded.session.id,
-                expiresAt: decoded.session.expires_at,
-            }),
+            // ATOMIC compare-and-activate (CR #2): stamps server metadata ONLY onto the
+            // EXACT pending record whose bearer we sent (digest-matched). A same-ref
+            // replacement or a concurrent delete aborts activation — never binds bearer
+            // A's server session onto bearer B.
+            activate: async () => {
+                const outcome = await (deps.activateSession ?? compareAndActivatePendingServerSession)({
+                    ...seatInput,
+                    droneId: decoded.drone.id,
+                    sessionId: decoded.session.id,
+                    expiresAt: decoded.session.expires_at,
+                    expectedPendingDigest: pendingBearerDigest,
+                });
+                if (outcome !== 'activated') {
+                    throw new Error(`Borg server session activation aborted: the exact pending record was ${outcome} ` +
+                        '(a concurrent reset or same-ref replacement); no server metadata was bound.');
+                }
+                return credentialRef;
+            },
             // Abort-scrub of ONLY this own pending record (never an ACTIVE record, never
             // a same-ref replacement) — invoked by FINALIZE on an expectation mismatch.
             scrubPending: () => (deps.scrubPending ?? compareAndClearPendingServerSession)(credentialRef, { origin, trustIdentity, cubeId: request.cubeId }, pendingBearerDigest),

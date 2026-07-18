@@ -5,8 +5,10 @@ import {
   activatePendingServerEnrollment,
   activatePendingServerSession,
   clearPendingServerCubeCreation,
+  clearPendingServerSession,
   clearServerSessionCredential,
   clearServerCredential,
+  compareAndActivatePendingServerSession,
   compareAndClearPendingServerSession,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
@@ -265,6 +267,56 @@ describe('compareAndClearPendingServerSession (composite abort-scrub, part C)', 
     const ref = serverSessionCredentialRef(seat);
     expect(await compareAndClearPendingServerSession(ref, binding, 'x')).toBe(false);
     expect(await compareAndClearPendingServerSession('not-a-ref', binding, 'x')).toBe(false);
+  });
+});
+
+describe('compareAndActivatePendingServerSession (atomic digest-guarded activate, CR #2)', () => {
+  const seat = {
+    origin: 'https://localhost:8787',
+    trustIdentity: 'sha256:server-a',
+    cubeId: '11111111-1111-4111-8111-111111111111',
+    roleId: '44444444-4444-4444-8444-444444444444',
+    operation: { projectRoot: '/work/repo', kind: 'seat' as const, operationKey: 'current-worktree' },
+  };
+  const binding = { origin: seat.origin, trustIdentity: seat.trustIdentity, cubeId: seat.cubeId };
+  const stamp = {
+    droneId: '22222222-2222-4222-8222-222222222222',
+    sessionId: '33333333-3333-4333-8333-333333333333',
+    expiresAt: '2026-07-20T00:00:00.000Z',
+  };
+
+  it('activates ONLY the exact sent bearer (digest match) and is idempotent on a retried FINALIZE', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const rec = await getOrCreatePendingServerSession(seat);
+    const digest = createHash('sha256').update(rec.credential).digest('hex');
+    const ref = serverSessionCredentialRef(seat);
+
+    expect(await compareAndActivatePendingServerSession({ ...seat, ...stamp, expectedPendingDigest: digest })).toBe('activated');
+    expect(JSON.parse(values.get(ref)!).state).toBe('active');
+    // Retried FINALIZE: the record is already active with the SAME bearer → idempotent re-stamp.
+    expect(await compareAndActivatePendingServerSession({ ...seat, ...stamp, expectedPendingDigest: digest })).toBe('activated');
+  });
+
+  it('REPLACED: a same-ref replacement (fresh bearer) is NEVER activated with this response’s metadata', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const first = await getOrCreatePendingServerSession(seat);
+    const firstDigest = createHash('sha256').update(first.credential).digest('hex');
+    // A reset+re-enroll replaced the pending bearer under the SAME deterministic ref.
+    await clearPendingServerSession(seat);
+    const second = await getOrCreatePendingServerSession(seat);
+    expect(second.credential).not.toBe(first.credential);
+
+    // Trying to stamp bearer-A's server metadata onto bearer-B → replaced, unchanged.
+    expect(await compareAndActivatePendingServerSession({ ...seat, ...stamp, expectedPendingDigest: firstDigest })).toBe('replaced');
+    expect(JSON.parse(values.get(serverSessionCredentialRef(seat))!).state).toBe('pending');
+  });
+
+  it('MISSING: a deleted record (a concurrent reset won) activates nothing', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    expect(await compareAndActivatePendingServerSession({ ...seat, ...stamp, expectedPendingDigest: 'a'.repeat(64) })).toBe('missing');
   });
 });
 

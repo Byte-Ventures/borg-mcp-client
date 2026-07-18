@@ -1,5 +1,5 @@
 import { type CreateCubeResponse, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
-import { activatePendingServerEnrollment, activatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, serverSessionCredentialRef, type ServerSessionOperation } from './config.js';
+import { activatePendingServerEnrollment, compareAndActivatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, serverSessionCredentialRef, type ServerSessionOperation } from './config.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
 type FetchLike = typeof fetch;
@@ -90,7 +90,7 @@ export declare function prepareBorgServerAttach(origin: string, trustIdentity: s
 }, deps?: {
     fetchImpl?: FetchLike;
     getPendingSession?: typeof getOrCreatePendingServerSession;
-    activateSession?: typeof activatePendingServerSession;
+    activateSession?: typeof compareAndActivatePendingServerSession;
     scrubPending?: typeof compareAndClearPendingServerSession;
     sessionCredentialRef?: typeof serverSessionCredentialRef;
 }): Promise<PreparedServerAttach>;
@@ -108,7 +108,7 @@ export declare function attachBorgServer(origin: string, trustIdentity: string, 
 }, deps?: {
     fetchImpl?: FetchLike;
     getPendingSession?: typeof getOrCreatePendingServerSession;
-    activateSession?: typeof activatePendingServerSession;
+    activateSession?: typeof compareAndActivatePendingServerSession;
 }): Promise<ServerAttachResult>;
 /**
  * Redeem one invitation after the caller has verified TLS and derived the

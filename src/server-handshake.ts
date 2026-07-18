@@ -21,7 +21,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 import {
   activatePendingServerEnrollment,
-  activatePendingServerSession,
+  compareAndActivatePendingServerSession,
   clearPendingServerCubeCreation,
   clearPendingServerEnrollment,
   compareAndClearPendingServerSession,
@@ -213,7 +213,7 @@ export async function prepareBorgServerAttach(
   deps: {
     fetchImpl?: FetchLike;
     getPendingSession?: typeof getOrCreatePendingServerSession;
-    activateSession?: typeof activatePendingServerSession;
+    activateSession?: typeof compareAndActivatePendingServerSession;
     scrubPending?: typeof compareAndClearPendingServerSession;
     sessionCredentialRef?: typeof serverSessionCredentialRef;
   } = {},
@@ -324,12 +324,26 @@ export async function prepareBorgServerAttach(
       pendingBearerDigest,
       // The single keychain pending→ACTIVE flip — invoked LAST by the FINALIZE
       // composite, after the cubes binding is persisted, under the cube lock.
-      activate: () => (deps.activateSession ?? activatePendingServerSession)({
-        ...seatInput,
-        droneId: decoded.drone.id,
-        sessionId: decoded.session.id,
-        expiresAt: decoded.session.expires_at,
-      }),
+      // ATOMIC compare-and-activate (CR #2): stamps server metadata ONLY onto the
+      // EXACT pending record whose bearer we sent (digest-matched). A same-ref
+      // replacement or a concurrent delete aborts activation — never binds bearer
+      // A's server session onto bearer B.
+      activate: async () => {
+        const outcome = await (deps.activateSession ?? compareAndActivatePendingServerSession)({
+          ...seatInput,
+          droneId: decoded.drone.id,
+          sessionId: decoded.session.id,
+          expiresAt: decoded.session.expires_at,
+          expectedPendingDigest: pendingBearerDigest,
+        });
+        if (outcome !== 'activated') {
+          throw new Error(
+            `Borg server session activation aborted: the exact pending record was ${outcome} ` +
+              '(a concurrent reset or same-ref replacement); no server metadata was bound.',
+          );
+        }
+        return credentialRef;
+      },
       // Abort-scrub of ONLY this own pending record (never an ACTIVE record, never
       // a same-ref replacement) — invoked by FINALIZE on an expectation mismatch.
       scrubPending: () => (deps.scrubPending ?? compareAndClearPendingServerSession)(
@@ -362,7 +376,7 @@ export async function attachBorgServer(
   deps: {
     fetchImpl?: FetchLike;
     getPendingSession?: typeof getOrCreatePendingServerSession;
-    activateSession?: typeof activatePendingServerSession;
+    activateSession?: typeof compareAndActivatePendingServerSession;
   } = {},
 ): Promise<ServerAttachResult> {
   const prepared = await prepareBorgServerAttach(origin, trustIdentity, parentCredential, request, deps);
