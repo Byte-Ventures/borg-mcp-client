@@ -54,27 +54,17 @@ export interface ServerSessionOperation {
     kind: 'seat' | 'sibling';
     operationKey: string;
 }
-/**
- * The SINGLE advisory lock over the whole 0600 credential store (Queen rescope).
- * Every mutator AND every observer that must serialize runs `operation` inside
- * one continuous hold of this lock, released on EVERY path incl throw (SR-seven
- * #4). The `account` argument is retained for call-site compatibility but is no
- * longer a per-account lock — there is one store lock now (no lock ordering, no
- * inversion, no reaper machinery). Implemented as an O_EXCL lockfile + bounded
- * stale-mtime reclaim (Node has no native flock; consistent with the existing
- * cubes.json.lock idiom and avoids a native dep).
- */
-export declare function withServerKeychainLock<T>(_account: string, operation: () => Promise<T>): Promise<T>;
 /** Test-only credential-store backend injection. */
 export declare function __setServerCredentialBackendForTest(backend: TokenBackend | null): void;
 /**
- * Persist one self-hosted server credential in the dedicated OS-keychain namespace.
+ * Persist one self-hosted server credential in the dedicated 0600 credential store.
  *
  * The account key binds both the canonical authority origin and the verified
  * server/CA identity. A credential enrolled for one authority is therefore
  * never considered for another endpoint or trust anchor. Enrollment owns the
  * write; command-line arguments and environment variables are intentionally
- * not credential sources.
+ * not credential sources. CR3b: the load→set→rename runs inside ONE hold of the
+ * single store lock so a concurrent writer cannot lose an unrelated account.
  */
 export declare function storeServerCredential(record: ServerCredentialRecord): Promise<void>;
 /** Read an authority-bound active client record, failing closed on corruption. */
@@ -105,7 +95,7 @@ export declare function activatePendingServerEnrollment(input: {
 }): Promise<void>;
 /** Delete only the exact definitively rejected pending attempt. */
 export declare function clearPendingServerEnrollment(origin: string, trustIdentity: string, retryKey: string): Promise<void>;
-/** Persist one repository-scoped cube-create idempotency key in the keychain. */
+/** Persist one repository-scoped cube-create idempotency key in the 0600 credential store. */
 export declare function getOrCreatePendingServerCubeCreation(input: {
     origin: string;
     trustIdentity: string;

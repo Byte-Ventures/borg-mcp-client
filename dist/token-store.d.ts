@@ -6,7 +6,7 @@
  * The raw secret rests only in the 0600 file, parity with the server's own TLS
  * private keys; there is no keychain and no obfuscation-grade fallback.
  */
-export type TokenBackendName = 'keychain' | 'file';
+export type TokenBackendName = 'file';
 /**
  * Account-agnostic key/value store over the 0600 credential file.
  */
@@ -23,7 +23,7 @@ export interface TokenBackend {
  * (parity with the server's TLS keys), never a keychain.
  *
  * These ops are NON-flocking by design: the config layer holds the single store
- * lock (withServerKeychainLock → withStoreLock) continuously across each
+ * lock (withStoreLock over CREDENTIALS_LOCK) continuously across each
  * read-compare-write, so nesting a second lock here would deadlock the O_EXCL
  * lockfile. Pure reads (get) are safe lock-free because atomicWrite0600's rename
  * guarantees a reader only ever sees a complete file.

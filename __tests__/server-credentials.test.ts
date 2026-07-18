@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { makeFileBackend } from '../src/token-store.js';
 import {
   __setServerCredentialBackendForTest,
   activatePendingServerEnrollment,
@@ -19,7 +23,7 @@ function memoryBackend(): { backend: TokenBackend; values: Map<string, string> }
   return {
     values,
     backend: {
-      name: 'keychain',
+      name: 'file',
       get: async (account) => values.get(account) ?? null,
       set: async (account, value) => { values.set(account, value); },
       delete: async (account) => { values.delete(account); },
@@ -67,6 +71,24 @@ describe('self-hosted server credential storage', () => {
     await expect(getServerCredential(origin, trustIdentity)).resolves.toBeNull();
     await clearServerCredential(origin, trustIdentity);
     expect(values).toHaveLength(0);
+  });
+
+  it('CR3b: concurrent credential writers on a REAL file backend all persist (locked RCW; no lost account)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'borg-cred-concurrency-'));
+    try {
+      __setServerCredentialBackendForTest(makeFileBackend(join(dir, 'credentials.json')));
+      // Distinct authorities → distinct accounts in ONE file. Without the store
+      // lock, each unlocked load→set→rename races and loses unrelated accounts.
+      const trusts = Array.from({ length: 8 }, (_, i) => `sha256:server-${i}`);
+      await Promise.all(
+        trusts.map((t) => storeServerCredential({ origin, trustIdentity: t, credential })),
+      );
+      for (const t of trusts) {
+        expect(await getServerCredential(origin, t)).toBe(credential);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('rejects non-canonical origins, control-bearing identities, and weak credentials', async () => {
@@ -133,7 +155,7 @@ describe('self-hosted server credential storage', () => {
   it('serializes N concurrent enrollment and cube-create tuple initializations', async () => {
     const values = new Map<string, string>();
     const backend: TokenBackend = {
-      name: 'keychain',
+      name: 'file',
       get: async (account) => values.get(account) ?? null,
       set: async (account, value) => {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 2));

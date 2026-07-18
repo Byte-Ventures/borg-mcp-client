@@ -47,19 +47,11 @@ function serverCredentialAccount(origin, trustIdentity) {
         .digest('hex');
     return `borg-server-credential:${binding}`;
 }
-/**
- * The SINGLE advisory lock over the whole 0600 credential store (Queen rescope).
- * Every mutator AND every observer that must serialize runs `operation` inside
- * one continuous hold of this lock, released on EVERY path incl throw (SR-seven
- * #4). The `account` argument is retained for call-site compatibility but is no
- * longer a per-account lock — there is one store lock now (no lock ordering, no
- * inversion, no reaper machinery). Implemented as an O_EXCL lockfile + bounded
- * stale-mtime reclaim (Node has no native flock; consistent with the existing
- * cubes.json.lock idiom and avoids a native dep).
- */
-export async function withServerKeychainLock(_account, operation) {
-    return withStoreLock(CREDENTIALS_LOCK, operation);
-}
+// The whole 0600 credential store is serialized by the SINGLE store lock
+// (seat-store.withStoreLock over CREDENTIALS_LOCK). Every mutator AND every
+// observer that must serialize runs its entire read-compare-write inside one
+// continuous hold, released on EVERY path incl throw (SR-seven #4). There is no
+// per-account lock and no compat shim — call sites acquire the store lock directly.
 function serverPendingEnrollmentAccount(origin, trustIdentity) {
     validateServerCredentialBinding(origin, trustIdentity);
     const binding = createHash('sha256')
@@ -118,7 +110,7 @@ function serverCubeRetryAccount(origin, trustIdentity, clientId, repositoryBindi
 }
 // Local-server bearers rest ONLY in the 0600 credential store (Queen rescope —
 // parity with the server's TLS keys; no OS keychain, no obfuscation-grade
-// fallback). The single store lock (withServerKeychainLock) serializes the RCW.
+// fallback). The single store lock (CREDENTIALS_LOCK) serializes the RCW.
 let serverCredentialBackendPromise = null;
 async function getServerCredentialBackend() {
     if (!serverCredentialBackendPromise) {
@@ -131,22 +123,18 @@ export function __setServerCredentialBackendForTest(backend) {
     serverCredentialBackendPromise = backend ? Promise.resolve(backend) : null;
 }
 /**
- * Persist one self-hosted server credential in the dedicated OS-keychain namespace.
- *
- * The account key binds both the canonical authority origin and the verified
- * server/CA identity. A credential enrolled for one authority is therefore
- * never considered for another endpoint or trust anchor. Enrollment owns the
- * write; command-line arguments and environment variables are intentionally
- * not credential sources.
+ * CR3b: the UNLOCKED credential write body. Validates then set()s the account.
+ * Callers that ALREADY hold the credential-store lock (activatePendingServerEnrollment)
+ * invoke this directly so they do not re-acquire (and self-deadlock on) the single
+ * store lock; the public storeServerCredential wraps it in one lock hold.
  */
-export async function storeServerCredential(record) {
+async function writeServerCredentialRecord(backend, record) {
     validateServerCredentialBinding(record.origin, record.trustIdentity);
     validateEnrollmentCredential(record.credential);
     if (record.clientId !== undefined && record.clientId !== null) {
         validateUuid(record.clientId, 'client identity');
     }
     const serverCapabilities = validateServerCapabilities(record.serverCapabilities ?? []);
-    const backend = await getServerCredentialBackend();
     await backend.set(serverCredentialAccount(record.origin, record.trustIdentity), JSON.stringify({
         version: SERVER_CREDENTIAL_RECORD_VERSION,
         origin: record.origin,
@@ -155,6 +143,20 @@ export async function storeServerCredential(record) {
         clientId: record.clientId ?? null,
         serverCapabilities,
     }));
+}
+/**
+ * Persist one self-hosted server credential in the dedicated 0600 credential store.
+ *
+ * The account key binds both the canonical authority origin and the verified
+ * server/CA identity. A credential enrolled for one authority is therefore
+ * never considered for another endpoint or trust anchor. Enrollment owns the
+ * write; command-line arguments and environment variables are intentionally
+ * not credential sources. CR3b: the load→set→rename runs inside ONE hold of the
+ * single store lock so a concurrent writer cannot lose an unrelated account.
+ */
+export async function storeServerCredential(record) {
+    const backend = await getServerCredentialBackend();
+    await withStoreLock(CREDENTIALS_LOCK, () => writeServerCredentialRecord(backend, record));
 }
 /** Read an authority-bound active client record, failing closed on corruption. */
 export async function getServerCredentialRecord(origin, trustIdentity) {
@@ -225,7 +227,7 @@ export async function getPendingServerEnrollment(origin, trustIdentity) {
     validateServerCredentialBinding(origin, trustIdentity);
     const backend = await getServerCredentialBackend();
     const account = serverPendingEnrollmentAccount(origin, trustIdentity);
-    return withServerKeychainLock(account, async () => {
+    return withStoreLock(CREDENTIALS_LOCK, async () => {
         const stored = await backend.get(account);
         if (!stored)
             return null;
@@ -248,7 +250,7 @@ export async function getOrCreatePendingServerEnrollment(input) {
     validateClientName(input.clientName);
     const backend = await getServerCredentialBackend();
     const account = serverPendingEnrollmentAccount(input.origin, input.trustIdentity);
-    return withServerKeychainLock(account, async () => {
+    return withStoreLock(CREDENTIALS_LOCK, async () => {
         const stored = await backend.get(account);
         if (stored) {
             try {
@@ -289,7 +291,7 @@ export async function activatePendingServerEnrollment(input) {
     const serverCapabilities = validateServerCapabilities(input.serverCapabilities);
     const backend = await getServerCredentialBackend();
     const pendingAccount = serverPendingEnrollmentAccount(input.origin, input.trustIdentity);
-    await withServerKeychainLock(pendingAccount, async () => {
+    await withStoreLock(CREDENTIALS_LOCK, async () => {
         const stored = await backend.get(pendingAccount);
         if (!stored)
             throw new Error('pending Borg server enrollment is missing');
@@ -302,7 +304,9 @@ export async function activatePendingServerEnrollment(input) {
         catch {
             throw new Error('pending Borg server enrollment does not match the verified response');
         }
-        await storeServerCredential({
+        // Already inside the single store lock — use the UNLOCKED write body so we do
+        // not re-acquire (and self-deadlock on) CREDENTIALS_LOCK (CR3b).
+        await writeServerCredentialRecord(backend, {
             origin: input.origin,
             trustIdentity: input.trustIdentity,
             credential: input.credential,
@@ -317,7 +321,7 @@ export async function clearPendingServerEnrollment(origin, trustIdentity, retryK
     validateUuid(retryKey, 'enrollment retry key');
     const backend = await getServerCredentialBackend();
     const account = serverPendingEnrollmentAccount(origin, trustIdentity);
-    await withServerKeychainLock(account, async () => {
+    await withStoreLock(CREDENTIALS_LOCK, async () => {
         const stored = await backend.get(account);
         if (!stored)
             return;
@@ -332,7 +336,7 @@ export async function clearPendingServerEnrollment(origin, trustIdentity, retryK
         await backend.delete(account);
     });
 }
-/** Persist one repository-scoped cube-create idempotency key in the keychain. */
+/** Persist one repository-scoped cube-create idempotency key in the 0600 credential store. */
 export async function getOrCreatePendingServerCubeCreation(input) {
     validateServerCredentialBinding(input.origin, input.trustIdentity);
     validateUuid(input.clientId, 'client identity');
@@ -346,7 +350,7 @@ export async function getOrCreatePendingServerCubeCreation(input) {
     const repositoryBinding = createHash('sha256').update(input.projectRoot).digest('hex');
     const backend = await getServerCredentialBackend();
     const account = serverCubeRetryAccount(input.origin, input.trustIdentity, input.clientId, repositoryBinding);
-    return withServerKeychainLock(account, async () => {
+    return withStoreLock(CREDENTIALS_LOCK, async () => {
         const stored = await backend.get(account);
         if (stored) {
             try {
@@ -396,7 +400,7 @@ export async function getOrCreatePendingServerCubeCreation(input) {
 export async function clearPendingServerCubeCreation(record) {
     const backend = await getServerCredentialBackend();
     const account = serverCubeRetryAccount(record.origin, record.trustIdentity, record.clientId, record.repositoryBinding);
-    await withServerKeychainLock(account, async () => {
+    await withStoreLock(CREDENTIALS_LOCK, async () => {
         const stored = await backend.get(account);
         if (!stored)
             return;
@@ -414,7 +418,7 @@ export async function clearPendingServerCubeCreation(record) {
 export async function clearServerCredential(origin, trustIdentity) {
     const backend = await getServerCredentialBackend();
     const pendingAccount = serverPendingEnrollmentAccount(origin, trustIdentity);
-    await withServerKeychainLock(pendingAccount, async () => {
+    await withStoreLock(CREDENTIALS_LOCK, async () => {
         await backend.delete(serverCredentialAccount(origin, trustIdentity));
         await backend.delete(pendingAccount);
     });

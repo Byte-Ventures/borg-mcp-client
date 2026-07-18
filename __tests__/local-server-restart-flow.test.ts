@@ -37,7 +37,7 @@ describe('local owner enrollment to restart flow', () => {
     const operation = { projectRoot: project, kind: 'seat' as const, operationKey: 'current-worktree' };
     const keychain = new Map<string, string>();
     const backend = {
-      name: 'keychain' as const,
+      name: 'file' as const,
       get: async (account: string) => keychain.get(account) ?? null,
       set: async (account: string, value: string) => { keychain.set(account, value); },
       delete: async (account: string) => { keychain.delete(account); },
