@@ -368,3 +368,54 @@ describe('seats store — sibling attaches never move/unseat an active binding (
     });
   });
 });
+
+describe('CR#3: findIncompleteSiblingAttempt — recover a crash-orphaned unbound pending sibling', () => {
+  const SRC = '/work/repo';
+  const KEY = { origin: SEAT.origin, trustIdentity: SEAT.trustIdentity, cubeId: SEAT.cubeId, projectRoot: SRC };
+  const siblingOp = { projectRoot: SRC, kind: 'sibling' as const, operationKey: 'implicit-sibling:RUN-1' };
+
+  it('returns the UNBOUND pending sibling record keyed by source repo (the persisted attempt identity)', async () => {
+    const { seats } = await load();
+    await seats.mintPendingSeat({ ...SEAT, operation: siblingOp, credential: 'a'.repeat(43) });
+    const found = await seats.findIncompleteSiblingAttempt(KEY);
+    expect(found).not.toBeNull();
+    expect(found!.operation).toEqual(siblingOp);
+    expect(found!.state).toBe('pending');
+    expect(seats.seatRef(found!)).toBe(seats.seatRef({ ...SEAT, operation: siblingOp }));
+  });
+
+  it('is null when NONE exists (a first sibling mints fresh)', async () => {
+    const { seats } = await load();
+    expect(await seats.findIncompleteSiblingAttempt(KEY)).toBeNull();
+  });
+
+  it('ignores a BOUND pending sibling (already discoverable by its worktree)', async () => {
+    const { seats } = await load();
+    await seats.mintPendingSeat({ ...SEAT, operation: siblingOp, credential: 'a'.repeat(43) });
+    expect(await seats.bindPendingSeatToWorktree({
+      ...SEAT, operation: siblingOp, expectedPendingDigest: digestOf('a'.repeat(43)),
+      worktree: '/wt/two', name: 'c', droneLabel: 'd', roleName: 'Drone',
+    })).toBe('bound');
+    // Bound → no longer an unbound in-flight attempt → not returned (freed for the next sibling).
+    expect(await seats.findIncompleteSiblingAttempt(KEY)).toBeNull();
+  });
+
+  it('ignores an ACTIVE sibling record and a kind=seat record and a DIFFERENT source repo', async () => {
+    const { seats } = await load();
+    // ACTIVE sibling (bound + activated).
+    await seats.mintPendingSeat({ ...SEAT, operation: siblingOp, credential: 'a'.repeat(43) });
+    await seats.activateAndBindSeat({
+      ...SEAT, operation: siblingOp, ...STAMP, expectedPendingDigest: digestOf('a'.repeat(43)),
+      worktree: '/wt/two', name: 'c', droneLabel: 'd', roleName: 'Drone',
+    });
+    // An in-place (kind=seat) unbound pending — must NOT be treated as a sibling attempt.
+    const seatOp = { projectRoot: SRC, kind: 'seat' as const, operationKey: 'current-worktree' };
+    await seats.mintPendingSeat({ ...SEAT, operation: seatOp, credential: 'e'.repeat(43) });
+    // A sibling for a DIFFERENT source repo.
+    const otherOp = { projectRoot: '/other/repo', kind: 'sibling' as const, operationKey: 'implicit-sibling:X' };
+    await seats.mintPendingSeat({ ...SEAT, operation: otherOp, credential: 'f'.repeat(43) });
+    expect(await seats.findIncompleteSiblingAttempt(KEY)).toBeNull();
+    // But the different-repo key DOES find its own unbound pending sibling.
+    expect(await seats.findIncompleteSiblingAttempt({ ...KEY, projectRoot: '/other/repo' })).not.toBeNull();
+  });
+});

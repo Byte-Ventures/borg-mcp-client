@@ -17,7 +17,7 @@ import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
-import { observeSeat, prepareSeat, } from './seats.js';
+import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
 import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
@@ -96,6 +96,14 @@ export function buildDefaultAssimilateDeps() {
         hasPersistedActiveCube: () => cubesHasPersistedActive(),
         readPersistedLocalSeat: () => readPersistedLocalSeat(),
         peekServerSessionRecord: async (credentialRef, binding) => (await observeSeat(credentialRef, binding)).state !== 'absent',
+        // CR#3: recover an in-flight implicit-sibling attempt (unbound pending sibling
+        // record) by source repo, so a rerun re-derives the EXACT seat + reuses the bearer.
+        findIncompleteSiblingAttempt: async (binding) => {
+            const record = await findIncompleteSiblingAttempt(binding);
+            if (!record)
+                return null;
+            return { operation: record.operation, roleId: record.roleId, credentialRef: seatRef(record) };
+        },
         probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
         setActiveCube: (a) => cubesSetActive(a),
         // Single-store FINALIZE: the merged activate+bind (reached via the injected

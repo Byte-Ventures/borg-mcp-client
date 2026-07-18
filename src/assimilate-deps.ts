@@ -35,8 +35,10 @@ import {
   sendBorgServerAttach,
 } from './server-handshake.js';
 import {
+  findIncompleteSiblingAttempt,
   observeSeat,
   prepareSeat,
+  seatRef,
   type ActivateSeatOutcome,
   type SeatOperation as ServerSessionOperation,
 } from './seats.js';
@@ -138,6 +140,13 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
     readPersistedLocalSeat: () => readPersistedLocalSeat(),
     peekServerSessionRecord: async (credentialRef, binding) =>
       (await observeSeat(credentialRef, binding)).state !== 'absent',
+    // CR#3: recover an in-flight implicit-sibling attempt (unbound pending sibling
+    // record) by source repo, so a rerun re-derives the EXACT seat + reuses the bearer.
+    findIncompleteSiblingAttempt: async (binding) => {
+      const record = await findIncompleteSiblingAttempt(binding);
+      if (!record) return null;
+      return { operation: record.operation, roleId: record.roleId, credentialRef: seatRef(record) };
+    },
     probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>
       defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
     setActiveCube: (a) => cubesSetActive(a),

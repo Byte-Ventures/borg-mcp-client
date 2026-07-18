@@ -225,6 +225,25 @@ export declare function getActiveSeatForWorktree(worktree: string): Promise<Seat
  * the no-ACTIVE-without-binding / non-hydratable-pending invariants.
  */
 export declare function getSeatForWorktree(worktree: string): Promise<SeatRecord | null>;
+/**
+ * CR#3: find an in-flight IMPLICIT-sibling attempt for `binding` — a PENDING,
+ * kind==='sibling' record whose operation.projectRoot is the source repo and which
+ * has NO worktree binding yet (unbound). Such a record is the persisted, collision-
+ * safe attempt identity left when a crash struck AFTER the server accepted the attach
+ * but BEFORE the worktree bind: its per-invocation-unique operationKey would otherwise
+ * be undiscoverable, so a rerun would mint a NEW bearer and the server (digest-
+ * correlating) would create a GHOST seat. Recovering it lets the rerun re-derive the
+ * EXACT ref and re-send the identical bearer (the server reuses its seat). A BOUND
+ * pending sibling (already discoverable by its worktree) and an ACTIVE record are NOT
+ * returned — so a COMPLETED sibling frees the source-repo key and the next distinct
+ * sibling mints a fresh identity. Deterministic first match.
+ */
+export declare function findIncompleteSiblingAttempt(binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    projectRoot: string;
+}): Promise<SeatRecord | null>;
 /** True iff this worktree has ANY persisted seat record (active OR a bound
  *  pending), so a crash-in-gap PENDING seat is discoverable (not mislabeled). */
 export declare function hasSeatForWorktree(worktree: string): Promise<boolean>;

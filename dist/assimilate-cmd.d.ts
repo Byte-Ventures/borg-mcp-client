@@ -101,6 +101,21 @@ export interface AssimilateDeps {
         trustIdentity: string;
         cubeId: string;
     }) => Promise<boolean>;
+    /** CR#3: recover an in-flight IMPLICIT-sibling attempt (a crash-orphaned UNBOUND
+     *  pending sibling record) keyed by source repo, so a rerun re-derives the EXACT
+     *  seat ref + re-sends the identical bearer (server reuses — no ghost). Returns the
+     *  stored operation + role so the rerun adopts them. Absent from unit stubs that
+     *  fully mock `assimilate`. */
+    findIncompleteSiblingAttempt?: (binding: {
+        origin: string;
+        trustIdentity: string;
+        cubeId: string;
+        projectRoot: string;
+    }) => Promise<{
+        operation: ServerSessionOperation;
+        roleId: string;
+        credentialRef: string;
+    } | null>;
     probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
     setActiveCube: (a: ActiveCube) => Promise<void>;
     /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the

@@ -187,6 +187,17 @@ export interface AssimilateDeps {
     credentialRef: string,
     binding: { origin: string; trustIdentity: string; cubeId: string },
   ) => Promise<boolean>;
+  /** CR#3: recover an in-flight IMPLICIT-sibling attempt (a crash-orphaned UNBOUND
+   *  pending sibling record) keyed by source repo, so a rerun re-derives the EXACT
+   *  seat ref + re-sends the identical bearer (server reuses — no ghost). Returns the
+   *  stored operation + role so the rerun adopts them. Absent from unit stubs that
+   *  fully mock `assimilate`. */
+  findIncompleteSiblingAttempt?: (binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    projectRoot: string;
+  }) => Promise<{ operation: ServerSessionOperation; roleId: string; credentialRef: string } | null>;
   probeSeat: (
     sessionToken: string,
     apiUrl: string,
@@ -854,6 +865,41 @@ export async function runAssimilate(
   }
 
   if (authority.kind === 'server') {
+    // CR#3: recover an in-flight IMPLICIT-sibling attempt (persisted + collision-safe).
+    // An implicit sibling mints a per-invocation-unique operationKey; a crash AFTER the
+    // server accepts but BEFORE the worktree bind leaves an UNBOUND pending sibling
+    // record whose random key would otherwise be undiscoverable — a rerun would mint a
+    // NEW bearer and the server (digest-correlating) would create a GHOST seat. The
+    // unbound pending sibling record IS the persisted attempt identity, discoverable by
+    // source repo: adopt its EXACT operation (→ same seat ref) AND its role, and declare
+    // a PENDING resume so prepareSeat REUSES the identical bearer (server reuses the
+    // seat). Only for an IMPLICIT sibling (no --worktree name); a named sibling already
+    // keys collision-safe on its name. Skipped once the attempt is bound/activated (it is
+    // no longer an unbound pending sibling), so a completed sibling frees the key.
+    if (
+      wantSibling &&
+      args.flags.worktree === undefined &&
+      auth.serverTrustIdentity !== undefined &&
+      deps.findIncompleteSiblingAttempt
+    ) {
+      const inflight = await deps.findIncompleteSiblingAttempt({
+        origin: auth.apiUrl,
+        trustIdentity: auth.serverTrustIdentity,
+        cubeId: cubeDetail.id,
+        projectRoot,
+      });
+      if (inflight) {
+        const inflightRole = cubeDetail.roles.find((role) => role.id === inflight.roleId);
+        if (inflightRole) {
+          // Adopt the EXACT stored operation (same operationKey → same R_sib) + role, and
+          // resume PENDING so prepareSeat re-sends the identical bearer and converges.
+          sessionOperation = inflight.operation;
+          savedLocalRole = inflightRole;
+          resumeCredentialRef = inflight.credentialRef;
+          resumeState = 'pending';
+        }
+      }
+    }
     if (!existing && hasPersistedIdentity) {
       // getActiveCube() is null AND metadata is persisted. Two distinct states:
       //   (a) crash-in-gap RESUME — the composite FINALIZE wrote the binding, then

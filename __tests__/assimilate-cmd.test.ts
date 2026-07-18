@@ -1422,6 +1422,45 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     // CR1(a): two implicit siblings mint DISTINCT keys — they never collide on one seat.
     expect(p1.session_operation!.operationKey).not.toBe(p2.session_operation!.operationKey);
   });
+
+  it('CR#3: an implicit sibling ADOPTS an in-flight attempt (recovered op + role, ABSENT pending-reuse)', async () => {
+    const existingCube = {
+      cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', droneLabel: 'drone-1',
+      apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone',
+    };
+    // A persisted crash-orphaned unbound pending sibling: its EXACT operation (a stable
+    // operationKey) + role must be adopted so the rerun re-derives the same seat.
+    const recoveredOp = { projectRoot: '/orig/repo', kind: 'sibling' as const, operationKey: 'implicit-sibling:PERSISTED' };
+    const findIncompleteSiblingAttempt = vi.fn(async () => ({
+      operation: recoveredOp, roleId: 'role-default', credentialRef: 'borg-server-session:' + 'c'.repeat(64),
+    }));
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-2', role_id: 'role-default',
+      result: 'reused' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'c'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
+    }));
+    const deps = makeStubDeps({
+      assimilate,
+      findIncompleteSiblingAttempt,
+      getActiveCube: vi.fn(async () => existingCube),
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1', name: 'myrepo',
+        roles: [{ id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false }],
+      })),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
+    expect(findIncompleteSiblingAttempt).toHaveBeenCalledTimes(1);
+    const params = assimilate.mock.calls[0][2];
+    // The EXACT recovered operation is re-sent (same operationKey → same seat ref),
+    // NOT a fresh per-invocation UUID.
+    expect(params.session_operation).toEqual(recoveredOp);
+    // The recovered role is adopted (role_id from the stored attempt).
+    expect(params.role_id).toBe('role-default');
+    // A PENDING resume → ABSENT/pending-reuse so prepareSeat re-sends the identical bearer.
+    expect(params.session_expected).toEqual({ kind: 'absent' });
+  });
 });
 
 describe('runAssimilate: step 6 (role resolution)', () => {
