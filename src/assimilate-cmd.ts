@@ -818,6 +818,7 @@ export async function runAssimilate(
   // not active, so no live-bearer digest is pinned) so it re-persists the extant
   // binding and flips pending→ACTIVE, rather than aborting on an ABSENT check.
   let resumeCredentialRef: string | undefined;
+  let resumeDroneId: string | undefined;
   if (existing && args.flags.here && existing.cubeId !== cubeDetail.id) {
     deps.stderr(
       authority.kind === 'server'
@@ -872,6 +873,7 @@ export async function runAssimilate(
         // re-resolves the existing pending record and re-sends the identical bearer.
         savedLocalRole = resumeRole;
         resumeCredentialRef = persisted.localSessionCredentialRef;
+        resumeDroneId = persisted.droneId;
       } else {
         deps.stderr(
           `This worktree has saved seat metadata for ${authority.apiUrl}, but its secure session ` +
@@ -1322,15 +1324,28 @@ export async function runAssimilate(
   ) {
     let expected: ExpectedBinding;
     if (resumeCredentialRef) {
-      // Crash-in-gap resume: the extant binding must still hold, but the credential
-      // is PENDING (not active) so no live-bearer digest is pinned — EXACT ref only.
-      expected = { kind: 'exact', credentialRef: resumeCredentialRef };
+      // Crash-in-gap resume: the extant FULL binding (incl its prior drone id)
+      // must still hold, but the credential is PENDING (not active) so no
+      // live-bearer digest is pinned — EXACT ref + drone id only.
+      expected = {
+        kind: 'exact',
+        credentialRef: resumeCredentialRef,
+        ...(resumeDroneId ? { droneId: resumeDroneId } : {}),
+      };
     } else if (remintInvalidPrior && existing?.localSessionCredentialRef) {
-      expected = { kind: 'exact', credentialRef: existing.localSessionCredentialRef };
+      // Eviction remint: the bearer is intentionally replaced, so no digest — but
+      // the prior (evicted) binding, incl its drone id, must still be the one we
+      // are replacing.
+      expected = {
+        kind: 'exact',
+        credentialRef: existing.localSessionCredentialRef,
+        ...(existing.droneId ? { droneId: existing.droneId } : {}),
+      };
     } else if (reattachPriorId != null && existing?.localSessionCredentialRef && existing.sessionToken) {
       expected = {
         kind: 'exact',
         credentialRef: existing.localSessionCredentialRef,
+        ...(existing.droneId ? { droneId: existing.droneId } : {}),
         sessionDigest: createHash('sha256').update(existing.sessionToken).digest('hex'),
       };
     } else {

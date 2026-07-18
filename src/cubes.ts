@@ -24,7 +24,10 @@ import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
 import {
   clearServerSessionCredential,
   compareAndClearServerSessionCredential,
+  compareAndClearSessionRecord,
   getActiveServerSessionCredential,
+  observeServerSessionRecord,
+  type ServerSessionRecordObservation,
 } from './config.js';
 
 const CUBES_DIR = join(homedir(), '.config', 'borgmcp');
@@ -494,37 +497,39 @@ export async function clearActiveCube(
   return await operation;
 }
 
-/**
- * Typed token-safe observation of this worktree's saved local seat credential.
- * The raw bearer is never surfaced past this module — PRESENT carries only its
- * sha256 digest so the caller (the offline `borg reset-local-seat` command) can
- * pin the exact credential it observed without ever handling the secret.
- */
-export type LocalSeatObservation =
-  | { kind: 'present'; sessionDigest: string }
-  | { kind: 'absent' };
-
 export interface LocalSeatSnapshot {
   apiUrl: string;
   serverTrustIdentity: string;
   cubeId: string;
+  /** The FULL binding includes the prior drone identity (CR #3): a drone-id
+   *  change at recheck is a full-binding change and aborts the reset. */
+  droneId: string;
   credentialRef: string;
   worktree: string;
-  observation: LocalSeatObservation;
+  /** Token-safe TYPED record observation: active|pending (with digest) or absent
+   *  (CR #3 — a binding+PENDING seat is no longer mislabeled ABSENT). */
+  observation: ServerSessionRecordObservation;
 }
 
 export type ResetLocalSeatOutcome =
   | { outcome: 'reset'; credentialRef: string }
+  // Credential deleted/confirmed-absent, but the cubes binding removal failed
+  // (fs error) — the safe forward state (binding-present/credential-absent) is
+  // reached; a rerun converges.
+  | { outcome: 'partial'; credentialRef: string }
+  // The credential delete threw AND a readback could not confirm it gone —
+  // repair-required; NEVER reported as success.
+  | { outcome: 'repair-required'; credentialRef: string }
   | { outcome: 'no-binding' }
   | { outcome: 'changed' };
 
 /**
  * S0 of the ratified client-seat-reset-state-model: snapshot this worktree's
- * exact local-seat binding plus a token-safe observation of its keychain
- * credential (PRESENT+digest | ABSENT). Read-only — no lock is held past the
- * read, and the authoritative re-check happens under the cube lock in
- * resetLocalSeatBinding. Returns null when this worktree has no LOCAL-server
- * seat to reset (no binding, or a non-local/legacy binding): an honest no-op.
+ * exact FULL local-seat binding (incl drone id) plus a token-safe TYPED record
+ * observation (active|pending+digest | absent). Read-only — no lock is held past
+ * the read, and the authoritative re-check happens under the cube lock in
+ * resetLocalSeatBinding. Returns null when this worktree has no LOCAL-server seat
+ * to reset (no binding, or a non-local/legacy binding): an honest no-op.
  */
 export async function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null> {
   const data = await readCubesFile();
@@ -536,7 +541,9 @@ export async function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null> {
     entry.serverTrustIdentity === undefined ||
     typeof entry.localSessionCredentialRef !== 'string' ||
     typeof entry.cubeId !== 'string' ||
-    !entry.cubeId
+    !entry.cubeId ||
+    typeof entry.droneId !== 'string' ||
+    !entry.droneId
   ) {
     // Not a hydratable local-server seat (cloud/legacy or incomplete) — nothing
     // this command is authorized to reset.
@@ -547,17 +554,15 @@ export async function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null> {
     trustIdentity: entry.serverTrustIdentity,
     cubeId: entry.cubeId,
   };
-  const bearer = await getActiveServerSessionCredential(
+  const observation = await observeServerSessionRecord(
     entry.localSessionCredentialRef,
     binding,
   );
-  const observation: LocalSeatObservation = bearer
-    ? { kind: 'present', sessionDigest: createHash('sha256').update(bearer).digest('hex') }
-    : { kind: 'absent' };
   return {
     apiUrl: entry.apiUrl,
     serverTrustIdentity: entry.serverTrustIdentity,
     cubeId: entry.cubeId,
+    droneId: entry.droneId,
     credentialRef: entry.localSessionCredentialRef,
     worktree,
     observation,
@@ -618,13 +623,17 @@ export async function readPersistedLocalSeat(): Promise<PersistedLocalSeat | nul
 
 /**
  * S2/S3 of the ratified client-seat-reset-state-model. Re-acquires the cube
- * write lock (OUTER; the keychain lock is only ever taken INNER via
- * compareAndClearServerSessionCredential — never a keychain→cube inversion),
- * re-observes the typed union, and commits only when the current binding STILL
- * matches the exact snapshot. Any change / missing / same-ref replacement is an
- * honest no-op ('changed'). Ordering is CREDENTIAL-FIRST: the keychain bearer is
- * deleted before the cube binding is removed, so the only surviving intermediate
- * state is binding-present/credential-absent — safe, rerunnable, and truthful.
+ * write lock (OUTER; the keychain lock is only ever taken INNER via the config
+ * clear/observe wrappers — never a keychain→cube inversion), re-checks the FULL
+ * binding (incl drone id, CR #3) plus the typed record observation, and commits
+ * only when everything STILL matches the exact snapshot. Any change / missing /
+ * same-ref replacement is an honest no-op ('changed'). Ordering is
+ * CREDENTIAL-FIRST: the exact matching record — ACTIVE **or** PENDING — is
+ * deleted before the cubes binding is removed, so the only surviving intermediate
+ * state is binding-present/credential-absent — safe, rerunnable, truthful.
+ * Failure states are typed (CR #4): 'partial' (credential gone, binding removal
+ * fs-failed → rerun converges) and 'repair-required' (delete-throw readback could
+ * not confirm the credential gone).
  */
 export async function resetLocalSeatBinding(
   expected: LocalSeatSnapshot,
@@ -635,11 +644,13 @@ export async function resetLocalSeatBinding(
     const key = findProjectRoot();
     const entry = existing.projects[key];
     if (!entry) return { outcome: 'no-binding' as const };
-    // The exact snapshot must still be the live binding; any drift is a no-op.
+    // The exact FULL snapshot (incl drone id) must still be the live binding; any
+    // drift — including a drone-id change under the same ref — is a no-op.
     if (
       entry.apiUrl !== expected.apiUrl ||
       entry.serverTrustIdentity !== expected.serverTrustIdentity ||
       entry.cubeId !== expected.cubeId ||
+      entry.droneId !== expected.droneId ||
       entry.localSessionCredentialRef !== expected.credentialRef
     ) {
       return { outcome: 'changed' as const };
@@ -651,41 +662,53 @@ export async function resetLocalSeatBinding(
       cubeId: entry.cubeId,
     };
 
-    const removeBinding = async () => {
-      delete existing.projects[key];
-      if (Object.keys(existing.projects).length === 0) {
-        try {
-          await unlink(CUBES_FILE);
-        } catch (error: any) {
-          if (error?.code !== 'ENOENT') throw error;
+    // Returns true iff the binding was removed; false on an fs failure (the safe
+    // forward state binding-present/credential-absent — a rerun converges).
+    const removeBinding = async (): Promise<boolean> => {
+      try {
+        delete existing.projects[key];
+        if (Object.keys(existing.projects).length === 0) {
+          try {
+            await unlink(CUBES_FILE);
+          } catch (error: any) {
+            if (error?.code !== 'ENOENT') throw error;
+          }
+        } else {
+          await writeCubesFile(existing);
         }
-      } else {
-        await writeCubesFile(existing);
+        return true;
+      } catch {
+        return false;
       }
     };
 
-    if (expected.observation.kind === 'present') {
-      // CREDENTIAL-FIRST: atomically compare the pinned digest and delete under
-      // the per-account keychain lock. A same-ref remint (fresh bearer, new
-      // digest) or an already-cleared credential = no delete = honest no-op with
-      // the binding left in place. A backend error PROPAGATES (coherent state).
-      const deleted = await compareAndClearServerSessionCredential(
+    if (expected.observation.state !== 'absent') {
+      // CREDENTIAL-FIRST: atomically compare the pinned digest against the exact
+      // ACTIVE-or-PENDING record and delete it under the keychain lock, with a
+      // delete-throw readback. A same-ref replacement (fresh bearer, new digest)
+      // or an already-cleared credential = no-match = honest no-op.
+      const cleared = await compareAndClearSessionRecord(
         credentialRef,
         binding,
-        expected.observation.sessionDigest,
+        expected.observation.digest,
       );
-      if (!deleted) return { outcome: 'changed' as const };
-      await removeBinding();
-      return { outcome: 'reset' as const, credentialRef };
+      if (cleared === 'no-match') return { outcome: 'changed' as const };
+      if (cleared === 'unknown') return { outcome: 'repair-required' as const, credentialRef };
+      // 'cleared': the credential is gone. Remove the binding (rerun-safe on fs fail).
+      return (await removeBinding())
+        ? { outcome: 'reset' as const, credentialRef }
+        : { outcome: 'partial' as const, credentialRef };
     }
 
     // ABSENT snapshot: the safe forward state (credential already gone). Confirm
-    // it is STILL absent under the lock — a fresh credential appearing under the
-    // same deterministic ref is a same-ref replacement we must NOT clobber.
-    const reobserved = await getActiveServerSessionCredential(credentialRef, binding);
-    if (reobserved !== null) return { outcome: 'changed' as const };
-    await removeBinding();
-    return { outcome: 'reset' as const, credentialRef };
+    // it is STILL absent under the lock — a fresh ACTIVE or PENDING record
+    // appearing under the same deterministic ref is a replacement we must NOT
+    // clobber the binding for.
+    const reobserved = await observeServerSessionRecord(credentialRef, binding);
+    if (reobserved.state !== 'absent') return { outcome: 'changed' as const };
+    return (await removeBinding())
+      ? { outcome: 'reset' as const, credentialRef }
+      : { outcome: 'partial' as const, credentialRef };
   }));
   activeCubeWriteQueue = operation.then(() => undefined, () => undefined);
   return await operation;
@@ -701,7 +724,9 @@ export async function resetLocalSeatBinding(
  * intentionally replaced, so no digest is pinned).
  */
 export type ExpectedBinding =
-  | { kind: 'exact'; credentialRef: string; sessionDigest?: string }
+  // `droneId`, when present, pins the FULL prior binding (CR #3): a drone-id
+  // change under the same ref is a full-binding change and aborts FINALIZE.
+  | { kind: 'exact'; credentialRef: string; droneId?: string; sessionDigest?: string }
   | { kind: 'absent' };
 
 export interface FinalizeServerSeatInput {
@@ -767,7 +792,9 @@ export async function finalizeServerSeatAttachment(
         prior.serverTrustIdentity !== trustIdentity ||
         prior.apiUrl !== active.apiUrl ||
         prior.cubeId !== active.cubeId ||
-        prior.localSessionCredentialRef !== expected.credentialRef;
+        prior.localSessionCredentialRef !== expected.credentialRef ||
+        // Full-binding pin (CR #3): the prior drone identity must be unchanged.
+        (expected.droneId !== undefined && prior.droneId !== expected.droneId);
       if (!mismatch && expected.sessionDigest !== undefined) {
         // Same-ref-replacement guard: the LIVE bearer's digest must still match
         // the one snapshotted at PREPARE. An offline reset (credential-first

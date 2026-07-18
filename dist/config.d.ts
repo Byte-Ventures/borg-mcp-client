@@ -189,6 +189,49 @@ export declare function compareAndClearServerSessionCredential(credentialRef: st
     cubeId: string;
 }, expectedSessionDigest: string): Promise<boolean>;
 /**
+ * Token-safe TYPED observation of the record at a per-seat ref (CR #3). Unlike
+ * getActiveServerSessionCredential (which returns null for a pending record — so
+ * a binding+PENDING state is mislabeled ABSENT), this distinguishes
+ * active|pending|absent and returns an immutable sha256 DIGEST (never the raw
+ * bearer) plus the drone identity for an active record. No lock, no mutate —
+ * the authoritative delete re-reads under the keychain lock.
+ */
+export type ServerSessionRecordObservation = {
+    state: 'active';
+    digest: string;
+    droneId: string;
+} | {
+    state: 'pending';
+    digest: string;
+} | {
+    state: 'absent';
+};
+export declare function observeServerSessionRecord(credentialRef: string, binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+}): Promise<ServerSessionRecordObservation>;
+/**
+ * The outcome of the readback-aware credential-first delete (CR #4). `cleared` —
+ * the exact matching record (ACTIVE or PENDING) was deleted and confirmed gone.
+ * `no-match` — nothing matched the pinned digest (already gone / replaced) so
+ * nothing was deleted. `unknown` — the delete threw AND a readback could not
+ * confirm the record is gone (repair-required; NEVER reported as success).
+ */
+export type ClearSessionRecordOutcome = 'cleared' | 'no-match' | 'unknown';
+/**
+ * Credential-FIRST atomic clear of the EXACT record — ACTIVE **or** PENDING —
+ * whose bearer digest matches the pinned one (CR #3: reset must clear a
+ * binding+PENDING seat too; CR #4: a delete-throw must be classified by
+ * readback, not reported as a plain error/success). Runs entirely under the
+ * per-account keychain lock, so no writer interleaves the compare and the delete.
+ */
+export declare function compareAndClearSessionRecord(credentialRef: string, binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+}, expectedDigest: string): Promise<ClearSessionRecordOutcome>;
+/**
  * Abort-scrub for the composite attach FINALIZE. Atomically deletes the caller's
  * OWN pending record IFF it is STILL state=='pending' AND its bearer digest
  * matches the one the caller prepared — never an ACTIVE record (a concurrent

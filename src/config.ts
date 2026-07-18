@@ -1049,6 +1049,153 @@ export async function compareAndClearServerSessionCredential(
 }
 
 /**
+ * Token-safe TYPED observation of the record at a per-seat ref (CR #3). Unlike
+ * getActiveServerSessionCredential (which returns null for a pending record — so
+ * a binding+PENDING state is mislabeled ABSENT), this distinguishes
+ * active|pending|absent and returns an immutable sha256 DIGEST (never the raw
+ * bearer) plus the drone identity for an active record. No lock, no mutate —
+ * the authoritative delete re-reads under the keychain lock.
+ */
+export type ServerSessionRecordObservation =
+  | { state: 'active'; digest: string; droneId: string }
+  | { state: 'pending'; digest: string }
+  | { state: 'absent' };
+
+export async function observeServerSessionRecord(
+  credentialRef: string,
+  binding: { origin: string; trustIdentity: string; cubeId: string },
+): Promise<ServerSessionRecordObservation> {
+  if (!/^borg-server-session:[a-f0-9]{64}$/.test(credentialRef)) return { state: 'absent' };
+  const backend = await getServerCredentialBackend();
+  const stored = await backend.get(credentialRef);
+  if (!stored) return { state: 'absent' };
+  try {
+    const record = JSON.parse(stored) as Partial<PendingServerSessionRecord> & {
+      version?: unknown;
+    };
+    const op = record.operation;
+    if (
+      record.version !== SERVER_PENDING_SESSION_RECORD_VERSION ||
+      record.origin !== binding.origin ||
+      record.trustIdentity !== binding.trustIdentity ||
+      record.cubeId !== binding.cubeId ||
+      (record.state !== 'active' && record.state !== 'pending') ||
+      typeof record.credential !== 'string' ||
+      typeof record.roleId !== 'string' ||
+      op === undefined ||
+      op === null ||
+      typeof op !== 'object' ||
+      typeof op.projectRoot !== 'string' ||
+      typeof op.operationKey !== 'string' ||
+      (op.kind !== 'seat' && op.kind !== 'sibling')
+    ) {
+      return { state: 'absent' };
+    }
+    if (
+      serverPendingSessionAccount(
+        record.origin,
+        record.trustIdentity,
+        record.cubeId,
+        record.roleId,
+        op,
+      ) !== credentialRef
+    ) {
+      return { state: 'absent' };
+    }
+    const digest = createHash('sha256').update(record.credential).digest('hex');
+    if (record.state === 'active') {
+      return { state: 'active', digest, droneId: typeof record.droneId === 'string' ? record.droneId : '' };
+    }
+    return { state: 'pending', digest };
+  } catch {
+    return { state: 'absent' };
+  }
+}
+
+/**
+ * The outcome of the readback-aware credential-first delete (CR #4). `cleared` —
+ * the exact matching record (ACTIVE or PENDING) was deleted and confirmed gone.
+ * `no-match` — nothing matched the pinned digest (already gone / replaced) so
+ * nothing was deleted. `unknown` — the delete threw AND a readback could not
+ * confirm the record is gone (repair-required; NEVER reported as success).
+ */
+export type ClearSessionRecordOutcome = 'cleared' | 'no-match' | 'unknown';
+
+/**
+ * Credential-FIRST atomic clear of the EXACT record — ACTIVE **or** PENDING —
+ * whose bearer digest matches the pinned one (CR #3: reset must clear a
+ * binding+PENDING seat too; CR #4: a delete-throw must be classified by
+ * readback, not reported as a plain error/success). Runs entirely under the
+ * per-account keychain lock, so no writer interleaves the compare and the delete.
+ */
+export async function compareAndClearSessionRecord(
+  credentialRef: string,
+  binding: { origin: string; trustIdentity: string; cubeId: string },
+  expectedDigest: string,
+): Promise<ClearSessionRecordOutcome> {
+  if (!/^borg-server-session:[a-f0-9]{64}$/.test(credentialRef)) return 'no-match';
+  const backend = await getServerCredentialBackend();
+  return withServerKeychainLock(credentialRef, async () => {
+    const stored = await backend.get(credentialRef);
+    if (!stored) return 'no-match';
+    let bearer: string;
+    try {
+      const record = JSON.parse(stored) as Partial<PendingServerSessionRecord> & {
+        version?: unknown;
+      };
+      const op = record.operation;
+      if (
+        record.version !== SERVER_PENDING_SESSION_RECORD_VERSION ||
+        record.origin !== binding.origin ||
+        record.trustIdentity !== binding.trustIdentity ||
+        record.cubeId !== binding.cubeId ||
+        (record.state !== 'active' && record.state !== 'pending') ||
+        typeof record.credential !== 'string' ||
+        typeof record.roleId !== 'string' ||
+        op === undefined ||
+        op === null ||
+        typeof op !== 'object' ||
+        typeof op.projectRoot !== 'string' ||
+        typeof op.operationKey !== 'string' ||
+        (op.kind !== 'seat' && op.kind !== 'sibling')
+      ) {
+        return 'no-match';
+      }
+      if (
+        serverPendingSessionAccount(
+          record.origin,
+          record.trustIdentity,
+          record.cubeId,
+          record.roleId,
+          op,
+        ) !== credentialRef
+      ) {
+        return 'no-match';
+      }
+      bearer = record.credential;
+    } catch {
+      return 'no-match';
+    }
+    const digest = createHash('sha256').update(bearer).digest('hex');
+    if (digest !== expectedDigest) return 'no-match';
+    try {
+      await backend.delete(credentialRef);
+    } catch {
+      // Delete threw. READ BACK under the same lock to classify the real state:
+      // a delete that succeeded then reported an error still leaves the record
+      // GONE (cleared); a record still present is UNKNOWN (repair-required).
+      try {
+        const after = await backend.get(credentialRef);
+        return after === null ? 'cleared' : 'unknown';
+      } catch {
+        return 'unknown';
+      }
+    }
+    return 'cleared';
+  });
+}
+
+/**
  * Abort-scrub for the composite attach FINALIZE. Atomically deletes the caller's
  * OWN pending record IFF it is STILL state=='pending' AND its bearer digest
  * matches the one the caller prepared — never an ACTIVE record (a concurrent

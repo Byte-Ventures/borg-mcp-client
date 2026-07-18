@@ -15,6 +15,7 @@
  * to know which worker to talk to.
  */
 import { rename, unlink, writeFile } from 'node:fs/promises';
+import { type ServerSessionRecordObservation } from './config.js';
 export type BorgCli = 'claude' | 'codex' | 'opencode';
 export interface ActiveCube {
     cubeId: string;
@@ -93,28 +94,27 @@ export declare function clearActiveCube(expected?: {
     removed: boolean;
     credentialRef: string | null;
 }>;
-/**
- * Typed token-safe observation of this worktree's saved local seat credential.
- * The raw bearer is never surfaced past this module — PRESENT carries only its
- * sha256 digest so the caller (the offline `borg reset-local-seat` command) can
- * pin the exact credential it observed without ever handling the secret.
- */
-export type LocalSeatObservation = {
-    kind: 'present';
-    sessionDigest: string;
-} | {
-    kind: 'absent';
-};
 export interface LocalSeatSnapshot {
     apiUrl: string;
     serverTrustIdentity: string;
     cubeId: string;
+    /** The FULL binding includes the prior drone identity (CR #3): a drone-id
+     *  change at recheck is a full-binding change and aborts the reset. */
+    droneId: string;
     credentialRef: string;
     worktree: string;
-    observation: LocalSeatObservation;
+    /** Token-safe TYPED record observation: active|pending (with digest) or absent
+     *  (CR #3 — a binding+PENDING seat is no longer mislabeled ABSENT). */
+    observation: ServerSessionRecordObservation;
 }
 export type ResetLocalSeatOutcome = {
     outcome: 'reset';
+    credentialRef: string;
+} | {
+    outcome: 'partial';
+    credentialRef: string;
+} | {
+    outcome: 'repair-required';
     credentialRef: string;
 } | {
     outcome: 'no-binding';
@@ -123,11 +123,11 @@ export type ResetLocalSeatOutcome = {
 };
 /**
  * S0 of the ratified client-seat-reset-state-model: snapshot this worktree's
- * exact local-seat binding plus a token-safe observation of its keychain
- * credential (PRESENT+digest | ABSENT). Read-only — no lock is held past the
- * read, and the authoritative re-check happens under the cube lock in
- * resetLocalSeatBinding. Returns null when this worktree has no LOCAL-server
- * seat to reset (no binding, or a non-local/legacy binding): an honest no-op.
+ * exact FULL local-seat binding (incl drone id) plus a token-safe TYPED record
+ * observation (active|pending+digest | absent). Read-only — no lock is held past
+ * the read, and the authoritative re-check happens under the cube lock in
+ * resetLocalSeatBinding. Returns null when this worktree has no LOCAL-server seat
+ * to reset (no binding, or a non-local/legacy binding): an honest no-op.
  */
 export declare function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null>;
 export interface PersistedLocalSeat {
@@ -156,13 +156,17 @@ export interface PersistedLocalSeat {
 export declare function readPersistedLocalSeat(): Promise<PersistedLocalSeat | null>;
 /**
  * S2/S3 of the ratified client-seat-reset-state-model. Re-acquires the cube
- * write lock (OUTER; the keychain lock is only ever taken INNER via
- * compareAndClearServerSessionCredential — never a keychain→cube inversion),
- * re-observes the typed union, and commits only when the current binding STILL
- * matches the exact snapshot. Any change / missing / same-ref replacement is an
- * honest no-op ('changed'). Ordering is CREDENTIAL-FIRST: the keychain bearer is
- * deleted before the cube binding is removed, so the only surviving intermediate
- * state is binding-present/credential-absent — safe, rerunnable, and truthful.
+ * write lock (OUTER; the keychain lock is only ever taken INNER via the config
+ * clear/observe wrappers — never a keychain→cube inversion), re-checks the FULL
+ * binding (incl drone id, CR #3) plus the typed record observation, and commits
+ * only when everything STILL matches the exact snapshot. Any change / missing /
+ * same-ref replacement is an honest no-op ('changed'). Ordering is
+ * CREDENTIAL-FIRST: the exact matching record — ACTIVE **or** PENDING — is
+ * deleted before the cubes binding is removed, so the only surviving intermediate
+ * state is binding-present/credential-absent — safe, rerunnable, truthful.
+ * Failure states are typed (CR #4): 'partial' (credential gone, binding removal
+ * fs-failed → rerun converges) and 'repair-required' (delete-throw readback could
+ * not confirm the credential gone).
  */
 export declare function resetLocalSeatBinding(expected: LocalSeatSnapshot): Promise<ResetLocalSeatOutcome>;
 /**
@@ -177,6 +181,7 @@ export declare function resetLocalSeatBinding(expected: LocalSeatSnapshot): Prom
 export type ExpectedBinding = {
     kind: 'exact';
     credentialRef: string;
+    droneId?: string;
     sessionDigest?: string;
 } | {
     kind: 'absent';

@@ -1162,9 +1162,11 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
       cwd: () => '/work/myrepo', findProjectRoot: () => '/work/myrepo',
     });
     expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(0);
+    // CR #3: the FULL prior binding — its drone id AND live-bearer digest — is pinned.
     expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({
       kind: 'exact',
       credentialRef: REF,
+      droneId: 'd-prior',
       sessionDigest: createHashDigest('prior-bearer'),
     });
   });
@@ -3034,9 +3036,9 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     expect(stderr.mock.calls.map((c) => String(c[0])).join('')).not.toMatch(/secure session could not be loaded/);
     // The identical seat is re-sent (resume), not a fresh mint.
     expect(assimilate).toHaveBeenCalled();
-    // FINALIZE converges with EXACT-ref (no live-bearer digest — the credential is pending).
+    // FINALIZE converges with EXACT ref + prior drone id (no live-bearer digest — pending).
     expect(finalizeServerSeat).toHaveBeenCalledTimes(1);
-    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({ kind: 'exact', credentialRef: REF });
+    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({ kind: 'exact', credentialRef: REF, droneId: 'drone-saved' });
     expect(finalizeServerSeat.mock.calls[0][0].active).toMatchObject({ cubeId: 'cube-1', localSessionCredentialRef: REF });
   });
 

@@ -64,8 +64,8 @@ export async function runResetLocalSeat(flags, deps) {
             "reset this worktree's seat.\n");
         return 0;
     }
-    const observed = snapshot.observation.kind === 'present'
-        ? 'a saved local session credential is present'
+    const observed = snapshot.observation.state !== 'absent'
+        ? `a saved local session credential is present (${snapshot.observation.state})`
         : 'the saved local session credential is already cleared (only the binding remains)';
     deps.stderr(`This will clear ONLY this worktree's saved local seat on ${snapshot.apiUrl} ` +
         `(worktree ${worktree}) — ${observed}. Server, trust anchor, cube, and sibling ` +
@@ -100,6 +100,26 @@ export async function runResetLocalSeat(flags, deps) {
             'was cleared; server, trust anchor, cube, and sibling worktrees unchanged.\n');
         deps.stdout(recoveryGuidance(snapshot.apiUrl));
         return 0;
+    }
+    if (outcome.outcome === 'partial') {
+        // CR #4: the credential is GONE but the cubes binding removal fs-failed. The
+        // safe forward state (binding-present/credential-absent) is reached — a rerun
+        // observes ABSENT and removes the dangling binding. Report it honestly, not
+        // as a plain "credential store error" (which would be false).
+        deps.stderr(`audit: PARTIALLY reset — this worktree's saved local session credential for ` +
+            `${snapshot.apiUrl} (worktree ${worktree}) was cleared, but removing the local binding ` +
+            'failed. This is safe and rerunnable: re-run `borg reset-local-seat` to remove the ' +
+            'dangling binding.\n');
+        return 1;
+    }
+    if (outcome.outcome === 'repair-required') {
+        // CR #4: the delete threw and a readback could not confirm the credential is
+        // gone. NEVER report success; direct to a rerun/repair.
+        deps.stderr(`audit: could NOT confirm the reset — the local credential delete for ${snapshot.apiUrl} ` +
+            `(worktree ${worktree}) reported an error and its final state is unknown. Re-run ` +
+            '`borg reset-local-seat` to converge; if it keeps failing, the OS keychain may need ' +
+            'repair/unlock.\n');
+        return 1;
     }
     if (outcome.outcome === 'no-binding') {
         deps.stdout(`No saved local seat remained for this worktree (${worktree}); nothing to reset.\n`);
