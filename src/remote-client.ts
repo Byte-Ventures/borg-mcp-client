@@ -477,13 +477,21 @@ async function authedFetch(
   if (response.status === 401) {
     // Reached only after pinned-TLS trust is verified (localAuthorityContext
     // fails closed otherwise), so a 401 here is an AUTHORITATIVE pin-matched
-    // session rejection: the selected server verified its own identity and
-    // rejected THIS worktree's bearer (revoked, or taken over by another
-    // session). Type it so callers (seat-probe → 'rejected' → scoped reset)
-    // can distinguish it from an unreachable/5xx/trust-mismatch failure.
+    // credential rejection. The credential CLASS decides the recovery, and ONLY
+    // a worktree-SESSION rejection may trigger the destructive scoped seat reset
+    // (SR): a rejected drone-SESSION bearer → SESSION_REJECTED → seat-probe
+    // 'rejected' → scoped reset; a rejected PARENT enrollment/client credential
+    // (authToken or stored client credential, e.g. list/get cubes) →
+    // CREDENTIAL_REJECTED → re-enroll, and NEVER a seat reset.
+    if (droneSession !== undefined) {
+      throw new BorgServerError(
+        'SESSION_REJECTED',
+        'the selected Borg server rejected this worktree session (revoked or taken over)',
+      );
+    }
     throw new BorgServerError(
-      'SESSION_REJECTED',
-      'the selected Borg server rejected this session (revoked or taken over)',
+      'CREDENTIAL_REJECTED',
+      'the selected Borg server rejected the saved enrollment credential',
     );
   }
 

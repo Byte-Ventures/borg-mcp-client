@@ -139,4 +139,23 @@ describe('local ActiveCube session persistence', () => {
     expect(result).toEqual({ removed: false, credentialRef: null });
     expect(keychainMocks.clearServerSessionCredential).not.toHaveBeenCalled();
   });
+
+  it('clearActiveCube refuses to delete when the pinned credential ref no longer matches (TOCTOU guard)', async () => {
+    const { fixture, cubes } = await setup();
+    // The binding currently holds a FRESH ref (e.g. a concurrent re-attach after
+    // the rejection was observed).
+    const currentRef = `borg-server-session:${'c'.repeat(64)}`;
+    await cubes.setActiveCube({ ...localMetadata, localSessionCredentialRef: currentRef, sessionToken: 'x' });
+
+    // A caller pins the OLD ref it saw rejected. The compare-under-lock must
+    // refuse the delete (the seat changed) and report an honest no-op.
+    const staleRef = `borg-server-session:${'a'.repeat(64)}`;
+    const result = await cubes.clearActiveCube({ credentialRef: staleRef });
+    expect(result).toEqual({ removed: false, credentialRef: null });
+    expect(keychainMocks.clearServerSessionCredential).not.toHaveBeenCalled();
+
+    // The current binding is untouched.
+    const persisted = readFileSync(join(fixture, '.config', 'borgmcp', 'cubes.json'), 'utf8');
+    expect(persisted).toContain(currentRef);
+  });
 });

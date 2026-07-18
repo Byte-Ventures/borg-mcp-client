@@ -92,7 +92,7 @@ export function buildDefaultAssimilateDeps() {
         },
         getActiveCube: () => cubesGetActive(),
         hasPersistedActiveCube: () => cubesHasPersistedActive(),
-        clearActiveCube: () => cubesClearActive(),
+        clearActiveCube: (expected) => cubesClearActive(expected),
         probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
         setActiveCube: (a) => cubesSetActive(a),
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),

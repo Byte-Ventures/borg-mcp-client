@@ -351,7 +351,7 @@ export function activeCubeWithFreshRegenIdentity(active, result) {
  * becomes empty as a result, remove the file entirely rather than leave
  * an empty {projects:{}} skeleton.
  */
-export async function clearActiveCube() {
+export async function clearActiveCube(expected) {
     const operation = activeCubeWriteQueue.then(() => withCubesWriteLock(async () => {
         const existing = await readCubesFile();
         // No binding to clear → report an honest no-op so callers never audit a
@@ -362,6 +362,16 @@ export async function clearActiveCube() {
         if (!(key in existing.projects))
             return { removed: false, credentialRef: null };
         const removedCredentialRef = existing.projects[key].localSessionCredentialRef ?? null;
+        // TOCTOU guard (PD #1082 / thirty-seven): the read-compare-delete runs under
+        // the cube write lock. If a caller pins the credential ref it observed being
+        // rejected, refuse to delete when the current binding no longer matches it —
+        // the seat changed (e.g. a concurrent re-attach) since the rejection, so
+        // deleting would clobber a DIFFERENT seat. Report an honest no-op.
+        if (expected !== undefined &&
+            expected.credentialRef !== undefined &&
+            removedCredentialRef !== expected.credentialRef) {
+            return { removed: false, credentialRef: null };
+        }
         delete existing.projects[key];
         if (Object.keys(existing.projects).length === 0) {
             try {

@@ -86,8 +86,12 @@ export interface AssimilateDeps {
     /** Clear ONLY the current worktree's saved seat: its cubes.json binding and
      *  its keychain session credential. Keys on findProjectRoot() — never touches
      *  server trust anchors, other worktrees, or cube state. Returns whether a
-     *  binding was actually removed so callers never audit a no-op as success. */
-    clearActiveCube: () => Promise<{
+     *  binding was actually removed so callers never audit a no-op as success.
+     *  When `expected.credentialRef` is pinned, the delete is refused (removed:
+     *  false) if the current binding no longer matches it (TOCTOU guard). */
+    clearActiveCube: (expected?: {
+        credentialRef?: string | null;
+    }) => Promise<{
         removed: boolean;
         credentialRef: string | null;
     }>;

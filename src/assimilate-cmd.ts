@@ -161,8 +161,12 @@ export interface AssimilateDeps {
   /** Clear ONLY the current worktree's saved seat: its cubes.json binding and
    *  its keychain session credential. Keys on findProjectRoot() — never touches
    *  server trust anchors, other worktrees, or cube state. Returns whether a
-   *  binding was actually removed so callers never audit a no-op as success. */
-  clearActiveCube: () => Promise<{ removed: boolean; credentialRef: string | null }>;
+   *  binding was actually removed so callers never audit a no-op as success.
+   *  When `expected.credentialRef` is pinned, the delete is refused (removed:
+   *  false) if the current binding no longer matches it (TOCTOU guard). */
+  clearActiveCube: (
+    expected?: { credentialRef?: string | null },
+  ) => Promise<{ removed: boolean; credentialRef: string | null }>;
   probeSeat: (
     sessionToken: string,
     apiUrl: string,
@@ -440,6 +444,7 @@ async function handleSessionRejectedReset(
   deps: AssimilateDeps,
   apiUrl: string,
   flags: AssimilateFlags,
+  expectedCredentialRef?: string | null,
 ): Promise<number> {
   const worktree = deps.findProjectRoot(deps.cwd());
   deps.stderr(
@@ -483,14 +488,19 @@ async function handleSessionRejectedReset(
 
   // Scoped, worktree-only mutation: this worktree's cubes.json binding + its
   // keychain session credential ONLY (clearActiveCube keys on findProjectRoot()).
-  const cleared = await deps.clearActiveCube();
+  // The observed-rejected credential ref is pinned so a seat that changed since
+  // the rejection (concurrent re-attach) is NOT clobbered.
+  const cleared = await deps.clearActiveCube(
+    expectedCredentialRef === undefined ? undefined : { credentialRef: expectedCredentialRef },
+  );
   if (!cleared.removed) {
-    // Fail closed: nothing was removed (no saved binding for this worktree), so
-    // never audit a reset that did not happen (SR: no copy-without-operation).
+    // Fail closed: nothing was removed (no matching saved binding for this
+    // worktree), so never audit a reset that did not happen (SR: no
+    // copy-without-operation).
     deps.stderr(
-      `audit: no changes made — no saved local seat binding was found for this worktree ` +
-        `(${worktree}); nothing to reset. Ask the server operator for a new invitation (the ` +
-        `server can stay running) and enroll with ${localAssimilateCommand(apiUrl, true)}.\n`,
+      `audit: no changes made — no matching saved local seat binding was found for this ` +
+        `worktree (${worktree}); nothing to reset. Ask the server operator for a new invitation ` +
+        `(the server can stay running) and enroll with ${localAssimilateCommand(apiUrl, true)}.\n`,
     );
     return 1;
   }
@@ -878,7 +888,9 @@ export async function runAssimilate(
       // "restart the server" indeterminate exit below. Distinct from
       // unreachable/404/5xx/trust-mismatch, which stay indeterminate.
       if (status === 'rejected') {
-        return await handleSessionRejectedReset(deps, auth.apiUrl, args.flags);
+        return await handleSessionRejectedReset(
+          deps, auth.apiUrl, args.flags, existing.localSessionCredentialRef ?? null,
+        );
       }
       if (status === 'indeterminate') {
         deps.stderr(
@@ -1050,9 +1062,15 @@ export async function runAssimilate(
     if (
       err instanceof BorgServerError &&
       err.code === 'SESSION_REJECTED' &&
-      authority.kind === 'server'
+      authority.kind === 'server' &&
+      reattachPriorId != null
     ) {
-      return await handleSessionRejectedReset(deps, authority.apiUrl, args.flags);
+      // Only a hydrated reattach (this worktree HAD a saved seat) may enter the
+      // scoped reset. A first/pending attach that is rejected has no saved seat
+      // to clear and falls through to the generic credential-rejection report.
+      return await handleSessionRejectedReset(
+        deps, authority.apiUrl, args.flags, existing?.localSessionCredentialRef ?? null,
+      );
     }
     if (authority.kind === 'server') {
       return reportServerFailure(deps, authority.apiUrl, err);

@@ -86,7 +86,9 @@ export declare function activeCubeWithFreshRegenIdentity(active: ActiveCube, res
  * becomes empty as a result, remove the file entirely rather than leave
  * an empty {projects:{}} skeleton.
  */
-export declare function clearActiveCube(): Promise<{
+export declare function clearActiveCube(expected?: {
+    credentialRef?: string | null;
+}): Promise<{
     removed: boolean;
     credentialRef: string | null;
 }>;
