@@ -3,8 +3,20 @@
  * Verifies SR-seven's file-store checklist items 1–4 against the real filesystem.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -65,6 +77,25 @@ describe('seat-store atomic 0600 write (checklist #1, #2, #3)', () => {
       }
     })();
     await Promise.all([writes, reads]);
+  });
+
+  it('CR3c: a pre-existing loose (0755) parent dir is REFUSED (fail closed)', async () => {
+    const dir = fixture();
+    const loose = join(dir, 'loose');
+    mkdirSync(loose);
+    chmodSync(loose, 0o755);
+    await expect(atomicWrite0600(join(loose, 'seats.json'), '{}')).rejects.toThrow(
+      /insecure permissions|0700/i,
+    );
+  });
+
+  it('CR3c: a 0700 parent is accepted and the secret lands 0600', async () => {
+    const dir = fixture();
+    const tight = join(dir, 'tight');
+    mkdirSync(tight);
+    chmodSync(tight, 0o700);
+    await atomicWrite0600(join(tight, 'seats.json'), '{"ok":1}');
+    expect(mode(join(tight, 'seats.json'))).toBe(0o600);
   });
 
   it('a failed write (parent is a file) cleans up the temp and throws', async () => {
@@ -135,6 +166,54 @@ describe('seat-store single-lock RCW (checklist #4)', () => {
       withStore(store, empty, parseStrict, async (txn) => { txn.data.n = 5; await txn.commit(); }),
     ).rejects.toThrow(/malformed|unsupported version/i);
     expect(await readFile(store, 'utf8')).toBe(wrongShape);
+  });
+
+  it('CR3a: a LIVE cross-process holder past the stale threshold is NOT stolen; a DEAD one is reclaimed', async () => {
+    const dir = fixture();
+    const lock = join(dir, 'seats.json.lock');
+    // A real, separate OS process holds the lock (cross-process liveness).
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+    await new Promise<void>((r) => child.on('spawn', () => r()));
+    writeFileSync(lock, JSON.stringify({ pid: child.pid, token: 'held-by-live' }));
+    // Backdate mtime well past the age threshold — the OLD unconditional reclaim
+    // would have stolen it; liveness-gated reclaim must not.
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(lock, old, old);
+    await expect(
+      withStoreLock(lock, async () => { /* unreachable */ }, { attempts: 4, waitMs: 5 }),
+    ).rejects.toThrow(/busy/i);
+    // The live holder's lock is untouched.
+    expect(existsSync(lock)).toBe(true);
+    expect(JSON.parse(readFileSync(lock, 'utf8')).token).toBe('held-by-live');
+    // Kill the holder → its PID is now dead → the SAME lock is reclaimable.
+    child.kill('SIGKILL');
+    await new Promise<void>((r) => child.on('exit', () => r()));
+    let ran = false;
+    await withStoreLock(lock, async () => { ran = true; }, { attempts: 50, waitMs: 5 });
+    expect(ran).toBe(true);
+  });
+
+  it('CR3a: release is identity-checked — a stalled holder never removes the successor lock (successor-safe)', async () => {
+    const dir = fixture();
+    const lock = join(dir, 'seats.json.lock');
+    await withStoreLock(lock, async () => {
+      // Simulate a reclaimer that judged us dead + a successor that acquired the lock
+      // while we were stalled: the on-disk token is now the successor's, not ours.
+      writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'successor-token' }));
+    }, { attempts: 5, waitMs: 5 });
+    // Our release must NOT have removed the successor's lock.
+    expect(existsSync(lock)).toBe(true);
+    expect(JSON.parse(readFileSync(lock, 'utf8')).token).toBe('successor-token');
+  });
+
+  it('CR3a: a stale lock left by a DEAD pid is reclaimed (no permanent wedge)', async () => {
+    const dir = fixture();
+    const lock = join(dir, 'seats.json.lock');
+    // A PID that is essentially certain to be dead.
+    writeFileSync(lock, JSON.stringify({ pid: 2 ** 30, token: 'ghost' }));
+    let ran = false;
+    await withStoreLock(lock, async () => { ran = true; }, { attempts: 50, waitMs: 5 });
+    expect(ran).toBe(true);
   });
 
   it('withStore returns null-state as empty and commits atomically at 0600', async () => {

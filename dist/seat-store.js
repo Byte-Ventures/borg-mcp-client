@@ -27,12 +27,112 @@
 import { open, mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
+// Age-based reclaim is a LAST-RESORT fallback used ONLY for a legacy/unparseable
+// lockfile that carries no live-pid identity; a well-formed lock is reclaimed only
+// when its holder PID is provably DEAD (CR3a), never on age alone.
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 10;
 const LOCK_ATTEMPTS = 500;
-/** Ensure the store's parent directory exists with 0700 permissions (checklist #3). */
+/**
+ * CR3a liveness check. `process.kill(pid, 0)` sends no signal but validates the
+ * target: ESRCH ⇒ no such process (DEAD → reclaimable); EPERM ⇒ the process exists
+ * but is owned by another user (ALIVE → never reclaim). Any success ⇒ alive.
+ */
+function isProcessAlive(pid) {
+    if (!Number.isInteger(pid) || pid <= 0)
+        return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (err) {
+        return err.code === 'EPERM';
+    }
+}
+function parseLockPayload(raw) {
+    try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.pid === 'number' && typeof parsed.token === 'string' && parsed.token.length > 0) {
+            return { pid: parsed.pid, token: parsed.token };
+        }
+    }
+    catch {
+        /* unparseable — treated as a legacy/garbage lock by the caller */
+    }
+    return null;
+}
+/**
+ * Ensure the store's parent directory exists at 0700 (checklist #3) AND repair-or-
+ * refuse a loose pre-existing one (CR3c). `mkdir(mode)` does NOT tighten an already-
+ * existing directory, so a pre-existing world/group-traversable parent would leave
+ * the 0600 credential-at-rest reachable. Fail CLOSED rather than write a secret
+ * beneath it.
+ */
 async function ensureParentDir(filePath) {
-    await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
+    const dir = dirname(filePath);
+    let existing = null;
+    try {
+        existing = await stat(dir);
+    }
+    catch (err) {
+        if (err.code !== 'ENOENT')
+            throw err;
+    }
+    if (existing) {
+        if ((existing.mode & 0o777) !== 0o700) {
+            throw new Error(`Borg store directory ${dir} has insecure permissions ` +
+                `(0${(existing.mode & 0o777).toString(8)}, expected 0700); refusing to write a credential under it`);
+        }
+        return;
+    }
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+}
+/**
+ * Successor-safe steal: unlink the stale lock ONLY if its bytes are still EXACTLY
+ * the ones we judged stale. If the holder released and a successor acquired between
+ * our inspection and this unlink, the content differs → we must not remove the
+ * successor's lock.
+ */
+async function reclaimIfUnchanged(lockPath, expected) {
+    let current;
+    try {
+        current = await readFile(lockPath, 'utf8');
+    }
+    catch (err) {
+        if (err.code === 'ENOENT')
+            return;
+        throw err;
+    }
+    if (current !== expected)
+        return;
+    await unlink(lockPath).catch((e) => {
+        if (e.code !== 'ENOENT')
+            throw e;
+    });
+}
+/**
+ * Identity-checked release (CR3a successor-safety): unlink ONLY if the lockfile
+ * still carries OUR token. If a reclaimer judged us dead/stale and a successor now
+ * holds the lock, its token differs and we must leave it intact — a blind unlink
+ * would remove the successor's lock and let a third writer in concurrently.
+ */
+async function releaseIfOurs(lockPath, token) {
+    let current;
+    try {
+        current = await readFile(lockPath, 'utf8');
+    }
+    catch (err) {
+        if (err.code === 'ENOENT')
+            return;
+        throw err;
+    }
+    const held = parseLockPayload(current);
+    if (held && held.token !== token)
+        return;
+    await unlink(lockPath).catch((e) => {
+        if (e.code !== 'ENOENT')
+            throw e;
+    });
 }
 /**
  * Atomic 0600 write (checklist #1 + #2): write to a same-dir temp opened
@@ -78,9 +178,14 @@ export async function readStoreFile(filePath) {
  * on EVERY path (finally) including a throw. The lockfile is O_EXCL-created; a
  * crashed holder is reclaimed after a bounded stale interval.
  */
-export async function withStoreLock(lockPath, op) {
+export async function withStoreLock(lockPath, op, opts = {}) {
+    const attempts = opts.attempts ?? LOCK_ATTEMPTS;
+    const waitMs = opts.waitMs ?? LOCK_WAIT_MS;
+    const staleMs = opts.staleMs ?? LOCK_STALE_MS;
     await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
-    for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+    const myToken = randomBytes(16).toString('hex');
+    const myPayload = JSON.stringify({ pid: process.pid, token: myToken });
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
         let handle;
         try {
             handle = await open(lockPath, 'wx', 0o600);
@@ -88,33 +193,55 @@ export async function withStoreLock(lockPath, op) {
         catch (err) {
             if (err.code !== 'EEXIST')
                 throw err;
+            // The lock is held. Read the holder's identity and reclaim ONLY when its PID
+            // is provably DEAD — a live-but-slow holder (even one past the age threshold)
+            // keeps its lock (CR3a). A legacy/unparseable payload with no live-pid info
+            // falls back to a bounded age gate so a crashed pre-upgrade holder can't wedge.
+            let raw;
             try {
-                const metadata = await stat(lockPath);
-                if (Date.now() - metadata.mtimeMs > LOCK_STALE_MS) {
-                    await unlink(lockPath).catch((e) => {
-                        if (e.code !== 'ENOENT')
-                            throw e;
-                    });
-                    continue;
+                raw = await readFile(lockPath, 'utf8');
+            }
+            catch (readErr) {
+                if (readErr.code === 'ENOENT')
+                    continue; // released — retry
+                throw readErr;
+            }
+            const held = parseLockPayload(raw);
+            let reclaim;
+            if (held) {
+                reclaim = !isProcessAlive(held.pid);
+            }
+            else {
+                try {
+                    const metadata = await stat(lockPath);
+                    reclaim = Date.now() - metadata.mtimeMs > staleMs;
+                }
+                catch (inspectionError) {
+                    if (inspectionError.code === 'ENOENT')
+                        continue;
+                    throw inspectionError;
                 }
             }
-            catch (inspectionError) {
-                if (inspectionError.code === 'ENOENT')
-                    continue;
-                throw inspectionError;
+            if (reclaim) {
+                await reclaimIfUnchanged(lockPath, raw);
+                continue;
             }
-            await new Promise((resolvePromise) => setTimeout(resolvePromise, LOCK_WAIT_MS));
+            await new Promise((resolvePromise) => setTimeout(resolvePromise, waitMs));
             continue;
+        }
+        // We own the lock. Stamp our identity so a reclaimer can liveness-check us and
+        // our release can identity-check before unlinking.
+        try {
+            await handle.writeFile(myPayload);
+        }
+        finally {
+            await handle.close();
         }
         try {
             return await op();
         }
         finally {
-            await handle.close();
-            await unlink(lockPath).catch((e) => {
-                if (e.code !== 'ENOENT')
-                    throw e;
-            });
+            await releaseIfOurs(lockPath, myToken);
         }
     }
     throw new Error('Borg seat store is busy');

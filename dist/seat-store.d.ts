@@ -38,7 +38,11 @@ export declare function readStoreFile(filePath: string): Promise<string | null>;
  * on EVERY path (finally) including a throw. The lockfile is O_EXCL-created; a
  * crashed holder is reclaimed after a bounded stale interval.
  */
-export declare function withStoreLock<T>(lockPath: string, op: () => Promise<T>): Promise<T>;
+export declare function withStoreLock<T>(lockPath: string, op: () => Promise<T>, opts?: {
+    attempts?: number;
+    waitMs?: number;
+    staleMs?: number;
+}): Promise<T>;
 /** A locked, in-memory transaction over one store file. */
 export interface StoreTxn<S> {
     /** The mutable in-memory state, loaded under the lock. Mutate then commit(). */
