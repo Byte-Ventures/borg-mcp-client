@@ -196,10 +196,15 @@ describe('release-status + reattach copy contract (item 7)', () => {
       expect(term.test('the client generates a 256-bit credential and UUID retry key and persists the exact tuple')).toBe(false);
       expect(term.test('the `retry_key` idempotency key applies to enrollment and cube-creation only')).toBe(false);
     }
-    // And the accurate pinned version reference is allowed.
-    expect(new RegExp(`borgmcp-shared@${pinnedShared.replace(/\./g, '\\.')}`).test(
-      `consumes the published borgmcp-shared@${pinnedShared} v2 registry release`,
-    )).toBe(true);
+    // And the accurate pinned version reference is allowed. Mirror the guard's real
+    // logic with a STATIC pattern (no dynamic RegExp built from the pin — that is
+    // the incomplete-escaping class CodeQL flags): the guard flags a doc only when a
+    // scanned `borgmcp-shared@X.Y.Z` differs from the pin.
+    const accurateDoc = `consumes the published borgmcp-shared@${pinnedShared} v2 registry release`;
+    const mismatchedVersions = [...accurateDoc.matchAll(/borgmcp-shared@(\d+\.\d+\.\d+)/g)]
+      .map((m) => m[1])
+      .filter((v) => v !== pinnedShared);
+    expect(mismatchedVersions).toEqual([]);
   });
 
   it('negative control: the guard DOES fire on the stale framing it must catch', () => {
