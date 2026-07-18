@@ -60,7 +60,6 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     peekServerSessionRecord: vi.fn(async () => false),
     probeSeat: vi.fn(async () => 'live'),
     setActiveCube: vi.fn(async () => {}),
-    clearActiveCube: vi.fn(async () => ({ removed: true, credentialRef: null })),
     findProjectRoot: vi.fn(() => '/work/myrepo'),
     installProjectSessionHook: vi.fn(),
     defaultAuthority: { kind: 'server', apiUrl: 'https://server.test' },
@@ -613,8 +612,8 @@ describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-u
 describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)', () => {
   // Ratified client-seat-reset-state-model clause 1: attach mutates NOTHING on a
   // rejection — it diagnoses and points at the dedicated OFFLINE
-  // `borg reset-local-seat` command. No clearActiveCube / setActiveCube / any
-  // local write happens on the rejected path.
+  // `borg reset-local-seat` command. No setActiveCube / any local write happens
+  // on the rejected path (clearActiveCube was DELETED — SR-seven (c)).
   const sameCubeSeat = () => vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone' }));
   const cubeResolves = {
     cwd: () => '/work/myrepo',
@@ -628,15 +627,13 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
 
   function assertNoMutation(deps: AssimilateDeps): void {
     expect(deps.setActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
-    expect(deps.clearActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   }
 
   it('the attach-catch rejection diagnoses (recommends `borg reset-local-seat`) and mutates nothing', async () => {
     const stderr = vi.fn();
-    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
     const setActiveCube = vi.fn(async () => {});
     const deps = makeStubDeps({
-      ...cubeResolves, stderr, clearActiveCube, setActiveCube,
+      ...cubeResolves, stderr, setActiveCube,
       isTTY: () => true,
       probeSeat: vi.fn(async () => 'live'),
       getActiveCube: sameCubeSeat(),
@@ -655,11 +652,10 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
 
   it('CANONICAL PATH: a pin-matched probeSeat → rejected diagnoses BEFORE attach, no "restart" advice, no mutation', async () => {
     const stderr = vi.fn();
-    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
     const setActiveCube = vi.fn(async () => {});
     const assimilate = vi.fn(async () => { throw new Error('attach must not run after a rejected probe'); });
     const deps = makeStubDeps({
-      ...cubeResolves, stderr, clearActiveCube, setActiveCube, assimilate,
+      ...cubeResolves, stderr, setActiveCube, assimilate,
       isTTY: () => false,
       probeSeat: vi.fn(async () => 'rejected'),
       getActiveCube: sameCubeSeat(),
@@ -717,7 +713,7 @@ describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR
     // Distinct from the takeover path AND the transient path.
     expect(out).not.toContain('borg reset-local-seat');
     expect(out).not.toMatch(/borg-mcp-server start|Start or restart the server/i);
-    expect(deps.clearActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(deps.setActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 
   it('trust-mismatch: TERMINAL trust copy, exit 1, never restart-the-server advice, never a reset', async () => {

@@ -361,10 +361,11 @@ describe('cubes.resetLocalSeatBinding (real backend + real fs)', () => {
   });
 
   it('no-binding when the worktree binding is gone by commit time', async () => {
-    const { config, cubes } = await setup();
+    const { fixture, config, cubes } = await setup();
     await seedSeat(config, cubes);
     const snap = (await cubes.snapshotLocalSeat())!;
-    await cubes.clearActiveCube();
+    // The binding vanished between snapshot and commit (another process removed it).
+    rmSync(cubesJson(fixture), { force: true });
     expect(await cubes.resetLocalSeatBinding(snap)).toEqual({ outcome: 'no-binding' });
   });
 

@@ -1,5 +1,5 @@
 import { type CreateCubeResponse, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
-import { activatePendingServerEnrollment, compareAndActivatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, serverSessionCredentialRef, type ServerSessionOperation } from './config.js';
+import { activatePendingServerEnrollment, compareAndActivatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, serverSessionCredentialRef, type ServerSessionOperation } from './config.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
 type FetchLike = typeof fetch;
@@ -101,41 +101,6 @@ export declare function sendBorgServerAttach(origin: string, trustIdentity: stri
     scrubPending?: typeof compareAndClearPendingServerSession;
     sessionCredentialRef?: typeof serverSessionCredentialRef;
 }): Promise<PreparedServerAttach>;
-/**
- * Mint the client bearer, then send it (the pre-composite contract). Retained for
- * callers/tests that do not drive the cube-lock-held prepare/FINALIZE themselves.
- * The production assimilate orchestration mints under the cube-lock composite
- * (cubes.prepareServerSeatAttachment) and calls sendBorgServerAttach directly, so
- * the mint is revalidated against the typed expectation before any send (CR #1).
- */
-export declare function prepareBorgServerAttach(origin: string, trustIdentity: string, parentCredential: string, request: {
-    cubeId: string;
-    roleId: string;
-    operation: ServerSessionOperation;
-    priorDroneId?: string;
-}, deps?: {
-    fetchImpl?: FetchLike;
-    getPendingSession?: typeof getOrCreatePendingServerSession;
-    activateSession?: typeof compareAndActivatePendingServerSession;
-    scrubPending?: typeof compareAndClearPendingServerSession;
-    sessionCredentialRef?: typeof serverSessionCredentialRef;
-}): Promise<PreparedServerAttach>;
-/**
- * PREPARE + network + activate, as a single call (the pre-composite contract).
- * Retained for callers/tests that do not drive the cube-lock-held FINALIZE
- * themselves; the assimilate orchestration now uses the cube-lock composite +
- * finalizeServerSeatAttachment so the binding lands BEFORE the pending→ACTIVE flip.
- */
-export declare function attachBorgServer(origin: string, trustIdentity: string, parentCredential: string, request: {
-    cubeId: string;
-    roleId: string;
-    operation: ServerSessionOperation;
-    priorDroneId?: string;
-}, deps?: {
-    fetchImpl?: FetchLike;
-    getPendingSession?: typeof getOrCreatePendingServerSession;
-    activateSession?: typeof compareAndActivatePendingServerSession;
-}): Promise<ServerAttachResult>;
 /**
  * Redeem one invitation after the caller has verified TLS and derived the
  * stable server/CA identity. The client-generated bearer + retry key are

@@ -30,7 +30,6 @@ import {
   getPendingServerEnrollment,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
-  getOrCreatePendingServerSession,
   serverSessionCredentialRef,
   type PendingServerCubeCreationRecord,
   type ServerSessionOperation,
@@ -356,80 +355,11 @@ export async function sendBorgServerAttach(
   }
 }
 
-/**
- * Mint the client bearer, then send it (the pre-composite contract). Retained for
- * callers/tests that do not drive the cube-lock-held prepare/FINALIZE themselves.
- * The production assimilate orchestration mints under the cube-lock composite
- * (cubes.prepareServerSeatAttachment) and calls sendBorgServerAttach directly, so
- * the mint is revalidated against the typed expectation before any send (CR #1).
- */
-export async function prepareBorgServerAttach(
-  origin: string,
-  trustIdentity: string,
-  parentCredential: string,
-  request: {
-    cubeId: string;
-    roleId: string;
-    operation: ServerSessionOperation;
-    priorDroneId?: string;
-  },
-  deps: {
-    fetchImpl?: FetchLike;
-    getPendingSession?: typeof getOrCreatePendingServerSession;
-    activateSession?: typeof compareAndActivatePendingServerSession;
-    scrubPending?: typeof compareAndClearPendingServerSession;
-    sessionCredentialRef?: typeof serverSessionCredentialRef;
-  } = {},
-): Promise<PreparedServerAttach> {
-  // Generate + persist the client bearer before contact; a retry re-sends the
-  // exact same pending bearer so the server resolves the identical session.
-  const pending = await (deps.getPendingSession ?? getOrCreatePendingServerSession)({
-    origin,
-    trustIdentity,
-    cubeId: request.cubeId,
-    roleId: request.roleId,
-    operation: request.operation,
-  });
-  const { getPendingSession: _drop, ...sendDeps } = deps;
-  return sendBorgServerAttach(origin, trustIdentity, parentCredential, request, pending.credential, sendDeps);
-}
-
-/**
- * PREPARE + network + activate, as a single call (the pre-composite contract).
- * Retained for callers/tests that do not drive the cube-lock-held FINALIZE
- * themselves; the assimilate orchestration now uses the cube-lock composite +
- * finalizeServerSeatAttachment so the binding lands BEFORE the pending→ACTIVE flip.
- */
-export async function attachBorgServer(
-  origin: string,
-  trustIdentity: string,
-  parentCredential: string,
-  request: {
-    cubeId: string;
-    roleId: string;
-    operation: ServerSessionOperation;
-    priorDroneId?: string;
-  },
-  deps: {
-    fetchImpl?: FetchLike;
-    getPendingSession?: typeof getOrCreatePendingServerSession;
-    activateSession?: typeof compareAndActivatePendingServerSession;
-  } = {},
-): Promise<ServerAttachResult> {
-  const prepared = await prepareBorgServerAttach(origin, trustIdentity, parentCredential, request, deps);
-  const credentialRef = await prepared.activate();
-  return {
-    cube: prepared.cube,
-    role: prepared.role,
-    drone: prepared.drone,
-    session: {
-      credentialRef,
-      sessionId: prepared.session.sessionId,
-      expiresAt: prepared.session.expiresAt,
-    },
-    result: prepared.result,
-  };
-}
+// SR-seven (c): the pre-composite mint-without-cube-lock seams (prepareBorgServerAttach)
+// and the activate-first no-binding wrapper (attachBorgServer) are DELETED — there is
+// no code path, not even test-only, that mints/sends a session_credential outside the
+// cube-owned composite. The ONLY session-credential send is sendBorgServerAttach, driven
+// by assimilate-deps AFTER cubes.prepareServerSeatAttachment has minted under the cube lock.
 
 /**
  * Redeem one invitation after the caller has verified TLS and derived the

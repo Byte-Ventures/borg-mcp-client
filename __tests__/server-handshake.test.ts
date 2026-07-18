@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
   DEFAULT_LOCAL_SERVER_ORIGIN,
-  attachBorgServer,
+  sendBorgServerAttach,
   connectEnrolledBorgServer,
   createBorgServerCube,
   enrollBorgServer,
@@ -11,7 +11,7 @@ import {
   resumeBorgServerEnrollment,
 } from '../src/server-handshake.js';
 import { serverSessionCredentialRef } from '../src/config.js';
-import type { PendingServerSessionRecord, ServerSessionOperation } from '../src/config.js';
+import type { ServerSessionOperation } from '../src/config.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
@@ -503,10 +503,12 @@ describe('self-hosted server handshake', () => {
     expect(deniedFetch).not.toHaveBeenCalled();
   });
 
-  it('attaches with the client-generated pending bearer and activates it in place', async () => {
+  // SR-seven (c): the pre-composite attach wrappers are DELETED. These tests
+  // exercise the ONLY surviving session-credential send path, sendBorgServerAttach
+  // (network-only; the bearer is minted by the cube-lock composite and passed in).
+  it('sends the ALREADY-MINTED pending bearer and its activate() flips it in place', async () => {
     const bearer = 's'.repeat(43);
     const expiresAt = '2026-07-14T16:00:00.000Z';
-    const credentialRef = `borg-server-session:${'a'.repeat(64)}`;
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',
       request_id: 'attach-response-1',
@@ -518,32 +520,25 @@ describe('self-hosted server handshake', () => {
         session: { id: SESSION_ID, expires_at: expiresAt },
       },
     }), { status: 201 }));
-    const pendingRecord: PendingServerSessionRecord = {
-      origin: 'https://server.example.com',
-      trustIdentity: 'spki-sha256:server-a',
-      cubeId: CUBE_ID,
-      roleId: ROLE_ID,
-      operation: OPERATION,
-      credential: bearer,
-      state: 'pending',
-    };
-    const getPendingSession = vi.fn(async () => pendingRecord);
-    // CR #2: the composite activate is an atomic compare-and-activate returning a
-    // typed outcome, not a bare ref. The deterministic ref comes from the seat.
     const activateSession = vi.fn(async () => 'activated' as const);
     const expectedRef = serverSessionCredentialRef(SEAT_INPUT);
 
-    await expect(attachBorgServer(
+    const prepared = await sendBorgServerAttach(
       'https://server.example.com',
       'spki-sha256:server-a',
       'p'.repeat(43),
       { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
-      { fetchImpl: fetchImpl as typeof fetch, getPendingSession, activateSession },
-    )).resolves.toMatchObject({
+      bearer,
+      { fetchImpl: fetchImpl as typeof fetch, activateSession },
+    );
+    expect(prepared).toMatchObject({
       result: 'created',
       drone: { id: DRONE_ID },
-      session: { credentialRef: expectedRef, sessionId: SESSION_ID, expiresAt },
+      credentialRef: expectedRef,
+      session: { sessionId: SESSION_ID, expiresAt },
     });
+    // activate() (the composite's LAST step) returns the deterministic ref.
+    await expect(prepared.activate()).resolves.toBe(expectedRef);
 
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://server.example.com/api/client/attach');
@@ -552,22 +547,11 @@ describe('self-hosted server handshake', () => {
       redirect: 'error',
       headers: expect.objectContaining({ Authorization: `Bearer ${'p'.repeat(43)}` }),
     });
-    // The client's own pending bearer is the session credential; the parent
+    // The passed-in pending bearer is the session credential; the parent
     // enrollment credential is only the Authorization bearer.
     expect(JSON.parse(String(init?.body))).toMatchObject({
       protocol_version: '2',
-      payload: {
-        cube_id: CUBE_ID,
-        role_id: ROLE_ID,
-        session_credential: bearer,
-      },
-    });
-    expect(getPendingSession).toHaveBeenCalledWith({
-      origin: 'https://server.example.com',
-      trustIdentity: 'spki-sha256:server-a',
-      cubeId: CUBE_ID,
-      roleId: ROLE_ID,
-      operation: OPERATION,
+      payload: { cube_id: CUBE_ID, role_id: ROLE_ID, session_credential: bearer },
     });
     expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({
       origin: 'https://server.example.com',
@@ -578,41 +562,38 @@ describe('self-hosted server handshake', () => {
       droneId: DRONE_ID,
       sessionId: SESSION_ID,
       expiresAt,
-      // CR #2: the EXACT bearer we sent is pinned by digest so a same-ref
-      // replacement cannot be activated with this response's server metadata.
+      // CR #2: the EXACT bearer sent is pinned by digest so a same-ref replacement
+      // cannot be activated with this response's server metadata.
       expectedPendingDigest: digestOf(bearer),
     }));
   });
 
-  it('CR #2: never binds server metadata onto a same-ref replacement — a `replaced`/`missing` activate aborts the attach', async () => {
-    const fetchImpl = (result: 'created' | 'reused' = 'created') => vi.fn(async () => new Response(JSON.stringify({
+  it('CR #2: activate() never binds server metadata onto a same-ref replacement — `replaced`/`missing` aborts', async () => {
+    const fetchImpl = () => vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',
       request_id: 'attach-r',
       payload: {
-        result,
+        result: 'created',
         cube: { id: CUBE_ID, name: 'local-cube' },
         role: { id: ROLE_ID, name: 'Builder' },
         drone: { id: DRONE_ID, label: 'builder-1' },
         session: { id: SESSION_ID, expires_at: '2026-07-20T00:00:00.000Z' },
       },
     }), { status: 201 }));
-    const pendingRecord: PendingServerSessionRecord = {
-      ...SEAT_INPUT, credential: 's'.repeat(43), state: 'pending',
+    const activateWith = async (outcome: 'replaced' | 'missing') => {
+      const prepared = await sendBorgServerAttach(
+        'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
+        { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+        's'.repeat(43),
+        { fetchImpl: fetchImpl() as typeof fetch, activateSession: vi.fn(async () => outcome) },
+      );
+      return prepared.activate();
     };
-    const attachWith = (outcome: 'replaced' | 'missing') => attachBorgServer(
-      'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
-      { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
-      {
-        fetchImpl: fetchImpl() as typeof fetch,
-        getPendingSession: vi.fn(async () => pendingRecord),
-        activateSession: vi.fn(async () => outcome),
-      },
-    );
-    await expect(attachWith('replaced')).rejects.toThrow(/replaced.*no server metadata was bound/i);
-    await expect(attachWith('missing')).rejects.toThrow(/missing.*no server metadata was bound/i);
+    await expect(activateWith('replaced')).rejects.toThrow(/replaced.*no server metadata was bound/i);
+    await expect(activateWith('missing')).rejects.toThrow(/missing.*no server metadata was bound/i);
   });
 
-  it('does not return attach metadata when the keychain activation fails', async () => {
+  it('activate() surfaces a keychain failure (the composite FINALIZE leaves binding+PENDING)', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',
       request_id: 'attach-response-2',
@@ -624,56 +605,26 @@ describe('self-hosted server handshake', () => {
         session: { id: SESSION_ID, expires_at: '2026-07-14T16:00:00.000Z' },
       },
     }), { status: 200 }));
-    const pendingRecord: PendingServerSessionRecord = {
-      origin: 'https://server.example.com',
-      trustIdentity: 'spki-sha256:server-a',
-      cubeId: CUBE_ID,
-      roleId: ROLE_ID,
-      operation: OPERATION,
-      credential: 's'.repeat(43),
-      state: 'pending',
-    };
-
-    await expect(attachBorgServer(
-      'https://server.example.com',
-      'spki-sha256:server-a',
-      'p'.repeat(43),
+    const prepared = await sendBorgServerAttach(
+      'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
       { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
-      {
-        fetchImpl: fetchImpl as typeof fetch,
-        getPendingSession: vi.fn(async () => pendingRecord),
-        activateSession: vi.fn(async () => {
-          throw new Error('keychain locked');
-        }),
-      },
-    )).rejects.toThrow('keychain locked');
+      's'.repeat(43),
+      { fetchImpl: fetchImpl as typeof fetch, activateSession: vi.fn(async () => { throw new Error('keychain locked'); }) },
+    );
+    await expect(prepared.activate()).rejects.toThrow('keychain locked');
   });
 
   it('redacts the session bearer and response body from attach failures', async () => {
     const bearer = 's'.repeat(43);
     const reflected = `${bearer} leaked`;
     const fetchImpl = vi.fn(async () => new Response(reflected, { status: 500 }));
-    const pendingRecord: PendingServerSessionRecord = {
-      origin: 'https://server.example.com',
-      trustIdentity: 'spki-sha256:server-a',
-      cubeId: CUBE_ID,
-      roleId: ROLE_ID,
-      operation: OPERATION,
-      credential: bearer,
-      state: 'pending',
-    };
-
     let error: unknown;
     try {
-      await attachBorgServer(
-        'https://server.example.com',
-        'spki-sha256:server-a',
-        'p'.repeat(43),
+      await sendBorgServerAttach(
+        'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
         { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
-        {
-          fetchImpl: fetchImpl as typeof fetch,
-          getPendingSession: vi.fn(async () => pendingRecord),
-        },
+        bearer,
+        { fetchImpl: fetchImpl as typeof fetch },
       );
     } catch (caught) {
       error = caught;
@@ -684,32 +635,21 @@ describe('self-hosted server handshake', () => {
   });
 
   it('classifies a typed SESSION_REJECTED takeover distinctly from a credential rejection', async () => {
-    const pendingRecord: PendingServerSessionRecord = {
-      origin: 'https://server.example.com',
-      trustIdentity: 'spki-sha256:server-a',
-      cubeId: CUBE_ID,
-      roleId: ROLE_ID,
-      operation: OPERATION,
-      credential: 's'.repeat(43),
-      state: 'pending',
-    };
     const rejectedWith = (code: string) => vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',
       error: { code, message: 'rejected' },
     }), { status: 401 }));
-    const attach = (fetchImpl: typeof fetch) => attachBorgServer(
-      'https://server.example.com',
-      'spki-sha256:server-a',
-      'p'.repeat(43),
+    const send = (fetchImpl: typeof fetch) => sendBorgServerAttach(
+      'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
       { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
-      { fetchImpl, getPendingSession: vi.fn(async () => pendingRecord) },
+      's'.repeat(43),
+      { fetchImpl },
     );
-
     // A typed takeover rejection surfaces its own code...
-    await expect(attach(rejectedWith('SESSION_REJECTED') as typeof fetch))
+    await expect(send(rejectedWith('SESSION_REJECTED') as typeof fetch))
       .rejects.toMatchObject({ code: 'SESSION_REJECTED' });
     // ...while any other 401 falls back to the generic credential rejection.
-    await expect(attach(rejectedWith('AUTH_INVALID') as typeof fetch))
+    await expect(send(rejectedWith('AUTH_INVALID') as typeof fetch))
       .rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
   });
 });

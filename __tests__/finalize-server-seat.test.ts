@@ -118,7 +118,7 @@ describe('finalizeServerSeatAttachment', () => {
     await cubes.setActiveCube({ ...meta, sessionToken: 'x' });
     // Offline reset committed in the network gap: credential-first delete, then
     // binding removal. Model the end state — the binding is gone.
-    await cubes.clearActiveCube();
+    rmSync(cubesJson(fixture), { force: true });
     expect(readOrEmpty(cubesJson(fixture))).not.toContain(REF);
 
     const activate = vi.fn(async () => {});

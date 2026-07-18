@@ -82,18 +82,6 @@ export declare function activeCubeWithFreshRegenIdentity(active: ActiveCube, res
         label?: string | null;
     };
 }): ActiveCube;
-/**
- * Clear the active cube for the current project. If the projects map
- * becomes empty as a result, remove the file entirely rather than leave
- * an empty {projects:{}} skeleton.
- */
-export declare function clearActiveCube(expected?: {
-    credentialRef?: string | null;
-    sessionDigest?: string;
-}): Promise<{
-    removed: boolean;
-    credentialRef: string | null;
-}>;
 export interface LocalSeatSnapshot {
     apiUrl: string;
     serverTrustIdentity: string;

@@ -132,7 +132,7 @@ describe('local owner enrollment to restart flow', () => {
       vi.resetModules();
       const config = await import('../src/config.js');
       config.__setServerCredentialBackendForTest(backend);
-      const { attachBorgServer, createBorgServerCube, enrollBorgServer } =
+      const { sendBorgServerAttach, createBorgServerCube, enrollBorgServer } =
         await import('../src/server-handshake.js');
       const enrolled = await enrollBorgServer(origin, trustIdentity, invitation, {
         fetchImpl: fetchImpl as typeof fetch,
@@ -147,13 +147,26 @@ describe('local owner enrollment to restart flow', () => {
         { fetchImpl: fetchImpl as typeof fetch },
       );
       expect(created).toMatchObject({ cube_id: cubeId, default_worker_role_id: roleId });
-      const attached = await attachBorgServer(
+      // The composite path: mint the pending bearer under the keychain lock (as
+      // cubes.prepareServerSeatAttachment does), send it, then activate it.
+      const pending = await config.getOrCreatePendingServerSession({
+        origin, trustIdentity, cubeId, roleId, operation,
+      });
+      const prepared = await sendBorgServerAttach(
         origin,
         trustIdentity,
         enrolled.token,
         { cubeId, roleId, operation },
+        pending.credential,
         { fetchImpl: fetchImpl as typeof fetch },
       );
+      const credentialRef = await prepared.activate();
+      const attached = {
+        cube: prepared.cube,
+        role: prepared.role,
+        drone: prepared.drone,
+        session: { credentialRef, expiresAt: prepared.session.expiresAt },
+      };
       // The bearer is client-generated and persisted in the keychain; the client
       // never learns it from the server. Read it back for the post-restart checks.
       const bearer = await config.getActiveServerSessionCredential(

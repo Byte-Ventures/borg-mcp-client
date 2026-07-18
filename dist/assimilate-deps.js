@@ -21,7 +21,7 @@ import { finalizeServerSeatAttachment, prepareServerSeatAttachment, readPersiste
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError } from './server-errors.js';
-import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, clearActiveCube as cubesClearActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
+import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
 import { addProjectSessionStartHook } from './config-utils.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
@@ -95,7 +95,6 @@ export function buildDefaultAssimilateDeps() {
         hasPersistedActiveCube: () => cubesHasPersistedActive(),
         readPersistedLocalSeat: () => readPersistedLocalSeat(),
         peekServerSessionRecord: (credentialRef, binding) => peekServerSessionRecord(credentialRef, binding),
-        clearActiveCube: (expected) => cubesClearActive(expected),
         probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
         setActiveCube: (a) => cubesSetActive(a),
         finalizeServerSeat: (input) => finalizeServerSeatAttachment(input),

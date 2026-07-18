@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
-import { clearServerSessionCredential, compareAndClearServerSessionCredential, compareAndClearSessionRecord, getActiveServerSessionCredential, observeServerSessionRecord, } from './config.js';
+import { clearServerSessionCredential, compareAndClearSessionRecord, getActiveServerSessionCredential, observeServerSessionRecord, } from './config.js';
 const CUBES_DIR = join(homedir(), '.config', 'borgmcp');
 const CUBES_FILE = join(CUBES_DIR, 'cubes.json');
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
@@ -346,82 +346,6 @@ export function activeCubeWithFreshRegenIdentity(active, result) {
     if (name === active.name && droneLabel === active.droneLabel)
         return active;
     return { ...active, name, droneLabel };
-}
-/**
- * Clear the active cube for the current project. If the projects map
- * becomes empty as a result, remove the file entirely rather than leave
- * an empty {projects:{}} skeleton.
- */
-export async function clearActiveCube(expected) {
-    const operation = activeCubeWriteQueue.then(() => withCubesWriteLock(async () => {
-        const existing = await readCubesFile();
-        // No binding to clear → report an honest no-op so callers never audit a
-        // reset that did not happen (SR: no copy-without-operation).
-        if (!existing)
-            return { removed: false, credentialRef: null };
-        const key = findProjectRoot();
-        if (!(key in existing.projects))
-            return { removed: false, credentialRef: null };
-        const entry = existing.projects[key];
-        const removedCredentialRef = entry.localSessionCredentialRef ?? null;
-        // If the caller pins the credential ref it observed rejected, a ref mismatch
-        // is an honest no-op (the seat this worktree points at is not the one that
-        // was rejected).
-        if (expected?.credentialRef !== undefined &&
-            removedCredentialRef !== expected.credentialRef) {
-            return { removed: false, credentialRef: null };
-        }
-        const removeBinding = async () => {
-            delete existing.projects[key];
-            if (Object.keys(existing.projects).length === 0) {
-                try {
-                    await unlink(CUBES_FILE);
-                }
-                catch (error) {
-                    if (error?.code !== 'ENOENT')
-                        throw error;
-                }
-            }
-            else {
-                await writeCubesFile(existing);
-            }
-        };
-        if (expected?.sessionDigest !== undefined) {
-            // TRANSACTIONAL same-ref guard (SR-six 689e2654 / PD / PS): the credential
-            // ref is deterministic per seat, so a concurrent reset+re-enroll writes a
-            // FRESH valid bearer under the SAME ref. compareAndClearServerSessionCredential
-            // reads → digest-compares → deletes atomically UNDER the per-account
-            // keychain lock (writers take the same lock), so no replacement can land
-            // between the comparison and the delete. Keychain-FIRST ordering: only
-            // after the exact rejected credential is deleted do we remove the cube
-            // binding — a mismatch is a no-op (nothing mutated), and a keychain
-            // get/delete error PROPAGATES with neither the credential nor the binding
-            // touched (coherent pre-reset state; the caller audits "could not
-            // complete", never a false success or a half-cleared binding).
-            if (!removedCredentialRef)
-                return { removed: false, credentialRef: null };
-            const deleted = await compareAndClearServerSessionCredential(removedCredentialRef, {
-                origin: entry.apiUrl,
-                trustIdentity: entry.serverTrustIdentity ?? '',
-                cubeId: entry.cubeId,
-            }, expected.sessionDigest);
-            if (!deleted)
-                return { removed: false, credentialRef: null };
-            await removeBinding();
-            return { removed: true, credentialRef: removedCredentialRef };
-        }
-        // Unpinned path (non-reset callers): CREDENTIAL-FIRST (CR #1) — delete the
-        // keychain credential BEFORE removing the binding, so the surviving
-        // intermediate is only ever binding-present/credential-absent (rerunnable),
-        // never ACTIVE-credential-without-binding. A throw propagates (no false
-        // success); the credential delete itself is account-lock-guarded.
-        if (removedCredentialRef)
-            await clearServerSessionCredential(removedCredentialRef);
-        await removeBinding();
-        return { removed: true, credentialRef: removedCredentialRef };
-    }));
-    activeCubeWriteQueue = operation.then(() => undefined, () => undefined);
-    return await operation;
 }
 /**
  * S0 of the ratified client-seat-reset-state-model: snapshot this worktree's

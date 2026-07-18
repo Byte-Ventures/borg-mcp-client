@@ -53,7 +53,6 @@ import {
   getActiveCube as cubesGetActive,
   hasPersistedActiveCube as cubesHasPersistedActive,
   setActiveCube as cubesSetActive,
-  clearActiveCube as cubesClearActive,
   inboxPathForDrone,
   setCodexWakeTarget,
 } from './cubes.js';
@@ -140,7 +139,6 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
     hasPersistedActiveCube: () => cubesHasPersistedActive(),
     readPersistedLocalSeat: () => readPersistedLocalSeat(),
     peekServerSessionRecord: (credentialRef, binding) => peekServerSessionRecord(credentialRef, binding),
-    clearActiveCube: (expected) => cubesClearActive(expected),
     probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>
       defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
     setActiveCube: (a) => cubesSetActive(a),
