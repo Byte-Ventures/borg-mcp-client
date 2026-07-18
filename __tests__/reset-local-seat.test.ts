@@ -369,6 +369,34 @@ describe('cubes.resetLocalSeatBinding (real backend + real fs)', () => {
     expect(await cubes.resetLocalSeatBinding(snap)).toEqual({ outcome: 'no-binding' });
   });
 
+  it('CR #4: a REAL binding-write failure AFTER the credential delete → PARTIAL (credential gone, rerunnable)', async () => {
+    const { fixture, config, cubes, values } = await setup();
+    const { ref } = await seedSeat(config, cubes);
+    // A sibling keeps the projects map non-empty so binding removal takes the
+    // writeCubesFile (rewrite) path, not the unlink path.
+    const sibling = join(fixture, 'sibling');
+    mkdirSync(join(sibling, '.git'), { recursive: true });
+    process.chdir(sibling);
+    await cubes.setActiveCube({
+      cubeId: SEAT.cubeId, droneId: STAMP.droneId, name: 'local-cube', droneLabel: 'sib',
+      apiUrl: SEAT.origin, serverTrustIdentity: SEAT.trustIdentity,
+      localSessionCredentialRef: `borg-server-session:${'e'.repeat(64)}`, roleName: 'Drone', sessionToken: 'x',
+    });
+    process.chdir(join(fixture, 'project'));
+    const snap = (await cubes.snapshotLocalSeat())!;
+    // Inject a REAL writeCubesFile failure that fires AFTER the (real) credential delete.
+    cubes.__setCubesWriteFailureForTest(() => new Error('ENOSPC: no space left on device'));
+    try {
+      const res = await cubes.resetLocalSeatBinding(snap);
+      // Credential-FIRST: the keychain record was deleted even though the binding
+      // rewrite failed — the safe forward state (binding-present/credential-absent).
+      expect(values.has(ref)).toBe(false);
+      expect(res).toEqual({ outcome: 'partial', credentialRef: ref });
+    } finally {
+      cubes.__setCubesWriteFailureForTest(null);
+    }
+  });
+
   it('CR #4: a delete-throw whose readback still sees the record → repair-required (never false success)', async () => {
     // A backend whose delete throws but whose get keeps returning the record →
     // compareAndClearSessionRecord readback = still present = unknown.

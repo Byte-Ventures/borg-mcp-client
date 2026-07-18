@@ -194,10 +194,21 @@ async function readCubesFile(): Promise<CubesFile | null> {
   return parsed;
 }
 
+// Test-only injected binding-write failure (CR #4): lets a test force a REAL
+// writeCubesFile/unlink failure AFTER a successful credential delete so the typed
+// `partial` (rerun-to-converge) outcome is exercised without racing filesystem
+// permissions on the co-located lock. Never wired by production callers.
+let cubesWriteFailureForTest: (() => Error) | null = null;
+/** @internal */
+export function __setCubesWriteFailureForTest(make: (() => Error) | null): void {
+  cubesWriteFailureForTest = make;
+}
+
 /**
  * Write the cubes.json file, ensuring the parent directory exists.
  */
 async function writeCubesFile(data: CubesFile): Promise<void> {
+  if (cubesWriteFailureForTest) throw cubesWriteFailureForTest();
   await atomicWriteFile(CUBES_FILE, JSON.stringify(data, null, 2) + '\n');
 }
 

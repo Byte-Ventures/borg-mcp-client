@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
   DEFAULT_LOCAL_SERVER_ORIGIN,
@@ -10,7 +10,13 @@ import {
   preflightBorgServerTag,
   resumeBorgServerEnrollment,
 } from '../src/server-handshake.js';
-import { serverSessionCredentialRef } from '../src/config.js';
+import {
+  __setServerCredentialBackendForTest,
+  clearPendingServerSession,
+  getOrCreatePendingServerSession,
+  serverSessionCredentialRef,
+} from '../src/config.js';
+import type { TokenBackend } from '../src/token-store.js';
 import type { ServerSessionOperation } from '../src/config.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
@@ -651,5 +657,64 @@ describe('self-hosted server handshake', () => {
     // ...while any other 401 falls back to the generic credential rejection.
     await expect(send(rejectedWith('AUTH_INVALID') as typeof fetch))
       .rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+  });
+});
+
+// SR-seven (a): even on the NO-EXPECTATION-DIGEST attach paths (first-enroll
+// ABSENT, resume/remint EXACT-ref-only), the atomic compare-and-activate is still
+// digest-guarded by the SENT bearer's digest. These REAL-backend integration
+// tests drive the full sendBorgServerAttach → prepared.activate() (real
+// compareAndActivatePendingServerSession) and swap/delete the record between send
+// and activate, proving it fails closed (replaced/missing) with no expectation
+// digest anywhere in play.
+describe('sendBorgServerAttach real activate fails closed with NO expectation digest (SR-seven a)', () => {
+  const ORIGIN = 'https://server.example.com';
+  const TRUST = 'sha256:server-a';
+  const SEAT = { origin: ORIGIN, trustIdentity: TRUST, cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION };
+
+  function memoryBackend(): { backend: TokenBackend; values: Map<string, string> } {
+    const values = new Map<string, string>();
+    return { values, backend: { name: 'keychain', get: async (a) => values.get(a) ?? null, set: async (a, v) => { values.set(a, v); }, delete: async (a) => { values.delete(a); } } };
+  }
+  afterEach(() => __setServerCredentialBackendForTest(null));
+
+  const attachOk = () => vi.fn(async () => new Response(JSON.stringify({
+    protocol_version: '2', request_id: 'attach-resp',
+    payload: {
+      result: 'reused',
+      cube: { id: CUBE_ID, name: 'local-cube' },
+      role: { id: ROLE_ID, name: 'Builder' },
+      drone: { id: DRONE_ID, label: 'builder-1' },
+      session: { id: SESSION_ID, expires_at: '2026-07-20T00:00:00.000Z' },
+    },
+  }), { status: 200 }));
+
+  it('REPLACED: a same-ref replacement between send and activate is never activated (no expectation digest)', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const pending = await getOrCreatePendingServerSession(SEAT);
+    const prepared = await sendBorgServerAttach(
+      ORIGIN, TRUST, 'p'.repeat(43), { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      pending.credential, { fetchImpl: attachOk() as typeof fetch },
+    );
+    // Between send and activate, the record is swapped for a FRESH bearer (a
+    // reset+re-enroll under the same deterministic ref) — no digest is pinned in
+    // the expectation; the SENT bearer's digest is the only guard.
+    await clearPendingServerSession(SEAT);
+    const fresh = await getOrCreatePendingServerSession(SEAT);
+    expect(fresh.credential).not.toBe(pending.credential);
+    await expect(prepared.activate()).rejects.toThrow(/replaced.*no server metadata was bound/i);
+  });
+
+  it('MISSING: a record deleted between send and activate is never activated (no expectation digest)', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const pending = await getOrCreatePendingServerSession(SEAT);
+    const prepared = await sendBorgServerAttach(
+      ORIGIN, TRUST, 'p'.repeat(43), { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      pending.credential, { fetchImpl: attachOk() as typeof fetch },
+    );
+    await clearPendingServerSession(SEAT); // a concurrent reset won
+    await expect(prepared.activate()).rejects.toThrow(/missing.*no server metadata was bound/i);
   });
 });

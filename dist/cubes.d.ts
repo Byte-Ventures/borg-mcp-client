@@ -48,6 +48,8 @@ export interface CodexWakeTargetRecord {
  */
 export declare function findProjectRoot(cwd?: string): string;
 export declare function inboxPathForDrone(cubeId: string, droneId: string): string;
+/** @internal */
+export declare function __setCubesWriteFailureForTest(make: (() => Error) | null): void;
 export declare function atomicWriteFile(filePath: string, data: string, opts?: {
     mode?: number;
     io?: {

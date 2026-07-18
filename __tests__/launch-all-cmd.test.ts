@@ -359,6 +359,37 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     expect(stderrOf(deps)).toMatch(/could not confirm drone-b.*launching anyway/);
   });
 
+  it('SR-seven (b): a TRUST-MISMATCH seat is a TERMINAL SKIP (never fail-open-launched)', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'trust-mismatch' : 'live'));
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    // The live one launches; the trust-mismatch one is SKIPPED, not launched.
+    expect(dispatched(deps)).toBe(true);
+    const err = stderrOf(deps);
+    expect(err).toMatch(/skipping drone-b.*could not verify the server identity/);
+    expect(err).toMatch(/terminal/);
+    expect(err).not.toMatch(/drone-b.*launching anyway/);
+  });
+
+  it('SR-seven (b): ALL trust-mismatch → nothing launched, terminal cause named (never fail-open)', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async () => 'trust-mismatch');
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(dispatched(deps)).toBe(false);
+    expect(stdoutOf(deps)).toMatch(/changed \(terminal\) server identity/);
+  });
+
+  it('SR-seven (b): a CREDENTIAL-REJECTED seat is a cause-accurate SKIP (not fail-open), re-enroll guidance', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'credential-rejected' : 'live'));
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(dispatched(deps)).toBe(true);
+    const err = stderrOf(deps);
+    expect(err).toMatch(/skipping drone-b.*saved credential was rejected/);
+    expect(err).toContain('--enroll');
+    expect(err).not.toMatch(/drone-b.*launching anyway/);
+  });
+
   it('--force does NOT override an eviction skip (distinct from the lock-live --force re-launch)', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async () => 'evicted');

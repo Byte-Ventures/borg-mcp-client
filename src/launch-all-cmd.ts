@@ -277,6 +277,8 @@ export async function runLaunchAll(
   const launchable: DroneCandidate[] = [];
   let evictedCount = 0;
   let rejectedCount = 0;
+  let trustMismatchCount = 0;
+  let credentialRejectedCount = 0;
   for (const c of lockLaunchable) {
     let status: SeatStatus;
     try {
@@ -304,22 +306,31 @@ export async function runLaunchAll(
       );
       continue;
     }
-    // CR #6: credential-rejected / trust-mismatch are non-terminal for the
-    // constructive launch path — fail-OPEN (launch anyway) with an accurate note
-    // rather than collapsing them into the transient "network" note.
+    // SR-seven (b): trust-mismatch is TERMINAL — a pinned-identity change is not
+    // fixed by launching a doomed drone, so SKIP (never fail-open).
+    if (status === 'trust-mismatch') {
+      trustMismatchCount += 1;
+      deps.stderr(
+        `skipping ${c.droneLabel} (${c.worktreeDir}): could not verify the server identity ` +
+          `(pinned trust changed) — this is terminal. Confirm ${c.apiUrl} is the expected server; ` +
+          'if it was re-initialized, restore the expected identity before relaunching.\n'
+      );
+      continue;
+    }
+    // SR-seven (b): credential-rejected is a cause-accurate SKIP (not a fail-open
+    // launch) — the saved credential no longer authenticates; re-enroll first.
+    if (status === 'credential-rejected') {
+      credentialRejectedCount += 1;
+      deps.stderr(
+        `skipping ${c.droneLabel} (${c.worktreeDir}): saved credential was rejected (not a takeover) — ` +
+          `re-enroll from that worktree with \`borg assimilate --host ${c.apiUrl} --enroll\`.\n`
+      );
+      continue;
+    }
+    // Only a genuinely transient cause fails OPEN (launch anyway with a note).
     if (status === 'indeterminate') {
       deps.stderr(
         `note: could not confirm ${c.droneLabel}'s seat is live (network/transient) — launching anyway.\n`
-      );
-    } else if (status === 'credential-rejected') {
-      deps.stderr(
-        `note: ${c.droneLabel}'s saved credential was rejected (not a takeover) — launching anyway; ` +
-          `if it keeps failing, re-enroll with \`borg assimilate --host ${c.apiUrl} --enroll\`.\n`
-      );
-    } else if (status === 'trust-mismatch') {
-      deps.stderr(
-        `note: could not verify ${c.droneLabel}'s server identity (pinned trust changed) — launching anyway; ` +
-          'confirm this is the expected server if it keeps failing.\n'
       );
     }
     launchable.push(c);
@@ -333,6 +344,12 @@ export async function runLaunchAll(
     }
     if (rejectedCount > 0) {
       causes.push(`${rejectedCount} with a saved seat no longer accepted (revoked/taken over)`);
+    }
+    if (trustMismatchCount > 0) {
+      causes.push(`${trustMismatchCount} with a changed (terminal) server identity`);
+    }
+    if (credentialRejectedCount > 0) {
+      causes.push(`${credentialRejectedCount} with a rejected saved credential`);
     }
     const causeText = causes.length > 0 ? ` (${causes.join(', ')})` : '';
     deps.stdout(

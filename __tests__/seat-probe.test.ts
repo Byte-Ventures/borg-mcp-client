@@ -137,4 +137,37 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
       await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
     }
   });
+
+  // RQ (a): a WRONG-PROTOCOL-VERSION 401 envelope must fail the bounded decode and
+  // fall closed to CREDENTIAL_REJECTED — a SESSION_REJECTED code under the wrong
+  // protocol version can NEVER trigger the destructive reset path.
+  it('drone-SESSION 401 with a WRONG protocol_version (even carrying SESSION_REJECTED) → CREDENTIAL_REJECTED', async () => {
+    const wrongVersion = JSON.stringify({ protocol_version: '1', error: { code: 'SESSION_REJECTED', message: 'rejected' } });
+    wireMocks({ fetchImpl: vi.fn(async () => new Response(wrongVersion, { status: 401 })) });
+    const { whoami } = await import('../src/remote-client.js');
+    await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+  });
+
+  // RQ (b): a DECLARED + CHUNKED oversized 401 body must trip the bounded read
+  // (AUTH_ERROR_ENVELOPE_LIMIT) and fail closed to CREDENTIAL_REJECTED — a hostile
+  // server cannot force a reset by padding a SESSION_REJECTED envelope past the cap.
+  it('drone-SESSION 401 with a DECLARED + CHUNKED oversized body → bounded-read fail-closed → CREDENTIAL_REJECTED', async () => {
+    // > 64 KiB (the auth-error envelope cap). Wrap a real SESSION_REJECTED code in
+    // megabytes of padding, delivered as a CHUNKED stream (no Content-Length).
+    const huge = 'x'.repeat(200 * 1024);
+    const bodyText = JSON.stringify({ protocol_version: '2', pad: huge, error: { code: 'SESSION_REJECTED', message: 'rejected' } });
+    const chunkedStream = () => new ReadableStream<Uint8Array>({
+      start(controller) {
+        const bytes = new TextEncoder().encode(bodyText);
+        // Emit in 16 KiB chunks so the bounded reader must accumulate + cut off.
+        for (let i = 0; i < bytes.length; i += 16 * 1024) {
+          controller.enqueue(bytes.subarray(i, i + 16 * 1024));
+        }
+        controller.close();
+      },
+    });
+    wireMocks({ fetchImpl: vi.fn(async () => new Response(chunkedStream(), { status: 401 })) });
+    const { whoami } = await import('../src/remote-client.js');
+    await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+  });
 });
