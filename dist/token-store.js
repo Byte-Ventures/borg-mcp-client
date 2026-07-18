@@ -1,46 +1,12 @@
 /**
- * OS-keychain credential backend.
+ * Local-server credential backend.
  *
- * config.ts's local-server credential group sits on top of this. The ONLY
- * supported storage engine is the OS keychain (@napi-rs/keyring) — real
- * platform at-rest encryption. There is deliberately NO obfuscation-grade
- * file fallback: local server credentials fail closed when the platform
- * keychain is unavailable rather than degrade to a weaker at-rest posture.
- *
- * The keyring entry factory is injected so the logic is unit-tested without a
- * real keychain.
+ * config.ts's local-server credential group sits on top of this. Storage is the
+ * 0600 file store (Queen rescope) — the OS keychain (@napi-rs/keyring) is GONE.
+ * The raw secret rests only in the 0600 file, parity with the server's own TLS
+ * private keys; there is no keychain and no obfuscation-grade fallback.
  */
-import { AsyncEntry } from '@napi-rs/keyring';
 import { atomicWrite0600, readStoreFile } from './seat-store.js';
-const SERVICE_NAME = 'borg-mcp';
-const defaultEntryFactory = (account) => new AsyncEntry(SERVICE_NAME, account);
-/**
- * Build the OS-keychain backend. A missing entry reads as null, and delete is
- * silent on a NoEntry error (idempotent clear) while other errors propagate
- * (fail-loud).
- */
-export function makeKeychainBackend(entryFactory = defaultEntryFactory) {
-    return {
-        name: 'keychain',
-        async get(account) {
-            return (await entryFactory(account).getPassword()) ?? null;
-        },
-        async set(account, value) {
-            await entryFactory(account).setPassword(value);
-        },
-        async delete(account) {
-            try {
-                await entryFactory(account).deletePassword();
-            }
-            catch (err) {
-                const msg = String(err?.message ?? '');
-                if (/no entry|not found|no matching/i.test(msg))
-                    return;
-                throw err;
-            }
-        },
-    };
-}
 // ─── 0600 file backend (Queen rescope: replaces the OS keychain) ─────────────
 /**
  * Build a TokenBackend over a single 0600 store file, all accounts held in one

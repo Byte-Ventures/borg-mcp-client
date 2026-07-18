@@ -1,8 +1,10 @@
 /**
  * Local environment / capability primitives.
  *
- * These pure helpers are kept free of side effects (env + platform are
- * injected) so the decision logic is unit-testable without a real keychain.
+ * Pure helpers kept free of side effects (env is injected) so the decision logic
+ * is unit-testable. (The OS-keychain availability probe was removed with the
+ * Queen rescope — credentials now rest in the 0600 file store, so there is no
+ * keychain to probe.)
  */
 /**
  * A BORG_* toggle is "on" only when present and not one of the falsy
@@ -12,14 +14,4 @@
  * reads through one convention.
  */
 export declare function envToggleOn(value: string | undefined): boolean;
-/**
- * Returns true when the OS keychain can be written to and read from. The
- * round-trip is injectable so callers/tests can supply a deterministic
- * probe; in production the default probe touches the real keychain.
- *
- * Any thrown error from the probe (no Secret Service, locked keychain,
- * permission denial) is treated as "unavailable" — local server credentials
- * then fail closed (there is no obfuscation-grade file fallback).
- */
-export declare function isKeyringAvailable(roundTrip?: () => Promise<void>): Promise<boolean>;
 //# sourceMappingURL=auth-env.d.ts.map

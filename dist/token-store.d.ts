@@ -1,18 +1,14 @@
 /**
- * OS-keychain credential backend.
+ * Local-server credential backend.
  *
- * config.ts's local-server credential group sits on top of this. The ONLY
- * supported storage engine is the OS keychain (@napi-rs/keyring) — real
- * platform at-rest encryption. There is deliberately NO obfuscation-grade
- * file fallback: local server credentials fail closed when the platform
- * keychain is unavailable rather than degrade to a weaker at-rest posture.
- *
- * The keyring entry factory is injected so the logic is unit-tested without a
- * real keychain.
+ * config.ts's local-server credential group sits on top of this. Storage is the
+ * 0600 file store (Queen rescope) — the OS keychain (@napi-rs/keyring) is GONE.
+ * The raw secret rests only in the 0600 file, parity with the server's own TLS
+ * private keys; there is no keychain and no obfuscation-grade fallback.
  */
 export type TokenBackendName = 'keychain' | 'file';
 /**
- * Account-agnostic key/value store over the OS keychain.
+ * Account-agnostic key/value store over the 0600 credential file.
  */
 export interface TokenBackend {
     readonly name: TokenBackendName;
@@ -20,23 +16,6 @@ export interface TokenBackend {
     set(account: string, value: string): Promise<void>;
     delete(account: string): Promise<void>;
 }
-/**
- * The slice of @napi-rs/keyring's AsyncEntry this backend depends on. The
- * return types mirror AsyncEntry exactly (deletePassword resolves to an
- * implementation-defined value we ignore) so the real class is assignable.
- */
-export interface KeyringEntry {
-    setPassword(value: string): Promise<void>;
-    getPassword(): Promise<string | null | undefined>;
-    deletePassword(): Promise<unknown>;
-}
-export type KeyringEntryFactory = (account: string) => KeyringEntry;
-/**
- * Build the OS-keychain backend. A missing entry reads as null, and delete is
- * silent on a NoEntry error (idempotent clear) while other errors propagate
- * (fail-loud).
- */
-export declare function makeKeychainBackend(entryFactory?: KeyringEntryFactory): TokenBackend;
 /**
  * Build a TokenBackend over a single 0600 store file, all accounts held in one
  * `{version, accounts}` map. get/set/delete read-modify-write the file via the

@@ -1,10 +1,11 @@
 /**
  * Local environment / capability primitives.
  *
- * These pure helpers are kept free of side effects (env + platform are
- * injected) so the decision logic is unit-testable without a real keychain.
+ * Pure helpers kept free of side effects (env is injected) so the decision logic
+ * is unit-testable. (The OS-keychain availability probe was removed with the
+ * Queen rescope — credentials now rest in the 0600 file store, so there is no
+ * keychain to probe.)
  */
-import { AsyncEntry } from '@napi-rs/keyring';
 /**
  * A BORG_* toggle is "on" only when present and not one of the falsy
  * spellings. Mirrors how the rest of the client reads boolean env vars:
@@ -17,43 +18,5 @@ export function envToggleOn(value) {
         return false;
     const v = value.trim().toLowerCase();
     return v !== '' && v !== '0' && v !== 'false' && v !== 'no';
-}
-/**
- * The probe round-trip used to decide whether the OS keychain is usable.
- * Performs a real set/get/delete against a throwaway account so a missing
- * Secret Service (headless Linux), a locked keychain, or any other backend
- * failure surfaces as a thrown error rather than a later mid-operation crash.
- */
-async function defaultKeyringRoundTrip() {
-    const PROBE_SERVICE = 'borg-mcp';
-    const PROBE_ACCOUNT = '__borg_keyring_probe__';
-    const entry = new AsyncEntry(PROBE_SERVICE, PROBE_ACCOUNT);
-    await entry.setPassword('probe');
-    await entry.getPassword();
-    // Best-effort cleanup; a failed delete still proves the keychain works.
-    try {
-        await entry.deletePassword();
-    }
-    catch {
-        /* leave the probe entry — its presence is harmless */
-    }
-}
-/**
- * Returns true when the OS keychain can be written to and read from. The
- * round-trip is injectable so callers/tests can supply a deterministic
- * probe; in production the default probe touches the real keychain.
- *
- * Any thrown error from the probe (no Secret Service, locked keychain,
- * permission denial) is treated as "unavailable" — local server credentials
- * then fail closed (there is no obfuscation-grade file fallback).
- */
-export async function isKeyringAvailable(roundTrip = defaultKeyringRoundTrip) {
-    try {
-        await roundTrip();
-        return true;
-    }
-    catch {
-        return false;
-    }
 }
 //# sourceMappingURL=auth-env.js.map

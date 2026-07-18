@@ -1,27 +1,21 @@
 /**
- * Tests for gh#557 environment/capability detection helpers.
- *
- * These pure helpers decide whether the loopback-browser OAuth flow is
- * viable in the current environment, or whether we must fall back to the
- * RFC 8628 device-grant flow (no browser) and/or a keychain-less token
- * store. Detection is split out so it can be unit-tested without a real
- * display, SSH session, or OS keychain.
+ * Tests for the surviving auth-env helper. The isKeyringAvailable probe was
+ * DELETED with the OS keychain (Queen rescope — credentials now rest in the 0600
+ * file store, so there is no keychain to probe).
  */
 import { describe, it, expect } from 'vitest';
-import { isKeyringAvailable } from '../src/auth-env.js';
+import { envToggleOn } from '../src/auth-env.js';
 
-describe('isKeyringAvailable (gh#557)', () => {
-  it('returns true when the injected round-trip probe resolves', async () => {
-    const probe = async () => {
-      /* round-trip succeeded */
-    };
-    expect(await isKeyringAvailable(probe)).toBe(true);
+describe('envToggleOn', () => {
+  it('is off for unset and the falsy spellings', () => {
+    for (const v of [undefined, '', ' ', '0', 'false', 'FALSE', 'no', ' No ']) {
+      expect(envToggleOn(v)).toBe(false);
+    }
   });
 
-  it('returns false when the injected round-trip probe throws (no Secret Service)', async () => {
-    const probe = async () => {
-      throw new Error('Platform secure storage failure: no Secret Service available');
-    };
-    expect(await isKeyringAvailable(probe)).toBe(false);
+  it('is on for any other non-empty value', () => {
+    for (const v of ['1', 'true', 'yes', 'on', 'anything']) {
+      expect(envToggleOn(v)).toBe(true);
+    }
   });
 });

@@ -5,7 +5,7 @@
  * documentation consumers use the same pure-data list.
  *
  * PURE DATA — no imports, no side effects — so documentation builds do not pull
- * in the client's MCP/keyring runtime dependencies.
+ * in the client's MCP runtime dependencies.
  */
 export interface ToolManifestEntry {
     name: string;
