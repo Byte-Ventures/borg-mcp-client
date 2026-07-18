@@ -231,8 +231,16 @@ export function activeCubeWithFreshRegenIdentity(active, result) {
  */
 export async function snapshotLocalSeat() {
     const worktree = findProjectRoot();
-    const record = await getActiveSeatForWorktree(worktree);
-    if (!record || !record.cubeId || !record.droneId)
+    // CR#4: discover an ACTIVE seat OR a bound-PENDING record (a sibling whose
+    // activation failed, bound to THIS worktree by the attach bind-pending step).
+    // getActiveSeatForWorktree would MISS the bound-pending record (it requires
+    // state==='active' + a drone id), so `reset-local-seat` would FALSELY report
+    // "nothing to reset" (exit 0) while a resumable, server-digest-bound bearer
+    // persists at rest — a FALSE-SUCCESS revocation failure. getSeatForWorktree sees
+    // both, and the offline reset's exact re-check + delete cover the bound-pending
+    // record too.
+    const record = await getSeatForWorktree(worktree);
+    if (!record || !record.cubeId)
         return null;
     const ref = seatRef(record);
     const observation = await observeSeat(ref, {
@@ -244,7 +252,7 @@ export async function snapshotLocalSeat() {
         apiUrl: record.origin,
         serverTrustIdentity: record.trustIdentity,
         cubeId: record.cubeId,
-        droneId: record.droneId,
+        ...(record.droneId !== undefined ? { droneId: record.droneId } : {}),
         credentialRef: ref,
         worktree,
         observation,

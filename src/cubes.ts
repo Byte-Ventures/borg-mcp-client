@@ -318,8 +318,11 @@ export interface LocalSeatSnapshot {
   serverTrustIdentity: string;
   cubeId: string;
   /** The FULL binding includes the prior drone identity (CR #3): a drone-id
-   *  change at recheck is a full-binding change and aborts the reset. */
-  droneId: string;
+   *  change at recheck is a full-binding change and aborts the reset. CR#4: a
+   *  bound-PENDING record (a sibling whose activation failed) may carry NO drone id
+   *  yet — the snapshot then omits it and the reset matches on undefined-vs-undefined,
+   *  still deleting the exact record. */
+  droneId?: string;
   credentialRef: string;
   worktree: string;
   /** Token-safe TYPED seat observation: active|pending (with digest) or absent. */
@@ -340,8 +343,16 @@ export type ResetLocalSeatOutcome =
  */
 export async function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null> {
   const worktree = findProjectRoot();
-  const record = await getActiveSeatForWorktree(worktree);
-  if (!record || !record.cubeId || !record.droneId) return null;
+  // CR#4: discover an ACTIVE seat OR a bound-PENDING record (a sibling whose
+  // activation failed, bound to THIS worktree by the attach bind-pending step).
+  // getActiveSeatForWorktree would MISS the bound-pending record (it requires
+  // state==='active' + a drone id), so `reset-local-seat` would FALSELY report
+  // "nothing to reset" (exit 0) while a resumable, server-digest-bound bearer
+  // persists at rest — a FALSE-SUCCESS revocation failure. getSeatForWorktree sees
+  // both, and the offline reset's exact re-check + delete cover the bound-pending
+  // record too.
+  const record = await getSeatForWorktree(worktree);
+  if (!record || !record.cubeId) return null;
   const ref = seatRef(record);
   const observation = await observeSeat(ref, {
     origin: record.origin,
@@ -352,7 +363,7 @@ export async function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null> {
     apiUrl: record.origin,
     serverTrustIdentity: record.trustIdentity,
     cubeId: record.cubeId,
-    droneId: record.droneId,
+    ...(record.droneId !== undefined ? { droneId: record.droneId } : {}),
     credentialRef: ref,
     worktree,
     observation,

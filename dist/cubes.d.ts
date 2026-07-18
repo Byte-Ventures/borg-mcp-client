@@ -93,8 +93,11 @@ export interface LocalSeatSnapshot {
     serverTrustIdentity: string;
     cubeId: string;
     /** The FULL binding includes the prior drone identity (CR #3): a drone-id
-     *  change at recheck is a full-binding change and aborts the reset. */
-    droneId: string;
+     *  change at recheck is a full-binding change and aborts the reset. CR#4: a
+     *  bound-PENDING record (a sibling whose activation failed) may carry NO drone id
+     *  yet — the snapshot then omits it and the reset matches on undefined-vs-undefined,
+     *  still deleting the exact record. */
+    droneId?: string;
     credentialRef: string;
     worktree: string;
     /** Token-safe TYPED seat observation: active|pending (with digest) or absent. */

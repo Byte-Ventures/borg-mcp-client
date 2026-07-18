@@ -251,7 +251,9 @@ export type ResetSeatOutcome = {
 export declare function resetSeatForWorktree(expected: {
     worktree: string;
     ref: string;
-    droneId: string;
+    /** CR#4: undefined for a bound-PENDING record with no drone id yet — the reset
+     *  matches undefined-vs-undefined and still deletes the exact record. */
+    droneId?: string;
     observation: SeatObservation;
 }): Promise<ResetSeatOutcome>;
 /** Abort-scrub of the caller's OWN pending record only (CR#2 finalize abort):

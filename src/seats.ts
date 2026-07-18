@@ -616,7 +616,9 @@ export type ResetSeatOutcome =
 export async function resetSeatForWorktree(expected: {
   worktree: string;
   ref: string;
-  droneId: string;
+  /** CR#4: undefined for a bound-PENDING record with no drone id yet — the reset
+   *  matches undefined-vs-undefined and still deletes the exact record. */
+  droneId?: string;
   observation: SeatObservation;
 }): Promise<ResetSeatOutcome> {
   return withStore<SeatsFile, ResetSeatOutcome>(SEATS_FILE, emptyStore, parseStore, async (txn) => {

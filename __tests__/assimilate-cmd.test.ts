@@ -1250,22 +1250,67 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
   const removedWorktree = (calls: string[][]) =>
     calls.some((c) => c[0] === 'git' && c[1] === 'worktree' && c[2] === 'remove');
 
-  it('CR #5: a spawned-sibling activation-failure PRESERVES the worktree (never orphans the binding it owns)', async () => {
+  // A finalize handle exposing the CR#2 bind-pending thunk with a chosen outcome.
+  const localResultWithBind = (bindPending: () => Promise<unknown>) =>
+    vi.fn(async () => ({
+      cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
+      local_session: { credential_ref: REF, expires_at: '2026-07-14T16:00:00.000Z' },
+      role_id: 'r',
+      finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}), bindPending },
+    }));
+
+  it('CR#4: activation-failure with a BOUND pending record PRESERVES the worktree + claims convergence', async () => {
     const { calls, runSync } = spyRunSync();
     const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'activation-failed' as const }));
     const stderr = vi.fn();
     const deps = makeStubDeps({
-      assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
+      assimilate: localResultWithBind(vi.fn(async () => 'bound' as const)),
       getCube: getCube(), finalizeServerSeat, stderr, runSync,
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
     });
     expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
-    // The worktree that owns the persisted binding was NOT removed.
+    // The worktree owns a durable locator (bound-pending) → NOT removed.
     expect(removedWorktree(calls)).toBe(false);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toMatch(/binding.*was saved/i);
+    expect(out).toMatch(/PRESERVED here|resumable seat state/i);
     expect(out).toMatch(/NOT removed/i);
-    expect(out).toMatch(/re-run/i);
+    expect(out).toMatch(/converge/i);
+  });
+
+  it('CR#4: activation-failure with a MISSING/replaced bind makes NO convergence claim + ROLLS BACK the worktree', async () => {
+    for (const outcome of ['missing', 'replaced'] as const) {
+      const { calls, runSync } = spyRunSync();
+      const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'activation-failed' as const }));
+      const stderr = vi.fn();
+      const deps = makeStubDeps({
+        assimilate: localResultWithBind(vi.fn(async () => outcome)),
+        getCube: getCube(), finalizeServerSeat, stderr, runSync,
+        listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+      });
+      expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+      // No durable locator → the spawned worktree is rolled back.
+      expect(removedWorktree(calls), `${outcome} should roll back`).toBe(true);
+      const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+      // Truthful FAILURE — never the false-success "converge / identical seat reused" claim.
+      expect(out).toMatch(/could NOT be preserved/i);
+      expect(out).not.toMatch(/converge|identical seat is reused/i);
+    }
+  });
+
+  it('CR#4: activation-failure where bindPending THROWS makes NO convergence claim + rolls back', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'activation-failed' as const }));
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      assimilate: localResultWithBind(vi.fn(async () => { throw new Error('store busy'); })),
+      getCube: getCube(), finalizeServerSeat, stderr, runSync,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    expect(removedWorktree(calls)).toBe(true);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/could NOT be preserved/i);
+    expect(out).not.toMatch(/converge|identical seat is reused/i);
   });
 
   it('CR#2: a spawned-sibling activation-failure BINDS the surviving pending record to the preserved worktree (rerun locator)', async () => {

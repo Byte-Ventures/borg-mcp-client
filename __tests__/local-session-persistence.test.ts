@@ -92,3 +92,48 @@ describe('local ActiveCube session persistence (single store)', () => {
     expect(JSON.stringify(snap)).not.toContain(BEARER);
   });
 });
+
+describe('CR#4: reset-local-seat discovers + clears a BOUND-PENDING seat (no false "nothing to reset")', () => {
+  // Seed a bound-PENDING record (a sibling whose activation failed, bound to THIS
+  // worktree) directly through the real seats API, then prove the offline reset
+  // snapshot sees it and the exact-delete clears it.
+  async function seedBoundPending(
+    seats: typeof import('../src/seats.js'),
+    worktree: string,
+    withDroneId: boolean,
+  ) {
+    const seat = {
+      origin: ORIGIN, trustIdentity: TRUST, cubeId: CUBE_ID, roleId: ROLE_ID,
+      // The ORIGINAL sibling operation (NOT the worktree's derived seat op).
+      operation: { projectRoot: '/orig/repo', kind: 'sibling' as const, operationKey: 'implicit-sibling:x' },
+    };
+    await seats.mintPendingSeat({ ...seat, credential: BEARER });
+    const outcome = await seats.bindPendingSeatToWorktree({
+      ...seat,
+      expectedPendingDigest: digestOf(BEARER),
+      ...(withDroneId ? { droneId: DRONE_ID } : {}),
+      worktree, name: 'local-cube', droneLabel: 'builder-1', roleName: 'Drone',
+    });
+    expect(outcome).toBe('bound');
+    return seats.seatRef(seat);
+  }
+
+  it.each([true, false])('clears the bound-pending record (droneId present=%s); it is NOT a live ActiveCube', async (withDroneId) => {
+    const { project, seats, cubes } = await setup();
+    const ref = await seedBoundPending(seats, project, withDroneId);
+    // The bound-pending record is NON-hydratable as a live seat…
+    expect(await cubes.getActiveCube()).toBeNull();
+    expect(await seats.getActiveSeatForWorktree(project)).toBeNull();
+    // …but reset MUST discover it (no false "nothing to reset").
+    const snap = await cubes.snapshotLocalSeat();
+    expect(snap).not.toBeNull();
+    expect(snap!.observation.state).toBe('pending');
+    expect(snap!.credentialRef).toBe(ref);
+    // The exact re-check + delete clears the whole record.
+    const outcome = await cubes.resetLocalSeatBinding(snap!);
+    expect(outcome.outcome).toBe('reset');
+    // Convergence: the record is gone; a second snapshot is an honest null.
+    expect(await cubes.snapshotLocalSeat()).toBeNull();
+    expect(await seats.getSeatForWorktree(project)).toBeNull();
+  });
+});

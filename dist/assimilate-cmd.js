@@ -1043,32 +1043,55 @@ export async function runAssimilate(args, deps) {
         if (!outcome.committed) {
             if (outcome.reason === 'activation-failed') {
                 // CR #5: the atomic activate+bind did NOT commit (missing/replaced/threw), so
-                // the record stays PENDING with no worktree of its own. CR#2: bind that exact
-                // pending record to THIS preserved worktree WITHOUT activating it — the record
-                // stays pending (non-hydratable as a live seat) but becomes DISCOVERABLE from
-                // here, so a rerun FROM this worktree re-derives the exact original operation
-                // and re-sends the identical bearer, converging on the SAME seat (no ghost).
-                // Best-effort: even if the bind cannot be written the worktree is preserved and
-                // the pending record survives at its ref (recoverable, never a duplicate).
+                // the record stays PENDING with no worktree of its own. CR#2/CR#4: bind that
+                // exact pending record to THIS preserved worktree WITHOUT activating it — the
+                // record stays pending (non-hydratable) but becomes DISCOVERABLE from here, so
+                // a rerun FROM this worktree re-derives the exact original operation and
+                // re-sends the identical bearer, converging on the SAME seat (no ghost).
+                //
+                // CR#4 (SR-seven false-success revocation): the bindPending OUTCOME is
+                // load-bearing and must be BRANCHED. A blanket "safe to re-run / identical
+                // seat reused" claim on a missing/replaced/thrown bind is a FALSE-SUCCESS
+                // revocation failure — the worktree would NOT own a durable locator, yet the
+                // operator would be told convergence is guaranteed. Preserve the spawned
+                // worktree ONLY when it owns a durable locator (a `bound` outcome).
+                let bindOutcome = 'unavailable';
                 if (result.finalize?.bindPending) {
                     try {
-                        await result.finalize.bindPending({
+                        bindOutcome = (await result.finalize.bindPending({
                             worktree: deps.findProjectRoot(deps.cwd()),
                             name: activeCube.name,
                             droneLabel: activeCube.droneLabel,
                             ...(activeCube.roleName !== undefined ? { roleName: activeCube.roleName } : {}),
                             ...(activeCube.roleClass !== undefined ? { roleClass: activeCube.roleClass } : {}),
                             ...(activeCube.isHumanSeat !== undefined ? { isHumanSeat: activeCube.isHumanSeat } : {}),
-                        });
+                        }));
                     }
                     catch {
-                        /* best-effort — the pending record survives at its ref regardless */
+                        bindOutcome = 'threw';
                     }
                 }
-                deps.stderr(`This worktree's seat binding on ${auth.apiUrl} was saved, but finalizing its ` +
-                    'secure session did not complete. This worktree was NOT removed and the state is ' +
-                    `safe to re-run: from here, re-run ${localAssimilateCommand(auth.apiUrl)} to ` +
-                    'converge (the identical seat is reused — no duplicate is minted).\n');
+                if (bindOutcome === 'bound') {
+                    // The worktree now owns a durable locator (the bound-pending record points
+                    // here). PRESERVE it. Truthful convergence copy: a rerun FROM here re-sends
+                    // the identical bearer (no duplicate), and `reset-local-seat` from here now
+                    // discovers + clears the bound-pending record.
+                    deps.stderr(`This worktree's secure session on ${auth.apiUrl} did not finish activating, but ` +
+                        'its resumable seat state was PRESERVED here. This worktree was NOT removed. From ' +
+                        `here, re-run ${localAssimilateCommand(auth.apiUrl)} to converge (the identical seat ` +
+                        `is reused — no duplicate is minted), or run ${resetLocalSeatCommand(auth.apiUrl)} to ` +
+                        'clear it.\n');
+                    return 1;
+                }
+                // missing / replaced / threw / unavailable: the worktree owns NO durable
+                // locator, so make NO convergence claim. Roll back the just-spawned worktree
+                // (preserve ONLY when it owns a durable locator) and point at the offline reset.
+                deps.stderr(`This worktree's secure session on ${auth.apiUrl} did not finish activating, and its ` +
+                    'seat state could NOT be preserved to this worktree (it was concurrently reset or ' +
+                    'replaced, or the local seat store could not be written). No usable seat remains here. ' +
+                    `Run ${resetLocalSeatCommand(auth.apiUrl)} to clear any saved seat, then re-run ` +
+                    `${localAssimilateCommand(auth.apiUrl)} to attach against the current state.\n`);
+                rollbackWorktree();
                 return 1;
             }
             // 'expectation-mismatch': the binding was NEVER written (this worktree's
