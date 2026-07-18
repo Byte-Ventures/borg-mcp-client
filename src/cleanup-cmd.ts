@@ -436,7 +436,7 @@ export async function buildCleanupReport(
     // Under worktreesHome but no saved seat → not eviction-orphaned
     // (pre-assimilate or hand-made). Report, never auto-prune.
     if (!seat) {
-      rows.push({ worktreePath: wt, wtBranch: null, reason: 'UNKNOWN-no-seat', detail: 'no cubes.json seat — manual review' });
+      rows.push({ worktreePath: wt, wtBranch: null, reason: 'UNKNOWN-no-seat', detail: 'no saved seat — manual review' });
       continue;
     }
 

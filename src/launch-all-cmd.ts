@@ -53,7 +53,7 @@ async function resolveTargetCube(
     const identities = await deps.readAllProjectIdentities();
     const matches = identities.filter((e) => e.cube.name === args.cubeName);
     if (matches.length === 0) {
-      return { error: `no cube named '${args.cubeName}' found in cubes.json — has any drone assimilated into it?` };
+      return { error: `no cube named '${args.cubeName}' found among this machine's saved seats — has any drone assimilated into it?` };
     }
     // gh#850: distinct cubes can share a name (same name across accounts/
     // environments, or a stale seat). Silently taking matches[0] could launch
@@ -65,9 +65,9 @@ async function resolveTargetCube(
         .join('\n');
       return {
         error:
-          `'${args.cubeName}' is ambiguous — ${matches.length} cubes in cubes.json share that name:\n${list}\n` +
+          `'${args.cubeName}' is ambiguous — ${matches.length} saved seats on this machine share that name:\n${list}\n` +
           'cd into the intended project and re-run without --cube-name (resolves the active cube), ' +
-          'or remove the stale seat(s) from cubes.json.',
+          'or clear the stale seat(s) by running `borg reset-local-seat` from the worktree that holds each.',
       };
     }
     return { cubeId: matches[0].cube.cubeId, name: args.cubeName };

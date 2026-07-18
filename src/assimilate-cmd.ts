@@ -410,17 +410,17 @@ function reportServerFailure(
     );
     return 1;
   }
-  if (/^Borg server keychain state is busy$/i.test(message)) {
+  if (/(?:seat|credential) store is busy/i.test(message)) {
     deps.stderr(
-      `The OS keychain is busy for ${apiUrl} because another Borg process is ` +
-        `creating or resuming secure state. Wait for it to finish, then rerun ${retryCommand}.\n`,
+      `Borg's local seat store is busy for ${apiUrl} because another Borg process is ` +
+        `creating or resuming saved seat state. Wait for it to finish, then rerun ${retryCommand}.\n`,
     );
     return 1;
   }
-  if (/keychain|secure credential (?:store|storage)/i.test(message)) {
+  if (/(?:local )?seat store|(?:secure )?credential (?:store|storage)/i.test(message)) {
     deps.stderr(
-      `Borg could not access the OS keychain for ${apiUrl}. ` +
-        `Unlock or enable the keychain, then rerun ${retryCommand}.\n`,
+      `Borg could not access its local seat store for ${apiUrl}. ` +
+        `Ensure its directory on this machine is readable and writable, then rerun ${retryCommand}.\n`,
     );
     return 1;
   }
@@ -871,9 +871,10 @@ export async function runAssimilate(
         resumeDroneId = persisted.droneId;
       } else {
         deps.stderr(
-          `This worktree has saved seat metadata for ${authority.apiUrl}, but its secure session ` +
-            'could not be loaded. No new seat was created. Unlock or restore the OS ' +
-            `keychain, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
+          `This worktree has saved seat metadata for ${authority.apiUrl}, but its local session ` +
+            'credential could not be loaded from the local seat store. No new seat was created. Run ' +
+            `${resetLocalSeatCommand(authority.apiUrl)} to clear this worktree's saved seat, then ` +
+            `ask the operator for a new invitation and rerun ${localAssimilateCommand(authority.apiUrl, true)}.\n`,
         );
         return 1;
       }
@@ -1317,7 +1318,7 @@ export async function runAssimilate(
     }
     deps.stderr(
       `spawned sibling worktree at ${candidate} on branch ${wtBranch} (${startRef}); ` +
-      `original dir is registered as active (edit ~/.config/borgmcp/cubes.json if stale).\n`
+      `the original dir keeps its active seat — run \`borg reset-local-seat\` there if that binding is stale.\n`
     );
     deps.chdir(candidate);
     deps.stderr(renderWorktreeSteeringNote(candidate, wtBranch, projectRoot));

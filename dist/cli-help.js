@@ -75,8 +75,9 @@ export function assimilateHelpText(version) {
 export function resetLocalSeatHelpText(version) {
     return (`borg reset-local-seat (borgmcp ${version}) — clear ONLY this worktree's saved local seat\n\n` +
         `Offline and network-free: it contacts no server and revokes nothing server-side. It clears\n` +
-        `just this worktree's cubes.json binding + its keychain session credential (keyed on the\n` +
-        `worktree root). Server, trust anchor, cube, and every sibling worktree are left untouched.\n\n` +
+        `just this worktree's saved local seat — its credential and cube binding together — from the\n` +
+        `local seat store on this machine. Server, trust anchor, cube, and every sibling worktree are\n` +
+        `left untouched.\n\n` +
         `Use it after \`borg assimilate\` reports this worktree's seat was revoked or taken over\n` +
         `(a pin-matched rejection), then ask the operator for a new invitation and re-enroll.\n\n` +
         `Usage:\n` +

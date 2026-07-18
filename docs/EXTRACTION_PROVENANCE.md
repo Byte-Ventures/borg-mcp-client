@@ -30,7 +30,8 @@ packed artifact (zero tolerance), and a no-cloud egress guard asserts the packed
 artifact reaches no hosted authority.
 
 Local enrollment now uses the reviewed client-generated credential/retry
-contract, with a pre-request `PENDING` keychain record, exact-tuple ambiguous
-retry, verified activation, and no file fallback. The contract now resolves to
+contract, with a pre-request `PENDING` record in the local 0600-permission seat
+store, exact-tuple ambiguous retry, and verified activation. The contract now
+resolves to
 the audited registry `borgmcp-shared@0.3.0`; release remains blocked until the
 matching server passes the process-level setup→create→attach→restart→log/SSE gate.

@@ -2485,12 +2485,12 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
-  it('uses dedicated recovery copy while another Borg process owns secure state', async () => {
+  it('uses dedicated recovery copy while another Borg process owns the local seat store', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
       connectServer: vi.fn(async () => {
-        throw new Error('Borg server keychain state is busy');
+        throw new Error('Borg seat store is busy');
       }),
     });
 
@@ -2500,18 +2500,18 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'The OS keychain is busy for https://localhost:8787 because another Borg process is ' +
-        'creating or resuming secure state. Wait for it to finish, then rerun ' +
+      "Borg's local seat store is busy for https://localhost:8787 because another Borg process is " +
+        'creating or resuming saved seat state. Wait for it to finish, then rerun ' +
         '`borg assimilate --host https://localhost:8787`.\n',
     );
   });
 
-  it('distinguishes an unavailable keychain from trust, auth, and connectivity failures', async () => {
+  it('distinguishes an unavailable local seat store from trust, auth, and connectivity failures', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
       connectServer: vi.fn(async () => {
-        throw new Error('OS keychain unavailable for Borg server credentials');
+        throw new Error('local seat store is not accessible');
       }),
     });
 
@@ -2521,8 +2521,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'Borg could not access the OS keychain for https://localhost:8787. ' +
-        'Unlock or enable the keychain, then rerun ' +
+      'Borg could not access its local seat store for https://localhost:8787. ' +
+        'Ensure its directory on this machine is readable and writable, then rerun ' +
         '`borg assimilate --host https://localhost:8787`.\n',
     );
   });
@@ -2698,8 +2698,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     ['no saved enrollment', new BorgServerError('NOT_ENROLLED', 'not enrolled')],
     ['saved credential rejected', new BorgServerError('CREDENTIAL_REJECTED', 'credential rejected')],
     ['session rejected takeover', new BorgServerError('SESSION_REJECTED', 'session rejected')],
-    ['keychain busy', new Error('Borg server keychain state is busy')],
-    ['keychain unavailable', new Error('OS keychain unavailable for Borg server credentials')],
+    ['local seat store busy', new Error('Borg seat store is busy')],
+    ['local seat store unavailable', new Error('local seat store is not accessible')],
     ['trust mismatch', new Error('Borg server CA certificate does not match its pinned identity')],
     ['server unreachable', new Error('connect ECONNREFUSED')],
     ['unexpected protocol', new Error('protocol response shape changed')],
@@ -3033,9 +3033,9 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     isHumanSeat: false,
   });
 
-  it('RECORD-ABSENT: binding present but NO session record → truthful keychain-loss error, never a new seat', async () => {
+  it('RECORD-ABSENT: binding present but NO session record → truthful local-seat-load error, never a new seat', async () => {
     const assimilate = vi.fn();
-    const peekServerSessionRecord = vi.fn(async () => false); // genuine keychain loss
+    const peekServerSessionRecord = vi.fn(async () => false); // genuine local-seat-load failure
     const deps = makeStubDeps({
       getActiveCube: vi.fn(async () => null),
       hasPersistedActiveCube: vi.fn(async () => true),
@@ -3053,10 +3053,12 @@ describe('runAssimilate: local saved-seat idempotency', () => {
 
     expect(peekServerSessionRecord).toHaveBeenCalled();
     expect(assimilate).not.toHaveBeenCalled();
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('secure session could not be loaded'));
+    expect(deps.stderr).toHaveBeenCalledWith(
+      expect.stringContaining('local session credential could not be loaded'),
+    );
   });
 
-  it('never treats persisted local metadata with a missing keychain session as a new seat', async () => {
+  it('never treats persisted local metadata with a missing local session credential as a new seat', async () => {
     const assimilate = vi.fn();
     // No raw seat readable → cannot resume → truthful error, unchanged.
     const deps = makeStubDeps({
@@ -3074,10 +3076,12 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     }, deps)).resolves.toBe(1);
 
     expect(assimilate).not.toHaveBeenCalled();
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('secure session could not be loaded'));
+    expect(deps.stderr).toHaveBeenCalledWith(
+      expect.stringContaining('local session credential could not be loaded'),
+    );
   });
 
-  it('CRASH-IN-GAP RESUME: binding present + a resumable PENDING record → resumes (no keychain-loss error), FINALIZE converges with EXACT-ref, exit 0', async () => {
+  it('CRASH-IN-GAP RESUME: binding present + a resumable PENDING record → resumes (no local-seat-load error), FINALIZE converges with EXACT-ref, exit 0', async () => {
     const REF = 'borg-server-session:' + 'b'.repeat(64);
     const activate = vi.fn(async () => {});
     const scrubPending = vi.fn(async () => {});
@@ -3109,8 +3113,8 @@ describe('runAssimilate: local saved-seat idempotency', () => {
       flags: { server: 'localhost:8787', yes: true, cubeName: 'myrepo' },
     }, deps)).toBe(0);
 
-    // NOT misdiagnosed as keychain loss.
-    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).not.toMatch(/secure session could not be loaded/);
+    // NOT misdiagnosed as a local-seat-load failure.
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).not.toMatch(/local session credential could not be loaded/);
     // The identical seat is re-sent (resume), not a fresh mint.
     expect(assimilate).toHaveBeenCalled();
     // FINALIZE converges with EXACT ref + prior drone id (no live-bearer digest — pending).

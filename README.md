@@ -90,7 +90,8 @@ begin coordinating.
 
 An ordinary enrolled client cannot create a cube. The server operator must grant
 it access before it reruns `borg assimilate --host 127.0.0.1:7091`. Enrollment
-credentials and retry state remain in the operating-system keychain. See the
+credentials and retry state remain in the local seat store on this machine (a
+0600-permission file store). See the
 complete setup, recovery, second-seat, and security flow in
 [`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md).
 

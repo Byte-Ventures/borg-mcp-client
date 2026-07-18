@@ -12,8 +12,8 @@
  *
  * SECURITY (SR-light, gh#818 221c43df): the disclosure lists file PATHS +
  * at most the PUBLIC `BORG_API_URL` — there is NO token/secret in the
- * written config to echo. Local credentials live in the OS keychain, and
- * the written config never contains a token or secret.
+ * written config to echo. Local credentials live in the local 0600-permission
+ * seat store, and the written config never contains a token or secret.
  */
 
 export interface ConfigMutationTarget {

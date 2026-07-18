@@ -33,6 +33,15 @@ const FORBIDDEN_CONTENT = [
   { pattern: /\/\/api\.borgmcp\.ai/i, description: 'hosted Borg API URL' },
   { pattern: /borgmcp\.ai\/(?:dashboard|get-started|pricing|account|upgrade|subscribe)/i, description: 'hosted Borg product URL' },
 ];
+// Operator-facing DOCS copy migrated OFF the OS keychain / `cubes.json` seat
+// model onto the local 0600-permission seat store. No shipped `.md` doc may
+// reintroduce the retired keychain/cubes.json recovery vocabulary. Checked ONLY
+// for `.md` files — internal `src`/`dist` comments legitimately name the retired
+// machinery (locks, refs, the historical project file) to describe the code.
+const DOCS_FORBIDDEN_CONTENT = [
+  { pattern: /\bkeychain\b/i, description: 'retired OS-keychain seat guidance' },
+  { pattern: /\bcubes\.json\b/i, description: 'retired cubes.json seat reference' },
+];
 // Reachable-cloud runtime identifiers (OAuth / billing / dashboard / reports).
 // Checked ONLY in shipped code (dist `.js`/`.d.ts`, src `.ts`) — NOT in `.md`
 // docs, which legitimately DESCRIBE the removal of these surfaces.
@@ -187,6 +196,14 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
       for (const forbidden of FORBIDDEN_CONTENT) {
         if (forbidden.pattern.test(content)) {
           throw new Error(`Packed artifact contains ${forbidden.description}: ${path}`);
+        }
+      }
+      // Retired-seat-vocabulary guard, scoped to operator-facing `.md` docs only.
+      if (path.endsWith('.md')) {
+        for (const forbidden of DOCS_FORBIDDEN_CONTENT) {
+          if (forbidden.pattern.test(content)) {
+            throw new Error(`Packed artifact contains ${forbidden.description}: ${path}`);
+          }
         }
       }
       // Reachable-cloud runtime symbols may only be absent from SHIPPED CODE.

@@ -6,9 +6,9 @@
  * nothing and points here). This command is the ONLY writer that intentionally
  * clears a worktree's saved local seat. It performs ZERO network I/O: it never
  * contacts the server, so it makes NO server-revocation claim. It clears ONLY
- * this worktree's cubes.json binding + its keychain session credential
- * (keyed on findProjectRoot()) — server, trust anchor, cube, and every sibling
- * worktree are untouched.
+ * this worktree's saved local seat — its credential and cube binding together —
+ * from the local seat store (keyed on findProjectRoot()); server, trust anchor,
+ * cube, and every sibling worktree are untouched.
  *
  * Flow (decision clause 2):
  *   S0  snapshot exact binding + token-safe credential observation
@@ -16,7 +16,7 @@
  *       any mutation; no local binding = honest no-op.
  *   S1  consent OUTSIDE any lock — TTY [y/N] defaulting to No; non-TTY requires
  *       the explicit --yes flag.
- *   S2/S3  re-acquire cube→keychain, re-verify the exact snapshot (any change /
+ *   S2/S3  re-acquire cube→seat store, re-verify the exact snapshot (any change /
  *       missing / same-ref replacement = honest no-op), then delete the
  *       CREDENTIAL FIRST and remove the binding.
  */
