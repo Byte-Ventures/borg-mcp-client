@@ -1099,7 +1099,7 @@ export async function main() {
           // for use with borg_reassign-drone (e.g. promoting a drone to Queen).
           // Uses the same owner-scoped GET /api/cubes/:id endpoint as
           // borg_list-drones — data is already accessible to the cube owner
-          // via the dashboard surface; this tool just makes role IDs
+          // over the local server; this tool just makes role IDs
           // discoverable inside the MCP tool namespace per drone-7's UX-FEEDBACK.
           // Render logic extracted to list-roles-render.ts for testability
           // per drone-3 QA-FAIL 2026-05-18T13:27:53Z.

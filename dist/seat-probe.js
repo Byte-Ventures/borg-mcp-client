@@ -6,10 +6,12 @@
 // graph. cleanup-cmd re-exports `SeatStatus` for backwards compatibility.
 import { whoami } from './remote-client.js';
 import { DroneEvictedError } from './drone-lifecycle.js';
+import { BorgServerError } from './server-errors.js';
 /**
  * Default seat probe: a lightweight drone-authed `whoami` with the seat's OWN
- * saved token. authedFetch throws the typed lifecycle error on the structured
- * code (410→DroneEvictedError); anything else is INDETERMINATE — and (for the
+ * saved token. authedFetch throws typed errors on the authoritative codes
+ * (410→DroneEvictedError; pin-matched 401→BorgServerError('SESSION_REJECTED')).
+ * A trust-mismatch / unreachable / 5xx / 404 stays INDETERMINATE — and (for the
  * destructive cleanup path) must NEVER authorize a delete. The launch path
  * treats indeterminate as launch-anyway (fail-OPEN).
  */
@@ -21,6 +23,10 @@ export async function defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity
     catch (err) {
         if (err instanceof DroneEvictedError)
             return 'evicted';
+        // Pin-matched session rejection is distinct from unreachable/404/5xx/
+        // trust-mismatch (which throw plain Errors and remain indeterminate).
+        if (err instanceof BorgServerError && err.code === 'SESSION_REJECTED')
+            return 'rejected';
         return 'indeterminate';
     }
 }

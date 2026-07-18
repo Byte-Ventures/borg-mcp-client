@@ -420,13 +420,15 @@ export function activeCubeWithFreshRegenIdentity(
  * becomes empty as a result, remove the file entirely rather than leave
  * an empty {projects:{}} skeleton.
  */
-export async function clearActiveCube(): Promise<void> {
+export async function clearActiveCube(): Promise<{ removed: boolean; credentialRef: string | null }> {
   const operation = activeCubeWriteQueue.then(() => withCubesWriteLock(async () => {
     const existing = await readCubesFile();
-    if (!existing) return;
+    // No binding to clear → report an honest no-op so callers never audit a
+    // reset that did not happen (SR: no copy-without-operation).
+    if (!existing) return { removed: false, credentialRef: null };
     const key = findProjectRoot();
-    if (!(key in existing.projects)) return;
-    const removedCredentialRef = existing.projects[key].localSessionCredentialRef;
+    if (!(key in existing.projects)) return { removed: false, credentialRef: null };
+    const removedCredentialRef = existing.projects[key].localSessionCredentialRef ?? null;
     delete existing.projects[key];
     if (Object.keys(existing.projects).length === 0) {
       try {
@@ -434,14 +436,16 @@ export async function clearActiveCube(): Promise<void> {
       } catch (error: any) {
         if (error?.code !== 'ENOENT') throw error;
       }
-      if (removedCredentialRef) await clearServerSessionCredential(removedCredentialRef);
-      return;
+    } else {
+      await writeCubesFile(existing);
     }
-    await writeCubesFile(existing);
+    // Only after the binding is durably removed do we clear its keychain
+    // session credential. A throw here propagates (no false success).
     if (removedCredentialRef) await clearServerSessionCredential(removedCredentialRef);
+    return { removed: true, credentialRef: removedCredentialRef };
   }));
-  activeCubeWriteQueue = operation.catch(() => {});
-  await operation;
+  activeCubeWriteQueue = operation.then(() => undefined, () => undefined);
+  return await operation;
 }
 
 export async function getProjectCliPreference(): Promise<BorgCli | null> {

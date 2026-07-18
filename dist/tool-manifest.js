@@ -433,7 +433,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_delete-role',
-        description: 'Delete a role. Refuses if any drone is still assigned — reassign or evict those drones from the dashboard first.',
+        description: 'Delete a role. Refuses if any drone is still assigned — reassign them with borg_reassign-drone or remove them with borg_evict-drone first.',
         inputSchema: {
             type: 'object',
             properties: {

@@ -160,8 +160,9 @@ export interface AssimilateDeps {
   hasPersistedActiveCube: () => Promise<boolean>;
   /** Clear ONLY the current worktree's saved seat: its cubes.json binding and
    *  its keychain session credential. Keys on findProjectRoot() — never touches
-   *  server trust anchors, other worktrees, or cube state. */
-  clearActiveCube: () => Promise<void>;
+   *  server trust anchors, other worktrees, or cube state. Returns whether a
+   *  binding was actually removed so callers never audit a no-op as success. */
+  clearActiveCube: () => Promise<{ removed: boolean; credentialRef: string | null }>;
   probeSeat: (
     sessionToken: string,
     apiUrl: string,
@@ -482,7 +483,17 @@ async function handleSessionRejectedReset(
 
   // Scoped, worktree-only mutation: this worktree's cubes.json binding + its
   // keychain session credential ONLY (clearActiveCube keys on findProjectRoot()).
-  await deps.clearActiveCube();
+  const cleared = await deps.clearActiveCube();
+  if (!cleared.removed) {
+    // Fail closed: nothing was removed (no saved binding for this worktree), so
+    // never audit a reset that did not happen (SR: no copy-without-operation).
+    deps.stderr(
+      `audit: no changes made — no saved local seat binding was found for this worktree ` +
+        `(${worktree}); nothing to reset. Ask the server operator for a new invitation (the ` +
+        `server can stay running) and enroll with ${localAssimilateCommand(apiUrl, true)}.\n`,
+    );
+    return 1;
+  }
   deps.stderr(
     `audit: cleared this worktree's saved local seat for ${apiUrl} (worktree ${worktree}) — ` +
       'local session binding + keychain session only; server, trust anchor, cube, and other ' +
@@ -861,6 +872,14 @@ export async function runAssimilate(
         auth.apiUrl,
         auth.serverTrustIdentity,
       );
+      // Canonical rotated/revoked path: a pin-matched 401 on THIS worktree's
+      // saved bearer. The hydrated saved seat exists (this `existing && --here`
+      // branch), so route to the scoped worktree-only reset BEFORE the generic
+      // "restart the server" indeterminate exit below. Distinct from
+      // unreachable/404/5xx/trust-mismatch, which stay indeterminate.
+      if (status === 'rejected') {
+        return await handleSessionRejectedReset(deps, auth.apiUrl, args.flags);
+      }
       if (status === 'indeterminate') {
         deps.stderr(
           `Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +

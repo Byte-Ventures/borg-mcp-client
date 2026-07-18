@@ -62,6 +62,8 @@ export function assimilateHelpText(version: string): string {
     `  --cube-name <name>         Cube to join/create (otherwise confirm repo basename)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
     `  --enroll                   Prompt for a hidden enrollment invitation in the operator terminal\n` +
+    `  --reset-local-seat         Non-interactively clear ONLY this worktree's saved seat when it was\n` +
+    `                             revoked/taken over (pin-matched rejection). TTY confirms instead.\n` +
     `  --template <name>          Bootstrap a new cube from a bundled role template\n` +
     `  --no-template              Create the cube with no template roles\n` +
     `  --cli claude|codex|opencode         Agent CLI to launch (default: claude)\n` +

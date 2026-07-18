@@ -40,7 +40,6 @@ import { explicitCliLaunchHint, runBareLaunchMenu, shouldResolveExplicitCliLaunc
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
-import { fetchLatestBorgmcpVersion, compareVersionsForStaleness } from './stale-version-check.js';
 import { defaultCliChoiceDeps, detectCliAvailability, installedCliNames, parseCliFlag, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
 import { BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
@@ -65,25 +64,10 @@ async function main() {
     // Resolve drone self-identification prefix (gh#25) before any error
     // emission so messages carry `[drone-X · cube]` from launch onward.
     await initConsolePrefix();
-    // Sprint 7 (b) — silent-stale-binary defensive hardening (gh#148).
-    // Async + non-blocking: fire the npm registry check in the
-    // background; if it returns within ~2s with a stale verdict, emit a
-    // stderr warning before Claude Code launches. Never blocks startup;
-    // fails silent on any error. The warning fires only when the user is
-    // launching `borg` interactively (TTY) — scripted invocations stay
-    // quiet to avoid CI-log noise.
-    const staleCheckPromise = (async () => {
-        if (!process.stderr.isTTY)
-            return;
-        const installed = getPackageVersion();
-        const latest = await fetchLatestBorgmcpVersion();
-        if (!latest)
-            return;
-        const result = compareVersionsForStaleness(installed, latest);
-        if (result.stale && result.message) {
-            process.stderr.write(`${consolePrefix()}${result.message}\n`);
-        }
-    })();
+    // Local-only client: bare `borg` performs NO automatic external network I/O
+    // (no npm-registry stale-version check) before authority selection. Only the
+    // explicitly selected local server may be contacted. A version comparison is
+    // available as an explicit operator action via `borg --version`.
     // Intercept --help / -h before handing off to Claude.
     if (process.argv[2] === '--help' || process.argv[2] === '-h') {
         process.stdout.write(topLevelHelpText(getPackageVersion()));
@@ -276,11 +260,6 @@ async function main() {
     const monitorClause = buildKickoffWakePathClause(cli, active && cli === 'claude' ? inboxPathForDrone(active.cubeId, active.droneId) : null, active && cli === 'claude'
         ? monitorStateRootForWorktree(findProjectRoot(process.cwd()))
         : null);
-    // Surface the stale-version warning before launching Claude Code so
-    // the operator sees it inline rather than buried in MCP-server stderr.
-    // 2s ceiling: if the registry check hasn't returned by now, skip
-    // silently — Claude Code launch shouldn't wait on a network check.
-    await Promise.race([staleCheckPromise, new Promise((r) => setTimeout(r, 2000))]);
     const codexWakeNonce = cli === 'codex' ? `borg-wake-${randomUUID()}` : null;
     let codexWakePathClause;
     let remoteArgs = [];

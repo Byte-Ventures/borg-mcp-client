@@ -208,7 +208,15 @@ async function handleSessionRejectedReset(deps, apiUrl, flags) {
     }
     // Scoped, worktree-only mutation: this worktree's cubes.json binding + its
     // keychain session credential ONLY (clearActiveCube keys on findProjectRoot()).
-    await deps.clearActiveCube();
+    const cleared = await deps.clearActiveCube();
+    if (!cleared.removed) {
+        // Fail closed: nothing was removed (no saved binding for this worktree), so
+        // never audit a reset that did not happen (SR: no copy-without-operation).
+        deps.stderr(`audit: no changes made — no saved local seat binding was found for this worktree ` +
+            `(${worktree}); nothing to reset. Ask the server operator for a new invitation (the ` +
+            `server can stay running) and enroll with ${localAssimilateCommand(apiUrl, true)}.\n`);
+        return 1;
+    }
     deps.stderr(`audit: cleared this worktree's saved local seat for ${apiUrl} (worktree ${worktree}) — ` +
         'local session binding + keychain session only; server, trust anchor, cube, and other ' +
         'worktrees unchanged.\n');
@@ -526,6 +534,14 @@ export async function runAssimilate(args, deps) {
                 ? cubeDetail.roles.find((role) => role.name === existing.roleName)
                 : undefined;
             const status = await deps.probeSeat(existing.sessionToken ?? '', auth.apiUrl, auth.serverTrustIdentity);
+            // Canonical rotated/revoked path: a pin-matched 401 on THIS worktree's
+            // saved bearer. The hydrated saved seat exists (this `existing && --here`
+            // branch), so route to the scoped worktree-only reset BEFORE the generic
+            // "restart the server" indeterminate exit below. Distinct from
+            // unreachable/404/5xx/trust-mismatch, which stay indeterminate.
+            if (status === 'rejected') {
+                return await handleSessionRejectedReset(deps, auth.apiUrl, args.flags);
+            }
             if (status === 'indeterminate') {
                 deps.stderr(`Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +
                     'No new seat was created. Start or restart the server with ' +

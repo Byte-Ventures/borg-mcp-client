@@ -90,6 +90,15 @@ describe('parseAssimilateArgs', () => {
     });
   });
 
+  it('parses --reset-local-seat into flags.resetLocalSeat (explicit non-TTY scoped-reset opt-in)', () => {
+    const result = parseAssimilateArgs(['--host', 'localhost:7091', '--here', '--reset-local-seat']);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.flags.resetLocalSeat).toBe(true);
+      expect(result.flags.here).toBe(true);
+    }
+  });
+
   it('rejects the unreleased --server spelling instead of retaining an alias', () => {
     for (const args of [
       ['--server', 'localhost:7091'],

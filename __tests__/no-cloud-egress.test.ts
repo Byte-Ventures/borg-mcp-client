@@ -49,6 +49,8 @@ const DELETED_MODULES = [
   'setup-action',
   'subscription-retry',
   'token-crypto',
+  'stale-version-check',
+  'get-started',
 ];
 
 // The hosted product URLs a local-only client must never link to or construct.
@@ -88,6 +90,10 @@ const CLOUD_SYMBOL_NEEDLES = [
   'borg_reports',
   'submitReport',
   'fetchReports',
+  // No hosted dashboard, and no automatic npm-registry runtime egress.
+  'dashboard',
+  'registry.npmjs.org',
+  'fetchLatestBorgmcpVersion',
 ];
 
 function scan(entries: { file: string; text: string }[], needles: string[]): string[] {

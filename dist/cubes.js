@@ -354,12 +354,14 @@ export function activeCubeWithFreshRegenIdentity(active, result) {
 export async function clearActiveCube() {
     const operation = activeCubeWriteQueue.then(() => withCubesWriteLock(async () => {
         const existing = await readCubesFile();
+        // No binding to clear → report an honest no-op so callers never audit a
+        // reset that did not happen (SR: no copy-without-operation).
         if (!existing)
-            return;
+            return { removed: false, credentialRef: null };
         const key = findProjectRoot();
         if (!(key in existing.projects))
-            return;
-        const removedCredentialRef = existing.projects[key].localSessionCredentialRef;
+            return { removed: false, credentialRef: null };
+        const removedCredentialRef = existing.projects[key].localSessionCredentialRef ?? null;
         delete existing.projects[key];
         if (Object.keys(existing.projects).length === 0) {
             try {
@@ -369,16 +371,18 @@ export async function clearActiveCube() {
                 if (error?.code !== 'ENOENT')
                     throw error;
             }
-            if (removedCredentialRef)
-                await clearServerSessionCredential(removedCredentialRef);
-            return;
         }
-        await writeCubesFile(existing);
+        else {
+            await writeCubesFile(existing);
+        }
+        // Only after the binding is durably removed do we clear its keychain
+        // session credential. A throw here propagates (no false success).
         if (removedCredentialRef)
             await clearServerSessionCredential(removedCredentialRef);
+        return { removed: true, credentialRef: removedCredentialRef };
     }));
-    activeCubeWriteQueue = operation.catch(() => { });
-    await operation;
+    activeCubeWriteQueue = operation.then(() => undefined, () => undefined);
+    return await operation;
 }
 export async function getProjectCliPreference() {
     const data = await readLaunchFile();

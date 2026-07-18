@@ -18,6 +18,7 @@ import { assertUuidShape } from './evict-drone.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE, errorCodeFromBody, } from './drone-lifecycle.js';
 import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
 import { loadBorgServerTrust } from './server-trust.js';
+import { BorgServerError } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
@@ -372,10 +373,13 @@ async function authedFetch(path, init = {}) {
     };
     let response = await buildRequest(token);
     if (response.status === 401) {
-        if (hasServerAuthority || hasExplicitAuth) {
-            throw new Error('Authentication required by the selected Borg server');
-        }
-        throw new Error('Authentication required by the selected Borg server');
+        // Reached only after pinned-TLS trust is verified (localAuthorityContext
+        // fails closed otherwise), so a 401 here is an AUTHORITATIVE pin-matched
+        // session rejection: the selected server verified its own identity and
+        // rejected THIS worktree's bearer (revoked, or taken over by another
+        // session). Type it so callers (seat-probe → 'rejected' → scoped reset)
+        // can distinguish it from an unreachable/5xx/trust-mismatch failure.
+        throw new BorgServerError('SESSION_REJECTED', 'the selected Borg server rejected this session (revoked or taken over)');
     }
     // gh#330: honor the server's Retry-After on 429 instead of failing the
     // (often required) coordination signal — borg_log / read-log / regen /

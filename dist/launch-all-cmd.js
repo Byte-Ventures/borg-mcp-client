@@ -238,6 +238,12 @@ export async function runLaunchAll(args, deps, opts = {}) {
                 `run \`borg cleanup --prune\` to remove the worktree, or \`borg assimilate\` to re-seat fresh.\n`);
             continue;
         }
+        if (status === 'rejected') {
+            deps.stderr(`skipping ${c.droneLabel} (${c.worktreeDir}): saved seat no longer accepted (revoked or ` +
+                `taken over) — from that worktree reset its seat and re-enroll ` +
+                `(\`borg assimilate --host <host> --here\`).\n`);
+            continue;
+        }
         if (status === 'indeterminate') {
             deps.stderr(`note: could not confirm ${c.droneLabel}'s seat is live (network/transient) — launching anyway.\n`);
         }

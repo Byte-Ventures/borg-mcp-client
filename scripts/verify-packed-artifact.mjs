@@ -52,6 +52,9 @@ const CLOUD_RUNTIME_SYMBOLS = [
   'borg_open_dashboard',
   'borg_report-friction',
   'borg_reports',
+  'dashboard',
+  'registry.npmjs.org',
+  'fetchLatestBorgmcpVersion',
 ];
 // Deleted cloud-only modules — no source or built mirror may ship.
 const DELETED_MODULE_BASENAMES = [
@@ -64,6 +67,8 @@ const DELETED_MODULE_BASENAMES = [
   'setup-action',
   'subscription-retry',
   'token-crypto',
+  'stale-version-check',
+  'get-started',
 ];
 
 async function walk(root, directory = root) {

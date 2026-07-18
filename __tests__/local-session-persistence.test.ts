@@ -100,4 +100,43 @@ describe('local ActiveCube session persistence', () => {
     expect(keychainMocks.clearServerSessionCredential)
       .toHaveBeenCalledWith(localMetadata.localSessionCredentialRef);
   });
+
+  it('clearActiveCube removes ONLY the current worktree binding + its credential; a sibling worktree and its ref are retained', async () => {
+    const { fixture, cubes } = await setup();
+    const projectA = process.cwd();
+    const refA = `borg-server-session:${'a'.repeat(64)}`;
+    await cubes.setActiveCube({ ...localMetadata, localSessionCredentialRef: refA, sessionToken: 'x' });
+
+    // A distinct sibling worktree under the SAME home (its own .git → own key).
+    const projectB = join(fixture, 'project-b');
+    mkdirSync(join(projectB, '.git'), { recursive: true });
+    process.chdir(projectB);
+    const refB = `borg-server-session:${'b'.repeat(64)}`;
+    await cubes.setActiveCube({ ...localMetadata, localSessionCredentialRef: refB, sessionToken: 'y' });
+
+    // Back in worktree A: clear ONLY A's saved seat.
+    process.chdir(projectA);
+    const result = await cubes.clearActiveCube();
+    expect(result).toEqual({ removed: true, credentialRef: refA });
+
+    // A's keychain credential cleared; the SIBLING's is untouched.
+    expect(keychainMocks.clearServerSessionCredential).toHaveBeenCalledWith(refA);
+    expect(keychainMocks.clearServerSessionCredential).not.toHaveBeenCalledWith(refB);
+
+    // cubes.json retains the sibling binding, not A's.
+    const persisted = readFileSync(join(fixture, '.config', 'borgmcp', 'cubes.json'), 'utf8');
+    expect(persisted).toContain(refB);
+    expect(persisted).not.toContain(refA);
+
+    // The sibling seat still resolves after the scoped reset.
+    process.chdir(projectB);
+    await expect(cubes.getActiveCube()).resolves.toMatchObject({ localSessionCredentialRef: refB });
+  });
+
+  it('clearActiveCube reports an honest no-op (removed:false) when this worktree has no saved binding', async () => {
+    const { cubes } = await setup();
+    const result = await cubes.clearActiveCube();
+    expect(result).toEqual({ removed: false, credentialRef: null });
+    expect(keychainMocks.clearServerSessionCredential).not.toHaveBeenCalled();
+  });
 });

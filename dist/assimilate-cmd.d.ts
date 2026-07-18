@@ -85,8 +85,12 @@ export interface AssimilateDeps {
     hasPersistedActiveCube: () => Promise<boolean>;
     /** Clear ONLY the current worktree's saved seat: its cubes.json binding and
      *  its keychain session credential. Keys on findProjectRoot() — never touches
-     *  server trust anchors, other worktrees, or cube state. */
-    clearActiveCube: () => Promise<void>;
+     *  server trust anchors, other worktrees, or cube state. Returns whether a
+     *  binding was actually removed so callers never audit a no-op as success. */
+    clearActiveCube: () => Promise<{
+        removed: boolean;
+        credentialRef: string | null;
+    }>;
     probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
     setActiveCube: (a: ActiveCube) => Promise<void>;
     findProjectRoot: (cwd: string) => string;

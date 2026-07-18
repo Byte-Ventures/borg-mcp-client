@@ -86,7 +86,10 @@ export declare function activeCubeWithFreshRegenIdentity(active: ActiveCube, res
  * becomes empty as a result, remove the file entirely rather than leave
  * an empty {projects:{}} skeleton.
  */
-export declare function clearActiveCube(): Promise<void>;
+export declare function clearActiveCube(): Promise<{
+    removed: boolean;
+    credentialRef: string | null;
+}>;
 export declare function getProjectCliPreference(): Promise<BorgCli | null>;
 /**
  * gh#556 Part 2 — like getProjectCliPreference, but keyed on an arbitrary

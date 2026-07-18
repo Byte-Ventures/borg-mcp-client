@@ -69,6 +69,7 @@ export type CleanupReason =
   | 'SURVIVES-clobber'
   | 'SURVIVES-unmerged'
   | 'SURVIVES-detached'
+  | 'SURVIVES-rejected'
   | 'SURVIVES-live'
   | 'SURVIVES-self'
   | 'UNKNOWN-indeterminate'
@@ -343,13 +344,15 @@ async function classifyWorktree(
   switch (status) {
     case 'evicted':
       return { reason: 'PRUNABLE', detail: '410 DRONE_EVICTED (clean + merged)' };
+    case 'rejected':
+      return { reason: 'SURVIVES-rejected', detail: 'pin-matched 401 (revoked/taken over) — recoverable via re-enroll, never delete' };
     case 'live':
       return { reason: 'SURVIVES-live', detail: 'seat resolves (drone alive)' };
     case 'indeterminate':
     default:
       return {
         reason: 'UNKNOWN-indeterminate',
-        detail: 'probe returned 401/network/transient (or gh#877 not yet deployed) — not deleting',
+        detail: 'probe returned network/transient/404/trust-mismatch (or gh#877 not yet deployed) — not deleting',
       };
   }
 }

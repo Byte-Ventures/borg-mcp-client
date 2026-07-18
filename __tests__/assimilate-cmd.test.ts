@@ -55,7 +55,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     hasPersistedActiveCube: vi.fn(async () => false),
     probeSeat: vi.fn(async () => 'live'),
     setActiveCube: vi.fn(async () => {}),
-    clearActiveCube: vi.fn(async () => {}),
+    clearActiveCube: vi.fn(async () => ({ removed: true, credentialRef: null })),
     findProjectRoot: vi.fn(() => '/work/myrepo'),
     installProjectSessionHook: vi.fn(),
     defaultAuthority: { kind: 'server', apiUrl: 'https://server.test' },
@@ -619,7 +619,7 @@ describe('runAssimilate: pin-matched SESSION_REJECTED performs a scoped worktree
 
   it('TTY confirm (y) clears ONLY this worktree seat, audits, and gives live-safe re-enroll copy', async () => {
     const stderr = vi.fn();
-    const clearActiveCube = vi.fn(async () => {});
+    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
     const deps = makeStubDeps({
       ...cubeResolves, stderr, clearActiveCube,
       isTTY: () => true,
@@ -642,7 +642,7 @@ describe('runAssimilate: pin-matched SESSION_REJECTED performs a scoped worktree
 
   it('TTY decline (empty → default No) makes NO changes and clears nothing', async () => {
     const stderr = vi.fn();
-    const clearActiveCube = vi.fn(async () => {});
+    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
     const deps = makeStubDeps({
       ...cubeResolves, stderr, clearActiveCube,
       isTTY: () => true,
@@ -658,7 +658,7 @@ describe('runAssimilate: pin-matched SESSION_REJECTED performs a scoped worktree
 
   it('non-TTY without --reset-local-seat makes NO changes and directs to the destructive flag', async () => {
     const stderr = vi.fn();
-    const clearActiveCube = vi.fn(async () => {});
+    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
     const deps = makeStubDeps({
       ...cubeResolves, stderr, clearActiveCube,
       isTTY: () => false,
@@ -673,7 +673,7 @@ describe('runAssimilate: pin-matched SESSION_REJECTED performs a scoped worktree
 
   it('non-TTY with --reset-local-seat clears ONLY this worktree seat and audits', async () => {
     const stderr = vi.fn();
-    const clearActiveCube = vi.fn(async () => {});
+    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
     const deps = makeStubDeps({
       ...cubeResolves, stderr, clearActiveCube,
       isTTY: () => false,
@@ -684,6 +684,47 @@ describe('runAssimilate: pin-matched SESSION_REJECTED performs a scoped worktree
     expect(exit).toBe(1);
     expect(clearActiveCube).toHaveBeenCalledTimes(1);
     expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain("audit: cleared this worktree's saved local seat");
+  });
+
+  it('CANONICAL PATH: a pin-matched whoami 401 (probeSeat → rejected) reaches the reset before any "restart" advice', async () => {
+    // The production defect CR caught: the pre-attach probe must classify a
+    // pin-matched 401 as `rejected` and route it to the reset — NOT collapse it
+    // to `indeterminate`/"restart the server". Here probeSeat returns 'rejected'
+    // and assimilate is NEVER reached (the seat is reset first).
+    const stderr = vi.fn();
+    const clearActiveCube = vi.fn(async () => ({ removed: true, credentialRef: null }));
+    const assimilate = vi.fn(async () => { throw new Error('attach must not run after a rejected probe'); });
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, clearActiveCube, assimilate,
+      isTTY: () => false,
+      probeSeat: vi.fn(async () => 'rejected'),
+      getActiveCube: sameCubeSeat(),
+    });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true, resetLocalSeat: true } }, deps);
+    expect(exit).toBe(1);
+    expect(assimilate).not.toHaveBeenCalled();
+    expect(clearActiveCube).toHaveBeenCalledTimes(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain("audit: cleared this worktree's saved local seat");
+    expect(out).not.toMatch(/Start or restart the server|borg-mcp-server start/i);
+  });
+
+  it('NO-OP is not audited as success: when nothing was removed, fail closed without a false "cleared" audit', async () => {
+    const stderr = vi.fn();
+    // The destructive primitive reports an honest no-op (no binding for this worktree).
+    const clearActiveCube = vi.fn(async () => ({ removed: false, credentialRef: null }));
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, clearActiveCube,
+      isTTY: () => false,
+      probeSeat: vi.fn(async () => 'rejected'),
+      getActiveCube: sameCubeSeat(),
+    });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true, resetLocalSeat: true } }, deps);
+    expect(exit).toBe(1);
+    expect(clearActiveCube).toHaveBeenCalledTimes(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('audit: no changes made');
+    expect(out).not.toContain("audit: cleared this worktree's saved local seat");
   });
 });
 
