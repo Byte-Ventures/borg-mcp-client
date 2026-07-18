@@ -24,6 +24,36 @@ function filesReferencing(needle: string, allow: string[] = []): string[] {
   return srcFiles.filter((f) => !allow.includes(f) && read(f).includes(needle));
 }
 
+/**
+ * SR NET-NEW behavioral lock-wrapping guard. Strip comments/line-comments (never
+ * `://`), then brace-match each top-level function so we can assert a credential/
+ * seat WRITE happens INSIDE a store-lock hold — not merely that the file placement
+ * is right (CR3b's unlocked writer passed the placement-only checks).
+ */
+function stripCommentsAndStrings(s: string): string {
+  return s
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/([^:"'`])\/\/[^\n]*/g, '$1');
+}
+function functionBodies(srcRaw: string): Map<string, string> {
+  const src = stripCommentsAndStrings(srcRaw);
+  const bodies = new Map<string, string>();
+  const re = /(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*(?:<[^>]*>)?\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    const name = m[1];
+    let i = re.lastIndex;
+    let depth = 1;
+    while (i < src.length && depth > 0) { const c = src[i]; if (c === '(') depth++; else if (c === ')') depth--; i++; }
+    while (i < src.length && src[i] !== '{') i++;
+    let bdepth = 0;
+    const start = i;
+    for (; i < src.length; i++) { const c = src[i]; if (c === '{') bdepth++; else if (c === '}') { bdepth--; if (bdepth === 0) { i++; break; } } }
+    bodies.set(name, src.slice(start, i));
+  }
+  return bodies;
+}
+
 describe('seat single-store writer guard (SR#5)', () => {
   it('the seat store file (SEATS_FILE) is reached ONLY from seats.ts', () => {
     // SEATS_FILE (the 0600 seats.json) is the single home of the seat map; only
@@ -85,6 +115,52 @@ describe('seat single-store writer guard (SR#5)', () => {
     expect(filesReferencing('getServerCredentialBackend', ['config.ts'])).toEqual([]);
     for (const call of ['backend.set(', 'backend.delete(', 'backend.get(']) {
       expect(filesReferencing(call, ['config.ts'])).toEqual([]);
+    }
+  });
+
+  it('SR NET-NEW: every credential backend .set/.delete in config.ts is lock-WRAPPED (behavioral, not placement)', () => {
+    // A credential write outside a store-lock hold is exactly the CR3b regression
+    // (an unlocked storeServerCredential) that the placement-only guards missed.
+    // Matches a store-lock hold: withStoreLock( or withStore(<generics>)( .
+    const heldsLock = (b: string) => /withStore(?:Lock)?\s*[<(]/.test(b);
+    const bodies = functionBodies(read('config.ts'));
+    // Documented UNLOCKED write bodies — invoked ONLY from inside a lock hold.
+    // Every such helper's callers are lock-verified below, so its own body is exempt.
+    const ALLOWLIST_UNLOCKED = ['writeServerCredentialRecord'];
+    const offenders: string[] = [];
+    for (const [name, body] of bodies) {
+      if (!/backend\.(set|delete)\(/.test(body)) continue;
+      if (!heldsLock(body) && !ALLOWLIST_UNLOCKED.includes(name)) offenders.push(name);
+    }
+    expect(offenders).toEqual([]);
+    // Each allowlisted UNLOCKED body must be invoked ONLY from a lock-wrapped caller.
+    for (const helper of ALLOWLIST_UNLOCKED) {
+      const callers = [...bodies.entries()].filter(
+        ([n, b]) => n !== helper && new RegExp(`\\b${helper}\\(`).test(b),
+      );
+      // It must actually be used (a dead unlocked writer would be a latent hazard)…
+      expect(callers.length).toBeGreaterThan(0);
+      // …and every caller holds the store lock before invoking it.
+      for (const [, body] of callers) {
+        expect(heldsLock(body)).toBe(true);
+      }
+    }
+  });
+
+  it('SR NET-NEW: every seat WRITE in seats.ts runs its RCW inside a withStore lock hold', () => {
+    const bodies = functionBodies(read('seats.ts'));
+    for (const writer of [
+      'mintPendingSeat',
+      'prepareSeat',
+      'activateAndBindSeat',
+      'resetSeatForWorktree',
+      'scrubPendingSeat',
+      'clearSeat',
+      'refreshSeatMetadata',
+    ]) {
+      const body = bodies.get(writer);
+      expect(body, `${writer} must be defined in seats.ts`).toBeTruthy();
+      expect(/withStore\s*</.test(body!), `${writer} must hold the store lock (withStore RCW)`).toBe(true);
     }
   });
 
