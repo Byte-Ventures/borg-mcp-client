@@ -3,6 +3,7 @@ import { type CodexRemoteLaunch } from './codex-remote.js';
 import type { BorgCli } from './cubes.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { ServerSessionOperation } from './config.js';
+import type { ExpectedBinding, FinalizeServerSeatOutcome } from './cubes.js';
 import { type LaunchApprovalDecision } from './cli-tool-approval.js';
 export interface AssimilateFlags {
     worktree?: string;
@@ -41,6 +42,10 @@ export interface AssimilateResult {
         expires_at: string | null;
     };
     result?: 'created' | 'reused';
+    finalize?: {
+        activate: () => Promise<unknown>;
+        scrubPending: () => Promise<unknown>;
+    };
 }
 export interface ActiveCube {
     cubeId: string;
@@ -96,6 +101,17 @@ export interface AssimilateDeps {
     }>;
     probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
     setActiveCube: (a: ActiveCube) => Promise<void>;
+    /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
+     *  typed expectation, persist the binding FIRST, then run `activate` (keychain
+     *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and
+     *  report an honest abort. Wired to cubes.finalizeServerSeatAttachment in
+     *  production; absent from unit stubs that fully mock `assimilate`. */
+    finalizeServerSeat?: (input: {
+        active: ActiveCube;
+        expected: ExpectedBinding;
+        activate: () => Promise<unknown>;
+        scrubPending: () => Promise<unknown>;
+    }) => Promise<FinalizeServerSeatOutcome>;
     findProjectRoot: (cwd: string) => string;
     installProjectSessionHook: (projectRoot: string) => void;
     /** gh#27: optional test seam — when set, selectAssimilationAuthority uses

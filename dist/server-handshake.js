@@ -1,6 +1,6 @@
 import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, createAttachRequestEnvelope, createProtocolEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, ErrorCode, } from 'borgmcp-shared/protocol';
-import { randomUUID } from 'node:crypto';
-import { activatePendingServerEnrollment, activatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, } from './config.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { activatePendingServerEnrollment, activatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, serverSessionCredentialRef, } from './config.js';
 import { BorgServerError } from './server-errors.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { loadBorgServerTrust, } from './server-trust.js';
@@ -82,15 +82,7 @@ export async function preflightBorgServerTag(origin, fetchImpl = fetch) {
         clearTimeout(timeout);
     }
 }
-/**
- * Attach an enrolled client principal to one granted cube/role over protocol v2.
- * The client CSPRNG-generates the session bearer and persists it PENDING in the
- * OS keychain (keyed by the stable per-seat identity) BEFORE this request, so an
- * interrupted/lost response is recovered by re-sending the exact same bearer —
- * the server binds only its digest. A verified `created`/`reused` response
- * activates that pending record in place; the server never returns a bearer.
- */
-export async function attachBorgServer(origin, trustIdentity, parentCredential, request, deps = {}) {
+export async function prepareBorgServerAttach(origin, trustIdentity, parentCredential, request, deps = {}) {
     if (!UUID_RE.test(request.cubeId) || !UUID_RE.test(request.roleId)) {
         throw new Error('Borg server attach requires valid cube and role identities');
     }
@@ -167,31 +159,63 @@ export async function attachBorgServer(origin, trustIdentity, parentCredential, 
         if (decoded.cube.id !== request.cubeId || decoded.role.id !== request.roleId) {
             throw new Error('Borg server returned an attach identity outside the request');
         }
-        const credentialRef = await (deps.activateSession ?? activatePendingServerSession)({
+        const seatInput = {
             origin,
             trustIdentity,
             cubeId: request.cubeId,
             roleId: request.roleId,
             operation: request.operation,
-            droneId: decoded.drone.id,
-            sessionId: decoded.session.id,
-            expiresAt: decoded.session.expires_at,
-        });
+        };
+        const credentialRef = (deps.sessionCredentialRef ?? serverSessionCredentialRef)(seatInput);
+        const pendingBearerDigest = createHash('sha256').update(pending.credential).digest('hex');
         return {
             cube: decoded.cube,
             role: decoded.role,
             drone: decoded.drone,
             session: {
-                credentialRef,
                 sessionId: decoded.session.id,
                 expiresAt: decoded.session.expires_at,
             },
             result: decoded.result,
+            credentialRef,
+            pendingBearerDigest,
+            // The single keychain pending→ACTIVE flip — invoked LAST by the FINALIZE
+            // composite, after the cubes binding is persisted, under the cube lock.
+            activate: () => (deps.activateSession ?? activatePendingServerSession)({
+                ...seatInput,
+                droneId: decoded.drone.id,
+                sessionId: decoded.session.id,
+                expiresAt: decoded.session.expires_at,
+            }),
+            // Abort-scrub of ONLY this own pending record (never an ACTIVE record, never
+            // a same-ref replacement) — invoked by FINALIZE on an expectation mismatch.
+            scrubPending: () => (deps.scrubPending ?? compareAndClearPendingServerSession)(credentialRef, { origin, trustIdentity, cubeId: request.cubeId }, pendingBearerDigest),
         };
     }
     finally {
         clearTimeout(timeout);
     }
+}
+/**
+ * PREPARE + network + activate, as a single call (the pre-composite contract).
+ * Retained for callers/tests that do not drive the cube-lock-held FINALIZE
+ * themselves; the assimilate orchestration now uses prepareBorgServerAttach +
+ * finalizeServerSeatAttachment so the binding lands BEFORE the pending→ACTIVE flip.
+ */
+export async function attachBorgServer(origin, trustIdentity, parentCredential, request, deps = {}) {
+    const prepared = await prepareBorgServerAttach(origin, trustIdentity, parentCredential, request, deps);
+    const credentialRef = await prepared.activate();
+    return {
+        cube: prepared.cube,
+        role: prepared.role,
+        drone: prepared.drone,
+        session: {
+            credentialRef,
+            sessionId: prepared.session.sessionId,
+            expiresAt: prepared.session.expiresAt,
+        },
+        result: prepared.result,
+    };
 }
 /**
  * Redeem one invitation after the caller has verified TLS and derived the

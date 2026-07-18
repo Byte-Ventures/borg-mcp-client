@@ -15,7 +15,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema
 import { assertRoleMatches } from './role-match.js';
 import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, reassignDrone, evictDrone, getCube, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
-import { activeCubeWithFreshRegenIdentity, getActiveCube, setActiveCube, findProjectRoot, inboxPathForDrone, } from './cubes.js';
+import { activeCubeWithFreshRegenIdentity, getActiveCube, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
 import { addSessionStartHook, addUserPromptSubmitHook } from './config-utils.js';
 import { humanAgo, formatLogEntryMarkdown, formatRegenMarkdown, getDronePlaybook, getDronePlaybookChapter, nullTaxonomyTip, regenWakePathDroneLabel, } from './regen-format.js';
@@ -234,7 +234,7 @@ export async function main() {
                     });
                     const freshActive = activeCubeWithFreshRegenIdentity(active, result);
                     if (freshActive !== active) {
-                        await setActiveCube(freshActive);
+                        await refreshActiveCubeMetadata(freshActive);
                     }
                     // Wake-path self-heal (gh#43): SSE delivery to the inbox file
                     // is independent from Claude Code waking on file writes. The
@@ -308,7 +308,7 @@ export async function main() {
                         });
                         const freshActive = activeCubeWithFreshRegenIdentity(active, result);
                         if (freshActive !== active) {
-                            await setActiveCube(freshActive);
+                            await refreshActiveCubeMetadata(freshActive);
                         }
                         const header = [
                             `# Re-attached to cube: ${freshActive.name}`,

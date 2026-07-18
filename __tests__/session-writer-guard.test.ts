@@ -73,6 +73,21 @@ describe('drone-session keychain writer guard (part D)', () => {
     expect(config).not.toContain('getServerSessionCredential(');
   });
 
+  it('the composite FINALIZE sanctioned wrappers live in the correct layer (config vs cube-owner)', () => {
+    const config = read('config.ts');
+    const cubes = read('cubes.ts');
+    // Keychain-layer wrappers (each account-lock-guarded) live in config.ts.
+    expect(config).toContain('export async function compareAndClearPendingServerSession');
+    expect(config).toContain('export function serverSessionCredentialRef');
+    // The cube-owned composite lives in cubes.ts and holds the OUTER cube lock.
+    expect(cubes).toContain('export async function finalizeServerSeatAttachment');
+    // The composite NEVER imports the raw keychain activation/scrub — those reach
+    // it only as INJECTED thunks (prepared by server-handshake), so the keychain
+    // lock is always taken INNER, inside config wrappers, under the cube lock.
+    expect(cubes).not.toContain('activatePendingServerSession');
+    expect(cubes).not.toContain('compareAndClearPendingServerSession');
+  });
+
   it("config's every borg-server-session: backend mutation lives beside a per-account keychain lock", () => {
     // Sanity that the guard has real subject matter: the session account prefix
     // and the account-scoped lock both live in config.ts.

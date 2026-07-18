@@ -62,7 +62,7 @@ import {
 import {
   activeCubeWithFreshRegenIdentity,
   getActiveCube,
-  setActiveCube,
+  refreshActiveCubeMetadata,
   findProjectRoot,
   inboxPathForDrone,
 } from './cubes.js';
@@ -338,7 +338,7 @@ export async function main() {
           });
           const freshActive = activeCubeWithFreshRegenIdentity(active, result);
           if (freshActive !== active) {
-            await setActiveCube(freshActive);
+            await refreshActiveCubeMetadata(freshActive);
           }
 
           // Wake-path self-heal (gh#43): SSE delivery to the inbox file
@@ -414,7 +414,7 @@ export async function main() {
             });
             const freshActive = activeCubeWithFreshRegenIdentity(active!, result);
             if (freshActive !== active) {
-              await setActiveCube(freshActive);
+              await refreshActiveCubeMetadata(freshActive);
             }
             const header = [
               `# Re-attached to cube: ${freshActive.name}`,

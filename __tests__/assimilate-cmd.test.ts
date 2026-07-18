@@ -8,6 +8,9 @@ import {
 } from '../src/assimilate-cmd';
 import { BorgServerError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
+import { createHash } from 'node:crypto';
+
+const createHashDigest = (s: string): string => createHash('sha256').update(s).digest('hex');
 
 const openCodeDroneMocks = vi.hoisted(() => ({
   computeOpenCodePort: vi.fn(() => 15555),
@@ -1044,6 +1047,94 @@ describe('runAssimilate: step 7 (assimilate + persist)', () => {
       name: 'myrepo',
       droneLabel: 'drone-1',
     }));
+  });
+});
+
+describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
+  const REF = 'borg-server-session:' + 'a'.repeat(64);
+  const localResultWithFinalize = (activate: () => Promise<unknown>, scrubPending: () => Promise<unknown>) =>
+    vi.fn(async () => ({
+      cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
+      local_session: { credential_ref: REF, expires_at: '2026-07-14T16:00:00.000Z' },
+      role_id: 'r',
+      finalize: { activate, scrubPending },
+    }));
+  const getCube = () => vi.fn(async () => ({
+    id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }],
+  }));
+
+  it('a fresh attach drives finalizeServerSeat with an ABSENT expectation + the deferred thunks; setActiveCube is NOT used', async () => {
+    const activate = vi.fn(async () => {});
+    const scrubPending = vi.fn(async () => {});
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const setActiveCube = vi.fn(async () => {});
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(activate, scrubPending),
+      getCube: getCube(), setActiveCube, finalizeServerSeat,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
+    expect(finalizeServerSeat).toHaveBeenCalledTimes(1);
+    const call = finalizeServerSeat.mock.calls[0][0];
+    expect(call.expected).toEqual({ kind: 'absent' });
+    expect(call.active).toMatchObject({ cubeId: 'c', droneId: 'd', localSessionCredentialRef: REF });
+    expect(call.activate).toBe(activate);
+    expect(call.scrubPending).toBe(scrubPending);
+    // The legacy activate-then-bind writer is bypassed on the composite path.
+    expect(setActiveCube).not.toHaveBeenCalled();
+  });
+
+  it('a --here reattach declares EXACT with the prior live-bearer digest', async () => {
+    const activate = vi.fn(async () => {});
+    const scrubPending = vi.fn(async () => {});
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const existingSeat = vi.fn(async () => ({
+      cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l',
+      apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      localSessionCredentialRef: REF, sessionToken: 'prior-bearer', roleName: 'Drone',
+    }));
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(activate, scrubPending),
+      getCube: getCube(), finalizeServerSeat,
+      getActiveCube: existingSeat,
+      probeSeat: vi.fn(async () => 'live'),
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+      cwd: () => '/work/myrepo', findProjectRoot: () => '/work/myrepo',
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(0);
+    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({
+      kind: 'exact',
+      credentialRef: REF,
+      sessionDigest: createHashDigest('prior-bearer'),
+    });
+  });
+
+  it('an expectation-mismatch abort fails closed (exit 1), rolls back nothing to overwrite, and never audits success', async () => {
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'expectation-mismatch' as const }));
+    const stderr = vi.fn();
+    const setActiveCube = vi.fn(async () => {});
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
+      getCube: getCube(), finalizeServerSeat, setActiveCube, stderr,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/changed during attach/);
+    expect(out).not.toMatch(/re-attached|no new drone minted/);
+    expect(setActiveCube).not.toHaveBeenCalled();
+  });
+
+  it('a finalize throw fails closed (exit 1)', async () => {
+    const finalizeServerSeat = vi.fn(async () => { throw new Error('keychain locked'); });
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
+      getCube: getCube(), finalizeServerSeat, stderr,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toMatch(/setActiveCube failed: keychain locked/);
   });
 });
 

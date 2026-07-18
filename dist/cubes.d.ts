@@ -141,6 +141,78 @@ export declare function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null>;
  * state is binding-present/credential-absent — safe, rerunnable, and truthful.
  */
 export declare function resetLocalSeatBinding(expected: LocalSeatSnapshot): Promise<ResetLocalSeatOutcome>;
+/**
+ * Typed prepare-time expectation for the composite attach FINALIZE (ratified
+ * client-seat-reset-state-model clause 3). REATTACH declares EXACT — the exact
+ * prior live binding must still hold at commit time (its ref, and when a live
+ * bearer is being preserved, its digest). FIRST-ENROLL (and a fresh sibling
+ * seat) declares ABSENT — no binding may have appeared. A self-remint after an
+ * authoritative eviction declares EXACT with the ref only (the bearer is
+ * intentionally replaced, so no digest is pinned).
+ */
+export type ExpectedBinding = {
+    kind: 'exact';
+    credentialRef: string;
+    sessionDigest?: string;
+} | {
+    kind: 'absent';
+};
+export interface FinalizeServerSeatInput {
+    /** The full worktree binding to persist (must carry the local-server trust +
+     *  the localSessionCredentialRef of the exact PENDING record). */
+    active: ActiveCubeInput;
+    /** Typed expectation declared at PREPARE. */
+    expected: ExpectedBinding;
+    /** The single keychain pending→ACTIVE transition — run LAST, after the binding. */
+    activate: () => Promise<unknown>;
+    /** Compare-and-scrub the caller's OWN pending record on abort (never an ACTIVE
+     *  record, never a same-ref replacement). */
+    scrubPending: () => Promise<unknown>;
+}
+export type FinalizeServerSeatOutcome = {
+    committed: true;
+} | {
+    committed: false;
+    reason: 'expectation-mismatch';
+};
+/**
+ * COMPOSITE cube-owned FINALIZE closing Race 2 on the attach path (ratified
+ * client-seat-reset-state-model clause 3). The CUBE write lock is held OUTER and
+ * CONTINUOUSLY across revalidate → write-binding → activate; the keychain lock is
+ * only ever taken INNER, inside the injected activate()/scrubPending() config
+ * wrappers (never a keychain→cube inversion). The network POST already happened
+ * between PREPARE and this call, with the cube lock released.
+ *
+ * REVALIDATE the current worktree binding against the typed expectation:
+ *   EXACT  — the prior binding must still exist with the exact same ref (and, when
+ *            a digest is pinned, the live bearer's digest must still match — an
+ *            absent/same-ref-replaced credential is a mismatch);
+ *   ABSENT — no binding may have appeared.
+ * Any mismatch = ABORT: compare-and-scrub ONLY the caller's own pending record,
+ * never a silent recreate (this is the exact PREPARE-paused → offline-reset-commits
+ * → FINALIZE-aborts shape — the reset stays complete, no orphan is minted).
+ *
+ * On match, FINALIZE is BINDING-FIRST: persist the cubes binding referencing the
+ * exact PENDING record FIRST, THEN the single keychain pending→ACTIVE transition
+ * LAST. The invariant "ACTIVE credential without a binding" is UNREACHABLE in
+ * every crash/interleave order; the only surviving intermediate is
+ * binding-present/credential-PENDING — non-hydratable (getActiveServerSessionCredential
+ * requires state=='active'), retry-safe, and truthful. An activate() throw
+ * leaves exactly that state (the binding stays written); re-running PREPARE+FINALIZE
+ * converges.
+ */
+export declare function finalizeServerSeatAttachment(input: FinalizeServerSeatInput): Promise<FinalizeServerSeatOutcome>;
+/**
+ * Metadata-only refresh (cube name / drone label / role display) for the CURRENT
+ * worktree's existing binding. Deliberately CANNOT alter the seat reference,
+ * identity, or credential binding: it reads the persisted entry, overlays ONLY
+ * the display fields, and rewrites — localSessionCredentialRef, cubeId, droneId,
+ * apiUrl, and serverTrustIdentity are taken verbatim from the PERSISTED entry,
+ * never from the argument. A no-op when this worktree has no binding, so a stale
+ * regen identity can never resurrect or mutate a seat ref. (Part D: split from
+ * the seat-ref/binding commit path setActiveCube / finalizeServerSeatAttachment.)
+ */
+export declare function refreshActiveCubeMetadata(active: ActiveCubeInput): Promise<void>;
 export declare function getProjectCliPreference(): Promise<BorgCli | null>;
 /**
  * gh#556 Part 2 — like getProjectCliPreference, but keyed on an arbitrary

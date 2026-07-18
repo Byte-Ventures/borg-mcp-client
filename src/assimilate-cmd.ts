@@ -45,6 +45,8 @@ import { normalizeServerEndpoint } from './server-endpoint.js';
 import { BorgServerError } from './server-errors.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { ServerSessionOperation } from './config.js';
+import type { ExpectedBinding, FinalizeServerSeatOutcome } from './cubes.js';
+import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs, type LaunchApprovalDecision } from './cli-tool-approval.js';
 
 export interface AssimilateFlags {
@@ -94,6 +96,14 @@ export interface AssimilateResult {
   // Idempotent-reattach discriminant: 'reused' when the server resolved the
   // client bearer to an existing seat, 'created' on a first/fresh attach.
   result?: 'created' | 'reused';
+  // Deferred FINALIZE handles for the local-server composite (Race 2): the
+  // keychain pending→ACTIVE flip and the abort-scrub of the own pending record,
+  // run by Step 8 under the cube lock AFTER the binding is persisted. Absent for
+  // the (severed) cloud path and for unit stubs that fully mock `assimilate`.
+  finalize?: {
+    activate: () => Promise<unknown>;
+    scrubPending: () => Promise<unknown>;
+  };
 }
 
 export interface ActiveCube {
@@ -171,6 +181,17 @@ export interface AssimilateDeps {
     serverTrustIdentity?: string,
   ) => Promise<SeatStatus>;
   setActiveCube: (a: ActiveCube) => Promise<void>;
+  /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
+   *  typed expectation, persist the binding FIRST, then run `activate` (keychain
+   *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and
+   *  report an honest abort. Wired to cubes.finalizeServerSeatAttachment in
+   *  production; absent from unit stubs that fully mock `assimilate`. */
+  finalizeServerSeat?: (input: {
+    active: ActiveCube;
+    expected: ExpectedBinding;
+    activate: () => Promise<unknown>;
+    scrubPending: () => Promise<unknown>;
+  }) => Promise<FinalizeServerSeatOutcome>;
   findProjectRoot: (cwd: string) => string;
 
   // gh#673 P2 (WI-1): write the borg-regen SessionStart hook into the
@@ -1171,42 +1192,101 @@ export async function runAssimilate(
     spawnedWorktreePath = deps.cwd();
   }
 
-  // ----- Step 8: setActiveCube (narrow rollback — worktree exists if spawned) -----
-  try {
-    await deps.setActiveCube({
-      cubeId: result.cube_id,
-      droneId: result.drone_id,
-      name: cubeDetail.name,
-      droneLabel: result.drone_label,
-      apiUrl: auth.apiUrl,
-      ...(auth.serverTrustIdentity === undefined
-        ? { sessionToken: result.session_token! }
-        : {
-          serverTrustIdentity: auth.serverTrustIdentity,
-          localSessionCredentialRef: result.local_session!.credential_ref,
-          localSessionExpiresAt: result.local_session!.expires_at,
-        }),
-      // gh#899: persist the assimilated role so the connect-time ListTools
-      // handler can role-scope the native tool surface.
-      roleName: assignedRole.name,
-      isHumanSeat: assignedRole.is_human_seat,
-      ...(assignedRole.role_class ? { roleClass: assignedRole.role_class } : {}),
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    deps.stderr(`setActiveCube failed: ${message}\n`);
-    if (spawnedWorktreePath) {
-      const rm = deps.runSync('git', ['worktree', 'remove', '--force', spawnedWorktreePath], projectRoot);
-      if (rm.status === 0) {
-        deps.stderr(`rolled back spawned worktree at ${spawnedWorktreePath}\n`);
-      } else {
-        deps.stderr(
-          `manual cleanup needed: \`git worktree remove --force ${spawnedWorktreePath}\` ` +
-          `(rollback attempt failed: ${safeStderr(rm.stderr).trim() || 'unknown'})\n`
-        );
-      }
+  // ----- Step 8: persist the binding (narrow rollback — worktree exists if spawned) -----
+  const activeCube: ActiveCube = {
+    cubeId: result.cube_id,
+    droneId: result.drone_id,
+    name: cubeDetail.name,
+    droneLabel: result.drone_label,
+    apiUrl: auth.apiUrl,
+    ...(auth.serverTrustIdentity === undefined
+      ? { sessionToken: result.session_token! }
+      : {
+        serverTrustIdentity: auth.serverTrustIdentity,
+        localSessionCredentialRef: result.local_session!.credential_ref,
+        localSessionExpiresAt: result.local_session!.expires_at,
+      }),
+    // gh#899: persist the assimilated role so the connect-time ListTools
+    // handler can role-scope the native tool surface.
+    roleName: assignedRole.name,
+    isHumanSeat: assignedRole.is_human_seat,
+    ...(assignedRole.role_class ? { roleClass: assignedRole.role_class } : {}),
+  };
+
+  const rollbackWorktree = (): void => {
+    if (!spawnedWorktreePath) return;
+    const rm = deps.runSync('git', ['worktree', 'remove', '--force', spawnedWorktreePath], projectRoot);
+    if (rm.status === 0) {
+      deps.stderr(`rolled back spawned worktree at ${spawnedWorktreePath}\n`);
+    } else {
+      deps.stderr(
+        `manual cleanup needed: \`git worktree remove --force ${spawnedWorktreePath}\` ` +
+        `(rollback attempt failed: ${safeStderr(rm.stderr).trim() || 'unknown'})\n`
+      );
     }
-    return 1;
+  };
+
+  // Local-server authority: drive the COMPOSITE cube-owned FINALIZE (Race 2).
+  // The cube lock is held OUTER across revalidate → binding-write → activate; the
+  // typed expectation is declared HERE at the orchestration layer (reattach =
+  // EXACT prior binding with its live-bearer digest; eviction remint = EXACT ref
+  // only, bearer intentionally replaced; fresh/sibling = ABSENT).
+  if (
+    auth.serverTrustIdentity !== undefined &&
+    result.finalize !== undefined &&
+    deps.finalizeServerSeat !== undefined
+  ) {
+    let expected: ExpectedBinding;
+    if (remintInvalidPrior && existing?.localSessionCredentialRef) {
+      expected = { kind: 'exact', credentialRef: existing.localSessionCredentialRef };
+    } else if (reattachPriorId != null && existing?.localSessionCredentialRef && existing.sessionToken) {
+      expected = {
+        kind: 'exact',
+        credentialRef: existing.localSessionCredentialRef,
+        sessionDigest: createHash('sha256').update(existing.sessionToken).digest('hex'),
+      };
+    } else {
+      expected = { kind: 'absent' };
+    }
+    let outcome: FinalizeServerSeatOutcome;
+    try {
+      outcome = await deps.finalizeServerSeat({
+        active: activeCube,
+        expected,
+        activate: result.finalize.activate,
+        scrubPending: result.finalize.scrubPending,
+      });
+    } catch (err) {
+      // A binding-write or activation failure. BINDING-FIRST means a thrown
+      // activation leaves binding-present/credential-PENDING (non-hydratable,
+      // retry-safe) — never an ACTIVE credential without a binding.
+      const message = err instanceof Error ? err.message : String(err);
+      deps.stderr(`setActiveCube failed: ${message}\n`);
+      rollbackWorktree();
+      return 1;
+    }
+    if (!outcome.committed) {
+      // Expectation mismatch: this worktree's saved seat changed under us between
+      // PREPARE and FINALIZE (a concurrent offline reset, or a competing enroll).
+      // The composite compare-and-scrubbed only our own pending record — no orphan
+      // ACTIVE credential exists. Do NOT silently recreate.
+      deps.stderr(
+        `This worktree's saved local seat on ${auth.apiUrl} changed during attach ` +
+          '(a concurrent reset or enroll); no seat was created and nothing was overwritten. ' +
+          `Re-run ${localAssimilateCommand(auth.apiUrl)} to attach against the current state.\n`,
+      );
+      rollbackWorktree();
+      return 1;
+    }
+  } else {
+    try {
+      await deps.setActiveCube(activeCube);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.stderr(`setActiveCube failed: ${message}\n`);
+      rollbackWorktree();
+      return 1;
+    }
   }
 
   // The worktree, not a reminted drone UUID, is the stable local seat identity

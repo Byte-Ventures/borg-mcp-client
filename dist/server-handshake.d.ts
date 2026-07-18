@@ -1,5 +1,5 @@
 import { type CreateCubeResponse, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
-import { activatePendingServerEnrollment, activatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, type ServerSessionOperation } from './config.js';
+import { activatePendingServerEnrollment, activatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, serverSessionCredentialRef, type ServerSessionOperation } from './config.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
 type FetchLike = typeof fetch;
@@ -57,6 +57,48 @@ export interface ServerAttachResult {
  * interrupted/lost response is recovered by re-sending the exact same bearer —
  * the server binds only its digest. A verified `created`/`reused` response
  * activates that pending record in place; the server never returns a bearer.
+ */
+/**
+ * The PREPARE + network half of an attach, WITHOUT the keychain pending→ACTIVE
+ * transition. The deferred `activate` / `scrubPending` thunks let the cube-lock-
+ * owning orchestration (assimilate) FINALIZE binding-FIRST: write the cubes
+ * binding referencing this exact pending record under the cube lock, THEN call
+ * `activate()` as the single last step. `credentialRef` is the deterministic
+ * per-seat account, known here (before activation) so the binding can reference
+ * it. `scrubPending` compare-and-scrubs ONLY this own pending record on a
+ * FINALIZE abort.
+ */
+export interface PreparedServerAttach {
+    cube: ServerAttachResult['cube'];
+    role: ServerAttachResult['role'];
+    drone: ServerAttachResult['drone'];
+    session: {
+        sessionId: string;
+        expiresAt: string;
+    };
+    result: 'created' | 'reused';
+    credentialRef: string;
+    pendingBearerDigest: string;
+    activate: () => Promise<string>;
+    scrubPending: () => Promise<boolean>;
+}
+export declare function prepareBorgServerAttach(origin: string, trustIdentity: string, parentCredential: string, request: {
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+    priorDroneId?: string;
+}, deps?: {
+    fetchImpl?: FetchLike;
+    getPendingSession?: typeof getOrCreatePendingServerSession;
+    activateSession?: typeof activatePendingServerSession;
+    scrubPending?: typeof compareAndClearPendingServerSession;
+    sessionCredentialRef?: typeof serverSessionCredentialRef;
+}): Promise<PreparedServerAttach>;
+/**
+ * PREPARE + network + activate, as a single call (the pre-composite contract).
+ * Retained for callers/tests that do not drive the cube-lock-held FINALIZE
+ * themselves; the assimilate orchestration now uses prepareBorgServerAttach +
+ * finalizeServerSeatAttachment so the binding lands BEFORE the pending→ACTIVE flip.
  */
 export declare function attachBorgServer(origin: string, trustIdentity: string, parentCredential: string, request: {
     cubeId: string;

@@ -106,6 +106,20 @@ export declare function activatePendingServerSession(input: {
     expiresAt: string;
 }): Promise<string>;
 /**
+ * The deterministic per-seat keychain reference for a pending/active session,
+ * known at PREPARE time (from origin+trust+cube+role+operation, before any
+ * activation). The composite attach FINALIZE uses it to persist the cubes
+ * binding referencing the EXACT pending record BEFORE the single pending→ACTIVE
+ * transition, so an ACTIVE credential is never observable without a binding.
+ */
+export declare function serverSessionCredentialRef(input: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+}): string;
+/**
  * Resolve the active bearer stored at an opaque per-seat reference. The role is
  * not required from the caller — the reference itself binds the role, so the
  * stored record's own role must re-derive the exact same account. Returns null
@@ -132,6 +146,23 @@ export declare function compareAndClearServerSessionCredential(credentialRef: st
     trustIdentity: string;
     cubeId: string;
 }, expectedSessionDigest: string): Promise<boolean>;
+/**
+ * Abort-scrub for the composite attach FINALIZE. Atomically deletes the caller's
+ * OWN pending record IFF it is STILL state=='pending' AND its bearer digest
+ * matches the one the caller prepared — never an ACTIVE record (a concurrent
+ * winner activated it and a binding now references it) and never a same-ref
+ * replacement (a competing fresh enroll wrote a different bearer under the same
+ * deterministic ref). The read → validate → compare → delete runs under the same
+ * per-account keychain lock as every session writer, so no interleave can slip
+ * between the comparison and the delete. Returns true iff the exact own pending
+ * record was deleted; every non-match is a no-op (false). A backend error
+ * PROPAGATES. The raw bearer is never returned or logged.
+ */
+export declare function compareAndClearPendingServerSession(credentialRef: string, binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+}, expectedBearerDigest: string): Promise<boolean>;
 /**
  * Discard any pending/active session record for one seat so the next attach
  * mints a fresh bearer. Used by the eviction/remint recovery path where the

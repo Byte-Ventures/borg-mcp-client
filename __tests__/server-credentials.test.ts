@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   __setServerCredentialBackendForTest,
   activatePendingServerEnrollment,
+  activatePendingServerSession,
   clearPendingServerCubeCreation,
   clearServerSessionCredential,
   clearServerCredential,
+  compareAndClearPendingServerSession,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
+  getOrCreatePendingServerSession,
   getPendingServerEnrollment,
   getServerCredential,
   getServerCredentialRecord,
+  serverSessionCredentialRef,
   storeServerCredential,
 } from '../src/config.js';
 import type { TokenBackend } from '../src/token-store.js';
@@ -205,6 +210,60 @@ describe('self-hosted server credential storage', () => {
       projectRoot: '/work/project-one',
     });
     expect(replacement.retryKey).not.toBe(first.retryKey);
+  });
+});
+
+describe('compareAndClearPendingServerSession (composite abort-scrub, part C)', () => {
+  const seat = {
+    origin: 'https://localhost:8787',
+    trustIdentity: 'sha256:server-a',
+    cubeId: '11111111-1111-4111-8111-111111111111',
+    roleId: '44444444-4444-4444-8444-444444444444',
+    operation: { projectRoot: '/work/repo', kind: 'seat' as const, operationKey: 'current-worktree' },
+  };
+  const binding = { origin: seat.origin, trustIdentity: seat.trustIdentity, cubeId: seat.cubeId };
+
+  it('deletes ONLY the own pending record when the bearer digest matches', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const rec = await getOrCreatePendingServerSession(seat);
+    const ref = serverSessionCredentialRef(seat);
+    const digest = createHash('sha256').update(rec.credential).digest('hex');
+
+    // Wrong digest (a competing fresh enroll wrote a different bearer under the
+    // same deterministic ref) → NO delete; the record is preserved.
+    expect(await compareAndClearPendingServerSession(ref, binding, 'deadbeef')).toBe(false);
+    expect(values.has(ref)).toBe(true);
+
+    // Correct digest + still pending → deleted.
+    expect(await compareAndClearPendingServerSession(ref, binding, digest)).toBe(true);
+    expect(values.has(ref)).toBe(false);
+  });
+
+  it('NEVER deletes an ACTIVE record (a concurrent winner activated it; a binding references it)', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const rec = await getOrCreatePendingServerSession(seat);
+    const ref = serverSessionCredentialRef(seat);
+    const digest = createHash('sha256').update(rec.credential).digest('hex');
+    // The record is activated (pending→active) by the winner.
+    await activatePendingServerSession({
+      ...seat,
+      droneId: '22222222-2222-4222-8222-222222222222',
+      sessionId: '33333333-3333-4333-8333-333333333333',
+      expiresAt: '2026-07-20T00:00:00.000Z',
+    });
+    // Scrub with the matching digest is a NO-OP because state=='active'.
+    expect(await compareAndClearPendingServerSession(ref, binding, digest)).toBe(false);
+    expect(values.has(ref)).toBe(true);
+  });
+
+  it('is a no-op on a missing record or a malformed ref', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const ref = serverSessionCredentialRef(seat);
+    expect(await compareAndClearPendingServerSession(ref, binding, 'x')).toBe(false);
+    expect(await compareAndClearPendingServerSession('not-a-ref', binding, 'x')).toBe(false);
   });
 });
 

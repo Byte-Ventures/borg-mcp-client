@@ -779,6 +779,31 @@ export async function activatePendingServerSession(
 }
 
 /**
+ * The deterministic per-seat keychain reference for a pending/active session,
+ * known at PREPARE time (from origin+trust+cube+role+operation, before any
+ * activation). The composite attach FINALIZE uses it to persist the cubes
+ * binding referencing the EXACT pending record BEFORE the single pending→ACTIVE
+ * transition, so an ACTIVE credential is never observable without a binding.
+ */
+export function serverSessionCredentialRef(
+  input: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+  },
+): string {
+  return serverPendingSessionAccount(
+    input.origin,
+    input.trustIdentity,
+    input.cubeId,
+    input.roleId,
+    input.operation,
+  );
+}
+
+/**
  * Resolve the active bearer stored at an opaque per-seat reference. The role is
  * not required from the caller — the reference itself binds the role, so the
  * stored record's own role must re-derive the exact same account. Returns null
@@ -895,6 +920,73 @@ export async function compareAndClearServerSessionCredential(
     }
     const digest = createHash('sha256').update(bearer).digest('hex');
     if (digest !== expectedSessionDigest) return false;
+    await backend.delete(credentialRef);
+    return true;
+  });
+}
+
+/**
+ * Abort-scrub for the composite attach FINALIZE. Atomically deletes the caller's
+ * OWN pending record IFF it is STILL state=='pending' AND its bearer digest
+ * matches the one the caller prepared — never an ACTIVE record (a concurrent
+ * winner activated it and a binding now references it) and never a same-ref
+ * replacement (a competing fresh enroll wrote a different bearer under the same
+ * deterministic ref). The read → validate → compare → delete runs under the same
+ * per-account keychain lock as every session writer, so no interleave can slip
+ * between the comparison and the delete. Returns true iff the exact own pending
+ * record was deleted; every non-match is a no-op (false). A backend error
+ * PROPAGATES. The raw bearer is never returned or logged.
+ */
+export async function compareAndClearPendingServerSession(
+  credentialRef: string,
+  binding: { origin: string; trustIdentity: string; cubeId: string },
+  expectedBearerDigest: string,
+): Promise<boolean> {
+  if (!/^borg-server-session:[a-f0-9]{64}$/.test(credentialRef)) return false;
+  const backend = await getServerCredentialBackend();
+  return withServerKeychainLock(credentialRef, async () => {
+    const stored = await backend.get(credentialRef);
+    if (!stored) return false;
+    let bearer: string;
+    try {
+      const record = JSON.parse(stored) as Partial<PendingServerSessionRecord> & {
+        version?: unknown;
+      };
+      const op = record.operation;
+      if (
+        record.version !== SERVER_PENDING_SESSION_RECORD_VERSION ||
+        record.origin !== binding.origin ||
+        record.trustIdentity !== binding.trustIdentity ||
+        record.cubeId !== binding.cubeId ||
+        record.state !== 'pending' ||
+        typeof record.credential !== 'string' ||
+        typeof record.roleId !== 'string' ||
+        op === undefined ||
+        op === null ||
+        typeof op !== 'object' ||
+        typeof op.projectRoot !== 'string' ||
+        typeof op.operationKey !== 'string' ||
+        (op.kind !== 'seat' && op.kind !== 'sibling')
+      ) {
+        return false;
+      }
+      if (
+        serverPendingSessionAccount(
+          record.origin,
+          record.trustIdentity,
+          record.cubeId,
+          record.roleId,
+          op,
+        ) !== credentialRef
+      ) {
+        return false;
+      }
+      bearer = record.credential;
+    } catch {
+      return false;
+    }
+    const digest = createHash('sha256').update(bearer).digest('hex');
+    if (digest !== expectedBearerDigest) return false;
     await backend.delete(credentialRef);
     return true;
   });

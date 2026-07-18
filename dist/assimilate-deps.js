@@ -15,8 +15,9 @@ import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
-import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, attachBorgServer, } from './server-handshake.js';
+import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, prepareBorgServerAttach, } from './server-handshake.js';
 import { clearPendingServerSession, } from './config.js';
+import { finalizeServerSeatAttachment } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError } from './server-errors.js';
@@ -95,6 +96,7 @@ export function buildDefaultAssimilateDeps() {
         clearActiveCube: (expected) => cubesClearActive(expected),
         probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
         setActiveCube: (a) => cubesSetActive(a),
+        finalizeServerSeat: (input) => finalizeServerSeatAttachment(input),
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
         // gh#673 P2 (WI-1): project-local SessionStart hook for the launch root.
         installProjectSessionHook: (projectRoot) => {
@@ -192,7 +194,10 @@ export function buildDefaultAssimilateDeps() {
                 if (params.remint_invalid_prior === true) {
                     await clearPendingServerSession(seatBinding);
                 }
-                const attached = await attachBorgServer(apiUrl, serverTrustIdentity, token, {
+                // PREPARE + network only — the keychain pending→ACTIVE flip is deferred to
+                // the cube-lock-held FINALIZE (finalizeServerSeatAttachment) so the binding
+                // lands BEFORE the credential goes active (Race 2 / ACTIVE-without-binding).
+                const prepared = await prepareBorgServerAttach(apiUrl, serverTrustIdentity, token, {
                     cubeId: params.cube_id,
                     roleId: params.role_id,
                     operation,
@@ -201,24 +206,34 @@ export function buildDefaultAssimilateDeps() {
                         : { priorDroneId: params.prior_drone_id }),
                 }, { fetchImpl: trust.fetchImpl });
                 if (params.prior_drone_id) {
+                    // The seat identity did not match the reattach/remint intent. Scrub the
+                    // caller's own pending record (no-op unless it is still ours + pending)
+                    // before surfacing, so no orphan pending lingers.
                     if (params.remint_invalid_prior) {
-                        if (attached.result !== 'created' || attached.drone.id === params.prior_drone_id) {
+                        if (prepared.result !== 'created' || prepared.drone.id === params.prior_drone_id) {
+                            await prepared.scrubPending();
                             throw new Error('Borg server did not remint a fresh seat after eviction');
                         }
                     }
-                    else if (attached.result !== 'reused' || attached.drone.id !== params.prior_drone_id) {
+                    else if (prepared.result !== 'reused' || prepared.drone.id !== params.prior_drone_id) {
+                        await prepared.scrubPending();
                         throw new BorgServerError('ATTACH_CONFLICT', 'Borg server did not reattach the saved seat');
                     }
                 }
                 return {
-                    cube_id: attached.cube.id,
-                    drone_id: attached.drone.id,
-                    drone_label: attached.drone.label,
-                    role_id: attached.role.id,
-                    result: attached.result,
+                    cube_id: prepared.cube.id,
+                    drone_id: prepared.drone.id,
+                    drone_label: prepared.drone.label,
+                    role_id: prepared.role.id,
+                    result: prepared.result,
                     local_session: {
-                        credential_ref: attached.session.credentialRef,
-                        expires_at: attached.session.expiresAt,
+                        credential_ref: prepared.credentialRef,
+                        expires_at: prepared.session.expiresAt,
+                    },
+                    // Handles for the cube-lock-held FINALIZE (assimilate-cmd Step 8).
+                    finalize: {
+                        activate: prepared.activate,
+                        scrubPending: prepared.scrubPending,
                     },
                 };
             }
