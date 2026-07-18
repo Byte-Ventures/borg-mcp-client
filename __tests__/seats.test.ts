@@ -223,3 +223,70 @@ describe('seats store — observation + sole raw-bearer reader (CR#3, SR#5)', ()
     expect(await seats.getActiveSeatCredential(ref, { ...BIND, cubeId: '99999999-9999-4999-8999-999999999999' })).toBeNull();
   });
 });
+
+describe('seats store — sibling attaches never move/unseat an active binding (CR1)', () => {
+  const inPlaceOp = { projectRoot: '/work/repo', kind: 'seat' as const, operationKey: 'current-worktree' };
+  const bindActive = (
+    seats: typeof import('../src/seats.js'),
+    operation: typeof inPlaceOp,
+    bearer: string,
+    worktree: string,
+  ) =>
+    seats.activateAndBindSeat({
+      ...SEAT, operation, ...STAMP, expectedPendingDigest: digestOf(bearer), worktree,
+      name: 'local-cube', droneLabel: 'builder', roleName: 'Drone',
+    });
+
+  it('distinct sibling operation keys mint DISTINCT refs; an ACTIVE in-place seat is untouched', async () => {
+    const { seats } = await load();
+    // An ACTIVE in-place seat bound to /wt/one.
+    await seats.mintPendingSeat({ ...SEAT, operation: inPlaceOp, credential: 'a'.repeat(43) });
+    expect(await bindActive(seats, inPlaceOp, 'a'.repeat(43), '/wt/one')).toBe('activated');
+    const inPlaceRef = seats.seatRef({ ...SEAT, operation: inPlaceOp });
+
+    // Two implicit siblings with DISTINCT (per-invocation-unique) keys.
+    const sibA = { projectRoot: '/work/repo', kind: 'sibling' as const, operationKey: 'implicit-sibling:AAA' };
+    const sibB = { projectRoot: '/work/repo', kind: 'sibling' as const, operationKey: 'implicit-sibling:BBB' };
+    const refA = seats.seatRef({ ...SEAT, operation: sibA });
+    const refB = seats.seatRef({ ...SEAT, operation: sibB });
+    // All three seats resolve to DISTINCT refs — no collision onto one seat.
+    expect(new Set([inPlaceRef, refA, refB]).size).toBe(3);
+
+    // Sibling A: ABSENT + revalidate (as assimilate now passes) → mint → bind /wt/two.
+    const pa = await seats.prepareSeat({
+      expected: { kind: 'absent' }, revalidate: true,
+      seed: { ...SEAT, operation: sibA, credential: 'b'.repeat(43) },
+    });
+    expect(pa.ok).toBe(true);
+    expect(await bindActive(seats, sibA, 'b'.repeat(43), '/wt/two')).toBe('activated');
+
+    // The ACTIVE in-place seat is UNTOUCHED — still bound to /wt/one at its own ref.
+    const one = await seats.getActiveSeatForWorktree('/wt/one');
+    expect(one?.worktree).toBe('/wt/one');
+    expect(one && seats.seatRef(one)).toBe(inPlaceRef);
+    // And sibling A landed at its own distinct ref/worktree.
+    const two = await seats.getActiveSeatForWorktree('/wt/two');
+    expect(two && seats.seatRef(two)).toBe(refA);
+  });
+
+  it('a sibling ABSENT revalidation ABORTS when an ACTIVE record already holds the ref (never moved)', async () => {
+    const { seats } = await load();
+    const sib = { projectRoot: '/work/repo', kind: 'sibling' as const, operationKey: 'named-sibling:review' };
+    await seats.prepareSeat({ expected: { kind: 'absent' }, revalidate: true, seed: { ...SEAT, operation: sib, credential: 'a'.repeat(43) } });
+    expect(await bindActive(seats, sib, 'a'.repeat(43), '/wt/review')).toBe('activated');
+
+    // A second sibling attach that lands on the SAME ref (e.g. same --worktree name)
+    // with a fresh bearer: ABSENT sees an ACTIVE record → abort, never reuse/move it.
+    const p2 = await seats.prepareSeat({
+      expected: { kind: 'absent' }, revalidate: true,
+      seed: { ...SEAT, operation: sib, credential: 'c'.repeat(43) },
+    });
+    expect(p2.ok).toBe(false);
+    // The active seat is unchanged (still /wt/review, original bearer digest).
+    const rev = await seats.getActiveSeatForWorktree('/wt/review');
+    expect(rev?.worktree).toBe('/wt/review');
+    expect(await seats.observeSeat(seats.seatRef({ ...SEAT, operation: sib }), BIND)).toMatchObject({
+      state: 'active', digest: digestOf('a'.repeat(43)),
+    });
+  });
+});

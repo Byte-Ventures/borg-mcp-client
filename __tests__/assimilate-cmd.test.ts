@@ -1275,6 +1275,43 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     expect(params.session_expected).toEqual({ kind: 'absent' });
     expect(params.revalidate_at_prepare).toBe(true);
   });
+
+  it('CR #1: an implicit sibling gets a COLLISION-SAFE (distinct-per-run) operation key and revalidates ABSENT at PREPARE', async () => {
+    const existingCube = {
+      cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', droneLabel: 'drone-1',
+      apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone',
+    };
+    const runOnce = async () => {
+      const assimilate = vi.fn(async () => ({
+        cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-2', role_id: 'role-default',
+        result: 'created' as const,
+        local_session: {
+          credential_ref: 'borg-server-session:' + 'b'.repeat(64),
+          expires_at: '2026-07-14T16:00:00.000Z',
+        },
+      }));
+      const deps = makeStubDeps({
+        assimilate,
+        getActiveCube: vi.fn(async () => existingCube),
+        listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+        getCube: vi.fn(async () => ({
+          id: 'cube-1', name: 'myrepo',
+          roles: [{ id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false }],
+        })),
+      });
+      // No --here + an existing active cube ⇒ implicit sibling spawn.
+      expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
+      return assimilate.mock.calls[0][2];
+    };
+    const p1 = await runOnce();
+    const p2 = await runOnce();
+    expect(p1.session_operation!.kind).toBe('sibling');
+    expect(p1.session_operation!.operationKey).toMatch(/^implicit-sibling:/);
+    expect(p1.revalidate_at_prepare).toBe(true);
+    // CR1(a): two implicit siblings mint DISTINCT keys — they never collide on one seat.
+    expect(p1.session_operation!.operationKey).not.toBe(p2.session_operation!.operationKey);
+  });
 });
 
 describe('runAssimilate: step 6 (role resolution)', () => {

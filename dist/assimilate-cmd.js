@@ -458,9 +458,16 @@ export async function runAssimilate(args, deps) {
         // deliberate sibling never collides with the durable in-place seat's bearer.
         projectRoot,
         kind: wantSibling ? 'sibling' : 'seat',
+        // CR1(a): an implicit sibling's operation key must be COLLISION-SAFE — two
+        // unnamed siblings of the same (origin,trust,cube,role) must get DISTINCT seat
+        // refs, else prepareSeat reuses the first sibling's ACTIVE record and the
+        // activate+bind step overwrites its worktree (an active seat silently unseated
+        // and rebound). A named sibling already keys on its name; an unnamed one derives
+        // a per-invocation-unique key so every distinct implicit sibling target mints a
+        // distinct bearer / seat ref.
         operationKey: wantSibling
             ? (args.flags.worktree === undefined
-                ? 'implicit-sibling'
+                ? `implicit-sibling:${randomUUID()}`
                 : `named-sibling:${args.flags.worktree}`)
             : 'current-worktree',
     };
@@ -710,10 +717,14 @@ export async function runAssimilate(args, deps) {
     else {
         sessionExpected = { kind: 'absent' };
     }
-    // In-place attaches (the target worktree is the current one) can revalidate the
-    // expectation at PREPARE; a sibling spawn's target key does not exist yet, so it
-    // mints without a prepare-check (there is no prior binding to race against).
-    const revalidateAtPrepare = !wantSibling;
+    // CR1(b): PREPARE-time revalidation is preserved for siblings too. A sibling
+    // declares an ABSENT expectation: a PENDING record at the ref (a lost-response
+    // retry / crash-in-gap) stays reusable so the identical bearer is re-sent, but an
+    // ACTIVE record holding the ref is a mismatch → abort (never silently reuse/move
+    // a live binding). With the collision-safe sibling key above the fresh ref is
+    // normally empty, so ABSENT passes and the mint proceeds; the check is the
+    // defense that stops an active seat from being unseated.
+    const revalidateAtPrepare = true;
     // ----- Step 6: API assimilate (no FS state yet — clean exit on failure) -----
     // gh#653 B4: progress for the seat-mint round-trip (silent-window stall).
     deps.stderr(`Joining cube '${cubeDetail.name}' as ${resolvedRole.name}…\n`);
