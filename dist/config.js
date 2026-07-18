@@ -3,9 +3,9 @@
  *
  * The self-hosted-server credential group (enrollment credentials, pending
  * enrollment/cube-creation records, and the per-seat drone-session bearers)
- * lives ONLY in the OS keychain (@napi-rs/keyring — real platform at-rest
- * encryption). It fails closed when the platform keychain is unavailable;
- * there is deliberately no obfuscation-grade file fallback.
+ * rests ONLY in the 0600 credential file store (Queen rescope) — parity with the
+ * server's own TLS private keys. The OS keychain is gone; the raw secret never
+ * leaves the 0600 file, and a single store flock serializes every read-compare-write.
  */
 import os from 'os';
 import path from 'path';
