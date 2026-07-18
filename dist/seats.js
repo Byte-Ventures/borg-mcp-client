@@ -142,6 +142,65 @@ export async function mintPendingSeat(input) {
     });
 }
 /**
+ * CR#1 PREPARE-time abort in the single-store model. Under ONE store flock:
+ * REVALIDATE the typed expectation against the record currently at the seat ref
+ * (EXACT: the exact prior ACTIVE record must still hold — ref, optional drone id,
+ * optional live-bearer digest; ABSENT: no ACTIVE record may hold this seat), then
+ * — only if it holds — MINT the pending record in the SAME lock hold. A pre-existing
+ * valid record (pending from a lost-response retry, or the active record being
+ * reattached) is REUSED so the identical bearer is re-sent. `scrubBeforeMint`
+ * discards a known-invalid saved record (eviction remint) before minting, still
+ * under the one flock. On a mismatch NOTHING is minted or scrubbed (abort).
+ */
+export async function prepareSeat(input) {
+    const { expected, revalidate = true, scrubBeforeMint = false, seed } = input;
+    const ref = seatRef(seed);
+    const binding = { origin: seed.origin, trustIdentity: seed.trustIdentity, cubeId: seed.cubeId };
+    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
+        if (revalidate) {
+            const prior = txn.data.seats[ref];
+            let mismatch;
+            if (expected.kind === 'exact') {
+                const holds = recordMatches(prior, ref, binding) &&
+                    prior.state === 'active' &&
+                    ref === expected.credentialRef &&
+                    (expected.droneId === undefined || prior.droneId === expected.droneId) &&
+                    (expected.sessionDigest === undefined || digestOf(prior.credential) === expected.sessionDigest);
+                mismatch = !holds;
+            }
+            else {
+                // ABSENT: an ACTIVE record holding this seat is a mismatch. A PENDING record
+                // (a lost-response retry / crash-in-gap) is NOT a live binding and is reused
+                // below so the identical bearer is re-sent.
+                mismatch = recordMatches(prior, ref, binding) && prior.state === 'active';
+            }
+            if (mismatch)
+                return { ok: false, reason: 'expectation-mismatch' };
+        }
+        if (scrubBeforeMint) {
+            delete txn.data.seats[ref];
+        }
+        const existing = txn.data.seats[ref];
+        if (recordMatches(existing, ref, binding)) {
+            // Idempotent reuse: re-send the exact bearer the server already digest-bound
+            // (a lost-response retry, a crash-in-gap pending, or an active reattach).
+            return { ok: true, record: existing };
+        }
+        const record = {
+            origin: seed.origin,
+            trustIdentity: seed.trustIdentity,
+            cubeId: seed.cubeId,
+            roleId: seed.roleId,
+            operation: seed.operation,
+            credential: seed.credential,
+            state: 'pending',
+        };
+        txn.data.seats[ref] = record;
+        await txn.commit();
+        return { ok: true, record };
+    });
+}
+/**
  * ATOMIC compare-and-activate + bind (CR#2 + the scope-A collapse). Under ONE
  * flock: the exact pending/active record whose bearer digest matches
  * `expectedPendingDigest` is stamped ACTIVE with the server metadata AND the

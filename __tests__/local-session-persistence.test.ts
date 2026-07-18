@@ -1,18 +1,14 @@
+/**
+ * cubes.getActiveCube hydration over the collapsed single seat store (seats.ts).
+ * The ActiveCube seat map lives wholly in seats.json; getActiveCube composes the
+ * ActiveCube from the ACTIVE bound SeatRecord and hydrates the session bearer via
+ * the SOLE raw-bearer reader (getActiveSeatCredential).
+ */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
-const keychainMocks = vi.hoisted(() => ({
-  getActiveServerSessionCredential: vi.fn(async () => 'k'.repeat(43)),
-  clearServerSessionCredential: vi.fn(async () => {}),
-  // The atomic compare+delete primitive (real atomicity is exercised in
-  // server-session-operation.test.ts); here it is a seam so clearActiveCube's
-  // delegation is testable. Default: the pinned digest matched and was deleted.
-  compareAndClearServerSessionCredential: vi.fn(async () => true),
-}));
-
-vi.mock('../src/config.js', () => keychainMocks);
+import { createHash } from 'node:crypto';
 
 const originalHome = process.env.HOME;
 const originalCwd = process.cwd();
@@ -22,91 +18,77 @@ afterEach(() => {
   process.chdir(originalCwd);
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
-  for (const fixture of fixtures.splice(0)) {
-    rmSync(fixture, { recursive: true, force: true });
-  }
-  keychainMocks.getActiveServerSessionCredential.mockClear();
-  keychainMocks.clearServerSessionCredential.mockClear();
+  for (const fixture of fixtures.splice(0)) rmSync(fixture, { recursive: true, force: true });
   vi.resetModules();
 });
 
-describe('local ActiveCube session persistence', () => {
-  async function setup() {
-    const fixture = mkdtempSync(join(tmpdir(), 'borg-local-session-'));
-    fixtures.push(fixture);
-    const project = join(fixture, 'project');
-    mkdirSync(join(project, '.git'), { recursive: true });
-    process.env.HOME = fixture;
-    process.chdir(project);
-    vi.resetModules();
-    return {
-      fixture,
-      cubes: await import('../src/cubes.js'),
-    };
+const CUBE_ID = '11111111-1111-4111-8111-111111111111';
+const ROLE_ID = '44444444-4444-4444-8444-444444444444';
+const DRONE_ID = '22222222-2222-4222-8222-222222222222';
+const ORIGIN = 'https://localhost:8787';
+const TRUST = 'spki-sha256:test-server';
+const BEARER = 'live-bearer-'.padEnd(43, 'k');
+const digestOf = (s: string) => createHash('sha256').update(s).digest('hex');
+
+async function setup() {
+  const fixture = mkdtempSync(join(tmpdir(), 'borg-local-session-'));
+  fixtures.push(fixture);
+  mkdirSync(join(fixture, 'project', '.git'), { recursive: true });
+  const project = realpathSync(join(fixture, 'project'));
+  process.env.HOME = fixture;
+  process.chdir(project);
+  vi.resetModules();
+  const seats = await import('../src/seats.js');
+  const cubes = await import('../src/cubes.js');
+  return { fixture, project, seats, cubes };
+}
+
+describe('local ActiveCube session persistence (single store)', () => {
+  async function seedActiveSeat(seats: typeof import('../src/seats.js'), worktree: string) {
+    const seat = { origin: ORIGIN, trustIdentity: TRUST, cubeId: CUBE_ID, roleId: ROLE_ID,
+      operation: { projectRoot: worktree, kind: 'seat' as const, operationKey: 'current-worktree' } };
+    await seats.mintPendingSeat({ ...seat, credential: BEARER });
+    expect(await seats.activateAndBindSeat({
+      ...seat, droneId: DRONE_ID, sessionId: '33333333-3333-4333-8333-333333333333',
+      expiresAt: '2026-07-20T00:00:00.000Z', expectedPendingDigest: digestOf(BEARER),
+      worktree, name: 'local-cube', droneLabel: 'builder-1', roleName: 'Drone',
+    })).toBe('activated');
+    return seats.seatRef(seat);
   }
 
-  const localMetadata = {
-    cubeId: '11111111-1111-4111-8111-111111111111',
-    droneId: '22222222-2222-4222-8222-222222222222',
-    name: 'local-cube',
-    droneLabel: 'builder-1',
-    apiUrl: 'https://localhost:8787',
-    serverTrustIdentity: 'spki-sha256:test-server',
-    localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
-    localSessionExpiresAt: '2026-07-14T16:00:00.000Z',
-  };
-
-  it('never writes a local bearer to cubes.json and hydrates it from keychain', async () => {
-    const { fixture, cubes } = await setup();
-    await cubes.setActiveCube({
-      ...localMetadata,
-      sessionToken: 'plaintext-must-not-persist',
+  it('getActiveCube composes the ActiveCube from the active seat and hydrates the bearer', async () => {
+    const { project, seats, cubes } = await setup();
+    const ref = await seedActiveSeat(seats, project);
+    const active = await cubes.getActiveCube();
+    expect(active).toMatchObject({
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'local-cube',
+      droneLabel: 'builder-1',
+      apiUrl: ORIGIN,
+      serverTrustIdentity: TRUST,
+      localSessionCredentialRef: ref,
+      sessionToken: BEARER,
     });
-
-    const persisted = readFileSync(
-      join(fixture, '.config', 'borgmcp', 'cubes.json'),
-      'utf8',
-    );
-    expect(persisted).not.toContain('plaintext-must-not-persist');
-    expect(persisted).toContain(localMetadata.localSessionCredentialRef);
-    vi.resetModules();
-    const restartedCubes = await import('../src/cubes.js');
-    await expect(restartedCubes.getActiveCube()).resolves.toMatchObject({
-      ...localMetadata,
-      sessionToken: 'k'.repeat(43),
-    });
-    // The idempotent bearer is resolved by the opaque per-seat reference alone —
-    // no drone id or generation is required (role + operation live in the record).
-    expect(keychainMocks.getActiveServerSessionCredential).toHaveBeenCalledWith(
-      localMetadata.localSessionCredentialRef,
-      {
-        origin: localMetadata.apiUrl,
-        trustIdentity: localMetadata.serverTrustIdentity,
-        cubeId: localMetadata.cubeId,
-      },
-    );
   });
 
-  it('retires a superseded prior keychain reference when the seat reference changes', async () => {
-    const { fixture, cubes } = await setup();
-    await cubes.setActiveCube(localMetadata);
-    const nextRef = `borg-server-session:${'c'.repeat(64)}`;
-    await cubes.setActiveCube({
-      ...localMetadata,
-      localSessionCredentialRef: nextRef,
+  it('a pending (non-activated) seat is never surfaced as a live ActiveCube', async () => {
+    const { seats, cubes } = await setup();
+    await seats.mintPendingSeat({
+      origin: ORIGIN, trustIdentity: TRUST, cubeId: CUBE_ID, roleId: ROLE_ID,
+      operation: { projectRoot: '/work/repo', kind: 'seat', operationKey: 'current-worktree' },
+      credential: BEARER,
     });
-
-    const persisted = readFileSync(
-      join(fixture, '.config', 'borgmcp', 'cubes.json'),
-      'utf8',
-    );
-    expect(persisted).toContain(nextRef);
-    expect(keychainMocks.clearServerSessionCredential)
-      .toHaveBeenCalledWith(localMetadata.localSessionCredentialRef);
+    expect(await cubes.getActiveCube()).toBeNull();
+    expect(await cubes.hasPersistedActiveCube()).toBe(false);
   });
 
-  // SR-seven (c): the clearActiveCube suite is DELETED with the function — the
-  // scoped-reset / TOCTOU / credential-first behavior it covered now lives in the
-  // reset composite resetLocalSeatBinding, tested against a REAL keychain backend
-  // in reset-local-seat.test.ts.
+  it('the raw bearer never appears in a snapshot observation (digest-only)', async () => {
+    const { project, seats, cubes } = await setup();
+    await seedActiveSeat(seats, project);
+    const snap = await cubes.snapshotLocalSeat();
+    expect(snap).not.toBeNull();
+    expect(snap!.observation).toEqual({ state: 'active', digest: digestOf(BEARER), droneId: DRONE_ID });
+    expect(JSON.stringify(snap)).not.toContain(BEARER);
+  });
 });

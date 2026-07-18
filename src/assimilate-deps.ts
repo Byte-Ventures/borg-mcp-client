@@ -9,6 +9,7 @@
  */
 
 import { spawnSync, spawn as spawnChild } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { hostname as osHostname, homedir as osHomedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
@@ -34,15 +35,12 @@ import {
   sendBorgServerAttach,
 } from './server-handshake.js';
 import {
-  clearPendingServerSession,
-  getOrCreatePendingServerSession,
-  peekServerSessionRecord,
-  type PendingServerSessionRecord,
-  type ServerSessionOperation,
-} from './config.js';
+  observeSeat,
+  prepareSeat,
+  type ActivateSeatOutcome,
+  type SeatOperation as ServerSessionOperation,
+} from './seats.js';
 import {
-  finalizeServerSeatAttachment,
-  prepareServerSeatAttachment,
   readPersistedLocalSeat,
 } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
@@ -138,11 +136,38 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
     getActiveCube: () => cubesGetActive(),
     hasPersistedActiveCube: () => cubesHasPersistedActive(),
     readPersistedLocalSeat: () => readPersistedLocalSeat(),
-    peekServerSessionRecord: (credentialRef, binding) => peekServerSessionRecord(credentialRef, binding),
+    peekServerSessionRecord: async (credentialRef, binding) =>
+      (await observeSeat(credentialRef, binding)).state !== 'absent',
     probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>
       defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
     setActiveCube: (a) => cubesSetActive(a),
-    finalizeServerSeat: (input) => finalizeServerSeatAttachment(input),
+    // Single-store FINALIZE: the merged activate+bind (reached via the injected
+    // `activate` thunk from sendBorgServerAttach) stamps the exact
+    // digest-matched PENDING record ACTIVE and binds the decided worktree in ONE
+    // atomic commit. PREPARE-time revalidation already ran (prepareSeat), so the
+    // only outcomes here are committed or a post-mint activation failure (CR#5:
+    // missing/replaced/throw → the pending record is the rerunnable locator; the
+    // caller PRESERVES the worktree). expectation-mismatch is produced upstream at
+    // PREPARE (result.prepareAborted), never here.
+    finalizeServerSeat: async ({ active, activate }) => {
+      const binding = {
+        worktree: cubesFindProjectRoot(process.cwd()),
+        name: active.name,
+        droneLabel: active.droneLabel,
+        ...(active.roleName !== undefined ? { roleName: active.roleName } : {}),
+        ...(active.roleClass !== undefined ? { roleClass: active.roleClass } : {}),
+        ...(active.isHumanSeat !== undefined ? { isHumanSeat: active.isHumanSeat } : {}),
+      };
+      let outcome: ActivateSeatOutcome;
+      try {
+        outcome = (await activate(binding)) as ActivateSeatOutcome;
+      } catch {
+        return { committed: false, reason: 'activation-failed' };
+      }
+      return outcome === 'activated'
+        ? { committed: true }
+        : { committed: false, reason: 'activation-failed' };
+    },
     findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
 
     // gh#673 P2 (WI-1): project-local SessionStart hook for the launch root.
@@ -240,32 +265,32 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
           throw new Error('Borg server attach operation identity is missing');
         }
         const operation = params.session_operation;
-        const seatBinding = {
+        const trust = await loadBorgServerTrust(apiUrl);
+        if (trust.identity !== serverTrustIdentity) {
+          throw new Error('Borg server trust identity changed; refusing the attach');
+        }
+        // CR #1: MINT under the SINGLE store flock via prepareSeat, which REVALIDATES
+        // the typed prepare-time expectation and mints the PENDING record in one lock
+        // hold — so a reset/writer that wins before PREPARE aborts the attach here
+        // before any credential is created or sent. Eviction-remint discards the
+        // known-invalid saved record (scrubBeforeMint) in the same flock. A fresh
+        // sibling spawn has no in-place binding to revalidate, so it passes
+        // revalidate:false but still mints under the one flock (never a bypass). The
+        // client CSPRNG-generates the bearer here; a lost-response retry / crash-in-gap
+        // is recovered by prepareSeat's idempotent mint-or-reuse (identical bearer).
+        const seed = {
           origin: apiUrl,
           trustIdentity: serverTrustIdentity,
           cubeId: params.cube_id,
           roleId: params.role_id,
           operation,
+          credential: randomBytes(32).toString('base64url'),
         };
-        const trust = await loadBorgServerTrust(apiUrl);
-        if (trust.identity !== serverTrustIdentity) {
-          throw new Error('Borg server trust identity changed; refusing the attach');
-        }
-        // CR #1: MINT under the cube-lock-held composite, which REVALIDATES the
-        // typed prepare-time expectation BEFORE any credential is created or sent —
-        // so a reset/binding writer that wins before PREPARE aborts the attach here,
-        // not only at FINALIZE. Eviction-remint discards the known-invalid saved
-        // bearer as scrubBeforeMint, still under the same cube lock. EVERY mint runs
-        // INSIDE the composite (SR-seven c) — a fresh sibling spawn has no in-place
-        // binding to revalidate against, so it passes revalidate:false but still
-        // mints under the cube lock (never a bypass).
-        const preparedMint = await prepareServerSeatAttachment<PendingServerSessionRecord>({
+        const preparedMint = await prepareSeat({
           expected: params.session_expected ?? { kind: 'absent' },
           revalidate: params.revalidate_at_prepare === true && params.session_expected !== undefined,
-          ...(params.remint_invalid_prior === true
-            ? { scrubBeforeMint: () => clearPendingServerSession(seatBinding) }
-            : {}),
-          mint: () => getOrCreatePendingServerSession(seatBinding),
+          scrubBeforeMint: params.remint_invalid_prior === true,
+          seed,
         });
         if (!preparedMint.ok) {
           return {
@@ -276,10 +301,10 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
             prepareAborted: true,
           };
         }
-        const pending: PendingServerSessionRecord = preparedMint.record;
-        // Network only — the keychain pending→ACTIVE flip is deferred to the
-        // cube-lock-held FINALIZE (finalizeServerSeatAttachment) so the binding
-        // lands BEFORE the credential goes active (Race 2 / ACTIVE-without-binding).
+        const pending = preparedMint.record;
+        // Network only — the pending→ACTIVE flip + worktree BIND are merged into the
+        // single-store activate+bind op, deferred to the FINALIZE thunk so the
+        // binding lands ATOMICALLY WITH activation (ACTIVE-without-binding unreachable).
         const prepared = await sendBorgServerAttach(
           apiUrl,
           serverTrustIdentity,

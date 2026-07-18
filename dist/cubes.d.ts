@@ -15,7 +15,9 @@
  * to know which worker to talk to.
  */
 import { rename, unlink, writeFile } from 'node:fs/promises';
-import { type ServerSessionRecordObservation } from './config.js';
+import { type SeatObservation } from './seats.js';
+/** Re-exported from seats.ts for call-site parity (the retired cross-store name). */
+export type { SeatExpectation as ExpectedBinding } from './seats.js';
 export type BorgCli = 'claude' | 'codex' | 'opencode';
 export interface ActiveCube {
     cubeId: string;
@@ -48,8 +50,6 @@ export interface CodexWakeTargetRecord {
  */
 export declare function findProjectRoot(cwd?: string): string;
 export declare function inboxPathForDrone(cubeId: string, droneId: string): string;
-/** @internal */
-export declare function __setCubesWriteFailureForTest(make: (() => Error) | null): void;
 export declare function atomicWriteFile(filePath: string, data: string, opts?: {
     mode?: number;
     io?: {
@@ -66,16 +66,20 @@ export declare function atomicWriteFile(filePath: string, data: string, opts?: {
  */
 export declare function getActiveCube(): Promise<ActiveCube | null>;
 /**
- * Distinguish a genuinely new worktree from one whose persisted local seat can
- * no longer be hydrated (for example, because its keychain item is missing).
- * No authority-bearing fields are returned through this diagnostic seam.
+ * True iff this worktree has an ACTIVE bound seat in seats.json. In the collapsed
+ * single-store model the credential and the worktree binding are one atomic unit,
+ * so there is no "binding present but credential lost" partial state to diagnose:
+ * an active bound seat always hydrates.
  */
 export declare function hasPersistedActiveCube(): Promise<boolean>;
 /**
- * Set the active cube for the current project. Preserves entries for all
- * other projects.
+ * Legacy binding-only writer. In the collapsed single-store model an ACTIVE seat is
+ * created ONLY by the atomic mint→activate+bind path in seats.ts (driven by the
+ * attach FINALIZE); there is no standalone binding write, and the
+ * severed cloud path has no plaintext session to persist. Retained solely as the
+ * fail-closed cloud/no-finalize branch seam.
  */
-export declare function setActiveCube(active: ActiveCubeInput): Promise<void>;
+export declare function setActiveCube(_active: ActiveCubeInput): Promise<void>;
 export declare function activeCubeWithFreshRegenIdentity(active: ActiveCube, result: {
     cube?: {
         name?: string | null;
@@ -93,18 +97,11 @@ export interface LocalSeatSnapshot {
     droneId: string;
     credentialRef: string;
     worktree: string;
-    /** Token-safe TYPED record observation: active|pending (with digest) or absent
-     *  (CR #3 — a binding+PENDING seat is no longer mislabeled ABSENT). */
-    observation: ServerSessionRecordObservation;
+    /** Token-safe TYPED seat observation: active|pending (with digest) or absent. */
+    observation: SeatObservation;
 }
 export type ResetLocalSeatOutcome = {
     outcome: 'reset';
-    credentialRef: string;
-} | {
-    outcome: 'partial';
-    credentialRef: string;
-} | {
-    outcome: 'repair-required';
     credentialRef: string;
 } | {
     outcome: 'no-binding';
@@ -112,12 +109,9 @@ export type ResetLocalSeatOutcome = {
     outcome: 'changed';
 };
 /**
- * S0 of the ratified client-seat-reset-state-model: snapshot this worktree's
- * exact FULL local-seat binding (incl drone id) plus a token-safe TYPED record
- * observation (active|pending+digest | absent). Read-only — no lock is held past
- * the read, and the authoritative re-check happens under the cube lock in
- * resetLocalSeatBinding. Returns null when this worktree has no LOCAL-server seat
- * to reset (no binding, or a non-local/legacy binding): an honest no-op.
+ * Snapshot this worktree's exact FULL local-seat binding (incl drone id) plus a
+ * token-safe TYPED observation (active + digest | absent). Read-only. Returns null
+ * when this worktree has no ACTIVE bound seat to reset: an honest no-op.
  */
 export declare function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null>;
 export interface PersistedLocalSeat {
@@ -134,88 +128,22 @@ export interface PersistedLocalSeat {
     isHumanSeat?: boolean;
 }
 /**
- * Read the RAW persisted local-server seat for the current worktree WITHOUT
- * hydrating its keychain credential. The crash-in-gap resume path uses this to
- * recover the seat identity (drone id, role, deterministic ref) when
- * getActiveCube() returns null purely because the credential is still PENDING
- * (non-hydratable) after the composite FINALIZE wrote the binding but a
- * crash/throw preceded the pending→ACTIVE flip. Returns null when this worktree
- * has no complete local-server binding — a genuine keychain loss stays a
- * truthful error and never becomes a new seat.
+ * Read the RAW persisted ACTIVE local-server seat for the current worktree. Used
+ * by the crash-in-gap resume path to recover the seat identity. In the collapsed
+ * single store a crash-in-gap PENDING record carries no worktree binding and is
+ * resumed automatically by prepareSeat's idempotent mint-or-reuse (the identical
+ * bearer is re-sent), so this returns null for that case; a genuine absence is
+ * likewise null and a fresh enroll mints correctly (no partial-loss error exists).
  */
 export declare function readPersistedLocalSeat(): Promise<PersistedLocalSeat | null>;
 /**
- * S2/S3 of the ratified client-seat-reset-state-model. Re-acquires the cube
- * write lock (OUTER; the keychain lock is only ever taken INNER via the config
- * clear/observe wrappers — never a keychain→cube inversion), re-checks the FULL
- * binding (incl drone id, CR #3) plus the typed record observation, and commits
- * only when everything STILL matches the exact snapshot. Any change / missing /
- * same-ref replacement is an honest no-op ('changed'). Ordering is
- * CREDENTIAL-FIRST: the exact matching record — ACTIVE **or** PENDING — is
- * deleted before the cubes binding is removed, so the only surviving intermediate
- * state is binding-present/credential-absent — safe, rerunnable, truthful.
- * Failure states are typed (CR #4): 'partial' (credential gone, binding removal
- * fs-failed → rerun converges) and 'repair-required' (delete-throw readback could
- * not confirm the credential gone).
+ * Reset this worktree's seat: delegate to the single-store resetSeatForWorktree,
+ * which under ONE flock re-checks the exact FULL binding (ref + drone id, CR #3)
+ * plus the token-safe observation and DELETES the whole record — credential AND
+ * binding vanish together in one commit. Any drift / missing / same-ref digest
+ * replacement is an honest no-op ('changed'); no cross-store 'partial' exists.
  */
 export declare function resetLocalSeatBinding(expected: LocalSeatSnapshot): Promise<ResetLocalSeatOutcome>;
-/**
- * Typed prepare-time expectation for the composite attach FINALIZE (ratified
- * client-seat-reset-state-model clause 3). REATTACH declares EXACT — the exact
- * prior live binding must still hold at commit time (its ref, and when a live
- * bearer is being preserved, its digest). FIRST-ENROLL (and a fresh sibling
- * seat) declares ABSENT — no binding may have appeared. A self-remint after an
- * authoritative eviction declares EXACT with the ref only (the bearer is
- * intentionally replaced, so no digest is pinned).
- */
-export type ExpectedBinding = {
-    kind: 'exact';
-    credentialRef: string;
-    droneId?: string;
-    sessionDigest?: string;
-} | {
-    kind: 'absent';
-};
-export interface FinalizeServerSeatInput {
-    /** The full worktree binding to persist (must carry the local-server trust +
-     *  the localSessionCredentialRef of the exact PENDING record). */
-    active: ActiveCubeInput;
-    /** Typed expectation declared at PREPARE. */
-    expected: ExpectedBinding;
-    /** The single keychain pending→ACTIVE transition — run LAST, after the binding. */
-    activate: () => Promise<unknown>;
-    /** Compare-and-scrub the caller's OWN pending record on abort (never an ACTIVE
-     *  record, never a same-ref replacement). */
-    scrubPending: () => Promise<unknown>;
-}
-export type PrepareServerSeatOutcome<R> = {
-    ok: true;
-    record: R;
-} | {
-    ok: false;
-    reason: 'expectation-mismatch';
-};
-/**
- * PREPARE-time revalidation + mint under the cube lock (CR #1 / SR-seven (c) — the
- * composite is the SOLE prepare authority, so EVERY mint (and eviction-remint
- * scrub) happens INSIDE the cube lock; no mint runs outside it). For an IN-PLACE
- * attach (`revalidate: true`) the typed expectation is checked against the current
- * worktree binding and a reset/writer that won BEFORE the mint aborts the attach
- * before any credential is created or sent. A sibling spawn (`revalidate: false`)
- * has no prior binding at its not-yet-created target key, so there is nothing to
- * revalidate — but it STILL mints under the cube lock (never a bypass). The cube
- * lock is held OUTER across revalidate → optional scrub → mint; the keychain lock
- * is taken INNER by the injected scrubBeforeMint()/mint() config wrappers (no
- * inversion). On an expectation mismatch NOTHING is minted or scrubbed.
- */
-export declare function prepareServerSeatAttachment<R>(input: {
-    expected: ExpectedBinding;
-    /** Default true. When false (a fresh sibling), the mint still runs under the
-     *  cube lock but no expectation is revalidated (no prior binding to race). */
-    revalidate?: boolean;
-    scrubBeforeMint?: () => Promise<unknown>;
-    mint: () => Promise<R>;
-}): Promise<PrepareServerSeatOutcome<R>>;
 export type FinalizeServerSeatOutcome = {
     committed: true;
 } | {
@@ -226,41 +154,11 @@ export type FinalizeServerSeatOutcome = {
     reason: 'activation-failed';
 };
 /**
- * COMPOSITE cube-owned FINALIZE closing Race 2 on the attach path (ratified
- * client-seat-reset-state-model clause 3). The CUBE write lock is held OUTER and
- * CONTINUOUSLY across revalidate → write-binding → activate; the keychain lock is
- * only ever taken INNER, inside the injected activate()/scrubPending() config
- * wrappers (never a keychain→cube inversion). The network POST already happened
- * between PREPARE and this call, with the cube lock released.
- *
- * REVALIDATE the current worktree binding against the typed expectation:
- *   EXACT  — the prior binding must still exist with the exact same ref (and, when
- *            a digest is pinned, the live bearer's digest must still match — an
- *            absent/same-ref-replaced credential is a mismatch);
- *   ABSENT — no binding may have appeared.
- * Any mismatch = ABORT: compare-and-scrub ONLY the caller's own pending record,
- * never a silent recreate (this is the exact PREPARE-paused → offline-reset-commits
- * → FINALIZE-aborts shape — the reset stays complete, no orphan is minted).
- *
- * On match, FINALIZE is BINDING-FIRST: persist the cubes binding referencing the
- * exact PENDING record FIRST, THEN the single keychain pending→ACTIVE transition
- * LAST. The invariant "ACTIVE credential without a binding" is UNREACHABLE in
- * every crash/interleave order; the only surviving intermediate is
- * binding-present/credential-PENDING — non-hydratable (getActiveServerSessionCredential
- * requires state=='active'), retry-safe, and truthful. An activate() throw
- * leaves exactly that state (the binding stays written); re-running PREPARE+FINALIZE
- * converges.
- */
-export declare function finalizeServerSeatAttachment(input: FinalizeServerSeatInput): Promise<FinalizeServerSeatOutcome>;
-/**
- * Metadata-only refresh (cube name / drone label / role display) for the CURRENT
- * worktree's existing binding. Deliberately CANNOT alter the seat reference,
- * identity, or credential binding: it reads the persisted entry, overlays ONLY
- * the display fields, and rewrites — localSessionCredentialRef, cubeId, droneId,
- * apiUrl, and serverTrustIdentity are taken verbatim from the PERSISTED entry,
- * never from the argument. A no-op when this worktree has no binding, so a stale
- * regen identity can never resurrect or mutate a seat ref. (Part D: split from
- * the seat-ref/binding commit path setActiveCube / finalizeServerSeatAttachment.)
+ * Metadata-only refresh (cube name / drone label / role display) of the CURRENT
+ * worktree's ACTIVE seat — delegates to seats.ts refreshSeatMetadata, which CANNOT
+ * alter the credential, ref, identity, or worktree binding. A no-op when this
+ * worktree has no active seat, so a stale regen identity can never resurrect or
+ * mutate a seat ref.
  */
 export declare function refreshActiveCubeMetadata(active: ActiveCubeInput): Promise<void>;
 export declare function getProjectCliPreference(): Promise<BorgCli | null>;
@@ -271,10 +169,9 @@ export declare function getProjectCliPreference(): Promise<BorgCli | null>;
  */
 export declare function getProjectCliPreferenceForPath(dir: string): Promise<BorgCli | null>;
 /**
- * gh#556 Part 2 — returns all persisted project identities from cubes.json.
- * Used by `borg launch-all` to enumerate drones across all known worktrees
- * (scheme-agnostic — covers both old sibling paths and new ~/.borg paths).
- * Returns an empty array if the file is absent or malformed.
+ * gh#556 Part 2 — returns all persisted project identities from the seat store.
+ * Used by `borg launch-all` to enumerate drones across all known worktrees.
+ * Returns an empty array when no ACTIVE bound seats exist.
  */
 export declare function readAllProjectIdentities(): Promise<Array<{
     projectPath: string;

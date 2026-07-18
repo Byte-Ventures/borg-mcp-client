@@ -93,7 +93,67 @@ export declare function mintPendingSeat(input: {
     operation: SeatOperation;
     credential: string;
 }): Promise<SeatRecord>;
+/**
+ * Typed prepare-time expectation for the single-store attach (CR#1). EXACT — the
+ * exact prior ACTIVE record must STILL hold at prepare time (its ref, and, when
+ * pinned, its drone id and its live-bearer digest). ABSENT — no ACTIVE record may
+ * hold this seat (a fresh enroll / a fresh sibling seat). Field name `credentialRef`
+ * is kept for call-site parity with the retired cross-store ExpectedBinding.
+ */
+export type SeatExpectation = {
+    kind: 'exact';
+    credentialRef: string;
+    droneId?: string;
+    sessionDigest?: string;
+} | {
+    kind: 'absent';
+};
+export type PrepareSeatOutcome = {
+    ok: true;
+    record: SeatRecord;
+} | {
+    ok: false;
+    reason: 'expectation-mismatch';
+};
+/**
+ * CR#1 PREPARE-time abort in the single-store model. Under ONE store flock:
+ * REVALIDATE the typed expectation against the record currently at the seat ref
+ * (EXACT: the exact prior ACTIVE record must still hold — ref, optional drone id,
+ * optional live-bearer digest; ABSENT: no ACTIVE record may hold this seat), then
+ * — only if it holds — MINT the pending record in the SAME lock hold. A pre-existing
+ * valid record (pending from a lost-response retry, or the active record being
+ * reattached) is REUSED so the identical bearer is re-sent. `scrubBeforeMint`
+ * discards a known-invalid saved record (eviction remint) before minting, still
+ * under the one flock. On a mismatch NOTHING is minted or scrubbed (abort).
+ */
+export declare function prepareSeat(input: {
+    expected: SeatExpectation;
+    /** Default true. When false (a fresh sibling target key that cannot yet hold a
+     *  record) the mint runs under the flock but no expectation is revalidated. */
+    revalidate?: boolean;
+    /** Eviction remint: delete the known-invalid saved record for this seat BEFORE
+     *  minting a fresh bearer, still inside the one flock. */
+    scrubBeforeMint?: boolean;
+    seed: {
+        origin: string;
+        trustIdentity: string;
+        cubeId: string;
+        roleId: string;
+        operation: SeatOperation;
+        credential: string;
+    };
+}): Promise<PrepareSeatOutcome>;
 export type ActivateSeatOutcome = 'activated' | 'missing' | 'replaced';
+/** The worktree binding + display supplied at FINALIZE (known only once the target
+ *  worktree is decided). Merged atomically with activation by activateAndBindSeat. */
+export interface SeatBinding {
+    worktree: string;
+    name: string;
+    droneLabel: string;
+    roleName?: string;
+    roleClass?: 'queen' | 'worker';
+    isHumanSeat?: boolean;
+}
 /**
  * ATOMIC compare-and-activate + bind (CR#2 + the scope-A collapse). Under ONE
  * flock: the exact pending/active record whose bearer digest matches

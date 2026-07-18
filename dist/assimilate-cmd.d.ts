@@ -4,6 +4,7 @@ import type { BorgCli } from './cubes.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { ServerSessionOperation } from './config.js';
 import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } from './cubes.js';
+import type { SeatBinding } from './seats.js';
 import { type LaunchApprovalDecision } from './cli-tool-approval.js';
 export interface AssimilateFlags {
     worktree?: string;
@@ -43,7 +44,7 @@ export interface AssimilateResult {
     };
     result?: 'created' | 'reused';
     finalize?: {
-        activate: () => Promise<unknown>;
+        activate: (binding: SeatBinding) => Promise<unknown>;
         scrubPending: () => Promise<unknown>;
     };
     prepareAborted?: boolean;
@@ -104,12 +105,12 @@ export interface AssimilateDeps {
     /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
      *  typed expectation, persist the binding FIRST, then run `activate` (keychain
      *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and
-     *  report an honest abort. Wired to cubes.finalizeServerSeatAttachment in
+     *  report an honest abort. Wired to the merged activate+bind FINALIZE in
      *  production; absent from unit stubs that fully mock `assimilate`. */
     finalizeServerSeat?: (input: {
         active: ActiveCube;
         expected: ExpectedBinding;
-        activate: () => Promise<unknown>;
+        activate: (binding: SeatBinding) => Promise<unknown>;
         scrubPending: () => Promise<unknown>;
     }) => Promise<FinalizeServerSeatOutcome>;
     findProjectRoot: (cwd: string) => string;

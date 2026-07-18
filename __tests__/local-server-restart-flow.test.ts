@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,8 +17,9 @@ afterEach(() => {
 describe('local owner enrollment to restart flow', () => {
   it('enrolls, creates, attaches, restarts, then uses local log and SSE without Cloud', async () => {
     const fixture = mkdtempSync(join(tmpdir(), 'borg-local-restart-'));
-    const project = join(fixture, 'project');
-    mkdirSync(join(project, '.git'), { recursive: true });
+    mkdirSync(join(fixture, 'project', '.git'), { recursive: true });
+    // Realpath so the worktree binding matches findProjectRoot() (macOS symlink).
+    const project = realpathSync(join(fixture, 'project'));
     process.env.HOME = fixture;
     process.chdir(project);
 
@@ -147,49 +149,33 @@ describe('local owner enrollment to restart flow', () => {
         { fetchImpl: fetchImpl as typeof fetch },
       );
       expect(created).toMatchObject({ cube_id: cubeId, default_worker_role_id: roleId });
-      // The composite path: mint the pending bearer under the keychain lock (as
-      // cubes.prepareServerSeatAttachment does), send it, then activate it.
-      const pending = await config.getOrCreatePendingServerSession({
-        origin, trustIdentity, cubeId, roleId, operation,
-      });
+      // Single-store path: mint the pending bearer (prepareSeat/mint), send it, then
+      // the merged activate+bind stamps ACTIVE + binds the worktree in ONE commit.
+      const seats = await import('../src/seats.js');
+      const bearer = randomBytes(32).toString('base64url');
+      await seats.mintPendingSeat({ origin, trustIdentity, cubeId, roleId, operation, credential: bearer });
       const prepared = await sendBorgServerAttach(
         origin,
         trustIdentity,
         enrolled.token,
         { cubeId, roleId, operation },
-        pending.credential,
+        bearer,
         { fetchImpl: fetchImpl as typeof fetch },
       );
-      const credentialRef = await prepared.activate();
-      const attached = {
-        cube: prepared.cube,
-        role: prepared.role,
-        drone: prepared.drone,
-        session: { credentialRef, expiresAt: prepared.session.expiresAt },
-      };
-      // The bearer is client-generated and persisted in the keychain; the client
-      // never learns it from the server. Read it back for the post-restart checks.
-      const bearer = await config.getActiveServerSessionCredential(
-        attached.session.credentialRef,
-        { origin, trustIdentity, cubeId },
-      );
-      expect(bearer).toMatch(/^[A-Za-z0-9_-]{43,}$/);
-      const cubes = await import('../src/cubes.js');
-      await cubes.setActiveCube({
-        cubeId,
-        droneId,
-        name: attached.cube.name,
-        droneLabel: attached.drone.label,
-        apiUrl: origin,
-        serverTrustIdentity: trustIdentity,
-        localSessionCredentialRef: attached.session.credentialRef,
-        localSessionExpiresAt: attached.session.expiresAt,
-        roleName: attached.role.name,
+      const outcome = await prepared.activate({
+        worktree: project,
+        name: prepared.cube.name,
+        droneLabel: prepared.drone.label,
+        roleName: prepared.role.name,
+        ...(prepared.role.role_class ? { roleClass: prepared.role.role_class } : {}),
+        ...(prepared.role.is_human_seat !== undefined ? { isHumanSeat: prepared.role.is_human_seat } : {}),
       });
-
-      const persisted = readFileSync(join(fixture, '.config', 'borgmcp', 'cubes.json'), 'utf8');
-      expect(persisted).not.toContain(bearer);
-      expect(persisted).toContain(attached.session.credentialRef);
+      expect(outcome).toBe('activated');
+      const credentialRef = prepared.credentialRef;
+      // The bearer rests only in the 0600 seat store; hydrate it back via the sole
+      // raw-bearer reader for the post-restart checks.
+      const hydrated = await seats.getActiveSeatCredential(credentialRef, { origin, trustIdentity, cubeId });
+      expect(hydrated).toBe(bearer);
 
       vi.resetModules();
       const restartedConfig = await import('../src/config.js');

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
   DEFAULT_LOCAL_SERVER_ORIGIN,
@@ -12,12 +12,18 @@ import {
 } from '../src/server-handshake.js';
 import {
   __setServerCredentialBackendForTest,
-  clearPendingServerSession,
-  getOrCreatePendingServerSession,
-  serverSessionCredentialRef,
 } from '../src/config.js';
+import {
+  clearSeat,
+  mintPendingSeat,
+  seatRef,
+  type SeatBinding,
+} from '../src/seats.js';
 import type { TokenBackend } from '../src/token-store.js';
 import type { ServerSessionOperation } from '../src/config.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
@@ -38,6 +44,14 @@ const SEAT_INPUT = {
   operation: OPERATION,
 };
 const digestOf = (bearer: string) => createHash('sha256').update(bearer).digest('hex');
+// The worktree binding + display supplied at FINALIZE (activate+bind).
+const BINDING: SeatBinding = {
+  worktree: '/work/project-one',
+  name: 'local-cube',
+  droneLabel: 'builder-1',
+  roleName: 'Builder',
+  roleClass: 'worker',
+};
 
 // The credential-free protocol preflight returns ONLY the exact tag.
 const tagPreflightBody = () =>
@@ -526,8 +540,8 @@ describe('self-hosted server handshake', () => {
         session: { id: SESSION_ID, expires_at: expiresAt },
       },
     }), { status: 201 }));
-    const activateSession = vi.fn(async () => 'activated' as const);
-    const expectedRef = serverSessionCredentialRef(SEAT_INPUT);
+    const activateAndBind = vi.fn(async () => 'activated' as const);
+    const expectedRef = seatRef(SEAT_INPUT);
 
     const prepared = await sendBorgServerAttach(
       'https://server.example.com',
@@ -535,7 +549,7 @@ describe('self-hosted server handshake', () => {
       'p'.repeat(43),
       { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
       bearer,
-      { fetchImpl: fetchImpl as typeof fetch, activateSession },
+      { fetchImpl: fetchImpl as typeof fetch, activateAndBind },
     );
     expect(prepared).toMatchObject({
       result: 'created',
@@ -543,8 +557,8 @@ describe('self-hosted server handshake', () => {
       credentialRef: expectedRef,
       session: { sessionId: SESSION_ID, expiresAt },
     });
-    // activate() (the composite's LAST step) returns the deterministic ref.
-    await expect(prepared.activate()).resolves.toBe(expectedRef);
+    // activate(binding) (the FINALIZE merged activate+bind) returns the typed outcome.
+    await expect(prepared.activate(BINDING)).resolves.toBe('activated');
 
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://server.example.com/api/client/attach');
@@ -559,7 +573,7 @@ describe('self-hosted server handshake', () => {
       protocol_version: '2',
       payload: { cube_id: CUBE_ID, role_id: ROLE_ID, session_credential: bearer },
     });
-    expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({
+    expect(activateAndBind).toHaveBeenCalledWith(expect.objectContaining({
       origin: 'https://server.example.com',
       trustIdentity: 'spki-sha256:server-a',
       cubeId: CUBE_ID,
@@ -571,10 +585,14 @@ describe('self-hosted server handshake', () => {
       // CR #2: the EXACT bearer sent is pinned by digest so a same-ref replacement
       // cannot be activated with this response's server metadata.
       expectedPendingDigest: digestOf(bearer),
+      // The worktree binding + display land atomically WITH activation.
+      worktree: BINDING.worktree,
+      name: BINDING.name,
+      droneLabel: BINDING.droneLabel,
     }));
   });
 
-  it('CR #2: activate() never binds server metadata onto a same-ref replacement — `replaced`/`missing` aborts', async () => {
+  it('CR #2: activate(binding) never binds server metadata onto a same-ref replacement — returns typed `replaced`/`missing`', async () => {
     const fetchImpl = () => vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',
       request_id: 'attach-r',
@@ -591,15 +609,16 @@ describe('self-hosted server handshake', () => {
         'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
         { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
         's'.repeat(43),
-        { fetchImpl: fetchImpl() as typeof fetch, activateSession: vi.fn(async () => outcome) },
+        { fetchImpl: fetchImpl() as typeof fetch, activateAndBind: vi.fn(async () => outcome) },
       );
-      return prepared.activate();
+      return prepared.activate(BINDING);
     };
-    await expect(activateWith('replaced')).rejects.toThrow(/replaced.*no server metadata was bound/i);
-    await expect(activateWith('missing')).rejects.toThrow(/missing.*no server metadata was bound/i);
+    // The merged activate+bind fails CLOSED with a typed outcome (never throws for a race).
+    await expect(activateWith('replaced')).resolves.toBe('replaced');
+    await expect(activateWith('missing')).resolves.toBe('missing');
   });
 
-  it('activate() surfaces a keychain failure (the composite FINALIZE leaves binding+PENDING)', async () => {
+  it('activate(binding) surfaces a store failure (the FINALIZE leaves the PENDING record)', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',
       request_id: 'attach-response-2',
@@ -615,9 +634,9 @@ describe('self-hosted server handshake', () => {
       'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
       { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
       's'.repeat(43),
-      { fetchImpl: fetchImpl as typeof fetch, activateSession: vi.fn(async () => { throw new Error('keychain locked'); }) },
+      { fetchImpl: fetchImpl as typeof fetch, activateAndBind: vi.fn(async () => { throw new Error('store locked'); }) },
     );
-    await expect(prepared.activate()).rejects.toThrow('keychain locked');
+    await expect(prepared.activate(BINDING)).rejects.toThrow('store locked');
   });
 
   it('redacts the session bearer and response body from attach failures', async () => {
@@ -661,22 +680,32 @@ describe('self-hosted server handshake', () => {
 });
 
 // SR-seven (a): even on the NO-EXPECTATION-DIGEST attach paths (first-enroll
-// ABSENT, resume/remint EXACT-ref-only), the atomic compare-and-activate is still
-// digest-guarded by the SENT bearer's digest. These REAL-backend integration
-// tests drive the full sendBorgServerAttach → prepared.activate() (real
-// compareAndActivatePendingServerSession) and swap/delete the record between send
-// and activate, proving it fails closed (replaced/missing) with no expectation
-// digest anywhere in play.
+// ABSENT, resume/remint EXACT-ref-only), the merged activate+bind is still
+// digest-guarded by the SENT bearer's digest. These REAL single-store integration
+// tests drive the full sendBorgServerAttach → prepared.activate(binding) (real
+// activateAndBindSeat) and swap/delete the record between send and activate,
+// proving it fails closed (replaced/missing) with no expectation digest in play.
 describe('sendBorgServerAttach real activate fails closed with NO expectation digest (SR-seven a)', () => {
   const ORIGIN = 'https://server.example.com';
   const TRUST = 'sha256:server-a';
   const SEAT = { origin: ORIGIN, trustIdentity: TRUST, cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION };
 
-  function memoryBackend(): { backend: TokenBackend; values: Map<string, string> } {
-    const values = new Map<string, string>();
-    return { values, backend: { name: 'keychain', get: async (a) => values.get(a) ?? null, set: async (a, v) => { values.set(a, v); }, delete: async (a) => { values.delete(a); } } };
-  }
-  afterEach(() => __setServerCredentialBackendForTest(null));
+  const originalHome = process.env.HOME;
+  const homeFixtures: string[] = [];
+  let seats: typeof import('../src/seats.js');
+  beforeEach(async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'borg-sh-seat-'));
+    homeFixtures.push(dir);
+    process.env.HOME = dir;
+    vi.resetModules();
+    seats = await import('../src/seats.js');
+  });
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    for (const f of homeFixtures.splice(0)) rmSync(f, { recursive: true, force: true });
+    vi.resetModules();
+  });
 
   const attachOk = () => vi.fn(async () => new Response(JSON.stringify({
     protocol_version: '2', request_id: 'attach-resp',
@@ -690,31 +719,27 @@ describe('sendBorgServerAttach real activate fails closed with NO expectation di
   }), { status: 200 }));
 
   it('REPLACED: a same-ref replacement between send and activate is never activated (no expectation digest)', async () => {
-    const { backend } = memoryBackend();
-    __setServerCredentialBackendForTest(backend);
-    const pending = await getOrCreatePendingServerSession(SEAT);
+    const pending = await seats.mintPendingSeat({ ...SEAT, credential: 'original-'.padEnd(43, 'a') });
     const prepared = await sendBorgServerAttach(
       ORIGIN, TRUST, 'p'.repeat(43), { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
-      pending.credential, { fetchImpl: attachOk() as typeof fetch },
+      pending.credential, { fetchImpl: attachOk() as typeof fetch, activateAndBind: seats.activateAndBindSeat },
     );
     // Between send and activate, the record is swapped for a FRESH bearer (a
     // reset+re-enroll under the same deterministic ref) — no digest is pinned in
     // the expectation; the SENT bearer's digest is the only guard.
-    await clearPendingServerSession(SEAT);
-    const fresh = await getOrCreatePendingServerSession(SEAT);
+    await seats.clearSeat(seats.seatRef(SEAT));
+    const fresh = await seats.mintPendingSeat({ ...SEAT, credential: 'fresh-'.padEnd(43, 'q') });
     expect(fresh.credential).not.toBe(pending.credential);
-    await expect(prepared.activate()).rejects.toThrow(/replaced.*no server metadata was bound/i);
+    await expect(prepared.activate(BINDING)).resolves.toBe('replaced');
   });
 
   it('MISSING: a record deleted between send and activate is never activated (no expectation digest)', async () => {
-    const { backend } = memoryBackend();
-    __setServerCredentialBackendForTest(backend);
-    const pending = await getOrCreatePendingServerSession(SEAT);
+    const pending = await seats.mintPendingSeat({ ...SEAT, credential: 'original-'.padEnd(43, 'a') });
     const prepared = await sendBorgServerAttach(
       ORIGIN, TRUST, 'p'.repeat(43), { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
-      pending.credential, { fetchImpl: attachOk() as typeof fetch },
+      pending.credential, { fetchImpl: attachOk() as typeof fetch, activateAndBind: seats.activateAndBindSeat },
     );
-    await clearPendingServerSession(SEAT); // a concurrent reset won
-    await expect(prepared.activate()).rejects.toThrow(/missing.*no server metadata was bound/i);
+    await seats.clearSeat(seats.seatRef(SEAT)); // a concurrent reset won
+    await expect(prepared.activate(BINDING)).resolves.toBe('missing');
   });
 });

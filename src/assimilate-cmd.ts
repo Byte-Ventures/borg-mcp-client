@@ -46,6 +46,7 @@ import { BorgServerError } from './server-errors.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { ServerSessionOperation } from './config.js';
 import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } from './cubes.js';
+import type { SeatBinding } from './seats.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs, type LaunchApprovalDecision } from './cli-tool-approval.js';
 
@@ -101,7 +102,7 @@ export interface AssimilateResult {
   // run by Step 8 under the cube lock AFTER the binding is persisted. Absent for
   // the (severed) cloud path and for unit stubs that fully mock `assimilate`.
   finalize?: {
-    activate: () => Promise<unknown>;
+    activate: (binding: SeatBinding) => Promise<unknown>;
     scrubPending: () => Promise<unknown>;
   };
   // CR #1: set when the cube-lock-held PREPARE revalidation aborted BEFORE any
@@ -190,12 +191,12 @@ export interface AssimilateDeps {
   /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
    *  typed expectation, persist the binding FIRST, then run `activate` (keychain
    *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and
-   *  report an honest abort. Wired to cubes.finalizeServerSeatAttachment in
+   *  report an honest abort. Wired to the merged activate+bind FINALIZE in
    *  production; absent from unit stubs that fully mock `assimilate`. */
   finalizeServerSeat?: (input: {
     active: ActiveCube;
     expected: ExpectedBinding;
-    activate: () => Promise<unknown>;
+    activate: (binding: SeatBinding) => Promise<unknown>;
     scrubPending: () => Promise<unknown>;
   }) => Promise<FinalizeServerSeatOutcome>;
   findProjectRoot: (cwd: string) => string;
@@ -863,7 +864,7 @@ export async function runAssimilate(
         // RESUME: reuse the persisted role (the ref binds the role, so a resume
         // MUST re-derive the exact same account) and let FINALIZE converge with an
         // EXACT-ref expectation. The seat operation is the in-place current-worktree
-        // seat (wantSibling is false here), so getOrCreatePendingServerSession
+        // seat (wantSibling is false here), so prepareSeat's idempotent mint-or-reuse
         // re-resolves the existing pending record and re-sends the identical bearer.
         savedLocalRole = resumeRole;
         resumeCredentialRef = persisted.localSessionCredentialRef;

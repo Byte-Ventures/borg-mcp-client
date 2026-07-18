@@ -518,7 +518,7 @@ export async function runAssimilate(args, deps) {
                 // RESUME: reuse the persisted role (the ref binds the role, so a resume
                 // MUST re-derive the exact same account) and let FINALIZE converge with an
                 // EXACT-ref expectation. The seat operation is the in-place current-worktree
-                // seat (wantSibling is false here), so getOrCreatePendingServerSession
+                // seat (wantSibling is false here), so prepareSeat's idempotent mint-or-reuse
                 // re-resolves the existing pending record and re-sends the identical bearer.
                 savedLocalRole = resumeRole;
                 resumeCredentialRef = persisted.localSessionCredentialRef;

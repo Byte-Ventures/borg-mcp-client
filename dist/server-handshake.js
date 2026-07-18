@@ -1,6 +1,7 @@
 import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, createAttachRequestEnvelope, createProtocolEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, ErrorCode, } from 'borgmcp-shared/protocol';
 import { createHash, randomUUID } from 'node:crypto';
-import { activatePendingServerEnrollment, compareAndActivatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, serverSessionCredentialRef, } from './config.js';
+import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, } from './config.js';
+import { activateAndBindSeat, scrubPendingSeat, seatRef, } from './seats.js';
 import { BorgServerError } from './server-errors.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { loadBorgServerTrust, } from './server-trust.js';
@@ -84,11 +85,10 @@ export async function preflightBorgServerTag(origin, fetchImpl = fetch) {
 }
 /**
  * The NETWORK-ONLY half of an attach: POST the ALREADY-MINTED pending bearer and
- * decode, WITHOUT minting (the mint is owned by the cube-lock-held
- * prepareServerSeatAttachment composite, CR #1). Returns the deferred
- * activate/scrubPending handles for the cube-lock-held FINALIZE. The composite
- * production path uses this after minting under the cube lock; the legacy
- * prepareBorgServerAttach wrapper mints then delegates here.
+ * decode, WITHOUT minting (the mint is owned by the single-store prepareSeat, CR#1).
+ * Returns the deferred activate/scrubPending handles: FINALIZE calls `activate`
+ * with the decided worktree binding, and activateAndBindSeat stamps ACTIVE + binds
+ * the worktree in ONE atomic commit (activate+bind merged — no cross-store gap).
  */
 export async function sendBorgServerAttach(origin, trustIdentity, parentCredential, request, pendingBearer, deps = {}) {
     if (!UUID_RE.test(request.cubeId) || !UUID_RE.test(request.roleId)) {
@@ -166,7 +166,7 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
             roleId: request.roleId,
             operation: request.operation,
         };
-        const credentialRef = (deps.sessionCredentialRef ?? serverSessionCredentialRef)(seatInput);
+        const credentialRef = (deps.sessionCredentialRef ?? seatRef)(seatInput);
         const pendingBearerDigest = createHash('sha256').update(pending.credential).digest('hex');
         return {
             cube: decoded.cube,
@@ -179,29 +179,29 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
             result: decoded.result,
             credentialRef,
             pendingBearerDigest,
-            // The single keychain pending→ACTIVE flip — invoked LAST by the FINALIZE
-            // composite, after the cubes binding is persisted, under the cube lock.
-            // ATOMIC compare-and-activate (CR #2): stamps server metadata ONLY onto the
-            // EXACT pending record whose bearer we sent (digest-matched). A same-ref
-            // replacement or a concurrent delete aborts activation — never binds bearer
-            // A's server session onto bearer B.
-            activate: async () => {
-                const outcome = await (deps.activateSession ?? compareAndActivatePendingServerSession)({
-                    ...seatInput,
-                    droneId: decoded.drone.id,
-                    sessionId: decoded.session.id,
-                    expiresAt: decoded.session.expires_at,
-                    expectedPendingDigest: pendingBearerDigest,
-                });
-                if (outcome !== 'activated') {
-                    throw new Error(`Borg server session activation aborted: the exact pending record was ${outcome} ` +
-                        '(a concurrent reset or same-ref replacement); no server metadata was bound.');
-                }
-                return credentialRef;
-            },
+            // The single-store ATOMIC activate+bind — invoked by FINALIZE with the decided
+            // worktree binding. Stamps server metadata + the worktree binding ONLY onto the
+            // EXACT pending record whose bearer we sent (digest-matched), in ONE commit. A
+            // same-ref replacement or a concurrent delete aborts (`replaced`/`missing`) —
+            // never binds bearer A's server session onto bearer B, and never leaves an
+            // ACTIVE credential without a binding (they land together).
+            activate: (binding) => (deps.activateAndBind ?? activateAndBindSeat)({
+                ...seatInput,
+                droneId: decoded.drone.id,
+                sessionId: decoded.session.id,
+                expiresAt: decoded.session.expires_at,
+                expectedPendingDigest: pendingBearerDigest,
+                worktree: binding.worktree,
+                name: binding.name,
+                droneLabel: binding.droneLabel,
+                ...(binding.roleName !== undefined ? { roleName: binding.roleName } : {}),
+                ...(binding.roleClass !== undefined ? { roleClass: binding.roleClass } : {}),
+                ...(binding.isHumanSeat !== undefined ? { isHumanSeat: binding.isHumanSeat } : {}),
+            }),
             // Abort-scrub of ONLY this own pending record (never an ACTIVE record, never
-            // a same-ref replacement) — invoked by FINALIZE on an expectation mismatch.
-            scrubPending: () => (deps.scrubPending ?? compareAndClearPendingServerSession)(credentialRef, { origin, trustIdentity, cubeId: request.cubeId }, pendingBearerDigest),
+            // a same-ref replacement) — invoked when the server did not honor the
+            // reattach/remint intent.
+            scrubPending: () => (deps.scrubPending ?? scrubPendingSeat)(credentialRef, { origin, trustIdentity, cubeId: request.cubeId }, pendingBearerDigest),
         };
     }
     finally {
@@ -212,7 +212,7 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
 // and the activate-first no-binding wrapper (attachBorgServer) are DELETED — there is
 // no code path, not even test-only, that mints/sends a session_credential outside the
 // cube-owned composite. The ONLY session-credential send is sendBorgServerAttach, driven
-// by assimilate-deps AFTER cubes.prepareServerSeatAttachment has minted under the cube lock.
+// by assimilate-deps AFTER prepareSeat has minted under the single store flock.
 /**
  * Redeem one invitation after the caller has verified TLS and derived the
  * stable server/CA identity. The client-generated bearer + retry key are

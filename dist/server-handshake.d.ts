@@ -1,5 +1,6 @@
 import { type CreateCubeResponse, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
-import { activatePendingServerEnrollment, compareAndActivatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, compareAndClearPendingServerSession, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, serverSessionCredentialRef, type ServerSessionOperation } from './config.js';
+import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment } from './config.js';
+import { activateAndBindSeat, scrubPendingSeat, seatRef, type ActivateSeatOutcome, type SeatBinding, type SeatOperation as ServerSessionOperation } from './seats.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
 type FetchLike = typeof fetch;
@@ -79,16 +80,19 @@ export interface PreparedServerAttach {
     result: 'created' | 'reused';
     credentialRef: string;
     pendingBearerDigest: string;
-    activate: () => Promise<string>;
+    /** The single-store ATOMIC activate+bind (CR#2 collapse): given the worktree
+     *  binding + display (known only at FINALIZE), stamp the exact digest-matched
+     *  PENDING record ACTIVE and bind the worktree in ONE commit. Returns the typed
+     *  outcome (`activated`/`missing`/`replaced`) — never throws for a race. */
+    activate: (binding: SeatBinding) => Promise<ActivateSeatOutcome>;
     scrubPending: () => Promise<boolean>;
 }
 /**
  * The NETWORK-ONLY half of an attach: POST the ALREADY-MINTED pending bearer and
- * decode, WITHOUT minting (the mint is owned by the cube-lock-held
- * prepareServerSeatAttachment composite, CR #1). Returns the deferred
- * activate/scrubPending handles for the cube-lock-held FINALIZE. The composite
- * production path uses this after minting under the cube lock; the legacy
- * prepareBorgServerAttach wrapper mints then delegates here.
+ * decode, WITHOUT minting (the mint is owned by the single-store prepareSeat, CR#1).
+ * Returns the deferred activate/scrubPending handles: FINALIZE calls `activate`
+ * with the decided worktree binding, and activateAndBindSeat stamps ACTIVE + binds
+ * the worktree in ONE atomic commit (activate+bind merged — no cross-store gap).
  */
 export declare function sendBorgServerAttach(origin: string, trustIdentity: string, parentCredential: string, request: {
     cubeId: string;
@@ -97,9 +101,9 @@ export declare function sendBorgServerAttach(origin: string, trustIdentity: stri
     priorDroneId?: string;
 }, pendingBearer: string, deps?: {
     fetchImpl?: FetchLike;
-    activateSession?: typeof compareAndActivatePendingServerSession;
-    scrubPending?: typeof compareAndClearPendingServerSession;
-    sessionCredentialRef?: typeof serverSessionCredentialRef;
+    activateAndBind?: typeof activateAndBindSeat;
+    scrubPending?: typeof scrubPendingSeat;
+    sessionCredentialRef?: typeof seatRef;
 }): Promise<PreparedServerAttach>;
 /**
  * Redeem one invitation after the caller has verified TLS and derived the
