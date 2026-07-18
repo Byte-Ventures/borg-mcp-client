@@ -88,6 +88,7 @@ export declare function activeCubeWithFreshRegenIdentity(active: ActiveCube, res
  */
 export declare function clearActiveCube(expected?: {
     credentialRef?: string | null;
+    sessionDigest?: string;
 }): Promise<{
     removed: boolean;
     credentialRef: string | null;

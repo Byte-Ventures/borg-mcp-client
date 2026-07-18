@@ -1,5 +1,5 @@
 import { dirname, basename } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { roleSlug, matchRoleByName, occupiedRoleIdsForAutoRole, pickDefaultRole, } from './role-resolver.js';
 import { deriveCubeName, parseGitRemote, sanitizeRemoteUrl } from './cube-name.js';
 import { validateName } from './name-validator.js';
@@ -175,7 +175,7 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
  * outcome is audited to stderr, and the recovery is live-safe: the operator is
  * never told to stop/restart the server.
  */
-async function handleSessionRejectedReset(deps, apiUrl, flags, expectedCredentialRef) {
+async function handleSessionRejectedReset(deps, apiUrl, flags, rejected) {
     const worktree = deps.findProjectRoot(deps.cwd());
     deps.stderr(`This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
         'revoked or taken over by another session. No other Borg state changed: your pinned ' +
@@ -208,9 +208,29 @@ async function handleSessionRejectedReset(deps, apiUrl, flags, expectedCredentia
     }
     // Scoped, worktree-only mutation: this worktree's cubes.json binding + its
     // keychain session credential ONLY (clearActiveCube keys on findProjectRoot()).
-    // The observed-rejected credential ref is pinned so a seat that changed since
-    // the rejection (concurrent re-attach) is NOT clobbered.
-    const cleared = await deps.clearActiveCube(expectedCredentialRef === undefined ? undefined : { credentialRef: expectedCredentialRef });
+    // Pin the exact rejected seat: its credential ref AND an unforgeable digest of
+    // the exact bearer observed rejected (token-safe — the raw bearer is never
+    // logged). A same-ref re-enroll writes a fresh bearer → different digest → the
+    // clear is refused, so a concurrent replacement is not clobbered.
+    const expected = rejected === undefined ? undefined : {
+        credentialRef: rejected.credentialRef,
+        ...(rejected.sessionToken
+            ? { sessionDigest: createHash('sha256').update(rejected.sessionToken).digest('hex') }
+            : {}),
+    };
+    let cleared;
+    try {
+        cleared = await deps.clearActiveCube(expected);
+    }
+    catch {
+        // Keychain/credential-store failure during the scoped clear: fail closed
+        // with NO completion audit (SR: a keychain-delete failure cannot emit
+        // success). The bearer/credential text is never surfaced.
+        deps.stderr(`audit: no changes made — the scoped seat reset for ${apiUrl} (worktree ${worktree}) ` +
+            `could not complete (local credential store error). Retry, or ask the server operator ` +
+            `for a new invitation and enroll with ${localAssimilateCommand(apiUrl, true)}.\n`);
+        return 1;
+    }
     if (!cleared.removed) {
         // Fail closed: nothing was removed (no matching saved binding for this
         // worktree), so never audit a reset that did not happen (SR: no
@@ -543,7 +563,10 @@ export async function runAssimilate(args, deps) {
             // "restart the server" indeterminate exit below. Distinct from
             // unreachable/404/5xx/trust-mismatch, which stay indeterminate.
             if (status === 'rejected') {
-                return await handleSessionRejectedReset(deps, auth.apiUrl, args.flags, existing.localSessionCredentialRef ?? null);
+                return await handleSessionRejectedReset(deps, auth.apiUrl, args.flags, {
+                    credentialRef: existing.localSessionCredentialRef ?? null,
+                    sessionToken: existing.sessionToken ?? null,
+                });
             }
             if (status === 'indeterminate') {
                 deps.stderr(`Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +
@@ -698,7 +721,10 @@ export async function runAssimilate(args, deps) {
             // Only a hydrated reattach (this worktree HAD a saved seat) may enter the
             // scoped reset. A first/pending attach that is rejected has no saved seat
             // to clear and falls through to the generic credential-rejection report.
-            return await handleSessionRejectedReset(deps, authority.apiUrl, args.flags, existing?.localSessionCredentialRef ?? null);
+            return await handleSessionRejectedReset(deps, authority.apiUrl, args.flags, {
+                credentialRef: existing?.localSessionCredentialRef ?? null,
+                sessionToken: existing?.sessionToken ?? null,
+            });
         }
         if (authority.kind === 'server') {
             return reportServerFailure(deps, authority.apiUrl, err);

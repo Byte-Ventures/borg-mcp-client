@@ -318,8 +318,29 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     const deps = depsFor(identities, async () => 'evicted');
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     // 4b-specific phrasing — distinct from the 4a lock-live 'appear live; nothing to launch'.
-    expect(stdoutOf(deps)).toMatch(/have evicted seats; nothing to launch/);
+    expect(stdoutOf(deps)).toMatch(/are not launchable .*nothing to launch/);
     expect(dispatched(deps)).toBe(false);
+  });
+
+  it('a REJECTED seat is SKIPPED (not launched, not pruned) with an explicit scoped-reset + re-enroll recovery', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'rejected' : 'live'));
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    // The live seat still launches; the rejected one is skipped, never launched.
+    expect(dispatched(deps)).toBe(true);
+    const err = stderrOf(deps);
+    expect(err).toMatch(/drone-b.*no longer accepted/);
+    expect(err).toContain('--reset-local-seat');
+    expect(err).not.toMatch(/drone-b.*evicted/);
+  });
+
+  it('ALL seats rejected → nothing launched, neutral summary (never called "evicted")', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async () => 'rejected');
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(dispatched(deps)).toBe(false);
+    const out = stdoutOf(deps);
+    expect(out).toMatch(/are not launchable .*nothing to launch/);
   });
 
   it('an INDETERMINATE (transient) seat is LAUNCHED (fail-OPEN) with a soft note', async () => {

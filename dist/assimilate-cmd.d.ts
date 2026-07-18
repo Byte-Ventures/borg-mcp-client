@@ -87,10 +87,12 @@ export interface AssimilateDeps {
      *  its keychain session credential. Keys on findProjectRoot() — never touches
      *  server trust anchors, other worktrees, or cube state. Returns whether a
      *  binding was actually removed so callers never audit a no-op as success.
-     *  When `expected.credentialRef` is pinned, the delete is refused (removed:
-     *  false) if the current binding no longer matches it (TOCTOU guard). */
+     *  When `expected` is pinned, the delete is refused (removed: false) unless
+     *  the current binding still matches BOTH the credential ref AND an unforgeable
+     *  digest of the exact rejected bearer (TOCTOU / same-ref-replacement guard). */
     clearActiveCube: (expected?: {
         credentialRef?: string | null;
+        sessionDigest?: string;
     }) => Promise<{
         removed: boolean;
         credentialRef: string | null;

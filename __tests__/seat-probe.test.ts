@@ -44,19 +44,15 @@ function wireMocks(opts: { fetchImpl: any; trustIdentity?: string }) {
   }));
 }
 
-const liveFetch = () => vi.fn(async (input: string | URL | Request) => {
-  const url = new URL(input.toString());
-  if (url.pathname === `/api/cubes/${CUBE_ID}`) {
-    return new Response(JSON.stringify(envelope({ cube: { id: CUBE_ID, name: 'local-cube' } })), { status: 200 });
-  }
-  if (url.pathname === `/api/cubes/${CUBE_ID}/roles`) {
-    return new Response(JSON.stringify(envelope({ roles: [{ id: ROLE_ID, name: 'Builder' }] })), { status: 200 });
-  }
-  if (url.pathname === `/api/cubes/${CUBE_ID}/drones`) {
-    return new Response(JSON.stringify(envelope({ drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID }] })), { status: 200 });
-  }
-  throw new Error(`unexpected ${url.pathname}`);
-});
+// A bounded shared-v2 typed error envelope. Only the exact SESSION_REJECTED code
+// (on a drone-session request) may trigger the destructive reset.
+function errorEnvelope(code: string, message = 'rejected') {
+  return JSON.stringify({ protocol_version: '2', error: { code, message } });
+}
+const sessionRejected401 = () => vi.fn(async () => new Response(
+  errorEnvelope('SESSION_REJECTED', 'the seat is bound to another session'),
+  { status: 401 },
+));
 
 afterEach(() => {
   vi.resetModules();
@@ -75,8 +71,20 @@ describe('defaultProbeSeat production chain (real whoami → authedFetch verdict
   // (The `live` and `evicted` end-to-end cases are covered by the local-server
   // route-adapter suite and the evicted-reattach + drone-lifecycle tests; this
   // file focuses on the security-critical 401-classifier verdicts.)
-  it('rejected: a pin-matched 401 on the drone SESSION bearer (→ scoped reset)', async () => {
-    await expect(probe(vi.fn(async () => new Response('unauthorized', { status: 401 })))).resolves.toBe('rejected');
+  it('rejected: a 401 whose bounded-decoded v2 envelope carries the EXACT SESSION_REJECTED code', async () => {
+    await expect(probe(sessionRejected401())).resolves.toBe('rejected');
+  });
+
+  it('indeterminate: a BARE 401 with no typed envelope is NOT a session rejection (never reset)', async () => {
+    await expect(probe(vi.fn(async () => new Response('unauthorized', { status: 401 })))).resolves.toBe('indeterminate');
+  });
+
+  it('indeterminate: a 401 with a MALFORMED body fails closed (never reset)', async () => {
+    await expect(probe(vi.fn(async () => new Response('{ not json', { status: 401 })))).resolves.toBe('indeterminate');
+  });
+
+  it('indeterminate: a 401 with a DIFFERENT typed code (CREDENTIAL_REJECTED) is not a session rejection', async () => {
+    await expect(probe(vi.fn(async () => new Response(errorEnvelope('CREDENTIAL_REJECTED'), { status: 401 })))).resolves.toBe('indeterminate');
   });
 
   it('indeterminate: a 5xx is transient/ambiguous, never destructive', async () => {
@@ -96,17 +104,23 @@ describe('defaultProbeSeat production chain (real whoami → authedFetch verdict
   });
 });
 
-describe('authedFetch 401 credential-class classification (session vs enrollment)', () => {
+describe('authedFetch 401 typed-code + credential-class classification', () => {
   beforeEach(() => vi.resetModules());
 
-  it('a drone-SESSION 401 throws SESSION_REJECTED (whoami path)', async () => {
-    wireMocks({ fetchImpl: vi.fn(async () => new Response('unauthorized', { status: 401 })) });
+  it('drone-SESSION 401 with the EXACT SESSION_REJECTED code → SESSION_REJECTED', async () => {
+    wireMocks({ fetchImpl: sessionRejected401() });
     const { whoami } = await import('../src/remote-client.js');
     await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'SESSION_REJECTED' });
   });
 
-  it('a parent-ENROLLMENT-credential 401 throws CREDENTIAL_REJECTED, NEVER SESSION_REJECTED (list-cubes path)', async () => {
-    wireMocks({ fetchImpl: vi.fn(async () => new Response('unauthorized', { status: 401 })) });
+  it('drone-SESSION 401 with a bare/untyped body → CREDENTIAL_REJECTED (bare 401 is never enough)', async () => {
+    wireMocks({ fetchImpl: vi.fn(async () => new Response('nope', { status: 401 })) });
+    const { whoami } = await import('../src/remote-client.js');
+    await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+  });
+
+  it('parent-ENROLLMENT-credential 401 EVEN WITH a SESSION_REJECTED code → CREDENTIAL_REJECTED (drone-session gate)', async () => {
+    wireMocks({ fetchImpl: sessionRejected401() });
     const { listCubes } = await import('../src/remote-client.js');
     await expect(
       listCubes({ apiUrl: ORIGIN, authToken: 'parent-enrollment-token', serverTrustIdentity: TRUST }),

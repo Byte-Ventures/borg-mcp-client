@@ -281,6 +281,9 @@ describe('buildCleanupReport classification', () => {
     const { rows } = await buildCleanupReport({ ...(deps as any) });
     expect(rows.find((r) => r.worktreePath === wt)?.reason).toBe('SURVIVES-detached');
   });
+  it('SURVIVES-rejected on a pin-matched 401 (revoked/taken over) — recoverable, NEVER pruned', async () => {
+    expect(await reasonFor({}, 'rejected')).toBe('SURVIVES-rejected');
+  });
   it('SURVIVES-live when the seat resolves', async () => {
     expect(await reasonFor({}, 'live')).toBe('SURVIVES-live');
   });

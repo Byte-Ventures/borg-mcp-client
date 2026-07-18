@@ -240,8 +240,9 @@ export async function runLaunchAll(args, deps, opts = {}) {
         }
         if (status === 'rejected') {
             deps.stderr(`skipping ${c.droneLabel} (${c.worktreeDir}): saved seat no longer accepted (revoked or ` +
-                `taken over) — from that worktree reset its seat and re-enroll ` +
-                `(\`borg assimilate --host <host> --here\`).\n`);
+                `taken over) — from that worktree run \`borg assimilate --host <host> --here\` ` +
+                `(add --reset-local-seat non-interactively) to reset ONLY that worktree's saved seat, ` +
+                `then ask the server operator for a new invitation and re-enroll.\n`);
             continue;
         }
         if (status === 'indeterminate') {
@@ -250,7 +251,8 @@ export async function runLaunchAll(args, deps, opts = {}) {
         launchable.push(c);
     }
     if (launchable.length === 0) {
-        deps.stdout(`All ${lockLaunchable.length} discovered drone(s) for cube '${cubeName}' have evicted seats; nothing to launch.\n`);
+        deps.stdout(`All ${lockLaunchable.length} discovered drone(s) for cube '${cubeName}' are not launchable ` +
+            `(evicted, or the saved seat is no longer accepted); nothing to launch.\n`);
         return 0;
     }
     // 5. --dry-run

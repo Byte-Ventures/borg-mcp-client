@@ -11,7 +11,7 @@
  */
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeProtocolEnvelope } from 'borgmcp-shared/protocol';
+import { createProtocolEnvelope, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
 import { consolePrefix } from './console-prefix.js';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
@@ -33,6 +33,9 @@ const LEGACY_MODEL_DESCRIPTOR_REGEX = /^(claude|ollama):[A-Za-z0-9._:\/-]+$/;
 const RATE_LIMIT_MAX_RETRIES = 3;
 const RATE_LIMIT_MAX_WAIT_MS = 60_000; // cap a single Retry-After honor
 export const LOCAL_SERVER_RESPONSE_LIMIT_BYTES = 32 * 1024 * 1024;
+// A typed auth-error envelope is tiny; anything larger is hostile and the
+// bounded read throws → the 401 fails closed to non-destructive CREDENTIAL_REJECTED.
+const AUTH_ERROR_ENVELOPE_LIMIT_BYTES = 64 * 1024;
 export const LOCAL_SERVER_REQUEST_TIMEOUT_MS = 5_000;
 const LOCAL_SERVER_RESPONSE_LIMIT_MESSAGE = 'Local Borg server response exceeded the response limit';
 /**
@@ -374,17 +377,26 @@ async function authedFetch(path, init = {}) {
     let response = await buildRequest(token);
     if (response.status === 401) {
         // Reached only after pinned-TLS trust is verified (localAuthorityContext
-        // fails closed otherwise), so a 401 here is an AUTHORITATIVE pin-matched
-        // credential rejection. The credential CLASS decides the recovery, and ONLY
-        // a worktree-SESSION rejection may trigger the destructive scoped seat reset
-        // (SR): a rejected drone-SESSION bearer → SESSION_REJECTED → seat-probe
-        // 'rejected' → scoped reset; a rejected PARENT enrollment/client credential
-        // (authToken or stored client credential, e.g. list/get cubes) →
-        // CREDENTIAL_REJECTED → re-enroll, and NEVER a seat reset.
-        if (droneSession !== undefined) {
+        // fails closed otherwise). The DESTRUCTIVE worktree-seat reset is permitted
+        // ONLY when BOTH hold: (a) this request used the drone SESSION bearer, and
+        // (b) the server's bounded-decoded shared-v2 error envelope carries the EXACT
+        // typed code SESSION_REJECTED. A bare 401 is never sufficient. Any other or
+        // absent/malformed/oversized code — or a parent enrollment/client credential
+        // (authToken/stored) — is CREDENTIAL_REJECTED → non-destructive re-enroll
+        // recovery, never a seat reset. The body is read (and thus consumed) here,
+        // bounded to reject oversized hostile payloads (fail closed to non-reset).
+        let rejectedCode;
+        try {
+            const body = await readBoundedResponseBody(response, AUTH_ERROR_ENVELOPE_LIMIT_BYTES, 'Local Borg server auth error response exceeded the response limit');
+            rejectedCode = decodeProtocolErrorEnvelope(JSON.parse(body)).error.code;
+        }
+        catch {
+            rejectedCode = undefined;
+        }
+        if (droneSession !== undefined && rejectedCode === ErrorCode.SESSION_REJECTED) {
             throw new BorgServerError('SESSION_REJECTED', 'the selected Borg server rejected this worktree session (revoked or taken over)');
         }
-        throw new BorgServerError('CREDENTIAL_REJECTED', 'the selected Borg server rejected the saved enrollment credential');
+        throw new BorgServerError('CREDENTIAL_REJECTED', 'the selected Borg server rejected the credential');
     }
     // gh#330: honor the server's Retry-After on 429 instead of failing the
     // (often required) coordination signal — borg_log / read-log / regen /

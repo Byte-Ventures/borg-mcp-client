@@ -15,6 +15,7 @@
  * to know which worker to talk to.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -421,7 +422,7 @@ export function activeCubeWithFreshRegenIdentity(
  * an empty {projects:{}} skeleton.
  */
 export async function clearActiveCube(
-  expected?: { credentialRef?: string | null },
+  expected?: { credentialRef?: string | null; sessionDigest?: string },
 ): Promise<{ removed: boolean; credentialRef: string | null }> {
   const operation = activeCubeWriteQueue.then(() => withCubesWriteLock(async () => {
     const existing = await readCubesFile();
@@ -430,18 +431,40 @@ export async function clearActiveCube(
     if (!existing) return { removed: false, credentialRef: null };
     const key = findProjectRoot();
     if (!(key in existing.projects)) return { removed: false, credentialRef: null };
-    const removedCredentialRef = existing.projects[key].localSessionCredentialRef ?? null;
-    // TOCTOU guard (PD #1082 / thirty-seven): the read-compare-delete runs under
-    // the cube write lock. If a caller pins the credential ref it observed being
-    // rejected, refuse to delete when the current binding no longer matches it —
-    // the seat changed (e.g. a concurrent re-attach) since the rejection, so
-    // deleting would clobber a DIFFERENT seat. Report an honest no-op.
-    if (
-      expected !== undefined &&
-      expected.credentialRef !== undefined &&
-      removedCredentialRef !== expected.credentialRef
-    ) {
-      return { removed: false, credentialRef: null };
+    const entry = existing.projects[key];
+    const removedCredentialRef = entry.localSessionCredentialRef ?? null;
+    // TOCTOU guard (PD #1082 / SR-six 7866d3d3): the read-compare-delete runs
+    // under the cube write lock. The credential REF is deterministic per
+    // origin+trust+cube+role+projectRoot+operation, so a same-ref re-enroll
+    // after the rejection writes a FRESH valid bearer under the SAME ref. To
+    // avoid clobbering that replacement, the caller pins BOTH the ref AND an
+    // unforgeable digest of the exact bearer it observed being rejected; we
+    // hydrate the CURRENT bearer here and compare digests. Any mismatch (or a
+    // missing/unreadable current bearer) is an honest no-op — never a delete.
+    if (expected !== undefined) {
+      if (expected.credentialRef !== undefined && removedCredentialRef !== expected.credentialRef) {
+        return { removed: false, credentialRef: null };
+      }
+      if (expected.sessionDigest !== undefined) {
+        let currentBearer: string | null = null;
+        if (removedCredentialRef) {
+          try {
+            currentBearer = await getActiveServerSessionCredential(removedCredentialRef, {
+              origin: entry.apiUrl,
+              trustIdentity: entry.serverTrustIdentity ?? '',
+              cubeId: entry.cubeId,
+            });
+          } catch {
+            currentBearer = null;
+          }
+        }
+        const currentDigest = currentBearer
+          ? createHash('sha256').update(currentBearer).digest('hex')
+          : null;
+        if (currentDigest !== expected.sessionDigest) {
+          return { removed: false, credentialRef: null };
+        }
+      }
     }
     delete existing.projects[key];
     if (Object.keys(existing.projects).length === 0) {

@@ -158,4 +158,35 @@ describe('local ActiveCube session persistence', () => {
     const persisted = readFileSync(join(fixture, '.config', 'borgmcp', 'cubes.json'), 'utf8');
     expect(persisted).toContain(currentRef);
   });
+
+  it('clearActiveCube refuses to delete when the BEARER digest differs under the SAME ref (same-ref replacement race)', async () => {
+    const { fixture, cubes } = await setup();
+    const ref = `borg-server-session:${'a'.repeat(64)}`;
+    await cubes.setActiveCube({ ...localMetadata, localSessionCredentialRef: ref, sessionToken: 'x' });
+    // The keychain now holds a FRESH valid bearer under the SAME ref (a concurrent
+    // reset+re-enroll of this same worktree while the stale prompt was open).
+    keychainMocks.getActiveServerSessionCredential.mockResolvedValue('FRESH-BEARER-value');
+    const { createHash } = await import('node:crypto');
+
+    // A caller pins the digest of the OLD (rejected) bearer. The ref matches but
+    // the digest does not → the fresh replacement must NOT be clobbered.
+    const staleDigest = createHash('sha256').update('STALE-rejected-bearer').digest('hex');
+    const refused = await cubes.clearActiveCube({ credentialRef: ref, sessionDigest: staleDigest });
+    expect(refused).toEqual({ removed: false, credentialRef: null });
+    expect(keychainMocks.clearServerSessionCredential).not.toHaveBeenCalled();
+    expect(readFileSync(join(fixture, '.config', 'borgmcp', 'cubes.json'), 'utf8')).toContain(ref);
+
+    // With the CURRENT bearer's digest, the scoped delete proceeds.
+    const freshDigest = createHash('sha256').update('FRESH-BEARER-value').digest('hex');
+    const ok = await cubes.clearActiveCube({ credentialRef: ref, sessionDigest: freshDigest });
+    expect(ok).toEqual({ removed: true, credentialRef: ref });
+  });
+
+  it('clearActiveCube surfaces a keychain-delete failure (throws) so callers cannot audit success', async () => {
+    const { cubes } = await setup();
+    const ref = `borg-server-session:${'a'.repeat(64)}`;
+    await cubes.setActiveCube({ ...localMetadata, localSessionCredentialRef: ref, sessionToken: 'x' });
+    keychainMocks.clearServerSessionCredential.mockRejectedValueOnce(new Error('keychain locked'));
+    await expect(cubes.clearActiveCube()).rejects.toThrow(/keychain/i);
+  });
 });
