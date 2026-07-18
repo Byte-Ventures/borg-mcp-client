@@ -149,8 +149,53 @@ export async function atomicWrite0600(filePath: string, data: string): Promise<v
   }
 }
 
-/** Read the store file, or null when it does not exist. */
+/**
+ * CR#2: enforce the at-rest perms on the READ / no-op paths too (not just
+ * atomicWrite). A secret must NEVER be read from a group/other-accessible store
+ * file, nor from under a group/other-traversable parent. Fail CLOSED without
+ * reading the bytes. Mirrors the server-trust.ts `(mode & 0o077) !== 0` idiom.
+ */
+async function assertSecureStorePerms(
+  filePath: string,
+  fileMode: number,
+): Promise<void> {
+  if ((fileMode & 0o077) !== 0) {
+    throw new Error(
+      `Borg seat store file ${filePath} has insecure permissions ` +
+        `(0${(fileMode & 0o777).toString(8)}, expected 0600); refusing to read a credential from it`,
+    );
+  }
+  const dir = dirname(filePath);
+  let dirStat: Awaited<ReturnType<typeof stat>>;
+  try {
+    dirStat = await stat(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return; // vanished — readFile handles
+    throw err;
+  }
+  if ((dirStat.mode & 0o077) !== 0) {
+    throw new Error(
+      `Borg seat store directory ${dir} has insecure permissions ` +
+        `(0${(dirStat.mode & 0o777).toString(8)}, expected 0700); refusing to read a credential under it`,
+    );
+  }
+}
+
+/**
+ * Read the store file, or null when it does not exist (ONLY the missing-file
+ * no-op path initializes empty). When the file exists, the 0600-store + 0700-parent
+ * perms are enforced BEFORE the bytes are read (CR#2) — a loosely-permissioned
+ * secret fails closed and is never read.
+ */
 export async function readStoreFile(filePath: string): Promise<string | null> {
+  let fileStat: Awaited<ReturnType<typeof stat>>;
+  try {
+    fileStat = await stat(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  await assertSecureStorePerms(filePath, fileStat.mode);
   try {
     return await readFile(filePath, 'utf8');
   } catch (err) {

@@ -7,7 +7,7 @@
  * resolves inside it.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -189,6 +189,7 @@ describe('seats store — observation + sole raw-bearer reader (CR#3, SR#5)', ()
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const corrupt = '{ "seats": { truncated';
     writeFileSync(path, corrupt);
+    chmodSync(path, 0o600); // isolate the malformed-detection path from the perm check
     const ref = seats.seatRef(SEAT);
     // A lock-free observation over a malformed store fails closed (does not read empty).
     await expect(seats.observeSeat(ref, BIND)).rejects.toThrow(/malformed|unsupported version/i);
@@ -205,10 +206,87 @@ describe('seats store — observation + sole raw-bearer reader (CR#3, SR#5)', ()
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const wrongVersion = JSON.stringify({ version: 999, seats: {} });
     writeFileSync(path, wrongVersion);
+    chmodSync(path, 0o600);
     await expect(seats.mintPendingSeat({ ...SEAT, credential: 'k'.repeat(43) })).rejects.toThrow(
       /malformed|unsupported version/i,
     );
     expect(readFileSync(path, 'utf8')).toBe(wrongVersion);
+  });
+
+  it('CR#2: a valid-JSON but schema-INVALID seat record FAILS CLOSED and preserves the bytes', async () => {
+    const { dir, seats } = await load();
+    const path = storeJson(dir);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    // version 1, seats is an object — but the single entry is invalid many ways:
+    // its key is not the record's derived ref, state is bogus, credential missing.
+    const invalid = JSON.stringify({
+      version: 1,
+      seats: {
+        ['borg-server-session:' + 'a'.repeat(64)]: {
+          origin: SEAT.origin,
+          trustIdentity: SEAT.trustIdentity,
+          cubeId: SEAT.cubeId,
+          roleId: SEAT.roleId,
+          operation: SEAT.operation,
+          state: 'bogus-state',
+        },
+      },
+    });
+    writeFileSync(path, invalid);
+    chmodSync(path, 0o600);
+    const ref = seats.seatRef(SEAT);
+    await expect(seats.observeSeat(ref, BIND)).rejects.toThrow(/malformed|unsupported version/i);
+    await expect(seats.mintPendingSeat({ ...SEAT, credential: 'k'.repeat(43) })).rejects.toThrow(
+      /malformed|unsupported version/i,
+    );
+    // The invalid bytes are preserved exactly — never erased/overwritten.
+    expect(readFileSync(path, 'utf8')).toBe(invalid);
+  });
+
+  it('CR#2: an ACTIVE record missing required binding fields FAILS CLOSED (no inconsistent active)', async () => {
+    const { dir, seats } = await load();
+    const path = storeJson(dir);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const ref = seats.seatRef(SEAT);
+    // A well-keyed record marked ACTIVE but WITHOUT droneId/sessionId/expiresAt/worktree.
+    const inconsistent = JSON.stringify({
+      version: 1,
+      seats: {
+        [ref]: {
+          origin: SEAT.origin,
+          trustIdentity: SEAT.trustIdentity,
+          cubeId: SEAT.cubeId,
+          roleId: SEAT.roleId,
+          operation: SEAT.operation,
+          credential: 'k'.repeat(43),
+          state: 'active',
+        },
+      },
+    });
+    writeFileSync(path, inconsistent);
+    chmodSync(path, 0o600);
+    await expect(seats.observeSeat(ref, BIND)).rejects.toThrow(/malformed|unsupported version/i);
+    expect(readFileSync(path, 'utf8')).toBe(inconsistent);
+  });
+
+  it('CR#2: a group/other-readable seats.json FAILS CLOSED on READ (0600 enforced on read)', async () => {
+    const { dir, seats } = await load();
+    const path = storeJson(dir);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const valid = JSON.stringify({ version: 1, seats: {} });
+    writeFileSync(path, valid);
+    chmodSync(path, 0o644); // world-readable secret at rest — must be refused on READ
+    const ref = seats.seatRef(SEAT);
+    await expect(seats.observeSeat(ref, BIND)).rejects.toThrow(/insecure permissions|0600/i);
+    expect(readFileSync(path, 'utf8')).toBe(valid);
+  });
+
+  it('CR#2: a MISSING seats.json still initializes empty (ENOENT is the only empty-init path)', async () => {
+    const { seats } = await load();
+    const ref = seats.seatRef(SEAT);
+    // No file on disk → observation reads empty (absent), and a mint succeeds.
+    await expect(seats.observeSeat(ref, BIND)).resolves.toEqual({ state: 'absent' });
+    await expect(seats.mintPendingSeat({ ...SEAT, credential: 'k'.repeat(43) })).resolves.toBeTruthy();
   });
 
   it('getActiveSeatCredential returns the bearer ONLY for an active, binding-matched record', async () => {

@@ -46,7 +46,16 @@ export function makeFileBackend(filePath) {
             Array.isArray(parsed.accounts)) {
             throw new Error('Borg credential store is malformed or has an unsupported version; refusing to overwrite it');
         }
-        return { ...(parsed.accounts) };
+        // CR#2: FULL value validation — every account value MUST be a string. A
+        // non-string value (a corrupted/tampered entry) fails CLOSED without writing,
+        // so a following set/delete never overwrites the store off a bad read.
+        const accounts = parsed.accounts;
+        for (const value of Object.values(accounts)) {
+            if (typeof value !== 'string') {
+                throw new Error('Borg credential store is malformed (a non-string account value); refusing to overwrite it');
+            }
+        }
+        return { ...accounts };
     };
     const save = (accounts) => atomicWrite0600(filePath, JSON.stringify({ version: 1, accounts }, null, 2) + '\n');
     return {

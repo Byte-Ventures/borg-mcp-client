@@ -35,7 +35,12 @@
  * cleans up the temp so no leftover file ever holds the secret.
  */
 export declare function atomicWrite0600(filePath: string, data: string): Promise<void>;
-/** Read the store file, or null when it does not exist. */
+/**
+ * Read the store file, or null when it does not exist (ONLY the missing-file
+ * no-op path initializes empty). When the file exists, the 0600-store + 0700-parent
+ * perms are enforced BEFORE the bytes are read (CR#2) — a loosely-permissioned
+ * secret fails closed and is never read.
+ */
 export declare function readStoreFile(filePath: string): Promise<string | null>;
 /**
  * Acquire the single advisory lock (checklist #4, RULED option b), run `op`, and

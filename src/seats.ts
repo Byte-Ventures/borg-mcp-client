@@ -96,10 +96,90 @@ function emptyStore(): SeatsFile {
   return { version: SEATS_VERSION, seats: {} };
 }
 
+const ROLE_CLASSES = new Set(['queen', 'worker']);
+const OPERATION_KINDS = new Set(['seat', 'sibling']);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isValidOperation(value: unknown): value is SeatOperation {
+  if (value === null || typeof value !== 'object') return false;
+  const op = value as Record<string, unknown>;
+  return (
+    isNonEmptyString(op.projectRoot) &&
+    typeof op.kind === 'string' &&
+    OPERATION_KINDS.has(op.kind) &&
+    isNonEmptyString(op.operationKey)
+  );
+}
+
 /**
- * CR4: parse + FULL version/schema validation. Returns null (→ fail closed at the
- * caller) for any malformed JSON, wrong version, or invalid shape; never throws and
- * never coerces a wrong-version file into a valid-looking empty store.
+ * CR#2: FULL per-entry validation. Every key/value/invariant of a seat record is
+ * checked — the ref is well-formed and self-consistent (the map key equals the
+ * record's derived ref), state ∈ {pending,active}, the credential is a non-empty
+ * string, the operation is well-shaped, an ACTIVE record carries ALL its required
+ * server + binding fields, and a PENDING record carries NO active-only fields
+ * (session id / expiry). A single invalid entry ⇒ the whole store is rejected
+ * (fail closed at the caller, bytes preserved) — never a silent cast.
+ */
+function isValidSeatRecord(ref: string, value: unknown): value is SeatRecord {
+  if (!REF_RE.test(ref)) return false;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const r = value as Record<string, unknown>;
+  // Identity + credential + operation.
+  if (
+    !isNonEmptyString(r.origin) ||
+    !isNonEmptyString(r.trustIdentity) ||
+    !isNonEmptyString(r.cubeId) ||
+    !isNonEmptyString(r.roleId) ||
+    !isValidOperation(r.operation) ||
+    !isNonEmptyString(r.credential)
+  ) {
+    return false;
+  }
+  if (r.state !== 'pending' && r.state !== 'active') return false;
+  // Optional display/typed fields, validated when present.
+  if (r.name !== undefined && typeof r.name !== 'string') return false;
+  if (r.droneLabel !== undefined && typeof r.droneLabel !== 'string') return false;
+  if (r.roleName !== undefined && typeof r.roleName !== 'string') return false;
+  if (r.roleClass !== undefined && (typeof r.roleClass !== 'string' || !ROLE_CLASSES.has(r.roleClass))) return false;
+  if (r.isHumanSeat !== undefined && typeof r.isHumanSeat !== 'boolean') return false;
+  if (r.worktree !== undefined && typeof r.worktree !== 'string') return false;
+  if (r.droneId !== undefined && (typeof r.droneId !== 'string' || !UUID_RE.test(r.droneId))) return false;
+  if (r.sessionId !== undefined && (typeof r.sessionId !== 'string' || !UUID_RE.test(r.sessionId))) return false;
+  if (
+    r.expiresAt !== undefined &&
+    (typeof r.expiresAt !== 'string' || !Number.isFinite(Date.parse(r.expiresAt)))
+  ) {
+    return false;
+  }
+  // State-consistency invariants (no inconsistent active|pending).
+  if (r.state === 'active') {
+    // An ACTIVE record MUST carry its full server session + worktree binding.
+    if (
+      typeof r.droneId !== 'string' ||
+      typeof r.sessionId !== 'string' ||
+      typeof r.expiresAt !== 'string' ||
+      typeof r.worktree !== 'string' ||
+      typeof r.name !== 'string' ||
+      typeof r.droneLabel !== 'string'
+    ) {
+      return false;
+    }
+  } else {
+    // A PENDING record must NOT carry active-only server session fields.
+    if (r.sessionId !== undefined || r.expiresAt !== undefined) return false;
+  }
+  // The map key must equal the record's derived ref (no cross-key aliasing).
+  return seatRef(value as SeatRecord) === ref;
+}
+
+/**
+ * CR4 + CR#2: parse + FULL version/schema/per-entry validation. Returns null (→ fail
+ * closed at the caller, bytes preserved) for any malformed JSON, wrong version, or
+ * ANY invalid entry; never throws and never coerces an invalid file into a
+ * valid-looking or empty store.
  */
 function parseStore(raw: string): SeatsFile | null {
   let parsed: unknown;
@@ -116,7 +196,11 @@ function parseStore(raw: string): SeatsFile | null {
       typeof candidate.seats === 'object' &&
       !Array.isArray(candidate.seats)
     ) {
-      return { version: SEATS_VERSION, seats: candidate.seats as Record<string, SeatRecord> };
+      const seats = candidate.seats as Record<string, unknown>;
+      for (const [ref, record] of Object.entries(seats)) {
+        if (!isValidSeatRecord(ref, record)) return null;
+      }
+      return { version: SEATS_VERSION, seats: seats as Record<string, SeatRecord> };
     }
   }
   return null;

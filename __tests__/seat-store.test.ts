@@ -145,6 +145,7 @@ describe('seat-store single-lock RCW (checklist #4)', () => {
     const store = join(dir, 'seats.json');
     const corrupt = '{ this is not valid json';
     writeFileSync(store, corrupt);
+    chmodSync(store, 0o600); // isolate malformed detection from the read-perm check
     // A malformed file must throw WITHOUT committing — never mapped to empty.
     await expect(
       withStore(store, empty, parse, async (txn) => { txn.data.n = 99; await txn.commit(); }),
@@ -163,6 +164,7 @@ describe('seat-store single-lock RCW (checklist #4)', () => {
     };
     const wrongShape = JSON.stringify({ notN: true });
     writeFileSync(store, wrongShape);
+    chmodSync(store, 0o600);
     await expect(
       withStore(store, empty, parseStrict, async (txn) => { txn.data.n = 5; await txn.commit(); }),
     ).rejects.toThrow(/malformed|unsupported version/i);

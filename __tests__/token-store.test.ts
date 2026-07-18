@@ -4,7 +4,7 @@
  * rescope; local-server credentials now rest in the 0600 file store exclusively.
  */
 import { afterEach, describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeFileBackend } from '../src/token-store.js';
@@ -50,6 +50,7 @@ describe('makeFileBackend (0600 credential store — Queen rescope)', () => {
     const path = store();
     const corrupt = 'not-json-at-all';
     writeFileSync(path, corrupt);
+    chmodSync(path, 0o600); // isolate malformed detection from the perm check
     const backend = makeFileBackend(path);
     await expect(backend.get('borg-server-session:k')).rejects.toThrow(/malformed/i);
     await expect(backend.set('borg-server-session:k', 'V')).rejects.toThrow(/malformed/i);
@@ -62,8 +63,38 @@ describe('makeFileBackend (0600 credential store — Queen rescope)', () => {
     const path = store();
     const wrongVersion = JSON.stringify({ version: 2, accounts: { 'borg-server-session:k': 'V' } });
     writeFileSync(path, wrongVersion);
+    chmodSync(path, 0o600);
     const backend = makeFileBackend(path);
     await expect(backend.set('borg-server-session:x', 'Y')).rejects.toThrow(/malformed|unsupported version/i);
     expect(readFileSync(path, 'utf8')).toBe(wrongVersion);
+  });
+
+  it('CR#2: a valid-JSON store with a NON-STRING account value FAILS CLOSED and is preserved', async () => {
+    const path = store();
+    // version 1, accounts is an object — but one value is not a string.
+    const badValue = JSON.stringify({ version: 1, accounts: { 'borg-server-session:k': { nested: true } } });
+    writeFileSync(path, badValue);
+    chmodSync(path, 0o600);
+    const backend = makeFileBackend(path);
+    await expect(backend.get('borg-server-session:k')).rejects.toThrow(/malformed/i);
+    await expect(backend.set('borg-server-session:x', 'Y')).rejects.toThrow(/malformed/i);
+    await expect(backend.delete('borg-server-session:k')).rejects.toThrow(/malformed/i);
+    expect(readFileSync(path, 'utf8')).toBe(badValue);
+  });
+
+  it('CR#2: a group/other-readable credential store FAILS CLOSED on READ (0600 enforced on read)', async () => {
+    const path = store();
+    const valid = JSON.stringify({ version: 1, accounts: { 'borg-server-session:k': 'V' } });
+    writeFileSync(path, valid);
+    chmodSync(path, 0o640); // group-readable secret at rest — refused on READ
+    const backend = makeFileBackend(path);
+    await expect(backend.get('borg-server-session:k')).rejects.toThrow(/insecure permissions|0600/i);
+    expect(readFileSync(path, 'utf8')).toBe(valid);
+  });
+
+  it('CR#2: a MISSING store still initializes empty (ENOENT is the only empty-init path)', async () => {
+    const backend = makeFileBackend(store());
+    await expect(backend.get('borg-server-session:k')).resolves.toBeNull();
+    await expect(backend.set('borg-server-session:k', 'V')).resolves.toBeUndefined();
   });
 });
