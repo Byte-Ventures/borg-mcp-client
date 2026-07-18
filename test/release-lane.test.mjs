@@ -16,9 +16,9 @@ import {
 import { smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const SHARED_VERSION = '0.3.0';
-const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.3.0.tgz';
-const SHARED_INTEGRITY = 'sha512-vXY4kZLBlyS0nqnveLAiAhbkc4pzP2C/V9nDRZ80lmv1z389A3yGLLSKx+ZHBb3qI17bTuDg1ILYN2qIVLWIIw==';
+const SHARED_VERSION = '0.4.0';
+const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.4.0.tgz';
+const SHARED_INTEGRITY = 'sha512-P5FmTiN10b3ogzHPkqr6l8K8w2ceRSSZP1D9XFBYI/qlV4JtardnWFCjFCUg9l9KHGCiorI3yj3YtA/McKzOXg==';
 
 async function validPackage(directory) {
   const packageRoot = join(directory, 'package');

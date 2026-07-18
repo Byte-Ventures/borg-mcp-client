@@ -84,20 +84,35 @@ describe('launch-all local authority binding', () => {
       const cubes = await import('../src/cubes.js');
 
       const cubeId = '11111111-1111-4111-8111-111111111111';
+      const roleId = '55555555-5555-4555-8555-555555555555';
       const activeDroneId = '22222222-2222-4222-8222-222222222222';
       const candidateDroneId = '33333333-3333-4333-8333-333333333333';
+      const activeSessionId = '66666666-6666-4666-8666-666666666666';
+      const candidateSessionId = '77777777-7777-4777-8777-777777777777';
+      const expiresAt = '2026-07-15T20:30:00.000Z';
       const apiUrl = 'https://127.0.0.1:7091';
       const serverTrustIdentity = 'spki-sha256:launch-all-server';
-      const activeToken = 'a'.repeat(43);
-      const candidateToken = 'b'.repeat(43);
+      // Distinct project roots ⇒ distinct per-seat operation ⇒ distinct bearer
+      // accounts for the active and candidate seats.
+      const activeOperation = { projectRoot: main, kind: 'seat' as const, operationKey: 'current-worktree' };
+      const candidateOperation = { projectRoot: candidate, kind: 'seat' as const, operationKey: 'current-worktree' };
 
-      activeCredentialRef = await config.storeServerSessionCredential({
+      await config.getOrCreatePendingServerSession({
         origin: apiUrl,
         trustIdentity: serverTrustIdentity,
         cubeId,
+        roleId,
+        operation: activeOperation,
+      });
+      activeCredentialRef = await config.activatePendingServerSession({
+        origin: apiUrl,
+        trustIdentity: serverTrustIdentity,
+        cubeId,
+        roleId,
+        operation: activeOperation,
         droneId: activeDroneId,
-        generation: 1,
-        credential: activeToken,
+        sessionId: activeSessionId,
+        expiresAt,
       });
       await cubes.setActiveCube({
         cubeId,
@@ -107,17 +122,25 @@ describe('launch-all local authority binding', () => {
         apiUrl,
         serverTrustIdentity,
         localSessionCredentialRef: activeCredentialRef,
-        localSessionGeneration: 1,
       });
 
       process.chdir(candidate);
-      const candidateCredentialRef = await config.storeServerSessionCredential({
+      await config.getOrCreatePendingServerSession({
         origin: apiUrl,
         trustIdentity: serverTrustIdentity,
         cubeId,
+        roleId,
+        operation: candidateOperation,
+      });
+      const candidateCredentialRef = await config.activatePendingServerSession({
+        origin: apiUrl,
+        trustIdentity: serverTrustIdentity,
+        cubeId,
+        roleId,
+        operation: candidateOperation,
         droneId: candidateDroneId,
-        generation: 1,
-        credential: candidateToken,
+        sessionId: candidateSessionId,
+        expiresAt,
       });
       await cubes.setActiveCube({
         cubeId,
@@ -127,7 +150,6 @@ describe('launch-all local authority binding', () => {
         apiUrl,
         serverTrustIdentity,
         localSessionCredentialRef: candidateCredentialRef,
-        localSessionGeneration: 1,
       });
       process.chdir(main);
 
@@ -172,7 +194,6 @@ describe('launch-all local authority binding', () => {
         },
       )).resolves.toBe(0);
 
-      expect(activeToken).not.toBe(candidateToken);
       expect(postDispatchActiveReads).toBe(1);
       expect(oauthGet).not.toHaveBeenCalled();
       expect(fetchSpy).not.toHaveBeenCalled();

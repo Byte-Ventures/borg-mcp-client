@@ -1,4 +1,4 @@
-export type BorgServerErrorCode = 'NOT_ENROLLED' | 'CREDENTIAL_REJECTED' | 'INVITATION_REJECTED' | 'CREATE_CUBE_DENIED' | 'ATTACH_CONFLICT';
+export type BorgServerErrorCode = 'NOT_ENROLLED' | 'CREDENTIAL_REJECTED' | 'INVITATION_REJECTED' | 'CREATE_CUBE_DENIED' | 'ATTACH_CONFLICT' | 'SESSION_REJECTED';
 /** Safe, non-secret state code for deterministic authority recovery copy. */
 export declare class BorgServerError extends Error {
     readonly code: BorgServerErrorCode;

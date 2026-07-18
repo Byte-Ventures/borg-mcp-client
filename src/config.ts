@@ -44,6 +44,7 @@ const SERVER_CREDENTIAL_RECORD_VERSION = 2 as const;
 const SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 1 as const;
 const SERVER_CUBE_RETRY_RECORD_VERSION = 1 as const;
 const SERVER_SESSION_RECORD_VERSION = 1 as const;
+const SERVER_PENDING_SESSION_RECORD_VERSION = 1 as const;
 const SERVER_KEYCHAIN_SERVICE = 'borg-mcp-local-server';
 const SERVER_KEYCHAIN_LOCK_STALE_MS = 30_000;
 const SERVER_KEYCHAIN_LOCK_WAIT_MS = 10;
@@ -111,6 +112,43 @@ export interface ServerSessionCredentialRecord {
   generation: number;
   credential: string;
   expiresAt?: string | null;
+}
+
+/**
+ * S1 clean-slate local drone-session record. The client CSPRNG-generates the
+ * bearer and persists it PENDING (keyed by the stable per-seat attach identity
+ * origin+trustIdentity+cube+role — no drone id yet on first attach) BEFORE the
+ * attach request. The bearer digest is the sole server correlator, so a lost
+ * response is recovered by re-sending the exact same bearer. After a verified
+ * `created`/`reused` response the SAME record is enriched in place with the
+ * server-assigned drone/session identity — no generation, no rotation.
+ */
+/**
+ * The seat/sibling operation dimension for a pending session. Because the client
+ * bearer digest is the SOLE server correlator, distinct seats require distinct
+ * bearers; a deliberate sibling attach must therefore namespace its bearer apart
+ * from the durable in-place seat for the same (origin,trust,cube,role). Ported
+ * from the retired local-attach `operationBindingKey`. projectRoot is captured
+ * before a successful sibling attach changes cwd, so it is stable across the
+ * whole prepare→activate lifecycle.
+ */
+export interface ServerSessionOperation {
+  projectRoot: string;
+  kind: 'seat' | 'sibling';
+  operationKey: string;
+}
+
+export interface PendingServerSessionRecord {
+  origin: string;
+  trustIdentity: string;
+  cubeId: string;
+  roleId: string;
+  operation: ServerSessionOperation;
+  credential: string;
+  state: 'pending' | 'active';
+  droneId?: string;
+  sessionId?: string;
+  expiresAt?: string;
 }
 
 function validateServerCredentialBinding(origin: string, trustIdentity: string): void {
@@ -557,6 +595,302 @@ function validateEnrollmentCredential(credential: string): void {
   if (!/^[A-Za-z0-9_-]{43}$/.test(credential)) {
     throw new Error('invalid Borg server credential');
   }
+}
+
+/**
+ * Stable per-seat keychain account for the S1 local drone-session bearer. Keyed
+ * by origin + trust identity + cube + role only — NOT the drone id (first attach
+ * has none) and NOT a generation counter. This is the identity a lost-response
+ * retry re-resolves to re-send the exact same pending bearer.
+ */
+function validateServerSessionOperation(operation: ServerSessionOperation): void {
+  if (
+    operation.projectRoot.length < 1 ||
+    operation.projectRoot.length > 4096 ||
+    operation.operationKey.length < 1 ||
+    operation.operationKey.length > 1024 ||
+    /[\u0000-\u001f\u007f]/.test(operation.projectRoot) ||
+    /[\u0000-\u001f\u007f]/.test(operation.operationKey) ||
+    (operation.kind !== 'seat' && operation.kind !== 'sibling')
+  ) {
+    throw new Error('invalid Borg server session operation');
+  }
+}
+
+function serverPendingSessionAccount(
+  origin: string,
+  trustIdentity: string,
+  cubeId: string,
+  roleId: string,
+  operation: ServerSessionOperation,
+): string {
+  validateServerCredentialBinding(origin, trustIdentity);
+  validateUuid(cubeId, 'cube identity');
+  validateUuid(roleId, 'role identity');
+  validateServerSessionOperation(operation);
+  const binding = createHash('sha256')
+    .update(origin)
+    .update('\0')
+    .update(trustIdentity)
+    .update('\0')
+    .update(cubeId)
+    .update('\0')
+    .update(roleId)
+    .update('\0')
+    .update(operation.projectRoot)
+    .update('\0')
+    .update(operation.kind)
+    .update('\0')
+    .update(operation.operationKey)
+    .digest('hex');
+  return `borg-server-session:${binding}`;
+}
+
+function validateSessionBearer(credential: string): void {
+  if (!/^[A-Za-z0-9_-]{43,1024}$/.test(credential)) {
+    throw new Error('invalid Borg server session bearer');
+  }
+}
+
+function decodePendingServerSession(
+  stored: string,
+  binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+  },
+): PendingServerSessionRecord {
+  const record = JSON.parse(stored) as Partial<PendingServerSessionRecord> & {
+    version?: unknown;
+  };
+  const op = record.operation;
+  if (
+    record.version !== SERVER_PENDING_SESSION_RECORD_VERSION ||
+    record.origin !== binding.origin ||
+    record.trustIdentity !== binding.trustIdentity ||
+    record.cubeId !== binding.cubeId ||
+    record.roleId !== binding.roleId ||
+    typeof record.credential !== 'string' ||
+    (record.state !== 'pending' && record.state !== 'active') ||
+    op === undefined ||
+    op === null ||
+    typeof op !== 'object' ||
+    op.projectRoot !== binding.operation.projectRoot ||
+    op.kind !== binding.operation.kind ||
+    op.operationKey !== binding.operation.operationKey
+  ) {
+    throw new Error('invalid Borg server session record');
+  }
+  validateServerSessionOperation(binding.operation);
+  validateSessionBearer(record.credential);
+  return {
+    origin: record.origin,
+    trustIdentity: record.trustIdentity,
+    cubeId: record.cubeId,
+    roleId: record.roleId,
+    operation: {
+      projectRoot: binding.operation.projectRoot,
+      kind: binding.operation.kind,
+      operationKey: binding.operation.operationKey,
+    },
+    credential: record.credential,
+    state: record.state,
+    ...(record.droneId === undefined ? {} : { droneId: record.droneId }),
+    ...(record.sessionId === undefined ? {} : { sessionId: record.sessionId }),
+    ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
+  };
+}
+
+/**
+ * Resolve the client's bearer for one seat, generating + persisting a PENDING
+ * record before the first attach. An existing record (pending or active) for
+ * the same seat returns its exact bearer so a lost-response retry re-sends the
+ * identical credential the server already digest-bound.
+ */
+export async function getOrCreatePendingServerSession(
+  input: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+  },
+): Promise<PendingServerSessionRecord> {
+  const account = serverPendingSessionAccount(
+    input.origin,
+    input.trustIdentity,
+    input.cubeId,
+    input.roleId,
+    input.operation,
+  );
+  const backend = await getServerCredentialBackend();
+  return withServerKeychainLock(account, async () => {
+    const stored = await backend.get(account);
+    if (stored) {
+      try {
+        return decodePendingServerSession(stored, input);
+      } catch {
+        // A corrupt/foreign record for this seat is cleared and re-minted; the
+        // old bearer was never usable without the server's matching digest.
+        await backend.delete(account);
+      }
+    }
+    const record: PendingServerSessionRecord = {
+      origin: input.origin,
+      trustIdentity: input.trustIdentity,
+      cubeId: input.cubeId,
+      roleId: input.roleId,
+      operation: {
+        projectRoot: input.operation.projectRoot,
+        kind: input.operation.kind,
+        operationKey: input.operation.operationKey,
+      },
+      credential: randomBytes(32).toString('base64url'),
+      state: 'pending',
+    };
+    validateSessionBearer(record.credential);
+    await backend.set(account, JSON.stringify({
+      version: SERVER_PENDING_SESSION_RECORD_VERSION,
+      ...record,
+    }));
+    return record;
+  });
+}
+
+/**
+ * Enrich the exact pending record IN PLACE with the server-assigned drone and
+ * session identity after a verified `created`/`reused` response, marking it
+ * active. No rename/copy window: the bearer never moves accounts.
+ */
+export async function activatePendingServerSession(
+  input: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+    droneId: string;
+    sessionId: string;
+    expiresAt: string;
+  },
+): Promise<string> {
+  validateUuid(input.droneId, 'drone identity');
+  validateUuid(input.sessionId, 'session identity');
+  if (typeof input.expiresAt !== 'string' || !Number.isFinite(Date.parse(input.expiresAt))) {
+    throw new Error('invalid Borg server session expiry');
+  }
+  const account = serverPendingSessionAccount(
+    input.origin,
+    input.trustIdentity,
+    input.cubeId,
+    input.roleId,
+    input.operation,
+  );
+  const backend = await getServerCredentialBackend();
+  await withServerKeychainLock(account, async () => {
+    const stored = await backend.get(account);
+    if (!stored) {
+      throw new Error('no pending Borg server session to activate');
+    }
+    const record = decodePendingServerSession(stored, input);
+    const next: PendingServerSessionRecord = {
+      ...record,
+      state: 'active',
+      droneId: input.droneId,
+      sessionId: input.sessionId,
+      expiresAt: input.expiresAt,
+    };
+    await backend.set(account, JSON.stringify({
+      version: SERVER_PENDING_SESSION_RECORD_VERSION,
+      ...next,
+    }));
+  });
+  return account;
+}
+
+/**
+ * Resolve the active bearer stored at an opaque per-seat reference. The role is
+ * not required from the caller — the reference itself binds the role, so the
+ * stored record's own role must re-derive the exact same account. Returns null
+ * for a missing/pending/foreign/mismatched record so callers fail closed.
+ */
+export async function getActiveServerSessionCredential(
+  credentialRef: string,
+  binding: { origin: string; trustIdentity: string; cubeId: string },
+): Promise<string | null> {
+  if (!/^borg-server-session:[a-f0-9]{64}$/.test(credentialRef)) return null;
+  const backend = await getServerCredentialBackend();
+  const stored = await backend.get(credentialRef);
+  if (!stored) return null;
+  try {
+    const record = JSON.parse(stored) as Partial<PendingServerSessionRecord> & {
+      version?: unknown;
+    };
+    const op = record.operation;
+    if (
+      record.version !== SERVER_PENDING_SESSION_RECORD_VERSION ||
+      record.origin !== binding.origin ||
+      record.trustIdentity !== binding.trustIdentity ||
+      record.cubeId !== binding.cubeId ||
+      record.state !== 'active' ||
+      typeof record.credential !== 'string' ||
+      typeof record.roleId !== 'string' ||
+      op === undefined ||
+      op === null ||
+      typeof op !== 'object' ||
+      typeof op.projectRoot !== 'string' ||
+      typeof op.operationKey !== 'string' ||
+      (op.kind !== 'seat' && op.kind !== 'sibling')
+    ) {
+      return null;
+    }
+    validateSessionBearer(record.credential);
+    // The reference must be the exact per-seat account for the stored role AND
+    // operation (seat vs sibling), so a sibling bearer never resolves a seat ref.
+    if (
+      serverPendingSessionAccount(
+        record.origin,
+        record.trustIdentity,
+        record.cubeId,
+        record.roleId,
+        op,
+      ) !== credentialRef
+    ) {
+      return null;
+    }
+    return record.credential;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Discard any pending/active session record for one seat so the next attach
+ * mints a fresh bearer. Used by the eviction/remint recovery path where the
+ * saved seat is known invalid and a new seat must be created.
+ */
+export async function clearPendingServerSession(
+  binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+  },
+): Promise<void> {
+  const account = serverPendingSessionAccount(
+    binding.origin,
+    binding.trustIdentity,
+    binding.cubeId,
+    binding.roleId,
+    binding.operation,
+  );
+  const backend = await getServerCredentialBackend();
+  await withServerKeychainLock(account, async () => {
+    await backend.delete(account);
+  });
 }
 
 function serverCubeRetryAccount(

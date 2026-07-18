@@ -53,7 +53,7 @@ describe('remote-client explicit authority connection', () => {
     const auth = mockCloudAuth();
     const fetchSpy = vi.fn(async () =>
       new Response(JSON.stringify({
-        protocol_version: '1',
+        protocol_version: '2',
         request_id: 'cubes-response-1',
         payload: { cubes: [] },
       }), {
@@ -106,7 +106,7 @@ describe('remote-client explicit authority connection', () => {
           ? { drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID }] }
           : { cube: { id: CUBE_ID, name: 'local-cube' } };
       return new Response(JSON.stringify({
-        protocol_version: '1',
+        protocol_version: '2',
         request_id: 'cube-response-1',
         payload,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });

@@ -31,7 +31,8 @@ describe('local owner enrollment to restart flow', () => {
     const humanRoleId = '66666666-6666-4666-8666-666666666666';
     const logId = '77777777-7777-4777-8777-777777777777';
     const invitation = 'i'.repeat(43);
-    const sessionToken = 's'.repeat(43);
+    const sessionId = '88888888-8888-4888-8888-888888888888';
+    const operation = { projectRoot: project, kind: 'seat' as const, operationKey: 'current-worktree' };
     const keychain = new Map<string, string>();
     const backend = {
       name: 'keychain' as const,
@@ -40,7 +41,7 @@ describe('local owner enrollment to restart flow', () => {
       delete: async (account: string) => { keychain.delete(account); },
     };
     const response = (payload: unknown, status = 200) => new Response(JSON.stringify({
-      protocol_version: '1',
+      protocol_version: '2',
       request_id: 'restart-response-1',
       payload,
     }), { status });
@@ -55,25 +56,8 @@ describe('local owner enrollment to restart flow', () => {
         }, 201);
       }
       if (path === '/api/protocol') {
-        return response({
-          protocol_version: '1',
-          package: { name: 'borgmcp-shared', version: '0.3.0' },
-          capabilities: [
-            'coordination.core',
-            'auth.bearer',
-            'auth.revocation',
-            'auth.retry-safe-enrollment',
-            'scope.cube-isolation',
-            'transport.tls',
-            'authority.no-cloud-fallback',
-          ],
-          limits: {
-            max_request_bytes: 65_536,
-            max_log_message_bytes: 10_240,
-            max_read_page_size: 500,
-            max_replay_page_size: 200,
-          },
-        });
+        // Credential-free tag-only preflight: bare exact tag, not enveloped.
+        return new Response(JSON.stringify({ protocol_version: '2' }), { status: 200 });
       }
       if (path === '/api/cubes' && method === 'POST') {
         return response({
@@ -85,11 +69,11 @@ describe('local owner enrollment to restart flow', () => {
       }
       if (path === '/api/client/attach') {
         return response({
+          result: 'created',
           cube: { id: cubeId, name: 'local-cube' },
           role: { id: roleId, name: 'Builder', role_class: 'worker', is_human_seat: false },
           drone: { id: droneId, label: 'builder-1' },
-          session: { token: sessionToken, expires_at: '2026-07-14T16:00:00.000Z', generation: 1 },
-          reattached: false,
+          session: { id: sessionId, expires_at: '2026-07-14T16:00:00.000Z' },
         }, 201);
       }
       if (path === `/api/cubes/${cubeId}` && method === 'GET') {
@@ -167,9 +151,16 @@ describe('local owner enrollment to restart flow', () => {
         origin,
         trustIdentity,
         enrolled.token,
-        { cubeId, roleId, retryKey },
+        { cubeId, roleId, operation },
         { fetchImpl: fetchImpl as typeof fetch },
       );
+      // The bearer is client-generated and persisted in the keychain; the client
+      // never learns it from the server. Read it back for the post-restart checks.
+      const bearer = await config.getActiveServerSessionCredential(
+        attached.session.credentialRef,
+        { origin, trustIdentity, cubeId },
+      );
+      expect(bearer).toMatch(/^[A-Za-z0-9_-]{43,}$/);
       const cubes = await import('../src/cubes.js');
       await cubes.setActiveCube({
         cubeId,
@@ -179,13 +170,12 @@ describe('local owner enrollment to restart flow', () => {
         apiUrl: origin,
         serverTrustIdentity: trustIdentity,
         localSessionCredentialRef: attached.session.credentialRef,
-        localSessionGeneration: attached.session.generation,
         localSessionExpiresAt: attached.session.expiresAt,
         roleName: attached.role.name,
       });
 
       const persisted = readFileSync(join(fixture, '.config', 'borgmcp', 'cubes.json'), 'utf8');
-      expect(persisted).not.toContain(sessionToken);
+      expect(persisted).not.toContain(bearer);
       expect(persisted).toContain(attached.session.credentialRef);
 
       vi.resetModules();
@@ -193,16 +183,16 @@ describe('local owner enrollment to restart flow', () => {
       restartedConfig.__setServerCredentialBackendForTest(backend);
       const restartedCubes = await import('../src/cubes.js');
       const active = await restartedCubes.getActiveCube();
-      expect(active?.sessionToken).toBe(sessionToken);
+      expect(active?.sessionToken).toBe(bearer);
 
       const remote = await import('../src/remote-client.js');
-      await expect(remote.regen(sessionToken, origin)).resolves.toMatchObject({
+      await expect(remote.regen(bearer!, origin)).resolves.toMatchObject({
         cube: { id: cubeId },
         role: { id: roleId },
         drone: { id: droneId },
         behind_by: 0,
       });
-      await expect(remote.appendLog(sessionToken, origin, 'post-restart log')).resolves
+      await expect(remote.appendLog(bearer!, origin, 'post-restart log')).resolves
         .toMatchObject({ entry: { id: logId, message: 'post-restart log' } });
 
       vi.doMock('../src/local-server-cursor.js', () => ({
@@ -233,7 +223,7 @@ describe('local owner enrollment to restart flow', () => {
       );
       expect(localCalls.length).toBeGreaterThan(0);
       expect(localCalls.every(([, init]) =>
-        new Headers(init?.headers).get('Authorization') === `Bearer ${sessionToken}`
+        new Headers(init?.headers).get('Authorization') === `Bearer ${bearer}`
       )).toBe(true);
       expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('borgmcp.ai'))).toBe(false);
     } finally {

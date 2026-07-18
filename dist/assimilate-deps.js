@@ -16,7 +16,7 @@ import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
 import { API_URL, getValidToken, listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, attachBorgServer, } from './server-handshake.js';
-import { completeLocalAttachRetry, getPendingLocalAttach, prepareLocalAttachRetry, } from './server-attach-state.js';
+import { clearPendingServerSession, } from './config.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError } from './server-errors.js';
@@ -94,13 +94,6 @@ export function buildDefaultAssimilateDeps() {
         getActiveCube: () => cubesGetActive(),
         hasPersistedActiveCube: () => cubesHasPersistedActive(),
         probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
-        getPendingLocalAttach: (apiUrl, serverTrustIdentity, cubeId, roleId, operation) => getPendingLocalAttach({
-            origin: apiUrl,
-            trustIdentity: serverTrustIdentity,
-            cubeId,
-            roleId,
-        }, operation),
-        completeLocalAttach: (completion) => completeLocalAttachRetry(completion),
         setActiveCube: (a) => cubesSetActive(a),
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
         // gh#673 P2 (WI-1): project-local SessionStart hook for the launch root.
@@ -193,37 +186,42 @@ export function buildDefaultAssimilateDeps() {
         },
         assimilate: async (apiUrl, token, params, serverTrustIdentity) => {
             if (serverTrustIdentity !== undefined) {
-                if (params.local_attach_operation === undefined) {
+                if (params.session_operation === undefined) {
                     throw new Error('Borg server attach operation identity is missing');
                 }
-                const binding = {
+                const operation = params.session_operation;
+                const seatBinding = {
                     origin: apiUrl,
                     trustIdentity: serverTrustIdentity,
                     cubeId: params.cube_id,
                     roleId: params.role_id,
+                    operation,
                 };
-                const retryKey = await prepareLocalAttachRetry(binding, {
-                    ...(params.prior_drone_id === undefined
-                        ? {}
-                        : { priorDroneId: params.prior_drone_id }),
-                    remintInvalidPrior: params.remint_invalid_prior === true,
-                }, params.local_attach_operation);
                 const trust = await loadBorgServerTrust(apiUrl);
                 if (trust.identity !== serverTrustIdentity) {
                     throw new Error('Borg server trust identity changed; refusing the attach');
                 }
+                // Eviction-remint: discard the known-invalid saved bearer BEFORE the
+                // attach so a genuinely fresh bearer (and therefore a new seat) is minted
+                // instead of the server reusing the evicted seat's digest.
+                if (params.remint_invalid_prior === true) {
+                    await clearPendingServerSession(seatBinding);
+                }
                 const attached = await attachBorgServer(apiUrl, serverTrustIdentity, token, {
                     cubeId: params.cube_id,
                     roleId: params.role_id,
-                    retryKey,
+                    operation,
+                    ...(params.prior_drone_id === undefined
+                        ? {}
+                        : { priorDroneId: params.prior_drone_id }),
                 }, { fetchImpl: trust.fetchImpl });
                 if (params.prior_drone_id) {
                     if (params.remint_invalid_prior) {
-                        if (attached.drone.id === params.prior_drone_id) {
-                            throw new Error('Borg server returned the invalid saved seat during remint');
+                        if (attached.result !== 'created' || attached.drone.id === params.prior_drone_id) {
+                            throw new Error('Borg server did not remint a fresh seat after eviction');
                         }
                     }
-                    else if (!attached.reattached || attached.drone.id !== params.prior_drone_id) {
+                    else if (attached.result !== 'reused' || attached.drone.id !== params.prior_drone_id) {
                         throw new BorgServerError('ATTACH_CONFLICT', 'Borg server did not reattach the saved seat');
                     }
                 }
@@ -232,15 +230,9 @@ export function buildDefaultAssimilateDeps() {
                     drone_id: attached.drone.id,
                     drone_label: attached.drone.label,
                     role_id: attached.role.id,
-                    reattached: attached.reattached,
-                    local_attach_completion: {
-                        binding,
-                        operation: params.local_attach_operation,
-                        retryKey,
-                    },
+                    result: attached.result,
                     local_session: {
                         credential_ref: attached.session.credentialRef,
-                        generation: attached.session.generation,
                         expires_at: attached.session.expiresAt,
                     },
                 };
@@ -260,7 +252,9 @@ export function buildDefaultAssimilateDeps() {
                 drone_label: result.drone.label,
                 session_token: result.sessionToken,
                 role_id: result.role.id,
-                reattached: result.reattached === true,
+                // Map the cloud gh#780 reattach hint onto the unified result discriminant
+                // so the same "reused" display path serves cloud and local authorities.
+                result: result.reattached === true ? 'reused' : 'created',
             };
         },
         listTemplates: async (apiUrl, token, serverTrustIdentity) => {

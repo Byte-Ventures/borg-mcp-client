@@ -3,7 +3,8 @@ export type BorgServerErrorCode =
   | 'CREDENTIAL_REJECTED'
   | 'INVITATION_REJECTED'
   | 'CREATE_CUBE_DENIED'
-  | 'ATTACH_CONFLICT';
+  | 'ATTACH_CONFLICT'
+  | 'SESSION_REJECTED';
 
 /** Safe, non-secret state code for deterministic authority recovery copy. */
 export class BorgServerError extends Error {

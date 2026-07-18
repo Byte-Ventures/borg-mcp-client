@@ -20,7 +20,7 @@ import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
-import { clearServerSessionCredential, getServerSessionCredential, } from './config.js';
+import { clearServerSessionCredential, getActiveServerSessionCredential, } from './config.js';
 const CUBES_DIR = join(homedir(), '.config', 'borgmcp');
 const CUBES_FILE = join(CUBES_DIR, 'cubes.json');
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
@@ -277,17 +277,16 @@ export async function hasPersistedActiveCube() {
 }
 async function hydrateActiveCube(entry) {
     if (entry.serverTrustIdentity !== undefined) {
-        if (typeof entry.localSessionCredentialRef !== 'string' ||
-            !Number.isSafeInteger(entry.localSessionGeneration) ||
-            (entry.localSessionGeneration ?? 0) < 1) {
+        if (typeof entry.localSessionCredentialRef !== 'string') {
             return null;
         }
-        const sessionToken = await getServerSessionCredential(entry.localSessionCredentialRef, {
+        // The credential reference re-derives the exact per-seat account (role +
+        // operation come from the stored session record), so no drone id or
+        // generation is needed to resolve the stable idempotent bearer.
+        const sessionToken = await getActiveServerSessionCredential(entry.localSessionCredentialRef, {
             origin: entry.apiUrl,
             trustIdentity: entry.serverTrustIdentity,
             cubeId: entry.cubeId,
-            droneId: entry.droneId,
-            generation: entry.localSessionGeneration,
         });
         if (!sessionToken)
             return null;
@@ -308,23 +307,11 @@ export async function setActiveCube(active) {
         const projectKey = findProjectRoot();
         const prior = existing.projects[projectKey];
         if (active.serverTrustIdentity !== undefined) {
-            if (typeof active.localSessionCredentialRef !== 'string' ||
-                !Number.isSafeInteger(active.localSessionGeneration) ||
-                (active.localSessionGeneration ?? 0) < 1) {
+            if (typeof active.localSessionCredentialRef !== 'string') {
                 throw new Error('local Borg server session metadata is incomplete');
             }
-            const nextGeneration = active.localSessionGeneration;
-            if (prior?.serverTrustIdentity === active.serverTrustIdentity &&
-                prior.apiUrl === active.apiUrl &&
-                prior.cubeId === active.cubeId &&
-                prior.droneId === active.droneId &&
-                typeof prior.localSessionGeneration === 'number' &&
-                prior.localSessionGeneration >= nextGeneration) {
-                if (prior.localSessionCredentialRef !== active.localSessionCredentialRef) {
-                    await clearServerSessionCredential(active.localSessionCredentialRef);
-                }
-                throw new Error('stale Borg server session generation was discarded');
-            }
+            // No generation: the idempotent bearer is stable per seat, so there is no
+            // rotation race to arbitrate — persist the current reference directly.
             const { sessionToken: _discardLocalBearer, ...persisted } = active;
             existing.projects[projectKey] = persisted;
             try {

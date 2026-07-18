@@ -115,31 +115,12 @@ if (mode === 'ambiguous') {
 
 if (mode === 'resume') {
   const bodies: unknown[] = [];
-  const protocolInfo = {
-    protocol_version: '1',
-    package: { name: 'borgmcp-shared', version: '0.3.0' },
-    capabilities: [
-      'coordination.core',
-      'auth.bearer',
-      'auth.revocation',
-      'auth.retry-safe-enrollment',
-      'scope.cube-isolation',
-      'transport.tls',
-      'authority.no-cloud-fallback',
-    ],
-    limits: {
-      max_request_bytes: 65_536,
-      max_log_message_bytes: 10_240,
-      max_read_page_size: 500,
-      max_replay_page_size: 200,
-    },
-  };
   const resumed = await resumeBorgServerEnrollment(common.origin, common.trustIdentity, {
     fetchImpl: (async (_input, init) => {
       if (init?.method === 'POST') {
         bodies.push(JSON.parse(String(init.body)));
         return new Response(JSON.stringify({
-          protocol_version: '1',
+          protocol_version: '2',
           request_id: 'resume-enrollment-1',
           payload: {
             purpose: 'owner',
@@ -148,11 +129,8 @@ if (mode === 'resume') {
           },
         }), { status: 201 });
       }
-      return new Response(JSON.stringify({
-        protocol_version: '1',
-        request_id: 'resume-protocol-1',
-        payload: protocolInfo,
-      }), { status: 200 });
+      // Credential-free tag-only preflight: bare exact tag.
+      return new Response(JSON.stringify({ protocol_version: '2' }), { status: 200 });
     }) as typeof fetch,
   });
   process.stdout.write(JSON.stringify({ bodies, token: resumed?.token }));

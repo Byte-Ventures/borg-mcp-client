@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const keychainMocks = vi.hoisted(() => ({
-  getServerSessionCredential: vi.fn(async () => 'k'.repeat(43)),
+  getActiveServerSessionCredential: vi.fn(async () => 'k'.repeat(43)),
   clearServerSessionCredential: vi.fn(async () => {}),
 }));
 
@@ -21,7 +21,7 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) {
     rmSync(fixture, { recursive: true, force: true });
   }
-  keychainMocks.getServerSessionCredential.mockClear();
+  keychainMocks.getActiveServerSessionCredential.mockClear();
   keychainMocks.clearServerSessionCredential.mockClear();
   vi.resetModules();
 });
@@ -49,7 +49,6 @@ describe('local ActiveCube session persistence', () => {
     apiUrl: 'https://localhost:8787',
     serverTrustIdentity: 'spki-sha256:test-server',
     localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
-    localSessionGeneration: 1,
     localSessionExpiresAt: '2026-07-14T16:00:00.000Z',
   };
 
@@ -72,66 +71,25 @@ describe('local ActiveCube session persistence', () => {
       ...localMetadata,
       sessionToken: 'k'.repeat(43),
     });
-    expect(keychainMocks.getServerSessionCredential).toHaveBeenCalledWith(
+    // The idempotent bearer is resolved by the opaque per-seat reference alone —
+    // no drone id or generation is required (role + operation live in the record).
+    expect(keychainMocks.getActiveServerSessionCredential).toHaveBeenCalledWith(
       localMetadata.localSessionCredentialRef,
-      expect.objectContaining({ generation: 1 }),
+      {
+        origin: localMetadata.apiUrl,
+        trustIdentity: localMetadata.serverTrustIdentity,
+        cubeId: localMetadata.cubeId,
+      },
     );
   });
 
-  it('discards a delayed lower generation and retains the newer metadata', async () => {
-    const { fixture, cubes } = await setup();
-    await cubes.setActiveCube({ ...localMetadata, localSessionGeneration: 3 });
-
-    await expect(cubes.setActiveCube({
-      ...localMetadata,
-      localSessionCredentialRef: `borg-server-session:${'b'.repeat(64)}`,
-      localSessionGeneration: 2,
-    })).rejects.toThrow(/stale.*generation/i);
-
-    const persisted = JSON.parse(readFileSync(
-      join(fixture, '.config', 'borgmcp', 'cubes.json'),
-      'utf8',
-    ));
-    expect(persisted.projects[process.cwd()].localSessionGeneration).toBe(3);
-    expect(persisted.projects[process.cwd()].localSessionCredentialRef)
-      .toBe(localMetadata.localSessionCredentialRef);
-    expect(keychainMocks.clearServerSessionCredential)
-      .toHaveBeenCalledWith(`borg-server-session:${'b'.repeat(64)}`);
-  });
-
-  it('serializes reordered concurrent responses and keeps the greatest generation', async () => {
-    const { fixture, cubes } = await setup();
-    await cubes.setActiveCube(localMetadata);
-    const generationThree = cubes.setActiveCube({
-      ...localMetadata,
-      localSessionCredentialRef: `borg-server-session:${'d'.repeat(64)}`,
-      localSessionGeneration: 3,
-    });
-    const delayedGenerationTwo = cubes.setActiveCube({
-      ...localMetadata,
-      localSessionCredentialRef: `borg-server-session:${'e'.repeat(64)}`,
-      localSessionGeneration: 2,
-    });
-
-    const outcomes = await Promise.allSettled([generationThree, delayedGenerationTwo]);
-    expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'rejected']);
-    const persisted = JSON.parse(readFileSync(
-      join(fixture, '.config', 'borgmcp', 'cubes.json'),
-      'utf8',
-    ));
-    expect(persisted.projects[process.cwd()].localSessionGeneration).toBe(3);
-    expect(persisted.projects[process.cwd()].localSessionCredentialRef)
-      .toBe(`borg-server-session:${'d'.repeat(64)}`);
-  });
-
-  it('advances metadata before retiring the prior keychain generation', async () => {
+  it('retires a superseded prior keychain reference when the seat reference changes', async () => {
     const { fixture, cubes } = await setup();
     await cubes.setActiveCube(localMetadata);
     const nextRef = `borg-server-session:${'c'.repeat(64)}`;
     await cubes.setActiveCube({
       ...localMetadata,
       localSessionCredentialRef: nextRef,
-      localSessionGeneration: 2,
     });
 
     const persisted = readFileSync(

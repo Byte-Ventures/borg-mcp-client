@@ -50,7 +50,93 @@ export interface ServerSessionCredentialRecord {
     credential: string;
     expiresAt?: string | null;
 }
+/**
+ * S1 clean-slate local drone-session record. The client CSPRNG-generates the
+ * bearer and persists it PENDING (keyed by the stable per-seat attach identity
+ * origin+trustIdentity+cube+role — no drone id yet on first attach) BEFORE the
+ * attach request. The bearer digest is the sole server correlator, so a lost
+ * response is recovered by re-sending the exact same bearer. After a verified
+ * `created`/`reused` response the SAME record is enriched in place with the
+ * server-assigned drone/session identity — no generation, no rotation.
+ */
+/**
+ * The seat/sibling operation dimension for a pending session. Because the client
+ * bearer digest is the SOLE server correlator, distinct seats require distinct
+ * bearers; a deliberate sibling attach must therefore namespace its bearer apart
+ * from the durable in-place seat for the same (origin,trust,cube,role). Ported
+ * from the retired local-attach `operationBindingKey`. projectRoot is captured
+ * before a successful sibling attach changes cwd, so it is stable across the
+ * whole prepare→activate lifecycle.
+ */
+export interface ServerSessionOperation {
+    projectRoot: string;
+    kind: 'seat' | 'sibling';
+    operationKey: string;
+}
+export interface PendingServerSessionRecord {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+    credential: string;
+    state: 'pending' | 'active';
+    droneId?: string;
+    sessionId?: string;
+    expiresAt?: string;
+}
 export declare function withServerKeychainLock<T>(account: string, operation: () => Promise<T>): Promise<T>;
+/**
+ * Resolve the client's bearer for one seat, generating + persisting a PENDING
+ * record before the first attach. An existing record (pending or active) for
+ * the same seat returns its exact bearer so a lost-response retry re-sends the
+ * identical credential the server already digest-bound.
+ */
+export declare function getOrCreatePendingServerSession(input: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+}): Promise<PendingServerSessionRecord>;
+/**
+ * Enrich the exact pending record IN PLACE with the server-assigned drone and
+ * session identity after a verified `created`/`reused` response, marking it
+ * active. No rename/copy window: the bearer never moves accounts.
+ */
+export declare function activatePendingServerSession(input: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+    droneId: string;
+    sessionId: string;
+    expiresAt: string;
+}): Promise<string>;
+/**
+ * Resolve the active bearer stored at an opaque per-seat reference. The role is
+ * not required from the caller — the reference itself binds the role, so the
+ * stored record's own role must re-derive the exact same account. Returns null
+ * for a missing/pending/foreign/mismatched record so callers fail closed.
+ */
+export declare function getActiveServerSessionCredential(credentialRef: string, binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+}): Promise<string | null>;
+/**
+ * Discard any pending/active session record for one seat so the next attach
+ * mints a fresh bearer. Used by the eviction/remint recovery path where the
+ * saved seat is known invalid and a new seat must be created.
+ */
+export declare function clearPendingServerSession(binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    roleId: string;
+    operation: ServerSessionOperation;
+}): Promise<void>;
 /**
  * gh#860: is THIS process's selected persistent backend the OS keychain? The
  * runtime-fallback (auth.ts) gates on this so a keychain WRITE failure migrates

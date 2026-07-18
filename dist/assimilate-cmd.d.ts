@@ -2,7 +2,7 @@ import type { Role, RoleOccupant } from './role-resolver.js';
 import { type CodexRemoteLaunch } from './codex-remote.js';
 import type { BorgCli } from './cubes.js';
 import type { SeatStatus } from './seat-probe.js';
-import type { LocalAttachCompletion, LocalAttachOperation } from './server-attach-state.js';
+import type { ServerSessionOperation } from './config.js';
 import { type LaunchApprovalDecision } from './cli-tool-approval.js';
 export interface AssimilateFlags {
     worktree?: string;
@@ -38,12 +38,9 @@ export interface AssimilateResult {
     role_id: string;
     local_session?: {
         credential_ref: string;
-        generation: number;
         expires_at: string | null;
     };
-    reattached?: boolean;
-    /** Exact prepared binding used only to complete durable local attach state. */
-    local_attach_completion?: LocalAttachCompletion;
+    result?: 'created' | 'reused';
 }
 export interface ActiveCube {
     cubeId: string;
@@ -55,7 +52,6 @@ export interface ActiveCube {
     /** Verified local-server CA identity; absent for Borg Cloud cubes. */
     serverTrustIdentity?: string;
     localSessionCredentialRef?: string;
-    localSessionGeneration?: number;
     localSessionExpiresAt?: string | null;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
@@ -85,11 +81,6 @@ export interface AssimilateDeps {
     getActiveCube: () => Promise<ActiveCube | null>;
     hasPersistedActiveCube: () => Promise<boolean>;
     probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
-    getPendingLocalAttach: (apiUrl: string, serverTrustIdentity: string, cubeId: string, roleId: string, operation: LocalAttachOperation) => Promise<{
-        priorDroneId?: string;
-        remintInvalidPrior: boolean;
-    } | null>;
-    completeLocalAttach: (completion: LocalAttachCompletion) => Promise<void>;
     setActiveCube: (a: ActiveCube) => Promise<void>;
     findProjectRoot: (cwd: string) => string;
     installProjectSessionHook: (projectRoot: string) => void;
@@ -133,7 +124,7 @@ export interface AssimilateDeps {
         remint_invalid_prior?: boolean;
         model?: string | null;
         agent_kind?: 'claude' | 'codex' | 'opencode' | null;
-        local_attach_operation?: LocalAttachOperation;
+        session_operation?: ServerSessionOperation;
     }, serverTrustIdentity?: string) => Promise<AssimilateResult>;
     listTemplates: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<Array<{
         name: string;

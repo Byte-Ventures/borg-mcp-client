@@ -1,20 +1,23 @@
-import { type CreateCubeResponse, type ProtocolInfo, type ServerCapability } from 'borgmcp-shared/protocol';
-import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, storeServerSessionCredential } from './config.js';
+import { type CreateCubeResponse, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
+import { activatePendingServerEnrollment, activatePendingServerSession, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, getOrCreatePendingServerSession, type ServerSessionOperation } from './config.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
 type FetchLike = typeof fetch;
 /** Bodyless, non-identifying liveness probe from the shared contract. */
 export declare function probeBorgServer(origin: string, fetchImpl?: FetchLike, timeoutMs?: number): Promise<boolean>;
 /**
- * Authenticate and negotiate the shared protocol without consulting Cloud.
- * The caller supplies an authority- and trust-bound credential from secure
- * storage; redirects are rejected so bearer credentials never cross origins.
+ * Credential-free protocol-tag preflight. After the caller has verified pinned
+ * TLS, confirm the server speaks the exact protocol tag BEFORE any bearer is
+ * created, sent, or a seat attached. Sends NO Authorization header, cookie,
+ * query, or body; rejects redirects; and bounds the response. A tag mismatch,
+ * an extra field, or any transport anomaly fails closed here — no keychain
+ * write, no attach, no Cloud fallback. The bearer is proven only at attach.
  */
-export declare function negotiateBorgServer(origin: string, credential: string, fetchImpl?: FetchLike): Promise<ProtocolInfo>;
+export declare function preflightBorgServerTag(origin: string, fetchImpl?: FetchLike): Promise<ProtocolTagPreflight>;
 export interface EnrolledServerConnection {
     token: string;
     trustIdentity: string;
-    protocol: ProtocolInfo;
+    protocol: ProtocolTagPreflight;
     clientId?: string | null;
     serverCapabilities?: ServerCapability[];
 }
@@ -42,23 +45,28 @@ export interface ServerAttachResult {
     };
     session: {
         credentialRef: string;
-        generation: number;
-        expiresAt: string | null;
+        sessionId: string;
+        expiresAt: string;
     };
-    reattached: boolean;
+    result: 'created' | 'reused';
 }
 /**
- * Attach an enrolled client principal to one granted cube/role. The response
- * bearer is written to a generation-specific keychain entry before this
- * function returns; only its opaque reference crosses into caller state.
+ * Attach an enrolled client principal to one granted cube/role over protocol v2.
+ * The client CSPRNG-generates the session bearer and persists it PENDING in the
+ * OS keychain (keyed by the stable per-seat identity) BEFORE this request, so an
+ * interrupted/lost response is recovered by re-sending the exact same bearer —
+ * the server binds only its digest. A verified `created`/`reused` response
+ * activates that pending record in place; the server never returns a bearer.
  */
 export declare function attachBorgServer(origin: string, trustIdentity: string, parentCredential: string, request: {
     cubeId: string;
     roleId: string;
-    retryKey: string;
+    operation: ServerSessionOperation;
+    priorDroneId?: string;
 }, deps?: {
     fetchImpl?: FetchLike;
-    storeSessionCredential?: typeof storeServerSessionCredential;
+    getPendingSession?: typeof getOrCreatePendingServerSession;
+    activateSession?: typeof activatePendingServerSession;
 }): Promise<ServerAttachResult>;
 /**
  * Redeem one invitation after the caller has verified TLS and derived the

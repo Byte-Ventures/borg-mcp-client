@@ -456,10 +456,10 @@ export async function runAssimilate(args, deps) {
     const existing = await deps.getActiveCube();
     const hasPersistedIdentity = existing !== null || await deps.hasPersistedActiveCube();
     const wantSibling = args.flags.worktree !== undefined || (existing !== null && !args.flags.here);
-    const localAttachOperation = {
-        // Capture the source repository before a successful attach changes cwd to
-        // the newly-created sibling. This is the stable state namespace for both
-        // preparation and completion.
+    const sessionOperation = {
+        // Capture the source repository before a successful sibling attach changes
+        // cwd. This is the stable seat/sibling namespace for the pending bearer, so a
+        // deliberate sibling never collides with the durable in-place seat's bearer.
         projectRoot,
         kind: wantSibling ? 'sibling' : 'seat',
         operationKey: wantSibling
@@ -493,31 +493,11 @@ export async function runAssimilate(args, deps) {
                 `worktree, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`);
             return 1;
         }
-        const pendingCandidates = (await Promise.all(cubeDetail.roles.map(async (role) => ({
-            role,
-            pending: await deps.getPendingLocalAttach(auth.apiUrl, auth.serverTrustIdentity, cubeDetail.id, role.id, localAttachOperation),
-        })))).filter((candidate) => candidate.pending !== null);
-        if (pendingCandidates.length > 1) {
-            deps.stderr(`Multiple unfinished seat attachments exist for ${authority.apiUrl}. ` +
-                'No new seat was created. Finish or repair the saved local state, then rerun ' +
-                `${localAssimilateCommand(authority.apiUrl)}.\n`);
-            return 1;
-        }
-        const pendingCandidate = pendingCandidates[0];
-        if (pendingCandidate?.pending) {
-            if (existing && args.flags.here &&
-                pendingCandidate.pending.priorDroneId !== undefined &&
-                pendingCandidate.pending.priorDroneId !== existing.droneId) {
-                deps.stderr(`The unfinished attachment for ${authority.apiUrl} does not match this worktree's ` +
-                    'saved seat. No new seat was created. Repair the saved local state, then rerun ' +
-                    `${localAssimilateCommand(authority.apiUrl)}.\n`);
-                return 1;
-            }
-            savedLocalRole = pendingCandidate.role;
-            reattachPriorId = pendingCandidate.pending.priorDroneId;
-            remintInvalidPrior = pendingCandidate.pending.remintInvalidPrior;
-        }
-        else if (existing && args.flags.here) {
+        // The per-seat PENDING bearer is the resume mechanism: a lost attach
+        // response is recovered when the next attach re-sends the identical bearer,
+        // so there is no separate unfinished-attach store to scan. Reattach identity
+        // for `--here` comes from this worktree's saved active cube below.
+        if (existing && args.flags.here) {
             savedLocalRole = existing.roleName
                 ? cubeDetail.roles.find((role) => role.name === existing.roleName)
                 : undefined;
@@ -645,7 +625,7 @@ export async function runAssimilate(args, deps) {
             ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
             ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
             ...(authority.kind === 'server'
-                ? { local_attach_operation: localAttachOperation }
+                ? { session_operation: sessionOperation }
                 : {}),
         };
         result = auth.serverTrustIdentity === undefined
@@ -692,10 +672,11 @@ export async function runAssimilate(args, deps) {
     // The drone label / session token are already server-truth; this aligns the
     // displayed role name + worktree slug with what was actually assigned.
     const assignedRole = cubeDetail.roles.find((r) => r.id === result.role_id) ?? resolvedRole;
-    if (result.reattached) {
-        // gh#780: the seat's existing role is authoritative on a reattach —
-        // a role difference is expected, not a grant fallback.
-        deps.stderr(`re-attached to existing seat ${result.drone_label} (session token rotated, no new drone minted)\n`);
+    if (result.result === 'reused') {
+        // The seat's existing role is authoritative on an idempotent reattach —
+        // a role difference is expected, not a grant fallback. The bearer is
+        // reused, not rotated: no new drone minted.
+        deps.stderr(`re-attached to existing seat ${result.drone_label} (same session, no new drone minted)\n`);
     }
     else if (assignedRole.id !== resolvedRole.id) {
         deps.stderr(`The requested role "${resolvedRole.name}" was unavailable; ` +
@@ -823,7 +804,6 @@ export async function runAssimilate(args, deps) {
                 : {
                     serverTrustIdentity: auth.serverTrustIdentity,
                     localSessionCredentialRef: result.local_session.credential_ref,
-                    localSessionGeneration: result.local_session.generation,
                     localSessionExpiresAt: result.local_session.expires_at,
                 }),
             // gh#899: persist the assimilated role so the connect-time ListTools
@@ -832,12 +812,6 @@ export async function runAssimilate(args, deps) {
             isHumanSeat: assignedRole.is_human_seat,
             ...(assignedRole.role_class ? { roleClass: assignedRole.role_class } : {}),
         });
-        if (auth.serverTrustIdentity !== undefined &&
-            result.local_attach_completion !== undefined) {
-            // cubes.json is now the durable consumer of the rotated session. Only
-            // now may a crash-safe attach tuple leave PENDING state.
-            await deps.completeLocalAttach(result.local_attach_completion);
-        }
     }
     catch (err) {
         const message = err instanceof Error ? err.message : String(err);

@@ -28,8 +28,6 @@ export interface ActiveCube {
     serverTrustIdentity?: string;
     /** Opaque local-session keychain reference; never a bearer. */
     localSessionCredentialRef?: string;
-    /** Server-owned monotonic local-session generation. */
-    localSessionGeneration?: number;
     localSessionExpiresAt?: string | null;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
