@@ -692,6 +692,64 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
   });
 });
 
+describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR #6)', () => {
+  const savedSeat = () => vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), sessionToken: 'prior-bearer', roleName: 'Drone' }));
+  const cubeResolves = {
+    cwd: () => '/work/myrepo',
+    findProjectRoot: () => '/work/myrepo',
+    listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    getCube: vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] })),
+  };
+
+  it("credential-rejected: NON-destructive re-enroll copy, exit 1, no reset diagnosis, no 'restart the server' advice", async () => {
+    const stderr = vi.fn();
+    const assimilate = vi.fn(async () => { throw new Error('attach must not run'); });
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, assimilate,
+      probeSeat: vi.fn(async () => 'credential-rejected'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    expect(assimilate).not.toHaveBeenCalled();
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('saved enrollment for https://server.test was rejected');
+    expect(out).toContain('--enroll');
+    // Distinct from the takeover path AND the transient path.
+    expect(out).not.toContain('borg reset-local-seat');
+    expect(out).not.toMatch(/borg-mcp-server start|Start or restart the server/i);
+    expect(deps.clearActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
+  it('trust-mismatch: TERMINAL trust copy, exit 1, never restart-the-server advice, never a reset', async () => {
+    const stderr = vi.fn();
+    const assimilate = vi.fn(async () => { throw new Error('attach must not run'); });
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, assimilate,
+      probeSeat: vi.fn(async () => 'trust-mismatch'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    expect(assimilate).not.toHaveBeenCalled();
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('could not verify the expected server identity');
+    expect(out).not.toMatch(/borg-mcp-server start|Start or restart the server/i);
+    expect(out).not.toContain('borg reset-local-seat');
+  });
+
+  it('indeterminate: STILL the transient restart advice (unchanged, distinct from the terminal causes)', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr,
+      probeSeat: vi.fn(async () => 'indeterminate'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/could not verify this worktree's saved seat/);
+    expect(out).toContain('borg-mcp-server start');
+  });
+});
+
 describe('runAssimilate: Sprint 19 (gh#184) strict-rollback semantics', () => {
   it('assimilate API failure: no worktree created (clean early-exit)', async () => {
     const runSyncSpy = vi.fn((cmd: string, args: string[]) => {

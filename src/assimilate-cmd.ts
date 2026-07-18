@@ -915,6 +915,29 @@ export async function runAssimilate(
       if (status === 'rejected') {
         return diagnoseSessionRejected(deps, auth.apiUrl);
       }
+      // CR #6: distinct causes get cause-accurate, non-destructive recovery —
+      // never the generic "restart the server" advice.
+      if (status === 'credential-rejected') {
+        // The saved SESSION bearer was rejected WITHOUT the typed takeover code
+        // (a bare/other 401). Non-destructive: re-enroll, never a seat reset.
+        deps.stderr(
+          `The saved enrollment for ${authority.apiUrl} was rejected. No new seat was created ` +
+            `and nothing was changed. Re-enroll with ${localAssimilateCommand(authority.apiUrl, true)} ` +
+            'from the operator’s terminal.\n',
+        );
+        return 1;
+      }
+      if (status === 'trust-mismatch') {
+        // Terminal: the pinned identity changed. Restarting the server does NOT
+        // fix it — verify this is the expected server / re-initialization.
+        deps.stderr(
+          `Borg could not verify the expected server identity for ${authority.apiUrl}. ` +
+            'No new seat was created. Verify that this is the expected server; if it was ' +
+            're-initialized, restore the expected identity, then rerun ' +
+            `${localAssimilateCommand(authority.apiUrl)}.\n`,
+        );
+        return 1;
+      }
       if (status === 'indeterminate') {
         deps.stderr(
           `Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +

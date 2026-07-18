@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Executable production-chain regression (SR-six 02b6f245 / thirty-seven): the
-// real defaultProbeSeat → whoami → localAuthorityContext → authedFetch path must
-// classify a pin-matched drone-SESSION 401 as `rejected` (→ scoped reset), a
-// parent-enrollment-credential 401 as CREDENTIAL_REJECTED (never a reset), a 410
-// DRONE_EVICTED as `evicted`, and 404/5xx/network/trust-mismatch as
-// `indeterminate` (non-destructive). No stubbing of the gating probe.
+// Executable production-chain regression (SR-six 02b6f245 / thirty-seven; CR #6):
+// the real defaultProbeSeat → whoami → localAuthorityContext → authedFetch path
+// must PRESERVE the distinct cause — a pin-matched drone-SESSION 401 → `rejected`
+// (→ offline reset), any OTHER 401 → `credential-rejected` (non-destructive
+// re-enroll), a trust/identity mismatch → `trust-mismatch` (terminal), a 410
+// DRONE_EVICTED → `evicted`, and only 404/5xx/network as `indeterminate`
+// (genuinely transient). No collapsing to `indeterminate`; no stubbing of the
+// gating probe.
 
 const ORIGIN = 'https://localhost:8787';
 const TRUST = 'spki-sha256:test-server';
@@ -75,16 +77,16 @@ describe('defaultProbeSeat production chain (real whoami → authedFetch verdict
     await expect(probe(sessionRejected401())).resolves.toBe('rejected');
   });
 
-  it('indeterminate: a BARE 401 with no typed envelope is NOT a session rejection (never reset)', async () => {
-    await expect(probe(vi.fn(async () => new Response('unauthorized', { status: 401 })))).resolves.toBe('indeterminate');
+  it('credential-rejected: a BARE 401 with no typed envelope is NOT a session rejection (non-destructive re-enroll)', async () => {
+    await expect(probe(vi.fn(async () => new Response('unauthorized', { status: 401 })))).resolves.toBe('credential-rejected');
   });
 
-  it('indeterminate: a 401 with a MALFORMED body fails closed (never reset)', async () => {
-    await expect(probe(vi.fn(async () => new Response('{ not json', { status: 401 })))).resolves.toBe('indeterminate');
+  it('credential-rejected: a 401 with a MALFORMED body fails closed to a non-destructive credential rejection', async () => {
+    await expect(probe(vi.fn(async () => new Response('{ not json', { status: 401 })))).resolves.toBe('credential-rejected');
   });
 
-  it('indeterminate: a 401 with a DIFFERENT typed code (CREDENTIAL_REJECTED) is not a session rejection', async () => {
-    await expect(probe(vi.fn(async () => new Response(errorEnvelope('CREDENTIAL_REJECTED'), { status: 401 })))).resolves.toBe('indeterminate');
+  it('credential-rejected: a 401 with a DIFFERENT typed code (CREDENTIAL_REJECTED) is a credential rejection, not a takeover', async () => {
+    await expect(probe(vi.fn(async () => new Response(errorEnvelope('CREDENTIAL_REJECTED'), { status: 401 })))).resolves.toBe('credential-rejected');
   });
 
   it('indeterminate: a 5xx is transient/ambiguous, never destructive', async () => {
@@ -99,8 +101,8 @@ describe('defaultProbeSeat production chain (real whoami → authedFetch verdict
     await expect(probe(vi.fn(async () => { throw new Error('ECONNREFUSED'); }))).resolves.toBe('indeterminate');
   });
 
-  it('indeterminate: a trust-identity mismatch is NOT a session rejection', async () => {
-    await expect(probe(vi.fn(), 'spki-sha256:DIFFERENT')).resolves.toBe('indeterminate');
+  it('trust-mismatch: a pinned-identity mismatch is a TERMINAL trust error, not transient/indeterminate', async () => {
+    await expect(probe(vi.fn(), 'spki-sha256:DIFFERENT')).resolves.toBe('trust-mismatch');
   });
 });
 
