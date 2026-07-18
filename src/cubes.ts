@@ -389,7 +389,7 @@ export interface PersistedLocalSeat {
  * path to recover the seat identity, its stored `operation`, and its `state`.
  *
  * CR#2: a SIBLING attach whose activation failed leaves a PENDING record BOUND to
- * the preserved worktree (bindPendingSeatToWorktree). This surfaces it so the
+ * the preserved worktree (via the attach path's bind-pending step). This surfaces it so the
  * rerun-from-that-worktree re-derives the EXACT sibling ref and re-sends the
  * identical bearer (ghost-free convergence). A crash-in-gap PENDING record that was
  * NEVER bound to a worktree still returns null here (it carries no worktree locator)

@@ -75,6 +75,7 @@ describe('seat single-store writer guard (SR#5)', () => {
       'export async function mintPendingSeat',
       'export async function prepareSeat',
       'export async function activateAndBindSeat',
+      'export async function bindPendingSeatToWorktree',
       'export async function resetSeatForWorktree',
       'export async function scrubPendingSeat',
       'export async function clearSeat',
@@ -88,6 +89,14 @@ describe('seat single-store writer guard (SR#5)', () => {
     // seats.ts defines it; the sole caller is the FINALIZE activate thunk. No
     // command mints/activates a seat off the single-store API.
     expect(filesReferencing('activateAndBindSeat', ['seats.ts', 'server-handshake.ts'])).toEqual([]);
+  });
+
+  it('the bound-PENDING bind op (bindPendingSeatToWorktree) is invoked ONLY by the attach path (server-handshake.ts)', () => {
+    // CR#2/CR#4: bindPendingSeatToWorktree is a seat WRITER (it mutates a PENDING
+    // record's worktree binding + display). seats.ts defines it; the sole caller is
+    // the activation-failure bindPending thunk in server-handshake.ts. No command
+    // binds a seat off the single-store API.
+    expect(filesReferencing('bindPendingSeatToWorktree', ['seats.ts', 'server-handshake.ts'])).toEqual([]);
   });
 
   it('the session-credential SEND (attach `session_credential`) lives ONLY in server-handshake.ts', () => {
@@ -153,6 +162,7 @@ describe('seat single-store writer guard (SR#5)', () => {
       'mintPendingSeat',
       'prepareSeat',
       'activateAndBindSeat',
+      'bindPendingSeatToWorktree',
       'resetSeatForWorktree',
       'scrubPendingSeat',
       'clearSeat',
@@ -162,6 +172,21 @@ describe('seat single-store writer guard (SR#5)', () => {
       expect(body, `${writer} must be defined in seats.ts`).toBeTruthy();
       expect(/withStore\s*</.test(body!), `${writer} must hold the store lock (withStore RCW)`).toBe(true);
     }
+  });
+
+  it('SR NET-NEW negative control: an UNLOCKED bindPendingSeatToWorktree would FAIL the lock guard', () => {
+    // Prove the lock-wrapping guard actually discriminates locked from unlocked (a
+    // placement-only guard would not): strip the withStore hold from the real body
+    // and confirm the guard's predicate flips to false. This is the exact CR3b class
+    // of regression (a writer that mutates the store OUTSIDE a lock hold).
+    const bodies = functionBodies(read('seats.ts'));
+    const body = bodies.get('bindPendingSeatToWorktree');
+    expect(body, 'bindPendingSeatToWorktree must be defined in seats.ts').toBeTruthy();
+    // Sanity: the real (locked) body passes the guard.
+    expect(/withStore\s*</.test(body!)).toBe(true);
+    // Remove every withStore hold — the unlocked body must be REJECTED by the guard.
+    const unlocked = body!.replace(/withStore\s*</g, 'plainCall<');
+    expect(/withStore\s*</.test(unlocked)).toBe(false);
   });
 
   it('the retired two-store composite + the cubes.json seat map are GONE from the tree', () => {
