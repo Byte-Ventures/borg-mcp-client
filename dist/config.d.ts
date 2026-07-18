@@ -1,15 +1,5 @@
 import type { ServerCapability } from 'borgmcp-shared/protocol';
 import { type TokenBackend } from './token-store.js';
-interface ServerKeychainLockTestHooks {
-    afterStaleStat?: () => Promise<void>;
-    afterStaleInspection?: () => Promise<void>;
-    afterReaperClaim?: () => Promise<void>;
-    afterActiveReaperElection?: () => Promise<void>;
-    afterActiveClaimRead?: () => Promise<void>;
-    beforeOwnerCleanup?: () => Promise<void>;
-}
-/** @internal Process-race harness only; never wired by production callers. */
-export declare function __setServerKeychainLockHooksForTest(hooks: ServerKeychainLockTestHooks | null): void;
 export interface ServerCredentialRecord {
     origin: string;
     trustIdentity: string;
@@ -76,7 +66,17 @@ export interface PendingServerSessionRecord {
     sessionId?: string;
     expiresAt?: string;
 }
-export declare function withServerKeychainLock<T>(account: string, operation: () => Promise<T>): Promise<T>;
+/**
+ * The SINGLE advisory lock over the whole 0600 credential store (Queen rescope).
+ * Every mutator AND every observer that must serialize runs `operation` inside
+ * one continuous hold of this lock, released on EVERY path incl throw (SR-seven
+ * #4). The `account` argument is retained for call-site compatibility but is no
+ * longer a per-account lock — there is one store lock now (no lock ordering, no
+ * inversion, no reaper machinery). Implemented as an O_EXCL lockfile + bounded
+ * stale-mtime reclaim (Node has no native flock; consistent with the existing
+ * cubes.json.lock idiom and avoids a native dep).
+ */
+export declare function withServerKeychainLock<T>(_account: string, operation: () => Promise<T>): Promise<T>;
 /**
  * Resolve the client's bearer for one seat, generating + persisting a PENDING
  * record before the first attach. An existing record (pending or active) for
@@ -260,7 +260,7 @@ export declare function clearPendingServerSession(binding: {
     roleId: string;
     operation: ServerSessionOperation;
 }): Promise<void>;
-/** Test-only server-keychain injection. */
+/** Test-only credential-store backend injection. */
 export declare function __setServerCredentialBackendForTest(backend: TokenBackend | null): void;
 /**
  * Persist one self-hosted server credential in the dedicated OS-keychain namespace.
@@ -321,5 +321,4 @@ export declare function clearServerCredential(origin: string, trustIdentity: str
  * atomic compareAndClearServerSessionCredential primitive instead.
  */
 export declare function clearServerSessionCredential(credentialRef: string): Promise<void>;
-export {};
 //# sourceMappingURL=config.d.ts.map

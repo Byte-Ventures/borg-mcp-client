@@ -10,7 +10,7 @@
  * The keyring entry factory is injected so the logic is unit-tested without a
  * real keychain.
  */
-export type TokenBackendName = 'keychain';
+export type TokenBackendName = 'keychain' | 'file';
 /**
  * Account-agnostic key/value store over the OS keychain.
  */
@@ -37,4 +37,17 @@ export type KeyringEntryFactory = (account: string) => KeyringEntry;
  * (fail-loud).
  */
 export declare function makeKeychainBackend(entryFactory?: KeyringEntryFactory): TokenBackend;
+/**
+ * Build a TokenBackend over a single 0600 store file, all accounts held in one
+ * `{version, accounts}` map. get/set/delete read-modify-write the file via the
+ * seat-store's atomic 0600 writer — the RAW secret rests only in the 0600 file
+ * (parity with the server's TLS keys), never a keychain.
+ *
+ * These ops are NON-flocking by design: the config layer holds the single store
+ * lock (withServerKeychainLock → withStoreLock) continuously across each
+ * read-compare-write, so nesting a second lock here would deadlock the O_EXCL
+ * lockfile. Pure reads (get) are safe lock-free because atomicWrite0600's rename
+ * guarantees a reader only ever sees a complete file.
+ */
+export declare function makeFileBackend(filePath: string): TokenBackend;
 //# sourceMappingURL=token-store.d.ts.map

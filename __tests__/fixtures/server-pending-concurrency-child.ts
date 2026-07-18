@@ -1,90 +1,19 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+/**
+ * Cross-process serialization child (Queen rescope). Runs against the REAL 0600
+ * credential file store (HOME points at a per-test fixture, so config resolves
+ * ~/.config/borgmcp/credentials.json inside it). No hooks, no injected backend —
+ * correctness comes from the single store flock alone.
+ */
 import {
-  __setServerKeychainLockHooksForTest,
-  __setServerCredentialBackendForTest,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
 } from '../../src/config.js';
-import type { TokenBackend } from '../../src/token-store.js';
 import { enrollBorgServer, resumeBorgServerEnrollment } from '../../src/server-handshake.js';
 
-const stateFile = process.env.BORG_TEST_KEYCHAIN_STATE;
 const mode = process.argv[2];
-if (!stateFile || !['enrollment', 'cube', 'ambiguous', 'resume'].includes(mode ?? '')) {
+if (!['enrollment', 'cube', 'ambiguous', 'resume'].includes(mode ?? '')) {
   throw new Error('invalid pending-concurrency child invocation');
 }
-
-const hookDirectory = process.env.BORG_TEST_LOCK_HOOK_DIR;
-const hookRelease = process.env.BORG_TEST_LOCK_HOOK_RELEASE;
-const hookStage = process.env.BORG_TEST_LOCK_HOOK_STAGE;
-if (
-  hookDirectory &&
-  ['stat', 'stale', 'cleanup', 'claim-read', 'owner-crash', 'claim-crash', 'active-crash']
-    .includes(hookStage ?? '')
-) {
-  const markReady = async () => {
-    await mkdir(hookDirectory, { recursive: true });
-    await writeFile(join(hookDirectory, `${hookStage}-${process.pid}`), 'ready');
-  };
-  const pause = async () => {
-    await markReady();
-    if (!hookRelease) throw new Error('lock hook release path is required');
-    for (;;) {
-      try {
-        await access(hookRelease);
-        return;
-      } catch {
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
-      }
-    }
-  };
-  const crash = async () => {
-    await markReady();
-    process.exit(0);
-  };
-  __setServerKeychainLockHooksForTest(hookStage === 'stat'
-    ? { afterStaleStat: pause }
-    : hookStage === 'stale'
-      ? { afterStaleInspection: pause }
-      : hookStage === 'cleanup'
-        ? { beforeOwnerCleanup: pause }
-        : hookStage === 'claim-read'
-          ? { afterActiveClaimRead: pause }
-        : hookStage === 'owner-crash'
-          ? { beforeOwnerCleanup: crash }
-          : hookStage === 'claim-crash'
-            ? { afterReaperClaim: crash }
-            : { afterActiveReaperElection: crash });
-}
-
-async function readState(): Promise<Record<string, string>> {
-  try {
-    return JSON.parse(await readFile(stateFile, 'utf8')) as Record<string, string>;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw error;
-  }
-}
-
-const backend: TokenBackend = {
-  name: 'keychain',
-  get: async (account) => (await readState())[account] ?? null,
-  set: async (account, value) => {
-    // Deliberately widen the backend's get→set race. Correctness must come from
-    // config.ts's cross-process authority/repository lock, not this test store.
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
-    const state = await readState();
-    state[account] = value;
-    await writeFile(stateFile, JSON.stringify(state), { mode: 0o600 });
-  },
-  delete: async (account) => {
-    const state = await readState();
-    delete state[account];
-    await writeFile(stateFile, JSON.stringify(state), { mode: 0o600 });
-  },
-};
-__setServerCredentialBackendForTest(backend);
 
 const common = {
   origin: 'https://localhost:8787',
