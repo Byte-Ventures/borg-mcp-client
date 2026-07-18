@@ -126,6 +126,22 @@ export declare function getActiveServerSessionCredential(credentialRef: string, 
     cubeId: string;
 }): Promise<string | null>;
 /**
+ * Atomically compare an active session credential against an expected token
+ * digest and delete it IFF they match. The ENTIRE read → validate → compare →
+ * delete runs under the same per-account keychain lock as the credential
+ * writers, so a same-ref remint cannot interleave between the comparison and the
+ * delete (SR-six 689e2654 / #1082 transactional reset). Returns true iff an
+ * active record matched the binding AND its bearer's sha256 digest matched the
+ * pinned one AND it was deleted; any non-match is a no-op (false). A backend
+ * get/delete error PROPAGATES so the caller leaves coherent pre-reset state
+ * (no half-applied delete). The raw bearer is never returned or logged.
+ */
+export declare function compareAndClearServerSessionCredential(credentialRef: string, binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+}, expectedSessionDigest: string): Promise<boolean>;
+/**
  * Discard any pending/active session record for one seat so the next attach
  * mints a fresh bearer. Used by the eviction/remint recovery path where the
  * saved seat is known invalid and a new seat must be created.

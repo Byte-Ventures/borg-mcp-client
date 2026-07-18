@@ -6,6 +6,10 @@ import { join } from 'node:path';
 const keychainMocks = vi.hoisted(() => ({
   getActiveServerSessionCredential: vi.fn(async () => 'k'.repeat(43)),
   clearServerSessionCredential: vi.fn(async () => {}),
+  // The atomic compare+delete primitive (real atomicity is exercised in
+  // server-session-operation.test.ts); here it is a seam so clearActiveCube's
+  // delegation is testable. Default: the pinned digest matched and was deleted.
+  compareAndClearServerSessionCredential: vi.fn(async () => true),
 }));
 
 vi.mock('../src/config.js', () => keychainMocks);
@@ -159,30 +163,37 @@ describe('local ActiveCube session persistence', () => {
     expect(persisted).toContain(currentRef);
   });
 
-  it('clearActiveCube refuses to delete when the BEARER digest differs under the SAME ref (same-ref replacement race)', async () => {
+  it('clearActiveCube delegates the pinned-digest path to the atomic primitive: a non-match is a no-op with the binding intact', async () => {
     const { fixture, cubes } = await setup();
     const ref = `borg-server-session:${'a'.repeat(64)}`;
     await cubes.setActiveCube({ ...localMetadata, localSessionCredentialRef: ref, sessionToken: 'x' });
-    // The keychain now holds a FRESH valid bearer under the SAME ref (a concurrent
-    // reset+re-enroll of this same worktree while the stale prompt was open).
-    keychainMocks.getActiveServerSessionCredential.mockResolvedValue('FRESH-BEARER-value');
-    const { createHash } = await import('node:crypto');
-
-    // A caller pins the digest of the OLD (rejected) bearer. The ref matches but
-    // the digest does not → the fresh replacement must NOT be clobbered.
-    const staleDigest = createHash('sha256').update('STALE-rejected-bearer').digest('hex');
-    const refused = await cubes.clearActiveCube({ credentialRef: ref, sessionDigest: staleDigest });
+    // The atomic compare+delete reports NO match (a same-ref replacement, stale
+    // digest, etc.). clearActiveCube must NOT remove the cube binding.
+    keychainMocks.compareAndClearServerSessionCredential.mockResolvedValueOnce(false);
+    const refused = await cubes.clearActiveCube({ credentialRef: ref, sessionDigest: 'deadbeef' });
     expect(refused).toEqual({ removed: false, credentialRef: null });
     expect(keychainMocks.clearServerSessionCredential).not.toHaveBeenCalled();
     expect(readFileSync(join(fixture, '.config', 'borgmcp', 'cubes.json'), 'utf8')).toContain(ref);
 
-    // With the CURRENT bearer's digest, the scoped delete proceeds.
-    const freshDigest = createHash('sha256').update('FRESH-BEARER-value').digest('hex');
-    const ok = await cubes.clearActiveCube({ credentialRef: ref, sessionDigest: freshDigest });
+    // A match → the binding is removed transactionally after the atomic delete.
+    keychainMocks.compareAndClearServerSessionCredential.mockResolvedValueOnce(true);
+    const ok = await cubes.clearActiveCube({ credentialRef: ref, sessionDigest: 'deadbeef' });
     expect(ok).toEqual({ removed: true, credentialRef: ref });
+    expect(existsSyncOrEmpty(join(fixture, '.config', 'borgmcp', 'cubes.json'))).not.toContain(ref);
   });
 
-  it('clearActiveCube surfaces a keychain-delete failure (throws) so callers cannot audit success', async () => {
+  it('clearActiveCube propagates an atomic compare+delete failure so the binding is left intact (no false success)', async () => {
+    const { fixture, cubes } = await setup();
+    const ref = `borg-server-session:${'a'.repeat(64)}`;
+    await cubes.setActiveCube({ ...localMetadata, localSessionCredentialRef: ref, sessionToken: 'x' });
+    keychainMocks.compareAndClearServerSessionCredential.mockRejectedValueOnce(new Error('keychain locked'));
+    await expect(cubes.clearActiveCube({ credentialRef: ref, sessionDigest: 'deadbeef' })).rejects.toThrow(/keychain/i);
+    // Keychain-FIRST ordering: the delete failed BEFORE any binding mutation, so
+    // the cube binding is still present (coherent pre-reset state).
+    expect(readFileSync(join(fixture, '.config', 'borgmcp', 'cubes.json'), 'utf8')).toContain(ref);
+  });
+
+  it('clearActiveCube (unpinned path) surfaces a keychain-delete failure so callers cannot audit success', async () => {
     const { cubes } = await setup();
     const ref = `borg-server-session:${'a'.repeat(64)}`;
     await cubes.setActiveCube({ ...localMetadata, localSessionCredentialRef: ref, sessionToken: 'x' });
@@ -190,3 +201,7 @@ describe('local ActiveCube session persistence', () => {
     await expect(cubes.clearActiveCube()).rejects.toThrow(/keychain/i);
   });
 });
+
+function existsSyncOrEmpty(p: string): string {
+  try { return readFileSync(p, 'utf8'); } catch { return ''; }
+}

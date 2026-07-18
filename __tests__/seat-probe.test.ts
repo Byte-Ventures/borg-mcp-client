@@ -126,4 +126,13 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
       listCubes({ apiUrl: ORIGIN, authToken: 'parent-enrollment-token', serverTrustIdentity: TRUST }),
     ).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
   });
+
+  it('drone-SESSION 401 with ANY non-SESSION_REJECTED typed code → CREDENTIAL_REJECTED (never reset)', async () => {
+    for (const code of ['AUTH_INVALID', 'AUTH_EXPIRED', 'AUTH_MISSING', 'SESSION_REVOKED', 'ACCESS_DENIED']) {
+      vi.resetModules();
+      wireMocks({ fetchImpl: vi.fn(async () => new Response(errorEnvelope(code), { status: 401 })) });
+      const { whoami } = await import('../src/remote-client.js');
+      await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+    }
+  });
 });

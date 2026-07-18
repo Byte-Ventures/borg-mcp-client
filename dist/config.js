@@ -661,6 +661,59 @@ export async function getActiveServerSessionCredential(credentialRef, binding) {
     }
 }
 /**
+ * Atomically compare an active session credential against an expected token
+ * digest and delete it IFF they match. The ENTIRE read → validate → compare →
+ * delete runs under the same per-account keychain lock as the credential
+ * writers, so a same-ref remint cannot interleave between the comparison and the
+ * delete (SR-six 689e2654 / #1082 transactional reset). Returns true iff an
+ * active record matched the binding AND its bearer's sha256 digest matched the
+ * pinned one AND it was deleted; any non-match is a no-op (false). A backend
+ * get/delete error PROPAGATES so the caller leaves coherent pre-reset state
+ * (no half-applied delete). The raw bearer is never returned or logged.
+ */
+export async function compareAndClearServerSessionCredential(credentialRef, binding, expectedSessionDigest) {
+    if (!/^borg-server-session:[a-f0-9]{64}$/.test(credentialRef))
+        return false;
+    const backend = await getServerCredentialBackend();
+    return withServerKeychainLock(credentialRef, async () => {
+        const stored = await backend.get(credentialRef);
+        if (!stored)
+            return false;
+        let bearer;
+        try {
+            const record = JSON.parse(stored);
+            const op = record.operation;
+            if (record.version !== SERVER_PENDING_SESSION_RECORD_VERSION ||
+                record.origin !== binding.origin ||
+                record.trustIdentity !== binding.trustIdentity ||
+                record.cubeId !== binding.cubeId ||
+                record.state !== 'active' ||
+                typeof record.credential !== 'string' ||
+                typeof record.roleId !== 'string' ||
+                op === undefined ||
+                op === null ||
+                typeof op !== 'object' ||
+                typeof op.projectRoot !== 'string' ||
+                typeof op.operationKey !== 'string' ||
+                (op.kind !== 'seat' && op.kind !== 'sibling')) {
+                return false;
+            }
+            if (serverPendingSessionAccount(record.origin, record.trustIdentity, record.cubeId, record.roleId, op) !== credentialRef) {
+                return false;
+            }
+            bearer = record.credential;
+        }
+        catch {
+            return false;
+        }
+        const digest = createHash('sha256').update(bearer).digest('hex');
+        if (digest !== expectedSessionDigest)
+            return false;
+        await backend.delete(credentialRef);
+        return true;
+    });
+}
+/**
  * Discard any pending/active session record for one seat so the next attach
  * mints a fresh bearer. Used by the eviction/remint recovery path where the
  * saved seat is known invalid and a new seat must be created.

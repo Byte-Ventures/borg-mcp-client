@@ -15,7 +15,6 @@
  * to know which worker to talk to.
  */
 
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -23,6 +22,7 @@ import { dirname, join, resolve } from 'node:path';
 import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
 import {
   clearServerSessionCredential,
+  compareAndClearServerSessionCredential,
   getActiveServerSessionCredential,
 } from './config.js';
 
@@ -433,51 +433,59 @@ export async function clearActiveCube(
     if (!(key in existing.projects)) return { removed: false, credentialRef: null };
     const entry = existing.projects[key];
     const removedCredentialRef = entry.localSessionCredentialRef ?? null;
-    // TOCTOU guard (PD #1082 / SR-six 7866d3d3): the read-compare-delete runs
-    // under the cube write lock. The credential REF is deterministic per
-    // origin+trust+cube+role+projectRoot+operation, so a same-ref re-enroll
-    // after the rejection writes a FRESH valid bearer under the SAME ref. To
-    // avoid clobbering that replacement, the caller pins BOTH the ref AND an
-    // unforgeable digest of the exact bearer it observed being rejected; we
-    // hydrate the CURRENT bearer here and compare digests. Any mismatch (or a
-    // missing/unreadable current bearer) is an honest no-op — never a delete.
-    if (expected !== undefined) {
-      if (expected.credentialRef !== undefined && removedCredentialRef !== expected.credentialRef) {
-        return { removed: false, credentialRef: null };
-      }
-      if (expected.sessionDigest !== undefined) {
-        let currentBearer: string | null = null;
-        if (removedCredentialRef) {
-          try {
-            currentBearer = await getActiveServerSessionCredential(removedCredentialRef, {
-              origin: entry.apiUrl,
-              trustIdentity: entry.serverTrustIdentity ?? '',
-              cubeId: entry.cubeId,
-            });
-          } catch {
-            currentBearer = null;
-          }
-        }
-        const currentDigest = currentBearer
-          ? createHash('sha256').update(currentBearer).digest('hex')
-          : null;
-        if (currentDigest !== expected.sessionDigest) {
-          return { removed: false, credentialRef: null };
-        }
-      }
+    // If the caller pins the credential ref it observed rejected, a ref mismatch
+    // is an honest no-op (the seat this worktree points at is not the one that
+    // was rejected).
+    if (
+      expected?.credentialRef !== undefined &&
+      removedCredentialRef !== expected.credentialRef
+    ) {
+      return { removed: false, credentialRef: null };
     }
-    delete existing.projects[key];
-    if (Object.keys(existing.projects).length === 0) {
-      try {
-        await unlink(CUBES_FILE);
-      } catch (error: any) {
-        if (error?.code !== 'ENOENT') throw error;
+
+    const removeBinding = async () => {
+      delete existing.projects[key];
+      if (Object.keys(existing.projects).length === 0) {
+        try {
+          await unlink(CUBES_FILE);
+        } catch (error: any) {
+          if (error?.code !== 'ENOENT') throw error;
+        }
+      } else {
+        await writeCubesFile(existing);
       }
-    } else {
-      await writeCubesFile(existing);
+    };
+
+    if (expected?.sessionDigest !== undefined) {
+      // TRANSACTIONAL same-ref guard (SR-six 689e2654 / PD / PS): the credential
+      // ref is deterministic per seat, so a concurrent reset+re-enroll writes a
+      // FRESH valid bearer under the SAME ref. compareAndClearServerSessionCredential
+      // reads → digest-compares → deletes atomically UNDER the per-account
+      // keychain lock (writers take the same lock), so no replacement can land
+      // between the comparison and the delete. Keychain-FIRST ordering: only
+      // after the exact rejected credential is deleted do we remove the cube
+      // binding — a mismatch is a no-op (nothing mutated), and a keychain
+      // get/delete error PROPAGATES with neither the credential nor the binding
+      // touched (coherent pre-reset state; the caller audits "could not
+      // complete", never a false success or a half-cleared binding).
+      if (!removedCredentialRef) return { removed: false, credentialRef: null };
+      const deleted = await compareAndClearServerSessionCredential(
+        removedCredentialRef,
+        {
+          origin: entry.apiUrl,
+          trustIdentity: entry.serverTrustIdentity ?? '',
+          cubeId: entry.cubeId,
+        },
+        expected.sessionDigest,
+      );
+      if (!deleted) return { removed: false, credentialRef: null };
+      await removeBinding();
+      return { removed: true, credentialRef: removedCredentialRef };
     }
-    // Only after the binding is durably removed do we clear its keychain
-    // session credential. A throw here propagates (no false success).
+
+    // Unpinned path (non-reset callers): remove the binding, then clear the
+    // credential. A throw here propagates (no false success).
+    await removeBinding();
     if (removedCredentialRef) await clearServerSessionCredential(removedCredentialRef);
     return { removed: true, credentialRef: removedCredentialRef };
   }));
