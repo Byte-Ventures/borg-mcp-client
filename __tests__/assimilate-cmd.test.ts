@@ -2613,6 +2613,38 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(output).not.toMatch(/unexpected response/i);
   });
 
+  it('renders fail-closed stale-lock guidance (dead holder) naming the lockfile path — never busy/retry', async () => {
+    const stderr = vi.fn();
+    const lockPath = '/home/op/.config/borgmcp/seats.json.lock';
+    const deps = makeStubDeps({
+      stderr,
+      connectServer: vi.fn(async () => {
+        // RULED option (b): a lock whose recorded holder is DEAD fails closed with a
+        // message naming the exact lockfile path and the delete-only-if-no-borg copy.
+        throw new Error(
+          `Borg seat store lock file ${lockPath} is stale: its recorded owner process ` +
+            '(pid 1073741824, started 2020-01-01T00:00:00.000Z) is no longer running. ' +
+            'Borg will NOT remove it automatically. If no borg process is running on this ' +
+            `machine, delete ${lockPath} and retry; otherwise wait for the other borg process to finish.`,
+        );
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((c) => String(c[0])).join('');
+    // The operator sees the exact lockfile path and the fail-closed 'stale' guidance…
+    expect(output).toContain(lockPath);
+    expect(output).toMatch(/stale/i);
+    expect(output).toMatch(/delete .*seats\.json\.lock/i);
+    // …never the transient busy/retry copy, and never the version fall-through.
+    expect(output).not.toMatch(/is busy for .*because another Borg process/i);
+    expect(output).not.toMatch(/versions? (?:are|is) compatible|unexpected response/i);
+  });
+
   it('distinguishes an unavailable local seat store from trust, auth, and connectivity failures', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({

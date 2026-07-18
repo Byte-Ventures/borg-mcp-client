@@ -16,9 +16,10 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   atomicWrite0600,
   readStoreFile,
@@ -168,52 +169,75 @@ describe('seat-store single-lock RCW (checklist #4)', () => {
     expect(await readFile(store, 'utf8')).toBe(wrongShape);
   });
 
-  it('CR3a: a LIVE cross-process holder past the stale threshold is NOT stolen; a DEAD one is reclaimed', async () => {
+  it('option (b): a LIVE cross-process holder is waited on then reported busy — never stolen', async () => {
     const dir = fixture();
     const lock = join(dir, 'seats.json.lock');
     // A real, separate OS process holds the lock (cross-process liveness).
     const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
     await new Promise<void>((r) => child.on('spawn', () => r()));
-    writeFileSync(lock, JSON.stringify({ pid: child.pid, token: 'held-by-live' }));
-    // Backdate mtime well past the age threshold — the OLD unconditional reclaim
-    // would have stolen it; liveness-gated reclaim must not.
+    writeFileSync(lock, JSON.stringify({ pid: child.pid, startTime: new Date().toISOString() }));
+    // Backdate mtime far past any legacy age threshold — option (b) has NO age gate,
+    // so a live holder is STILL never stolen (only ever waited on, then busy).
     const old = new Date(Date.now() - 10 * 60 * 1000);
     utimesSync(lock, old, old);
     await expect(
       withStoreLock(lock, async () => { /* unreachable */ }, { attempts: 4, waitMs: 5 }),
     ).rejects.toThrow(/busy/i);
-    // The live holder's lock is untouched.
+    // The live holder's lock is untouched — Borg never steals a held lock.
     expect(existsSync(lock)).toBe(true);
-    expect(JSON.parse(readFileSync(lock, 'utf8')).token).toBe('held-by-live');
-    // Kill the holder → its PID is now dead → the SAME lock is reclaimable.
+    expect(JSON.parse(readFileSync(lock, 'utf8')).pid).toBe(child.pid);
     child.kill('SIGKILL');
     await new Promise<void>((r) => child.on('exit', () => r()));
-    let ran = false;
-    await withStoreLock(lock, async () => { ran = true; }, { attempts: 50, waitMs: 5 });
-    expect(ran).toBe(true);
   });
 
-  it('CR3a: release is identity-checked — a stalled holder never removes the successor lock (successor-safe)', async () => {
+  it('option (b): a DEAD recorded holder FAILS CLOSED naming the lockfile path — never reclaimed', async () => {
     const dir = fixture();
     const lock = join(dir, 'seats.json.lock');
-    await withStoreLock(lock, async () => {
-      // Simulate a reclaimer that judged us dead + a successor that acquired the lock
-      // while we were stalled: the on-disk token is now the successor's, not ours.
-      writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'successor-token' }));
-    }, { attempts: 5, waitMs: 5 });
-    // Our release must NOT have removed the successor's lock.
+    // A PID that is essentially certain to be dead, plus a recorded start time.
+    writeFileSync(lock, JSON.stringify({ pid: 2 ** 30, startTime: '2020-01-01T00:00:00.000Z' }));
+    // Fail closed: the message names the EXACT lockfile path and is 'stale'.
+    await expect(
+      withStoreLock(lock, async () => { /* unreachable */ }, { attempts: 50, waitMs: 5 }),
+    ).rejects.toThrow(lock);
+    await expect(
+      withStoreLock(lock, async () => { /* unreachable */ }, { attempts: 3, waitMs: 1 }),
+    ).rejects.toThrow(/stale/i);
+    // The dead holder's lock is NEVER auto-deleted — the operator must clear it.
     expect(existsSync(lock)).toBe(true);
-    expect(JSON.parse(readFileSync(lock, 'utf8')).token).toBe('successor-token');
   });
 
-  it('CR3a: a stale lock left by a DEAD pid is reclaimed (no permanent wedge)', async () => {
+  it('option (b): a missing/unparseable lock payload FAILS CLOSED (corrupt lock never stolen)', async () => {
     const dir = fixture();
     const lock = join(dir, 'seats.json.lock');
-    // A PID that is essentially certain to be dead.
-    writeFileSync(lock, JSON.stringify({ pid: 2 ** 30, token: 'ghost' }));
-    let ran = false;
-    await withStoreLock(lock, async () => { ran = true; }, { attempts: 50, waitMs: 5 });
-    expect(ran).toBe(true);
+    writeFileSync(lock, 'not-json-garbage');
+    await expect(
+      withStoreLock(lock, async () => { /* unreachable */ }, { attempts: 3, waitMs: 1 }),
+    ).rejects.toThrow(/stale/i);
+    expect(existsSync(lock)).toBe(true);
+  });
+
+  it('option (b): two-process contention — exactly one proceeds at a time (no lost update, cross-process)', async () => {
+    const dir = fixture();
+    const lock = join(dir, 'contended.json.lock');
+    const counter = join(dir, 'counter.json');
+    const N = 5;
+    const child = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'seat-store-lock-child.ts');
+    const runOne = () =>
+      new Promise<string>((resolveRun, rejectRun) => {
+        execFile(
+          process.execPath,
+          ['--import', 'tsx', child, lock, counter],
+          { maxBuffer: 1024 * 1024 },
+          (err, stdout) => (err ? rejectRun(err) : resolveRun(stdout.trim())),
+        );
+      });
+    const outs = await Promise.all(Array.from({ length: N }, () => runOne()));
+    // Every contender eventually acquired and committed…
+    expect(outs.every((o) => o === 'ok')).toBe(true);
+    // …and the flock serialized their read-modify-write: no increment was lost.
+    expect(JSON.parse(readFileSync(counter, 'utf8')).n).toBe(N);
+    // Every process released its OWN lock on the way out.
+    expect(existsSync(lock)).toBe(false);
   });
 
   it('withStore returns null-state as empty and commits atomically at 0600', async () => {

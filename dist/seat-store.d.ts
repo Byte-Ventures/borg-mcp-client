@@ -14,11 +14,15 @@
  *      a crash never leaves a torn/readable partial, and the temp is cleaned up
  *      on any write failure.
  *   3. PARENT DIR 0700 — created with mode 0700.
- *   4. flock DISCIPLINE — a single advisory lock (O_EXCL lockfile + bounded
- *      stale-mtime reclaim, the established repo idiom since Node has no flock);
- *      the whole read-compare-write runs inside ONE continuous hold, released on
- *      EVERY path (finally) including throw. No per-account locks, no TOCTOU
- *      between acquire and commit.
+ *   4. flock DISCIPLINE — a single advisory lock (O_EXCL lockfile), RULED option
+ *      (b) (Coordinator cca6957a): NO automatic reclaim, EVER. Acquire is an atomic
+ *      `open(lockPath,'wx',0o600)`; the whole read-compare-write runs inside ONE
+ *      continuous hold, released on EVERY path (finally) by unlinking our OWN lock.
+ *      A pre-existing lock held by a LIVE pid is waited on (bounded) then reported
+ *      transient-busy; a lock whose recorded pid is DEAD (or whose payload is
+ *      missing/unparseable) FAILS CLOSED naming the exact lockfile path — Borg NEVER
+ *      steals or auto-deletes it (rename-claim reclaim is rejected: pathname
+ *      substitution). No per-account locks, no TOCTOU between acquire and commit.
  *
  * The raw secret rests only in the 0600 file (parity with the server's TLS keys);
  * this module never logs it, and the digest-only observation discipline of the
@@ -34,14 +38,21 @@ export declare function atomicWrite0600(filePath: string, data: string): Promise
 /** Read the store file, or null when it does not exist. */
 export declare function readStoreFile(filePath: string): Promise<string | null>;
 /**
- * Acquire the single advisory lock (checklist #4), run `op`, and release the lock
- * on EVERY path (finally) including a throw. The lockfile is O_EXCL-created; a
- * crashed holder is reclaimed after a bounded stale interval.
+ * Acquire the single advisory lock (checklist #4, RULED option b), run `op`, and
+ * release it on EVERY path (finally) by unlinking OUR OWN lock. Acquire is an atomic
+ * `open(lockPath,'wx',0o600)`. On EEXIST the lock is held:
+ *   - holder PID ALIVE → bounded wait/retry (attempts×waitMs), then throw the truthful
+ *     transient 'Borg seat store is busy' error;
+ *   - holder PID DEAD, or the payload is missing/unparseable → FAIL CLOSED naming the
+ *     exact lockfile path + the recorded dead pid/start-time. Borg NEVER auto-deletes
+ *     or steals it (no reclaim, no rename-claim). The operator clears it by hand only
+ *     after confirming no borg process is running.
+ * Because nothing ever steals a held lock, a plain unlink of our own lock on release
+ * is safe (no successor can be holding it).
  */
 export declare function withStoreLock<T>(lockPath: string, op: () => Promise<T>, opts?: {
     attempts?: number;
     waitMs?: number;
-    staleMs?: number;
 }): Promise<T>;
 /** A locked, in-memory transaction over one store file. */
 export interface StoreTxn<S> {

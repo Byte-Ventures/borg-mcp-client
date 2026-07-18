@@ -131,6 +131,15 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
             `${localAssimilateCommand(apiUrl, true)} from the operator’s terminal.\n`);
         return 1;
     }
+    if (/seat store lock file .* is stale/i.test(message)) {
+        // RULED option (b): a lock whose recorded holder is DEAD (or whose payload is
+        // corrupt) is NEVER auto-removed. Surface the fail-closed guidance verbatim —
+        // it already names the exact lockfile path and the delete-only-if-no-borg
+        // instruction — so the operator can clear it by hand, then retry.
+        deps.stderr(`${safeStderr(message)}\nAfter confirming no borg process is running and clearing the ` +
+            `stale lock, rerun ${retryCommand}.\n`);
+        return 1;
+    }
     if (/(?:seat|credential) store is busy/i.test(message)) {
         deps.stderr(`Borg's local seat store is busy for ${apiUrl} because another Borg process is ` +
             `creating or resuming saved seat state. Wait for it to finish, then rerun ${retryCommand}.\n`);

@@ -14,37 +14,40 @@
  *      a crash never leaves a torn/readable partial, and the temp is cleaned up
  *      on any write failure.
  *   3. PARENT DIR 0700 — created with mode 0700.
- *   4. flock DISCIPLINE — a single advisory lock (O_EXCL lockfile + bounded
- *      stale-mtime reclaim, the established repo idiom since Node has no flock);
- *      the whole read-compare-write runs inside ONE continuous hold, released on
- *      EVERY path (finally) including throw. No per-account locks, no TOCTOU
- *      between acquire and commit.
+ *   4. flock DISCIPLINE — a single advisory lock (O_EXCL lockfile), RULED option
+ *      (b) (Coordinator cca6957a): NO automatic reclaim, EVER. Acquire is an atomic
+ *      `open(lockPath,'wx',0o600)`; the whole read-compare-write runs inside ONE
+ *      continuous hold, released on EVERY path (finally) by unlinking our OWN lock.
+ *      A pre-existing lock held by a LIVE pid is waited on (bounded) then reported
+ *      transient-busy; a lock whose recorded pid is DEAD (or whose payload is
+ *      missing/unparseable) FAILS CLOSED naming the exact lockfile path — Borg NEVER
+ *      steals or auto-deletes it (rename-claim reclaim is rejected: pathname
+ *      substitution). No per-account locks, no TOCTOU between acquire and commit.
  *
  * The raw secret rests only in the 0600 file (parity with the server's TLS keys);
  * this module never logs it, and the digest-only observation discipline of the
  * callers keeps the raw bearer from leaving the store owner.
  */
 
-import { open, mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { open, link, mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
-// Age-based reclaim is a LAST-RESORT fallback used ONLY for a legacy/unparseable
-// lockfile that carries no live-pid identity; a well-formed lock is reclaimed only
-// when its holder PID is provably DEAD (CR3a), never on age alone.
-const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 10;
 const LOCK_ATTEMPTS = 500;
 
 interface LockPayload {
   pid: number;
-  token: string;
+  /** ISO process start time — an operator-facing hint and a PID-reuse tell. */
+  startTime: string;
 }
 
 /**
- * CR3a liveness check. `process.kill(pid, 0)` sends no signal but validates the
- * target: ESRCH ⇒ no such process (DEAD → reclaimable); EPERM ⇒ the process exists
- * but is owned by another user (ALIVE → never reclaim). Any success ⇒ alive.
+ * Liveness check for the alive/dead branch (RULED option b). `process.kill(pid, 0)`
+ * sends no signal but validates the target: ESRCH ⇒ no such process (DEAD → fail
+ * closed); EPERM ⇒ the process exists but is owned by another user (ALIVE → wait).
+ * Any success ⇒ alive. This decides ONLY whether to wait vs. fail closed — it never
+ * authorizes a reclaim.
  */
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -56,16 +59,40 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+/** Approximate wall-clock process start time (Date.now() − uptime). */
+function processStartTime(): string {
+  return new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString();
+}
+
 function parseLockPayload(raw: string): LockPayload | null {
   try {
-    const parsed = JSON.parse(raw) as { pid?: unknown; token?: unknown };
-    if (typeof parsed.pid === 'number' && typeof parsed.token === 'string' && parsed.token.length > 0) {
-      return { pid: parsed.pid, token: parsed.token };
+    const parsed = JSON.parse(raw) as { pid?: unknown; startTime?: unknown };
+    if (typeof parsed.pid === 'number' && Number.isInteger(parsed.pid) && parsed.pid > 0) {
+      return {
+        pid: parsed.pid,
+        startTime: typeof parsed.startTime === 'string' ? parsed.startTime : 'unknown',
+      };
     }
   } catch {
-    /* unparseable — treated as a legacy/garbage lock by the caller */
+    /* unparseable — treated as a corrupt/foreign lock by the caller (fail closed) */
   }
   return null;
+}
+
+/**
+ * The fail-closed stale-lock error (RULED option b). Names the EXACT lockfile path
+ * plus the recorded dead pid / start time, and tells the operator to delete that
+ * file ONLY if no borg process is running. Borg never removes it automatically.
+ */
+function staleLockError(lockPath: string, held: LockPayload | null): Error {
+  const who = held
+    ? `its recorded owner process (pid ${held.pid}, started ${held.startTime}) is no longer running`
+    : 'its lock file is missing a valid owner identity or is corrupt';
+  return new Error(
+    `Borg seat store lock file ${lockPath} is stale: ${who}. ` +
+      'Borg will NOT remove it automatically. If no borg process is running on this ' +
+      `machine, delete ${lockPath} and retry; otherwise wait for the other borg process to finish.`,
+  );
 }
 
 /**
@@ -93,47 +120,6 @@ async function ensureParentDir(filePath: string): Promise<void> {
     return;
   }
   await mkdir(dir, { recursive: true, mode: 0o700 });
-}
-
-/**
- * Successor-safe steal: unlink the stale lock ONLY if its bytes are still EXACTLY
- * the ones we judged stale. If the holder released and a successor acquired between
- * our inspection and this unlink, the content differs → we must not remove the
- * successor's lock.
- */
-async function reclaimIfUnchanged(lockPath: string, expected: string): Promise<void> {
-  let current: string;
-  try {
-    current = await readFile(lockPath, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw err;
-  }
-  if (current !== expected) return;
-  await unlink(lockPath).catch((e: NodeJS.ErrnoException) => {
-    if (e.code !== 'ENOENT') throw e;
-  });
-}
-
-/**
- * Identity-checked release (CR3a successor-safety): unlink ONLY if the lockfile
- * still carries OUR token. If a reclaimer judged us dead/stale and a successor now
- * holds the lock, its token differs and we must leave it intact — a blind unlink
- * would remove the successor's lock and let a third writer in concurrently.
- */
-async function releaseIfOurs(lockPath: string, token: string): Promise<void> {
-  let current: string;
-  try {
-    current = await readFile(lockPath, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw err;
-  }
-  const held = parseLockPayload(current);
-  if (held && held.token !== token) return;
-  await unlink(lockPath).catch((e: NodeJS.ErrnoException) => {
-    if (e.code !== 'ENOENT') throw e;
-  });
 }
 
 /**
@@ -174,72 +160,78 @@ export async function readStoreFile(filePath: string): Promise<string | null> {
 }
 
 /**
- * Acquire the single advisory lock (checklist #4), run `op`, and release the lock
- * on EVERY path (finally) including a throw. The lockfile is O_EXCL-created; a
- * crashed holder is reclaimed after a bounded stale interval.
+ * Acquire the single advisory lock (checklist #4, RULED option b), run `op`, and
+ * release it on EVERY path (finally) by unlinking OUR OWN lock. Acquire is an atomic
+ * `open(lockPath,'wx',0o600)`. On EEXIST the lock is held:
+ *   - holder PID ALIVE → bounded wait/retry (attempts×waitMs), then throw the truthful
+ *     transient 'Borg seat store is busy' error;
+ *   - holder PID DEAD, or the payload is missing/unparseable → FAIL CLOSED naming the
+ *     exact lockfile path + the recorded dead pid/start-time. Borg NEVER auto-deletes
+ *     or steals it (no reclaim, no rename-claim). The operator clears it by hand only
+ *     after confirming no borg process is running.
+ * Because nothing ever steals a held lock, a plain unlink of our own lock on release
+ * is safe (no successor can be holding it).
  */
 export async function withStoreLock<T>(
   lockPath: string,
   op: () => Promise<T>,
-  opts: { attempts?: number; waitMs?: number; staleMs?: number } = {},
+  opts: { attempts?: number; waitMs?: number } = {},
 ): Promise<T> {
   const attempts = opts.attempts ?? LOCK_ATTEMPTS;
   const waitMs = opts.waitMs ?? LOCK_WAIT_MS;
-  const staleMs = opts.staleMs ?? LOCK_STALE_MS;
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
-  const myToken = randomBytes(16).toString('hex');
-  const myPayload = JSON.stringify({ pid: process.pid, token: myToken });
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    let handle;
-    try {
-      handle = await open(lockPath, 'wx', 0o600);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      // The lock is held. Read the holder's identity and reclaim ONLY when its PID
-      // is provably DEAD — a live-but-slow holder (even one past the age threshold)
-      // keeps its lock (CR3a). A legacy/unparseable payload with no live-pid info
-      // falls back to a bounded age gate so a crashed pre-upgrade holder can't wedge.
-      let raw: string;
-      try {
-        raw = await readFile(lockPath, 'utf8');
-      } catch (readErr) {
-        if ((readErr as NodeJS.ErrnoException).code === 'ENOENT') continue; // released — retry
-        throw readErr;
-      }
-      const held = parseLockPayload(raw);
-      let reclaim: boolean;
-      if (held) {
-        reclaim = !isProcessAlive(held.pid);
-      } else {
-        try {
-          const metadata = await stat(lockPath);
-          reclaim = Date.now() - metadata.mtimeMs > staleMs;
-        } catch (inspectionError) {
-          if ((inspectionError as NodeJS.ErrnoException).code === 'ENOENT') continue;
-          throw inspectionError;
-        }
-      }
-      if (reclaim) {
-        await reclaimIfUnchanged(lockPath, raw);
-        continue;
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, waitMs));
-      continue;
-    }
-    // We own the lock. Stamp our identity so a reclaimer can liveness-check us and
-    // our release can identity-check before unlinking.
-    try {
-      await handle.writeFile(myPayload);
-    } finally {
-      await handle.close();
-    }
-    try {
-      return await op();
-    } finally {
-      await releaseIfOurs(lockPath, myToken);
-    }
+  const myPayload = JSON.stringify({ pid: process.pid, startTime: processStartTime() });
+  // Stage the FULLY-WRITTEN payload in a same-dir temp, then acquire by atomically
+  // hard-linking it into place. `link` is atomic (EEXIST when the lock is held), and
+  // because the target appears already carrying the complete payload there is NO
+  // empty creation window — a concurrent contender never misreads a just-created
+  // lock as a corrupt/missing payload (which under option (b) would wrongly fail
+  // closed). A plain `open('wx')` create-then-write leaves exactly that window.
+  const tmp = `${lockPath}.${process.pid}.${randomBytes(6).toString('hex')}.acq`;
+  const staged = await open(tmp, 'wx', 0o600);
+  try {
+    await staged.writeFile(myPayload);
+  } finally {
+    await staged.close();
   }
-  throw new Error('Borg seat store is busy');
+  try {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await link(tmp, lockPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        // The lock is held. Inspect the holder — but NEVER reclaim/steal it.
+        let raw: string;
+        try {
+          raw = await readFile(lockPath, 'utf8');
+        } catch (readErr) {
+          if ((readErr as NodeJS.ErrnoException).code === 'ENOENT') continue; // released — retry
+          throw readErr;
+        }
+        const held = parseLockPayload(raw);
+        if (held && isProcessAlive(held.pid)) {
+          // A live-but-slow holder keeps its lock: wait a bounded interval and retry.
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, waitMs));
+          continue;
+        }
+        // Dead recorded holder, or a missing/unparseable payload → fail closed. The
+        // operator must confirm no borg process is running and delete the file by hand.
+        throw staleLockError(lockPath, held);
+      }
+      // We own the lock (it already carries our payload from the staged temp).
+      try {
+        return await op();
+      } finally {
+        // No reclaim exists, so nobody can be holding our lock — a plain unlink is safe.
+        await unlink(lockPath).catch((e: NodeJS.ErrnoException) => {
+          if (e.code !== 'ENOENT') throw e;
+        });
+      }
+    }
+    throw new Error('Borg seat store is busy');
+  } finally {
+    await unlink(tmp).catch(() => {});
+  }
 }
 
 /** A locked, in-memory transaction over one store file. */
