@@ -744,6 +744,46 @@ describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR
     expect(out).toMatch(/could not verify this worktree's saved seat/);
     expect(out).toContain('borg-mcp-server start');
   });
+
+  it('unreachable: transient restart advice (a transport failure/timeout is not terminal)', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr,
+      probeSeat: vi.fn(async () => 'unreachable'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/could not verify this worktree's saved seat/);
+    expect(out).toContain('borg-mcp-server start');
+    expect(out).not.toContain('borg reset-local-seat');
+  });
+
+  it('endpoint-mismatch (404): a version-mismatch copy — NOT restart advice, NOT a reset', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr,
+      probeSeat: vi.fn(async () => 'endpoint-mismatch'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/did not recognize this worktree's drone endpoint|versions? (?:are|is) likely incompatible|versions match/i);
+    expect(out).not.toContain('borg reset-local-seat');
+  });
+
+  it('server-failure (5xx): a distinct server-error copy — non-destructive, no reset', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr,
+      probeSeat: vi.fn(async () => 'server-failure'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/returned a server error/i);
+    expect(out).not.toContain('borg reset-local-seat');
+  });
 });
 
 describe('runAssimilate: Sprint 19 (gh#184) strict-rollback semantics', () => {

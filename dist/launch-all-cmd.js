@@ -270,8 +270,18 @@ export async function runLaunchAll(args, deps, opts = {}) {
                 `re-enroll from that worktree with \`borg assimilate --host ${c.apiUrl} --enroll\`.\n`);
             continue;
         }
-        // Only a genuinely transient cause fails OPEN (launch anyway with a note).
-        if (status === 'indeterminate') {
+        // CR5: every non-authoritative cause fails OPEN (launch anyway) with a
+        // cause-accurate note. Only the authoritative/terminal causes above skip.
+        if (status === 'unreachable') {
+            deps.stderr(`note: could not reach ${c.droneLabel}'s server to confirm its seat (network/timeout) — launching anyway.\n`);
+        }
+        else if (status === 'endpoint-mismatch') {
+            deps.stderr(`note: ${c.droneLabel}'s server did not recognize the drone endpoint (possible client/server version mismatch) — launching anyway.\n`);
+        }
+        else if (status === 'server-failure') {
+            deps.stderr(`note: ${c.droneLabel}'s server returned an error while confirming its seat (transient) — launching anyway.\n`);
+        }
+        else if (status === 'indeterminate') {
             deps.stderr(`note: could not confirm ${c.droneLabel}'s seat is live (network/transient) — launching anyway.\n`);
         }
         launchable.push(c);

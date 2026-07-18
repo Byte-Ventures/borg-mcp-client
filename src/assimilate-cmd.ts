@@ -943,7 +943,31 @@ export async function runAssimilate(
         );
         return 1;
       }
-      if (status === 'indeterminate') {
+      if (status === 'endpoint-mismatch') {
+        // CR5: a verified server returned 404 for the drone endpoint — a protocol /
+        // client-server VERSION mismatch, not a transient blip. Restarting does not
+        // fix it; align versions. Non-destructive: no seat created, nothing reset.
+        deps.stderr(
+          `Borg reached ${authority.apiUrl} but it did not recognize this worktree's drone ` +
+            'endpoint — the client and server versions are likely incompatible. No new seat ' +
+            'was created and nothing was changed. Update the Borg client and/or server so ' +
+            `their versions match, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
+        );
+        return 1;
+      }
+      if (status === 'server-failure') {
+        // CR5: a verified server returned 5xx — its own internal error. Transient:
+        // check the server, then retry. Non-destructive.
+        deps.stderr(
+          `Borg reached ${authority.apiUrl} but it returned a server error while verifying ` +
+            "this worktree's saved seat. No new seat was created. Check the server (its logs / " +
+            `\`borg-mcp-server start\`), then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
+        );
+        return 1;
+      }
+      if (status === 'unreachable' || status === 'indeterminate') {
+        // CR5: transport failure / timeout (unreachable) or a genuinely ambiguous
+        // failure (indeterminate) — both transient. Start or restart the server.
         deps.stderr(
           `Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +
             'No new seat was created. Start or restart the server with ' +

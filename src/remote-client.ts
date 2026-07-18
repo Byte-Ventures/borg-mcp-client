@@ -31,7 +31,12 @@ import {
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import { canonicalizeWorkingRepoIdentity, type WorkingRepo } from './working-repo.js';
 import { loadBorgServerTrust, type ServerFetch } from './server-trust.js';
-import { BorgServerError } from './server-errors.js';
+import {
+  BorgServerError,
+  BorgServerHttpError,
+  BorgServerTrustError,
+  BorgServerUnreachableError,
+} from './server-errors.js';
 import { getActiveCube, type ActiveCube } from './cubes.js';
 import {
   advanceLocalServerCursor,
@@ -235,7 +240,8 @@ async function decodeLocalProtocolResponse<T>(
     return decodeProtocolEnvelope(body, (value) => value as T).payload;
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error('Local Borg server request timed out');
+      // CR5: a TYPED transport-timeout verdict (message kept for call-site parity).
+      throw new BorgServerUnreachableError('Local Borg server request timed out');
     }
     throw error;
   } finally {
@@ -444,7 +450,8 @@ async function authedFetch(
   {
     const trust = await loadBorgServerTrust(baseUrl);
     if (trust.identity !== serverTrustIdentity) {
-      throw new Error('Borg server trust identity changed; refusing the connection');
+      // CR5: a TYPED terminal trust verdict — never inferred from error text.
+      throw new BorgServerTrustError('Borg server trust identity changed; refusing the connection');
     }
     requestFetch = trust.fetchImpl;
     if (droneSession !== undefined) {
@@ -533,7 +540,13 @@ async function authedFetch(
     if (hasServerAuthority || hasExplicitAuth) {
       await response.body?.cancel().catch(() => {});
       debugLog(`✗ ${response.status} ${method} ${path}`);
-      throw new Error(`Borg server request failed (HTTP ${response.status})`);
+      // CR5: carry the raw status in a TYPED error so a probe distinguishes an
+      // endpoint/protocol-mismatch (404) from a server-failure (5xx) by code, not
+      // by matching mutable message text. Message kept identical for call-site parity.
+      throw new BorgServerHttpError(
+        response.status,
+        `Borg server request failed (HTTP ${response.status})`,
+      );
     }
     // Read the body ONCE (the stream can only be consumed once) and reuse
     // it for both the debug trace and the thrown error. The server error

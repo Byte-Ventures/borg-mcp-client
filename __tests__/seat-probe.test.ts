@@ -89,19 +89,31 @@ describe('defaultProbeSeat production chain (real whoami → authedFetch verdict
     await expect(probe(vi.fn(async () => new Response(errorEnvelope('CREDENTIAL_REJECTED'), { status: 401 })))).resolves.toBe('credential-rejected');
   });
 
-  it('indeterminate: a 5xx is transient/ambiguous, never destructive', async () => {
-    await expect(probe(vi.fn(async () => new Response('boom', { status: 500 })))).resolves.toBe('indeterminate');
+  it('server-failure: a 5xx is the server\'s own error (typed by status, never destructive)', async () => {
+    await expect(probe(vi.fn(async () => new Response('boom', { status: 500 })))).resolves.toBe('server-failure');
   });
 
-  it('indeterminate: a 404 stays non-destructive', async () => {
-    await expect(probe(vi.fn(async () => new Response('nope', { status: 404 })))).resolves.toBe('indeterminate');
+  it('endpoint-mismatch: a 404 is a protocol/version mismatch (typed by status), non-destructive', async () => {
+    await expect(probe(vi.fn(async () => new Response('nope', { status: 404 })))).resolves.toBe('endpoint-mismatch');
   });
 
-  it('indeterminate: a network error stays non-destructive', async () => {
-    await expect(probe(vi.fn(async () => { throw new Error('ECONNREFUSED'); }))).resolves.toBe('indeterminate');
+  it('indeterminate: an unexpected non-ok status (e.g. 418) stays ambiguous, never destructive', async () => {
+    await expect(probe(vi.fn(async () => new Response('teapot', { status: 418 })))).resolves.toBe('indeterminate');
   });
 
-  it('trust-mismatch: a pinned-identity mismatch is a TERMINAL trust error, not transient/indeterminate', async () => {
+  it('unreachable: a transport errno (ECONNREFUSED on the error cause) is classified by CODE, not message text', async () => {
+    await expect(probe(vi.fn(async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    }))).resolves.toBe('unreachable');
+  });
+
+  it('unreachable: a top-level errno code is also transport-classified', async () => {
+    await expect(probe(vi.fn(async () => {
+      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    }))).resolves.toBe('unreachable');
+  });
+
+  it('trust-mismatch: a pinned-identity mismatch is a TERMINAL typed trust verdict, not transient/indeterminate', async () => {
     await expect(probe(vi.fn(), 'spki-sha256:DIFFERENT')).resolves.toBe('trust-mismatch');
   });
 });
