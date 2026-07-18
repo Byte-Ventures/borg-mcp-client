@@ -410,11 +410,14 @@ export async function clearActiveCube(expected) {
             await removeBinding();
             return { removed: true, credentialRef: removedCredentialRef };
         }
-        // Unpinned path (non-reset callers): remove the binding, then clear the
-        // credential. A throw here propagates (no false success).
-        await removeBinding();
+        // Unpinned path (non-reset callers): CREDENTIAL-FIRST (CR #1) — delete the
+        // keychain credential BEFORE removing the binding, so the surviving
+        // intermediate is only ever binding-present/credential-absent (rerunnable),
+        // never ACTIVE-credential-without-binding. A throw propagates (no false
+        // success); the credential delete itself is account-lock-guarded.
         if (removedCredentialRef)
             await clearServerSessionCredential(removedCredentialRef);
+        await removeBinding();
         return { removed: true, credentialRef: removedCredentialRef };
     }));
     activeCubeWriteQueue = operation.then(() => undefined, () => undefined);
@@ -585,6 +588,55 @@ export async function resetLocalSeatBinding(expected) {
         return (await removeBinding())
             ? { outcome: 'reset', credentialRef }
             : { outcome: 'partial', credentialRef };
+    }));
+    activeCubeWriteQueue = operation.then(() => undefined, () => undefined);
+    return await operation;
+}
+/**
+ * PREPARE-time revalidation + mint under the cube lock (CR #1 — the composite is
+ * the SOLE prepare/writer authority, so a reset/binding writer that wins BEFORE
+ * the mint aborts the attach BEFORE any credential is created or sent). Used for
+ * IN-PLACE attaches (the target worktree is the current one, so its binding is
+ * observable now); a sibling spawn has no prior binding at its not-yet-created
+ * target key, so it mints without a prepare-check. The cube lock is held OUTER
+ * across revalidate → optional scrub → mint; the keychain lock is taken INNER by
+ * the injected scrubBeforeMint()/mint() config wrappers (no inversion). On an
+ * expectation mismatch NOTHING is minted or scrubbed.
+ */
+export async function prepareServerSeatAttachment(input) {
+    const { expected, scrubBeforeMint, mint } = input;
+    const operation = activeCubeWriteQueue.then(() => withCubesWriteLock(async () => {
+        const existing = await readCubesFile();
+        const key = findProjectRoot();
+        const prior = existing?.projects[key];
+        let mismatch;
+        if (expected.kind === 'exact') {
+            mismatch =
+                prior === undefined ||
+                    prior.localSessionCredentialRef !== expected.credentialRef ||
+                    (expected.droneId !== undefined && prior.droneId !== expected.droneId);
+            if (!mismatch && expected.sessionDigest !== undefined && prior) {
+                const bearer = await getActiveServerSessionCredential(expected.credentialRef, {
+                    origin: prior.apiUrl,
+                    trustIdentity: prior.serverTrustIdentity ?? '',
+                    cubeId: prior.cubeId,
+                });
+                const digest = bearer === null
+                    ? null
+                    : createHash('sha256').update(bearer).digest('hex');
+                if (digest !== expected.sessionDigest)
+                    mismatch = true;
+            }
+        }
+        else {
+            mismatch = prior !== undefined;
+        }
+        if (mismatch)
+            return { ok: false, reason: 'expectation-mismatch' };
+        if (scrubBeforeMint)
+            await scrubBeforeMint();
+        const record = await mint();
+        return { ok: true, record };
     }));
     activeCubeWriteQueue = operation.then(() => undefined, () => undefined);
     return await operation;

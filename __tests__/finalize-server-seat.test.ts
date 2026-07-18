@@ -217,3 +217,73 @@ describe('finalizeServerSeatAttachment', () => {
     expect(committed).toBe(1);
   });
 });
+
+describe('prepareServerSeatAttachment (CR #1 — PREPARE-time revalidation + mint under the cube lock)', () => {
+  it('EXACT match: revalidates then MINTS (in that order); scrubBeforeMint runs before mint', async () => {
+    const { cubes } = await setup();
+    await cubes.setActiveCube({ ...meta, sessionToken: 'x' });
+    const bearer = 'live-bearer-'.padEnd(43, 'z');
+    keychainMocks.getActiveServerSessionCredential.mockResolvedValue(bearer);
+    const order: string[] = [];
+    const scrubBeforeMint = vi.fn(async () => { order.push('scrub'); });
+    const mint = vi.fn(async () => { order.push('mint'); return { credential: 'minted' }; });
+    const res = await cubes.prepareServerSeatAttachment({
+      expected: { kind: 'exact', credentialRef: REF, droneId: meta.droneId, sessionDigest: createHash('sha256').update(bearer).digest('hex') },
+      scrubBeforeMint, mint,
+    });
+    expect(res).toEqual({ ok: true, record: { credential: 'minted' } });
+    expect(order).toEqual(['scrub', 'mint']);
+  });
+
+  it('EXACT mismatch (a reset removed the binding before PREPARE): ABORTS — nothing minted or scrubbed', async () => {
+    const { cubes } = await setup(); // no prior binding
+    const mint = vi.fn(async () => ({ credential: 'minted' }));
+    const scrubBeforeMint = vi.fn(async () => {});
+    const res = await cubes.prepareServerSeatAttachment({
+      expected: { kind: 'exact', credentialRef: REF, droneId: meta.droneId }, scrubBeforeMint, mint,
+    });
+    expect(res).toEqual({ ok: false, reason: 'expectation-mismatch' });
+    expect(mint).not.toHaveBeenCalled();
+    expect(scrubBeforeMint).not.toHaveBeenCalled();
+  });
+
+  it('EXACT digest mismatch (same-ref replacement before PREPARE): ABORTS before mint', async () => {
+    const { cubes } = await setup();
+    await cubes.setActiveCube({ ...meta, sessionToken: 'x' });
+    keychainMocks.getActiveServerSessionCredential.mockResolvedValue('a-different-bearer-'.padEnd(43, 'q'));
+    const mint = vi.fn(async () => ({ credential: 'minted' }));
+    const res = await cubes.prepareServerSeatAttachment({
+      expected: { kind: 'exact', credentialRef: REF, droneId: meta.droneId, sessionDigest: 'a'.repeat(64) }, mint,
+    });
+    expect(res).toEqual({ ok: false, reason: 'expectation-mismatch' });
+    expect(mint).not.toHaveBeenCalled();
+  });
+
+  it('EXACT drone-id mismatch: ABORTS before mint (full-binding pin)', async () => {
+    const { cubes } = await setup();
+    await cubes.setActiveCube({ ...meta, sessionToken: 'x' });
+    const mint = vi.fn(async () => ({ credential: 'minted' }));
+    const res = await cubes.prepareServerSeatAttachment({
+      expected: { kind: 'exact', credentialRef: REF, droneId: 'different-drone' }, mint,
+    });
+    expect(res).toEqual({ ok: false, reason: 'expectation-mismatch' });
+    expect(mint).not.toHaveBeenCalled();
+  });
+
+  it('ABSENT match (fresh in-place, no prior binding): MINTS', async () => {
+    const { cubes } = await setup();
+    const mint = vi.fn(async () => ({ credential: 'minted' }));
+    const res = await cubes.prepareServerSeatAttachment({ expected: { kind: 'absent' }, mint });
+    expect(res).toEqual({ ok: true, record: { credential: 'minted' } });
+    expect(mint).toHaveBeenCalledTimes(1);
+  });
+
+  it('ABSENT mismatch (a binding appeared before PREPARE): ABORTS before mint', async () => {
+    const { cubes } = await setup();
+    await cubes.setActiveCube({ ...meta, sessionToken: 'x' });
+    const mint = vi.fn(async () => ({ credential: 'minted' }));
+    const res = await cubes.prepareServerSeatAttachment({ expected: { kind: 'absent' }, mint });
+    expect(res).toEqual({ ok: false, reason: 'expectation-mismatch' });
+    expect(mint).not.toHaveBeenCalled();
+  });
+});

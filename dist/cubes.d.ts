@@ -198,6 +198,29 @@ export interface FinalizeServerSeatInput {
      *  record, never a same-ref replacement). */
     scrubPending: () => Promise<unknown>;
 }
+export type PrepareServerSeatOutcome<R> = {
+    ok: true;
+    record: R;
+} | {
+    ok: false;
+    reason: 'expectation-mismatch';
+};
+/**
+ * PREPARE-time revalidation + mint under the cube lock (CR #1 — the composite is
+ * the SOLE prepare/writer authority, so a reset/binding writer that wins BEFORE
+ * the mint aborts the attach BEFORE any credential is created or sent). Used for
+ * IN-PLACE attaches (the target worktree is the current one, so its binding is
+ * observable now); a sibling spawn has no prior binding at its not-yet-created
+ * target key, so it mints without a prepare-check. The cube lock is held OUTER
+ * across revalidate → optional scrub → mint; the keychain lock is taken INNER by
+ * the injected scrubBeforeMint()/mint() config wrappers (no inversion). On an
+ * expectation mismatch NOTHING is minted or scrubbed.
+ */
+export declare function prepareServerSeatAttachment<R>(input: {
+    expected: ExpectedBinding;
+    scrubBeforeMint?: () => Promise<unknown>;
+    mint: () => Promise<R>;
+}): Promise<PrepareServerSeatOutcome<R>>;
 export type FinalizeServerSeatOutcome = {
     committed: true;
 } | {

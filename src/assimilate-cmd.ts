@@ -104,6 +104,10 @@ export interface AssimilateResult {
     activate: () => Promise<unknown>;
     scrubPending: () => Promise<unknown>;
   };
+  // CR #1: set when the cube-lock-held PREPARE revalidation aborted BEFORE any
+  // credential was minted or sent (a reset/binding writer won before PREPARE).
+  // No worktree has been spawned yet at that point, so the caller exits cleanly.
+  prepareAborted?: boolean;
 }
 
 export interface ActiveCube {
@@ -243,7 +247,7 @@ export interface AssimilateDeps {
   assimilate: (
     apiUrl: string,
     token: string,
-    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null; session_operation?: ServerSessionOperation },
+    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null; session_operation?: ServerSessionOperation; session_expected?: ExpectedBinding; revalidate_at_prepare?: boolean },
     serverTrustIdentity?: string,
   ) => Promise<AssimilateResult>;
   listTemplates: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<Array<{ name: string; description: string }>>;
@@ -1057,6 +1061,39 @@ export async function runAssimilate(
     return 1;
   }
 
+  // The TYPED prepare-time expectation (ratified clause 3 / CR #1). Declared HERE,
+  // BEFORE the mint+send, and revalidated at BOTH the cube-lock-held PREPARE (so a
+  // reset that wins before PREPARE aborts before any credential is created/sent)
+  // and FINALIZE. resume/reattach/remint pin the FULL prior binding (ref + drone
+  // id [+ live digest]); fresh/sibling declare ABSENT.
+  let sessionExpected: ExpectedBinding;
+  if (resumeCredentialRef) {
+    sessionExpected = {
+      kind: 'exact',
+      credentialRef: resumeCredentialRef,
+      ...(resumeDroneId ? { droneId: resumeDroneId } : {}),
+    };
+  } else if (remintInvalidPrior && existing?.localSessionCredentialRef) {
+    sessionExpected = {
+      kind: 'exact',
+      credentialRef: existing.localSessionCredentialRef,
+      ...(existing.droneId ? { droneId: existing.droneId } : {}),
+    };
+  } else if (reattachPriorId != null && existing?.localSessionCredentialRef && existing.sessionToken) {
+    sessionExpected = {
+      kind: 'exact',
+      credentialRef: existing.localSessionCredentialRef,
+      ...(existing.droneId ? { droneId: existing.droneId } : {}),
+      sessionDigest: createHash('sha256').update(existing.sessionToken).digest('hex'),
+    };
+  } else {
+    sessionExpected = { kind: 'absent' };
+  }
+  // In-place attaches (the target worktree is the current one) can revalidate the
+  // expectation at PREPARE; a sibling spawn's target key does not exist yet, so it
+  // mints without a prepare-check (there is no prior binding to race against).
+  const revalidateAtPrepare = !wantSibling;
+
   // ----- Step 6: API assimilate (no FS state yet — clean exit on failure) -----
   // gh#653 B4: progress for the seat-mint round-trip (silent-window stall).
   deps.stderr(`Joining cube '${cubeDetail.name}' as ${resolvedRole.name}…\n`);
@@ -1071,7 +1108,11 @@ export async function runAssimilate(
       ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
       ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
       ...(authority.kind === 'server'
-        ? { session_operation: sessionOperation }
+        ? {
+          session_operation: sessionOperation,
+          session_expected: sessionExpected,
+          revalidate_at_prepare: revalidateAtPrepare,
+        }
         : {}),
     };
     result = auth.serverTrustIdentity === undefined
@@ -1121,6 +1162,20 @@ export async function runAssimilate(
     }
     const message = err instanceof Error ? err.message : String(err);
     deps.stderr(`assimilate failed: ${message}\n`);
+    return 1;
+  }
+
+  if (authority.kind === 'server' && result.prepareAborted) {
+    // CR #1: the cube-lock-held PREPARE revalidation aborted BEFORE any credential
+    // was minted or sent — this worktree's saved seat changed under us (a
+    // concurrent offline reset, or a competing enroll). No FS/network mutation
+    // happened; never silently recreate.
+    deps.stderr(
+      `This worktree's saved local seat on ${authority.apiUrl} changed before the attach ` +
+        '(a concurrent reset or enroll); no credential was created or sent and nothing was ' +
+        `changed. Re-run ${localAssimilateCommand(authority.apiUrl)} to attach against the ` +
+        'current state.\n',
+    );
     return 1;
   }
 
@@ -1322,40 +1377,13 @@ export async function runAssimilate(
     result.finalize !== undefined &&
     deps.finalizeServerSeat !== undefined
   ) {
-    let expected: ExpectedBinding;
-    if (resumeCredentialRef) {
-      // Crash-in-gap resume: the extant FULL binding (incl its prior drone id)
-      // must still hold, but the credential is PENDING (not active) so no
-      // live-bearer digest is pinned — EXACT ref + drone id only.
-      expected = {
-        kind: 'exact',
-        credentialRef: resumeCredentialRef,
-        ...(resumeDroneId ? { droneId: resumeDroneId } : {}),
-      };
-    } else if (remintInvalidPrior && existing?.localSessionCredentialRef) {
-      // Eviction remint: the bearer is intentionally replaced, so no digest — but
-      // the prior (evicted) binding, incl its drone id, must still be the one we
-      // are replacing.
-      expected = {
-        kind: 'exact',
-        credentialRef: existing.localSessionCredentialRef,
-        ...(existing.droneId ? { droneId: existing.droneId } : {}),
-      };
-    } else if (reattachPriorId != null && existing?.localSessionCredentialRef && existing.sessionToken) {
-      expected = {
-        kind: 'exact',
-        credentialRef: existing.localSessionCredentialRef,
-        ...(existing.droneId ? { droneId: existing.droneId } : {}),
-        sessionDigest: createHash('sha256').update(existing.sessionToken).digest('hex'),
-      };
-    } else {
-      expected = { kind: 'absent' };
-    }
+    // The SAME typed expectation declared before PREPARE is revalidated again at
+    // FINALIZE (commit-time revalidation, ratified clause 3).
     let outcome: FinalizeServerSeatOutcome;
     try {
       outcome = await deps.finalizeServerSeat({
         active: activeCube,
-        expected,
+        expected: sessionExpected,
         activate: result.finalize.activate,
         scrubPending: result.finalize.scrubPending,
       });

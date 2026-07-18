@@ -1243,6 +1243,42 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
     expect(removedWorktree(calls)).toBe(true);
   });
+
+  it('CR #1: a PREPARE abort (reset won before PREPARE) exits cleanly BEFORE any worktree spawn or finalize', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const stderr = vi.fn();
+    // deps.assimilate signals the cube-lock PREPARE revalidation aborted before mint/send.
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'c', drone_id: '', drone_label: '', role_id: 'r', prepareAborted: true as const,
+    }));
+    const deps = makeStubDeps({
+      assimilate, getCube: getCube(), finalizeServerSeat, stderr, runSync,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/changed before the attach/);
+    expect(out).toMatch(/no credential was created or sent/);
+    // No FINALIZE, and no worktree was ever spawned (so none to roll back).
+    expect(finalizeServerSeat).not.toHaveBeenCalled();
+    expect(calls.some((c) => c[0] === 'git' && c[1] === 'worktree' && c[2] === 'add')).toBe(false);
+    expect(removedWorktree(calls)).toBe(false);
+  });
+
+  it('CR #1: an in-place attach passes the typed expectation + revalidate_at_prepare to deps.assimilate', async () => {
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const assimilate = localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {}));
+    const deps = makeStubDeps({
+      assimilate, getCube: getCube(), finalizeServerSeat,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
+    // A fresh in-place attach → ABSENT expectation, revalidated at PREPARE.
+    const params = assimilate.mock.calls[0][2];
+    expect(params.session_expected).toEqual({ kind: 'absent' });
+    expect(params.revalidate_at_prepare).toBe(true);
+  });
 });
 
 describe('runAssimilate: step 6 (role resolution)', () => {

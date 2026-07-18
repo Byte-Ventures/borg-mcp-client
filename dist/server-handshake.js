@@ -82,7 +82,15 @@ export async function preflightBorgServerTag(origin, fetchImpl = fetch) {
         clearTimeout(timeout);
     }
 }
-export async function prepareBorgServerAttach(origin, trustIdentity, parentCredential, request, deps = {}) {
+/**
+ * The NETWORK-ONLY half of an attach: POST the ALREADY-MINTED pending bearer and
+ * decode, WITHOUT minting (the mint is owned by the cube-lock-held
+ * prepareServerSeatAttachment composite, CR #1). Returns the deferred
+ * activate/scrubPending handles for the cube-lock-held FINALIZE. The composite
+ * production path uses this after minting under the cube lock; the legacy
+ * prepareBorgServerAttach wrapper mints then delegates here.
+ */
+export async function sendBorgServerAttach(origin, trustIdentity, parentCredential, request, pendingBearer, deps = {}) {
     if (!UUID_RE.test(request.cubeId) || !UUID_RE.test(request.roleId)) {
         throw new Error('Borg server attach requires valid cube and role identities');
     }
@@ -92,15 +100,7 @@ export async function prepareBorgServerAttach(origin, trustIdentity, parentCrede
     if (!/^[A-Za-z0-9_-]{43,1024}$/.test(parentCredential)) {
         throw new Error('stored Borg server enrollment credential is invalid');
     }
-    // Generate + persist the client bearer before contact; a retry re-sends the
-    // exact same pending bearer so the server resolves the identical session.
-    const pending = await (deps.getPendingSession ?? getOrCreatePendingServerSession)({
-        origin,
-        trustIdentity,
-        cubeId: request.cubeId,
-        roleId: request.roleId,
-        operation: request.operation,
-    });
+    const pending = { credential: pendingBearer };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
     try {
@@ -209,9 +209,29 @@ export async function prepareBorgServerAttach(origin, trustIdentity, parentCrede
     }
 }
 /**
+ * Mint the client bearer, then send it (the pre-composite contract). Retained for
+ * callers/tests that do not drive the cube-lock-held prepare/FINALIZE themselves.
+ * The production assimilate orchestration mints under the cube-lock composite
+ * (cubes.prepareServerSeatAttachment) and calls sendBorgServerAttach directly, so
+ * the mint is revalidated against the typed expectation before any send (CR #1).
+ */
+export async function prepareBorgServerAttach(origin, trustIdentity, parentCredential, request, deps = {}) {
+    // Generate + persist the client bearer before contact; a retry re-sends the
+    // exact same pending bearer so the server resolves the identical session.
+    const pending = await (deps.getPendingSession ?? getOrCreatePendingServerSession)({
+        origin,
+        trustIdentity,
+        cubeId: request.cubeId,
+        roleId: request.roleId,
+        operation: request.operation,
+    });
+    const { getPendingSession: _drop, ...sendDeps } = deps;
+    return sendBorgServerAttach(origin, trustIdentity, parentCredential, request, pending.credential, sendDeps);
+}
+/**
  * PREPARE + network + activate, as a single call (the pre-composite contract).
  * Retained for callers/tests that do not drive the cube-lock-held FINALIZE
- * themselves; the assimilate orchestration now uses prepareBorgServerAttach +
+ * themselves; the assimilate orchestration now uses the cube-lock composite +
  * finalizeServerSeatAttachment so the binding lands BEFORE the pending→ACTIVE flip.
  */
 export async function attachBorgServer(origin, trustIdentity, parentCredential, request, deps = {}) {

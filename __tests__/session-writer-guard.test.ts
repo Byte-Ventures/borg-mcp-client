@@ -49,6 +49,39 @@ describe('drone-session keychain writer guard (part D)', () => {
     expect(config).not.toContain('withCubesWriteLock');
   });
 
+  it('CR #1: the worktree BINDING writer (writeCubesFile) lives ONLY in the cube-lock owner (cubes.ts)', () => {
+    // Every cubes.json binding mutation flows through writeCubesFile, which is
+    // private to cubes.ts and only ever called under withCubesWriteLock. No other
+    // module may write a binding (a bypass writer outside the composite).
+    expect(filesReferencing('writeCubesFile', ['cubes.ts'])).toEqual([]);
+  });
+
+  it('CR #1: the drone-SESSION credential SEND (attach `session_credential`) lives ONLY in server-handshake.ts', () => {
+    // The only place a session bearer is put on the wire is the attach POST body.
+    // A `session_credential` send anywhere else is an unsanctioned credential path.
+    expect(filesReferencing('session_credential', ['server-handshake.ts'])).toEqual([]);
+  });
+
+  it('CR #1: the production orchestrator routes the MINT through the cube-lock composite, not a bypass attach', () => {
+    const deps = read('assimilate-deps.ts');
+    // assimilate-deps mints under cubes.prepareServerSeatAttachment (PREPARE-time
+    // revalidation), and sends via the network-only sendBorgServerAttach...
+    expect(deps).toContain('prepareServerSeatAttachment');
+    expect(deps).toContain('sendBorgServerAttach');
+    // ...and NEVER the mint+send(+activate) wrappers that skip the cube-lock
+    // prepare revalidation.
+    expect(deps).not.toContain('attachBorgServer');
+    expect(deps).not.toContain('prepareBorgServerAttach');
+  });
+
+  it('CR #1: the pre-composite attach wrappers are confined to server-handshake.ts (no production caller elsewhere)', () => {
+    // attachBorgServer / prepareBorgServerAttach mint (and attachBorgServer also
+    // activates) without the cube-lock PREPARE revalidation — they are retained
+    // only for lower-level tests and must have NO caller in any other src module.
+    expect(filesReferencing('attachBorgServer', ['server-handshake.ts'])).toEqual([]);
+    expect(filesReferencing('prepareBorgServerAttach', ['server-handshake.ts'])).toEqual([]);
+  });
+
   it('the cube-lock owner reaches session credentials ONLY via sanctioned config exports (never a raw backend)', () => {
     const cubes = read('cubes.ts');
     // cubes.ts holds the OUTER cube lock; it must never construct or touch the

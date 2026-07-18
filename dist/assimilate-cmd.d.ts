@@ -46,6 +46,7 @@ export interface AssimilateResult {
         activate: () => Promise<unknown>;
         scrubPending: () => Promise<unknown>;
     };
+    prepareAborted?: boolean;
 }
 export interface ActiveCube {
     cubeId: string;
@@ -159,6 +160,8 @@ export interface AssimilateDeps {
         model?: string | null;
         agent_kind?: 'claude' | 'codex' | 'opencode' | null;
         session_operation?: ServerSessionOperation;
+        session_expected?: ExpectedBinding;
+        revalidate_at_prepare?: boolean;
     }, serverTrustIdentity?: string) => Promise<AssimilateResult>;
     listTemplates: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<Array<{
         name: string;

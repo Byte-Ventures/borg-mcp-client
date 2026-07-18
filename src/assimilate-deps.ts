@@ -31,14 +31,20 @@ import {
   enrollLocalBorgServer,
   probeLocalBorgServer,
   resumeLocalBorgServerEnrollment,
-  prepareBorgServerAttach,
+  sendBorgServerAttach,
 } from './server-handshake.js';
 import {
   clearPendingServerSession,
+  getOrCreatePendingServerSession,
   peekServerSessionRecord,
+  type PendingServerSessionRecord,
   type ServerSessionOperation,
 } from './config.js';
-import { finalizeServerSeatAttachment, readPersistedLocalSeat } from './cubes.js';
+import {
+  finalizeServerSeatAttachment,
+  prepareServerSeatAttachment,
+  readPersistedLocalSeat,
+} from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError } from './server-errors.js';
@@ -247,16 +253,43 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
         if (trust.identity !== serverTrustIdentity) {
           throw new Error('Borg server trust identity changed; refusing the attach');
         }
-        // Eviction-remint: discard the known-invalid saved bearer BEFORE the
-        // attach so a genuinely fresh bearer (and therefore a new seat) is minted
-        // instead of the server reusing the evicted seat's digest.
-        if (params.remint_invalid_prior === true) {
-          await clearPendingServerSession(seatBinding);
+        // CR #1: MINT under the cube-lock-held composite, which REVALIDATES the
+        // typed prepare-time expectation BEFORE any credential is created or sent —
+        // so a reset/binding writer that wins before PREPARE aborts the attach here,
+        // not only at FINALIZE. Eviction-remint discards the known-invalid saved
+        // bearer as scrubBeforeMint, still under the same cube lock. A sibling spawn
+        // has no prior binding at its not-yet-created target key, so it mints
+        // directly (no in-place binding to revalidate against).
+        const mint = () => getOrCreatePendingServerSession(seatBinding);
+        let pending: PendingServerSessionRecord;
+        if (params.revalidate_at_prepare === true && params.session_expected !== undefined) {
+          const preparedMint = await prepareServerSeatAttachment<PendingServerSessionRecord>({
+            expected: params.session_expected,
+            ...(params.remint_invalid_prior === true
+              ? { scrubBeforeMint: () => clearPendingServerSession(seatBinding) }
+              : {}),
+            mint,
+          });
+          if (!preparedMint.ok) {
+            return {
+              cube_id: params.cube_id,
+              drone_id: '',
+              drone_label: '',
+              role_id: params.role_id,
+              prepareAborted: true,
+            };
+          }
+          pending = preparedMint.record;
+        } else {
+          if (params.remint_invalid_prior === true) {
+            await clearPendingServerSession(seatBinding);
+          }
+          pending = await mint();
         }
-        // PREPARE + network only — the keychain pending→ACTIVE flip is deferred to
-        // the cube-lock-held FINALIZE (finalizeServerSeatAttachment) so the binding
+        // Network only — the keychain pending→ACTIVE flip is deferred to the
+        // cube-lock-held FINALIZE (finalizeServerSeatAttachment) so the binding
         // lands BEFORE the credential goes active (Race 2 / ACTIVE-without-binding).
-        const prepared = await prepareBorgServerAttach(
+        const prepared = await sendBorgServerAttach(
           apiUrl,
           serverTrustIdentity,
           token,
@@ -268,6 +301,7 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
               ? {}
               : { priorDroneId: params.prior_drone_id }),
           },
+          pending.credential,
           { fetchImpl: trust.fetchImpl },
         );
         if (params.prior_drone_id) {
