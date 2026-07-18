@@ -658,11 +658,22 @@ export async function finalizeServerSeatAttachment(input) {
             await scrubPending();
             return { committed: false, reason: 'expectation-mismatch' };
         }
-        // BINDING-FIRST: persist the binding, THEN flip pending→ACTIVE.
+        // BINDING-FIRST: persist the binding, THEN flip pending→ACTIVE. A
+        // writeCubesFile failure PROPAGATES (the binding never landed → the caller
+        // may safely roll back a just-spawned worktree).
         const { sessionToken: _discardLocalBearer, ...persisted } = active;
         existing.projects[key] = persisted;
         await writeCubesFile(existing);
-        await activate();
+        // CR #5: once the binding is written, an activation throw must NOT surface as
+        // a generic failure that makes the caller delete the worktree owning it. The
+        // state is binding-present/credential-PENDING — non-hydratable, rerunnable —
+        // so report it as a distinct typed outcome and keep the worktree.
+        try {
+            await activate();
+        }
+        catch {
+            return { committed: false, reason: 'activation-failed' };
+        }
         return { committed: true };
     }));
     activeCubeWriteQueue = operation.then(() => undefined, () => undefined);

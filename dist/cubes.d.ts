@@ -203,6 +203,9 @@ export type FinalizeServerSeatOutcome = {
 } | {
     committed: false;
     reason: 'expectation-mismatch';
+} | {
+    committed: false;
+    reason: 'activation-failed';
 };
 /**
  * COMPOSITE cube-owned FINALIZE closing Race 2 on the attach path (ratified

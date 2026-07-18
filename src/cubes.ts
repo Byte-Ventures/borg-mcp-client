@@ -743,8 +743,15 @@ export interface FinalizeServerSeatInput {
 }
 
 export type FinalizeServerSeatOutcome =
+  // Binding persisted AND the credential flipped to ACTIVE.
   | { committed: true }
-  | { committed: false; reason: 'expectation-mismatch' };
+  // Aborted at revalidate — the binding was NEVER written (safe to roll back a
+  // just-spawned worktree; the own pending record was scrubbed).
+  | { committed: false; reason: 'expectation-mismatch' }
+  // The binding WAS persisted but the pending→ACTIVE flip threw (CR #5). This
+  // worktree now OWNS the binding (binding-present/credential-PENDING, rerunnable)
+  // — the caller must NOT delete the worktree, or it would orphan the binding.
+  | { committed: false; reason: 'activation-failed' };
 
 /**
  * COMPOSITE cube-owned FINALIZE closing Race 2 on the attach path (ratified
@@ -818,12 +825,22 @@ export async function finalizeServerSeatAttachment(
       return { committed: false as const, reason: 'expectation-mismatch' as const };
     }
 
-    // BINDING-FIRST: persist the binding, THEN flip pending→ACTIVE.
+    // BINDING-FIRST: persist the binding, THEN flip pending→ACTIVE. A
+    // writeCubesFile failure PROPAGATES (the binding never landed → the caller
+    // may safely roll back a just-spawned worktree).
     const { sessionToken: _discardLocalBearer, ...persisted } = active;
     existing.projects[key] = persisted;
     await writeCubesFile(existing);
 
-    await activate();
+    // CR #5: once the binding is written, an activation throw must NOT surface as
+    // a generic failure that makes the caller delete the worktree owning it. The
+    // state is binding-present/credential-PENDING — non-hydratable, rerunnable —
+    // so report it as a distinct typed outcome and keep the worktree.
+    try {
+      await activate();
+    } catch {
+      return { committed: false as const, reason: 'activation-failed' as const };
+    }
     return { committed: true as const };
   }));
   activeCubeWriteQueue = operation.then(() => undefined, () => undefined);

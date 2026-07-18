@@ -1198,6 +1198,51 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
     expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toMatch(/setActiveCube failed: keychain locked/);
   });
+
+  // CR #5: a spawned-sibling worktree OWNS the persisted binding once FINALIZE
+  // has written it. An activation failure after that must NOT delete the worktree.
+  const spyRunSync = () => {
+    const calls: string[][] = [];
+    const runSync = vi.fn((cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      return args[0] === 'remote'
+        ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' }
+        : { status: 0, stdout: '', stderr: '' };
+    });
+    return { calls, runSync };
+  };
+  const removedWorktree = (calls: string[][]) =>
+    calls.some((c) => c[0] === 'git' && c[1] === 'worktree' && c[2] === 'remove');
+
+  it('CR #5: a spawned-sibling activation-failure PRESERVES the worktree (never orphans the binding it owns)', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'activation-failed' as const }));
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
+      getCube: getCube(), finalizeServerSeat, stderr, runSync,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    // The worktree that owns the persisted binding was NOT removed.
+    expect(removedWorktree(calls)).toBe(false);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/binding.*was saved/i);
+    expect(out).toMatch(/NOT removed/i);
+    expect(out).toMatch(/re-run/i);
+  });
+
+  it('CR #5: an expectation-mismatch on a spawned sibling DOES roll it back (the binding was never written)', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'expectation-mismatch' as const }));
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
+      getCube: getCube(), finalizeServerSeat, stderr: vi.fn(), runSync,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    expect(removedWorktree(calls)).toBe(true);
+  });
 });
 
 describe('runAssimilate: step 6 (role resolution)', () => {

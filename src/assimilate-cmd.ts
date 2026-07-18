@@ -1360,19 +1360,32 @@ export async function runAssimilate(
         scrubPending: result.finalize.scrubPending,
       });
     } catch (err) {
-      // A binding-write or activation failure. BINDING-FIRST means a thrown
-      // activation leaves binding-present/credential-PENDING (non-hydratable,
-      // retry-safe) — never an ACTIVE credential without a binding.
+      // A BINDING-WRITE (or revalidate) failure BEFORE the binding landed. Nothing
+      // owns the spawned worktree yet, so rolling it back is safe.
       const message = err instanceof Error ? err.message : String(err);
       deps.stderr(`setActiveCube failed: ${message}\n`);
       rollbackWorktree();
       return 1;
     }
     if (!outcome.committed) {
-      // Expectation mismatch: this worktree's saved seat changed under us between
-      // PREPARE and FINALIZE (a concurrent offline reset, or a competing enroll).
-      // The composite compare-and-scrubbed only our own pending record — no orphan
-      // ACTIVE credential exists. Do NOT silently recreate.
+      if (outcome.reason === 'activation-failed') {
+        // CR #5: the binding WAS persisted (this worktree OWNS it) but the keychain
+        // activation threw. The state is binding-present/credential-PENDING —
+        // non-hydratable and RERUNNABLE. Deleting the worktree here would orphan
+        // the binding + pending record and destroy the only discoverable recovery
+        // location, so the worktree is PRESERVED.
+        deps.stderr(
+          `This worktree's seat binding on ${auth.apiUrl} was saved, but finalizing its ` +
+            'secure session did not complete. This worktree was NOT removed and the state is ' +
+            `safe to re-run: from here, re-run ${localAssimilateCommand(auth.apiUrl)} to ` +
+            'converge (the identical seat is reused — no duplicate is minted).\n',
+        );
+        return 1;
+      }
+      // 'expectation-mismatch': the binding was NEVER written (this worktree's
+      // saved seat changed under us between PREPARE and FINALIZE — a concurrent
+      // reset or enroll). The composite scrubbed only our own pending record — no
+      // orphan ACTIVE credential — so a just-spawned worktree is safe to remove.
       deps.stderr(
         `This worktree's saved local seat on ${auth.apiUrl} changed during attach ` +
           '(a concurrent reset or enroll); no seat was created and nothing was overwritten. ' +

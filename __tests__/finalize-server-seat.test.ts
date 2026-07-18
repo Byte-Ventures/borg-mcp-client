@@ -159,13 +159,15 @@ describe('finalizeServerSeatAttachment', () => {
     expect(keychainMocks.getActiveServerSessionCredential).not.toHaveBeenCalled();
   });
 
-  it('activation-failure leaves binding-present/credential-PENDING (never ACTIVE-without-binding); a retry converges', async () => {
+  it('activation-failure returns a TYPED activation-failed outcome (binding kept, PENDING) — CR #5; a retry converges', async () => {
     const { fixture, cubes } = await setup();
-    // First FINALIZE: binding persists, then activation THROWS.
+    // First FINALIZE: binding persists, then activation THROWS. CR #5: this is a
+    // TYPED outcome, not a thrown error, so the caller can preserve the worktree.
     const failing = vi.fn(async () => { throw new Error('keychain locked'); });
-    await expect(cubes.finalizeServerSeatAttachment({
+    const res1 = await cubes.finalizeServerSeatAttachment({
       active: { ...meta }, expected: { kind: 'absent' }, activate: failing, scrubPending: vi.fn(async () => {}),
-    })).rejects.toThrow(/keychain/i);
+    });
+    expect(res1).toEqual({ committed: false, reason: 'activation-failed' });
     // Binding was written (PENDING-without-ACTIVE forward state) — never rolled back.
     expect(readOrEmpty(cubesJson(fixture))).toContain(REF);
 
