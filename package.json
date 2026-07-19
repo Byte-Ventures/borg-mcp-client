@@ -41,7 +41,7 @@
   "files": [
     "dist",
     "src",
-    "docs",
+    "docs/*.md",
     "README.md",
     "LICENSE",
     "NOTICE",
