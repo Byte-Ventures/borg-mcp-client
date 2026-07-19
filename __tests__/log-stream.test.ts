@@ -65,7 +65,7 @@ vi.mock('../src/local-server-cursor.js', () => ({
 
 /**
  * Build a Response whose body emits the given SSE event blocks then
- * closes — mimics the worker side of /api/drone/stream.
+ * closes — mimics the local server stream.
  */
 function makeSSEResponse(blocks: string[]): Response {
   const encoder = new TextEncoder();

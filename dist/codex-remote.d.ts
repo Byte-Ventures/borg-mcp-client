@@ -113,7 +113,7 @@ export declare function prepareCodexRemoteLaunch(deps: PrepareCodexRemoteDeps): 
  * claude.ts and assimilate-deps.ts so there's ONE wiring.
  *
  * The readiness probe uses Codex app-server RPCs ONLY (connect + thread/loaded/
- * list) — it never calls a borg /api/drone/* endpoint — so it can never advance
+ * list) — it never calls a Borg coordination endpoint — so it can never advance
  * last_seen/last_regen_at and mask a deaf Codex (the gh#46/gh#406 signal-truth
  * invariant; the app-server socket is the wake-DELIVERY wire, not a liveness
  * signal).

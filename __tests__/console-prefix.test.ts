@@ -34,7 +34,8 @@ describe('initConsolePrefix — cube-cache-hit', () => {
       name: 'borg-mcp',
       sessionToken: 'tok',
       droneLabel: 'drone-6',
-      apiUrl: 'https://api.borgmcp.ai',
+      apiUrl: 'https://127.0.0.1:7091',
+      serverTrustIdentity: 'spki-sha256:test-server',
     });
     const prefix = await initConsolePrefix();
     expect(prefix).toBe('[drone-6 · borg-mcp]');

@@ -9,7 +9,7 @@
  *   docs/superpowers/specs/2026-05-11-server-push-log-subscription.md
  *
  * Lifetimes:
- *   - One persistent fetch-streaming connection to /api/drone/stream
+ *   - One persistent fetch-streaming connection to the cube-scoped stream
  *     per active cube.
  *   - On every received `event: log`, a single line is appended to the
  *     per-drone inbox file (same format the old poller wrote).
@@ -438,10 +438,7 @@ export function __runLoopForTest(testDeps) {
 }
 export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     const { fetchImpl, appendLine, hasInboxEntryId, wakeCodex, heartbeatTimeoutMs, hwmDivergenceGraceMs, abortSignal, injectOpenCode, } = { ...defaultDeps, ...deps };
-    const isLocal = active.serverTrustIdentity !== undefined;
-    // There is no hosted authority: a stream must carry verified local server
-    // trust. Anything else fails closed before the transport is touched.
-    if (!isLocal) {
+    if (active.serverTrustIdentity === undefined) {
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
     const token = active.sessionToken;
@@ -450,28 +447,22 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         Accept: 'text/event-stream',
     };
     let requestFetch = fetchImpl;
-    let streamPath = '/api/drone/stream';
-    if (isLocal) {
-        if (deps.fetchImpl === undefined) {
-            const trust = await loadBorgServerTrust(active.apiUrl);
-            if (trust.identity !== active.serverTrustIdentity) {
-                throw new Error('Borg server trust identity changed; refusing the stream');
-            }
-            requestFetch = trust.fetchImpl;
+    if (deps.fetchImpl === undefined) {
+        const trust = await loadBorgServerTrust(active.apiUrl);
+        if (trust.identity !== active.serverTrustIdentity) {
+            throw new Error('Borg server trust identity changed; refusing the stream');
         }
-        const cursor = await getLocalServerCursor({
-            origin: active.apiUrl,
-            trustIdentity: active.serverTrustIdentity,
-            cubeId: active.cubeId,
-            droneId: active.droneId,
-            // client#41: the stream resumes from its OWN delivery cursor, NOT the
-            // unread watermark. Advancing the watermark is the exclusive job of an
-            // explicit read-log drain.
-            purpose: 'stream',
-        });
-        const query = cursor ? `?cursor=${encodeURIComponent(encodeLocalServerCursor(cursor))}` : '';
-        streamPath = `/api/cubes/${active.cubeId}/stream${query}`;
+        requestFetch = trust.fetchImpl;
     }
+    const cursor = await getLocalServerCursor({
+        origin: active.apiUrl,
+        trustIdentity: active.serverTrustIdentity,
+        cubeId: active.cubeId,
+        droneId: active.droneId,
+        purpose: 'stream',
+    });
+    const query = cursor ? `?cursor=${encodeURIComponent(encodeLocalServerCursor(cursor))}` : '';
+    const streamPath = `/api/cubes/${active.cubeId}/stream${query}`;
     const ac = new AbortController();
     const abortFromExternal = () => {
         try {
@@ -631,7 +622,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         }
         markEventPersisted(ev.id, ev.data?.created_at ?? '');
         markBroadcastPersisted(broadcastHwmFromLogEvent(ev));
-        if (isLocal && ev.cursor) {
+        if (ev.cursor) {
             // client#41: delivery advances the STREAM cursor only. The unread
             // watermark (read-log unread_only) is deliberately NOT touched here, so a
             // wake-triggering entry stays unread until the agent drains it — SSE
@@ -668,9 +659,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         // bare status (SEC R2). Any other status falls through to the generic throw
         // so the reconnect loop keeps retrying transient failures.
         if (response.status === 410) {
-            const body = isLocal
-                ? await readBoundedResponseBody(response, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES, 'Local Borg server SSE response exceeded the response limit', ac.signal).catch(() => '')
-                : await response.text().catch(() => '');
+            const body = await readBoundedResponseBody(response, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES, 'Local Borg server SSE response exceeded the response limit', ac.signal).catch(() => '');
             const code = errorCodeFromBody(body);
             if (code === DRONE_EVICTED_CODE) {
                 throw new DroneEvictedError();
@@ -685,15 +674,13 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
             // the dead cursor. The unread watermark (client#41) is untouched, so no
             // undrained wake is lost across the reset.
             if (code === CURSOR_EXPIRED_CODE) {
-                if (isLocal) {
-                    await clearLocalServerCursor({
-                        origin: active.apiUrl,
-                        trustIdentity: active.serverTrustIdentity,
-                        cubeId: active.cubeId,
-                        droneId: active.droneId,
-                        purpose: 'stream',
-                    });
-                }
+                await clearLocalServerCursor({
+                    origin: active.apiUrl,
+                    trustIdentity: active.serverTrustIdentity,
+                    cubeId: active.cubeId,
+                    droneId: active.droneId,
+                    purpose: 'stream',
+                });
                 throw new StreamCursorExpiredError();
             }
         }
@@ -701,7 +688,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     }
     streamState.connected = true;
     try {
-        for await (const event of parseSSE(response.body, isLocal ? LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES : undefined)) {
+        for await (const event of parseSSE(response.body, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES)) {
             bumpWatchdog();
             const nowIso = new Date().toISOString();
             streamState.lastWireActivityAt = nowIso;
@@ -833,7 +820,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                 // while only an addressed drone writes it to its inbox and wakes. A
                 // malformed direct frame with no matching recipient fails closed in
                 // the wake direction (cursor advances; no cube-wide wake storm).
-                if (isLocal && event.data?.visibility === 'direct') {
+                if (event.data?.visibility === 'direct') {
                     const recipients = Array.isArray(event.data?.recipient_drone_ids)
                         ? event.data.recipient_drone_ids.filter((recipient) => typeof recipient === 'string')
                         : [];

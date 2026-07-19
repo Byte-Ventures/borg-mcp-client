@@ -7,7 +7,7 @@
  *   - no identity for this worktree              → refuse, direct to CLI
  *   - identity exists but a DIFFERENT cube asked → refuse, direct to CLI
  *
- * The tool must be structurally INCAPABLE of POSTing /api/assimilate —
+ * The tool must be structurally incapable of using the retired attach route —
  * minting is the CLI's job, where worktree spawn + identity persistence
  * are handled coherently.
  */

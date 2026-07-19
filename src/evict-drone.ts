@@ -1,11 +1,11 @@
 /**
  * Pure label→id resolution for the `borg_evict-drone` tool (gh#718).
  *
- * `CubeStore.evictDrone` and the owner-authed `DELETE /api/drones/:id` route
+ * the local drone-management route
  * both take a drone UUID. Coordinators, however, see drone LABELS everywhere
  * (roster, regen, cube log) and rarely the UUIDs. This helper lets the tool
  * accept a label and resolve it to the drone id client-side, against the
- * owner-scoped cube detail returned by `getCube` (the same id+label pairs
+ * cube-grant-scoped detail returned by `getCube` (the same id+label pairs
  * `borg_list-drones` renders). No I/O here — a pure function so it can be
  * unit-tested in isolation; the handler in index.ts owns the network calls.
  */

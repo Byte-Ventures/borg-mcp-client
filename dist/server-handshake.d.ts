@@ -12,7 +12,7 @@ export declare function probeBorgServer(origin: string, fetchImpl?: FetchLike, t
  * created, sent, or a seat attached. Sends NO Authorization header, cookie,
  * query, or body; rejects redirects; and bounds the response. A tag mismatch,
  * an extra field, or any transport anomaly fails closed here — no keychain
- * write, no attach, no Cloud fallback. The bearer is proven only at attach.
+ * write and no attach. The bearer is proven only at attach.
  */
 export declare function preflightBorgServerTag(origin: string, fetchImpl?: FetchLike): Promise<ProtocolTagPreflight>;
 export interface EnrolledServerConnection {

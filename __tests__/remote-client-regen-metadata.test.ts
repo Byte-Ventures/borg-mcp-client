@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * regen() advisory metadata.
  *
  * The deleted file asserted that reported_model / working_repo identity were
- * marshalled into the CLOUD /api/drone/regen query string (with origin
+ * marshalled into the retired remote query string (with origin
  * canonicalization stripping embedded secrets). After cloud severance, regen on
  * the LOCAL path composes the cube/role/drone/roster through /api/cubes routes
  * and NEVER emits the advisory model or working-repo identity anywhere on the

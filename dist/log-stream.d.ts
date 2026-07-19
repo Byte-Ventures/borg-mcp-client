@@ -9,7 +9,7 @@
  *   docs/superpowers/specs/2026-05-11-server-push-log-subscription.md
  *
  * Lifetimes:
- *   - One persistent fetch-streaming connection to /api/drone/stream
+ *   - One persistent fetch-streaming connection to the cube-scoped stream
  *     per active cube.
  *   - On every received `event: log`, a single line is appended to the
  *     per-drone inbox file (same format the old poller wrote).

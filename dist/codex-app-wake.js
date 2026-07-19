@@ -9,7 +9,7 @@ export function formatCodexWakePrompt(inboxLine) {
 }
 // gh#708: STATIC catch-up/drain prompt (zero interpolation — no token/secret/PII/
 // cube-content; the entry bodies are fetched by codex itself via the
-// RLS/visibility-gated borg_read-log, never injected into the wake). Delivered
+// grant/visibility-gated borg_read-log, never injected into the wake). Delivered
 // once after a wake is deferred (mid-turn thread) or retried (transient miss), to
 // fire the already-shipped drain so no entry is skipped. gh#857 WI-2 reuses it as
 // the periodic heartbeat prompt.

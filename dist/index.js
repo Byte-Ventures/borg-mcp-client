@@ -13,7 +13,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
-import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, reassignDrone, evictDrone, getCube, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
+import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, reassignDrone, getCube, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
@@ -30,7 +30,6 @@ import { getPackageVersion, getOnDiskVersion, handleVersionFlag } from './versio
 import { renderStreamStatus, checkInboxMonitorHealthy, formatWakePathPrefix, shouldShowWakePathWarning, } from './stream-status.js';
 import { formatRoleAgentLabel, formatWorkingRepoLabel, renderRoster } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
-import { resolveDroneIdByLabel, isUuidShape } from './evict-drone.js';
 import { DroneEvictedError, formatEvictedToolResult, } from './drone-lifecycle.js';
 import { classifyInSessionAssimilate, reattachOnlyRefusal, reattachFailureMessage, } from './assimilate-guard.js';
 import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
@@ -43,7 +42,6 @@ import { setModuleInjectOpenCode } from './log-stream.js';
 import { lifecycleSignalForMessage, recordLifecycleLog, shouldSuppressLifecycleLog, } from './lifecycle-log-guard.js';
 import { normalizeDirectLogRecipients, } from './direct-log.js';
 import { formatLocalManageToolResult } from './local-manage-tool-result.js';
-import { formatEvictionSuccess, formatReassignmentSuccess, } from './drone-management-tool-result.js';
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
@@ -145,7 +143,7 @@ export async function main() {
     const allToolDefs = TOOL_MANIFEST;
     // Register tool listing — role-scope the native surface (gh#899). Missing role
     // (old cubes.json / pre-assimilate) → full set; deferred tools stay reachable
-    // via borg_tool. Never an auth boundary — server RLS/ownership is unchanged.
+    // via borg_tool. Never an auth boundary — live per-client cube grants govern.
     server.setRequestHandler(ListToolsRequestSchema, async () => {
         let scope = null;
         try {
@@ -180,7 +178,7 @@ export async function main() {
         }
         // gh#899: borg_tool dispatcher — unwrap to the inner tool and fall through
         // to the SAME switch below (identical activation gate + per-tool auth/Zod
-        // validation; no weaker entry — the server RLS/ownership boundary is
+        // validation; no weaker entry — the server's live cube-grant boundary is
         // unchanged). Guards against dispatcher self-reference / recursion.
         if (name === 'borg_tool') {
             const inner = typeof args?.name === 'string' ? args.name : '';
@@ -287,7 +285,7 @@ export async function main() {
                     if (!cubeName)
                         throw new Error('cube_name is required');
                     // gh#780 (Queen ruling 33a62d94): RE-ATTACH-ONLY. The old handler
-                    // POSTed /api/assimilate, which always MINTS a new drones row —
+                    // used the retired attach path, which always minted a new drone row —
                     // so agents "recovering" from auth blips spawned orphan seats.
                     // This tool now re-attaches to the worktree's saved identity or
                     // refuses with CLI guidance; it is structurally incapable of
@@ -566,13 +564,14 @@ export async function main() {
                     const visibility = args?.visibility === 'broadcast' || args?.visibility === 'direct'
                         ? args.visibility
                         : undefined;
+                    if (!active.serverTrustIdentity) {
+                        throw new Error('Selected Borg server authority state is missing or unreadable');
+                    }
                     const appendOpts = {
                         ...(explicitClass ? { class: explicitClass } : {}),
                         ...(hasTo ? { to: recipients ?? [] } : {}),
                         ...(visibility ? { visibility } : {}),
-                        ...(active.serverTrustIdentity === undefined
-                            ? {}
-                            : { serverTrustIdentity: active.serverTrustIdentity }),
+                        serverTrustIdentity: active.serverTrustIdentity,
                     };
                     const result = await appendLog(active.sessionToken, active.apiUrl, message, appendOpts);
                     await recordLifecycleLog(active, message);
@@ -882,66 +881,11 @@ export async function main() {
                         throw new Error('drone_id is required');
                     if (!roleId)
                         throw new Error('role_id is required');
-                    const result = await reassignDrone(droneId, roleId);
-                    return {
-                        content: [{
-                                type: 'text',
-                                text: formatReassignmentSuccess(result),
-                            }],
-                    };
+                    return await reassignDrone(droneId, roleId);
                 }
                 case 'borg_evict-drone': {
-                    const droneIdArg = args?.drone_id?.trim();
-                    const label = args?.label?.trim();
-                    const cubeId = args?.cube_id?.trim();
-                    const active = await getActiveCube();
-                    if (!active)
-                        throw new Error('No active cube');
-                    let targetId;
-                    let targetLabel;
-                    let targetCubeName;
-                    if (droneIdArg) {
-                        // Explicit UUID path — mirrors borg_reassign-drone. gh#782:
-                        // validate the shape BEFORE building the URL so a label (or a
-                        // path-shaped value) passed as drone_id gets a clear error
-                        // instead of a confusing not-found / malformed request path.
-                        if (!isUuidShape(droneIdArg)) {
-                            throw new Error(`drone_id "${droneIdArg}" is not a UUID — if that's a drone label, pass it as label + cube_id instead.`);
-                        }
-                        targetId = droneIdArg;
-                        targetLabel = droneIdArg;
-                    }
-                    else if (label) {
-                        // Label path: resolve to id against the owner-scoped cube roster.
-                        if (!cubeId)
-                            throw new Error('cube_id is required when evicting by label');
-                        let drones;
-                        if (active.serverTrustIdentity !== undefined && cubeId === active.cubeId) {
-                            drones = (await getRoster(active.sessionToken, active.apiUrl, undefined, active.serverTrustIdentity)).drones;
-                            targetCubeName = active.name;
-                        }
-                        else {
-                            const targetCube = await getCube(cubeId);
-                            drones = targetCube.drones;
-                            targetCubeName = targetCube.name;
-                        }
-                        const match = resolveDroneIdByLabel(drones, label);
-                        if (!match) {
-                            throw new Error(`No active drone labelled "${label}" in cube ${cubeId} (it may already be evicted; check borg_list-drones).`);
-                        }
-                        targetId = match.id;
-                        targetLabel = match.label;
-                    }
-                    else {
-                        throw new Error('Provide drone_id, or label + cube_id, to identify the drone to evict');
-                    }
-                    await evictDrone(targetId);
-                    return {
-                        content: [{
-                                type: 'text',
-                                text: formatEvictionSuccess(targetLabel, targetId, targetCubeName),
-                            }],
-                    };
+                    void args;
+                    throw new Error('Local Borg server does not support drone eviction');
                 }
                 case 'borg_list-drones': {
                     const cubeId = args?.cube_id;
@@ -970,7 +914,7 @@ export async function main() {
                 case 'borg_list-roles': {
                     // Sprint 6 / gh#153: surface role IDs to Coordinator-class drones
                     // for use with borg_reassign-drone (e.g. promoting a drone to Queen).
-                    // Uses the same owner-scoped GET /api/cubes/:id endpoint as
+                    // Uses the same cube-grant-scoped GET /api/cubes/:id endpoint as
                     // borg_list-drones — data is already accessible to the cube owner
                     // over the local server; this tool just makes role IDs
                     // discoverable inside the MCP tool namespace per drone-7's UX-FEEDBACK.

@@ -166,10 +166,6 @@ export interface AssimilateDeps {
         session_expected?: ExpectedBinding;
         revalidate_at_prepare?: boolean;
     }, serverTrustIdentity?: string) => Promise<AssimilateResult>;
-    listTemplates: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<Array<{
-        name: string;
-        description: string;
-    }>>;
     getInboxPath: (cubeId: string, droneId: string) => string;
     probeMcpReady: () => Promise<boolean>;
     resolveCli: (explicit?: BorgCli) => Promise<BorgCli>;

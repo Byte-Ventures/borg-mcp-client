@@ -96,6 +96,9 @@ const CLOUD_SYMBOL_NEEDLES = [
   'fetchLatestBorgmcpVersion',
 ];
 
+const LEGACY_AUTHORITY_ROUTE = /\/api\/(?:drone(?:\/|[?'"`])|drones\/|roles\/|templates(?:\/|[?'"`])|assimilate(?:[?'"`]))/;
+const LEGACY_AUTHORIZATION_COPY = /\bowner-scoped\b|\bcube ownership\b|\bRLS\b|\bcubes? owned by\b|USER\/OWNER|NON-OWNER|OWNER's|caller owns|owner level/i;
+
 function scan(entries: { file: string; text: string }[], needles: string[]): string[] {
   const offenders: string[] = [];
   for (const { file, text } of entries) {
@@ -117,6 +120,19 @@ describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
 
   it('no OAuth / subscription / dashboard / report identifier appears in shipped src (raw, comments included)', () => {
     expect(scan(readAll(SRC_FILES, SRC_DIR), CLOUD_SYMBOL_NEEDLES)).toEqual([]);
+  });
+
+  it('no legacy authority route family appears in shipped src', () => {
+    const offenders = readAll(SRC_FILES, SRC_DIR)
+      .filter(({ text }) => LEGACY_AUTHORITY_ROUTE.test(text))
+      .map(({ file }) => file);
+    expect(offenders).toEqual([]);
+  });
+
+  it('agent-visible authorization copy uses live cube grants, not ownership or role labels', () => {
+    for (const file of ['tool-manifest.ts', 'tool-scope.ts', 'remote-client.ts']) {
+      expect(readFileSync(path.join(SRC_DIR, file), 'utf8')).not.toMatch(LEGACY_AUTHORIZATION_COPY);
+    }
   });
 
   it('no import or reference to a deleted cloud-only module remains in src', () => {
@@ -187,5 +203,12 @@ describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
   it.runIf(distJs.length > 0)('built dist carries no hosted URL, OAuth, subscription, dashboard, or report residue', () => {
     const entries = readAll(distJs, DIST_DIR);
     expect(scan(entries, [...HOSTED_URL_NEEDLES, ...CLOUD_SYMBOL_NEEDLES])).toEqual([]);
+  });
+
+  it.runIf(distJs.length > 0)('built dist carries no legacy authority route family', () => {
+    const offenders = readAll(distJs, DIST_DIR)
+      .filter(({ text }) => LEGACY_AUTHORITY_ROUTE.test(text))
+      .map(({ file }) => file);
+    expect(offenders).toEqual([]);
   });
 });

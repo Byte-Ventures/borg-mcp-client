@@ -240,4 +240,33 @@ describe('local manage-request authority', () => {
     expect(localFetch).not.toHaveBeenCalled();
     expect(hostedFetch).not.toHaveBeenCalled();
   });
+
+  it('rejects dot-segment IDs before credential lookup or network access', async () => {
+    const remote = await import('../src/remote-client.js');
+    const traversal = '../protocol';
+    const rejected = [
+      () => remote.updateCube(traversal, { cube_directive: 'no' }),
+      () => remote.patchTaxonomyClass(traversal, { action: 'remove', class: 'qa' }),
+      () => remote.createRole(traversal, {
+        name: 'Builder',
+        short_description: 'builds',
+        detailed_description: 'Build.',
+      }),
+      () => remote.updateRole(traversal, { short_description: 'no' }),
+      () => remote.patchRoleSection(traversal, { action: 'delete', heading: 'Workflow' }),
+      () => remote.listRoles(traversal),
+      () => remote.getCube(traversal, {
+        apiUrl: ORIGIN,
+        authToken: PARENT,
+        serverTrustIdentity: TRUST_IDENTITY,
+      }),
+    ];
+
+    for (const call of rejected) {
+      await expect(call()).rejects.toThrow(/not a UUID/);
+    }
+    expect(getServerCredential).not.toHaveBeenCalled();
+    expect(localFetch).not.toHaveBeenCalled();
+    expect(hostedFetch).not.toHaveBeenCalled();
+  });
 });

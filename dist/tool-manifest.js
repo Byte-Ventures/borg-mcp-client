@@ -206,7 +206,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_decide',
-        description: 'Record a RATIFIED cube decision in the durable decision registry (gh#740) so drones cite it by topic instead of restating from memory. SEAT-HOLDER ONLY (Coordinator/Queen) — recording IS the ratification act; a decision is not ratified until it is in the registry. Topic-keyed: recording a new decision on an existing topic supersedes the prior (one active per topic). Surfaces in borg_regen + borg_decisions.',
+        description: 'Record a RATIFIED cube decision in the durable decision registry (gh#740) so drones cite it by topic instead of restating from memory. Coordinator/Queen are workflow-eligible to ratify, but their labels grant no server permission; the selected local client must have a live cube-manage grant. Recording IS the ratification act; a decision is not ratified until it is in the registry. Topic-keyed: recording a new decision on an existing topic supersedes the prior (one active per topic). Surfaces in borg_regen + borg_decisions.',
         inputSchema: {
             type: 'object',
             required: ['topic', 'decision'],
@@ -241,7 +241,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_remove-decision',
-        description: 'Remove one active ratified decision from the cube registry by topic or decision id. SEAT-HOLDER ONLY (Coordinator/Queen). The decision stops appearing in borg_decisions and borg_regen while its audit record is retained.',
+        description: 'Remove one active ratified decision from the cube registry by topic or decision id. Coordinator/Queen are workflow-eligible, but their labels grant no server permission; the selected local client must have a live cube-manage grant. The decision stops appearing in borg_decisions and borg_regen while its audit record is retained.',
         inputSchema: {
             type: 'object',
             oneOf: [{ required: ['topic'] }, { required: ['decision_id'] }],
@@ -285,7 +285,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_list-cubes',
-        description: 'List every cube owned by this user. Returns id, name, cube_directive, and timestamps for each. Useful before assimilate to see what\'s available, or as a starting point for any management action.',
+        description: 'List every cube readable by this local client\'s live grants. Returns id, name, cube_directive, and timestamps for each. Useful before assimilate to see what\'s available, or as a starting point for an authorized management action.',
         inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -444,8 +444,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_reassign-drone',
-        description: 'Reassign a drone to a different role in the same cube. Coordinator-shaped: the cube\'s Coordinator drone is the one expected to call this when dispatching new drones to specific work. ' +
-            'Server refuses if you try to assign to the Coordinator role when another drone already holds it (evict or reassign that drone first).',
+        description: 'Drone reassignment is not exposed by the local server yet. Invoking this tool returns an explicit unsupported result without selecting a credential or making a network request. Role labels grant no server permission.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -457,7 +456,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_evict-drone',
-        description: 'Evict (soft-delete) a drone from its cube. Coordinator-shaped: the cube\'s Coordinator/Queen seat calls this to remove a dead, stuck, or surplus drone — it drops out of the roster and frees its slot (incl. a held Coordinator/Queen-class seat), while its activity-log history is preserved with anonymized attribution. Owner-scoped: you can only evict drones in cubes you own. Identify the drone EITHER by drone_id (UUID) OR by label + cube_id (the label as it appears in the roster/regen).',
+        description: 'Drone eviction is not exposed by the local server yet. Invoking this tool returns an explicit unsupported result without selecting a credential or making a network request. Role labels grant no server permission.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -469,7 +468,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_list-drones',
-        description: 'List every drone in a cube (owner-scoped). Returns id, label, role_id, agent_kind, last_seen, advisory reported model, working repository, and wake_path_alert_class for each — gives the Coordinator a roster they can act on with borg_reassign-drone.',
+        description: 'List every drone in a cube when this local client has a live read, write, or manage grant. Returns id, label, role_id, agent_kind, last_seen, advisory reported model, working repository, and wake_path_alert_class. Role labels affect workflow only and grant no server permission.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -480,7 +479,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_list-roles',
-        description: 'List every role in a cube (owner-scoped). Returns id, name, short_description, is_default, is_mandatory, is_human_seat, can_broadcast, receives_all_direct, and role_class for each — gives Coordinator-class drones the role UUIDs they need for borg_reassign-drone (e.g. to promote a drone to the Queen role). Closes the gh#153 Queen-role-promotion UX gap (Coordinator drones previously had no way to discover role IDs without operator help).',
+        description: 'List every role in a cube when this local client has a live read, write, or manage grant. Returns id, name, short_description, is_default, is_mandatory, is_human_seat, can_broadcast, receives_all_direct, and role_class. Role labels affect workflow only and grant no server permission.',
         inputSchema: {
             type: 'object',
             properties: {

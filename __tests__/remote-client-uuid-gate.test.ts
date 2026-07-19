@@ -3,14 +3,14 @@
  * is interpolated into the request path in remote-client.ts, for BOTH
  * path-interpolating drone mutations:
  *
- *   reassignDrone -> PATCH  /api/drones/:id
- *   evictDrone    -> DELETE /api/drones/:id
+ *   reassignDrone
+ *   evictDrone
  *
  * The gate must throw before any token fetch or network call (path-shaped
  * values like "../cubes/<uuid>" never reach URL construction), and must not
  * change behavior for valid UUIDs.
  *
- * Adapted to the LOCAL server path (cloud severance): the /api/drones mutation
+ * The local server does not expose drone mutation
  * routes are not carried by the local server, so a VALID drone_id passes the
  * UUID gate and then fails closed at the local transport with "does not
  * support" — still WITHOUT any network call. The security property under test

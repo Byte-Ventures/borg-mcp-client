@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { extractHttpErrorMessage, parseRetryAfterMs, rateLimitWaitMs, retryOn429 } from '../src/remote-client';
+import { parseRetryAfterMs, rateLimitWaitMs, retryOn429 } from '../src/remote-client';
 
 /** Minimal Response stand-in: just the bits retryOn429 reads. */
 function fakeResponse(status: number, retryAfter?: string): Response {
@@ -90,41 +90,5 @@ describe('retryOn429', () => {
     const sleep = vi.fn(async (ms: number) => { slept.push(ms); });
     await retryOn429(fakeResponse(429), doRequest, { sleep, maxRetries: 2, jitter: () => 0 });
     expect(slept).toEqual([1000, 2000]); // 1s·(attempt+1)
-  });
-});
-
-describe('extractHttpErrorMessage', () => {
-  it('surfaces structured worker error messages without raw JSON noise', () => {
-    expect(
-      extractHttpErrorMessage(
-        JSON.stringify({
-          error: {
-            code: 'INVALID_INPUT',
-            message: 'Invalid since cursor.',
-            details: 'Use an entry id or ISO timestamp.',
-          },
-        })
-      )
-    ).toBe('Invalid since cursor. Use an entry id or ISO timestamp.');
-  });
-
-  it('keeps legacy string error bodies readable', () => {
-    expect(
-      extractHttpErrorMessage(
-        JSON.stringify({ error: 'Invalid ack body', details: 'entry_id is required' })
-      )
-    ).toBe('Invalid ack body: entry_id is required');
-  });
-
-  it('keeps top-level worker details with the message', () => {
-    expect(
-      extractHttpErrorMessage(
-        JSON.stringify({
-          code: 'SUBSCRIPTION_REQUIRED',
-          message: 'Subscription required.',
-          details: 'Run borg_upgrade-subscription to continue.',
-        })
-      )
-    ).toBe('Subscription required. Run borg_upgrade-subscription to continue.');
   });
 });

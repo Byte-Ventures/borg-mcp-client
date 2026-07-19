@@ -8,7 +8,7 @@
  *
  * Local-server session tokens never enter this file: only an opaque keychain
  * reference is stored and hydrated at read time. An entry without verified
- * local-server trust can no longer be hydrated (no cloud plaintext tokens).
+ * local-server trust can no longer be hydrated.
  *
  * apiUrl is captured at assimilate time so subprocess invocations (e.g. the
  * SessionStart hook firing borg-regen) don't need BORG_API_URL in their env
@@ -210,9 +210,8 @@ async function hydrateActiveCube(record) {
 /**
  * Legacy binding-only writer. In the collapsed single-store model an ACTIVE seat is
  * created ONLY by the atomic mint→activate+bind path in seats.ts (driven by the
- * attach FINALIZE); there is no standalone binding write, and the
- * severed cloud path has no plaintext session to persist. Retained solely as the
- * fail-closed cloud/no-finalize branch seam.
+ * attach FINALIZE); there is no standalone binding write. Retained solely as a
+ * fail-closed guard for incomplete session metadata.
  */
 export async function setActiveCube(_active) {
     throw new Error('local Borg server session metadata is incomplete');

@@ -14,21 +14,11 @@ describe('remote-client explicit authority connection', () => {
     vi.resetModules();
   });
 
-  function mockCloudAuth() {
-    const getIdToken = vi.fn(async () => 'cloud-token-must-not-be-read');
-    const getRefreshToken = vi.fn(async () => 'cloud-refresh-must-not-be-read');
+  function mockLocalAuthority() {
     const getServerCredential = vi.fn(async () => 'persisted-local-token');
     vi.doMock('../src/config.js', () => ({
-      getIdToken,
-      getRefreshToken,
-      clearTokens: vi.fn(async () => {}),
       getServerCredential,
       storeServerCredential: vi.fn(async () => {}),
-    }));
-    vi.doMock('../src/auth.js', () => ({
-      refreshIdToken: vi.fn(async () => {}),
-      RefreshTokenInvalidError: class extends Error {},
-      RefreshTransientError: class extends Error {},
     }));
     vi.doMock('../src/server-trust.js', () => ({
       loadBorgServerTrust: vi.fn(async () => ({
@@ -46,11 +36,11 @@ describe('remote-client explicit authority connection', () => {
         serverTrustIdentity: 'spki-sha256:test-server',
       })),
     }));
-    return { getIdToken, getRefreshToken, getServerCredential };
+    return { getServerCredential };
   }
 
-  it('uses the selected endpoint and token without reading cloud credentials', async () => {
-    const auth = mockCloudAuth();
+  it('uses only the selected local endpoint and credential', async () => {
+    const auth = mockLocalAuthority();
     const fetchSpy = vi.fn(async () =>
       new Response(JSON.stringify({
         protocol_version: '2',
@@ -70,8 +60,6 @@ describe('remote-client explicit authority connection', () => {
       serverTrustIdentity: 'spki-sha256:test-server',
     });
 
-    expect(auth.getIdToken).not.toHaveBeenCalled();
-    expect(auth.getRefreshToken).not.toHaveBeenCalled();
     expect(auth.getServerCredential).not.toHaveBeenCalled();
     expect(fetchSpy).toHaveBeenCalledWith(
       'https://localhost:8787/api/cubes',
@@ -81,8 +69,8 @@ describe('remote-client explicit authority connection', () => {
     );
   });
 
-  it('does not invoke Google refresh when the selected server rejects its credential', async () => {
-    const auth = mockCloudAuth();
+  it('reports when the selected server rejects its credential', async () => {
+    mockLocalAuthority();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('unauthorized', { status: 401 })));
 
     const { listCubes } = await import('../src/remote-client.js');
@@ -92,12 +80,10 @@ describe('remote-client explicit authority connection', () => {
       serverTrustIdentity: 'spki-sha256:test-server',
     })).rejects.toThrow('selected Borg server');
 
-    expect(auth.getIdToken).not.toHaveBeenCalled();
-    expect(auth.getRefreshToken).not.toHaveBeenCalled();
   });
 
   it('uses the hydrated local drone credential as the sole Bearer after relaunch', async () => {
-    const auth = mockCloudAuth();
+    const auth = mockLocalAuthority();
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
       const path = new URL(input.toString()).pathname;
       const payload = path.endsWith('/roles')
@@ -116,8 +102,6 @@ describe('remote-client explicit authority connection', () => {
     const { getCubeInfo } = await import('../src/remote-client.js');
     await getCubeInfo('drone-session', 'https://localhost:8787');
 
-    expect(auth.getIdToken).not.toHaveBeenCalled();
-    expect(auth.getRefreshToken).not.toHaveBeenCalled();
     expect(auth.getServerCredential).not.toHaveBeenCalled();
     expect(fetchSpy).toHaveBeenCalledWith(
       `https://localhost:8787/api/cubes/${CUBE_ID}`,
@@ -134,7 +118,7 @@ describe('remote-client explicit authority connection', () => {
   });
 
   it('does not surface an untrusted server response body in errors', async () => {
-    mockCloudAuth();
+    mockLocalAuthority();
     const reflectedSecret = 's'.repeat(43);
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       `reflected ${reflectedSecret}\u001b[2J`,
@@ -162,19 +146,9 @@ describe('remote-client explicit authority connection', () => {
   it.each([
     ['missing active state', async () => null],
     ['keychain hydration failure', async () => { throw new Error('keychain locked'); }],
-  ])('fails closed before OAuth or network when local authority has %s', async (_case, getActive) => {
-    const getIdToken = vi.fn(async () => 'cloud-token-proof');
-    const getRefreshToken = vi.fn(async () => 'cloud-refresh-proof');
+  ])('fails closed before network when local authority has %s', async (_case, getActive) => {
     vi.doMock('../src/config.js', () => ({
-      getIdToken,
-      getRefreshToken,
-      clearTokens: vi.fn(async () => {}),
       getServerCredential: vi.fn(async () => null),
-    }));
-    vi.doMock('../src/auth.js', () => ({
-      refreshIdToken: vi.fn(async () => {}),
-      RefreshTokenInvalidError: class extends Error {},
-      RefreshTransientError: class extends Error {},
     }));
     vi.doMock('../src/cubes.js', () => ({ getActiveCube: vi.fn(getActive) }));
     vi.doMock('../src/server-trust.js', () => ({
@@ -198,27 +172,15 @@ describe('remote-client explicit authority connection', () => {
       authority,
     )).rejects.toThrow(/authority state is missing or unreadable|keychain locked/i);
 
-    expect(getIdToken).not.toHaveBeenCalled();
-    expect(getRefreshToken).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it.each([
     'https://127.0.0.1:7091',
     'https://borg.internal.example:9443',
-  ])('rejects downgraded trust metadata for explicit endpoint %s before OAuth/network', async (apiUrl) => {
-    const getIdToken = vi.fn(async () => 'cloud-token-proof');
-    const getRefreshToken = vi.fn(async () => 'cloud-refresh-proof');
+  ])('rejects downgraded trust metadata for explicit endpoint %s before network', async (apiUrl) => {
     vi.doMock('../src/config.js', () => ({
-      getIdToken,
-      getRefreshToken,
-      clearTokens: vi.fn(async () => {}),
       getServerCredential: vi.fn(async () => null),
-    }));
-    vi.doMock('../src/auth.js', () => ({
-      refreshIdToken: vi.fn(async () => {}),
-      RefreshTokenInvalidError: class extends Error {},
-      RefreshTransientError: class extends Error {},
     }));
     vi.doMock('../src/cubes.js', () => ({
       getActiveCube: vi.fn(async () => ({
@@ -241,8 +203,64 @@ describe('remote-client explicit authority connection', () => {
     await expect(getRoster('legacy-local-session', apiUrl, undefined, undefined))
       .rejects.toThrow(/authority state is missing or unreadable/i);
 
-    expect(getIdToken).not.toHaveBeenCalled();
-    expect(getRefreshToken).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a dot-segment persisted cube id before credential or network access', async () => {
+    const getServerCredential = vi.fn(async () => 'must-not-be-read');
+    vi.doMock('../src/config.js', () => ({ getServerCredential }));
+    vi.doMock('../src/cubes.js', () => ({
+      getActiveCube: vi.fn(async () => ({
+        cubeId: '../protocol',
+        droneId: DRONE_ID,
+        sessionToken: 'drone-session',
+        apiUrl: 'https://localhost:8787',
+        serverTrustIdentity: 'spki-sha256:test-server',
+      })),
+    }));
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { getCubeInfo } = await import('../src/remote-client.js');
+
+    await expect(getCubeInfo(
+      'drone-session',
+      'https://localhost:8787',
+      'spki-sha256:test-server',
+    )).rejects.toThrow(/cube_id .* not a UUID/);
+    expect(getServerCredential).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('maps an exact trusted drone-session 410 DRONE_EVICTED envelope to the terminal error', async () => {
+    mockLocalAuthority();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '2',
+      request_id: 'evicted-1',
+      error: { code: 'DRONE_EVICTED', message: 'untrusted detail' },
+    }), { status: 410 })));
+    const { getCubeInfo } = await import('../src/remote-client.js');
+
+    await expect(getCubeInfo(
+      'drone-session',
+      'https://localhost:8787',
+      'spki-sha256:test-server',
+    )).rejects.toMatchObject({ name: 'DroneEvictedError' });
+  });
+
+  it.each([
+    ['exact code on a parent request', JSON.stringify({ protocol_version: '2', request_id: 'parent-1', error: { code: 'DRONE_EVICTED', message: 'no' } })],
+    ['wrong code', JSON.stringify({ protocol_version: '2', request_id: 'wrong-1', error: { code: 'ACCESS_DENIED', message: 'no' } })],
+    ['bare body', 'gone'],
+    ['malformed body', '{'],
+  ])('keeps a trusted parent 410 with %s generic', async (_case, body) => {
+    mockLocalAuthority();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 410 })));
+    const { listCubes } = await import('../src/remote-client.js');
+
+    await expect(listCubes({
+      apiUrl: 'https://localhost:8787',
+      authToken: 'local-enrollment-token',
+      serverTrustIdentity: 'spki-sha256:test-server',
+    })).rejects.toMatchObject({ name: 'BorgServerHttpError', status: 410 });
   });
 });

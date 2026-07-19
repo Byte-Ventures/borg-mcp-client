@@ -15,7 +15,7 @@ import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
-import { listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
+import { listCubes as remoteListCubes, getCube as remoteGetCube, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
 import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
 import { readPersistedLocalSeat, } from './cubes.js';
@@ -155,21 +155,27 @@ export function buildDefaultAssimilateDeps() {
             ...(onPending === undefined ? {} : { onPending }),
         }),
         listCubes: async (apiUrl, token, serverTrustIdentity) => {
+            if (serverTrustIdentity === undefined) {
+                throw new Error('Selected Borg server authority state is missing or unreadable');
+            }
             const { cubes } = await remoteListCubes({
                 apiUrl,
                 authToken: token,
-                ...(serverTrustIdentity === undefined ? {} : { serverTrustIdentity }),
+                serverTrustIdentity,
             });
             return cubes.map((c) => ({ id: c.id, name: c.name }));
         },
         getCube: async (apiUrl, token, cubeId, serverTrustIdentity) => {
+            if (serverTrustIdentity === undefined) {
+                throw new Error('Selected Borg server authority state is missing or unreadable');
+            }
             // BUG-2 fix (v0.9.2): remote-client now unwraps the server's
             // `{cube, roles, drones}` shape, so the returned object is
             // already flat with id/name/roles at the top level.
             const cube = await remoteGetCube(cubeId, {
                 apiUrl,
                 authToken: token,
-                ...(serverTrustIdentity === undefined ? {} : { serverTrustIdentity }),
+                serverTrustIdentity,
             });
             return {
                 id: cube.id,
@@ -179,7 +185,10 @@ export function buildDefaultAssimilateDeps() {
             };
         },
         createCube: async (apiUrl, token, params, serverTrustIdentity) => {
-            if (serverTrustIdentity !== undefined) {
+            if (serverTrustIdentity === undefined) {
+                throw new Error('Selected Borg server authority state is missing or unreadable');
+            }
+            {
                 if (!params.name || !params.projectRoot) {
                     throw new Error('Local Borg server cube creation requires a repository name and root');
                 }
@@ -201,15 +210,12 @@ export function buildDefaultAssimilateDeps() {
                     drones: cube.drones ?? [],
                 };
             }
-            const cube = await remoteCreateCube(params.name, '', params.template ? { template: params.template } : undefined, {
-                apiUrl,
-                authToken: token,
-                ...(serverTrustIdentity === undefined ? {} : { serverTrustIdentity }),
-            });
-            return { id: cube.id, name: cube.name, roles: cube.roles };
         },
         assimilate: async (apiUrl, token, params, serverTrustIdentity) => {
-            if (serverTrustIdentity !== undefined) {
+            if (serverTrustIdentity === undefined) {
+                throw new Error('Selected Borg server authority state is missing or unreadable');
+            }
+            {
                 if (params.session_operation === undefined) {
                     throw new Error('Borg server attach operation identity is missing');
                 }
@@ -297,33 +303,6 @@ export function buildDefaultAssimilateDeps() {
                     },
                 };
             }
-            // The backend persists a model only for a known agent kind.
-            const result = await remoteAssimilate({
-                cube_id: params.cube_id,
-                role_id: params.role_id,
-                // gh#780: reattach hint for the --here same-cube recovery flow.
-                ...(params.prior_drone_id ? { prior_drone_id: params.prior_drone_id } : {}),
-                // Task 25: send effective model to worker so it can persist it.
-                ...(params.model != null ? { model: params.model } : {}),
-            }, apiUrl, params.hostname ?? null, params.agent_kind ?? null, token, serverTrustIdentity);
-            return {
-                cube_id: result.cube.id,
-                drone_id: result.drone.id,
-                drone_label: result.drone.label,
-                session_token: result.sessionToken,
-                role_id: result.role.id,
-                // Map the cloud gh#780 reattach hint onto the unified result discriminant
-                // so the same "reused" display path serves cloud and local authorities.
-                result: result.reattached === true ? 'reused' : 'created',
-            };
-        },
-        listTemplates: async (apiUrl, token, serverTrustIdentity) => {
-            const { templates } = await remoteListTemplates({
-                apiUrl,
-                authToken: token,
-                ...(serverTrustIdentity === undefined ? {} : { serverTrustIdentity }),
-            });
-            return templates.map((t) => ({ name: t.name, description: t.description }));
         },
         // CR-PE-F1 wiring (Phase E merge brought this seam in): compute the
         // inbox file path used by the borg-inbox-monitor command in step 8

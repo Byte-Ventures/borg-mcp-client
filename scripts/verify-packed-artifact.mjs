@@ -79,6 +79,19 @@ const CLOUD_RUNTIME_SYMBOLS = [
   'registry.npmjs.org',
   'fetchLatestBorgmcpVersion',
 ];
+const LEGACY_AUTHORITY_ROUTE = /\/api\/(?:drone(?:\/|[?'"`])|drones\/|roles\/|templates(?:\/|[?'"`])|assimilate(?:[?'"`]))/;
+const LEGACY_AUTHORIZATION_COPY = /\bowner-scoped\b|\bcube ownership\b|\bRLS\b|\bcubes? owned by\b|USER\/OWNER|NON-OWNER|OWNER's|caller owns|owner level/i;
+const AUTHORIZATION_COPY_PATHS = new Set([
+  'src/tool-manifest.ts',
+  'src/tool-scope.ts',
+  'src/remote-client.ts',
+  'dist/tool-manifest.js',
+  'dist/tool-manifest.d.ts',
+  'dist/tool-scope.js',
+  'dist/tool-scope.d.ts',
+  'dist/remote-client.js',
+  'dist/remote-client.d.ts',
+]);
 // Deleted cloud-only modules — no source or built mirror may ship.
 const DELETED_MODULE_BASENAMES = [
   'auth',
@@ -251,6 +264,12 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
           if (content.includes(symbol)) {
             throw new Error(`Packed artifact ships a reachable-cloud runtime symbol '${symbol}': ${path}`);
           }
+        }
+        if (LEGACY_AUTHORITY_ROUTE.test(content)) {
+          throw new Error(`Packed artifact ships a legacy authority route: ${path}`);
+        }
+        if (AUTHORIZATION_COPY_PATHS.has(path) && LEGACY_AUTHORIZATION_COPY.test(content)) {
+          throw new Error(`Packed artifact ships obsolete ownership-based authorization copy: ${path}`);
         }
       }
       unpackedBytes += metadata.size;

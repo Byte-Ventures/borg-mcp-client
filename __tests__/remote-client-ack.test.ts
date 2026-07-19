@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * through the verified local authority to POST /api/cubes/:cubeId/acks with a
  * protocol-enveloped { entry_id, kind } body. The gh#418 kind contract is
  * preserved on this wire (default 'ack', explicit 'claim'). The old cloud
- * route /api/drone/log/:id/ack is dead code and is no longer asserted.
+ * retired acknowledgement route is absent and no longer asserted.
  */
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';

@@ -164,7 +164,7 @@ describe('isRegenerableIgnored (S4a default-deny allowlist)', () => {
     // emits it swallowed by the collapsed `!! .claude/` dir entry, never standalone.
     // The `.claude` allowlist entry is SEGMENT-exact: near-miss names stay precious
     // (pins against a future switch to prefix/substring matching).
-    for (const p of ['.env', '.env.test', '.dev.vars', 'data/', 'credentials.json', '.rls-borg-app-x.password', 'secret.key', 'settings.local.json',
+    for (const p of ['.env', '.env.test', '.dev.vars', 'data/', 'credentials.json', '.service-session.password', 'secret.key', 'settings.local.json',
       'my.claude.bak', '.claude.config', '.claude-old/', 'xclaude/', 'foo/.claudex/']) {
       expect(isRegenerableIgnored(p), p).toBe(false);
     }

@@ -10,11 +10,11 @@
  * server trust or it fails closed before any network or credential use.
  */
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
-import { type WorkingRepo } from './working-repo.js';
+import type { WorkingRepo } from './working-repo.js';
 export interface RemoteConnection {
     apiUrl: string;
     authToken: string;
-    serverTrustIdentity?: string;
+    serverTrustIdentity: string;
 }
 export declare const LOCAL_SERVER_RESPONSE_LIMIT_BYTES: number;
 export declare const LOCAL_SERVER_REQUEST_TIMEOUT_MS = 5000;
@@ -33,7 +33,6 @@ export declare function parseRetryAfterMs(headerValue: string | null): number | 
  * drones sharing one per-IP bucket don't retry in lockstep.
  */
 export declare function rateLimitWaitMs(retryAfterMs: number | null, attempt: number, capMs?: number, jitter?: () => number): number;
-export declare function extractHttpErrorMessage(body: string): string;
 /**
  * Given an ALREADY-OBTAINED response, while it is a 429 and retries
  * remain, wait per `rateLimitWaitMs` (honoring the CURRENT response's
@@ -52,53 +51,6 @@ export declare function retryOn429(initialResponse: Response, doRequest: () => P
     jitter?: () => number;
     log?: (msg: string) => void;
 }): Promise<Response>;
-/**
- * Connect this client as a Drone to a Cube.
- *
- * Returns the cube definition, the drone's assigned role (with full
- * detailed_description), the drone record, and an opaque session token
- * the caller is expected to persist via cubes.ts.
- */
-export declare function assimilate(cubeNameOrSelector: string | {
-    cube_id?: string;
-    cube_name?: string;
-    role_id?: string;
-    role_name?: string;
-    prior_drone_id?: string;
-    model?: string | null;
-}, apiUrl?: string, hostname?: string | null, agentKind?: 'claude' | 'codex' | 'opencode' | null, authToken?: string, serverTrustIdentity?: string): Promise<{
-    cube: {
-        id: string;
-        owner_id: string;
-        name: string;
-        cube_directive: string;
-        created_at: string;
-        updated_at: string;
-    };
-    role: {
-        id: string;
-        cube_id: string;
-        name: string;
-        short_description: string;
-        detailed_description: string;
-        is_default: boolean;
-        is_mandatory: boolean;
-        is_human_seat: boolean;
-        role_class: 'queen' | 'worker';
-        created_at: string;
-    };
-    drone: {
-        id: string;
-        cube_id: string;
-        role_id: string;
-        label: string;
-        last_seen: string;
-        hostname: string | null;
-        created_at: string;
-    };
-    sessionToken: string;
-    reattached?: boolean;
-}>;
 /**
  * Get the active cube's directive + role registry.
  */
@@ -169,10 +121,7 @@ export declare function readLog(sessionToken: string, apiUrl: string, opts?: {
  * CONFLICT DO NOTHING. 204 No Content on success.
  */
 export declare function ackLogEntry(sessionToken: string, apiUrl: string, entryId: string, kind?: 'ack' | 'claim', serverTrustIdentity?: string): Promise<void>;
-/**
- * gh#740: record a ratified cube decision (seat-holder only — the worker
- * enforces the seat gate). Supersedes the active decision on the same topic.
- */
+/** Record a ratified cube decision using the local client's cube-manage grant. */
 export declare function recordDecision(sessionToken: string, apiUrl: string, input: {
     topic: string;
     decision: string;
@@ -264,8 +213,7 @@ export declare function appendLog(sessionToken: string, apiUrl: string, message:
     }[];
 }>;
 /**
- * List all cubes owned by the authenticated user. Owner-scoped via the
- * Bearer token alone; no drone session needed.
+ * List cubes readable by the local client's live grants.
  */
 export declare function listCubes(connection?: RemoteConnection): Promise<{
     cubes: any[];
@@ -274,13 +222,6 @@ export declare function listCubes(connection?: RemoteConnection): Promise<{
  * List bundled cube templates. Used by the `borg assimilate` orchestrator
  * to surface the interactive template prompt on first-drone bootstrap.
  */
-export declare function listTemplates(connection?: RemoteConnection): Promise<{
-    templates: Array<{
-        name: string;
-        description: string;
-        roles: any[];
-    }>;
-}>;
 /**
  * Create a new cube. Server-side seeds a default "Drone" role atomically
  * so the cube is assimilatable immediately, OR applies the named template
@@ -316,9 +257,8 @@ export declare function updateCube(cubeId: string, updates: {
 /**
  * gh#473 PR1 — granular per-class taxonomy patch. Add / replace-by-name
  * / remove a single class within the cube's message_taxonomy, leaving
- * other classes unchanged. The worker re-validates the FULL resulting
- * array (cross-class invariants) before persist. Owner-scoped via the
- * Bearer token.
+ * other classes unchanged. The server re-validates the full resulting
+ * array and requires the selected local client's live cube-manage grant.
  */
 export declare function patchTaxonomyClass(cubeId: string, op: {
     action: 'add';
@@ -334,7 +274,7 @@ export declare function patchTaxonomyClass(cubeId: string, op: {
 }>;
 /**
  * Delete a cube. Cascade-deletes all roles, drones, and log entries.
- * Owner-scoped via the Bearer token; the worker enforces ownership.
+ * Requires a live cube-manage grant on the selected local client.
  */
 export declare function deleteCube(cubeId: string): Promise<void>;
 /**
@@ -375,8 +315,8 @@ export declare function updateRole(roleId: string, updates: {
 /**
  * gh#473 PR1 — granular role-text section patch. Replace / insert /
  * delete a single named section of a role's detailed_description,
- * leaving the rest of the field byte-identical. Owner-scoped via the
- * Bearer token. Sections are delimited by plain-label lines (e.g.
+ * leaving the rest of the field byte-identical. Requires the selected local
+ * client's live cube-manage grant. Sections are delimited by plain-label lines (e.g.
  * `Workflow:`), NOT markdown headings.
  */
 export declare function patchRoleSection(roleId: string, op: {
@@ -406,26 +346,16 @@ export declare function deleteRole(roleId: string): Promise<void>;
  * the seat returns an error. The class-hierarchy guard also rejects
  * direct promotion from non-human-seat roles.
  */
-export declare function reassignDrone(droneId: string, roleId: string): Promise<{
-    drone: any;
-    role?: any;
-    cube?: any;
-}>;
+export declare function reassignDrone(droneId: string, roleId: string): Promise<never>;
 /**
- * Evict (soft-delete) a drone from its cube (gh#718). Owner-authed via the
- * Bearer token, exactly like reassignDrone — the worker's `DELETE
- * /api/drones/:id` route scopes the delete to cubes the caller owns
- * (CubeStore.evictDrone RLS owner-scope), so a non-owner can never evict
- * another account's drone. The drone row is preserved with `evicted_at` set
- * and its activity-log attribution anonymized; the route returns 204 No
- * Content (no body).
+ * Drone eviction is not exposed by the local server yet.
  */
 export declare function evictDrone(droneId: string): Promise<void>;
 export declare function listRoles(cubeId: string): Promise<any[]>;
 /**
  * Fetch a cube's full detail: directive, roles (with detailed
- * descriptions), and drones. Accessible to owners and active members via
- * the Bearer token; no drone session needed.
+ * descriptions), and drones. Access is enforced by the local client's live
+ * per-cube grant.
  */
 export declare function getCube(cubeId: string, connection?: RemoteConnection): Promise<{
     id: string;
