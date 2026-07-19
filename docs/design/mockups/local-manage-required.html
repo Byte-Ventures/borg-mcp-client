@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local management authority states</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --page: #eef1ec;
+      --ink: #17201a;
+      --muted: #5c685f;
+      --panel: #fbfdf9;
+      --line: #c3cbc4;
+      --terminal: #111814;
+      --terminal-ink: #e8eee9;
+      --success: #1f7145;
+      --denied: #9a4d17;
+      --hidden: #5c6370;
+      --accent: #245f97;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      font: 16px/1.55 system-ui, sans-serif;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 48px auto 80px;
+    }
+
+    h1, h2 { line-height: 1.15; }
+    h1 { max-width: 800px; margin: 0 0 12px; font-size: clamp(2rem, 5vw, 4rem); }
+    h2 { margin: 0; font-size: 1.25rem; }
+    p { max-width: 820px; }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+    .eyebrow, .state {
+      color: var(--muted);
+      font-size: .82rem;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .lede { color: var(--muted); font-size: 1.1rem; }
+    .grid { display: grid; gap: 24px; margin-top: 40px; }
+
+    article {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+    }
+
+    article > header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .success { color: var(--success); }
+    .denied { color: var(--denied); }
+    .hidden { color: var(--hidden); }
+
+    .terminal {
+      margin: 0;
+      padding: 22px;
+      overflow-x: auto;
+      background: var(--terminal);
+      color: var(--terminal-ink);
+      font: 14px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    .prompt { color: #8fd5ac; }
+    .marker { color: #f3b27b; }
+    .notes { padding: 16px 20px 18px; }
+    .notes strong { color: var(--accent); }
+    .notes ul { margin: 8px 0 0; padding-left: 20px; }
+
+    .rules {
+      margin-top: 28px;
+      padding: 22px;
+      border-left: 4px solid var(--accent);
+      background: var(--panel);
+    }
+
+    table { width: 100%; margin-top: 14px; border-collapse: collapse; }
+    th, td { padding: 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: color-mix(in srgb, var(--panel), var(--accent) 8%); }
+
+    @media (min-width: 860px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+      article:first-child { grid-column: 1 / -1; }
+    }
+
+    @media (max-width: 640px) {
+      main { width: min(100% - 20px, 1120px); margin-top: 28px; }
+      article > header { align-items: flex-start; flex-direction: column; }
+      .rules { overflow-x: auto; }
+      table { min-width: 640px; }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page: #141915;
+        --ink: #edf1ed;
+        --muted: #aab4ac;
+        --panel: #1c231e;
+        --line: #3b463d;
+        --terminal: #090e0b;
+        --success: #8fd5ac;
+        --denied: #f3b27b;
+        --hidden: #b8c0cb;
+        --accent: #89b9e8;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Interaction mockup / borg-mcp-client</p>
+    <h1>Local management authority</h1>
+    <p class="lede">Management actions use the selected local client's server grant. Coordinator and Queen remain workflow roles; changing a drone's role does not change server authorization.</p>
+
+    <section class="grid" aria-label="Local management result states">
+      <article>
+        <header>
+          <h2>Managing client records a decision</h2>
+          <span class="state success">Success</span>
+        </header>
+        <pre class="terminal"><span class="prompt">MCP tool call</span>  borg_decide
+{
+  "topic": "repository-topology",
+  "decision": "Active development occurs in the public client, server, and shared repositories.",
+  "rationale": "Keep the local product boundary explicit."
+}
+
+Tool result
+Recorded ratified decision on "repository-topology" in cube "borg-mcp".
+Cite it via borg_decisions; it surfaces in borg_regen.
+
+<span class="prompt">MCP tool call</span>  borg_decisions
+{ "topic": "repository-topology" }
+
+Tool result
+repository-topology: Active development occurs in the public client, server, and shared repositories.</pre>
+        <div class="notes"><strong>Required outcome</strong>
+          <ul>
+            <li>The selected parent client credential has cube management access.</li>
+            <li>Success is proven by immediate readback, not by the write response alone.</li>
+            <li>No drone-session credential is treated as a management credential.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article>
+        <header>
+          <h2>Known cube, insufficient access</h2>
+          <span class="state denied">Typed denial</span>
+        </header>
+        <pre class="terminal"><span class="prompt">MCP tool call</span>  borg_decide
+{
+  "topic": "repository-topology",
+  "decision": "..."
+}
+
+Tool result
+<span class="marker">[LOCAL-MANAGE-REQUIRED]</span> This session cannot record a decision in cube "borg-mcp" because the selected local client does not have cube management access.
+
+Coordinator and Queen are workflow roles; they do not grant server permissions. Nothing was recorded. Do not retry this request from this session.
+
+Use a session whose local client already has management access to this cube.</pre>
+        <div class="notes"><strong>Required outcome</strong>
+          <ul>
+            <li>Shown only after the server recognizes the cube and an authenticated read/write client lacking manage access.</li>
+            <li>The marker stops blind agent retries; the zero-mutation sentence removes ratification ambiguity.</li>
+            <li>Recovery uses an already-managing session. It does not cite a nonexistent grant command.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article>
+        <header>
+          <h2>Another management action is denied</h2>
+          <span class="state denied">Operation-specific</span>
+        </header>
+        <pre class="terminal"><span class="prompt">MCP tool call</span>  borg_evict-drone
+{
+  "label": "builder-7a12",
+  "cube_id": "326ea162-1234-4abc-8def-1234567890ab"
+}
+
+Tool result
+<span class="marker">[LOCAL-MANAGE-REQUIRED]</span> This session cannot remove "builder-7a12" from cube "borg-mcp" because the selected local client does not have cube management access.
+
+Coordinator and Queen are workflow roles; they do not grant server permissions. No drone was removed. Do not retry this request from this session.
+
+Use a session whose local client already has management access to this cube.</pre>
+        <div class="notes"><strong>Required outcome</strong>
+          <ul>
+            <li>Reuse the authority explanation and recovery path.</li>
+            <li>Copy the target reference from the caller's input; never perform a lookup to improve denial copy.</li>
+            <li>State the exact outcome: "No drone was removed."</li>
+          </ul>
+        </div>
+      </article>
+
+      <article>
+        <header>
+          <h2>Unknown or unauthorized cube</h2>
+          <span class="state hidden">Non-disclosure</span>
+        </header>
+        <pre class="terminal"><span class="prompt">MCP tool call</span>  borg_decide
+{ "topic": "repository-topology", "decision": "..." }
+
+Tool result
+Error: Borg server request failed (HTTP 404)</pre>
+        <div class="notes"><strong>Required outcome</strong>
+          <ul>
+            <li>Do not emit <code>[LOCAL-MANAGE-REQUIRED]</code> for an unknown, foreign, or no-grant cube.</li>
+            <li>Do not reveal whether the cube, client, topic, or target exists.</li>
+            <li>Never reinterpret a generic 403 or 404 from another route as a management denial.</li>
+          </ul>
+        </div>
+      </article>
+    </section>
+
+    <section class="rules">
+      <h2>Copy matrix</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Operation</th>
+            <th>Opening phrase</th>
+            <th>Zero-mutation phrase</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Record decision</td>
+            <td>This session cannot record a decision in cube "&lt;name&gt;"...</td>
+            <td>Nothing was recorded.</td>
+          </tr>
+          <tr>
+            <td>Evict drone by label</td>
+            <td>This session cannot remove "&lt;label&gt;" from cube "&lt;name&gt;"...</td>
+            <td>No drone was removed.</td>
+          </tr>
+          <tr>
+            <td>Evict drone by UUID</td>
+            <td>This session cannot remove "&lt;drone-id&gt;" from cube "&lt;name&gt;"...</td>
+            <td>No drone was removed.</td>
+          </tr>
+          <tr>
+            <td>Reassign drone</td>
+            <td>This session cannot reassign drone "&lt;drone-id&gt;" to role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No drone was reassigned.</td>
+          </tr>
+          <tr>
+            <td>Create role</td>
+            <td>This session cannot create role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role was created.</td>
+          </tr>
+          <tr>
+            <td>Update role</td>
+            <td>This session cannot update role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role was updated.</td>
+          </tr>
+          <tr>
+            <td>Insert role section</td>
+            <td>This session cannot insert section "&lt;heading&gt;" in role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role section was inserted.</td>
+          </tr>
+          <tr>
+            <td>Replace role section</td>
+            <td>This session cannot replace section "&lt;heading&gt;" in role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role section was replaced.</td>
+          </tr>
+          <tr>
+            <td>Delete role section</td>
+            <td>This session cannot delete section "&lt;heading&gt;" from role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role section was deleted.</td>
+          </tr>
+          <tr>
+            <td>Add taxonomy class</td>
+            <td>This session cannot add message class "&lt;class&gt;" to cube "&lt;name&gt;"...</td>
+            <td>No message class was added.</td>
+          </tr>
+          <tr>
+            <td>Replace taxonomy class</td>
+            <td>This session cannot replace message class "&lt;class&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No message class was replaced.</td>
+          </tr>
+          <tr>
+            <td>Remove taxonomy class</td>
+            <td>This session cannot remove message class "&lt;class&gt;" from cube "&lt;name&gt;"...</td>
+            <td>No message class was removed.</td>
+          </tr>
+          <tr>
+            <td>Update cube directive or whole taxonomy</td>
+            <td>This session cannot update cube settings in cube "&lt;name&gt;"...</td>
+            <td>No cube settings were changed.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="rules">
+      <h2>Implementation acceptance</h2>
+      <ul>
+        <li>Only server-declared management operations use the selected parent client credential. Unsupported local tools remain explicitly unsupported.</li>
+        <li>The server returns typed <code>403 ACCESS_DENIED</code> for an authenticated, known-cube read/write client that lacks manage access or a valid bound live drone session attempting administration. Unknown, no-grant, and foreign-cube requests remain 404.</li>
+        <li>The client selects only the parent credential for management. It maps only that parent credential's management-operation denial to <code>[LOCAL-MANAGE-REQUIRED]</code>; a drone credential remains non-managing, is never selected for management, and does not enter this copy path.</li>
+        <li>The client does not map generic 403/404 responses from other operations.</li>
+        <li>Every target reference comes directly from the validated tool input. Reassignment uses drone and role UUIDs; eviction echoes the supplied label or drone UUID. Denial rendering performs no lookup.</li>
+        <li>The denied action performs zero mutation, is not retried, and never falls back to Cloud.</li>
+        <li>Managing success plus readback and same-cube non-manage denial plus no-write are end-to-end release gates.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
