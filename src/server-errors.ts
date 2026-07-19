@@ -41,7 +41,7 @@ export class LocalManageRequiredError extends Error {
     public readonly noMutation: string,
   ) {
     super(
-      `[LOCAL-MANAGE-REQUIRED] This session cannot ${operation} in cube "${cubeName}" because ` +
+      `[LOCAL-MANAGE-REQUIRED] This session cannot ${operation} because ` +
       'the selected local client does not have cube management access.\n\n' +
       'Coordinator and Queen are workflow roles; they do not grant server permissions. ' +
       `${noMutation} Do not retry this request from this session.\n\n` +

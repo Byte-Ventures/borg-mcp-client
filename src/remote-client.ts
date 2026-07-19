@@ -278,6 +278,10 @@ interface LocalManageOperation {
   noMutation: string;
 }
 
+function manageCopyValue(value: string): string {
+  return JSON.stringify(value);
+}
+
 async function localManageRequest<T>(
   active: ActiveCube,
   path: string,
@@ -975,7 +979,7 @@ export async function recordDecision(
       `/api/cubes/${local.cubeId}/decisions`,
       'POST',
       {
-        operation: 'record a decision',
+        operation: `record a decision in cube ${manageCopyValue(local.name)}`,
         cubeName: local.name,
         noMutation: 'Nothing was recorded.',
       },
@@ -1385,7 +1389,7 @@ export async function updateCube(
       `/api/cubes/${cubeId}`,
       'PATCH',
       {
-        operation: 'change cube settings',
+        operation: `update cube settings in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
         cubeName: cubeId === active.cubeId ? active.name : cubeId,
         noMutation: 'No cube settings were changed.',
       },
@@ -1419,15 +1423,17 @@ export async function patchTaxonomyClass(
   const active = await getActiveCube();
   if (active?.serverTrustIdentity !== undefined) {
     const className = op.action === 'remove' ? op.class : op.class_def.class;
+    const preposition = op.action === 'add' ? 'to' : op.action === 'replace' ? 'in' : 'from';
     const pastTense = op.action === 'add' ? 'added' : op.action === 'replace' ? 'replaced' : 'removed';
+    const cubeName = cubeId === active.cubeId ? active.name : cubeId;
     const result = await localManageRequest<{ cube: any }>(
       active,
       `/api/cubes/${cubeId}/taxonomy-patch`,
       'POST',
       {
-        operation: `${op.action} taxonomy class "${className}"`,
-        cubeName: cubeId === active.cubeId ? active.name : cubeId,
-        noMutation: `No class was ${pastTense}.`,
+        operation: `${op.action} message class ${manageCopyValue(className)} ${preposition} cube ${manageCopyValue(cubeName)}`,
+        cubeName,
+        noMutation: `No message class was ${pastTense}.`,
       },
       op,
     );
@@ -1468,7 +1474,7 @@ export async function createRole(
       `/api/cubes/${cubeId}/roles`,
       'POST',
       {
-        operation: `create role "${data.name}"`,
+        operation: `create role ${manageCopyValue(data.name)} in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
         cubeName: cubeId === active.cubeId ? active.name : cubeId,
         noMutation: 'No role was created.',
       },
@@ -1502,7 +1508,7 @@ export async function updateRole(
       `/api/cubes/${active.cubeId}/roles/${roleId}`,
       'PATCH',
       {
-        operation: `update role "${roleId}"`,
+        operation: `update role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
         cubeName: active.name,
         noMutation: 'No role was updated.',
       },
@@ -1578,9 +1584,9 @@ export async function patchRoleSection(
       `/api/cubes/${active.cubeId}/roles/${roleId}/section-patch`,
       'POST',
       {
-        operation: `${op.action} section "${op.heading}" in role "${roleId}"`,
+        operation: `${op.action} section ${manageCopyValue(op.heading)} ${op.action === 'delete' ? 'from' : 'in'} role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
         cubeName: active.name,
-        noMutation: `No section was ${op.action === 'insert' ? 'inserted' : op.action === 'replace' ? 'replaced' : 'deleted'}.`,
+        noMutation: `No role section was ${op.action === 'insert' ? 'inserted' : op.action === 'replace' ? 'replaced' : 'deleted'}.`,
       },
       { ...op },
     );
@@ -1622,7 +1628,7 @@ export async function reassignDrone(droneId: string, roleId: string): Promise<{ 
       `/api/cubes/${active.cubeId}/drones/${droneId}`,
       'PATCH',
       {
-        operation: `reassign "${droneId}"`,
+        operation: `reassign drone ${manageCopyValue(droneId)} to role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
         cubeName: active.name,
         noMutation: 'No drone was reassigned.',
       },
@@ -1660,7 +1666,7 @@ export async function evictDrone(droneId: string, targetLabel: string = droneId)
       `/api/cubes/${active.cubeId}/drones/${droneId}`,
       'DELETE',
       {
-        operation: `remove "${targetLabel}"`,
+        operation: `remove ${manageCopyValue(targetLabel)} from cube ${manageCopyValue(active.name)}`,
         cubeName: active.name,
         noMutation: 'No drone was removed.',
       },

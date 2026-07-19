@@ -131,37 +131,39 @@ describe('local manage-request authority', () => {
   });
 
   it.each([
-    ['decision', () => import('../src/remote-client.js').then((remote) =>
+    ['decision', `record a decision in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.recordDecision(SESSION, ORIGIN, { topic: 'topology', decision: 'public repos' }, TRUST_IDENTITY)), 'Nothing was recorded.'],
-    ['config', () => import('../src/remote-client.js').then((remote) =>
+    ['config', `update cube settings in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.updateCube(CUBE_ID, { cube_directive: 'local only' })), 'No cube settings were changed.'],
-    ['taxonomy add', () => import('../src/remote-client.js').then((remote) =>
-      remote.patchTaxonomyClass(CUBE_ID, { action: 'add', class_def: { class: 'qa', prefixes: ['QA:'], routing: 'broadcast' } })), 'No class was added.'],
-    ['taxonomy replace', () => import('../src/remote-client.js').then((remote) =>
-      remote.patchTaxonomyClass(CUBE_ID, { action: 'replace', class_def: { class: 'qa', prefixes: ['QA:'], routing: 'broadcast' } })), 'No class was replaced.'],
-    ['taxonomy remove', () => import('../src/remote-client.js').then((remote) =>
-      remote.patchTaxonomyClass(CUBE_ID, { action: 'remove', class: 'qa' })), 'No class was removed.'],
-    ['role create', () => import('../src/remote-client.js').then((remote) =>
+    ['taxonomy add', `add message class "qa" to cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
+      remote.patchTaxonomyClass(CUBE_ID, { action: 'add', class_def: { class: 'qa', prefixes: ['QA:'], routing: 'broadcast' } })), 'No message class was added.'],
+    ['taxonomy replace', `replace message class "qa" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
+      remote.patchTaxonomyClass(CUBE_ID, { action: 'replace', class_def: { class: 'qa', prefixes: ['QA:'], routing: 'broadcast' } })), 'No message class was replaced.'],
+    ['taxonomy remove', `remove message class "qa" from cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
+      remote.patchTaxonomyClass(CUBE_ID, { action: 'remove', class: 'qa' })), 'No message class was removed.'],
+    ['role create', `create role "Builder" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.createRole(CUBE_ID, { name: 'Builder', short_description: 'builds', detailed_description: 'Build.' })), 'No role was created.'],
-    ['role update', () => import('../src/remote-client.js').then((remote) =>
+    ['role update', `update role "${ROLE_ID}" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.updateRole(ROLE_ID, { short_description: 'builds carefully' })), 'No role was updated.'],
-    ['section insert', () => import('../src/remote-client.js').then((remote) =>
-      remote.patchRoleSection(ROLE_ID, { action: 'insert', heading: 'Workflow', body: 'Build.' })), 'No section was inserted.'],
-    ['section replace', () => import('../src/remote-client.js').then((remote) =>
-      remote.patchRoleSection(ROLE_ID, { action: 'replace', heading: 'Workflow', body: 'Build.' })), 'No section was replaced.'],
-    ['section delete', () => import('../src/remote-client.js').then((remote) =>
-      remote.patchRoleSection(ROLE_ID, { action: 'delete', heading: 'Workflow' })), 'No section was deleted.'],
-    ['drone reassign', () => import('../src/remote-client.js').then((remote) =>
+    ['section insert', `insert section "Workflow" in role "${ROLE_ID}" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
+      remote.patchRoleSection(ROLE_ID, { action: 'insert', heading: 'Workflow', body: 'Build.' })), 'No role section was inserted.'],
+    ['section replace', `replace section "Workflow" in role "${ROLE_ID}" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
+      remote.patchRoleSection(ROLE_ID, { action: 'replace', heading: 'Workflow', body: 'Build.' })), 'No role section was replaced.'],
+    ['section delete', `delete section "Workflow" from role "${ROLE_ID}" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
+      remote.patchRoleSection(ROLE_ID, { action: 'delete', heading: 'Workflow' })), 'No role section was deleted.'],
+    ['drone reassign', `reassign drone "${DRONE_ID}" to role "${ROLE_ID}" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.reassignDrone(DRONE_ID, ROLE_ID)), 'No drone was reassigned.'],
-    ['drone evict', () => import('../src/remote-client.js').then((remote) =>
+    ['drone evict', `remove "builder-1" from cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.evictDrone(DRONE_ID, 'builder-1')), 'No drone was removed.'],
-  ])('maps exact ACCESS_DENIED 403 for a %s operation to actionable no-mutation copy', async (_kind, call, noMutation) => {
+    ['drone evict by UUID', `remove "${DRONE_ID}" from cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
+      remote.evictDrone(DRONE_ID)), 'No drone was removed.'],
+  ])('maps exact ACCESS_DENIED 403 for a %s operation to actionable no-mutation copy', async (_kind, opening, call, noMutation) => {
     failure = { status: 403, code: 'ACCESS_DENIED' };
 
     const error = await call().then(() => null, (caught) => caught);
     expect(error).toMatchObject({
       name: 'LocalManageRequiredError',
-      message: expect.stringContaining('[LOCAL-MANAGE-REQUIRED]'),
+      message: expect.stringContaining(`[LOCAL-MANAGE-REQUIRED] This session cannot ${opening} because`),
     });
     expect(error.message).toContain(noMutation);
     expect(error.message).toContain('Do not retry this request from this session.');

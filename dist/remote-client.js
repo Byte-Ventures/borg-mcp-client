@@ -199,6 +199,9 @@ async function localServerRequest(active, path, method, payload) {
             }),
     }), true);
 }
+function manageCopyValue(value) {
+    return JSON.stringify(value);
+}
 async function localManageRequest(active, path, method, operation, payload) {
     const trustIdentity = active.serverTrustIdentity;
     const authToken = await getServerCredential(active.apiUrl, trustIdentity);
@@ -724,7 +727,7 @@ export async function recordDecision(sessionToken, apiUrl, input, serverTrustIde
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
         const payload = await localManageRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'POST', {
-            operation: 'record a decision',
+            operation: `record a decision in cube ${manageCopyValue(local.name)}`,
             cubeName: local.name,
             noMutation: 'Nothing was recorded.',
         }, input);
@@ -1013,7 +1016,7 @@ export async function updateCube(cubeId, updates) {
             payload.message_taxonomy = updates.message_taxonomy ?? null;
         }
         const result = await localManageRequest(active, `/api/cubes/${cubeId}`, 'PATCH', {
-            operation: 'change cube settings',
+            operation: `update cube settings in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
             cubeName: cubeId === active.cubeId ? active.name : cubeId,
             noMutation: 'No cube settings were changed.',
         }, payload);
@@ -1039,11 +1042,13 @@ export async function patchTaxonomyClass(cubeId, op) {
     const active = await getActiveCube();
     if (active?.serverTrustIdentity !== undefined) {
         const className = op.action === 'remove' ? op.class : op.class_def.class;
+        const preposition = op.action === 'add' ? 'to' : op.action === 'replace' ? 'in' : 'from';
         const pastTense = op.action === 'add' ? 'added' : op.action === 'replace' ? 'replaced' : 'removed';
+        const cubeName = cubeId === active.cubeId ? active.name : cubeId;
         const result = await localManageRequest(active, `/api/cubes/${cubeId}/taxonomy-patch`, 'POST', {
-            operation: `${op.action} taxonomy class "${className}"`,
-            cubeName: cubeId === active.cubeId ? active.name : cubeId,
-            noMutation: `No class was ${pastTense}.`,
+            operation: `${op.action} message class ${manageCopyValue(className)} ${preposition} cube ${manageCopyValue(cubeName)}`,
+            cubeName,
+            noMutation: `No message class was ${pastTense}.`,
         }, op);
         if (!result)
             throw new Error('Local Borg server returned an empty taxonomy response');
@@ -1075,7 +1080,7 @@ export async function createRole(cubeId, data) {
         if (data.default_model !== undefined)
             localUnsupported('per-role default model');
         const result = await localManageRequest(active, `/api/cubes/${cubeId}/roles`, 'POST', {
-            operation: `create role "${data.name}"`,
+            operation: `create role ${manageCopyValue(data.name)} in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
             cubeName: cubeId === active.cubeId ? active.name : cubeId,
             noMutation: 'No role was created.',
         }, buildLocalRoleFields(data));
@@ -1101,7 +1106,7 @@ export async function updateRole(roleId, updates) {
         if (updates.default_model !== undefined)
             localUnsupported('per-role default model');
         const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}`, 'PATCH', {
-            operation: `update role "${roleId}"`,
+            operation: `update role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
             cubeName: active.name,
             noMutation: 'No role was updated.',
         }, buildLocalRoleFields(updates));
@@ -1153,9 +1158,9 @@ export async function patchRoleSection(roleId, op) {
         // Local (self-hosted) authority: section-patch rides the cube-scoped route
         // (/api/cubes/:cubeId/roles/:roleId/section-patch), NOT the cloud path.
         const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}/section-patch`, 'POST', {
-            operation: `${op.action} section "${op.heading}" in role "${roleId}"`,
+            operation: `${op.action} section ${manageCopyValue(op.heading)} ${op.action === 'delete' ? 'from' : 'in'} role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
             cubeName: active.name,
-            noMutation: `No section was ${op.action === 'insert' ? 'inserted' : op.action === 'replace' ? 'replaced' : 'deleted'}.`,
+            noMutation: `No role section was ${op.action === 'insert' ? 'inserted' : op.action === 'replace' ? 'replaced' : 'deleted'}.`,
         }, { ...op });
         if (!result)
             throw new Error('Local Borg server returned an empty role response');
@@ -1190,7 +1195,7 @@ export async function reassignDrone(droneId, roleId) {
     const active = await getActiveCube();
     if (active?.serverTrustIdentity !== undefined) {
         const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/drones/${droneId}`, 'PATCH', {
-            operation: `reassign "${droneId}"`,
+            operation: `reassign drone ${manageCopyValue(droneId)} to role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
             cubeName: active.name,
             noMutation: 'No drone was reassigned.',
         }, { role_id: roleId });
@@ -1222,7 +1227,7 @@ export async function evictDrone(droneId, targetLabel = droneId) {
     const active = await getActiveCube();
     if (active?.serverTrustIdentity !== undefined) {
         await localManageRequest(active, `/api/cubes/${active.cubeId}/drones/${droneId}`, 'DELETE', {
-            operation: `remove "${targetLabel}"`,
+            operation: `remove ${manageCopyValue(targetLabel)} from cube ${manageCopyValue(active.name)}`,
             cubeName: active.name,
             noMutation: 'No drone was removed.',
         });
