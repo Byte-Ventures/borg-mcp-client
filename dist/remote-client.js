@@ -955,6 +955,24 @@ export async function createCube(name, cubeDirective, opts, connection) {
  * pass only what changes.
  */
 export async function updateCube(cubeId, updates) {
+    const active = await getActiveCube();
+    if (active?.serverTrustIdentity !== undefined) {
+        // Local (self-hosted) authority: the manage-scoped cube PATCH accepts
+        // only cube_directive and message_taxonomy — the local server carries no
+        // cube-rename route, so a name change fails closed cause-accurately.
+        if (updates.name !== undefined)
+            localUnsupported('cube rename');
+        const payload = {};
+        if (updates.cube_directive !== undefined)
+            payload.cube_directive = updates.cube_directive;
+        if (Object.prototype.hasOwnProperty.call(updates, 'message_taxonomy')) {
+            payload.message_taxonomy = updates.message_taxonomy ?? null;
+        }
+        const result = await localServerRequest(active, `/api/cubes/${cubeId}`, 'PATCH', payload);
+        if (!result)
+            throw new Error('Local Borg server returned an empty cube response');
+        return result;
+    }
     const response = await authedFetch(`/api/cubes/${cubeId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -989,6 +1007,17 @@ export async function deleteCube(cubeId) {
  * default role; the cube always has exactly one default.
  */
 export async function createRole(cubeId, data) {
+    const active = await getActiveCube();
+    if (active?.serverTrustIdentity !== undefined) {
+        // Local (self-hosted) authority: the cube-scoped role-create route accepts
+        // only the server-known fields. default_model has no local server route.
+        if (data.default_model !== undefined)
+            localUnsupported('per-role default model');
+        const result = await localServerRequest(active, `/api/cubes/${cubeId}/roles`, 'POST', buildLocalRoleFields(data));
+        if (!result)
+            throw new Error('Local Borg server returned an empty role response');
+        return result;
+    }
     const response = await authedFetch(`/api/cubes/${cubeId}/roles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1000,12 +1029,47 @@ export async function createRole(cubeId, data) {
  * Update a role. All fields optional; pass only what changes.
  */
 export async function updateRole(roleId, updates) {
+    const active = await getActiveCube();
+    if (active?.serverTrustIdentity !== undefined) {
+        // Local (self-hosted) authority: role update rides the cube-scoped route
+        // (/api/cubes/:cubeId/roles/:roleId), NOT the cube-unscoped cloud path.
+        if (updates.default_model !== undefined)
+            localUnsupported('per-role default model');
+        const result = await localServerRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}`, 'PATCH', buildLocalRoleFields(updates));
+        if (!result)
+            throw new Error('Local Borg server returned an empty role response');
+        return result;
+    }
     const response = await authedFetch(`/api/roles/${roleId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
     });
     return await response.json();
+}
+/**
+ * Project a create/update-role field bag onto the exact snake_case keys the
+ * self-hosted coordination API accepts, dropping undefined entries and the
+ * cloud-only default_model (rejected before this call). name is included only
+ * when present so a partial update PATCHes just the supplied fields.
+ */
+function buildLocalRoleFields(fields) {
+    const payload = {};
+    for (const key of [
+        'name',
+        'short_description',
+        'detailed_description',
+        'is_default',
+        'is_mandatory',
+        'is_human_seat',
+        'can_broadcast',
+        'receives_all_direct',
+        'role_class',
+    ]) {
+        if (fields[key] !== undefined)
+            payload[key] = fields[key];
+    }
+    return payload;
 }
 /**
  * gh#473 PR1 — granular role-text section patch. Replace / insert /
@@ -1015,6 +1079,15 @@ export async function updateRole(roleId, updates) {
  * `Workflow:`), NOT markdown headings.
  */
 export async function patchRoleSection(roleId, op) {
+    const active = await getActiveCube();
+    if (active?.serverTrustIdentity !== undefined) {
+        // Local (self-hosted) authority: section-patch rides the cube-scoped route
+        // (/api/cubes/:cubeId/roles/:roleId/section-patch), NOT the cloud path.
+        const result = await localServerRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}/section-patch`, 'POST', { ...op });
+        if (!result)
+            throw new Error('Local Borg server returned an empty role response');
+        return result;
+    }
     const response = await authedFetch(`/api/roles/${roleId}/section-patch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
