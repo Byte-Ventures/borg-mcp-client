@@ -29,7 +29,7 @@ import path from 'node:path';
 import { compareBroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import { getActiveCube, inboxPathForDrone } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
-import { advanceLocalServerCursor, encodeLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
+import { advanceLocalServerCursor, clearLocalServerCursor, encodeLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE, EVICTED_RESULT_MARKER, errorCodeFromBody, } from './drone-lifecycle.js';
 import { CODEX_HEARTBEAT_CADENCE_MS, fireCodexHeartbeatTick, formatCodexWakePrompt, startCodexHeartbeat, wakeCodexViaAppServer, } from './codex-app-wake.js';
 import { readBoundedResponseBody } from './server-response.js';
@@ -44,6 +44,26 @@ const HWM_DIVERGENCE_GRACE_MS = 2_000;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 30_000;
 export const LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES = 64 * 1024;
+/**
+ * client#42: the server's structured code for an expired stream resume cursor
+ * (server 410 CURSOR_EXPIRED — the pointed-at entry was pruned). Recoverable,
+ * NOT terminal: distinct from DRONE_EVICTED.
+ */
+export const CURSOR_EXPIRED_CODE = 'CURSOR_EXPIRED';
+/**
+ * client#42: recoverable stream error thrown when the server rejects the resume
+ * cursor as expired. The resume cursor is reset BEFORE this is thrown, so the
+ * reconnect loop's next connect re-establishes from a fresh valid point instead
+ * of looping forever on the dead cursor. Deliberately NOT a DroneEvictedError —
+ * the reconnect loop treats only DroneEvictedError as terminal, so this falls
+ * through to the ordinary backoff-reconnect (which now recovers).
+ */
+export class StreamCursorExpiredError extends Error {
+    constructor(message = 'stream resume cursor expired — reset for catchup, reconnecting') {
+        super(message);
+        this.name = 'StreamCursorExpiredError';
+    }
+}
 function isProcessAlive(pid) {
     try {
         process.kill(pid, 0);
@@ -651,8 +671,30 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
             const body = isLocal
                 ? await readBoundedResponseBody(response, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES, 'Local Borg server SSE response exceeded the response limit', ac.signal).catch(() => '')
                 : await response.text().catch(() => '');
-            if (errorCodeFromBody(body) === DRONE_EVICTED_CODE) {
+            const code = errorCodeFromBody(body);
+            if (code === DRONE_EVICTED_CODE) {
                 throw new DroneEvictedError();
+            }
+            // client#42: an expired resume cursor is RECOVERABLE, not terminal. The
+            // pointed-at entry was pruned server-side, so retrying the SAME cursor
+            // 410s forever (a wedged, silently-dead wake path). Reset the stream's
+            // resume cursor to a fresh valid point (clear it → the next connect omits
+            // ?cursor= and the server re-establishes from the current tail), then
+            // throw the distinct recoverable error so the reconnect loop backs off and
+            // resumes — NOT the terminal DRONE_EVICTED path, NOT an infinite retry of
+            // the dead cursor. The unread watermark (client#41) is untouched, so no
+            // undrained wake is lost across the reset.
+            if (code === CURSOR_EXPIRED_CODE) {
+                if (isLocal) {
+                    await clearLocalServerCursor({
+                        origin: active.apiUrl,
+                        trustIdentity: active.serverTrustIdentity,
+                        cubeId: active.cubeId,
+                        droneId: active.droneId,
+                        purpose: 'stream',
+                    });
+                }
+                throw new StreamCursorExpiredError();
             }
         }
         throw new Error(`stream HTTP ${response.status}`);

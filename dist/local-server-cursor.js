@@ -124,6 +124,25 @@ export async function advanceLocalServerCursor(binding, cursor) {
         await writeState(state);
     });
 }
+/**
+ * client#42: reset (delete) a persisted cursor for `binding`. Used by the SSE
+ * recovery path when the server returns 410 CURSOR_EXPIRED for the stream's
+ * resume cursor — the pointed-at entry has been pruned server-side, so the
+ * stale cursor can never be resumed and must be cleared, letting the next
+ * stream connect re-establish from a fresh valid point (the current tail)
+ * instead of looping forever on the dead cursor. No-op when no cursor is
+ * stored for the binding.
+ */
+export async function clearLocalServerCursor(binding) {
+    const key = cursorKey(binding);
+    await withLock(async () => {
+        const state = await readState();
+        if (!(key in state.cursors))
+            return;
+        delete state.cursors[key];
+        await writeState(state);
+    });
+}
 export function encodeLocalServerCursor(cursor) {
     if (!validCursor(cursor))
         throw new Error('invalid local Borg server cursor');
