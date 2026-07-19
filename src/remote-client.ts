@@ -1018,6 +1018,10 @@ export async function regen(
   // workers (client falls back to rendering recentLog).
   recentLog?: any[];
   behind_by?: number;
+  // gh#740: active ratified decisions for the cube, rendered by regen-format.
+  // The cloud regen ships these in its response; the local path composes them
+  // via listDecisions so self-hosted regen matches cloud behavior.
+  decisions?: any[];
 }> {
   const local = await localAuthorityContext(
     sessionToken,
@@ -1030,6 +1034,22 @@ export async function regen(
       ? await getLocalServerCursor(localCursorBinding(local))
       : await resolveLocalLogCursor(local, opts.since);
     const page = await localReadLogPage(local, { cursor, limit: 1 });
+    // gh#740: fetch the cube's active ratified decisions so local regen
+    // renders the decisions section, matching cloud regen. Resilient: a
+    // decisions-fetch failure must not break orientation (warn + continue).
+    let decisions: any[] = [];
+    try {
+      decisions = (await listDecisions(
+        sessionToken,
+        apiUrl,
+        undefined,
+        opts.serverTrustIdentity,
+      )).decisions;
+    } catch (error) {
+      console.warn(
+        `Local regen: failed to fetch ratified decisions (${error instanceof Error ? error.message : String(error)}); continuing without them.`,
+      );
+    }
     return {
       cube: composed.cube,
       role: composed.role,
@@ -1038,6 +1058,7 @@ export async function regen(
       drones: composed.drones,
       recentLog: [],
       behind_by: page.entries.length + page.behind_by,
+      decisions,
     };
   }
   const params = new URLSearchParams();
