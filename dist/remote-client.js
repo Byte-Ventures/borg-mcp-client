@@ -1138,6 +1138,17 @@ export async function evictDrone(droneId) {
     assertUuidShape(droneId, 'drone_id');
     await authedFetch(`/api/drones/${droneId}`, { method: 'DELETE' });
 }
+export async function listRoles(cubeId) {
+    const active = await getActiveCube();
+    if (active?.serverTrustIdentity !== undefined) {
+        const result = await localServerRequest(active, `/api/cubes/${cubeId}/roles`, 'GET');
+        if (!result || !Array.isArray(result.roles)) {
+            throw new Error('Local Borg server returned an invalid roles response');
+        }
+        return result.roles;
+    }
+    return (await getCube(cubeId)).roles;
+}
 /**
  * Fetch a cube's full detail: directive, roles (with detailed
  * descriptions), and drones. Accessible to owners and active members via

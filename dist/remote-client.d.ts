@@ -419,6 +419,7 @@ export declare function reassignDrone(droneId: string, roleId: string): Promise<
  * Content (no body).
  */
 export declare function evictDrone(droneId: string): Promise<void>;
+export declare function listRoles(cubeId: string): Promise<any[]>;
 /**
  * Fetch a cube's full detail: directive, roles (with detailed
  * descriptions), and drones. Accessible to owners and active members via
