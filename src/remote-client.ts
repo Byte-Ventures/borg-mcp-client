@@ -1152,9 +1152,6 @@ export async function appendLog(
     opts.serverTrustIdentity,
   );
   if (local) {
-    if (opts.class !== undefined) {
-      localUnsupported('message taxonomy routing');
-    }
     let visibility = opts.visibility;
     let recipientDroneIds = opts.recipientDroneIds;
     if (visibility !== 'broadcast' &&
@@ -1187,6 +1184,10 @@ export async function appendLog(
         ...(visibility === 'direct' && recipientDroneIds
           ? { recipientDroneIds }
           : {}),
+        // server#48 append-time taxonomy routing: forward the requested class
+        // so the server can classify/route. It is honored only when no explicit
+        // visibility/recipients override it (server resolveMessageRouting).
+        ...(opts.class ? { class: opts.class } : {}),
       },
     );
     if (!payload) throw new Error('Local Borg server returned an empty log response');

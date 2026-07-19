@@ -6,11 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * Adapted to the LOCAL server path (cloud severance): appendLog routes through
  * the verified local authority to POST /api/cubes/:cubeId/logs with a
  * protocol-enveloped body. The default broadcast omits visibility; an explicit
- * direct send carries { visibility, recipientDroneIds }. Two behaviours have no
- * local analogue and are asserted at their real local contract instead of the
- * dead cloud /api/drone/log route:
- *  - `class:` (server taxonomy routing) is not carried locally: it fails closed
- *    with "does not support" before any network call.
+ * direct send carries { visibility, recipientDroneIds }. Two further behaviours:
+ *  - `class:` (server#48 taxonomy routing) is now forwarded on the local append
+ *    request in the `class` field; the server classifies/routes it. It is only
+ *    honored when no explicit visibility/recipients override it.
  *  - an explicit `to:` array is resolved against the local roster into
  *    recipientDroneIds (a direct send), rather than passed through verbatim.
  * The pre-network contradiction guard (broadcast + non-empty to:) is unchanged.
@@ -111,16 +110,12 @@ describe('appendLog directed-message request body (local path)', () => {
     });
   });
 
-  it('fails closed on server taxonomy routing (class:) before any network call', async () => {
+  it('forwards opts.class on the local append for server#48 taxonomy routing', async () => {
     const { appendLog } = await import('../src/remote-client.js');
-    await expect(appendLog(SESSION, ORIGIN, 'STARTING: work', {
-      class: 'status-claim',
-      to: ['builder-1'],
-    })).rejects.toThrow(/Local Borg server does not support/);
-    expect(fetchSpy.mock.calls.some(([input, init]) =>
-      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` &&
-      init?.method === 'POST'
-    )).toBe(false);
+    await appendLog(SESSION, ORIGIN, 'STARTING: work', { class: 'status-claim' });
+    // class reaches the request body in the server-expected `class` field, with
+    // no visibility/recipients so the server performs class-based routing.
+    expect(postBody()).toEqual({ message: 'STARTING: work', class: 'status-claim' });
   });
 
   it('resolves an explicit empty to array into a direct send with no recipients', async () => {
