@@ -197,7 +197,7 @@ test('release attempt guard rejects reruns of an immutable tag workflow', () => 
 
 test('release readiness accepts the extracted standalone client', async () => {
   const report = await verifyReleaseReadiness(root);
-  assert.deepEqual(report, { name: 'borgmcp', version: '1.1.15', shared: SHARED_VERSION });
+  assert.deepEqual(report, { name: 'borgmcp', version: '2.0.0', shared: SHARED_VERSION });
 });
 
 test('public-source scan ignores a linked-worktree .git file', async (t) => {
