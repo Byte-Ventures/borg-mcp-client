@@ -43,6 +43,7 @@ import { setModuleInjectOpenCode } from './log-stream.js';
 import { lifecycleSignalForMessage, recordLifecycleLog, shouldSuppressLifecycleLog, } from './lifecycle-log-guard.js';
 import { normalizeDirectLogRecipients, } from './direct-log.js';
 import { formatLocalManageToolResult } from './local-manage-tool-result.js';
+import { formatEvictionSuccess, formatReassignmentSuccess, } from './drone-management-tool-result.js';
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
@@ -881,13 +882,11 @@ export async function main() {
                         throw new Error('drone_id is required');
                     if (!roleId)
                         throw new Error('role_id is required');
-                    const { drone, role, cube } = await reassignDrone(droneId, roleId);
-                    if (!role || !cube)
-                        throw new Error('Local Borg server returned incomplete reassignment context');
+                    const result = await reassignDrone(droneId, roleId);
                     return {
                         content: [{
                                 type: 'text',
-                                text: `Reassigned ${drone.label} in cube ${cube.name} to role ${role.name}.\nDrone id: ${drone.id}\nRole id: ${role.id}`,
+                                text: formatReassignmentSuccess(result),
                             }],
                     };
                 }
@@ -900,6 +899,7 @@ export async function main() {
                         throw new Error('No active cube');
                     let targetId;
                     let targetLabel;
+                    let targetCubeName;
                     if (droneIdArg) {
                         // Explicit UUID path — mirrors borg_reassign-drone. gh#782:
                         // validate the shape BEFORE building the URL so a label (or a
@@ -915,9 +915,16 @@ export async function main() {
                         // Label path: resolve to id against the owner-scoped cube roster.
                         if (!cubeId)
                             throw new Error('cube_id is required when evicting by label');
-                        const { drones } = active.serverTrustIdentity !== undefined && cubeId === active.cubeId
-                            ? await getRoster(active.sessionToken, active.apiUrl, undefined, active.serverTrustIdentity)
-                            : await getCube(cubeId);
+                        let drones;
+                        if (active.serverTrustIdentity !== undefined && cubeId === active.cubeId) {
+                            drones = (await getRoster(active.sessionToken, active.apiUrl, undefined, active.serverTrustIdentity)).drones;
+                            targetCubeName = active.name;
+                        }
+                        else {
+                            const targetCube = await getCube(cubeId);
+                            drones = targetCube.drones;
+                            targetCubeName = targetCube.name;
+                        }
                         const match = resolveDroneIdByLabel(drones, label);
                         if (!match) {
                             throw new Error(`No active drone labelled "${label}" in cube ${cubeId} (it may already be evicted; check borg_list-drones).`);
@@ -932,10 +939,7 @@ export async function main() {
                     return {
                         content: [{
                                 type: 'text',
-                                text: `Removed ${targetLabel} from cube ${active.name}.\n` +
-                                    'The seat credential is revoked. The session will stop after its next Borg request.\n' +
-                                    'The worktree and project files were not deleted. Activity history remains attributed to the removed seat.\n' +
-                                    'After its work is merged, run `borg cleanup` to review whether the worktree can be pruned.',
+                                text: formatEvictionSuccess(targetLabel, targetId, targetCubeName),
                             }],
                     };
                 }
