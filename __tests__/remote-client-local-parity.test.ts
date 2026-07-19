@@ -54,7 +54,7 @@ describe('local roster-anchor and taxonomy-patch parity', () => {
           return new Response(JSON.stringify(errorEnvelope('since must be an activity entry id or ISO timestamp')), { status: 400 });
         }
         if (since === CROSS_CUBE_LOG_ID) {
-          return new Response(JSON.stringify(errorEnvelope('since activity entry does not belong to this cube')), { status: 400 });
+          return new Response(JSON.stringify(errorEnvelope('since activity entry does not belong to this cube')), { status: 404 });
         }
         return new Response(JSON.stringify(envelope({
           drones: [{
@@ -120,13 +120,13 @@ describe('local roster-anchor and taxonomy-patch parity', () => {
   });
 
   it.each([
-    'not-an-anchor',
-    CROSS_CUBE_LOG_ID,
-  ])('surfaces a typed server-derived roster failure for %s', async (since) => {
+    ['not-an-anchor', 400],
+    [CROSS_CUBE_LOG_ID, 404],
+  ])('surfaces a typed server-derived roster failure for %s', async (since, status) => {
     const { getRoster } = await import('../src/remote-client.js');
     await expect(getRoster(SESSION, ORIGIN, since, TRUST_IDENTITY)).rejects.toMatchObject({
       name: 'BorgServerHttpError',
-      status: 400,
+      status,
     });
     expect(hostedFetch).not.toHaveBeenCalled();
   });
