@@ -18,7 +18,7 @@ import { assertUuidShape } from './evict-drone.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE, errorCodeFromBody, } from './drone-lifecycle.js';
 import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
 import { loadBorgServerTrust } from './server-trust.js';
-import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, LocalManageRequiredError, } from './server-errors.js';
+import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
@@ -204,9 +204,15 @@ function manageCopyValue(value) {
 }
 async function localManageRequest(active, path, method, operation, payload) {
     const trustIdentity = active.serverTrustIdentity;
-    const authToken = await getServerCredential(active.apiUrl, trustIdentity);
+    let authToken;
+    try {
+        authToken = await getServerCredential(active.apiUrl, trustIdentity);
+    }
+    catch {
+        throw new LocalManageCredentialUnavailableError(operation.operation, operation.cubeName, operation.noMutation);
+    }
     if (!authToken) {
-        throw new LocalManageRequiredError(operation.operation, operation.cubeName, operation.noMutation);
+        throw new LocalManageCredentialUnavailableError(operation.operation, operation.cubeName, operation.noMutation);
     }
     try {
         return await decodeLocalProtocolResponse((signal) => authedFetch(path, {
@@ -1192,17 +1198,6 @@ export async function reassignDrone(droneId, roleId) {
     // ("../cubes/<uuid>") must never reach URL construction. role_id rides
     // in the JSON body, not the path, so it is not interpolation-exposed.
     assertUuidShape(droneId, 'drone_id');
-    const active = await getActiveCube();
-    if (active?.serverTrustIdentity !== undefined) {
-        const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/drones/${droneId}`, 'PATCH', {
-            operation: `reassign drone ${manageCopyValue(droneId)} to role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
-            cubeName: active.name,
-            noMutation: 'No drone was reassigned.',
-        }, { role_id: roleId });
-        if (!result)
-            throw new Error('Local Borg server returned an empty drone response');
-        return result;
-    }
     const response = await authedFetch(`/api/drones/${droneId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1219,20 +1214,11 @@ export async function reassignDrone(droneId, roleId) {
  * and its activity-log attribution anonymized; the route returns 204 No
  * Content (no body).
  */
-export async function evictDrone(droneId, targetLabel = droneId) {
+export async function evictDrone(droneId) {
     // gh#782: same pre-network gate as reassignDrone — defense-in-depth at
     // the layer that interpolates the path (the borg_evict-drone tool layer
     // keeps its friendlier label-hint validation above this).
     assertUuidShape(droneId, 'drone_id');
-    const active = await getActiveCube();
-    if (active?.serverTrustIdentity !== undefined) {
-        await localManageRequest(active, `/api/cubes/${active.cubeId}/drones/${droneId}`, 'DELETE', {
-            operation: `remove ${manageCopyValue(targetLabel)} from cube ${manageCopyValue(active.name)}`,
-            cubeName: active.name,
-            noMutation: 'No drone was removed.',
-        });
-        return;
-    }
     await authedFetch(`/api/drones/${droneId}`, { method: 'DELETE' });
 }
 export async function listRoles(cubeId) {

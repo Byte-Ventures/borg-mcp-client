@@ -126,6 +126,7 @@ import {
 import {
   normalizeDirectLogRecipients,
 } from './direct-log.js';
+import { formatLocalManageToolResult } from './local-manage-tool-result.js';
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
@@ -1031,14 +1032,22 @@ export async function main() {
           const roleId = args?.role_id as string;
           if (!droneId) throw new Error('drone_id is required');
           if (!roleId) throw new Error('role_id is required');
-          const { drone } = await reassignDrone(droneId, roleId);
-          return { content: [{ type: 'text', text: `Reassigned drone ${drone.label} (${drone.id}) to role ${drone.role_id}.` }] };
+          const { drone, role, cube } = await reassignDrone(droneId, roleId);
+          if (!role || !cube) throw new Error('Local Borg server returned incomplete reassignment context');
+          return {
+            content: [{
+              type: 'text',
+              text: `Reassigned ${drone.label} in cube ${cube.name} to role ${role.name}.\nDrone id: ${drone.id}\nRole id: ${role.id}`,
+            }],
+          };
         }
 
         case 'borg_evict-drone': {
           const droneIdArg = (args?.drone_id as string | undefined)?.trim();
           const label = (args?.label as string | undefined)?.trim();
           const cubeId = (args?.cube_id as string | undefined)?.trim();
+          const active = await getActiveCube();
+          if (!active) throw new Error('No active cube');
 
           let targetId: string;
           let targetLabel: string;
@@ -1055,7 +1064,9 @@ export async function main() {
           } else if (label) {
             // Label path: resolve to id against the owner-scoped cube roster.
             if (!cubeId) throw new Error('cube_id is required when evicting by label');
-            const { drones } = await getCube(cubeId);
+            const { drones } = active.serverTrustIdentity !== undefined && cubeId === active.cubeId
+              ? await getRoster(active.sessionToken, active.apiUrl, undefined, active.serverTrustIdentity)
+              : await getCube(cubeId);
             const match = resolveDroneIdByLabel(drones, label);
             if (!match) {
               throw new Error(`No active drone labelled "${label}" in cube ${cubeId} (it may already be evicted; check borg_list-drones).`);
@@ -1066,8 +1077,16 @@ export async function main() {
             throw new Error('Provide drone_id, or label + cube_id, to identify the drone to evict');
           }
 
-          await evictDrone(targetId, targetLabel);
-          return { content: [{ type: 'text', text: `Evicted drone ${targetLabel} (${targetId}). Soft-deleted: removed from the roster and freed its seat; log history preserved with anonymized attribution.` }] };
+          await evictDrone(targetId);
+          return {
+            content: [{
+              type: 'text',
+              text: `Removed ${targetLabel} from cube ${active.name}.\n` +
+                'The seat credential is revoked. The session will stop after its next Borg request.\n' +
+                'The worktree and project files were not deleted. Activity history remains attributed to the removed seat.\n' +
+                'After its work is merged, run `borg cleanup` to review whether the worktree can be pruned.',
+            }],
+          };
         }
 
         case 'borg_list-drones': {
@@ -1176,6 +1195,9 @@ export async function main() {
           isError: true,
         };
       }
+
+      const localManageResult = formatLocalManageToolResult(error);
+      if (localManageResult) return localManageResult;
 
       return {
         content: [

@@ -64,12 +64,6 @@ describe('local manage-request authority', () => {
       if (url.pathname === `/api/cubes/${CUBE_ID}/roles/${ROLE_ID}/section-patch` && method === 'POST') {
         return new Response(JSON.stringify(envelope({ role: { id: ROLE_ID, name: 'Builder' } })), { status: 200 });
       }
-      if (url.pathname === `/api/cubes/${CUBE_ID}/drones/${DRONE_ID}` && method === 'PATCH') {
-        return new Response(JSON.stringify(envelope({ drone: { id: DRONE_ID, role_id: ROLE_ID } })), { status: 200 });
-      }
-      if (url.pathname === `/api/cubes/${CUBE_ID}/drones/${DRONE_ID}` && method === 'DELETE') {
-        return new Response(null, { status: 204 });
-      }
       throw new Error(`unexpected local request ${method} ${url.pathname}`);
     });
 
@@ -116,16 +110,13 @@ describe('local manage-request authority', () => {
     });
     await remote.updateRole(ROLE_ID, { short_description: 'builds carefully' });
     await remote.patchRoleSection(ROLE_ID, { action: 'replace', heading: 'Workflow', body: 'Build.' });
-    await remote.reassignDrone(DRONE_ID, ROLE_ID);
-    await remote.evictDrone(DRONE_ID);
-
-    expect(localFetch).toHaveBeenCalledTimes(8);
+    expect(localFetch).toHaveBeenCalledTimes(6);
     for (const [, init] of localFetch.mock.calls) {
       const authorization = new Headers(init?.headers).get('Authorization');
       expect(authorization).toBe(`Bearer ${PARENT}`);
       expect(authorization).not.toContain(SESSION);
     }
-    expect(getServerCredential).toHaveBeenCalledTimes(8);
+    expect(getServerCredential).toHaveBeenCalledTimes(6);
     expect(getServerCredential).toHaveBeenCalledWith(ORIGIN, TRUST_IDENTITY);
     expect(hostedFetch).not.toHaveBeenCalled();
   });
@@ -151,12 +142,6 @@ describe('local manage-request authority', () => {
       remote.patchRoleSection(ROLE_ID, { action: 'replace', heading: 'Workflow', body: 'Build.' })), 'No role section was replaced.'],
     ['section delete', `delete section "Workflow" from role "${ROLE_ID}" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.patchRoleSection(ROLE_ID, { action: 'delete', heading: 'Workflow' })), 'No role section was deleted.'],
-    ['drone reassign', `reassign drone "${DRONE_ID}" to role "${ROLE_ID}" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
-      remote.reassignDrone(DRONE_ID, ROLE_ID)), 'No drone was reassigned.'],
-    ['drone evict', `remove "builder-1" from cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
-      remote.evictDrone(DRONE_ID, 'builder-1')), 'No drone was removed.'],
-    ['drone evict by UUID', `remove "${DRONE_ID}" from cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
-      remote.evictDrone(DRONE_ID)), 'No drone was removed.'],
   ])('maps exact ACCESS_DENIED 403 for a %s operation to actionable no-mutation copy', async (_kind, opening, call, noMutation) => {
     failure = { status: 403, code: 'ACCESS_DENIED' };
 
@@ -202,7 +187,8 @@ describe('local manage-request authority', () => {
       { topic: 'topology', decision: 'public repos' },
       TRUST_IDENTITY,
     )).rejects.toMatchObject({
-      name: 'LocalManageRequiredError',
+      name: 'LocalManageCredentialUnavailableError',
+      message: expect.not.stringContaining('[LOCAL-MANAGE-REQUIRED]'),
     });
     expect(localFetch).not.toHaveBeenCalled();
     expect(hostedFetch).not.toHaveBeenCalled();
@@ -217,7 +203,10 @@ describe('local manage-request authority', () => {
       ORIGIN,
       { topic: 'topology', decision: 'public repos' },
       TRUST_IDENTITY,
-    )).rejects.toThrow('credential store is unreadable');
+    )).rejects.toMatchObject({
+      name: 'LocalManageCredentialUnavailableError',
+      message: expect.not.stringContaining('[LOCAL-MANAGE-REQUIRED]'),
+    });
     expect(localFetch).not.toHaveBeenCalled();
     expect(hostedFetch).not.toHaveBeenCalled();
   });
@@ -240,6 +229,8 @@ describe('local manage-request authority', () => {
       () => remote.applyTemplate(CUBE_ID, 'software-dev'),
       () => remote.syncRoles(CUBE_ID, 'software-dev'),
       () => remote.removeDecision(SESSION, ORIGIN, { topic: 'topology' }, TRUST_IDENTITY),
+      () => remote.reassignDrone(DRONE_ID, ROLE_ID),
+      () => remote.evictDrone(DRONE_ID),
     ];
 
     for (const call of unsupported) {

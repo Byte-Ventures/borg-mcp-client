@@ -39,6 +39,20 @@ export class LocalManageRequiredError extends Error {
         this.name = 'LocalManageRequiredError';
     }
 }
+export class LocalManageCredentialUnavailableError extends Error {
+    operation;
+    cubeName;
+    noMutation;
+    constructor(operation, cubeName, noMutation) {
+        super(`The selected local client credential for cube "${cubeName}" is missing or unreadable. ` +
+            `This session cannot ${operation}. ${noMutation} Restore or re-enroll the selected local ` +
+            'client before retrying.');
+        this.operation = operation;
+        this.cubeName = cubeName;
+        this.noMutation = noMutation;
+        this.name = 'LocalManageCredentialUnavailableError';
+    }
+}
 /**
  * CR5: a STABLE TYPED terminal trust verdict — the pinned server identity no longer
  * matches. This is a security boundary: it must be classified from the error TYPE,
