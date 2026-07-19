@@ -41,6 +41,16 @@ describe('local-adapter management writes (client#39)', () => {
           cube: { id: CUBE_ID, name: 'Hive', cube_directive: 'ship it' },
         })), { status: 200 });
       }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/roles` && method === 'GET') {
+        return new Response(JSON.stringify(localEnvelope({
+          roles: [{
+            id: ROLE_ID,
+            name: 'Builder',
+            short_description: 'builds',
+            is_default: true,
+          }],
+        })), { status: 200 });
+      }
       if (url.pathname === `/api/cubes/${CUBE_ID}/roles` && method === 'POST') {
         return new Response(JSON.stringify(localEnvelope({
           role: { id: ROLE_ID, name: 'Builder' },
@@ -105,6 +115,21 @@ describe('local-adapter management writes (client#39)', () => {
     await expect(updateCube(CUBE_ID, { name: 'Renamed' }))
       .rejects.toThrow(/Local Borg server does not support/);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('lists roles via the cube-scoped roles route', async () => {
+    const { listRoles } = await import('../src/remote-client.js');
+    await expect(listRoles(CUBE_ID)).resolves.toEqual([{
+      id: ROLE_ID,
+      name: 'Builder',
+      short_description: 'builds',
+      is_default: true,
+    }]);
+    expect(fetchSpy.mock.calls.some(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/roles` &&
+      (init?.method ?? 'GET') === 'GET'
+    )).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('creates a role via the cube-scoped roles route', async () => {

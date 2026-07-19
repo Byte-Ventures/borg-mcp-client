@@ -13,7 +13,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
-import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, reassignDrone, evictDrone, getCube, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
+import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, reassignDrone, evictDrone, getCube, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
@@ -954,7 +954,7 @@ export async function main() {
                     const cubeId = args?.cube_id;
                     if (!cubeId)
                         throw new Error('cube_id is required');
-                    const { roles } = await getCube(cubeId);
+                    const roles = await listRoles(cubeId);
                     return { content: [{ type: 'text', text: renderRoleList(roles, cubeId) }] };
                 }
                 case 'borg_list-templates': {

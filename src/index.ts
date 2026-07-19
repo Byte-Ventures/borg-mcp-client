@@ -45,6 +45,7 @@ import {
   reassignDrone,
   evictDrone,
   getCube,
+  listRoles,
   syncRoles,
   applyTemplate,
   whoami,
@@ -1105,7 +1106,7 @@ export async function main() {
           // per drone-3 QA-FAIL 2026-05-18T13:27:53Z.
           const cubeId = args?.cube_id as string;
           if (!cubeId) throw new Error('cube_id is required');
-          const { roles } = await getCube(cubeId);
+          const roles = await listRoles(cubeId);
           return { content: [{ type: 'text', text: renderRoleList(roles, cubeId) }] };
         }
 
