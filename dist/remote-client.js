@@ -210,12 +210,15 @@ async function localConnectionRequest(connection, path) {
         headers: { Accept: 'application/json' },
     }), false);
 }
-async function localCubeComposition(active) {
+async function localCubeComposition(active, since) {
     const base = `/api/cubes/${active.cubeId}`;
+    const dronesPath = since === undefined
+        ? `${base}/drones`
+        : `${base}/drones?since=${encodeURIComponent(since)}`;
     const [cubePayload, rolePayload, dronePayload] = await Promise.all([
         localServerRequest(active, base, 'GET'),
         localServerRequest(active, `${base}/roles`, 'GET'),
-        localServerRequest(active, `${base}/drones`, 'GET'),
+        localServerRequest(active, dronesPath, 'GET'),
     ]);
     if (!cubePayload || !rolePayload || !dronePayload) {
         throw new Error('Local Borg server returned an incomplete cube response');
@@ -230,6 +233,7 @@ async function localCubeComposition(active) {
         drones: dronePayload.drones,
         role,
         drone,
+        since: dronePayload.since,
     };
 }
 function localCursorBinding(active) {
@@ -600,10 +604,13 @@ export async function whoami(sessionToken, apiUrl, serverTrustIdentity) {
 export async function getRoster(sessionToken, apiUrl, since, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
-        if (since !== undefined)
-            localUnsupported('roster liveness filtering');
-        const composed = await localCubeComposition(local);
-        return { drones: composed.drones, roles: composed.roles, message_taxonomy: null };
+        const composed = await localCubeComposition(local, since);
+        return {
+            drones: composed.drones,
+            roles: composed.roles,
+            message_taxonomy: composed.cube.message_taxonomy ?? null,
+            since: composed.since,
+        };
     }
     const qs = since ? `?since=${encodeURIComponent(since)}` : '';
     const response = await authedFetch(`/api/drone/roster${qs}`, {
@@ -989,6 +996,13 @@ export async function updateCube(cubeId, updates) {
  * Bearer token.
  */
 export async function patchTaxonomyClass(cubeId, op) {
+    const active = await getActiveCube();
+    if (active?.serverTrustIdentity !== undefined) {
+        const result = await localServerRequest(active, `/api/cubes/${cubeId}/taxonomy-patch`, 'POST', op);
+        if (!result)
+            throw new Error('Local Borg server returned an empty taxonomy response');
+        return result;
+    }
     const response = await authedFetch(`/api/cubes/${cubeId}/taxonomy-patch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
