@@ -5,7 +5,7 @@
  * `autoEvictPresumedDead`, or gh#877 graceful self-shutdown) leaves its
  * worktree dir (`~/.borg/worktrees/<repo>/<name>`) + its `wt-<suffix>`
  * branch on disk. Nothing reclaims them. This command finds and SAFELY
- * removes worktrees orphaned by eviction — never destroying live, frozen,
+ * removes worktrees orphaned by eviction — never destroying live,
  * dirty, unmerged, or precious-local-state work.
  *
  * Pure composition over `worktree-lifecycle.ts` + the gh#877 per-seat
@@ -16,8 +16,8 @@
  * SEC gate (gh#882, S1–S5 — design entries 98e45fbf / acd76794):
  *   S1  Destructive prune authority = server 410 DRONE_EVICTED on the
  *       worktree's OWN saved-seat token, ONLY.
- *   S2  KEEP classes (any one → never prune, surface): 423 DRONE_FROZEN
- *       (reversible); dirty; unmerged; non-regenerable gitignored-local.
+ *   S2  KEEP classes (any one → never prune, surface): dirty; unmerged;
+ *       non-regenerable gitignored-local.
  *   S3  Report-only until gh#877 is DEPLOYED. The destructive path keys on
  *       the 410 CODE — pre-deploy the server returns 401 → probe resolves
  *       'indeterminate' → report-only → safe. No flag / deploy coupling;
@@ -69,7 +69,7 @@ export type CleanupReason =
   | 'SURVIVES-clobber'
   | 'SURVIVES-unmerged'
   | 'SURVIVES-detached'
-  | 'SURVIVES-frozen'
+  | 'SURVIVES-rejected'
   | 'SURVIVES-live'
   | 'SURVIVES-self'
   | 'UNKNOWN-indeterminate'
@@ -344,15 +344,15 @@ async function classifyWorktree(
   switch (status) {
     case 'evicted':
       return { reason: 'PRUNABLE', detail: '410 DRONE_EVICTED (clean + merged)' };
-    case 'frozen':
-      return { reason: 'SURVIVES-frozen', detail: '423 DRONE_FROZEN (reversible)' };
+    case 'rejected':
+      return { reason: 'SURVIVES-rejected', detail: 'pin-matched 401 (revoked/taken over) — recoverable via re-enroll, never delete' };
     case 'live':
       return { reason: 'SURVIVES-live', detail: 'seat resolves (drone alive)' };
     case 'indeterminate':
     default:
       return {
         reason: 'UNKNOWN-indeterminate',
-        detail: 'probe returned 401/network/transient (or gh#877 not yet deployed) — not deleting',
+        detail: 'probe returned network/transient/404/trust-mismatch (or gh#877 not yet deployed) — not deleting',
       };
   }
 }
@@ -436,7 +436,7 @@ export async function buildCleanupReport(
     // Under worktreesHome but no saved seat → not eviction-orphaned
     // (pre-assimilate or hand-made). Report, never auto-prune.
     if (!seat) {
-      rows.push({ worktreePath: wt, wtBranch: null, reason: 'UNKNOWN-no-seat', detail: 'no cubes.json seat — manual review' });
+      rows.push({ worktreePath: wt, wtBranch: null, reason: 'UNKNOWN-no-seat', detail: 'no saved seat — manual review' });
       continue;
     }
 

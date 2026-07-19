@@ -90,6 +90,14 @@ describe('parseAssimilateArgs', () => {
     });
   });
 
+  it('rejects the retired --reset-local-seat flag (reset moved to `borg reset-local-seat`)', () => {
+    const result = parseAssimilateArgs(['--host', 'localhost:7091', '--here', '--reset-local-seat']);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('unknown flag: --reset-local-seat');
+    }
+  });
+
   it('rejects the unreleased --server spelling instead of retaining an alias', () => {
     for (const args of [
       ['--server', 'localhost:7091'],

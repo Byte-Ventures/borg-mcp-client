@@ -5,6 +5,37 @@ import { request as httpsRequest } from 'node:https';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
+import { BorgServerTrustError } from './server-errors.js';
+// CR5 TLS LATTICE: OpenSSL/Node TLS certificate-verification error codes. A raw
+// CA / cert-chain / SAN failure from the pinned transport is a potential MITM and
+// MUST be a TERMINAL trust-mismatch verdict — never a transient 'restart' blip.
+// Connection refusal / reset / timeout are NOT in here: those stay raw transport
+// errors so the seat probe classifies them as `unreachable` (genuinely transient).
+const TLS_TRUST_ERROR_CODES = new Set([
+    'DEPTH_ZERO_SELF_SIGNED_CERT',
+    'SELF_SIGNED_CERT_IN_CHAIN',
+    'UNABLE_TO_GET_ISSUER_CERT',
+    'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'CERT_UNTRUSTED',
+    'CERT_CHAIN_TOO_LONG',
+    'HOSTNAME_MISMATCH',
+    'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+/**
+ * True iff `code` is a PINNED-TRANSPORT certificate-verification failure (bad CA,
+ * unverifiable chain, self-signed leaf, expired/not-yet-valid cert, or a SAN /
+ * hostname mismatch). These are terminal trust-mismatch — a restart never fixes a
+ * wrong cert. `CERT_*` covers the OpenSSL verify family (CERT_HAS_EXPIRED,
+ * CERT_NOT_YET_VALID, CERT_REVOKED, …); `ERR_TLS_CERT*` covers Node's SAN check.
+ */
+function isPinnedTransportTrustFailure(code) {
+    if (!code)
+        return false;
+    return (code.startsWith('CERT_') ||
+        code.startsWith('ERR_TLS_CERT') ||
+        TLS_TRUST_ERROR_CODES.has(code));
+}
 const trustCache = new Map();
 function serverDataDirectory() {
     return resolve(process.env.BORG_SERVER_DATA_DIR ?? join(homedir(), '.borg', 'server'));
@@ -148,7 +179,19 @@ export function createPinnedServerFetch(origin, caCertificate) {
             };
             init.signal?.addEventListener('abort', abort, { once: true });
             request.once('close', () => init.signal?.removeEventListener('abort', abort));
-            request.once('error', rejectPromise);
+            request.once('error', (error) => {
+                // CR5: a pinned-transport CERT/CA/SAN verification failure is TERMINAL trust
+                // — type it as BorgServerTrustError so the seat probe returns `trust-mismatch`
+                // (never `indeterminate` → "restart"). Connection refusal/reset/timeout carry
+                // a transport errno (or an AbortError) and are rethrown RAW so the probe
+                // classifies them as `unreachable`.
+                const code = error.code;
+                if (isPinnedTransportTrustFailure(code)) {
+                    rejectPromise(new BorgServerTrustError(`Borg server presented a certificate that failed pinned verification (${code})`));
+                    return;
+                }
+                rejectPromise(error);
+            });
             if (body !== undefined)
                 request.write(body);
             request.end();

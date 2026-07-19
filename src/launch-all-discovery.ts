@@ -95,7 +95,7 @@ export async function discoverDroneCandidates(
     // 4. malformed entry (cubeId/droneId not UUID) → warn + skip
     if (!isUuid(cube.cubeId) || !isUuid(cube.droneId)) {
       deps.stderr(
-        `skipping ${worktreeDir}: cubes.json entry has malformed cubeId/droneId — re-assimilate to fix\n`
+        `skipping ${worktreeDir}: its saved seat has a malformed cubeId/droneId — re-assimilate to fix\n`
       );
       continue;
     }

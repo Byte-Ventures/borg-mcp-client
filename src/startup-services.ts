@@ -6,7 +6,6 @@ export interface McpStartupServices {
   auditHook: McpStartupTask;
   sseStream: McpStartupTask;
   openCode: McpStartupTask;
-  healthBeat: McpStartupTask;
 }
 
 /**
@@ -25,7 +24,6 @@ export async function runMcpStartupServices(
     services.auditHook,
     services.sseStream,
     services.openCode,
-    services.healthBeat,
   ];
   for (const task of tasks) {
     try {

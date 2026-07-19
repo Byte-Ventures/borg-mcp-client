@@ -34,9 +34,7 @@ export declare function reattachOnlyRefusal(decision: Exclude<AssimilateDecision
 /**
  * Failure advice when a re-attach's server-validated calls fail.
  *
- * Returns null for auth-class failures — the index.ts auth funnel
- * (auth-recovery.ts) owns that advice; the caller rethrows. For everything
- * else (evicted seat, revoked session, dead cube) the seat is unreachable:
+ * The seat is unreachable (evicted seat, revoked session, dead cube):
  * surface the server error verbatim plus CLI guidance. NEVER advise an
  * in-session re-mint (SR cond-4: no fabricated success, lean on server
  * re-validation).
@@ -44,5 +42,5 @@ export declare function reattachOnlyRefusal(decision: Exclude<AssimilateDecision
 export declare function reattachFailureMessage(error: {
     name?: string;
     message?: string;
-}): string | null;
+}): string;
 //# sourceMappingURL=assimilate-guard.d.ts.map

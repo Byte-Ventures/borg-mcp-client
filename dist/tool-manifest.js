@@ -1,41 +1,5 @@
 export const TOOL_MANIFEST = [
     {
-        name: 'borg_subscribe',
-        description: 'Create Stripe checkout session for Cube tier ($1/month per cube; each cube adds 8 pooled agent sessions + 1000 req/hr). Free tier is permanent (1 cube + 3 agent sessions + 100 req/hr); no trial.',
-        inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-        },
-    },
-    {
-        name: 'borg_upgrade-subscription',
-        description: 'Open the Stripe Billing Portal to manage Cube tier quantity ($1/month per cube; each cube adds 8 pooled agent sessions + 1000 req/hr).',
-        inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-        },
-    },
-    {
-        name: 'borg_subscription_status',
-        description: 'Check subscription status',
-        inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-        },
-    },
-    {
-        name: 'borg_open_dashboard',
-        description: 'Open Borg MCP dashboard in browser to manage cubes, roles, and drones',
-        inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-        },
-    },
-    {
         name: 'borg_regen',
         description: "Refresh your context as a Drone. Returns the active cube's directive, " +
             "your role's detailed playbook, the drone roster, and recent activity log entries — " +
@@ -131,7 +95,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_docs',
-        description: 'Look up the Borg MCP documentation. Call this when the user asks how borgmcp works, or any feature / usage / setup / pricing / concept / tool question. Returns the docs index — each section\'s borgmcp.ai URL + a one-line summary. Pass `topic` (e.g. "pricing", "worktree", "roles", "codex") to get the best-matching section(s) instead of the full index. Then WebFetch the returned URL to read the page — borg_docs returns the index only, it does not fetch the page for you.',
+        description: 'Look up the Borg MCP documentation. Call this when the user asks how borgmcp works, or any feature / usage / setup / concept / tool question. Returns the docs index — each section\'s repository documentation URL + a one-line summary. Pass `topic` (e.g. "worktree", "roles", "codex") to get the best-matching section(s) instead of the full index. Then WebFetch the returned URL to read the page — borg_docs returns the index only, it does not fetch the page for you.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -320,34 +284,6 @@ export const TOOL_MANIFEST = [
         },
     },
     {
-        name: 'borg_report-friction',
-        description: 'Report friction or a bug directly to the borgmcp dev team. WRITE-ONLY — you cannot read reports back. Use it when something about borg itself slowed you down, confused you, or broke: awkward UX, an unclear playbook, a missing affordance, or a bug you hit while using borg. Secrets (tokens, keys) are auto-scrubbed server-side before storage, but avoid pasting them anyway.',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                message: {
-                    type: 'string',
-                    description: 'What hit you + what you expected instead (max 10KB). Concrete and specific helps the dev team most.',
-                },
-                kind: {
-                    type: 'string',
-                    enum: ['friction', 'bug'],
-                    description: "'friction' (default) for UX/workflow friction; 'bug' for something broken.",
-                },
-                metadata: {
-                    type: 'object',
-                    description: 'Optional non-secret context. Allowed keys only: version, cube_id, os. Any other key is rejected.',
-                },
-            },
-            required: ['message'],
-        },
-    },
-    {
-        name: 'borg_reports',
-        description: 'Read the friction/bug reports submitted via borg_report-friction, newest first, for triage. The READ counterpart to write-only borg_report-friction. Builder/dogfooder-tier only — the server gates non-builder callers with a clear message. Surfaces each report\'s kind, timestamp, reporter email, and non-secret metadata; secrets were scrubbed server-side before storage.',
-        inputSchema: { type: 'object', properties: {} },
-    },
-    {
         name: 'borg_list-cubes',
         description: 'List every cube owned by this user. Returns id, name, cube_directive, and timestamps for each. Useful before assimilate to see what\'s available, or as a starting point for any management action.',
         inputSchema: { type: 'object', properties: {} },
@@ -497,7 +433,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_delete-role',
-        description: 'Delete a role. Refuses if any drone is still assigned — reassign or evict those drones from the dashboard first.',
+        description: 'Delete a role. Refuses if any drone is still assigned — reassign them with borg_reassign-drone or remove them with borg_evict-drone first.',
         inputSchema: {
             type: 'object',
             properties: {

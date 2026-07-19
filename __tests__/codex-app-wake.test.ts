@@ -1,10 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
-  __resetHealthBeatStateForTest,
-  getLastEventReceivedAt,
-} from '../src/health-beat';
-import {
   CODEX_CATCHUP_PROMPT,
   CODEX_HEARTBEAT_CADENCE_MS,
   fireCodexHeartbeatTick,
@@ -23,7 +19,6 @@ import { wakeRetryBackoffMs } from '../src/codex-wake-resolve';
 describe('codex app-server wake gating', () => {
   beforeEach(() => {
     resetCodexWakeForTests();
-    __resetHealthBeatStateForTest();
   });
 
   it('is disabled unless BORG_CODEX_REMOTE_WAKE=1', () => {
@@ -174,7 +169,6 @@ describe('codex app-server wake gating', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(client.startTurn).toHaveBeenCalledWith('thread-123', 'one');
-    expect(getLastEventReceivedAt()).not.toBeNull();
   });
 
   it('does not record a Codex wake-path receipt when the thread is already active', async () => {
@@ -210,7 +204,6 @@ describe('codex app-server wake gating', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(client.startTurn).not.toHaveBeenCalled();
-    expect(getLastEventReceivedAt()).toBeNull();
   });
 
   it('skips turn injection when the persisted Codex thread is already active', async () => {
@@ -480,7 +473,6 @@ describe('gh#633 — probeCodexBridgeArmed (agnostic wake-armed for codex)', () 
 describe('gh#708: coalesced catch-up wake on a mid-turn-active thread', () => {
   beforeEach(() => {
     resetCodexWakeForTests();
-    __resetHealthBeatStateForTest();
   });
 
   const ACTIVE_CUBE = {
@@ -586,7 +578,6 @@ describe('gh#708: coalesced catch-up wake on a mid-turn-active thread', () => {
 describe('gh#855 — fresh wake-target re-resolution (deaf-when-idle fix)', () => {
   beforeEach(() => {
     resetCodexWakeForTests();
-    __resetHealthBeatStateForTest();
   });
 
   const ACTIVE = {
@@ -696,7 +687,6 @@ describe('gh#855 — fresh wake-target re-resolution (deaf-when-idle fix)', () =
 describe('gh#857 WI-1 — durable per-entry retry (no more silent drop)', () => {
   beforeEach(() => {
     resetCodexWakeForTests();
-    __resetHealthBeatStateForTest();
   });
 
   const ACTIVE = {
@@ -798,7 +788,6 @@ describe('gh#857 WI-1 — durable per-entry retry (no more silent drop)', () => 
 describe('gh#857 WI-2 — codex /loop-equivalent heartbeat', () => {
   beforeEach(() => {
     resetCodexWakeForTests();
-    __resetHealthBeatStateForTest();
   });
 
   const ACTIVE = {
@@ -927,20 +916,17 @@ describe('gh#857 WI-2 — codex /loop-equivalent heartbeat', () => {
     // genuine inbound delivery, never self-generated. A time-driven heartbeat
     // recording a receipt would mask a genuinely-deaf drone. So: heartbeat updates
     // ONLY its local double-fire gate (lastDeliveredAt), NOT the receipt axis.
-    expect(getLastEventReceivedAt()).toBeNull();
     const client = idleClient();
     await fireCodexHeartbeatTick(deps(client, 100_000), CADENCE);
 
     expect(client.startTurn).toHaveBeenCalledWith('th', CODEX_CATCHUP_PROMPT); // drain delivered
     expect(getLastDeliveredAt()).toBe(100_000); // local heartbeat-gating state updated
-    expect(getLastEventReceivedAt()).toBeNull(); // receipt watermark NOT fabricated
   });
 });
 
 describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware heartbeat', () => {
   beforeEach(() => {
     resetCodexWakeForTests();
-    __resetHealthBeatStateForTest();
   });
 
   const ACTIVE = {

@@ -53,7 +53,7 @@ async function resolveTargetCube(
     const identities = await deps.readAllProjectIdentities();
     const matches = identities.filter((e) => e.cube.name === args.cubeName);
     if (matches.length === 0) {
-      return { error: `no cube named '${args.cubeName}' found in cubes.json — has any drone assimilated into it?` };
+      return { error: `no cube named '${args.cubeName}' found among this machine's saved seats — has any drone assimilated into it?` };
     }
     // gh#850: distinct cubes can share a name (same name across accounts/
     // environments, or a stale seat). Silently taking matches[0] could launch
@@ -65,9 +65,9 @@ async function resolveTargetCube(
         .join('\n');
       return {
         error:
-          `'${args.cubeName}' is ambiguous — ${matches.length} cubes in cubes.json share that name:\n${list}\n` +
+          `'${args.cubeName}' is ambiguous — ${matches.length} saved seats on this machine share that name:\n${list}\n` +
           'cd into the intended project and re-run without --cube-name (resolves the active cube), ' +
-          'or remove the stale seat(s) from cubes.json.',
+          'or clear the stale seat(s) by running `borg reset-local-seat` from the worktree that holds each.',
       };
     }
     return { cubeId: matches[0].cube.cubeId, name: args.cubeName };
@@ -261,21 +261,24 @@ export async function runLaunchAll(
     return 0;
   }
 
-  // 4b. server-liveness skip — drop seats the server reports EVICTED (gone) or
-  //     FROZEN (paused). Reuses the gh#882 per-seat probe (each seat's OWN token
-  //     → 410 DRONE_EVICTED / 423 DRONE_FROZEN). Relaunching an evicted seat
-  //     silently re-mints a fresh drone (the resurrection bug); a frozen seat
-  //     would mint a DUPLICATE (assimilate --here cannot re-attach a frozen
-  //     prior). So SKIP both; LAUNCH 'live' + 'indeterminate'.
+  // 4b. server-liveness skip — drop seats the server reports EVICTED (gone).
+  //     Reuses the gh#882 per-seat probe (each seat's OWN token → 410
+  //     DRONE_EVICTED). Relaunching an evicted seat silently re-mints a fresh
+  //     drone (the resurrection bug). So SKIP evicted; LAUNCH 'live' +
+  //     'indeterminate'.
   //
   //     Launch-vs-delete asymmetry (vs `borg cleanup`, which fails SAFE): a
   //     LAUNCH is constructive — a transient probe failure must NOT silently
   //     omit a real seat (that is a new silent-stall class), so 'indeterminate'
-  //     fails OPEN (launch anyway, with a note). Only an AUTHORITATIVE 410/423
-  //     skips. --force does NOT override this skip: an evicted/frozen seat is
-  //     server-authoritative gone/paused, whereas --force only re-launches a
+  //     fails OPEN (launch anyway, with a note). Only an AUTHORITATIVE 410
+  //     skips. --force does NOT override this skip: an evicted seat is
+  //     server-authoritative gone, whereas --force only re-launches a
   //     LOCK-live (seemingly-running) session.
   const launchable: DroneCandidate[] = [];
+  let evictedCount = 0;
+  let rejectedCount = 0;
+  let trustMismatchCount = 0;
+  let credentialRejectedCount = 0;
   for (const c of lockLaunchable) {
     let status: SeatStatus;
     try {
@@ -284,20 +287,61 @@ export async function runLaunchAll(
       status = 'indeterminate';
     }
     if (status === 'evicted') {
+      evictedCount += 1;
       deps.stderr(
         `skipping ${c.droneLabel} (${c.worktreeDir}): seat no longer in cube (evicted) — ` +
           `run \`borg cleanup --prune\` to remove the worktree, or \`borg assimilate\` to re-seat fresh.\n`
       );
       continue;
     }
-    if (status === 'frozen') {
+    if (status === 'rejected') {
+      rejectedCount += 1;
       deps.stderr(
-        `skipping ${c.droneLabel} (${c.worktreeDir}): seat frozen (subscription downgrade) — ` +
-          `paused, not relaunching; it resumes automatically when billing is restored.\n`
+        `skipping ${c.droneLabel} (${c.worktreeDir}): saved seat no longer accepted (revoked or ` +
+          `taken over). Recover from that worktree: ` +
+          `1) \`borg reset-local-seat --host ${c.apiUrl}\` (add --yes non-interactively) to clear ` +
+          `ONLY that worktree's saved seat; ` +
+          `2) ask the server operator to mint a fresh scoped invitation (the server stays running); ` +
+          `3) \`borg assimilate --host ${c.apiUrl} --enroll\`.\n`
       );
       continue;
     }
-    if (status === 'indeterminate') {
+    // SR-seven (b): trust-mismatch is TERMINAL — a pinned-identity change is not
+    // fixed by launching a doomed drone, so SKIP (never fail-open).
+    if (status === 'trust-mismatch') {
+      trustMismatchCount += 1;
+      deps.stderr(
+        `skipping ${c.droneLabel} (${c.worktreeDir}): could not verify the server identity ` +
+          `(pinned trust changed) — this is terminal. Confirm ${c.apiUrl} is the expected server; ` +
+          'if it was re-initialized, restore the expected identity before relaunching.\n'
+      );
+      continue;
+    }
+    // SR-seven (b): credential-rejected is a cause-accurate SKIP (not a fail-open
+    // launch) — the saved credential no longer authenticates; re-enroll first.
+    if (status === 'credential-rejected') {
+      credentialRejectedCount += 1;
+      deps.stderr(
+        `skipping ${c.droneLabel} (${c.worktreeDir}): saved credential was rejected (not a takeover) — ` +
+          `re-enroll from that worktree with \`borg assimilate --host ${c.apiUrl} --enroll\`.\n`
+      );
+      continue;
+    }
+    // CR5: every non-authoritative cause fails OPEN (launch anyway) with a
+    // cause-accurate note. Only the authoritative/terminal causes above skip.
+    if (status === 'unreachable') {
+      deps.stderr(
+        `note: could not reach ${c.droneLabel}'s server to confirm its seat (network/timeout) — launching anyway.\n`
+      );
+    } else if (status === 'endpoint-mismatch') {
+      deps.stderr(
+        `note: ${c.droneLabel}'s server did not recognize the drone endpoint (possible client/server version mismatch) — launching anyway.\n`
+      );
+    } else if (status === 'server-failure') {
+      deps.stderr(
+        `note: ${c.droneLabel}'s server returned an error while confirming its seat (transient) — launching anyway.\n`
+      );
+    } else if (status === 'indeterminate') {
       deps.stderr(
         `note: could not confirm ${c.droneLabel}'s seat is live (network/transient) — launching anyway.\n`
       );
@@ -305,8 +349,25 @@ export async function runLaunchAll(
     launchable.push(c);
   }
   if (launchable.length === 0) {
+    // Accurate cause counts — an all-rejected sweep must NOT claim "evicted"
+    // (and vice-versa). Only name a cause when at least one seat hit it.
+    const causes: string[] = [];
+    if (evictedCount > 0) {
+      causes.push(`${evictedCount} evicted`);
+    }
+    if (rejectedCount > 0) {
+      causes.push(`${rejectedCount} with a saved seat no longer accepted (revoked/taken over)`);
+    }
+    if (trustMismatchCount > 0) {
+      causes.push(`${trustMismatchCount} with a changed (terminal) server identity`);
+    }
+    if (credentialRejectedCount > 0) {
+      causes.push(`${credentialRejectedCount} with a rejected saved credential`);
+    }
+    const causeText = causes.length > 0 ? ` (${causes.join(', ')})` : '';
     deps.stdout(
-      `All ${lockLaunchable.length} discovered drone(s) for cube '${cubeName}' have evicted/frozen seats; nothing to launch.\n`
+      `All ${lockLaunchable.length} discovered drone(s) for cube '${cubeName}' are not launchable` +
+        `${causeText}; nothing to launch.\n`
     );
     return 0;
   }

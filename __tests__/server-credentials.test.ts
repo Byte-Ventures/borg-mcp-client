@@ -1,17 +1,19 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { makeFileBackend } from '../src/token-store.js';
 import {
   __setServerCredentialBackendForTest,
   activatePendingServerEnrollment,
   clearPendingServerCubeCreation,
-  clearServerSessionCredential,
   clearServerCredential,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
   getPendingServerEnrollment,
-  getServerSessionCredential,
   getServerCredential,
   getServerCredentialRecord,
-  storeServerSessionCredential,
   storeServerCredential,
 } from '../src/config.js';
 import type { TokenBackend } from '../src/token-store.js';
@@ -21,7 +23,7 @@ function memoryBackend(): { backend: TokenBackend; values: Map<string, string> }
   return {
     values,
     backend: {
-      name: 'keychain',
+      name: 'file',
       get: async (account) => values.get(account) ?? null,
       set: async (account, value) => { values.set(account, value); },
       delete: async (account) => { values.delete(account); },
@@ -69,6 +71,24 @@ describe('self-hosted server credential storage', () => {
     await expect(getServerCredential(origin, trustIdentity)).resolves.toBeNull();
     await clearServerCredential(origin, trustIdentity);
     expect(values).toHaveLength(0);
+  });
+
+  it('CR3b: concurrent credential writers on a REAL file backend all persist (locked RCW; no lost account)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'borg-cred-concurrency-'));
+    try {
+      __setServerCredentialBackendForTest(makeFileBackend(join(dir, 'credentials.json')));
+      // Distinct authorities → distinct accounts in ONE file. Without the store
+      // lock, each unlocked load→set→rename races and loses unrelated accounts.
+      const trusts = Array.from({ length: 8 }, (_, i) => `sha256:server-${i}`);
+      await Promise.all(
+        trusts.map((t) => storeServerCredential({ origin, trustIdentity: t, credential })),
+      );
+      for (const t of trusts) {
+        expect(await getServerCredential(origin, t)).toBe(credential);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('rejects non-canonical origins, control-bearing identities, and weak credentials', async () => {
@@ -135,7 +155,7 @@ describe('self-hosted server credential storage', () => {
   it('serializes N concurrent enrollment and cube-create tuple initializations', async () => {
     const values = new Map<string, string>();
     const backend: TokenBackend = {
-      name: 'keychain',
+      name: 'file',
       get: async (account) => values.get(account) ?? null,
       set: async (account, value) => {
         await new Promise((resolvePromise) => setTimeout(resolvePromise, 2));
@@ -207,80 +227,5 @@ describe('self-hosted server credential storage', () => {
       projectRoot: '/work/project-one',
     });
     expect(replacement.retryKey).not.toBe(first.retryKey);
-  });
-});
-
-describe('self-hosted server session credential storage', () => {
-  const binding = {
-    origin: 'https://localhost:8787',
-    trustIdentity: 'spki-sha256:server-a',
-    cubeId: '11111111-1111-4111-8111-111111111111',
-    droneId: '22222222-2222-4222-8222-222222222222',
-    generation: 7,
-  };
-  const credential = 'd'.repeat(43);
-
-  it('stores the bearer under an opaque generation-specific reference', async () => {
-    const { backend, values } = memoryBackend();
-    __setServerCredentialBackendForTest(backend);
-
-    const credentialRef = await storeServerSessionCredential({
-      ...binding,
-      credential,
-      expiresAt: '2026-07-14T15:00:00.000Z',
-    });
-
-    expect(credentialRef).toMatch(/^borg-server-session:[a-f0-9]{64}$/);
-    expect(credentialRef).not.toContain(binding.cubeId);
-    expect(credentialRef).not.toContain(binding.droneId);
-    await expect(getServerSessionCredential(credentialRef, binding)).resolves.toBe(credential);
-    expect([...values.values()].join('')).toContain(credential);
-  });
-
-  it('fails closed when identity or generation does not match the reference', async () => {
-    const { backend } = memoryBackend();
-    __setServerCredentialBackendForTest(backend);
-    const credentialRef = await storeServerSessionCredential({ ...binding, credential });
-
-    await expect(getServerSessionCredential(credentialRef, {
-      ...binding,
-      generation: binding.generation + 1,
-    })).resolves.toBeNull();
-    await expect(getServerSessionCredential(credentialRef, {
-      ...binding,
-      droneId: '33333333-3333-4333-8333-333333333333',
-    })).resolves.toBeNull();
-  });
-
-  it('removes only the selected generation', async () => {
-    const { backend, values } = memoryBackend();
-    __setServerCredentialBackendForTest(backend);
-    const oldRef = await storeServerSessionCredential({ ...binding, credential });
-    const newRef = await storeServerSessionCredential({
-      ...binding,
-      generation: binding.generation + 1,
-      credential: 'e'.repeat(43),
-    });
-
-    await clearServerSessionCredential(oldRef);
-    expect(values.has(oldRef)).toBe(false);
-    expect(values.has(newRef)).toBe(true);
-  });
-
-  it('rejects malformed bindings before touching the keychain', async () => {
-    const { backend, values } = memoryBackend();
-    __setServerCredentialBackendForTest(backend);
-
-    await expect(storeServerSessionCredential({
-      ...binding,
-      generation: 0,
-      credential,
-    })).rejects.toThrow(/generation/i);
-    await expect(storeServerSessionCredential({
-      ...binding,
-      cubeId: '../cube',
-      credential,
-    })).rejects.toThrow(/identity/i);
-    expect(values.size).toBe(0);
   });
 });

@@ -28,6 +28,70 @@ const FORBIDDEN_CONTENT = [
   { pattern: /\bpostgres(?:ql)?:\/\//i, description: 'database connection URL' },
   { pattern: /\b[a-z0-9-]+\.workers\.dev\b/i, description: 'Worker service URL' },
   { pattern: /(?:^|[^A-Za-z])(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)/m, description: 'local absolute path' },
+  // Local-only client (server-client-localhost-lan-only-no-cloud): no hosted
+  // Borg API/product URL may appear in ANY shipped file (dist, src, docs, README).
+  { pattern: /\/\/api\.borgmcp\.ai/i, description: 'hosted Borg API URL' },
+  { pattern: /borgmcp\.ai\/(?:dashboard|get-started|pricing|account|upgrade|subscribe)/i, description: 'hosted Borg product URL' },
+];
+// Operator-facing DOCS copy migrated OFF the OS keychain / `cubes.json` seat
+// model onto the local 0600-permission seat store. No shipped `.md` doc may
+// reintroduce the retired keychain/cubes.json recovery vocabulary. Checked ONLY
+// for `.md` files — internal `src`/`dist` comments legitimately name the retired
+// machinery (locks, refs, the historical project file) to describe the code.
+const DOCS_FORBIDDEN_CONTENT = [
+  { pattern: /\bkeychain\b/i, description: 'retired OS-keychain seat guidance' },
+  { pattern: /\bcubes\.json\b/i, description: 'retired cubes.json seat reference' },
+];
+// Item 7 (release-integrity): shipped `.md` docs must describe the PUBLISHED
+// borgmcp-shared@<pin> v2 release — never a stale numbered-server (`server #N`)
+// attribution, WIP release framing, or the RETIRED re-attach retry-tuple ROTATION
+// claim (the client bearer is the sole correlator, REUSED not rotated). Precise: the
+// accurate publish-timing "preview-only" statement and the accurate enrollment/
+// cube-creation `retry_key` / retry-tuple line are NOT flagged (they never say
+// "rotate", never numberer a server release, never sit "retry tuple" beside
+// "reattach"). The shared-version mismatch check is enforced against the PIN below.
+const DOCS_STALE_RELEASE_FRAMING = [
+  { pattern: /server #\d+/i, description: 'stale numbered-server release attribution' },
+  { pattern: /\bWIP\b/, description: 'stale WIP release framing' },
+  { pattern: /\brotat\w*\b[^.\n]{0,40}\bretry\b/i, description: 'retired re-attach retry-tuple rotation claim' },
+  { pattern: /reattach\w*[^.\n]{0,60}retry tuple/i, description: 'retired re-attach retry-tuple rotation claim' },
+];
+// Reachable-cloud runtime identifiers (OAuth / billing / dashboard / reports).
+// Checked ONLY in shipped code (dist `.js`/`.d.ts`, src `.ts`) — NOT in `.md`
+// docs, which legitimately DESCRIBE the removal of these surfaces.
+const CLOUD_RUNTIME_SYMBOLS = [
+  'authenticateWithGoogle',
+  'refreshIdToken',
+  'getValidToken',
+  'createSubscription',
+  'checkSubscriptionStatus',
+  'createBillingPortalSession',
+  'submitReport',
+  'fetchReports',
+  'startHealthBeatTick',
+  'borg_subscribe',
+  'borg_upgrade-subscription',
+  'borg_subscription_status',
+  'borg_open_dashboard',
+  'borg_report-friction',
+  'borg_reports',
+  'dashboard',
+  'registry.npmjs.org',
+  'fetchLatestBorgmcpVersion',
+];
+// Deleted cloud-only modules — no source or built mirror may ship.
+const DELETED_MODULE_BASENAMES = [
+  'auth',
+  'auth-recovery',
+  'authority',
+  'device-auth',
+  'health-beat',
+  'setup-authority',
+  'setup-action',
+  'subscription-retry',
+  'token-crypto',
+  'stale-version-check',
+  'get-started',
 ];
 
 async function walk(root, directory = root) {
@@ -126,6 +190,18 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
     const files = await walk(root);
     if (files.length > MAX_FILES) throw new Error(`Packed artifact contains too many files: ${files.length}.`);
 
+    // Item 7: read the shared PIN from the packed manifest so the shipped-doc
+    // version-reference check auto-tracks the pin (a doc naming any other version fails).
+    let pinnedShared;
+    try {
+      pinnedShared = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).dependencies?.['borgmcp-shared'];
+    } catch {
+      pinnedShared = undefined;
+    }
+    if (typeof pinnedShared !== 'string' || !/^\d+\.\d+\.\d+$/.test(pinnedShared)) {
+      throw new Error('Packed package.json is missing a valid borgmcp-shared pin.');
+    }
+
     let unpackedBytes = 0;
     const relativeFiles = new Set();
     for (const file of files) {
@@ -148,12 +224,55 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
           throw new Error(`Packed artifact contains ${forbidden.description}: ${path}`);
         }
       }
+      // Retired-seat-vocabulary guard, scoped to operator-facing `.md` docs only.
+      if (path.endsWith('.md')) {
+        for (const forbidden of DOCS_FORBIDDEN_CONTENT) {
+          if (forbidden.pattern.test(content)) {
+            throw new Error(`Packed artifact contains ${forbidden.description}: ${path}`);
+          }
+        }
+        // Item 7 release-integrity: no stale release framing, and every shipped
+        // `borgmcp-shared@X.Y.Z` reference must equal the pin.
+        for (const forbidden of DOCS_STALE_RELEASE_FRAMING) {
+          if (forbidden.pattern.test(content)) {
+            throw new Error(`Packed artifact contains ${forbidden.description}: ${path}`);
+          }
+        }
+        for (const match of content.matchAll(/borgmcp-shared@(\d+\.\d+\.\d+)/g)) {
+          if (match[1] !== pinnedShared) {
+            throw new Error(`Packed doc references borgmcp-shared@${match[1]} != pinned ${pinnedShared}: ${path}`);
+          }
+        }
+      }
+      // Reachable-cloud runtime symbols may only be absent from SHIPPED CODE.
+      // (.md docs describe the removal and are intentionally exempt here.)
+      if (/\.(?:js|ts)$/.test(path) || path.endsWith('.d.ts')) {
+        for (const symbol of CLOUD_RUNTIME_SYMBOLS) {
+          if (content.includes(symbol)) {
+            throw new Error(`Packed artifact ships a reachable-cloud runtime symbol '${symbol}': ${path}`);
+          }
+        }
+      }
       unpackedBytes += metadata.size;
       relativeFiles.add(path);
     }
     if (unpackedBytes > MAX_UNPACKED_BYTES) throw new Error(`Unpacked artifact exceeds ${MAX_UNPACKED_BYTES} bytes.`);
     for (const required of REQUIRED_FILES) {
       if (!relativeFiles.has(required)) throw new Error(`Packed artifact is missing ${required}.`);
+    }
+    // No deleted cloud-only module may ship as source or built mirror.
+    for (const base of DELETED_MODULE_BASENAMES) {
+      for (const candidate of [
+        `src/${base}.ts`,
+        `dist/${base}.js`,
+        `dist/${base}.d.ts`,
+        `dist/${base}.js.map`,
+        `dist/${base}.d.ts.map`,
+      ]) {
+        if (relativeFiles.has(candidate)) {
+          throw new Error(`Packed artifact ships a deleted cloud-only module: ${candidate}`);
+        }
+      }
     }
 
     const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));

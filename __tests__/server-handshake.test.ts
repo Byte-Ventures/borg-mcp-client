@@ -1,39 +1,61 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   DEFAULT_LOCAL_SERVER_ORIGIN,
-  attachBorgServer,
+  sendBorgServerAttach,
   connectEnrolledBorgServer,
   createBorgServerCube,
   enrollBorgServer,
   probeBorgServer,
-  negotiateBorgServer,
+  preflightBorgServerTag,
   resumeBorgServerEnrollment,
 } from '../src/server-handshake.js';
+import {
+  __setServerCredentialBackendForTest,
+} from '../src/config.js';
+import {
+  clearSeat,
+  mintPendingSeat,
+  seatRef,
+  type SeatBinding,
+} from '../src/seats.js';
+import type { TokenBackend } from '../src/token-store.js';
+import type { ServerSessionOperation } from '../src/config.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
-const RETRY_KEY = '44444444-4444-4444-8444-444444444444';
+const SESSION_ID = '99999999-9999-4999-8999-999999999999';
 
-const protocolInfo = {
-  protocol_version: '1',
-  package: { name: 'borgmcp-shared', version: '0.2.0' },
-  capabilities: [
-    'coordination.core',
-    'auth.bearer',
-    'auth.revocation',
-    'auth.retry-safe-enrollment',
-    'scope.cube-isolation',
-    'transport.tls',
-    'authority.no-cloud-fallback',
-  ],
-  limits: {
-    max_request_bytes: 65_536,
-    max_log_message_bytes: 10_240,
-    max_read_page_size: 500,
-    max_replay_page_size: 200,
-  },
+const OPERATION: ServerSessionOperation = {
+  projectRoot: '/work/project-one',
+  kind: 'seat',
+  operationKey: 'current-worktree',
 };
+
+const SEAT_INPUT = {
+  origin: 'https://server.example.com',
+  trustIdentity: 'spki-sha256:server-a',
+  cubeId: CUBE_ID,
+  roleId: ROLE_ID,
+  operation: OPERATION,
+};
+const digestOf = (bearer: string) => createHash('sha256').update(bearer).digest('hex');
+// The worktree binding + display supplied at FINALIZE (activate+bind).
+const BINDING: SeatBinding = {
+  worktree: '/work/project-one',
+  name: 'local-cube',
+  droneLabel: 'builder-1',
+  roleName: 'Builder',
+  roleClass: 'worker',
+};
+
+// The credential-free protocol preflight returns ONLY the exact tag.
+const tagPreflightBody = () =>
+  new Response(JSON.stringify({ protocol_version: '2' }), { status: 200 });
 
 describe('self-hosted server handshake', () => {
   it('tracks the server-owned loopback default from the Part 2 service contract', () => {
@@ -53,69 +75,51 @@ describe('self-hosted server handshake', () => {
     await expect(probeBorgServer('https://localhost:8787', fetchImpl as typeof fetch)).resolves.toBe(false);
   });
 
-  it('authenticates, decodes the envelope, and enforces mandatory capabilities', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '1',
-      request_id: 'request-12345678',
-      payload: protocolInfo,
-    }), { status: 200 }));
+  it('preflights the protocol tag credential-free (no Authorization) and decodes only the tag', async () => {
+    const fetchImpl = vi.fn(async () => tagPreflightBody());
 
-    await expect(negotiateBorgServer(
+    await expect(preflightBorgServerTag(
       'https://server.example.com',
-      'c'.repeat(43),
       fetchImpl as typeof fetch,
-    )).resolves.toMatchObject({ package: { name: 'borgmcp-shared' } });
-    expect(fetchImpl).toHaveBeenCalledWith('https://server.example.com/api/protocol', expect.objectContaining({
-      redirect: 'error',
-      headers: expect.objectContaining({ Authorization: `Bearer ${'c'.repeat(43)}` }),
-    }));
+    )).resolves.toEqual({ protocol_version: '2' });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe('https://server.example.com/api/protocol');
+    expect(init).toMatchObject({ method: 'GET', redirect: 'error' });
+    // Credential-free: no bearer/cookie/authorization leaves the client.
+    expect(init?.headers).not.toHaveProperty('Authorization');
   });
 
-  it('fails closed for missing security capabilities and malformed envelopes', async () => {
-    const withoutRevocation = {
-      ...protocolInfo,
-      capabilities: protocolInfo.capabilities.filter((capability) => capability !== 'auth.revocation'),
-    };
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '1',
-      request_id: 'request-12345678',
-      payload: withoutRevocation,
-    }), { status: 200 }));
+  it('fails closed on a mismatched tag or any extra field before attach', async () => {
+    const wrongTag = vi.fn(async () => new Response(JSON.stringify({ protocol_version: '1' }), { status: 200 }));
+    await expect(preflightBorgServerTag('https://server.example.com', wrongTag as typeof fetch))
+      .rejects.toThrow(/Unsupported protocol version\.?/);
 
-    await expect(negotiateBorgServer('https://server.example.com', 'c'.repeat(43), fetchImpl as typeof fetch))
-      .rejects.toThrow(/auth\.revocation/);
-
-    fetchImpl.mockResolvedValueOnce(new Response(JSON.stringify({ ...protocolInfo }), { status: 200 }));
-    await expect(negotiateBorgServer('https://server.example.com', 'c'.repeat(43), fetchImpl as typeof fetch))
+    const extraField = vi.fn(async () => new Response(
+      JSON.stringify({ protocol_version: '2', package: { name: 'borgmcp-shared' } }),
+      { status: 200 },
+    ));
+    await expect(preflightBorgServerTag('https://server.example.com', extraField as typeof fetch))
       .rejects.toThrow(/Unknown field "package"/);
   });
 
-  it('does not follow redirects or expose response bodies in auth errors', async () => {
-    const fetchImpl = vi.fn(async () => new Response('credential leaked in diagnostic', { status: 401 }));
+  it('does not follow redirects or expose the response body on a preflight failure', async () => {
+    const fetchImpl = vi.fn(async () => new Response('server fingerprint leaked in diagnostic', { status: 401 }));
 
-    await expect(negotiateBorgServer('https://server.example.com', 'c'.repeat(43), fetchImpl as typeof fetch))
-      .rejects.toThrow('stored Borg server credential was rejected');
+    await expect(preflightBorgServerTag('https://server.example.com', fetchImpl as typeof fetch))
+      .rejects.toThrow('Borg server protocol preflight failed (HTTP 401)');
     expect(fetchImpl).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ redirect: 'error' }));
   });
 
-  it('rejects header-unsafe credentials and oversized protocol bodies before decoding', async () => {
+  it('rejects an oversized protocol preflight body before decoding', async () => {
     const fetchImpl = vi.fn(async () => new Response('x'.repeat(65_537), { status: 200 }));
 
-    await expect(negotiateBorgServer('https://server.example.com', `${'c'.repeat(43)}\n`, fetchImpl as typeof fetch))
-      .rejects.toThrow(/credential is invalid/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
-
-    await expect(negotiateBorgServer('https://server.example.com', 'c'.repeat(43), fetchImpl as typeof fetch))
+    await expect(preflightBorgServerTag('https://server.example.com', fetchImpl as typeof fetch))
       .rejects.toThrow(/response limit/i);
   });
 
   it('loads only the credential bound to the verified server identity', async () => {
     const loadCredential = vi.fn(async () => 'c'.repeat(43));
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '1',
-      request_id: 'request-12345678',
-      payload: protocolInfo,
-    }), { status: 200 }));
+    const fetchImpl = vi.fn(async () => tagPreflightBody());
 
     await expect(connectEnrolledBorgServer(
       'https://server.example.com',
@@ -135,26 +139,24 @@ describe('self-hosted server handshake', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('enrolls through a versioned body, negotiates, then stores the bound credential', async () => {
+  it('preflights the tag FIRST, then enrolls through a versioned body and stores the bound credential', async () => {
     const invitation = 'i'.repeat(43);
     const credential = 'c'.repeat(43);
     const retryKey = '55555555-5555-4555-8555-555555555555';
     const clientId = '66666666-6666-4666-8666-666666666666';
+    // CR fb4d6eba: the credential-free preflight is the FIRST call; the
+    // enrollment POST is the second, only after the exact-tag preflight passes.
     const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '1',
+        protocol_version: '2',
         request_id: 'enroll-request-1',
         payload: {
           purpose: 'owner',
           client_id: clientId,
           server_capabilities: ['create_cube'],
         },
-      }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '1',
-        request_id: 'protocol-request-1',
-        payload: protocolInfo,
-      }), { status: 200 }));
+      }), { status: 201 }));
     const prepareEnrollment = vi.fn(async () => ({
       origin: 'https://server.example.com',
       trustIdentity: 'sha256:server-a',
@@ -181,12 +183,18 @@ describe('self-hosted server handshake', () => {
       serverCapabilities: ['create_cube'],
     });
 
-    const [enrollmentUrl, enrollmentInit] = fetchImpl.mock.calls[0];
+    // Call 0 is the credential-free preflight.
+    const [protocolUrl, protocolInit] = fetchImpl.mock.calls[0];
+    expect(protocolUrl).toBe('https://server.example.com/api/protocol');
+    expect(protocolInit).toMatchObject({ method: 'GET', redirect: 'error' });
+    expect(protocolInit?.headers).not.toHaveProperty('Authorization');
+    // Call 1 is the enrollment POST.
+    const [enrollmentUrl, enrollmentInit] = fetchImpl.mock.calls[1];
     expect(enrollmentUrl).toBe('https://server.example.com/api/enrollment/exchange');
     expect(enrollmentInit).toMatchObject({ method: 'POST', redirect: 'error' });
     const body = JSON.parse(String(enrollmentInit?.body));
     expect(body).toMatchObject({
-      protocol_version: '1',
+      protocol_version: '2',
       payload: {
         invitation,
         retry_key: retryKey,
@@ -203,20 +211,81 @@ describe('self-hosted server handshake', () => {
       clientId,
       serverCapabilities: ['create_cube'],
     });
+    // The preflight runs before the pending credential is prepared/persisted,
+    // which in turn runs before the enrollment POST; activation is last.
+    expect(fetchImpl.mock.invocationCallOrder[0]).toBeLessThan(
+      prepareEnrollment.mock.invocationCallOrder[0],
+    );
     expect(prepareEnrollment.mock.invocationCallOrder[0]).toBeLessThan(
-      fetchImpl.mock.invocationCallOrder[0],
+      fetchImpl.mock.invocationCallOrder[1],
     );
     expect(activateEnrollment.mock.invocationCallOrder[0]).toBeGreaterThan(
       fetchImpl.mock.invocationCallOrder[1],
     );
   });
 
-  it('does not send an invitation when the pending keychain write fails', async () => {
-    const fetchImpl = vi.fn();
+  it('rejects an incompatible server at the preflight before any credential prepare, POST, or activation (first enrollment)', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ protocol_version: '1' }), { status: 200 }));
+    const prepareEnrollment = vi.fn();
+    const activateEnrollment = vi.fn();
+    const clearPendingEnrollment = vi.fn();
+
     await expect(enrollBorgServer(
       'https://server.example.com',
       'sha256:server-a',
       'i'.repeat(43),
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        prepareEnrollment: prepareEnrollment as never,
+        activateEnrollment,
+        clearPendingEnrollment,
+      },
+    )).rejects.toThrow();
+
+    // Exactly one request — the preflight — and no credential/secret work.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    expect(prepareEnrollment).not.toHaveBeenCalled();
+    expect(activateEnrollment).not.toHaveBeenCalled();
+    expect(clearPendingEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('rejects an incompatible server at the preflight on resume, with zero POST/activation', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ protocol_version: '1' }), { status: 200 }));
+    const loadPendingEnrollment = vi.fn(async () => ({
+      origin: 'https://server.example.com',
+      trustIdentity: 'sha256:server-a',
+      invitation: 'i'.repeat(43),
+      retryKey: '55555555-5555-4555-8555-555555555555',
+      credential: 'c'.repeat(43),
+      clientName: 'operator-laptop',
+    }));
+    const activateEnrollment = vi.fn();
+
+    await expect(resumeBorgServerEnrollment(
+      'https://server.example.com',
+      'sha256:server-a',
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadPendingEnrollment,
+        activateEnrollment,
+      },
+    )).rejects.toThrow();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    expect(activateEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('does not send an invitation when the pending keychain write fails', async () => {
+    // The credential-free preflight is the only permitted request; when the
+    // pending keychain write then fails, no invitation-bearing POST is sent.
+    const invitation = 'i'.repeat(43);
+    const fetchImpl = vi.fn(async () => tagPreflightBody());
+    await expect(enrollBorgServer(
+      'https://server.example.com',
+      'sha256:server-a',
+      invitation,
       {
         fetchImpl: fetchImpl as typeof fetch,
         prepareEnrollment: vi.fn(async () => {
@@ -224,15 +293,22 @@ describe('self-hosted server handshake', () => {
         }),
       },
     )).rejects.toThrow('keychain locked');
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    for (const [, init] of fetchImpl.mock.calls) {
+      expect(String((init as RequestInit | undefined)?.body ?? '')).not.toContain(invitation);
+    }
   });
 
   it('classifies a rejected invitation without reading or storing the response body', async () => {
     const reflectedInvitation = 'i'.repeat(43);
-    const fetchImpl = vi.fn(async () => new Response(
-      `reflected ${reflectedInvitation}`,
-      { status: 401 },
-    ));
+    // Preflight succeeds first; the enrollment POST is then rejected 401.
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
+      .mockResolvedValueOnce(new Response(
+        `reflected ${reflectedInvitation}`,
+        { status: 401 },
+      ));
     const pending = {
       origin: 'https://server.example.com',
       trustIdentity: 'sha256:server-a',
@@ -278,22 +354,19 @@ describe('self-hosted server handshake', () => {
       credential: 'c'.repeat(43),
       clientName: 'operator-laptop',
     };
+    // Preflight is call 0; the ambiguous enrollment POST is retried at calls 1-2.
     const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
       .mockRejectedValueOnce(new Error('response lost'))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '1',
+        protocol_version: '2',
         request_id: 'enroll-retry-1',
         payload: {
           purpose: 'owner',
           client_id: '66666666-6666-4666-8666-666666666666',
           server_capabilities: ['create_cube'],
         },
-      }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '1',
-        request_id: 'protocol-retry-1',
-        payload: protocolInfo,
-      }), { status: 200 }));
+      }), { status: 201 }));
     const activateEnrollment = vi.fn(async () => {});
 
     await enrollBorgServer(
@@ -308,8 +381,9 @@ describe('self-hosted server handshake', () => {
       },
     );
 
-    const first = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
-    const retry = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    const first = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
+    const retry = JSON.parse(String(fetchImpl.mock.calls[2][1]?.body));
     expect(retry.payload).toEqual(first.payload);
     expect(retry.payload).toEqual({
       invitation: pending.invitation,
@@ -329,21 +403,18 @@ describe('self-hosted server handshake', () => {
       credential: 'c'.repeat(43),
       clientName: 'operator-laptop',
     };
+    // Preflight is call 0 (credential-free GET); the enrollment POST is call 1.
     const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '1',
+        protocol_version: '2',
         request_id: 'enroll-resume-1',
         payload: {
           purpose: 'owner',
           client_id: '66666666-6666-4666-8666-666666666666',
           server_capabilities: ['create_cube'],
         },
-      }), { status: 201 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '1',
-        request_id: 'protocol-resume-1',
-        payload: protocolInfo,
-      }), { status: 200 }));
+      }), { status: 201 }));
     const activateEnrollment = vi.fn(async () => {});
     const onPending = vi.fn();
 
@@ -362,7 +433,8 @@ describe('self-hosted server handshake', () => {
     expect(onPending.mock.invocationCallOrder[0]).toBeLessThan(
       fetchImpl.mock.invocationCallOrder[0],
     );
-    const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://server.example.com/api/protocol');
+    const request = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
     expect(request.payload).toEqual({
       invitation: pending.invitation,
       retry_key: pending.retryKey,
@@ -395,7 +467,7 @@ describe('self-hosted server handshake', () => {
     const fetchImpl = vi.fn()
       .mockRejectedValueOnce(new Error('response lost'))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '1',
+        protocol_version: '2',
         request_id: 'cube-retry-1',
         payload: {
           cube_id: CUBE_ID,
@@ -451,37 +523,42 @@ describe('self-hosted server handshake', () => {
     expect(deniedFetch).not.toHaveBeenCalled();
   });
 
-  it('attaches with a persisted retry key and keychains the returned generation', async () => {
-    const sessionToken = 's'.repeat(43);
+  // SR-seven (c): the pre-composite attach wrappers are DELETED. These tests
+  // exercise the ONLY surviving session-credential send path, sendBorgServerAttach
+  // (network-only; the bearer is minted by the cube-lock composite and passed in).
+  it('sends the ALREADY-MINTED pending bearer and its activate() flips it in place', async () => {
+    const bearer = 's'.repeat(43);
+    const expiresAt = '2026-07-14T16:00:00.000Z';
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '1',
+      protocol_version: '2',
       request_id: 'attach-response-1',
       payload: {
+        result: 'created',
         cube: { id: CUBE_ID, name: 'local-cube' },
         role: { id: ROLE_ID, name: 'Builder', role_class: 'worker' },
         drone: { id: DRONE_ID, label: 'builder-1' },
-        session: {
-          token: sessionToken,
-          expires_at: '2026-07-14T16:00:00.000Z',
-          generation: 3,
-        },
-        reattached: false,
+        session: { id: SESSION_ID, expires_at: expiresAt },
       },
     }), { status: 201 }));
-    const storeSessionCredential = vi.fn(async () =>
-      `borg-server-session:${'a'.repeat(64)}`
-    );
+    const activateAndBind = vi.fn(async () => 'activated' as const);
+    const expectedRef = seatRef(SEAT_INPUT);
 
-    await expect(attachBorgServer(
+    const prepared = await sendBorgServerAttach(
       'https://server.example.com',
       'spki-sha256:server-a',
       'p'.repeat(43),
-      { cubeId: CUBE_ID, roleId: ROLE_ID, retryKey: RETRY_KEY },
-      { fetchImpl: fetchImpl as typeof fetch, storeSessionCredential },
-    )).resolves.toMatchObject({
+      { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      bearer,
+      { fetchImpl: fetchImpl as typeof fetch, activateAndBind },
+    );
+    expect(prepared).toMatchObject({
+      result: 'created',
       drone: { id: DRONE_ID },
-      session: { generation: 3, credentialRef: expect.stringMatching(/^borg-server-session:/) },
+      credentialRef: expectedRef,
+      session: { sessionId: SESSION_ID, expiresAt },
     });
+    // activate(binding) (the FINALIZE merged activate+bind) returns the typed outcome.
+    await expect(prepared.activate(BINDING)).resolves.toBe('activated');
 
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://server.example.com/api/client/attach');
@@ -490,70 +567,179 @@ describe('self-hosted server handshake', () => {
       redirect: 'error',
       headers: expect.objectContaining({ Authorization: `Bearer ${'p'.repeat(43)}` }),
     });
+    // The passed-in pending bearer is the session credential; the parent
+    // enrollment credential is only the Authorization bearer.
     expect(JSON.parse(String(init?.body))).toMatchObject({
-      protocol_version: '1',
-      payload: {
-        cube_id: CUBE_ID,
-        role_id: ROLE_ID,
-        retry_key: RETRY_KEY,
-      },
+      protocol_version: '2',
+      payload: { cube_id: CUBE_ID, role_id: ROLE_ID, session_credential: bearer },
     });
-    expect(storeSessionCredential).toHaveBeenCalledWith({
+    expect(activateAndBind).toHaveBeenCalledWith(expect.objectContaining({
       origin: 'https://server.example.com',
       trustIdentity: 'spki-sha256:server-a',
       cubeId: CUBE_ID,
+      roleId: ROLE_ID,
+      operation: OPERATION,
       droneId: DRONE_ID,
-      generation: 3,
-      credential: sessionToken,
-      expiresAt: '2026-07-14T16:00:00.000Z',
-    });
+      sessionId: SESSION_ID,
+      expiresAt,
+      // CR #2: the EXACT bearer sent is pinned by digest so a same-ref replacement
+      // cannot be activated with this response's server metadata.
+      expectedPendingDigest: digestOf(bearer),
+      // The worktree binding + display land atomically WITH activation.
+      worktree: BINDING.worktree,
+      name: BINDING.name,
+      droneLabel: BINDING.droneLabel,
+    }));
   });
 
-  it('does not return attach metadata when the keychain write fails', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '1',
-      request_id: 'attach-response-2',
+  it('CR #2: activate(binding) never binds server metadata onto a same-ref replacement — returns typed `replaced`/`missing`', async () => {
+    const fetchImpl = () => vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '2',
+      request_id: 'attach-r',
       payload: {
+        result: 'created',
         cube: { id: CUBE_ID, name: 'local-cube' },
         role: { id: ROLE_ID, name: 'Builder' },
         drone: { id: DRONE_ID, label: 'builder-1' },
-        session: { token: 's'.repeat(43), expires_at: null, generation: 4 },
-        reattached: true,
+        session: { id: SESSION_ID, expires_at: '2026-07-20T00:00:00.000Z' },
       },
-    }), { status: 200 }));
-
-    await expect(attachBorgServer(
-      'https://server.example.com',
-      'spki-sha256:server-a',
-      'p'.repeat(43),
-      { cubeId: CUBE_ID, roleId: ROLE_ID, retryKey: RETRY_KEY },
-      {
-        fetchImpl: fetchImpl as typeof fetch,
-        storeSessionCredential: vi.fn(async () => {
-          throw new Error('keychain locked');
-        }),
-      },
-    )).rejects.toThrow('keychain locked');
+    }), { status: 201 }));
+    const activateWith = async (outcome: 'replaced' | 'missing') => {
+      const prepared = await sendBorgServerAttach(
+        'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
+        { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+        's'.repeat(43),
+        { fetchImpl: fetchImpl() as typeof fetch, activateAndBind: vi.fn(async () => outcome) },
+      );
+      return prepared.activate(BINDING);
+    };
+    // The merged activate+bind fails CLOSED with a typed outcome (never throws for a race).
+    await expect(activateWith('replaced')).resolves.toBe('replaced');
+    await expect(activateWith('missing')).resolves.toBe('missing');
   });
 
-  it('redacts retry keys and response bodies from attach failures', async () => {
-    const reflected = `${RETRY_KEY} ${'s'.repeat(43)}`;
-    const fetchImpl = vi.fn(async () => new Response(reflected, { status: 500 }));
+  it('activate(binding) surfaces a store failure (the FINALIZE leaves the PENDING record)', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '2',
+      request_id: 'attach-response-2',
+      payload: {
+        result: 'reused',
+        cube: { id: CUBE_ID, name: 'local-cube' },
+        role: { id: ROLE_ID, name: 'Builder' },
+        drone: { id: DRONE_ID, label: 'builder-1' },
+        session: { id: SESSION_ID, expires_at: '2026-07-14T16:00:00.000Z' },
+      },
+    }), { status: 200 }));
+    const prepared = await sendBorgServerAttach(
+      'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
+      { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      's'.repeat(43),
+      { fetchImpl: fetchImpl as typeof fetch, activateAndBind: vi.fn(async () => { throw new Error('store locked'); }) },
+    );
+    await expect(prepared.activate(BINDING)).rejects.toThrow('store locked');
+  });
 
+  it('redacts the session bearer and response body from attach failures', async () => {
+    const bearer = 's'.repeat(43);
+    const reflected = `${bearer} leaked`;
+    const fetchImpl = vi.fn(async () => new Response(reflected, { status: 500 }));
     let error: unknown;
     try {
-      await attachBorgServer(
-        'https://server.example.com',
-        'spki-sha256:server-a',
-        'p'.repeat(43),
-        { cubeId: CUBE_ID, roleId: ROLE_ID, retryKey: RETRY_KEY },
+      await sendBorgServerAttach(
+        'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
+        { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+        bearer,
         { fetchImpl: fetchImpl as typeof fetch },
       );
     } catch (caught) {
       error = caught;
     }
     expect((error as Error).message).toBe('Borg server attach failed (HTTP 500)');
-    expect((error as Error).message).not.toContain(RETRY_KEY);
+    expect((error as Error).message).not.toContain(bearer);
     expect((error as Error).message).not.toContain(reflected);
+  });
+
+  it('classifies a typed SESSION_REJECTED takeover distinctly from a credential rejection', async () => {
+    const rejectedWith = (code: string) => vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '2',
+      error: { code, message: 'rejected' },
+    }), { status: 401 }));
+    const send = (fetchImpl: typeof fetch) => sendBorgServerAttach(
+      'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
+      { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      's'.repeat(43),
+      { fetchImpl },
+    );
+    // A typed takeover rejection surfaces its own code...
+    await expect(send(rejectedWith('SESSION_REJECTED') as typeof fetch))
+      .rejects.toMatchObject({ code: 'SESSION_REJECTED' });
+    // ...while any other 401 falls back to the generic credential rejection.
+    await expect(send(rejectedWith('AUTH_INVALID') as typeof fetch))
+      .rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+  });
+});
+
+// SR-seven (a): even on the NO-EXPECTATION-DIGEST attach paths (first-enroll
+// ABSENT, resume/remint EXACT-ref-only), the merged activate+bind is still
+// digest-guarded by the SENT bearer's digest. These REAL single-store integration
+// tests drive the full sendBorgServerAttach → prepared.activate(binding) (real
+// activateAndBindSeat) and swap/delete the record between send and activate,
+// proving it fails closed (replaced/missing) with no expectation digest in play.
+describe('sendBorgServerAttach real activate fails closed with NO expectation digest (SR-seven a)', () => {
+  const ORIGIN = 'https://server.example.com';
+  const TRUST = 'sha256:server-a';
+  const SEAT = { origin: ORIGIN, trustIdentity: TRUST, cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION };
+
+  const originalHome = process.env.HOME;
+  const homeFixtures: string[] = [];
+  let seats: typeof import('../src/seats.js');
+  beforeEach(async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'borg-sh-seat-'));
+    homeFixtures.push(dir);
+    process.env.HOME = dir;
+    vi.resetModules();
+    seats = await import('../src/seats.js');
+  });
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    for (const f of homeFixtures.splice(0)) rmSync(f, { recursive: true, force: true });
+    vi.resetModules();
+  });
+
+  const attachOk = () => vi.fn(async () => new Response(JSON.stringify({
+    protocol_version: '2', request_id: 'attach-resp',
+    payload: {
+      result: 'reused',
+      cube: { id: CUBE_ID, name: 'local-cube' },
+      role: { id: ROLE_ID, name: 'Builder' },
+      drone: { id: DRONE_ID, label: 'builder-1' },
+      session: { id: SESSION_ID, expires_at: '2026-07-20T00:00:00.000Z' },
+    },
+  }), { status: 200 }));
+
+  it('REPLACED: a same-ref replacement between send and activate is never activated (no expectation digest)', async () => {
+    const pending = await seats.mintPendingSeat({ ...SEAT, credential: 'original-'.padEnd(43, 'a') });
+    const prepared = await sendBorgServerAttach(
+      ORIGIN, TRUST, 'p'.repeat(43), { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      pending.credential, { fetchImpl: attachOk() as typeof fetch, activateAndBind: seats.activateAndBindSeat },
+    );
+    // Between send and activate, the record is swapped for a FRESH bearer (a
+    // reset+re-enroll under the same deterministic ref) — no digest is pinned in
+    // the expectation; the SENT bearer's digest is the only guard.
+    await seats.clearSeat(seats.seatRef(SEAT));
+    const fresh = await seats.mintPendingSeat({ ...SEAT, credential: 'fresh-'.padEnd(43, 'q') });
+    expect(fresh.credential).not.toBe(pending.credential);
+    await expect(prepared.activate(BINDING)).resolves.toBe('replaced');
+  });
+
+  it('MISSING: a record deleted between send and activate is never activated (no expectation digest)', async () => {
+    const pending = await seats.mintPendingSeat({ ...SEAT, credential: 'original-'.padEnd(43, 'a') });
+    const prepared = await sendBorgServerAttach(
+      ORIGIN, TRUST, 'p'.repeat(43), { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      pending.credential, { fetchImpl: attachOk() as typeof fetch, activateAndBind: seats.activateAndBindSeat },
+    );
+    await seats.clearSeat(seats.seatRef(SEAT)); // a concurrent reset won
+    await expect(prepared.activate(BINDING)).resolves.toBe('missing');
   });
 });

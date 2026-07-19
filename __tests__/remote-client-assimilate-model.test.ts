@@ -1,141 +1,106 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const HOSTED_API_URL = 'https://api.borgmcp.ai';
+/**
+ * assimilate() model handling.
+ *
+ * gh#896 (defense-in-depth) is fully preserved: a malformed model descriptor is
+ * rejected client-side BEFORE any network attempt. gh#890 asserted that a valid
+ * model was copied onto the CLOUD /api/assimilate POST body; after cloud
+ * severance assimilate() is not carried by the local server — /api/assimilate is
+ * outside the local /api/cubes surface, so it fails closed with "does not
+ * support" (local enrollment goes through the server handshake, not this path).
+ * These tests pin BOTH: the descriptor gate still guards valid vs. malformed
+ * input, and every well-formed selector fails closed at the transport boundary
+ * without leaking to a cloud route.
+ */
 
-vi.mock('../src/config.js', () => ({
-  getIdToken: vi.fn(async () => 'id-token'),
-  getRefreshToken: vi.fn(async () => null),
-  clearTokens: vi.fn(async () => {}),
-}));
+const CUBE_ID = '11111111-1111-4111-8111-111111111111';
+const DRONE_ID = '33333333-3333-4333-8333-333333333333';
+const ORIGIN = 'https://localhost:8787';
+const TRUST_IDENTITY = 'spki-sha256:test-server';
+const SESSION = 's'.repeat(43);
 
-vi.mock('../src/auth.js', () => ({
-  refreshIdToken: vi.fn(async () => {}),
-  RefreshTokenInvalidError: class RefreshTokenInvalidError extends Error {},
-  RefreshTransientError: class RefreshTransientError extends Error {},
-}));
-
-// gh#890: the selector carried `model` from assimilate-deps but remote-client
-// never copied it onto the /api/assimilate POST body — drones.model stayed NULL
-// even though the server accepts + persists it. These tests pin the wire body.
-describe('assimilate() model on the /api/assimilate POST body (gh#890)', () => {
-  let fetchSpy: ReturnType<typeof vi.spyOn>;
+describe('assimilate() model descriptor gate and local transport (gh#890 / gh#896)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          cube: {
-            id: 'cube-1',
-            owner_id: 'owner-1',
-            name: 'borg-mcp',
-            cube_directive: '',
-            created_at: '2026-06-20T00:00:00.000Z',
-            updated_at: '2026-06-20T00:00:00.000Z',
-          },
-          role: {
-            id: 'role-1',
-            cube_id: 'cube-1',
-            name: 'Builder',
-            short_description: '',
-            detailed_description: '',
-            is_default: true,
-            is_human_seat: false,
-            role_class: 'worker',
-            created_at: '2026-06-20T00:00:00.000Z',
-          },
-          drone: {
-            id: 'drone-1',
-            cube_id: 'cube-1',
-            role_id: 'role-1',
-            label: 'one-of-one-builder',
-            last_seen: '2026-06-20T00:00:00.000Z',
-            hostname: null,
-            created_at: '2026-06-20T00:00:00.000Z',
-          },
-          sessionToken: 'session-token',
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      )
-    );
+    vi.resetModules();
+    fetchSpy = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => ({
+        identity: TRUST_IDENTITY,
+        fetchImpl: fetchSpy,
+      })),
+    }));
+    vi.doMock('../src/cubes.js', () => ({
+      getActiveCube: vi.fn(async () => ({
+        cubeId: CUBE_ID,
+        droneId: DRONE_ID,
+        sessionToken: SESSION,
+        apiUrl: ORIGIN,
+        serverTrustIdentity: TRUST_IDENTITY,
+      })),
+    }));
   });
 
   afterEach(() => {
-    fetchSpy.mockRestore();
+    vi.resetModules();
   });
 
-  it('includes model on the wire body when the selector carries it', async () => {
+  // gh#896: reject a malformed descriptor client-side BEFORE the transport
+  // (belt-and-suspenders over the upstream flag-parse + server gate).
+  it('rejects a malformed model descriptor BEFORE any network attempt (throws, no fetch)', async () => {
     const { assimilate } = await import('../src/remote-client.js');
-
-    await assimilate(
-      { cube_id: 'cube-1', role_id: 'role-1', model: 'ollama:qwen3:q4_K_M' },
-      HOSTED_API_URL,
-      null,
-      'claude'
-    );
-
-    const [, init] = fetchSpy.mock.calls[0];
-    const body = JSON.parse(init!.body as string);
-    expect(body.model).toBe('ollama:qwen3:q4_K_M');
-  });
-
-  it('omits model from the wire body when the selector has none', async () => {
-    const { assimilate } = await import('../src/remote-client.js');
-
-    await assimilate(
-      { cube_id: 'cube-1', role_id: 'role-1' },
-      HOSTED_API_URL,
-      null,
-      'claude'
-    );
-
-    const [, init] = fetchSpy.mock.calls[0];
-    const body = JSON.parse(init!.body as string);
-    expect('model' in body).toBe(false);
-  });
-
-  it('omits model when the selector value is explicitly null', async () => {
-    const { assimilate } = await import('../src/remote-client.js');
-
-    await assimilate(
-      { cube_id: 'cube-1', role_id: 'role-1', model: null },
-      HOSTED_API_URL,
-      null,
-      'claude'
-    );
-
-    const [, init] = fetchSpy.mock.calls[0];
-    const body = JSON.parse(init!.body as string);
-    expect('model' in body).toBe(false);
-  });
-
-  // gh#896: defense-in-depth — reject a malformed descriptor client-side before
-  // the wire (belt-and-suspenders over the upstream flag-parse + server gate).
-  it('rejects a malformed model descriptor BEFORE POSTing (throws, no fetch)', async () => {
-    const { assimilate } = await import('../src/remote-client.js');
-
     await expect(
       assimilate(
         { cube_id: 'cube-1', role_id: 'role-1', model: 'garbage-no-colon' },
-        HOSTED_API_URL,
+        ORIGIN,
         null,
-        'claude'
-      )
+        'claude',
+      ),
     ).rejects.toThrow(/Invalid model descriptor/);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('accepts a valid descriptor and sends it on the wire', async () => {
+  it('accepts a valid descriptor at the gate, then fails closed at the local transport (no cloud route)', async () => {
     const { assimilate } = await import('../src/remote-client.js');
+    await expect(
+      assimilate(
+        { cube_id: 'cube-1', role_id: 'role-1', model: 'ollama:qwen3:q4_K_M' },
+        ORIGIN,
+        null,
+        'claude',
+      ),
+    ).rejects.toThrow(/Local Borg server does not support/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 
-    await assimilate(
-      { cube_id: 'cube-1', role_id: 'role-1', model: 'claude:claude-opus-4-8' },
-      HOSTED_API_URL,
-      null,
-      'claude'
-    );
+  it('accepts a canonical claude descriptor at the gate, then fails closed at the local transport', async () => {
+    const { assimilate } = await import('../src/remote-client.js');
+    await expect(
+      assimilate(
+        { cube_id: 'cube-1', role_id: 'role-1', model: 'claude:claude-opus-4-8' },
+        ORIGIN,
+        null,
+        'claude',
+      ),
+    ).rejects.toThrow(/Local Borg server does not support/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 
-    const [, init] = fetchSpy.mock.calls[0];
-    const body = JSON.parse(init!.body as string);
-    expect(body.model).toBe('claude:claude-opus-4-8');
+  it('a selector with no model passes the gate and fails closed at the local transport', async () => {
+    const { assimilate } = await import('../src/remote-client.js');
+    await expect(
+      assimilate({ cube_id: 'cube-1', role_id: 'role-1' }, ORIGIN, null, 'claude'),
+    ).rejects.toThrow(/Local Borg server does not support/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('a selector with an explicitly null model passes the gate and fails closed at the local transport', async () => {
+    const { assimilate } = await import('../src/remote-client.js');
+    await expect(
+      assimilate({ cube_id: 'cube-1', role_id: 'role-1', model: null }, ORIGIN, null, 'claude'),
+    ).rejects.toThrow(/Local Borg server does not support/);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

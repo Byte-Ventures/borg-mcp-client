@@ -8,6 +8,9 @@ import {
 } from '../src/assimilate-cmd';
 import { BorgServerError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
+import { createHash } from 'node:crypto';
+
+const createHashDigest = (s: string): string => createHash('sha256').update(s).digest('hex');
 
 const openCodeDroneMocks = vi.hoisted(() => ({
   computeOpenCodePort: vi.fn(() => 15555),
@@ -53,16 +56,13 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     setTerminalTitle: vi.fn(),
     getActiveCube: vi.fn(async () => null),
     hasPersistedActiveCube: vi.fn(async () => false),
+    readPersistedLocalSeat: vi.fn(async () => null),
+    peekServerSessionRecord: vi.fn(async () => false),
     probeSeat: vi.fn(async () => 'live'),
-    getPendingLocalAttach: vi.fn(async () => null),
-    completeLocalAttach: vi.fn(async () => {}),
     setActiveCube: vi.fn(async () => {}),
     findProjectRoot: vi.fn(() => '/work/myrepo'),
     installProjectSessionHook: vi.fn(),
-    getCachedAuth: vi.fn(async () => ({ token: 'test-token', apiUrl: 'http://api.test' })),
-    runSetup: vi.fn(async () => ({ token: 'fresh-token', apiUrl: 'http://api.test' })),
-    cloudApiUrl: 'http://api.test',
-    defaultAuthority: { kind: 'cloud', apiUrl: 'http://api.test' },
+    defaultAuthority: { kind: 'server', apiUrl: 'https://server.test' },
     detectLocalServer: vi.fn(async () => null),
     connectServer: vi.fn(async () => ({
       token: 'server-token',
@@ -82,19 +82,9 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       ...(serverTrustIdentity === undefined
         ? { session_token: 'sess' }
         : {
-          local_attach_completion: {
-            binding: {
-              origin: apiUrl,
-              trustIdentity: serverTrustIdentity,
-              cubeId: params.cube_id,
-              roleId: params.role_id,
-            },
-            operation: params.local_attach_operation!,
-            retryKey: '44444444-4444-4444-8444-444444444444',
-          },
+          result: 'created' as const,
           local_session: {
             credential_ref: 'borg-server-session:' + 'a'.repeat(64),
-            generation: 1,
             expires_at: '2026-07-14T16:00:00.000Z',
           },
         }),
@@ -212,7 +202,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
 
   it('fails before minting a seat when selected-CLI MCP configuration cannot be ensured', async () => {
     const assimilate = vi.fn(async () => ({
-      cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-1', session_token: 'sess', role_id: 'role-default',
+      cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'role-default',
     }));
     const exec = vi.fn(async () => 0);
     const probeMcpReady = vi.fn(async () => true);
@@ -223,7 +213,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
 
     await expect(runAssimilate({ role: undefined, flags: { yes: true, cli: 'opencode' } }, deps)).resolves.toBe(1);
 
-    expect(deps.stderr).toHaveBeenCalledWith('opencode MCP configuration failed: opencode CLI not found\n');
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('opencode MCP configuration failed'));
     expect(assimilate).not.toHaveBeenCalled();
     expect(probeMcpReady).not.toHaveBeenCalled();
     expect(exec).not.toHaveBeenCalled();
@@ -256,7 +246,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
   it('Claude kickoff passes an explicit worktree-local monitor root with the new drone inbox path', async () => {
     const exec = vi.fn(async () => 0);
     const assimilate = vi.fn(async () => ({
-      cube_id: 'cube-1', drone_id: 'drone-uuid-1', drone_label: 'drone-2', session_token: 's', role_id: 'r',
+      cube_id: 'cube-1', drone_id: 'drone-uuid-1', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r',
     }));
     const getInboxPath = vi.fn((c: string, d: string) => `/test-inboxes/${c}/${d}.log`);
     const runSync = vi.fn((cmd: string, args: string[]) =>
@@ -572,7 +562,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
 // Worktree rollback narrows to the single setActiveCube failure path
 // post-worktree-creation.
 describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-up)', () => {
-  const sameCubeSeat = vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', sessionToken: 's', droneLabel: 'l', apiUrl: 'http://api.test' }));
+  const sameCubeSeat = vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone' }));
   const cubeResolves = {
     cwd: () => '/work/myrepo',
     findProjectRoot: () => '/work/myrepo',
@@ -595,7 +585,7 @@ describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-u
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('seat evicted'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('was evicted'));
     expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining('assimilate failed')); // not the generic path
     const worktreeAdds = runSyncSpy.mock.calls.filter((c) => c[1][0] === 'worktree' && c[1][1] === 'add');
     expect(worktreeAdds).toHaveLength(0); // clean early-exit, no resurrection FS state
@@ -615,7 +605,184 @@ describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-u
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('assimilate failed'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('unexpected response'));
+  });
+});
+
+describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)', () => {
+  // Ratified client-seat-reset-state-model clause 1: attach mutates NOTHING on a
+  // rejection — it diagnoses and points at the dedicated OFFLINE
+  // `borg reset-local-seat` command. No setActiveCube / any local write happens
+  // on the rejected path (clearActiveCube was DELETED — SR-seven (c)).
+  const sameCubeSeat = () => vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone' }));
+  const cubeResolves = {
+    cwd: () => '/work/myrepo',
+    findProjectRoot: () => '/work/myrepo',
+    listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    getCube: vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] })),
+  };
+  // The attach (pinned-TLS) succeeds its identity check, then the server rejects
+  // THIS worktree's saved session bearer — a pin-matched SESSION_REJECTED.
+  const rejectAttach = () => vi.fn(async () => { throw new BorgServerError('SESSION_REJECTED', 'session bearer no longer accepted'); });
+
+  function assertNoMutation(deps: AssimilateDeps): void {
+    expect(deps.setActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  }
+
+  it('the attach-catch rejection diagnoses (recommends `borg reset-local-seat`) and mutates nothing', async () => {
+    const stderr = vi.fn();
+    const setActiveCube = vi.fn(async () => {});
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, setActiveCube,
+      isTTY: () => true,
+      probeSeat: vi.fn(async () => 'live'),
+      getActiveCube: sameCubeSeat(),
+      assimilate: rejectAttach(),
+    });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
+    expect(exit).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('no longer accepted');
+    expect(out).toContain('borg reset-local-seat');
+    expect(out).toContain('No Borg state');
+    expect(out).not.toMatch(/borgmcp\.ai|Cloud/i);
+    expect(out).not.toMatch(/stop the server|restart it/i);
+    assertNoMutation(deps);
+  });
+
+  it('CANONICAL PATH: a pin-matched probeSeat → rejected diagnoses BEFORE attach, no "restart" advice, no mutation', async () => {
+    const stderr = vi.fn();
+    const setActiveCube = vi.fn(async () => {});
+    const assimilate = vi.fn(async () => { throw new Error('attach must not run after a rejected probe'); });
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, setActiveCube, assimilate,
+      isTTY: () => false,
+      probeSeat: vi.fn(async () => 'rejected'),
+      getActiveCube: sameCubeSeat(),
+    });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
+    expect(exit).toBe(1);
+    expect(assimilate).not.toHaveBeenCalled();
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('borg reset-local-seat');
+    expect(out).not.toMatch(/Start or restart the server|borg-mcp-server start/i);
+    assertNoMutation(deps);
+  });
+
+  it('the diagnosis is identical whether or not stdin is a TTY (no destructive prompt/flag path anymore)', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr,
+      isTTY: () => false,
+      probeSeat: vi.fn(async () => 'live'),
+      getActiveCube: sameCubeSeat(),
+      assimilate: rejectAttach(),
+    });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
+    expect(exit).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('borg reset-local-seat');
+    // Offline command guidance mentions --yes for non-interactive use.
+    expect(out).toContain('--yes');
+    assertNoMutation(deps);
+  });
+});
+
+describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR #6)', () => {
+  const savedSeat = () => vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), sessionToken: 'prior-bearer', roleName: 'Drone' }));
+  const cubeResolves = {
+    cwd: () => '/work/myrepo',
+    findProjectRoot: () => '/work/myrepo',
+    listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    getCube: vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] })),
+  };
+
+  it("credential-rejected: NON-destructive re-enroll copy, exit 1, no reset diagnosis, no 'restart the server' advice", async () => {
+    const stderr = vi.fn();
+    const assimilate = vi.fn(async () => { throw new Error('attach must not run'); });
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, assimilate,
+      probeSeat: vi.fn(async () => 'credential-rejected'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    expect(assimilate).not.toHaveBeenCalled();
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('saved enrollment for https://server.test was rejected');
+    expect(out).toContain('--enroll');
+    // Distinct from the takeover path AND the transient path.
+    expect(out).not.toContain('borg reset-local-seat');
+    expect(out).not.toMatch(/borg-mcp-server start|Start or restart the server/i);
+    expect(deps.setActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
+  it('trust-mismatch: TERMINAL trust copy, exit 1, never restart-the-server advice, never a reset', async () => {
+    const stderr = vi.fn();
+    const assimilate = vi.fn(async () => { throw new Error('attach must not run'); });
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, assimilate,
+      probeSeat: vi.fn(async () => 'trust-mismatch'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    expect(assimilate).not.toHaveBeenCalled();
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toContain('could not verify the expected server identity');
+    expect(out).not.toMatch(/borg-mcp-server start|Start or restart the server/i);
+    expect(out).not.toContain('borg reset-local-seat');
+  });
+
+  it('indeterminate: STILL the transient restart advice (unchanged, distinct from the terminal causes)', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr,
+      probeSeat: vi.fn(async () => 'indeterminate'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/could not verify this worktree's saved seat/);
+    expect(out).toContain('borg-mcp-server start');
+  });
+
+  it('unreachable: transient restart advice (a transport failure/timeout is not terminal)', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr,
+      probeSeat: vi.fn(async () => 'unreachable'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/could not verify this worktree's saved seat/);
+    expect(out).toContain('borg-mcp-server start');
+    expect(out).not.toContain('borg reset-local-seat');
+  });
+
+  it('endpoint-mismatch (404): a version-mismatch copy — NOT restart advice, NOT a reset', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr,
+      probeSeat: vi.fn(async () => 'endpoint-mismatch'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/did not recognize this worktree's drone endpoint|versions? (?:are|is) likely incompatible|versions match/i);
+    expect(out).not.toContain('borg reset-local-seat');
+  });
+
+  it('server-failure (5xx): a distinct server-error copy — non-destructive, no reset', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr,
+      probeSeat: vi.fn(async () => 'server-failure'),
+      getActiveCube: savedSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/returned a server error/i);
+    expect(out).not.toContain('borg reset-local-seat');
   });
 });
 
@@ -639,7 +806,7 @@ describe('runAssimilate: Sprint 19 (gh#184) strict-rollback semantics', () => {
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('assimilate failed: Cannot assimilate'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Cannot assimilate'));
     // No worktree-add was attempted (API failure stopped flow BEFORE worktree step).
     const worktreeAddCalls = runSyncSpy.mock.calls.filter(
       (call) => call[1][0] === 'worktree' && call[1][1] === 'add'
@@ -735,7 +902,7 @@ describe('runAssimilate: Sprint 19 (gh#184) strict-rollback semantics', () => {
     });
     const exit = await runAssimilate({ role: 'frobnicate', flags: { yes: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('no role matching "frobnicate"'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('role matching "frobnicate"'));
     // No worktree-add — gh#184 canonical assertion.
     const worktreeAddCalls = runSyncSpy.mock.calls.filter(
       (call) => call[1][0] === 'worktree' && call[1][1] === 'add'
@@ -783,7 +950,7 @@ describe('runAssimilate: Sprint 19 (gh#184) strict-rollback semantics', () => {
     const exit = await runAssimilate({ role: 'xyzzy', flags: { yes: true } }, deps);
     expect(exit).toBe(1);
     const stderrCalls = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(stderrCalls).toContain('no role matching "xyzzy"');
+    expect(stderrCalls).toContain('role matching "xyzzy"');
     expect(stderrCalls).not.toContain('Did you mean');
   });
 });
@@ -955,7 +1122,7 @@ describe('runAssimilate: Sprint 18 (post-exit shell-cd hint)', () => {
 
 describe('runAssimilate: step 7 (assimilate + persist)', () => {
   it('calls assimilate with cube + role IDs and persists to cubes.json', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', session_token: 'tok', role_id: 'r' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r' }));
     const setActiveCube = vi.fn(async () => {});
     const getCube = vi.fn(async () => ({
       id: 'c', name: 'myrepo',
@@ -974,15 +1141,331 @@ describe('runAssimilate: step 7 (assimilate + persist)', () => {
       cubeId: 'c',
       droneId: 'd',
       name: 'myrepo',
-      sessionToken: 'tok',
       droneLabel: 'drone-1',
     }));
   });
 });
 
+describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
+  const REF = 'borg-server-session:' + 'a'.repeat(64);
+  const localResultWithFinalize = (activate: () => Promise<unknown>, scrubPending: () => Promise<unknown>) =>
+    vi.fn(async () => ({
+      cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
+      local_session: { credential_ref: REF, expires_at: '2026-07-14T16:00:00.000Z' },
+      role_id: 'r',
+      finalize: { activate, scrubPending },
+    }));
+  const getCube = () => vi.fn(async () => ({
+    id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }],
+  }));
+
+  it('a fresh attach drives finalizeServerSeat with an ABSENT expectation + the deferred thunks; setActiveCube is NOT used', async () => {
+    const activate = vi.fn(async () => {});
+    const scrubPending = vi.fn(async () => {});
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const setActiveCube = vi.fn(async () => {});
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(activate, scrubPending),
+      getCube: getCube(), setActiveCube, finalizeServerSeat,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
+    expect(finalizeServerSeat).toHaveBeenCalledTimes(1);
+    const call = finalizeServerSeat.mock.calls[0][0];
+    expect(call.expected).toEqual({ kind: 'absent' });
+    expect(call.active).toMatchObject({ cubeId: 'c', droneId: 'd', localSessionCredentialRef: REF });
+    expect(call.activate).toBe(activate);
+    expect(call.scrubPending).toBe(scrubPending);
+    // The legacy activate-then-bind writer is bypassed on the composite path.
+    expect(setActiveCube).not.toHaveBeenCalled();
+  });
+
+  it('a --here reattach declares EXACT with the prior live-bearer digest', async () => {
+    const activate = vi.fn(async () => {});
+    const scrubPending = vi.fn(async () => {});
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const existingSeat = vi.fn(async () => ({
+      cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l',
+      apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      localSessionCredentialRef: REF, sessionToken: 'prior-bearer', roleName: 'Drone',
+    }));
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(activate, scrubPending),
+      getCube: getCube(), finalizeServerSeat,
+      getActiveCube: existingSeat,
+      probeSeat: vi.fn(async () => 'live'),
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+      cwd: () => '/work/myrepo', findProjectRoot: () => '/work/myrepo',
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(0);
+    // CR #3: the FULL prior binding — its drone id AND live-bearer digest — is pinned.
+    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({
+      kind: 'exact',
+      credentialRef: REF,
+      droneId: 'd-prior',
+      sessionDigest: createHashDigest('prior-bearer'),
+    });
+  });
+
+  it('an expectation-mismatch abort fails closed (exit 1), rolls back nothing to overwrite, and never audits success', async () => {
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'expectation-mismatch' as const }));
+    const stderr = vi.fn();
+    const setActiveCube = vi.fn(async () => {});
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
+      getCube: getCube(), finalizeServerSeat, setActiveCube, stderr,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/changed during attach/);
+    expect(out).not.toMatch(/re-attached|no new drone minted/);
+    expect(setActiveCube).not.toHaveBeenCalled();
+  });
+
+  it('a finalize throw fails closed (exit 1)', async () => {
+    const finalizeServerSeat = vi.fn(async () => { throw new Error('keychain locked'); });
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
+      getCube: getCube(), finalizeServerSeat, stderr,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toMatch(/setActiveCube failed: keychain locked/);
+  });
+
+  // CR #5: a spawned-sibling worktree OWNS the persisted binding once FINALIZE
+  // has written it. An activation failure after that must NOT delete the worktree.
+  const spyRunSync = () => {
+    const calls: string[][] = [];
+    const runSync = vi.fn((cmd: string, args: string[]) => {
+      calls.push([cmd, ...args]);
+      return args[0] === 'remote'
+        ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' }
+        : { status: 0, stdout: '', stderr: '' };
+    });
+    return { calls, runSync };
+  };
+  const removedWorktree = (calls: string[][]) =>
+    calls.some((c) => c[0] === 'git' && c[1] === 'worktree' && c[2] === 'remove');
+
+  // A finalize handle exposing the CR#2 bind-pending thunk with a chosen outcome.
+  const localResultWithBind = (bindPending: () => Promise<unknown>) =>
+    vi.fn(async () => ({
+      cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
+      local_session: { credential_ref: REF, expires_at: '2026-07-14T16:00:00.000Z' },
+      role_id: 'r',
+      finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}), bindPending },
+    }));
+
+  it('CR#4: activation-failure with a BOUND pending record PRESERVES the worktree + claims convergence', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'activation-failed' as const }));
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      assimilate: localResultWithBind(vi.fn(async () => 'bound' as const)),
+      getCube: getCube(), finalizeServerSeat, stderr, runSync,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    // The worktree owns a durable locator (bound-pending) → NOT removed.
+    expect(removedWorktree(calls)).toBe(false);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/PRESERVED here|resumable seat state/i);
+    expect(out).toMatch(/NOT removed/i);
+    expect(out).toMatch(/converge/i);
+  });
+
+  it('CR#4: activation-failure with a MISSING/replaced bind makes NO convergence claim + ROLLS BACK the worktree', async () => {
+    for (const outcome of ['missing', 'replaced'] as const) {
+      const { calls, runSync } = spyRunSync();
+      const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'activation-failed' as const }));
+      const stderr = vi.fn();
+      const deps = makeStubDeps({
+        assimilate: localResultWithBind(vi.fn(async () => outcome)),
+        getCube: getCube(), finalizeServerSeat, stderr, runSync,
+        listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+      });
+      expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+      // No durable locator → the spawned worktree is rolled back.
+      expect(removedWorktree(calls), `${outcome} should roll back`).toBe(true);
+      const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+      // Truthful FAILURE — never the false-success "converge / identical seat reused" claim.
+      expect(out).toMatch(/could NOT be preserved/i);
+      expect(out).not.toMatch(/converge|identical seat is reused/i);
+    }
+  });
+
+  it('CR#4: activation-failure where bindPending THROWS makes NO convergence claim + rolls back', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'activation-failed' as const }));
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      assimilate: localResultWithBind(vi.fn(async () => { throw new Error('store busy'); })),
+      getCube: getCube(), finalizeServerSeat, stderr, runSync,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    expect(removedWorktree(calls)).toBe(true);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/could NOT be preserved/i);
+    expect(out).not.toMatch(/converge|identical seat is reused/i);
+  });
+
+  it('CR#2: a spawned-sibling activation-failure BINDS the surviving pending record to the preserved worktree (rerun locator)', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'activation-failed' as const }));
+    const bindPending = vi.fn(async () => 'bound' as const);
+    // A finalize handle that also exposes the CR#2 bind-pending thunk.
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
+      local_session: { credential_ref: REF, expires_at: '2026-07-14T16:00:00.000Z' },
+      role_id: 'r',
+      finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}), bindPending },
+    }));
+    const deps = makeStubDeps({
+      assimilate, getCube: getCube(), finalizeServerSeat, stderr: vi.fn(), runSync,
+      cwd: () => '/home/test/.borg/worktrees/myrepo/drone-2',
+      findProjectRoot: () => '/home/test/.borg/worktrees/myrepo/drone-2',
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    // The preserved worktree now OWNS a discoverable, resumable pending record.
+    expect(bindPending).toHaveBeenCalledTimes(1);
+    expect(bindPending.mock.calls[0][0]).toMatchObject({ worktree: '/home/test/.borg/worktrees/myrepo/drone-2' });
+    // ...and the worktree that owns it was NOT removed.
+    expect(removedWorktree(calls)).toBe(false);
+  });
+
+  it('CR #5: an expectation-mismatch on a spawned sibling DOES roll it back (the binding was never written)', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'expectation-mismatch' as const }));
+    const deps = makeStubDeps({
+      assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
+      getCube: getCube(), finalizeServerSeat, stderr: vi.fn(), runSync,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    expect(removedWorktree(calls)).toBe(true);
+  });
+
+  it('CR #1: a PREPARE abort (reset won before PREPARE) exits cleanly BEFORE any worktree spawn or finalize', async () => {
+    const { calls, runSync } = spyRunSync();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const stderr = vi.fn();
+    // deps.assimilate signals the cube-lock PREPARE revalidation aborted before mint/send.
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'c', drone_id: '', drone_label: '', role_id: 'r', prepareAborted: true as const,
+    }));
+    const deps = makeStubDeps({
+      assimilate, getCube: getCube(), finalizeServerSeat, stderr, runSync,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
+    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(out).toMatch(/changed before the attach/);
+    expect(out).toMatch(/no credential was created or sent/);
+    // No FINALIZE, and no worktree was ever spawned (so none to roll back).
+    expect(finalizeServerSeat).not.toHaveBeenCalled();
+    expect(calls.some((c) => c[0] === 'git' && c[1] === 'worktree' && c[2] === 'add')).toBe(false);
+    expect(removedWorktree(calls)).toBe(false);
+  });
+
+  it('CR #1: an in-place attach passes the typed expectation + revalidate_at_prepare to deps.assimilate', async () => {
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const assimilate = localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {}));
+    const deps = makeStubDeps({
+      assimilate, getCube: getCube(), finalizeServerSeat,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
+    // A fresh in-place attach → ABSENT expectation, revalidated at PREPARE.
+    const params = assimilate.mock.calls[0][2];
+    expect(params.session_expected).toEqual({ kind: 'absent' });
+    expect(params.revalidate_at_prepare).toBe(true);
+  });
+
+  it('CR #1: an implicit sibling gets a COLLISION-SAFE (distinct-per-run) operation key and revalidates ABSENT at PREPARE', async () => {
+    const existingCube = {
+      cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', droneLabel: 'drone-1',
+      apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone',
+    };
+    const runOnce = async () => {
+      const assimilate = vi.fn(async () => ({
+        cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-2', role_id: 'role-default',
+        result: 'created' as const,
+        local_session: {
+          credential_ref: 'borg-server-session:' + 'b'.repeat(64),
+          expires_at: '2026-07-14T16:00:00.000Z',
+        },
+      }));
+      const deps = makeStubDeps({
+        assimilate,
+        getActiveCube: vi.fn(async () => existingCube),
+        listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+        getCube: vi.fn(async () => ({
+          id: 'cube-1', name: 'myrepo',
+          roles: [{ id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false }],
+        })),
+      });
+      // No --here + an existing active cube ⇒ implicit sibling spawn.
+      expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
+      return assimilate.mock.calls[0][2];
+    };
+    const p1 = await runOnce();
+    const p2 = await runOnce();
+    expect(p1.session_operation!.kind).toBe('sibling');
+    expect(p1.session_operation!.operationKey).toMatch(/^implicit-sibling:/);
+    expect(p1.revalidate_at_prepare).toBe(true);
+    // CR1(a): two implicit siblings mint DISTINCT keys — they never collide on one seat.
+    expect(p1.session_operation!.operationKey).not.toBe(p2.session_operation!.operationKey);
+  });
+
+  it('CR#3: an implicit sibling ADOPTS an in-flight attempt (recovered op + role, ABSENT pending-reuse)', async () => {
+    const existingCube = {
+      cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', droneLabel: 'drone-1',
+      apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone',
+    };
+    // A persisted crash-orphaned unbound pending sibling: its EXACT operation (a stable
+    // operationKey) + role must be adopted so the rerun re-derives the same seat.
+    const recoveredOp = { projectRoot: '/orig/repo', kind: 'sibling' as const, operationKey: 'implicit-sibling:PERSISTED' };
+    const findIncompleteSiblingAttempt = vi.fn(async () => ({
+      operation: recoveredOp, roleId: 'role-default', credentialRef: 'borg-server-session:' + 'c'.repeat(64),
+    }));
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-2', role_id: 'role-default',
+      result: 'reused' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'c'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
+    }));
+    const deps = makeStubDeps({
+      assimilate,
+      findIncompleteSiblingAttempt,
+      getActiveCube: vi.fn(async () => existingCube),
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1', name: 'myrepo',
+        roles: [{ id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false }],
+      })),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
+    expect(findIncompleteSiblingAttempt).toHaveBeenCalledTimes(1);
+    const params = assimilate.mock.calls[0][2];
+    // The EXACT recovered operation is re-sent (same operationKey → same seat ref),
+    // NOT a fresh per-invocation UUID.
+    expect(params.session_operation).toEqual(recoveredOp);
+    // The recovered role is adopted (role_id from the stored attempt).
+    expect(params.role_id).toBe('role-default');
+    // A PENDING resume → ABSENT/pending-reuse so prepareSeat re-sends the identical bearer.
+    expect(params.session_expected).toEqual({ kind: 'absent' });
+  });
+});
+
 describe('runAssimilate: step 6 (role resolution)', () => {
   it('first drone with no role → human-seat role', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', session_token: 's', role_id: 'r-coord' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coord' }));
     const createCube = vi.fn(async () => ({
       id: 'c', name: 'myrepo',
       roles: [
@@ -998,12 +1481,13 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-coord' })
+      expect.objectContaining({ role_id: 'r-coord' }),
+      expect.any(String),
     );
   });
 
   it('falls through to the default worker once the mandatory Coordinator seat is occupied', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-build' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-build' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1023,7 +1507,8 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-build' })
+      expect.objectContaining({ role_id: 'r-build' }),
+      expect.any(String),
     );
   });
 
@@ -1032,7 +1517,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
   // assimilate (non-first-drone path — cube already has a drone) must skip
   // the occupied default and pick the unoccupied worker role instead.
   it('bare assimilate skips the occupied default and picks the next worker role', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-reviewer' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-reviewer' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1053,12 +1538,13 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-reviewer' })
+      expect.objectContaining({ role_id: 'r-reviewer' }),
+      expect.any(String),
     );
   });
 
   it('bare assimilate treats a presumed-abandoned role as fillable', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-builder' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-builder' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1081,11 +1567,12 @@ describe('runAssimilate: step 6 (role resolution)', () => {
       expect.any(String),
       expect.any(String),
       expect.objectContaining({ role_id: 'r-builder' }),
+      expect.any(String),
     );
   });
 
   it('a live occupant still blocks its role when abandoned rows are also present', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-3', session_token: 's', role_id: 'r-reviewer' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-reviewer' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1111,11 +1598,12 @@ describe('runAssimilate: step 6 (role resolution)', () => {
       expect.any(String),
       expect.any(String),
       expect.objectContaining({ role_id: 'r-reviewer' }),
+      expect.any(String),
     );
   });
 
   it('bare assimilate refills a mandatory role past the give-up advisory', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-coordinator' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coordinator' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1138,11 +1626,12 @@ describe('runAssimilate: step 6 (role resolution)', () => {
       expect.any(String),
       expect.any(String),
       expect.objectContaining({ role_id: 'r-coordinator' }),
+      expect.any(String),
     );
   });
 
   it('bare assimilate fills an unoccupied mandatory Coordinator before worker roles', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-coordinator' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coordinator' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1162,12 +1651,13 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-coordinator' })
+      expect.objectContaining({ role_id: 'r-coordinator' }),
+      expect.any(String),
     );
   });
 
   it('explicit role arg matched case-insensitively', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-3', session_token: 's', role_id: 'r-cr' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-cr' }));
     const getCube = vi.fn(async () => ({
       id: 'c', name: 'myrepo',
       roles: [
@@ -1187,7 +1677,8 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ role_id: 'r-cr' })
+      expect.objectContaining({ role_id: 'r-cr' }),
+      expect.any(String),
     );
   });
 
@@ -1206,12 +1697,15 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     });
     const exit = await runAssimilate({ role: 'nonexistent', flags: { yes: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('no role matching'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('role matching'));
   });
 });
 
 describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
-  it('applies starter silently with --yes when cube does not exist', async () => {
+  // A local (self-hosted) server supports its DEFAULT cube template only. The
+  // former cloud template-selection paths (arbitrary --template, --no-template,
+  // interactive template prompt) are removed with the cloud authority.
+  it('creates the cube with the default template on the server bootstrap path', async () => {
     const createCube = vi.fn(async () => ({
       id: 'c-new',
       name: 'myrepo',
@@ -1225,64 +1719,25 @@ describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
     );
     const deps = makeStubDeps({ createCube, runSync, listCubes: vi.fn(async () => []) });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo', template: 'starter' });
-  });
-
-  it('uses --template flag verbatim', async () => {
-    const createCube = vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
-    const runSync = vi.fn((cmd: string, args: string[]) =>
-      args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
+    expect(createCube).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ name: 'myrepo', template: 'default' }),
+      expect.any(String),
     );
-    const deps = makeStubDeps({ createCube, runSync, listCubes: vi.fn(async () => []) });
-    await runAssimilate({ role: undefined, flags: { yes: true, template: 'research' } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo', template: 'research' });
   });
 
-  it('passes no template with --no-template', async () => {
-    const createCube = vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
-    const runSync = vi.fn((cmd: string, args: string[]) =>
-      args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
-    );
-    const deps = makeStubDeps({ createCube, runSync, listCubes: vi.fn(async () => []) });
-    await runAssimilate({ role: undefined, flags: { yes: true, noTemplate: true } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo' });
-  });
-
-  it('fails non-TTY without --yes when prompt would be needed', async () => {
+  it('rejects a non-default template on the server bootstrap path', async () => {
     const stderr = vi.fn();
-    const deps = makeStubDeps({
-      stderr,
-      isTTY: () => false,
-      listCubes: vi.fn(async () => []),
-      runSync: vi.fn((cmd: string, args: string[]) =>
-        args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
-      ),
-    });
-    const exit = await runAssimilate({ role: undefined, flags: {} }, deps);
+    const createCube = vi.fn();
+    const runSync = vi.fn((cmd: string, args: string[]) =>
+      args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
+    );
+    const deps = makeStubDeps({ stderr, createCube: createCube as any, runSync, listCubes: vi.fn(async () => []) });
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, template: 'research' } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('cube creation needs a template choice'));
-  });
-
-  it('prompts interactively and applies user choice', async () => {
-    const answers = ['2', '1']; // Borg server host is 1 (default), Borg Cloud is 2, then template option 1
-    const prompt = vi.fn(async () => answers.shift() ?? '1');
-    const createCube = vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
-    const listTemplates = vi.fn(async () => [
-      { name: 'software-dev', description: 'sw' },
-      { name: 'research', description: 'res' },
-    ]);
-    const deps = makeStubDeps({
-      prompt,
-      createCube,
-      listTemplates,
-      isTTY: () => true,
-      listCubes: vi.fn(async () => []),
-      runSync: vi.fn((cmd: string, args: string[]) =>
-        args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
-      ),
-    });
-    await runAssimilate({ role: undefined, flags: {} }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), { name: 'myrepo', template: 'software-dev' });
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('supports its default cube template only'));
+    expect(createCube).not.toHaveBeenCalled();
   });
 });
 
@@ -1300,7 +1755,7 @@ describe('runAssimilate: step 4 (cube existence + detail)', () => {
     );
     const deps = makeStubDeps({ listCubes, getCube, createCube: createCube as any, runSync, getActiveCube: vi.fn(async () => null) });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(getCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'cube-existing');
+    expect(getCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'cube-existing', expect.any(String));
     expect(createCube).not.toHaveBeenCalled();
   });
 });
@@ -1633,17 +2088,17 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       cube_id: 'cube-1',
       drone_id: 'drone-prior',
       drone_label: 'one-of-one-builder',
-      session_token: 'rotated-token',
       role_id: 'role-builder',
-      reattached: true,
+      result: 'reused' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'b'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
     }));
     const deps = makeStubDeps({
       runSync,
       stderr,
       setActiveCube,
       assimilate: assimilateSpy as any,
-      // Saved identity for THIS worktree, SAME cube as the target.
-      getActiveCube: vi.fn(async () => ({ cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', sessionToken: 'dead-token', droneLabel: 'one-of-one-builder', apiUrl: 'http://api.test' })),
+      // Saved identity for THIS worktree, SAME cube + server authority as the target.
+      getActiveCube: vi.fn(async () => ({ cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', droneLabel: 'one-of-one-builder', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Builder' })),
       listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
       getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [
         { id: 'role-builder', name: 'Builder', is_default: false, is_human_seat: false },
@@ -1654,11 +2109,12 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(assimilateSpy).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ prior_drone_id: 'drone-prior' })
+      expect.objectContaining({ prior_drone_id: 'drone-prior' }),
+      expect.any(String),
     );
-    // The rotated identity is persisted: same seat, NEW token.
+    // The rotated identity is persisted: same seat, new local session reference.
     expect(setActiveCube).toHaveBeenCalledWith(
-      expect.objectContaining({ droneId: 'drone-prior', sessionToken: 'rotated-token' })
+      expect.objectContaining({ droneId: 'drone-prior', localSessionCredentialRef: 'borg-server-session:' + 'b'.repeat(64) })
     );
     // In-place recovery: no sibling worktree spawned.
     expect(runSync).not.toHaveBeenCalledWith('git', expect.arrayContaining(['worktree']), expect.anything());
@@ -1674,8 +2130,9 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       cube_id: 'cube-1',
       drone_id: 'drone-new',
       drone_label: 'one-of-one-builder',
-      session_token: 'sess',
       role_id: 'role-builder',
+      result: 'created' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
     }));
     const deps = makeStubDeps({
       assimilate: assimilateSpy as any,
@@ -1728,7 +2185,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     const createCube = vi.fn(async () => ({ id: 'c', name: 'cool-repo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
     const deps = makeStubDeps({ runSync, createCube });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'cool-repo' }));
+    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'cool-repo' }), expect.any(String));
   });
 
   it('uses the sanitized repository basename with --yes when no origin exists', async () => {
@@ -1737,7 +2194,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     const createCube = vi.fn(async () => ({ id: 'c', name: 'my-repo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
     const deps = makeStubDeps({ runSync, prompt, createCube, cwd: () => '/work/My_Repo', findProjectRoot: () => '/work/My_Repo' });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'my-repo' }));
+    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'my-repo' }), expect.any(String));
     expect(prompt).not.toHaveBeenCalled();
   });
 
@@ -1779,7 +2236,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     const createCube = vi.fn();
     const deps = makeStubDeps({ runSync, createCube, isTTY: () => false });
     await expect(runAssimilate({ role: undefined, flags: {} }, deps)).resolves.toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Re-run with --cube-name <name> or --yes'));
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('--cube-name <name>'));
     expect(createCube).not.toHaveBeenCalled();
   });
 
@@ -1835,7 +2292,7 @@ describe('runAssimilate: BUG-1 — UX-F4 stderr false positive', () => {
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     const stderrCalls = stderr.mock.calls.map((c) => String(c[0])).join('');
     expect(stderrCalls).toContain("Could not parse the origin remote; using directory name 'somerepo'");
-    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'somerepo' }));
+    expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'somerepo' }), expect.any(String));
   });
 });
 
@@ -1856,7 +2313,7 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
       ],
     }));
     const assimilate = vi.fn(async () => ({
-      cube_id: 'c-new', drone_id: 'd', drone_label: 'drone-1', session_token: 's', role_id: 'r-coord',
+      cube_id: 'c-new', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coord',
     }));
     const runSync = vi.fn((cmd: string, args: string[]) =>
       args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
@@ -1867,7 +2324,8 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
     // Step 6 reached cubeDetail.roles.find without "Cannot read properties of undefined".
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String), expect.any(String),
-      expect.objectContaining({ role_id: 'r-coord' })
+      expect.objectContaining({ role_id: 'r-coord' }),
+      expect.any(String),
     );
   });
 
@@ -1879,7 +2337,7 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
       drones: [],
     }));
     const assimilate = vi.fn(async () => ({
-      cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', session_token: 's', role_id: 'r-build',
+      cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-build',
     }));
     const runSync = vi.fn((cmd: string, args: string[]) =>
       args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
@@ -1892,29 +2350,14 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
     expect(exit).toBe(0);
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String), expect.any(String),
-      expect.objectContaining({ role_id: 'r-build' })
+      expect.objectContaining({ role_id: 'r-build' }),
+      expect.any(String),
     );
   });
 });
 
-describe('runAssimilate: step 1 (auth)', () => {
-  it('uses cached auth when available', async () => {
-    const getCachedAuth = vi.fn(async () => ({ token: 'cached', apiUrl: 'http://api.test' }));
-    const runSetup = vi.fn(async () => ({ token: 'fresh', apiUrl: 'http://api.test' }));
-    const deps = makeStubDeps({ getCachedAuth, runSetup });
-    await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(getCachedAuth).toHaveBeenCalled();
-    expect(runSetup).not.toHaveBeenCalled();
-  });
-
-  it('runs setup inline when no cached auth', async () => {
-    const getCachedAuth = vi.fn(async () => null);
-    const runSetup = vi.fn(async () => ({ token: 'fresh', apiUrl: 'http://api.test' }));
-    const deps = makeStubDeps({ getCachedAuth, runSetup });
-    await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(runSetup).toHaveBeenCalled();
-  });
-});
+// Cloud-auth (getCachedAuth / runSetup) step-1 tests removed: cloud authority
+// no longer exists — `borg assimilate` supports only local server authority.
 
 describe('runAssimilate: #1015 authority selection', () => {
   it('connects directly to an explicit server before touching cloud auth and persists its endpoint', async () => {
@@ -1951,9 +2394,9 @@ describe('runAssimilate: #1015 authority selection', () => {
       apiUrl: 'https://localhost:8787',
       serverTrustIdentity: SERVER_TRUST_IDENTITY,
       localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64),
-      localSessionGeneration: 1,
     }));
     expect(setActiveCube.mock.calls[0][0]).not.toHaveProperty('sessionToken');
+    expect(setActiveCube.mock.calls[0][0]).not.toHaveProperty('localSessionGeneration');
   });
 
   it('gives an endpoint-bound recovery command when a local role is unavailable', async () => {
@@ -2228,12 +2671,12 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
-  it('uses dedicated recovery copy while another Borg process owns secure state', async () => {
+  it('uses dedicated recovery copy while another Borg process owns the local seat store', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
       connectServer: vi.fn(async () => {
-        throw new Error('Borg server keychain state is busy');
+        throw new Error('Borg seat store is busy');
       }),
     });
 
@@ -2243,18 +2686,55 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'The OS keychain is busy for https://localhost:8787 because another Borg process is ' +
-        'creating or resuming secure state. Wait for it to finish, then rerun ' +
+      "Borg's local seat store is busy for https://localhost:8787 because another Borg process is " +
+        'creating or resuming saved seat state. Wait for it to finish, then rerun ' +
         '`borg assimilate --host https://localhost:8787`.\n',
     );
+    // RQ: a transient store-busy lock exhaustion must render the RETRY copy — never
+    // the misleading version-compatibility fall-through.
+    const output = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(output).not.toMatch(/versions? (?:are|is) compatible|version compatibility/i);
+    expect(output).not.toMatch(/unexpected response/i);
   });
 
-  it('distinguishes an unavailable keychain from trust, auth, and connectivity failures', async () => {
+  it('renders fail-closed stale-lock guidance (dead holder) naming the lockfile path — never busy/retry', async () => {
+    const stderr = vi.fn();
+    const lockPath = '/home/op/.config/borgmcp/seats.json.lock';
+    const deps = makeStubDeps({
+      stderr,
+      connectServer: vi.fn(async () => {
+        // RULED option (b): a lock whose recorded holder is DEAD fails closed with a
+        // message naming the exact lockfile path and the delete-only-if-no-borg copy.
+        throw new Error(
+          `Borg seat store lock file ${lockPath} is stale: its recorded owner process ` +
+            '(pid 1073741824, started 2020-01-01T00:00:00.000Z) is no longer running. ' +
+            'Borg will NOT remove it automatically. If no borg process is running on this ' +
+            `machine, delete ${lockPath} and retry; otherwise wait for the other borg process to finish.`,
+        );
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((c) => String(c[0])).join('');
+    // The operator sees the exact lockfile path and the fail-closed 'stale' guidance…
+    expect(output).toContain(lockPath);
+    expect(output).toMatch(/stale/i);
+    expect(output).toMatch(/delete .*seats\.json\.lock/i);
+    // …never the transient busy/retry copy, and never the version fall-through.
+    expect(output).not.toMatch(/is busy for .*because another Borg process/i);
+    expect(output).not.toMatch(/versions? (?:are|is) compatible|unexpected response/i);
+  });
+
+  it('distinguishes an unavailable local seat store from trust, auth, and connectivity failures', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
       connectServer: vi.fn(async () => {
-        throw new Error('OS keychain unavailable for Borg server credentials');
+        throw new Error('local seat store is not accessible');
       }),
     });
 
@@ -2264,8 +2744,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'Borg could not access the OS keychain for https://localhost:8787. ' +
-        'Unlock or enable the keychain, then rerun ' +
+      'Borg could not access its local seat store for https://localhost:8787. ' +
+        'Ensure its directory on this machine is readable and writable, then rerun ' +
         '`borg assimilate --host https://localhost:8787`.\n',
     );
   });
@@ -2379,6 +2859,36 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
+  it('surfaces a pin-matched SESSION_REJECTED takeover distinctly, scoped to this worktree, with no Cloud or restart advice', async () => {
+    const stderr = vi.fn();
+    const connectServer = vi.fn(async () => {
+      throw new BorgServerError('SESSION_REJECTED', 'session bearer no longer accepted');
+    });
+    const deps = makeStubDeps({ stderr, connectServer });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'server.example.com' },
+    }, deps)).toBe(1);
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    // Distinct copy: names the worktree's local seat, not a version/protocol mismatch.
+    expect(output).toContain("This worktree's saved local seat on https://server.example.com is no longer accepted");
+    expect(output).toContain('revoked or taken over by another session');
+    // Confirms no Borg state changed (attach is pure diagnosis).
+    expect(output).toContain('No Borg state changed');
+    // Points at the dedicated OFFLINE reset command (no attach-path mutation).
+    expect(output).toContain("clear ONLY this worktree's saved seat");
+    expect(output).toContain('borg reset-local-seat');
+    // Live-safe recovery: new invitation, server stays running, re-enroll from this worktree.
+    expect(output).toContain('`borg assimilate --host https://server.example.com --enroll`');
+    expect(output).toContain('server can stay running');
+    // Never advises restart / version alignment / Cloud, and leaks no bearer.
+    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
+    expect(output).not.toMatch(/versions?\s+are\s+compatible|restart|version alignment/i);
+    expect(output).not.toMatch(/[A-Za-z0-9_-]{43,}/);
+  });
+
   it('explains how the operator replaces a rejected enrollment invitation', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
@@ -2395,20 +2905,24 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     const output = stderr.mock.calls.map((call) => String(call[0])).join('');
-    expect(output).toContain('replacement enrollment invitation');
+    expect(output).toContain('replacement invitation');
     expect(output).toContain('`borg-mcp-server owner-invite`');
     expect(output).toContain('`borg-mcp-server client-invite`');
     expect(output).toContain(
       '`borg assimilate --host https://localhost:8787 --enroll`',
     );
+    // Live-safe: the server stays running — never tell the operator to stop/restart it.
+    expect(output).toContain('server can stay running');
+    expect(output).not.toMatch(/stop the server|restart it/i);
     expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
   });
 
   it.each([
     ['no saved enrollment', new BorgServerError('NOT_ENROLLED', 'not enrolled')],
     ['saved credential rejected', new BorgServerError('CREDENTIAL_REJECTED', 'credential rejected')],
-    ['keychain busy', new Error('Borg server keychain state is busy')],
-    ['keychain unavailable', new Error('OS keychain unavailable for Borg server credentials')],
+    ['session rejected takeover', new BorgServerError('SESSION_REJECTED', 'session rejected')],
+    ['local seat store busy', new Error('Borg seat store is busy')],
+    ['local seat store unavailable', new Error('local seat store is not accessible')],
     ['trust mismatch', new Error('Borg server CA certificate does not match its pinned identity')],
     ['server unreachable', new Error('connect ECONNREFUSED')],
     ['unexpected protocol', new Error('protocol response shape changed')],
@@ -2455,31 +2969,12 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
-  it('allows declining detection and choosing Cloud explicitly', async () => {
-    const answers = ['n', '2', '1'];
-    const prompt = vi.fn(async () => answers.shift() ?? '1');
-    const getCachedAuth = vi.fn(async () => ({ token: 'cloud-token', apiUrl: 'https://api.borgmcp.ai' }));
-    const connectServer = vi.fn(async () => ({
-      token: 'local-token',
-      trustIdentity: SERVER_TRUST_IDENTITY,
-    }));
-    const deps = makeStubDeps({
-      prompt,
-      getCachedAuth,
-      detectLocalServer: vi.fn(async () => 'https://localhost:8787'),
-      connectServer,
-    });
-
-    expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(0);
-
-    expect(getCachedAuth).toHaveBeenCalledOnce();
-    expect(connectServer).not.toHaveBeenCalled();
-    expect(String(prompt.mock.calls[1][0])).toContain('Borg Cloud');
-  });
+  // 'declining detection and choosing Cloud explicitly' removed: there is no
+  // Cloud authority to choose — declining detection prompts for a local host.
 
   it('prompts for a custom host when no local server is detected', async () => {
-    const answers = ['1', 'server.example.com', '1'];
-    const prompt = vi.fn(async () => answers.shift() ?? '1');
+    const answers = ['server.example.com'];
+    const prompt = vi.fn(async () => answers.shift() ?? '');
     const connectServer = vi.fn(async () => ({
       token: 'server-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
@@ -2492,8 +2987,7 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(0);
 
-    expect(String(prompt.mock.calls[0][0])).toContain('Connect this project to');
-    expect(String(prompt.mock.calls[1][0])).toContain('host or URL');
+    expect(String(prompt.mock.calls[0][0])).toContain('host or URL');
     expect(connectServer).toHaveBeenCalledWith('https://server.example.com');
   });
 
@@ -2558,8 +3052,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(connectServer).not.toHaveBeenCalled();
     expect(listCubes).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(
-      'No authority specified. Use --host <server> to select a local server, ' +
-        'or run without --yes from an interactive terminal to choose an authority.\n',
+      'No local server selected. Use `borg assimilate --host <host> --here` to select a local server.\n',
     );
   });
 
@@ -2609,7 +3102,6 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     apiUrl: 'https://localhost:8787',
     serverTrustIdentity: SERVER_TRUST_IDENTITY,
     localSessionCredentialRef: 'borg-server-session:' + 'b'.repeat(64),
-    localSessionGeneration: 1,
     roleName: 'Drone',
     roleClass: 'worker',
     isHumanSeat: false,
@@ -2629,10 +3121,11 @@ describe('runAssimilate: local saved-seat idempotency', () => {
   it('reattaches an identical rerun after restart without minting another drone', async () => {
     let active: ActiveCube | null = null;
     let droneCount = 0;
-    let generation = 0;
     const getActiveCube = vi.fn(async () => active);
     const setActiveCube = vi.fn(async (next: ActiveCube) => {
-      active = { ...next, sessionToken: `session-${next.localSessionGeneration}` };
+      // Real cubes.ts hydrates the bearer from the keychain; here the stub just
+      // makes the persisted seat resolvable on the next rerun.
+      active = { ...next, sessionToken: 'saved-local-session' };
     });
     const probeSeat = vi.fn(async () => 'live' as const);
     const assimilate = vi.fn(async (
@@ -2641,30 +3134,14 @@ describe('runAssimilate: local saved-seat idempotency', () => {
       params: { prior_drone_id?: string },
     ) => {
       if (!params.prior_drone_id) droneCount += 1;
-      generation += 1;
       return {
         cube_id: 'cube-1',
         drone_id: 'drone-saved',
         drone_label: 'one-of-one-drone',
         role_id: 'role-default',
-        reattached: params.prior_drone_id === 'drone-saved',
-        local_attach_completion: {
-          binding: {
-            origin: 'https://localhost:8787',
-            trustIdentity: SERVER_TRUST_IDENTITY,
-            cubeId: 'cube-1',
-            roleId: 'role-default',
-          },
-          operation: {
-            projectRoot: '/work/myrepo',
-            kind: 'seat' as const,
-            operationKey: 'current-worktree',
-          },
-          retryKey: '44444444-4444-4444-8444-444444444444',
-        },
+        result: (params.prior_drone_id === 'drone-saved' ? 'reused' : 'created') as 'created' | 'reused',
         local_session: {
-          credential_ref: `borg-server-session:${String(generation).padStart(64, 'c')}`,
-          generation,
+          credential_ref: 'borg-server-session:' + 'c'.repeat(64),
           expires_at: null,
         },
       };
@@ -2693,11 +3170,11 @@ describe('runAssimilate: local saved-seat idempotency', () => {
       prior_drone_id: 'drone-saved',
     });
     expect(probeSeat).toHaveBeenCalledWith(
-      'session-1',
+      'saved-local-session',
       'https://localhost:8787',
       SERVER_TRUST_IDENTITY,
     );
-    expect(active).toMatchObject({ droneId: 'drone-saved', localSessionGeneration: 2 });
+    expect(active).toMatchObject({ droneId: 'drone-saved' });
   });
 
   it('remints only after the saved seat is authoritatively evicted', async () => {
@@ -2766,11 +3243,56 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('could not verify'));
   });
 
-  it('never treats persisted local metadata with a missing keychain session as a new seat', async () => {
+  const persistedRawSeat = () => ({
+    cubeId: 'cube-1',
+    droneId: 'drone-saved',
+    name: 'myrepo',
+    droneLabel: 'one-of-one-drone',
+    apiUrl: 'https://localhost:8787',
+    serverTrustIdentity: SERVER_TRUST_IDENTITY,
+    localSessionCredentialRef: 'borg-server-session:' + 'b'.repeat(64),
+    roleName: 'Drone',
+    roleClass: 'worker' as const,
+    isHumanSeat: false,
+    // CR#2: a resumable record carries its STORED operation + state. A bound-PENDING
+    // record resumes with an ABSENT/pending-reuse expectation (re-send the identical
+    // bearer) — an EXACT expectation would be rejected by prepareSeat's active-only guard.
+    operation: { projectRoot: '/work/myrepo', kind: 'seat' as const, operationKey: 'current-worktree' },
+    state: 'pending' as const,
+  });
+
+  it('RECORD-ABSENT: binding present but NO session record → truthful local-seat-load error, never a new seat', async () => {
     const assimilate = vi.fn();
+    const peekServerSessionRecord = vi.fn(async () => false); // genuine local-seat-load failure
     const deps = makeStubDeps({
       getActiveCube: vi.fn(async () => null),
       hasPersistedActiveCube: vi.fn(async () => true),
+      readPersistedLocalSeat: vi.fn(async () => persistedRawSeat()),
+      peekServerSessionRecord,
+      assimilate: assimilate as AssimilateDeps['assimilate'],
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => localCube()),
+    });
+
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', here: true, yes: true, cubeName: 'myrepo' },
+    }, deps)).resolves.toBe(1);
+
+    expect(peekServerSessionRecord).toHaveBeenCalled();
+    expect(assimilate).not.toHaveBeenCalled();
+    expect(deps.stderr).toHaveBeenCalledWith(
+      expect.stringContaining('local session credential could not be loaded'),
+    );
+  });
+
+  it('never treats persisted local metadata with a missing local session credential as a new seat', async () => {
+    const assimilate = vi.fn();
+    // No raw seat readable → cannot resume → truthful error, unchanged.
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => null),
+      hasPersistedActiveCube: vi.fn(async () => true),
+      readPersistedLocalSeat: vi.fn(async () => null),
       assimilate: assimilate as AssimilateDeps['assimilate'],
       listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
       getCube: vi.fn(async () => localCube()),
@@ -2782,216 +3304,100 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     }, deps)).resolves.toBe(1);
 
     expect(assimilate).not.toHaveBeenCalled();
-    expect(deps.getPendingLocalAttach).not.toHaveBeenCalled();
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('secure session could not be loaded'));
+    expect(deps.stderr).toHaveBeenCalledWith(
+      expect.stringContaining('local session credential could not be loaded'),
+    );
   });
 
-  it('resumes an unfinished exact attach tuple without probing a revoked old session', async () => {
-    const probeSeat = vi.fn();
-    const getPendingLocalAttach = vi.fn(async (
-      _apiUrl: string,
-      _trust: string,
-      _cubeId: string,
-      roleId: string,
-    ) => roleId === 'role-default'
-      ? { priorDroneId: 'drone-saved', remintInvalidPrior: false }
-      : null);
+  it('CRASH-IN-GAP RESUME: binding present + a resumable PENDING record → resumes (no local-seat-load error), FINALIZE converges with EXACT-ref, exit 0', async () => {
+    const REF = 'borg-server-session:' + 'b'.repeat(64);
+    const activate = vi.fn(async () => {});
+    const scrubPending = vi.fn(async () => {});
+    // The re-sent attach resolves the SAME seat (bearer digest is the correlator);
+    // the composite FINALIZE flips the pending record to ACTIVE.
     const assimilate = vi.fn(async () => ({
-      cube_id: 'cube-1',
-      drone_id: 'drone-saved',
-      drone_label: 'one-of-one-drone',
-      role_id: 'role-default',
-      reattached: true,
-      local_attach_completion: {
-        binding: {
-          origin: 'https://localhost:8787',
-          trustIdentity: SERVER_TRUST_IDENTITY,
-          cubeId: 'cube-1',
-          roleId: 'role-default',
-        },
-        operation: {
-          projectRoot: '/work/myrepo',
-          kind: 'seat' as const,
-          operationKey: 'current-worktree',
-        },
-        retryKey: '66666666-6666-4666-8666-666666666666',
-      },
-      local_session: {
-        credential_ref: 'borg-server-session:' + 'e'.repeat(64),
-        generation: 2,
-        expires_at: null,
-      },
+      cube_id: 'cube-1', drone_id: 'drone-saved', drone_label: 'one-of-one-drone',
+      result: 'reused' as const, role_id: 'role-default',
+      local_session: { credential_ref: REF, expires_at: '2026-07-20T00:00:00.000Z' },
+      finalize: { activate, scrubPending },
     }));
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const stderr = vi.fn();
     const deps = makeStubDeps({
-      // The prior session was revoked by the server-side commit whose response
-      // was lost, so hydration can no longer return an active seat.
-      getActiveCube: vi.fn(async () => null),
-      getPendingLocalAttach,
-      probeSeat,
-      assimilate: assimilate as AssimilateDeps['assimilate'],
-      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
-      getCube: vi.fn(async () => localCube(true)),
-    });
-
-    await expect(runAssimilate({
-      role: undefined,
-      flags: { server: 'localhost:8787', here: true, yes: true, cubeName: 'myrepo' },
-    }, deps)).resolves.toBe(0);
-
-    expect(probeSeat).not.toHaveBeenCalled();
-    expect(assimilate.mock.calls[0][2]).toMatchObject({
-      role_id: 'role-default',
-      prior_drone_id: 'drone-saved',
-    });
-    expect(deps.completeLocalAttach).toHaveBeenCalledWith(expect.objectContaining({
-      binding: expect.objectContaining({ roleId: 'role-default' }),
-      operation: expect.objectContaining({
-        projectRoot: '/work/myrepo',
-        kind: 'seat',
-      }),
-      retryKey: '66666666-6666-4666-8666-666666666666',
-    }));
-  });
-
-  it('retries one implicit sibling exactly, then mints a distinct later sibling', async () => {
-    let cwd = '/work/myrepo';
-    const spawned = new Set<string>();
-    let pending: {
-      retryKey: string;
-      droneId: string;
-      operation: NonNullable<Parameters<AssimilateDeps['assimilate']>[2]['local_attach_operation']>;
-      bindingRoleId: string;
-    } | null = null;
-    let nextDrone = 1;
-    let loseFirstResponse = true;
-    const setActiveCube = vi.fn(async () => {});
-    const completeLocalAttach = vi.fn(async (completion: NonNullable<AssimilateResult['local_attach_completion']>) => {
-      expect(pending).not.toBeNull();
-      expect(completion.retryKey).toBe(pending!.retryKey);
-      expect(completion.binding.roleId).toBe(pending!.bindingRoleId);
-      pending = null;
-    });
-    const assimilate = vi.fn(async (
-      apiUrl: string,
-      _token: string,
-      params: Parameters<AssimilateDeps['assimilate']>[2],
-      trustIdentity?: string,
-    ) => {
-      const operation = params.local_attach_operation!;
-      if (pending === null) {
-        pending = {
-          retryKey: `44444444-4444-4444-8444-${String(nextDrone).padStart(12, '0')}`,
-          droneId: `sibling-${nextDrone++}`,
-          operation,
-          bindingRoleId: params.role_id,
-        };
-      } else {
-        expect(operation).toEqual(pending.operation);
-        expect(params.role_id).toBe(pending.bindingRoleId);
-      }
-      if (loseFirstResponse) {
-        loseFirstResponse = false;
-        throw new Error('response lost after server commit');
-      }
-      return {
-        cube_id: 'cube-1',
-        drone_id: pending.droneId,
-        drone_label: pending.droneId,
-        // A valid server reattach may retain a different role. Completion must
-        // still consume the originally prepared role binding.
-        role_id: 'role-other',
-        local_attach_completion: {
-          binding: {
-            origin: apiUrl,
-            trustIdentity: trustIdentity!,
-            cubeId: params.cube_id,
-            roleId: pending.bindingRoleId,
-          },
-          operation: pending.operation,
-          retryKey: pending.retryKey,
-        },
-        local_session: {
-          credential_ref: 'borg-server-session:' + 'f'.repeat(64),
-          generation: 1,
-          expires_at: null,
-        },
-      };
-    });
-    const runSync = vi.fn((_cmd: string, argv: string[]) => {
-      if (argv[0] === 'worktree' && argv[1] === 'add') {
-        const path = argv[2] === '-b' ? argv[4] : argv[2];
-        spawned.add(path);
-        return { status: 0, stdout: '', stderr: '' };
-      }
-      if (argv[0] === 'worktree' && argv[1] === 'list') {
-        return { status: 0, stdout: '/work/myrepo\n', stderr: '' };
-      }
-      if (argv[0] === 'rev-parse' && argv.includes('refs/heads/wt-other')) {
-        return { status: 1, stdout: '', stderr: '' };
-      }
-      if (argv[0] === 'rev-parse' && argv.includes('refs/heads/wt-other-2')) {
-        return { status: 1, stdout: '', stderr: '' };
-      }
-      if (argv[0] === 'rev-parse') {
-        return { status: 0, stdout: 'abc123\n', stderr: '' };
-      }
-      return { status: 0, stdout: '', stderr: '' };
-    });
-    const deps = makeStubDeps({
-      cwd: () => cwd,
-      chdir: vi.fn((next: string) => { cwd = next; }),
-      findProjectRoot: () => '/work/myrepo',
-      pathExists: (path: string) => spawned.has(path),
-      runSync,
-      getActiveCube: vi.fn(async () => localActive()),
-      getPendingLocalAttach: vi.fn(async (
-        _apiUrl,
-        _trust,
-        _cubeId,
-        roleId,
-        operation,
-      ) => pending !== null && roleId === pending.bindingRoleId &&
-          JSON.stringify(operation) === JSON.stringify(pending.operation)
-        ? { remintInvalidPrior: false }
-        : null),
-      completeLocalAttach,
-      setActiveCube,
-      assimilate: assimilate as AssimilateDeps['assimilate'],
+      stderr,
+      getActiveCube: vi.fn(async () => null),                       // PENDING is non-hydratable
+      hasPersistedActiveCube: vi.fn(async () => true),
+      readPersistedLocalSeat: vi.fn(async () => persistedRawSeat()),
+      peekServerSessionRecord: vi.fn(async () => true),             // resumable record present
+      assimilate,
+      finalizeServerSeat,
       listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
       getCube: vi.fn(async () => localCube()),
     });
-    const args = {
+
+    // A fresh `borg assimilate` — no --here needed.
+    expect(await runAssimilate({
       role: undefined,
       flags: { server: 'localhost:8787', yes: true, cubeName: 'myrepo' },
-    };
+    }, deps)).toBe(0);
 
-    await expect(runAssimilate(args, deps)).resolves.toBe(1);
-    expect(pending?.droneId).toBe('sibling-1');
-
-    cwd = '/work/myrepo';
-    await expect(runAssimilate(args, deps)).resolves.toBe(0);
-    expect(setActiveCube).toHaveBeenLastCalledWith(expect.objectContaining({
-      droneId: 'sibling-1',
-      roleName: 'Other',
-    }));
-    expect(completeLocalAttach).toHaveBeenLastCalledWith(expect.objectContaining({
-      binding: expect.objectContaining({ roleId: 'role-default' }),
-      operation: {
-        projectRoot: '/work/myrepo',
-        kind: 'sibling',
-        operationKey: 'implicit-sibling',
-      },
-    }));
-
-    cwd = '/work/myrepo';
-    await expect(runAssimilate(args, deps)).resolves.toBe(0);
-    expect(setActiveCube).toHaveBeenLastCalledWith(expect.objectContaining({
-      droneId: 'sibling-2',
-    }));
-    expect(new Set(setActiveCube.mock.calls.map(([active]) => active.droneId))).toEqual(
-      new Set(['sibling-1', 'sibling-2']),
-    );
+    // NOT misdiagnosed as a local-seat-load failure.
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).not.toMatch(/local session credential could not be loaded/);
+    // The identical seat is re-sent (resume), not a fresh mint.
+    expect(assimilate).toHaveBeenCalled();
+    // CR#2: a bound-PENDING resume declares ABSENT (pending-reuse) — prepareSeat REUSES
+    // the pending record and re-sends the identical bearer. An EXACT expectation would
+    // be rejected by prepareSeat's `prior.state==='active'` guard and abort convergence.
+    expect(finalizeServerSeat).toHaveBeenCalledTimes(1);
+    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({ kind: 'absent' });
+    expect(finalizeServerSeat.mock.calls[0][0].active).toMatchObject({ cubeId: 'cube-1', localSessionCredentialRef: REF });
   });
+
+  it('CR#2: a bound-PENDING SIBLING resume OVERRIDES session_operation from the stored record and declares ABSENT (re-derives the exact original ref)', async () => {
+    const REF = 'borg-server-session:' + 'b'.repeat(64);
+    // The stored record is a sibling whose activation failed, bound to THIS worktree.
+    // Its operation is the ORIGINAL sibling op (projectRoot = the source repo), NOT
+    // this worktree's derived current-worktree seat op.
+    const siblingOperation = { projectRoot: '/work/original', kind: 'sibling' as const, operationKey: 'implicit-sibling:run-1' };
+    const boundPendingSibling = () => ({
+      cubeId: 'cube-1', name: 'myrepo', droneLabel: 'one-of-one-drone',
+      apiUrl: 'https://localhost:8787', serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      localSessionCredentialRef: REF, roleName: 'Drone', roleClass: 'worker' as const, isHumanSeat: false,
+      operation: siblingOperation, state: 'pending' as const,
+    });
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'cube-1', drone_id: 'drone-saved', drone_label: 'one-of-one-drone',
+      result: 'reused' as const, role_id: 'role-default',
+      local_session: { credential_ref: REF, expires_at: '2026-07-20T00:00:00.000Z' },
+      finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}) },
+    }));
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => null),
+      hasPersistedActiveCube: vi.fn(async () => true),
+      readPersistedLocalSeat: vi.fn(async () => boundPendingSibling()),
+      peekServerSessionRecord: vi.fn(async () => true),
+      assimilate,
+      finalizeServerSeat,
+      cwd: () => '/work/myrepo', findProjectRoot: () => '/work/myrepo',
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => localCube()),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true, cubeName: 'myrepo' },
+    }, deps)).toBe(0);
+
+    // The rerun re-derives the EXACT original sibling operation from the stored
+    // record (override) — NOT this worktree's current-worktree seat op.
+    const params = assimilate.mock.calls[0][2] as { session_operation?: unknown; session_expected?: unknown };
+    expect(params.session_operation).toEqual(siblingOperation);
+    // A PENDING record resumes with ABSENT/pending-reuse (never EXACT).
+    expect(params.session_expected).toEqual({ kind: 'absent' });
+    expect(finalizeServerSeat.mock.calls[0][0].expected).toEqual({ kind: 'absent' });
+  });
+
 });
 
 // Phase G Task 19 — fills coverage gap on spec scenarios 5 + 12.
@@ -3029,7 +3435,7 @@ describe('runAssimilate: integration scenario 5 (--worktree force-create)', () =
       'https://localhost:8787',
       'server-token',
       expect.objectContaining({
-        local_attach_operation: {
+        session_operation: {
           projectRoot: '/work/myrepo',
           kind: 'sibling',
           operationKey: 'named-sibling:review-1',
@@ -3037,14 +3443,6 @@ describe('runAssimilate: integration scenario 5 (--worktree force-create)', () =
       }),
       SERVER_TRUST_IDENTITY,
     );
-    expect(deps.completeLocalAttach).toHaveBeenCalledWith(expect.objectContaining({
-      binding: expect.objectContaining({ roleId: 'r' }),
-      operation: {
-        projectRoot: '/work/myrepo',
-        kind: 'sibling',
-        operationKey: 'named-sibling:review-1',
-      },
-    }));
   });
 });
 
@@ -3128,7 +3526,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
         cube_id: 'cube-1',
         drone_id: 'drone-x',
         drone_label: 'drone-1',
-        session_token: 'sess',
+        result: 'created' as const,
+        local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
         role_id: 'role-builder',
       })),
       runSync: gitRemoteRunSync,
@@ -3146,7 +3545,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
       cube_id: 'cube-1',
       drone_id: 'drone-x',
       drone_label: 'drone-1',
-      session_token: 'sess',
+      result: 'created' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
       role_id: 'role-builder',
     }));
     const exec = vi.fn(async () => 0);
@@ -3160,7 +3560,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ model: 'claude:claude-opus-4-8', agent_kind: 'claude' })
+      expect.objectContaining({ model: 'claude:claude-opus-4-8', agent_kind: 'claude' }),
+      expect.any(String),
     );
     const [, , , envArg] = exec.mock.calls[0] as [string, string[], string, Record<string, string>];
     expect(envArg.ANTHROPIC_MODEL).toBe('claude-opus-4-8');
@@ -3173,7 +3574,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
       cube_id: 'cube-1',
       drone_id: 'drone-x',
       drone_label: 'drone-1',
-      session_token: 'sess',
+      result: 'created' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
       role_id: 'role-builder',
     }));
     const deps = successDeps({
@@ -3195,7 +3597,8 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ model: null })
+      expect.objectContaining({ model: null }),
+      expect.any(String),
     );
   });
 

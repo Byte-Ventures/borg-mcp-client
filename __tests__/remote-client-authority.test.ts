@@ -53,7 +53,7 @@ describe('remote-client explicit authority connection', () => {
     const auth = mockCloudAuth();
     const fetchSpy = vi.fn(async () =>
       new Response(JSON.stringify({
-        protocol_version: '1',
+        protocol_version: '2',
         request_id: 'cubes-response-1',
         payload: { cubes: [] },
       }), {
@@ -106,7 +106,7 @@ describe('remote-client explicit authority connection', () => {
           ? { drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID }] }
           : { cube: { id: CUBE_ID, name: 'local-cube' } };
       return new Response(JSON.stringify({
-        protocol_version: '1',
+        protocol_version: '2',
         request_id: 'cube-response-1',
         payload,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -236,16 +236,10 @@ describe('remote-client explicit authority connection', () => {
     }));
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    const { getRoster, submitReport } = await import('../src/remote-client.js');
+    const { getRoster } = await import('../src/remote-client.js');
 
     await expect(getRoster('legacy-local-session', apiUrl, undefined, undefined))
       .rejects.toThrow(/authority state is missing or unreadable/i);
-    await expect(submitReport(
-      'legacy-local-session',
-      apiUrl,
-      { message: 'must not reach Cloud' },
-      undefined,
-    )).rejects.toThrow(/authority state is missing or unreadable/i);
 
     expect(getIdToken).not.toHaveBeenCalled();
     expect(getRefreshToken).not.toHaveBeenCalled();

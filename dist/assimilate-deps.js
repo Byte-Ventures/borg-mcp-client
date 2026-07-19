@@ -8,20 +8,21 @@
  * (see `client/__tests__/assimilate-cmd.test.ts:makeStubDeps`).
  */
 import { spawnSync, spawn as spawnChild } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { hostname as osHostname, homedir as osHomedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
-import { API_URL, getValidToken, listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
-import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, attachBorgServer, } from './server-handshake.js';
-import { completeLocalAttachRetry, getPendingLocalAttach, prepareLocalAttachRetry, } from './server-attach-state.js';
+import { listCubes as remoteListCubes, getCube as remoteGetCube, createCube as remoteCreateCube, assimilate as remoteAssimilate, listTemplates as remoteListTemplates, } from './remote-client.js';
+import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
+import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
+import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError } from './server-errors.js';
 import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
-import { authenticateWithGoogle } from './auth.js';
 import { addProjectSessionStartHook } from './config-utils.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
@@ -93,35 +94,51 @@ export function buildDefaultAssimilateDeps() {
         },
         getActiveCube: () => cubesGetActive(),
         hasPersistedActiveCube: () => cubesHasPersistedActive(),
+        readPersistedLocalSeat: () => readPersistedLocalSeat(),
+        peekServerSessionRecord: async (credentialRef, binding) => (await observeSeat(credentialRef, binding)).state !== 'absent',
+        // CR#3: recover an in-flight implicit-sibling attempt (unbound pending sibling
+        // record) by source repo, so a rerun re-derives the EXACT seat + reuses the bearer.
+        findIncompleteSiblingAttempt: async (binding) => {
+            const record = await findIncompleteSiblingAttempt(binding);
+            if (!record)
+                return null;
+            return { operation: record.operation, roleId: record.roleId, credentialRef: seatRef(record) };
+        },
         probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
-        getPendingLocalAttach: (apiUrl, serverTrustIdentity, cubeId, roleId, operation) => getPendingLocalAttach({
-            origin: apiUrl,
-            trustIdentity: serverTrustIdentity,
-            cubeId,
-            roleId,
-        }, operation),
-        completeLocalAttach: (completion) => completeLocalAttachRetry(completion),
         setActiveCube: (a) => cubesSetActive(a),
+        // Single-store FINALIZE: the merged activate+bind (reached via the injected
+        // `activate` thunk from sendBorgServerAttach) stamps the exact
+        // digest-matched PENDING record ACTIVE and binds the decided worktree in ONE
+        // atomic commit. PREPARE-time revalidation already ran (prepareSeat), so the
+        // only outcomes here are committed or a post-mint activation failure (CR#5:
+        // missing/replaced/throw → the pending record is the rerunnable locator; the
+        // caller PRESERVES the worktree). expectation-mismatch is produced upstream at
+        // PREPARE (result.prepareAborted), never here.
+        finalizeServerSeat: async ({ active, activate }) => {
+            const binding = {
+                worktree: cubesFindProjectRoot(process.cwd()),
+                name: active.name,
+                droneLabel: active.droneLabel,
+                ...(active.roleName !== undefined ? { roleName: active.roleName } : {}),
+                ...(active.roleClass !== undefined ? { roleClass: active.roleClass } : {}),
+                ...(active.isHumanSeat !== undefined ? { isHumanSeat: active.isHumanSeat } : {}),
+            };
+            let outcome;
+            try {
+                outcome = (await activate(binding));
+            }
+            catch {
+                return { committed: false, reason: 'activation-failed' };
+            }
+            return outcome === 'activated'
+                ? { committed: true }
+                : { committed: false, reason: 'activation-failed' };
+        },
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
         // gh#673 P2 (WI-1): project-local SessionStart hook for the launch root.
         installProjectSessionHook: (projectRoot) => {
             addProjectSessionStartHook(projectRoot);
         },
-        getCachedAuth: async () => {
-            try {
-                const token = await getValidToken();
-                return { token, apiUrl: API_URL };
-            }
-            catch {
-                return null;
-            }
-        },
-        runSetup: async () => {
-            await authenticateWithGoogle();
-            const token = await getValidToken();
-            return { token, apiUrl: API_URL };
-        },
-        cloudApiUrl: API_URL,
         // #1015: discovery is advisory but still verifies the server-owned CA.
         detectLocalServer: async () => (await probeLocalBorgServer(DEFAULT_LOCAL_SERVER_ORIGIN))
             ? DEFAULT_LOCAL_SERVER_ORIGIN
@@ -193,55 +210,90 @@ export function buildDefaultAssimilateDeps() {
         },
         assimilate: async (apiUrl, token, params, serverTrustIdentity) => {
             if (serverTrustIdentity !== undefined) {
-                if (params.local_attach_operation === undefined) {
+                if (params.session_operation === undefined) {
                     throw new Error('Borg server attach operation identity is missing');
                 }
-                const binding = {
-                    origin: apiUrl,
-                    trustIdentity: serverTrustIdentity,
-                    cubeId: params.cube_id,
-                    roleId: params.role_id,
-                };
-                const retryKey = await prepareLocalAttachRetry(binding, {
-                    ...(params.prior_drone_id === undefined
-                        ? {}
-                        : { priorDroneId: params.prior_drone_id }),
-                    remintInvalidPrior: params.remint_invalid_prior === true,
-                }, params.local_attach_operation);
+                const operation = params.session_operation;
                 const trust = await loadBorgServerTrust(apiUrl);
                 if (trust.identity !== serverTrustIdentity) {
                     throw new Error('Borg server trust identity changed; refusing the attach');
                 }
-                const attached = await attachBorgServer(apiUrl, serverTrustIdentity, token, {
+                // CR #1: MINT under the SINGLE store flock via prepareSeat, which REVALIDATES
+                // the typed prepare-time expectation and mints the PENDING record in one lock
+                // hold — so a reset/writer that wins before PREPARE aborts the attach here
+                // before any credential is created or sent. Eviction-remint discards the
+                // known-invalid saved record (scrubBeforeMint) in the same flock. A fresh
+                // sibling spawn has no in-place binding to revalidate, so it passes
+                // revalidate:false but still mints under the one flock (never a bypass). The
+                // client CSPRNG-generates the bearer here; a lost-response retry / crash-in-gap
+                // is recovered by prepareSeat's idempotent mint-or-reuse (identical bearer).
+                const seed = {
+                    origin: apiUrl,
+                    trustIdentity: serverTrustIdentity,
                     cubeId: params.cube_id,
                     roleId: params.role_id,
-                    retryKey,
-                }, { fetchImpl: trust.fetchImpl });
+                    operation,
+                    credential: randomBytes(32).toString('base64url'),
+                };
+                const preparedMint = await prepareSeat({
+                    expected: params.session_expected ?? { kind: 'absent' },
+                    revalidate: params.revalidate_at_prepare === true && params.session_expected !== undefined,
+                    scrubBeforeMint: params.remint_invalid_prior === true,
+                    seed,
+                });
+                if (!preparedMint.ok) {
+                    return {
+                        cube_id: params.cube_id,
+                        drone_id: '',
+                        drone_label: '',
+                        role_id: params.role_id,
+                        prepareAborted: true,
+                    };
+                }
+                const pending = preparedMint.record;
+                // Network only — the pending→ACTIVE flip + worktree BIND are merged into the
+                // single-store activate+bind op, deferred to the FINALIZE thunk so the
+                // binding lands ATOMICALLY WITH activation (ACTIVE-without-binding unreachable).
+                const prepared = await sendBorgServerAttach(apiUrl, serverTrustIdentity, token, {
+                    cubeId: params.cube_id,
+                    roleId: params.role_id,
+                    operation,
+                    ...(params.prior_drone_id === undefined
+                        ? {}
+                        : { priorDroneId: params.prior_drone_id }),
+                }, pending.credential, { fetchImpl: trust.fetchImpl });
                 if (params.prior_drone_id) {
+                    // The seat identity did not match the reattach/remint intent. Scrub the
+                    // caller's own pending record (no-op unless it is still ours + pending)
+                    // before surfacing, so no orphan pending lingers.
                     if (params.remint_invalid_prior) {
-                        if (attached.drone.id === params.prior_drone_id) {
-                            throw new Error('Borg server returned the invalid saved seat during remint');
+                        if (prepared.result !== 'created' || prepared.drone.id === params.prior_drone_id) {
+                            await prepared.scrubPending();
+                            throw new Error('Borg server did not remint a fresh seat after eviction');
                         }
                     }
-                    else if (!attached.reattached || attached.drone.id !== params.prior_drone_id) {
+                    else if (prepared.result !== 'reused' || prepared.drone.id !== params.prior_drone_id) {
+                        await prepared.scrubPending();
                         throw new BorgServerError('ATTACH_CONFLICT', 'Borg server did not reattach the saved seat');
                     }
                 }
                 return {
-                    cube_id: attached.cube.id,
-                    drone_id: attached.drone.id,
-                    drone_label: attached.drone.label,
-                    role_id: attached.role.id,
-                    reattached: attached.reattached,
-                    local_attach_completion: {
-                        binding,
-                        operation: params.local_attach_operation,
-                        retryKey,
-                    },
+                    cube_id: prepared.cube.id,
+                    drone_id: prepared.drone.id,
+                    drone_label: prepared.drone.label,
+                    role_id: prepared.role.id,
+                    result: prepared.result,
                     local_session: {
-                        credential_ref: attached.session.credentialRef,
-                        generation: attached.session.generation,
-                        expires_at: attached.session.expiresAt,
+                        credential_ref: prepared.credentialRef,
+                        expires_at: prepared.session.expiresAt,
+                    },
+                    // Handles for the cube-lock-held FINALIZE (assimilate-cmd Step 8).
+                    finalize: {
+                        activate: prepared.activate,
+                        scrubPending: prepared.scrubPending,
+                        // CR#2: bind the surviving PENDING record to the preserved worktree on an
+                        // activation failure so the rerun-from-there resumes the exact operation.
+                        bindPending: prepared.bindPending,
                     },
                 };
             }
@@ -260,7 +312,9 @@ export function buildDefaultAssimilateDeps() {
                 drone_label: result.drone.label,
                 session_token: result.sessionToken,
                 role_id: result.role.id,
-                reattached: result.reattached === true,
+                // Map the cloud gh#780 reattach hint onto the unified result discriminant
+                // so the same "reused" display path serves cloud and local authorities.
+                result: result.reattached === true ? 'reused' : 'created',
             };
         },
         listTemplates: async (apiUrl, token, serverTrustIdentity) => {

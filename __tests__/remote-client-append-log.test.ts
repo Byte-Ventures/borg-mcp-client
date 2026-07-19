@@ -1,109 +1,146 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const HOSTED_API_URL = process.env.BORG_API_URL || 'https://api.borgmcp.ai';
+/**
+ * appendLog directed-message request body.
+ *
+ * Adapted to the LOCAL server path (cloud severance): appendLog routes through
+ * the verified local authority to POST /api/cubes/:cubeId/logs with a
+ * protocol-enveloped body. The default broadcast omits visibility; an explicit
+ * direct send carries { visibility, recipientDroneIds }. Two behaviours have no
+ * local analogue and are asserted at their real local contract instead of the
+ * dead cloud /api/drone/log route:
+ *  - `class:` (server taxonomy routing) is not carried locally: it fails closed
+ *    with "does not support" before any network call.
+ *  - an explicit `to:` array is resolved against the local roster into
+ *    recipientDroneIds (a direct send), rather than passed through verbatim.
+ * The pre-network contradiction guard (broadcast + non-empty to:) is unchanged.
+ */
 
-vi.mock('../src/config.js', () => ({
-  getIdToken: vi.fn(async () => 'id-token'),
-  getRefreshToken: vi.fn(async () => null),
-  clearTokens: vi.fn(async () => {}),
-}));
+const CUBE_ID = '11111111-1111-4111-8111-111111111111';
+const ROLE_ID = '22222222-2222-4222-8222-222222222222';
+const DRONE_ID = '33333333-3333-4333-8333-333333333333';
+const ORIGIN = 'https://localhost:8787';
+const TRUST_IDENTITY = 'spki-sha256:test-server';
+const SESSION = 's'.repeat(43);
 
-vi.mock('../src/auth.js', () => ({
-  refreshIdToken: vi.fn(async () => {}),
-  RefreshTokenInvalidError: class RefreshTokenInvalidError extends Error {},
-  RefreshTransientError: class RefreshTransientError extends Error {},
-}));
+function localEnvelope(payload: unknown, requestId = 'local-response-1') {
+  return { protocol_version: '2', request_id: requestId, payload };
+}
 
-describe('appendLog directed-message request body', () => {
-  let fetchSpy: ReturnType<typeof vi.spyOn>;
+describe('appendLog directed-message request body (local path)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
+    vi.resetModules();
+    fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input.toString());
+      const method = init?.method ?? 'GET';
+      if (url.pathname === `/api/cubes/${CUBE_ID}/roles` && method === 'GET') {
+        return new Response(JSON.stringify(localEnvelope({
+          roles: [{ id: ROLE_ID, name: 'Builder', is_human_seat: false }],
+        })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/drones` && method === 'GET') {
+        return new Response(JSON.stringify(localEnvelope({
+          drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID }],
+        })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/logs` && method === 'POST') {
+        const request = JSON.parse(String(init?.body)).payload;
+        return new Response(JSON.stringify(localEnvelope({
           entry: {
             id: 'entry-1',
-            cube_id: 'cube-1',
-            drone_id: 'drone-1',
-            message: 'hello',
-            visibility: 'broadcast',
+            cube_id: CUBE_ID,
+            drone_id: DRONE_ID,
+            message: request.message,
+            visibility: request.visibility ?? 'broadcast',
+            recipient_drone_ids: request.recipientDroneIds ?? [],
             created_at: '2026-05-29T20:00:00.000Z',
           },
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      )
-    );
+        })), { status: 200 });
+      }
+      throw new Error(`unexpected local request ${method} ${url.pathname}`);
+    });
+
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => ({
+        identity: TRUST_IDENTITY,
+        fetchImpl: fetchSpy,
+      })),
+    }));
+    vi.doMock('../src/cubes.js', () => ({
+      getActiveCube: vi.fn(async () => ({
+        cubeId: CUBE_ID,
+        droneId: DRONE_ID,
+        sessionToken: SESSION,
+        apiUrl: ORIGIN,
+        serverTrustIdentity: TRUST_IDENTITY,
+      })),
+    }));
   });
 
   afterEach(() => {
-    fetchSpy.mockRestore();
+    vi.resetModules();
   });
+
+  function postBody() {
+    const post = fetchSpy.mock.calls.find(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` &&
+      init?.method === 'POST'
+    );
+    expect(post).toBeDefined();
+    return JSON.parse(String(post![1]?.body)).payload;
+  }
 
   it('omits visibility fields for default broadcast back-compat', async () => {
     const { appendLog } = await import('../src/remote-client.js');
-
-    await appendLog('session-token', HOSTED_API_URL, 'hello');
-
-    const [, init] = fetchSpy.mock.calls[0];
-    expect(JSON.parse(init!.body as string)).toEqual({ message: 'hello' });
+    await appendLog(SESSION, ORIGIN, 'hello');
+    expect(postBody()).toEqual({ message: 'hello' });
   });
 
   it('sends direct visibility and recipient ids when requested', async () => {
     const { appendLog } = await import('../src/remote-client.js');
-
-    await appendLog('session-token', HOSTED_API_URL, 'secret', {
+    await appendLog(SESSION, ORIGIN, 'secret', {
       visibility: 'direct',
       recipientDroneIds: ['drone-2'],
     });
-
-    const [, init] = fetchSpy.mock.calls[0];
-    expect(JSON.parse(init!.body as string)).toEqual({
+    expect(postBody()).toEqual({
       message: 'secret',
       visibility: 'direct',
       recipientDroneIds: ['drone-2'],
     });
   });
 
-  it('sends raw server-routing tokens without resolving them client-side', async () => {
+  it('fails closed on server taxonomy routing (class:) before any network call', async () => {
     const { appendLog } = await import('../src/remote-client.js');
-
-    await appendLog('session-token', HOSTED_API_URL, 'STARTING: work', {
+    await expect(appendLog(SESSION, ORIGIN, 'STARTING: work', {
       class: 'status-claim',
-      to: ['Coordinator'],
-    });
-
-    const [, init] = fetchSpy.mock.calls[0];
-    expect(JSON.parse(init!.body as string)).toEqual({
-      message: 'STARTING: work',
-      class: 'status-claim',
-      to: ['Coordinator'],
-    });
+      to: ['builder-1'],
+    })).rejects.toThrow(/Local Borg server does not support/);
+    expect(fetchSpy.mock.calls.some(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` &&
+      init?.method === 'POST'
+    )).toBe(false);
   });
 
-  it('preserves an explicit empty to array for the server D3 path', async () => {
+  it('resolves an explicit empty to array into a direct send with no recipients', async () => {
     const { appendLog } = await import('../src/remote-client.js');
-
-    await appendLog('session-token', HOSTED_API_URL, 'hello', {
-      to: [],
-    });
-
-    const [, init] = fetchSpy.mock.calls[0];
-    expect(JSON.parse(init!.body as string)).toEqual({
+    await appendLog(SESSION, ORIGIN, 'hello', { to: [] });
+    expect(postBody()).toEqual({
       message: 'hello',
-      to: [],
+      visibility: 'direct',
+      recipientDroneIds: [],
     });
   });
 
-  it('rejects contradictory hosted to: plus broadcast before token lookup or fetch', async () => {
+  it('rejects contradictory to: plus broadcast before authority lookup or POST', async () => {
     const { appendLog } = await import('../src/remote-client.js');
-
-    await expect(appendLog('session-token', HOSTED_API_URL, 'contradictory routing', {
-      to: ['Coordinator'],
+    await expect(appendLog(SESSION, ORIGIN, 'contradictory routing', {
+      to: ['builder-1'],
       visibility: 'broadcast',
     })).rejects.toThrow(
       /Remove visibility to direct to recipients, or remove to: to broadcast/,
     );
-
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

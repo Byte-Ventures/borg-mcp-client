@@ -26,7 +26,6 @@
 
 import { Buffer } from 'node:buffer';
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { compareBroadcastHwm, type BroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import { getActiveCube, inboxPathForDrone } from './cubes.js';
@@ -51,16 +50,7 @@ import {
   startCodexHeartbeat,
   wakeCodexViaAppServer,
 } from './codex-app-wake.js';
-import { getValidToken } from './remote-client.js';
-import {
-  recordEventReceipt,
-  emitHealthBeat,
-  getCachedMonitorHealthy,
-  getCachedWakeArmed,
-} from './health-beat.js';
-import { getPackageVersion } from './version.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { isCanonicalHostedApiUrl } from './authority.js';
 import {
   acquireStreamLease,
   readOwnershipSnapshot,
@@ -110,15 +100,6 @@ export function setModuleInjectOpenCode(fn: (text: string) => Promise<boolean>):
 const RECENT_IDS_CAP = 50;
 export const INBOX_TAIL_LINES_CAP = 512;
 export const INBOX_TAIL_TRIM_THRESHOLD_LINES = INBOX_TAIL_LINES_CAP * 2;
-
-function resolveRuntimeHostname(): string | null {
-  try {
-    const h = os.hostname();
-    return h && h.trim() ? h.trim().slice(0, 255) : null;
-  } catch {
-    return null;
-  }
-}
 
 // ------------------------------------------------------------------
 // Probeable status (read by the `borg_stream-status` MCP tool)
@@ -353,8 +334,6 @@ export interface StreamDeps {
     entryId: string,
     renderedLine: string
   ) => Promise<boolean>;
-  /** Override the auth-token fetch (tests skip the OS keychain). */
-  getToken?: () => Promise<string>;
   /** Optional Codex app-server wake sink; tests inject a spy. */
   wakeCodex?: (reason: string) => void;
   /** Override the heartbeat watchdog timeout. */
@@ -368,14 +347,6 @@ export interface StreamDeps {
   /** Override owner stale threshold in focused duplicate-process tests. */
   ownerStaleMs?: number;
   /**
-   * gh#541 WU-2: invoked after a delivered inbound entry is freshly written to
-   * the inbox file (the wake-path RECEIPT — the event that should wake the
-   * agent). Default records the receipt watermark + emits a best-effort health
-   * beat (child-process HTTP via the real global fetch — its own wire, NOT the
-   * SSE stream's fetchImpl — below the agent classifier). Tests inject a spy.
-   */
-  onInboxReceipt?: (active: ActiveCube, token: string) => void;
-  /**
    * Optional opencode entry injector for autonomous drone processing.
    * When provided AND the injection succeeds, the inbox file write is skipped
    * (the drone processes the entry autonomously). On failure, falls through
@@ -388,41 +359,14 @@ const defaultDeps: Required<StreamDeps> = {
   fetchImpl: globalThis.fetch.bind(globalThis),
   appendLine: defaultAppendLine,
   hasInboxEntryId: defaultHasInboxEntryId,
-  getToken: getValidToken,
   wakeCodex: wakeCodexViaAppServer,
   heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
   hwmDivergenceGraceMs: HWM_DIVERGENCE_GRACE_MS,
   abortSignal: new AbortController().signal,
   ownerDeps: {},
   ownerStaleMs: 70_000,
-  onInboxReceipt: defaultOnInboxReceipt,
   injectOpenCode: (text) => _moduleInjectOpenCode ? _moduleInjectOpenCode(text) : Promise.resolve(false),
 };
-
-/**
- * gh#541 WU-2 default receipt handler: record the wake-path receipt watermark
- * and fire a best-effort health beat below the agent classifier. Reuses the
- * SSE session's already-fetched token (no extra keychain read) and the cached
- * monitor-health from the periodic tick (no pgrep per inbound entry).
- */
-function defaultOnInboxReceipt(active: ActiveCube, token: string): void {
-  recordEventReceipt();
-  void emitHealthBeat(active, {
-    sseConnected: true,
-    inboxMonitorHealthy: getCachedMonitorHealthy(),
-    // gh#633: reuse the cached transport-agnostic wake-armed from the periodic
-    // tick (no bridge/Monitor re-probe per inbound entry).
-    wakeArmed: getCachedWakeArmed(),
-    // gh#634: live runtime agent_kind (cheap env read, constant per session).
-    agentKind: resolveSessionAgentKind(),
-    hostname: resolveRuntimeHostname(),
-    version: getPackageVersion(),
-    getToken: async () => token,
-    // The beat rides the real global fetch — its OWN child-process HTTP wire,
-    // independent of the SSE stream's (possibly test-injected) fetchImpl.
-    fetchImpl: globalThis.fetch.bind(globalThis),
-  });
-}
 
 // ------------------------------------------------------------------
 // Outer reconnect loop
@@ -639,30 +583,24 @@ export async function streamOnce(
     fetchImpl,
     appendLine,
     hasInboxEntryId,
-    getToken,
     wakeCodex,
     heartbeatTimeoutMs,
     hwmDivergenceGraceMs,
     abortSignal,
-    onInboxReceipt,
     injectOpenCode,
   } = { ...defaultDeps, ...deps };
 
   const isLocal = active.serverTrustIdentity !== undefined;
-  // An environment-selected BORG_API_URL is routing configuration, not proof
-  // of Borg Cloud authority. A drone session aimed anywhere except the
-  // canonical hosted origin must carry hydrated local trust before either the
-  // OAuth token getter or the SSE transport is touched.
-  if (!isLocal && !isCanonicalHostedApiUrl(active.apiUrl)) {
+  // There is no hosted authority: a stream must carry verified local server
+  // trust. Anything else fails closed before the transport is touched.
+  if (!isLocal) {
     throw new Error('Selected Borg server authority state is missing or unreadable');
   }
-  const token = isLocal ? active.sessionToken : await getToken();
+  const token = active.sessionToken;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: 'text/event-stream',
-    ...(isLocal ? {} : { 'X-Drone-Session': active.sessionToken }),
   };
-  if (lastEventId && !isLocal) headers['Last-Event-ID'] = lastEventId;
   let requestFetch = fetchImpl;
   let streamPath = '/api/drone/stream';
   if (isLocal) {
@@ -826,14 +764,10 @@ export async function streamOnce(
     // Monitor/tail-F path is unused for opencode). Falls through to inbox on
     // failure so the entry is never lost.
     if (await injectOpenCode(line)) {
-      if (!isLocal || deps.onInboxReceipt !== undefined) onInboxReceipt(active, token);
       return 'written';
     }
     await appendLine(active.cubeId, active.droneId, line);
     wakeCodex(formatCodexWakePrompt(line));
-    // gh#541 WU-2: a fresh inbound entry just hit the inbox (the wake-path
-    // receipt). Record it + beat below the classifier (best-effort).
-    if (!isLocal || deps.onInboxReceipt !== undefined) onInboxReceipt(active, token);
     return 'written';
   };
 
@@ -884,9 +818,8 @@ export async function streamOnce(
     // returns the authoritative 410 DRONE_EVICTED. Surface it as the terminal
     // typed error so the reconnect loop stops retrying (B25) instead of backing
     // off forever against a dead seat. Keyed on the structured code, not the
-    // bare status (SEC R2). 423/DRONE_FROZEN is NOT terminal here — it falls
-    // through to the generic throw so the loop keeps reconnecting (resumes when
-    // billing is restored).
+    // bare status (SEC R2). Any other status falls through to the generic throw
+    // so the reconnect loop keeps retrying transient failures.
     if (response.status === 410) {
       const body = isLocal
         ? await readBoundedResponseBody(

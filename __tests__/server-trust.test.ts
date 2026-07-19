@@ -1,5 +1,9 @@
 import { createHash, X509Certificate } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rootCertificates } from 'node:tls';
@@ -9,6 +13,7 @@ import {
   createPinnedServerFetch,
   loadBorgServerTrust,
 } from '../src/server-trust.js';
+import { BorgServerTrustError } from '../src/server-errors.js';
 
 const tempDirectories: string[] = [];
 
@@ -87,5 +92,77 @@ describe('same-user Borg server trust', () => {
       'http://127.0.0.1:7091',
       ca.certificate,
     )).toThrow(/HTTPS origin/i);
+  });
+});
+
+// CR5 TLS LATTICE: a raw CA / cert-chain / SAN failure from the pinned transport
+// must be a TERMINAL BorgServerTrustError (→ `trust-mismatch`), while a connection
+// refusal stays a raw transport error (→ `unreachable`). Exercised against a REAL
+// TLS server presenting a wrong certificate — the production wrong-cert regression.
+describe('CR5 pinned-transport trust verdicts (real wrong cert)', () => {
+  const dirs: string[] = [];
+  const servers: HttpsServer[] = [];
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((s) => new Promise<void>((r) => s.close(() => r()))));
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+  function tmp(): string {
+    const d = mkdtempSync(join(tmpdir(), 'borg-tls-'));
+    dirs.push(d);
+    return d;
+  }
+  function genSelfSigned(dir: string, name: string, subj: string, san?: string): { cert: string; key: string } {
+    const keyPath = join(dir, `${name}.key`);
+    const certPath = join(dir, `${name}.crt`);
+    const args = [
+      'req', '-x509', '-newkey', 'rsa:2048', '-keyout', keyPath, '-out', certPath,
+      '-days', '2', '-nodes', '-subj', subj,
+    ];
+    if (san) args.push('-addext', `subjectAltName=${san}`);
+    execFileSync('openssl', args, { stdio: 'ignore' });
+    return { cert: readFileSync(certPath, 'utf8'), key: readFileSync(keyPath, 'utf8') };
+  }
+  async function startTls(cert: string, key: string): Promise<string> {
+    const server = createHttpsServer({ cert, key }, (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+    });
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    return `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+  async function freeClosedPort(cert: string, key: string): Promise<string> {
+    const probe = createHttpsServer({ cert, key });
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', () => r()));
+    const port = (probe.address() as AddressInfo).port;
+    await new Promise<void>((r) => probe.close(() => r()));
+    return `https://127.0.0.1:${port}`;
+  }
+
+  it('a CA/chain mismatch (server cert not signed by the pinned CA) → terminal BorgServerTrustError', async () => {
+    const dir = tmp();
+    const server = genSelfSigned(dir, 'srv', '/CN=127.0.0.1', 'IP:127.0.0.1');
+    const wrongCa = genSelfSigned(dir, 'wrongca', '/CN=wrong-ca');
+    const origin = await startTls(server.cert, server.key);
+    const pinned = createPinnedServerFetch(origin, wrongCa.cert);
+    await expect(pinned(`${origin}/api/cubes`)).rejects.toBeInstanceOf(BorgServerTrustError);
+  });
+
+  it('a SAN/hostname mismatch (chain verifies, wrong SAN) → terminal BorgServerTrustError', async () => {
+    const dir = tmp();
+    // Self-signed cert with a SAN for a DIFFERENT IP; pin the SAME cert as the CA so
+    // the chain verifies but the hostname check fails (ERR_TLS_CERT_ALTNAME_INVALID).
+    const san = genSelfSigned(dir, 'san', '/CN=elsewhere', 'IP:10.99.99.99');
+    const origin = await startTls(san.cert, san.key);
+    const pinned = createPinnedServerFetch(origin, san.cert);
+    await expect(pinned(`${origin}/api/cubes`)).rejects.toBeInstanceOf(BorgServerTrustError);
+  });
+
+  it('a connection refusal (server down) is NOT trust — it stays a raw transport error (→ unreachable)', async () => {
+    const dir = tmp();
+    const ca = genSelfSigned(dir, 'ca', '/CN=ca');
+    const origin = await freeClosedPort(ca.cert, ca.key);
+    const pinned = createPinnedServerFetch(origin, ca.cert);
+    await expect(pinned(`${origin}/api/cubes`)).rejects.not.toBeInstanceOf(BorgServerTrustError);
   });
 });

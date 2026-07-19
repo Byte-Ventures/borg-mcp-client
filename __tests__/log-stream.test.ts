@@ -34,19 +34,34 @@ import {
   type EnrichedEntry,
 } from '../src/log-stream';
 
+// The only stream transport is the verified local (self-hosted) server; every
+// cube fixture carries a trust identity + local endpoint. The injected fetchImpl
+// bypasses the real pinned-TLS trust load. The transport-agnostic SSE logic
+// (parse, dedup, hwm divergence, own-post filter, ack fan-out) is exercised
+// through this local path.
 const ACTIVE_CUBE = {
   cubeId: 'cube-1',
   droneId: 'drone-1',
   sessionToken: 'token-1',
-  apiUrl: 'https://api.borgmcp.ai',
+  apiUrl: 'https://127.0.0.1:8443',
+  serverTrustIdentity: 'trust-1',
 };
 
 const UUID_ACTIVE_CUBE = {
   cubeId: '11111111-1111-4111-8111-111111111111',
   droneId: '22222222-2222-4222-8222-222222222222',
   sessionToken: 'token-1',
-  apiUrl: 'https://api.borgmcp.ai',
+  apiUrl: 'https://127.0.0.1:8443',
+  serverTrustIdentity: 'trust-1',
 };
+
+// Local SSE cursor is disk-backed; stub it so the stream logic runs without
+// touching ~/.config and without a persisted cursor.
+vi.mock('../src/local-server-cursor.js', () => ({
+  getLocalServerCursor: vi.fn(async () => null),
+  advanceLocalServerCursor: vi.fn(async () => {}),
+  encodeLocalServerCursor: vi.fn(() => ''),
+}));
 
 /**
  * Build a Response whose body emits the given SSE event blocks then
@@ -142,15 +157,10 @@ function makeDeps(fetchImpl: typeof fetch, appendLine?: any): StreamDeps {
   return {
     fetchImpl,
     appendLine: appendLine ?? vi.fn().mockResolvedValue(undefined),
-    getToken: vi.fn().mockResolvedValue('test-token'),
     wakeCodex: vi.fn(),
     // Tight watchdog so any timer-based path doesn't hang the test.
     heartbeatTimeoutMs: 500,
     hwmDivergenceGraceMs: 10,
-    // gh#541 WU-2: no-op by default so unit tests don't fire real health beats
-    // (the production default rides the global fetch). Tests that exercise the
-    // hook override this with their own spy.
-    onInboxReceipt: vi.fn(),
   };
 }
 
@@ -461,7 +471,7 @@ describe('streamOnce', () => {
       const blocks = [
         'event: bookmark\ndata: {"as_of":"2026-05-11T12:00:00Z"}\n\n',
         'event: heartbeat\ndata: {"ts":"2026-05-11T12:00:01Z","hwm":{"id":"e_broadcast","created_at":"2026-05-11T12:00:01Z"}}\n\n',
-        'event: log\nid: e_direct\ndata: {"id":"e_direct","visibility":"direct","drone_id":"drone-2","message":"secret","created_at":"2026-05-11T12:00:02Z"}\n\n',
+        'event: log\nid: e_direct\ndata: {"id":"e_direct","visibility":"direct","recipient_drone_ids":["drone-1"],"drone_id":"drone-2","message":"secret","created_at":"2026-05-11T12:00:02Z"}\n\n',
         'event: heartbeat\ndata: {"ts":"2026-05-11T12:00:03Z","hwm":{"id":"e_broadcast","created_at":"2026-05-11T12:00:01Z"}}\n\n',
       ];
       let requestSignal: AbortSignal | null = null;
@@ -1152,26 +1162,6 @@ describe('streamOnce', () => {
     expect(onEventId).toHaveBeenLastCalledWith('e_new');
   });
 
-  it('sends Last-Event-ID header on resume reconnect', async () => {
-    const blocks = [
-      'event: bookmark\ndata: {"as_of":"2026-05-11T12:00:00Z"}\n\n',
-    ];
-    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse(blocks));
-    const onEventId = vi.fn();
-
-    await streamOnce(
-      ACTIVE_CUBE,
-      'e_prior',
-      onEventId,
-      makeDeps(fetchImpl)
-    );
-
-    const [, init] = fetchImpl.mock.calls[0];
-    expect(init.headers['Last-Event-ID']).toBe('e_prior');
-    expect(init.headers['X-Drone-Session']).toBe(ACTIVE_CUBE.sessionToken);
-    expect(init.headers['Authorization']).toBe('Bearer test-token');
-  });
-
   it('throws on non-200 response so the outer loop reconnects with backoff', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response('Unauthorized', { status: 401 })
@@ -1240,41 +1230,6 @@ describe('streamState content-vs-wire freshness split (T1.2)', () => {
     const s = getStreamStatus();
     expect(s.lastContentEventAt).not.toBeNull();
     expect(s.lastWireActivityAt).not.toBeNull();
-  });
-});
-
-describe('streamOnce — gh#541 WU-2 receipt hook', () => {
-  it('fires onInboxReceipt (with active + session token + fetch) on a fresh inbound inbox-write', async () => {
-    const blocks = [
-      'event: bookmark\ndata: {"as_of":"2026-06-03T08:00:00Z"}\n\n',
-      'event: log\nid: e1\ndata: {"id":"e1","drone_id":"other-drone","message":"hi","created_at":"2026-06-03T08:00:01Z"}\n\n',
-    ];
-    const appendLine = vi.fn().mockResolvedValue(undefined);
-    const onInboxReceipt = vi.fn();
-    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse(blocks));
-    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
-      ...makeDeps(fetchImpl, appendLine),
-      onInboxReceipt,
-    });
-    expect(appendLine).toHaveBeenCalledTimes(1);
-    expect(onInboxReceipt).toHaveBeenCalledTimes(1);
-    expect(onInboxReceipt).toHaveBeenCalledWith(ACTIVE_CUBE, 'test-token');
-  });
-
-  it('does NOT fire onInboxReceipt on an own-post (no inbox write → no wake-path receipt)', async () => {
-    const blocks = [
-      'event: bookmark\ndata: {"as_of":"2026-06-03T08:00:00Z"}\n\n',
-      'event: log\nid: e2\ndata: {"id":"e2","drone_id":"drone-1","message":"my own post","created_at":"2026-06-03T08:00:01Z"}\n\n',
-    ];
-    const appendLine = vi.fn().mockResolvedValue(undefined);
-    const onInboxReceipt = vi.fn();
-    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse(blocks));
-    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
-      ...makeDeps(fetchImpl, appendLine),
-      onInboxReceipt,
-    });
-    expect(appendLine).not.toHaveBeenCalled();
-    expect(onInboxReceipt).not.toHaveBeenCalled();
   });
 });
 

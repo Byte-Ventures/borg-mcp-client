@@ -15,17 +15,14 @@ reviewed and satisfied:
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- an operator verifies in Google Console that the four pinned OAuth values are
-  Byte Ventures Desktop and TVs/Limited Input public-client distribution
-  material, including consent-screen and redirect policy, and records approval;
-- the exact audited registry dependency `borgmcp-shared@0.3.0` remains locked
+- the exact audited registry dependency `borgmcp-shared@0.4.0` remains locked
   to its canonical tarball and integrity, and the matching server passes the
   process-level local dogfood gate;
 - an unused stable package version is selected and authorized separately;
-- registry package `borgmcp-shared@0.3.0` remains bound to one canonical
+- registry package `borgmcp-shared@0.4.0` remains bound to one canonical
   lockfile resolution and SHA-512 integrity;
 - the client package passes its full tests, type checks, build, clean packed
-  installation, MCP stdio, and local-server/Cloud compatibility gates;
+  installation, MCP stdio, and local-server compatibility gates;
 - the repository is public and the settings below pass an operator audit; and
 - the exact release commit has the required Code Review, Security, Release
   Quality, extraction, and explicit release-authorization gates.
@@ -63,19 +60,13 @@ tag. Repository settings are operator-owned; source changes do not apply them.
    and Dependabot security updates. Enable validity checks and non-provider
    patterns when the organization plan supports them.
 
-## OAuth Public-Client Controls
+## Public-Source Sensitivity Controls
 
-Before allowing a push-protection exception or publishing, compare the four
-SHA-256 fingerprints and paths in `docs/EXTRACTION_PROVENANCE.md` with Google
-Console. Verify the project, application types, consent screen, scopes, and
-Desktop redirect policy. Permit only those exact source literals and generated
-copies; never disable the provider pattern or repository push protection.
-
-Configure quota alerts for both clients. If either client is misclassified,
-transferred, abused, or unexpectedly consumes quota, revoke it in Google
-Console, replace both the source value and generated output, rerun the full
-release checks, and ship only after a new Security review. Treat the embedded
-values as public identifiers and never as client-authentication proof.
+This is a local-only client with no OAuth/Cloud material. `scripts/verify-public-source.mjs`
+forbids ANY Google OAuth client ID or `GOCSPX` value, database URLs, private
+Worker/test endpoints, developer-local paths, and monorepo-only imports anywhere
+in the source or packed artifact; never disable the provider patterns or
+repository push protection.
 
 Immediately after checkout, both jobs reject immutable reruns and then reject a
 checked-out root `.npmrc`, before `setup-node` or any npm command. The exact npm
@@ -131,7 +122,7 @@ tracked output, and rejects drift. It then creates one npm tarball and enforces:
 - no credentials, keys, private service URLs, database URLs, local paths,
   `.npmrc`, environment files, symlinks, or special archive entries;
 - exact `borgmcp` identity and public provenance repository; and
-- registry-only dependencies with exact audited `borgmcp-shared@0.3.0`.
+- registry-only dependencies with exact audited `borgmcp-shared@0.4.0`.
 
 Every lock entry is bound to its package-path identity, version, exact canonical
 npm tarball URL, and full SHA-512 SRI. The release gate fetches official

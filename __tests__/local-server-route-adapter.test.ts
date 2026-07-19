@@ -11,7 +11,7 @@ const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '1', request_id: requestId, payload };
+  return { protocol_version: '2', request_id: requestId, payload };
 }
 
 describe('local server route adapter', () => {
@@ -296,11 +296,7 @@ describe('local server route adapter', () => {
     const remote = await import('../src/remote-client.js');
     const before = fetchSpy.mock.calls.length;
 
-    await expect(remote.submitReport(SESSION, ORIGIN, { message: 'local report' }))
-      .rejects.toThrow(/Local Borg server does not support/);
     await expect(remote.roleRationale(SESSION, ORIGIN, 'Builder', 'Workflow'))
-      .rejects.toThrow(/Local Borg server does not support/);
-    await expect(remote.fetchReports())
       .rejects.toThrow(/Local Borg server does not support/);
     expect(fetchSpy.mock.calls).toHaveLength(before);
   });

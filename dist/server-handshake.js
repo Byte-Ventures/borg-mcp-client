@@ -1,6 +1,7 @@
-import { CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, createProtocolEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolEnvelope, negotiateProtocol, } from 'borgmcp-shared/protocol';
-import { randomUUID } from 'node:crypto';
-import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, storeServerSessionCredential, } from './config.js';
+import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, createAttachRequestEnvelope, createProtocolEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, ErrorCode, } from 'borgmcp-shared/protocol';
+import { createHash, randomUUID } from 'node:crypto';
+import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, } from './config.js';
+import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, } from './seats.js';
 import { BorgServerError } from './server-errors.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { loadBorgServerTrust, } from './server-trust.js';
@@ -45,14 +46,14 @@ async function readHandshakeBodyWithTimeout(response) {
     }
 }
 /**
- * Authenticate and negotiate the shared protocol without consulting Cloud.
- * The caller supplies an authority- and trust-bound credential from secure
- * storage; redirects are rejected so bearer credentials never cross origins.
+ * Credential-free protocol-tag preflight. After the caller has verified pinned
+ * TLS, confirm the server speaks the exact protocol tag BEFORE any bearer is
+ * created, sent, or a seat attached. Sends NO Authorization header, cookie,
+ * query, or body; rejects redirects; and bounds the response. A tag mismatch,
+ * an extra field, or any transport anomaly fails closed here — no keychain
+ * write, no attach, no Cloud fallback. The bearer is proven only at attach.
  */
-export async function negotiateBorgServer(origin, credential, fetchImpl = fetch) {
-    if (!/^[A-Za-z0-9_-]{43,1024}$/.test(credential)) {
-        throw new Error('stored Borg server credential is invalid; enroll this client again');
-    }
+export async function preflightBorgServerTag(origin, fetchImpl = fetch) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
     try {
@@ -62,14 +63,10 @@ export async function negotiateBorgServer(origin, credential, fetchImpl = fetch)
             signal: controller.signal,
             headers: {
                 Accept: 'application/json',
-                Authorization: `Bearer ${credential}`,
             },
         });
-        if (response.status === 401 || response.status === 403) {
-            throw new BorgServerError('CREDENTIAL_REJECTED', 'stored Borg server credential was rejected');
-        }
         if (!response.ok) {
-            throw new Error(`Borg server protocol handshake failed (HTTP ${response.status})`);
+            throw new Error(`Borg server protocol preflight failed (HTTP ${response.status})`);
         }
         let decoded;
         try {
@@ -78,78 +75,36 @@ export async function negotiateBorgServer(origin, credential, fetchImpl = fetch)
         catch (error) {
             if (error instanceof Error && error.message.includes('response limit'))
                 throw error;
-            throw new Error('Borg server returned an invalid protocol envelope');
+            throw new Error('Borg server returned an invalid protocol preflight');
         }
-        return decodeProtocolEnvelope(decoded, (payload) => negotiateProtocol(payload)).payload;
+        return decodeProtocolTagPreflight(decoded);
     }
     finally {
         clearTimeout(timeout);
     }
 }
-function decodeServerAttachResponse(value) {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        throw new Error('Borg server returned an invalid attach response');
-    }
-    const record = value;
-    const cube = record.cube;
-    const role = record.role;
-    const drone = record.drone;
-    const session = record.session;
-    const expiresAt = session?.expires_at;
-    if (!cube || !UUID_RE.test(String(cube.id ?? '')) || typeof cube.name !== 'string' ||
-        !role || !UUID_RE.test(String(role.id ?? '')) || typeof role.name !== 'string' ||
-        !drone || !UUID_RE.test(String(drone.id ?? '')) || typeof drone.label !== 'string' ||
-        !session || typeof session.token !== 'string' ||
-        !/^[A-Za-z0-9_-]{43,1024}$/.test(session.token) ||
-        !Number.isSafeInteger(session.generation) || Number(session.generation) < 1 ||
-        (expiresAt !== null &&
-            (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)))) ||
-        typeof record.reattached !== 'boolean') {
-        throw new Error('Borg server returned an invalid attach response');
-    }
-    const roleClass = role.role_class;
-    if (roleClass !== undefined && roleClass !== 'queen' && roleClass !== 'worker') {
-        throw new Error('Borg server returned an invalid attach response');
-    }
-    if (role.is_human_seat !== undefined && typeof role.is_human_seat !== 'boolean') {
-        throw new Error('Borg server returned an invalid attach response');
-    }
-    return {
-        cube: { id: String(cube.id), name: cube.name },
-        role: {
-            id: String(role.id),
-            name: role.name,
-            ...(roleClass === undefined ? {} : { role_class: roleClass }),
-            ...(role.is_human_seat === undefined ? {} : { is_human_seat: role.is_human_seat }),
-        },
-        drone: { id: String(drone.id), label: drone.label },
-        session: {
-            token: session.token,
-            generation: Number(session.generation),
-            expiresAt: expiresAt,
-        },
-        reattached: record.reattached,
-    };
-}
 /**
- * Attach an enrolled client principal to one granted cube/role. The response
- * bearer is written to a generation-specific keychain entry before this
- * function returns; only its opaque reference crosses into caller state.
+ * The NETWORK-ONLY half of an attach: POST the ALREADY-MINTED pending bearer and
+ * decode, WITHOUT minting (the mint is owned by the single-store prepareSeat, CR#1).
+ * Returns the deferred activate/scrubPending handles: FINALIZE calls `activate`
+ * with the decided worktree binding, and activateAndBindSeat stamps ACTIVE + binds
+ * the worktree in ONE atomic commit (activate+bind merged — no cross-store gap).
  */
-export async function attachBorgServer(origin, trustIdentity, parentCredential, request, deps = {}) {
+export async function sendBorgServerAttach(origin, trustIdentity, parentCredential, request, pendingBearer, deps = {}) {
     if (!UUID_RE.test(request.cubeId) || !UUID_RE.test(request.roleId)) {
         throw new Error('Borg server attach requires valid cube and role identities');
     }
-    if (!UUID_RE.test(request.retryKey)) {
-        throw new Error('Borg server attach retry state is invalid');
+    if (request.priorDroneId !== undefined && !UUID_RE.test(request.priorDroneId)) {
+        throw new Error('Borg server attach prior drone identity is invalid');
     }
     if (!/^[A-Za-z0-9_-]{43,1024}$/.test(parentCredential)) {
         throw new Error('stored Borg server enrollment credential is invalid');
     }
+    const pending = { credential: pendingBearer };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
     try {
-        const response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, CLIENT_ATTACH_PATH), {
+        const response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, ATTACH_PATH), {
             method: 'POST',
             redirect: 'error',
             signal: controller.signal,
@@ -158,13 +113,32 @@ export async function attachBorgServer(origin, trustIdentity, parentCredential, 
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${parentCredential}`,
             },
-            body: JSON.stringify(createProtocolEnvelope(randomUUID(), {
+            body: JSON.stringify(createAttachRequestEnvelope(randomUUID(), {
                 cube_id: request.cubeId,
                 role_id: request.roleId,
-                retry_key: request.retryKey,
+                session_credential: pending.credential,
+                ...(request.priorDroneId === undefined
+                    ? {}
+                    : { prior_drone_id: request.priorDroneId }),
             })),
         });
         if (response.status === 401 || response.status === 403) {
+            // A typed SESSION_REJECTED body means the presented bearer targets a seat
+            // already bound to a different session (takeover), distinct from a rejected
+            // parent enrollment credential. Decode defensively; any anomaly falls back
+            // to the generic credential rejection below. Never echo the response body.
+            if (response.status === 401) {
+                let rejectedCode;
+                try {
+                    rejectedCode = decodeProtocolErrorEnvelope(JSON.parse(await readHandshakeBody(response, controller.signal))).error.code;
+                }
+                catch {
+                    rejectedCode = undefined;
+                }
+                if (rejectedCode === ErrorCode.SESSION_REJECTED) {
+                    throw new BorgServerError('SESSION_REJECTED', 'Borg server rejected the session: the seat is already bound to another session');
+                }
+            }
             throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
         }
         if (response.status === 409) {
@@ -175,7 +149,7 @@ export async function attachBorgServer(origin, trustIdentity, parentCredential, 
         }
         let decoded;
         try {
-            decoded = decodeProtocolEnvelope(JSON.parse(await readHandshakeBody(response, controller.signal)), decodeServerAttachResponse).payload;
+            decoded = decodeAttachResponseEnvelope(JSON.parse(await readHandshakeBody(response, controller.signal))).payload;
         }
         catch (error) {
             if (error instanceof Error && error.message.includes('response limit'))
@@ -185,39 +159,88 @@ export async function attachBorgServer(origin, trustIdentity, parentCredential, 
         if (decoded.cube.id !== request.cubeId || decoded.role.id !== request.roleId) {
             throw new Error('Borg server returned an attach identity outside the request');
         }
-        const credentialRef = await (deps.storeSessionCredential ?? storeServerSessionCredential)({
+        const seatInput = {
             origin,
             trustIdentity,
-            cubeId: decoded.cube.id,
-            droneId: decoded.drone.id,
-            generation: decoded.session.generation,
-            credential: decoded.session.token,
-            expiresAt: decoded.session.expiresAt,
-        });
+            cubeId: request.cubeId,
+            roleId: request.roleId,
+            operation: request.operation,
+        };
+        const credentialRef = (deps.sessionCredentialRef ?? seatRef)(seatInput);
+        const pendingBearerDigest = createHash('sha256').update(pending.credential).digest('hex');
         return {
             cube: decoded.cube,
             role: decoded.role,
             drone: decoded.drone,
             session: {
-                credentialRef,
-                generation: decoded.session.generation,
-                expiresAt: decoded.session.expiresAt,
+                sessionId: decoded.session.id,
+                expiresAt: decoded.session.expires_at,
             },
-            reattached: decoded.reattached,
+            result: decoded.result,
+            credentialRef,
+            pendingBearerDigest,
+            // The single-store ATOMIC activate+bind — invoked by FINALIZE with the decided
+            // worktree binding. Stamps server metadata + the worktree binding ONLY onto the
+            // EXACT pending record whose bearer we sent (digest-matched), in ONE commit. A
+            // same-ref replacement or a concurrent delete aborts (`replaced`/`missing`) —
+            // never binds bearer A's server session onto bearer B, and never leaves an
+            // ACTIVE credential without a binding (they land together).
+            activate: (binding) => (deps.activateAndBind ?? activateAndBindSeat)({
+                ...seatInput,
+                droneId: decoded.drone.id,
+                sessionId: decoded.session.id,
+                expiresAt: decoded.session.expires_at,
+                expectedPendingDigest: pendingBearerDigest,
+                worktree: binding.worktree,
+                name: binding.name,
+                droneLabel: binding.droneLabel,
+                ...(binding.roleName !== undefined ? { roleName: binding.roleName } : {}),
+                ...(binding.roleClass !== undefined ? { roleClass: binding.roleClass } : {}),
+                ...(binding.isHumanSeat !== undefined ? { isHumanSeat: binding.isHumanSeat } : {}),
+            }),
+            // Abort-scrub of ONLY this own pending record (never an ACTIVE record, never
+            // a same-ref replacement) — invoked when the server did not honor the
+            // reattach/remint intent.
+            scrubPending: () => (deps.scrubPending ?? scrubPendingSeat)(credentialRef, { origin, trustIdentity, cubeId: request.cubeId }, pendingBearerDigest),
+            // CR#2: on activation failure, bind the EXACT digest-matched PENDING record to
+            // the preserved (spawned) worktree WITHOUT activating it — it stays pending, so
+            // it is non-hydratable as a live seat but IS discoverable/resumable from that
+            // worktree. The rerun re-sends the identical bearer and converges (no ghost).
+            bindPending: (binding) => (deps.bindPending ?? bindPendingSeatToWorktree)({
+                ...seatInput,
+                expectedPendingDigest: pendingBearerDigest,
+                droneId: decoded.drone.id,
+                worktree: binding.worktree,
+                name: binding.name,
+                droneLabel: binding.droneLabel,
+                ...(binding.roleName !== undefined ? { roleName: binding.roleName } : {}),
+                ...(binding.roleClass !== undefined ? { roleClass: binding.roleClass } : {}),
+                ...(binding.isHumanSeat !== undefined ? { isHumanSeat: binding.isHumanSeat } : {}),
+            }),
         };
     }
     finally {
         clearTimeout(timeout);
     }
 }
+// SR-seven (c): the pre-composite mint-without-cube-lock seams (prepareBorgServerAttach)
+// and the activate-first no-binding wrapper (attachBorgServer) are DELETED — there is
+// no code path, not even test-only, that mints/sends a session_credential outside the
+// cube-owned composite. The ONLY session-credential send is sendBorgServerAttach, driven
+// by assimilate-deps AFTER prepareSeat has minted under the single store flock.
 /**
  * Redeem one invitation after the caller has verified TLS and derived the
  * stable server/CA identity. The client-generated bearer + retry key are
- * persisted PENDING in the OS keychain before the first request. A transport-
- * ambiguous exchange is retried with that exact tuple; only a decoded response
- * followed by an authenticated protocol proof activates the bearer.
+ * persisted PENDING in the local 0600 file store before the first request. A
+ * transport-ambiguous exchange is retried with that exact tuple; only a decoded
+ * response followed by an authenticated protocol proof activates the bearer.
  */
 export async function enrollBorgServer(origin, trustIdentity, invitation, deps = {}) {
+    const fetchImpl = deps.fetchImpl ?? fetch;
+    // Credential-free tag preflight FIRST (CR fb4d6eba): after pinned TLS, an
+    // incompatible server must be rejected before any credential is created or
+    // persisted and before any invitation/secret-bearing request is sent.
+    const protocol = await preflightBorgServerTag(origin, fetchImpl);
     const pending = await (deps.prepareEnrollment ?? getOrCreatePendingServerEnrollment)({
         origin,
         trustIdentity,
@@ -230,7 +253,6 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
         client_credential: pending.credential,
         ...(pending.clientName ? { client_name: pending.clientName } : {}),
     });
-    const fetchImpl = deps.fetchImpl ?? fetch;
     let response = null;
     let lastTransportError;
     for (let attempt = 0; attempt < 2 && response === null; attempt += 1) {
@@ -273,7 +295,6 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
             throw error;
         throw new Error('Borg server returned an invalid enrollment envelope');
     }
-    const protocol = await negotiateBorgServer(origin, pending.credential, fetchImpl);
     await (deps.activateEnrollment ?? activatePendingServerEnrollment)({
         origin,
         trustIdentity,
@@ -411,7 +432,7 @@ export async function connectEnrolledBorgServer(origin, trustIdentity, deps = {}
     if (!token) {
         throw new BorgServerError('NOT_ENROLLED', 'no enrolled credential is stored for this Borg server identity');
     }
-    const protocol = await negotiateBorgServer(origin, token, deps.fetchImpl ?? fetch);
+    const protocol = await preflightBorgServerTag(origin, deps.fetchImpl ?? fetch);
     return {
         token,
         trustIdentity,

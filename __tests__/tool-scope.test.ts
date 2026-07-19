@@ -4,7 +4,6 @@ import {
   deferredToolNames,
   UNIVERSAL_TOOLS,
   MANAGEMENT_TOOLS,
-  BILLING_TOOLS,
   DISPATCHER_TOOLS,
   AUTH_SENSITIVE_TOOLS,
   type RoleScope,
@@ -23,16 +22,14 @@ const QUEEN: RoleScope = { roleName: 'Queen', roleClass: 'queen', isHumanSeat: f
 const ALL = [
   ...UNIVERSAL_TOOLS,
   ...MANAGEMENT_TOOLS,
-  ...BILLING_TOOLS,
 ].map((name) => ({ name }));
 
 describe('tool-scope role filtering (gh#899)', () => {
-  it('worker: hides management + billing, keeps universal + dispatcher', () => {
+  it('worker: hides management, keeps universal + dispatcher', () => {
     const names = new Set(filterToolsForRole(ALL, WORKER).map((t) => t.name));
     for (const u of UNIVERSAL_TOOLS) expect(names.has(u)).toBe(true);
     for (const d of DISPATCHER_TOOLS) expect(names.has(d)).toBe(true);
     for (const m of MANAGEMENT_TOOLS) expect(names.has(m)).toBe(false);
-    for (const b of BILLING_TOOLS) expect(names.has(b)).toBe(false);
   });
 
   it('worker: auth-sensitive ops are filtered from the native surface', () => {
@@ -79,12 +76,10 @@ describe('tool-scope role filtering (gh#899)', () => {
     expect(names.has('borg_future-tool')).toBe(true);
   });
 
-  it('the four sets are disjoint and dispatcher ⊂ universal', () => {
+  it('the sets are disjoint and dispatcher ⊂ universal', () => {
     const mgmt = new Set(MANAGEMENT_TOOLS);
-    const bill = new Set(BILLING_TOOLS);
     for (const u of UNIVERSAL_TOOLS) {
       expect(mgmt.has(u)).toBe(false);
-      expect(bill.has(u)).toBe(false);
     }
     for (const d of DISPATCHER_TOOLS) expect(UNIVERSAL_TOOLS.includes(d)).toBe(true);
   });

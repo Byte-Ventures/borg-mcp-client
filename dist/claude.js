@@ -23,7 +23,7 @@ import chalk from 'chalk';
 import { findProjectRoot, getActiveCube, inboxPathForDrone, setCodexWakeTarget, pruneDeadCodexWakeTargets } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import { handleVersionFlag, getPackageVersion } from './version.js';
-import { isHelpFlag, setupHelpText, topLevelHelpText, assimilateHelpText } from './cli-help.js';
+import { isHelpFlag, setupHelpText, topLevelHelpText, assimilateHelpText, resetLocalSeatHelpText } from './cli-help.js';
 import { runSpawn } from './spawn.js';
 import { buildClaudeLaunchArgs } from './claude-launch-args.js';
 import { parseSyncArgs, runSync } from './sync.js';
@@ -31,6 +31,7 @@ import { parseCleanupArgs, runCleanup } from './cleanup-cmd.js';
 import { parseAssimilateArgs } from './parse-assimilate-args.js';
 import { runAssimilate } from './assimilate-cmd.js';
 import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
+import { parseResetLocalSeatArgs, runResetLocalSeat, buildDefaultResetLocalSeatDeps, } from './reset-local-seat-cmd.js';
 import { parseLaunchAllArgs } from './parse-launch-all-args.js';
 import { unknownSubcommand } from './unknown-subcommand.js';
 import { runLaunchAll } from './launch-all-cmd.js';
@@ -40,10 +41,7 @@ import { explicitCliLaunchHint, runBareLaunchMenu, shouldResolveExplicitCliLaunc
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
-import { fetchLatestBorgmcpVersion, compareVersionsForStaleness } from './stale-version-check.js';
 import { defaultCliChoiceDeps, detectCliAvailability, installedCliNames, parseCliFlag, resolveCliChoice } from './cli-platform.js';
-import { getRefreshToken, getIdToken } from './config.js';
-import { composeGetStarted, shouldShowGetStarted } from './get-started.js';
 import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
 import { BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
 import { findLoadedCodexThread } from './codex-app-server.js';
@@ -67,25 +65,10 @@ async function main() {
     // Resolve drone self-identification prefix (gh#25) before any error
     // emission so messages carry `[drone-X · cube]` from launch onward.
     await initConsolePrefix();
-    // Sprint 7 (b) — silent-stale-binary defensive hardening (gh#148).
-    // Async + non-blocking: fire the npm registry check in the
-    // background; if it returns within ~2s with a stale verdict, emit a
-    // stderr warning before Claude Code launches. Never blocks startup;
-    // fails silent on any error. The warning fires only when the user is
-    // launching `borg` interactively (TTY) — scripted invocations stay
-    // quiet to avoid CI-log noise.
-    const staleCheckPromise = (async () => {
-        if (!process.stderr.isTTY)
-            return;
-        const installed = getPackageVersion();
-        const latest = await fetchLatestBorgmcpVersion();
-        if (!latest)
-            return;
-        const result = compareVersionsForStaleness(installed, latest);
-        if (result.stale && result.message) {
-            process.stderr.write(`${consolePrefix()}${result.message}\n`);
-        }
-    })();
+    // Local-only client: bare `borg` performs NO automatic external network I/O
+    // (no npm-registry stale-version check) before authority selection. Only the
+    // explicitly selected local server may be contacted. A version comparison is
+    // available as an explicit operator action via `borg --version`.
     // Intercept --help / -h before handing off to Claude.
     if (process.argv[2] === '--help' || process.argv[2] === '-h') {
         process.stdout.write(topLevelHelpText(getPackageVersion()));
@@ -116,6 +99,20 @@ async function main() {
         }
         const deps = buildDefaultAssimilateDeps();
         const code = await runAssimilate({ role: parsed.role, flags: parsed.flags }, deps);
+        process.exit(code);
+    }
+    if (process.argv[2] === 'reset-local-seat') {
+        if (process.argv.slice(3).some(isHelpFlag)) {
+            process.stdout.write(resetLocalSeatHelpText(getPackageVersion()));
+            process.exit(0);
+        }
+        const parsed = parseResetLocalSeatArgs(process.argv.slice(3));
+        if (!parsed.ok) {
+            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg reset-local-seat: ${parsed.error}\n`));
+            process.stderr.write(`Run \`borg --help\` for usage.\n`);
+            process.exit(1);
+        }
+        const code = await runResetLocalSeat(parsed.flags, buildDefaultResetLocalSeatDeps());
         process.exit(code);
     }
     if (process.argv[2] === 'spawn') {
@@ -163,22 +160,6 @@ async function main() {
         process.stderr.write(chalk.red(`${consolePrefix()}◼ unknown command: ${unknownCmd}\n`));
         process.stderr.write(`Run \`borg --help\` for usage.\n`);
         process.exit(1);
-    }
-    // gh#817: a FRESH (not-yet-onboarded) user running bare `borg` needs the
-    // get-started breadcrumb on a USER-VISIBLE surface — npm v7+ suppresses the
-    // B1 postinstall banner, so it never reached them. This must run BEFORE
-    // resolveCliChoice so it short-circuits BOTH fresh-user failure modes: the
-    // multi-CLI "pass --cli" error AND the single-CLI silent agent launch.
-    //
-    // Presence-only check (SR gh#817 d2549b62): the token VALUE is never decoded,
-    // logged, or printed — only its existence gates the branch. Refresh-token
-    // presence is the durable setup-completion signal (it survives id_token
-    // expiry), so a configured user whose id_token has lapsed is NOT mistaken for
-    // fresh and their normal launch is preserved (no regression).
-    if (shouldShowGetStarted((await getRefreshToken()) !== null, (await getIdToken()) !== null)) {
-        const hasAgentCli = installedCliNames(detectCliAvailability()).length > 0;
-        process.stdout.write(composeGetStarted(hasAgentCli));
-        process.exit(0);
     }
     const parsedCli = parseCliFlag(process.argv.slice(2));
     if (parsedCli.error) {
@@ -294,11 +275,6 @@ async function main() {
     const monitorClause = buildKickoffWakePathClause(cli, active && cli === 'claude' ? inboxPathForDrone(active.cubeId, active.droneId) : null, active && cli === 'claude'
         ? monitorStateRootForWorktree(findProjectRoot(process.cwd()))
         : null);
-    // Surface the stale-version warning before launching Claude Code so
-    // the operator sees it inline rather than buried in MCP-server stderr.
-    // 2s ceiling: if the registry check hasn't returned by now, skip
-    // silently — Claude Code launch shouldn't wait on a network check.
-    await Promise.race([staleCheckPromise, new Promise((r) => setTimeout(r, 2000))]);
     const codexWakeNonce = cli === 'codex' ? `borg-wake-${randomUUID()}` : null;
     let codexWakePathClause;
     let remoteArgs = [];

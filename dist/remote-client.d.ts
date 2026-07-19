@@ -1,15 +1,16 @@
 /**
- * Remote HTTP client for api.borgmcp.ai
+ * HTTP client for a verified local (self-hosted) Borg server.
  *
  * Handles:
- * - HTTP requests to remote MCP server
- * - Automatic token injection
+ * - Pinned-TLS requests to the selected local server
+ * - Drone-session / enrollment-credential injection
  * - Network failure handling with retry + exponential backoff
- * - Offline queue for pending operations
+ *
+ * There is no hosted-authority path: every request must carry verified local
+ * server trust or it fails closed before any network or credential use.
  */
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import { type WorkingRepo } from './working-repo.js';
-export declare const API_URL: string;
 export interface RemoteConnection {
     apiUrl: string;
     authToken: string;
@@ -51,36 +52,6 @@ export declare function retryOn429(initialResponse: Response, doRequest: () => P
     jitter?: () => number;
     log?: (msg: string) => void;
 }): Promise<Response>;
-/**
- * Get valid auth token (refreshes if expired).
- *
- * Exported so the SSE log-stream consumer (`src/log-stream.ts`)
- * can attach the same Bearer header that `authedFetch` uses for REST,
- * without duplicating the refresh-token plumbing.
- */
-export declare function getValidToken(): Promise<string>;
-/**
- * gh#794: the stored session's state, WITHOUT throwing — powers `borg setup`'s
- * short-circuit (SR#3: short-circuit ONLY on `valid`, never past a dead token).
- */
-export type SessionState = 'valid' | 'dead' | 'transient';
-/**
- * gh#794: classify the stored session into valid | dead | transient.
- *
- * ⚠ EFFECTFUL — NOT a read-only probe. The expired branch ATTEMPTS a refresh,
- * which on success PERSISTS the new id_token (via refreshIdToken → storeIdToken,
- * AES-256-GCM-re-encrypted) and on a dead refresh_token `clearTokens()`s. So a
- * `valid` result may have just refreshed-and-stored the session. `clearTokens`
- * fires ONLY on `dead` (RefreshTokenInvalidError / invalid_grant), NEVER on
- * `transient` — a network blip must not nuke a valid keychain (gh#34 invariant).
- *
- *   - cached id_token still valid (outside the config.ts 5-min buffer) → 'valid'
- *   - expired/within-buffer + refresh succeeds → 'valid' (refreshed + persisted)
- *   - expired + RefreshTokenInvalidError → 'dead' (cleared — re-auth needed)
- *   - expired + RefreshTransientError / unknown → 'transient' (keychain intact)
- *   - no refresh_token at all → 'dead' (never set up / already cleared)
- */
-export declare function probeSession(): Promise<SessionState>;
 /**
  * Connect this client as a Drone to a Cube.
  *
@@ -292,40 +263,6 @@ export declare function appendLog(sessionToken: string, apiUrl: string, message:
     }[];
 }>;
 /**
- * gh#716 — submit a friction/bug report to the borgmcp dev team (borg_report-friction).
- * WRITE-ONLY: the caller never reads reports back. The server scrubs secrets before
- * persist and stamps reporter_user_id from the authenticated session (never client input).
- * Drone-session authed (POST /api/drone/report). Opaque `{ ok: true }` response.
- */
-export declare function submitReport(sessionToken: string, apiUrl: string, input: {
-    kind?: 'friction' | 'bug';
-    message: string;
-    metadata?: Record<string, string>;
-}, serverTrustIdentity?: string): Promise<{
-    ok: boolean;
-}>;
-export interface TriageReport {
-    id: string;
-    kind: 'friction' | 'bug';
-    message: string;
-    metadata: Record<string, string> | null;
-    redacted: boolean;
-    created_at: string;
-    reporter_email: string;
-}
-/**
- * gh#956: read counterpart to submitReport — fetch friction/bug reports for
- * triage. OAuth-only (mirrors listCubes; not cube-scoped). The server gates
- * non-builder callers with 403, surfaced here as `{ forbidden: true }` so the
- * tool can show a clear tier message instead of throwing.
- */
-export declare function fetchReports(): Promise<{
-    forbidden: true;
-} | {
-    forbidden: false;
-    reports: TriageReport[];
-}>;
-/**
  * List all cubes owned by the authenticated user. Owner-scoped via the
  * Bearer token alone; no drone session needed.
  */
@@ -507,10 +444,6 @@ export declare function applyTemplate(cubeId: string, templateName: string): Pro
     updated: number;
 }>;
 /**
- * Check subscription status
- */
-export declare function checkSubscriptionStatus(): Promise<any>;
-/**
  * gh#473 PR2 — NON-CLOBBERING sync of a cube's roles + message_taxonomy
  * against the current built-in template. Dry-run by default classifies
  * each fragment (role-text SECTION / short_description / flags / taxonomy
@@ -522,9 +455,4 @@ export declare function checkSubscriptionStatus(): Promise<any>;
  * never touched. Returns a NonClobberSyncResult.
  */
 export declare function syncRoles(cubeId: string, templateName?: string, apply?: boolean, decisions?: Record<string, 'accept' | 'reject'>): Promise<any>;
-/**
- * Create subscription (returns checkout URL)
- */
-export declare function createSubscription(): Promise<string>;
-export declare function createBillingPortalSession(): Promise<string>;
 //# sourceMappingURL=remote-client.d.ts.map

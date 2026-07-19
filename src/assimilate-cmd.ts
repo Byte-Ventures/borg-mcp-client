@@ -44,10 +44,10 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { BorgServerError } from './server-errors.js';
 import type { SeatStatus } from './seat-probe.js';
-import type {
-  LocalAttachCompletion,
-  LocalAttachOperation,
-} from './server-attach-state.js';
+import type { ServerSessionOperation } from './config.js';
+import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } from './cubes.js';
+import type { SeatBinding, BindPendingSeatOutcome } from './seats.js';
+import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs, type LaunchApprovalDecision } from './cli-tool-approval.js';
 
 export interface AssimilateFlags {
@@ -92,14 +92,28 @@ export interface AssimilateResult {
   role_id: string;
   local_session?: {
     credential_ref: string;
-    generation: number;
     expires_at: string | null;
   };
-  // gh#780: true when the server re-attached an existing seat (token
-  // rotated) instead of minting. Absent from pre-gh#780 workers.
-  reattached?: boolean;
-  /** Exact prepared binding used only to complete durable local attach state. */
-  local_attach_completion?: LocalAttachCompletion;
+  // Idempotent-reattach discriminant: 'reused' when the server resolved the
+  // client bearer to an existing seat, 'created' on a first/fresh attach.
+  result?: 'created' | 'reused';
+  // Deferred FINALIZE handles for the local-server composite (Race 2): the
+  // keychain pending→ACTIVE flip and the abort-scrub of the own pending record,
+  // run by Step 8 under the cube lock AFTER the binding is persisted. Absent for
+  // the (severed) cloud path and for unit stubs that fully mock `assimilate`.
+  finalize?: {
+    activate: (binding: SeatBinding) => Promise<unknown>;
+    scrubPending: () => Promise<unknown>;
+    // CR#2: on an activation failure, bind the surviving PENDING record to the
+    // preserved worktree (no activation) so a rerun FROM there resumes the exact
+    // pending operation and re-sends the identical bearer. Absent for the (severed)
+    // cloud path and for unit stubs that fully mock `assimilate`.
+    bindPending?: (binding: SeatBinding) => Promise<unknown>;
+  };
+  // CR #1: set when the cube-lock-held PREPARE revalidation aborted BEFORE any
+  // credential was minted or sent (a reset/binding writer won before PREPARE).
+  // No worktree has been spawned yet at that point, so the caller exits cleanly.
+  prepareAborted?: boolean;
 }
 
 export interface ActiveCube {
@@ -109,10 +123,9 @@ export interface ActiveCube {
   sessionToken?: string;
   droneLabel: string;
   apiUrl: string;
-  /** Verified local-server CA identity; absent for Borg Cloud cubes. */
+  /** Verified local-server CA identity; absent until a local server is selected. */
   serverTrustIdentity?: string;
   localSessionCredentialRef?: string;
-  localSessionGeneration?: number;
   localSessionExpiresAt?: string | null;
   // gh#899: assimilated role, persisted for connect-time tool-surface scoping
   // (mirrors cubes.ts ActiveCube; optional → backward-compatible).
@@ -162,20 +175,46 @@ export interface AssimilateDeps {
   // mis-await in Phase F wiring. Promise<...> matches the real shape.
   getActiveCube: () => Promise<ActiveCube | null>;
   hasPersistedActiveCube: () => Promise<boolean>;
+  /** Read the RAW persisted local seat for this worktree WITHOUT hydrating its
+   *  keychain credential — used to recover a crash-in-gap PENDING seat when
+   *  getActiveCube() returns null purely because the credential is non-hydratable
+   *  (binding written by FINALIZE, then a crash before the pending→ACTIVE flip). */
+  readPersistedLocalSeat?: () => Promise<PersistedLocalSeat | null>;
+  /** Pure PEEK: is a resumable session RECORD (pending or active) present at the
+   *  per-seat ref? Distinguishes a rerunnable crash-in-gap state from genuine
+   *  keychain loss without creating or mutating anything. */
+  peekServerSessionRecord?: (
+    credentialRef: string,
+    binding: { origin: string; trustIdentity: string; cubeId: string },
+  ) => Promise<boolean>;
+  /** CR#3: recover an in-flight IMPLICIT-sibling attempt (a crash-orphaned UNBOUND
+   *  pending sibling record) keyed by source repo, so a rerun re-derives the EXACT
+   *  seat ref + re-sends the identical bearer (server reuses — no ghost). Returns the
+   *  stored operation + role so the rerun adopts them. Absent from unit stubs that
+   *  fully mock `assimilate`. */
+  findIncompleteSiblingAttempt?: (binding: {
+    origin: string;
+    trustIdentity: string;
+    cubeId: string;
+    projectRoot: string;
+  }) => Promise<{ operation: ServerSessionOperation; roleId: string; credentialRef: string } | null>;
   probeSeat: (
     sessionToken: string,
     apiUrl: string,
     serverTrustIdentity?: string,
   ) => Promise<SeatStatus>;
-  getPendingLocalAttach: (
-    apiUrl: string,
-    serverTrustIdentity: string,
-    cubeId: string,
-    roleId: string,
-    operation: LocalAttachOperation,
-  ) => Promise<{ priorDroneId?: string; remintInvalidPrior: boolean } | null>;
-  completeLocalAttach: (completion: LocalAttachCompletion) => Promise<void>;
   setActiveCube: (a: ActiveCube) => Promise<void>;
+  /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
+   *  typed expectation, persist the binding FIRST, then run `activate` (keychain
+   *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and
+   *  report an honest abort. Wired to the merged activate+bind FINALIZE in
+   *  production; absent from unit stubs that fully mock `assimilate`. */
+  finalizeServerSeat?: (input: {
+    active: ActiveCube;
+    expected: ExpectedBinding;
+    activate: (binding: SeatBinding) => Promise<unknown>;
+    scrubPending: () => Promise<unknown>;
+  }) => Promise<FinalizeServerSeatOutcome>;
   findProjectRoot: (cwd: string) => string;
 
   // gh#673 P2 (WI-1): write the borg-regen SessionStart hook into the
@@ -183,9 +222,6 @@ export interface AssimilateDeps {
   // Real wiring = config-utils addProjectSessionStartHook.
   installProjectSessionHook: (projectRoot: string) => void;
 
-  getCachedAuth: () => Promise<{ token: string; apiUrl: string } | null>;
-  runSetup: () => Promise<{ token: string; apiUrl: string }>;
-  cloudApiUrl: string;
   /** gh#27: optional test seam — when set, selectAssimilationAuthority uses
    *  this instead of prompting/failing. Not wired in production. */
   defaultAuthority?: AssimilationAuthority;
@@ -218,7 +254,7 @@ export interface AssimilateDeps {
   assimilate: (
     apiUrl: string,
     token: string,
-    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null; local_attach_operation?: LocalAttachOperation },
+    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null; session_operation?: ServerSessionOperation; session_expected?: ExpectedBinding; revalidate_at_prepare?: boolean },
     serverTrustIdentity?: string,
   ) => Promise<AssimilateResult>;
   listTemplates: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<Array<{ name: string; description: string }>>;
@@ -253,7 +289,6 @@ export interface AssimilateDeps {
 }
 
 type AssimilationAuthority =
-  | { kind: 'cloud'; apiUrl: string }
   | { kind: 'server'; apiUrl: string };
 
 function affirmative(answer: string): boolean {
@@ -279,11 +314,11 @@ async function selectAssimilationAuthority(
     }
   }
 
-  // gh#27: non-TTY and --yes must NOT infer Cloud — the user must explicitly
-  // choose an authority. Fail closed instead of silently routing to Cloud.
+  // Only a local self-hosted server authority exists. Non-TTY and --yes must
+  // NOT infer an authority — fail closed with actionable guidance.
   if (!deps.isTTY() || flags.yes) {
     if (deps.defaultAuthority) return deps.defaultAuthority;
-    deps.stderr('No authority specified. Use --host <server> to select a local server, or run without --yes from an interactive terminal to choose an authority.\n');
+    deps.stderr('No local server selected. Use `borg assimilate --host <host> --here` to select a local server.\n');
     return null;
   }
 
@@ -303,27 +338,13 @@ async function selectAssimilationAuthority(
     if (affirmative(answer)) return { kind: 'server', apiUrl: detected };
   }
 
-  const choice = (await deps.prompt(
-    'Connect this project to:\n' +
-      '  1) A Borg server (local or self-hosted)\n' +
-      '  2) Borg Cloud (borgmcp.ai; subscription required)\n' +
-      '[1]: ',
-  )).trim();
-  if (choice === '' || choice === '1') {
-    const host = await deps.prompt('Borg server host or URL: ');
-    try {
-      return { kind: 'server', apiUrl: normalizeServerEndpoint(host) };
-    } catch (error) {
-      deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
-      return null;
-    }
-  }
-  if (choice !== '2') {
-    deps.stderr(`invalid authority choice ${JSON.stringify(choice)}\n`);
+  const host = await deps.prompt('Borg server host or URL: ');
+  try {
+    return { kind: 'server', apiUrl: normalizeServerEndpoint(host) };
+  } catch (error) {
+    deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
     return null;
   }
-
-  return { kind: 'cloud', apiUrl: deps.cloudApiUrl };
 }
 
 function localAssimilateCommand(apiUrl: string, enroll = false): string {
@@ -368,13 +389,32 @@ function reportServerFailure(
     );
     return 1;
   }
+  // A pin-matched typed 401: the server verified its own identity but rejected
+  // THIS worktree's session bearer (revoked, or taken over by another session).
+  // Distinct from a protocol/version mismatch and from a rejected enrollment:
+  // only this worktree's saved local seat is affected, and recovery is scoped to
+  // this worktree — no server/trust-anchor/cube/other-worktree reset, no restart
+  // or version-alignment advice, and never a Cloud fallback (#1082).
+  if (error instanceof BorgServerError && error.code === 'SESSION_REJECTED') {
+    // Attach is PURE DIAGNOSIS on a rejection — it mutates nothing. This copy
+    // claims NO mutation of its own; it points at the dedicated OFFLINE
+    // `borg reset-local-seat` command (the only writer that clears a seat).
+    deps.stderr(
+      `This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
+        'revoked or taken over by another session. No Borg state changed. Run ' +
+        `${resetLocalSeatCommand(apiUrl)} to clear ONLY this worktree's saved seat ` +
+        '(offline; add `--yes` when non-interactive), then ask the server operator for a new ' +
+        'invitation — the server can stay running — and re-enroll with ' +
+        `${localAssimilateCommand(apiUrl, true)}.\n`,
+    );
+    return 1;
+  }
   if (error instanceof BorgServerError && error.code === 'INVITATION_REJECTED') {
     deps.stderr(
       `The enrollment invitation for ${apiUrl} was rejected or expired. ` +
-        'Ask the server operator for a replacement enrollment invitation. ' +
-        'For an unclaimed owner client, stop the server and run `borg-mcp-server owner-invite`; ' +
-        'for an ordinary client, stop the server and run `borg-mcp-server client-invite`. ' +
-        'Restart it with `borg-mcp-server start`, then rerun ' +
+        'Ask the server operator for a replacement invitation — the server can stay running: ' +
+        'for an unclaimed owner client run `borg-mcp-server owner-invite`; for an ordinary ' +
+        'client run `borg-mcp-server client-invite`. Then rerun ' +
         `${localAssimilateCommand(apiUrl, true)}.\n`,
     );
     return 1;
@@ -386,17 +426,28 @@ function reportServerFailure(
     );
     return 1;
   }
-  if (/^Borg server keychain state is busy$/i.test(message)) {
+  if (/seat store lock file .* is stale/i.test(message)) {
+    // RULED option (b): a lock whose recorded holder is DEAD (or whose payload is
+    // corrupt) is NEVER auto-removed. Surface the fail-closed guidance verbatim —
+    // it already names the exact lockfile path and the delete-only-if-no-borg
+    // instruction — so the operator can clear it by hand, then retry.
     deps.stderr(
-      `The OS keychain is busy for ${apiUrl} because another Borg process is ` +
-        `creating or resuming secure state. Wait for it to finish, then rerun ${retryCommand}.\n`,
+      `${safeStderr(message)}\nAfter confirming no borg process is running and clearing the ` +
+        `stale lock, rerun ${retryCommand}.\n`,
     );
     return 1;
   }
-  if (/keychain|secure credential (?:store|storage)/i.test(message)) {
+  if (/(?:seat|credential) store is busy/i.test(message)) {
     deps.stderr(
-      `Borg could not access the OS keychain for ${apiUrl}. ` +
-        `Unlock or enable the keychain, then rerun ${retryCommand}.\n`,
+      `Borg's local seat store is busy for ${apiUrl} because another Borg process is ` +
+        `creating or resuming saved seat state. Wait for it to finish, then rerun ${retryCommand}.\n`,
+    );
+    return 1;
+  }
+  if (/(?:local )?seat store|(?:secure )?credential (?:store|storage)/i.test(message)) {
+    deps.stderr(
+      `Borg could not access its local seat store for ${apiUrl}. ` +
+        `Ensure its directory on this machine is readable and writable, then rerun ${retryCommand}.\n`,
     );
     return 1;
   }
@@ -424,6 +475,42 @@ function reportServerFailure(
     `Borg server at ${apiUrl} returned an unexpected response: ` +
       `${safeMessage || 'request failed'}. ` +
       `Check that the client and server versions are compatible, then rerun ${retryCommand}.\n`,
+  );
+  return 1;
+}
+
+function resetLocalSeatCommand(apiUrl: string): string {
+  return `\`borg reset-local-seat --host ${apiUrl}\``;
+}
+
+/**
+ * Pin-matched SESSION_REJECTED diagnosis (#1082). PURE DIAGNOSIS — attach makes
+ * ZERO local mutation on a rejected seat (ratified client-seat-reset-state-model
+ * clause 1). The local server verified its OWN pinned identity (this is reached
+ * only after a successful pinned-TLS attach — a pin MISMATCH throws a distinct
+ * trust error and never lands here), then rejected THIS worktree's saved session
+ * bearer (revoked, or taken over by another session). We stop and recommend the
+ * dedicated OFFLINE `borg reset-local-seat` command, which is the ONLY writer
+ * that clears a worktree's saved seat. Nothing here contacts the server further,
+ * emits unselected/cloud egress, or touches local state. The recovery is
+ * live-safe: the operator is never told to stop/restart the server.
+ */
+function diagnoseSessionRejected(
+  deps: AssimilateDeps,
+  apiUrl: string,
+): number {
+  const worktree = deps.findProjectRoot(deps.cwd());
+  deps.stderr(
+    `This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
+      'revoked or taken over by another session. No Borg state was changed: your pinned ' +
+      'server trust, this and every other worktree, and their cubes are all untouched.\n',
+  );
+  deps.stderr(
+    `To clear ONLY this worktree's saved local seat (worktree ${worktree}), run ` +
+      `${resetLocalSeatCommand(apiUrl)} (add \`--yes\` when non-interactive). That command is ` +
+      'offline — it revokes nothing server-side. Then ask the server operator for a new ' +
+      'invitation (the server can stay running) and re-enroll with ' +
+      `${localAssimilateCommand(apiUrl, true)}.\n`,
   );
   return 1;
 }
@@ -534,7 +621,7 @@ export async function runAssimilate(
   }
 
   let auth: { token: string; apiUrl: string; serverTrustIdentity?: string };
-  if (authority.kind === 'server') {
+  {
     try {
       let serverAuth: {
         token: string;
@@ -599,27 +686,6 @@ export async function runAssimilate(
     } catch (error) {
       return reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true);
     }
-  } else {
-    let cloudAuth = await deps.getCachedAuth();
-    if (!cloudAuth) {
-      if (!deps.isTTY() && !args.flags.yes) {
-        deps.stderr('borg setup required and stdin is non-interactive. Run `borg setup` first in an interactive terminal, then `borg assimilate`.\n');
-        return 1;
-      }
-      cloudAuth = await deps.runSetup();
-    }
-    auth = cloudAuth;
-  }
-
-  // gh#293: detect cross-account cube reference (owner-email:cube-name format).
-  let crossAccountRef: { ownerEmail: string; cubeName: string } | null = null;
-  if (cubeName && cubeName.includes('@') && cubeName.includes(':')) {
-    const colonIdx = cubeName.lastIndexOf(':');
-    crossAccountRef = {
-      ownerEmail: cubeName.substring(0, colonIdx),
-      cubeName: cubeName.substring(colonIdx + 1),
-    };
-    cubeName = crossAccountRef.cubeName;
   }
 
   // ----- Sprint 19 (gh#184): Reorder for strict-rollback semantics. -----
@@ -647,28 +713,9 @@ export async function runAssimilate(
       ? await deps.listCubes(auth.apiUrl, auth.token)
       : await deps.listCubes(auth.apiUrl, auth.token, auth.serverTrustIdentity);
   } catch (err) {
-    if (authority.kind === 'server') {
-      return reportServerFailure(deps, authority.apiUrl, err);
-    }
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('Authentication required') || msg.includes('Authentication expired')) {
-      deps.stderr('Re-authenticating...\n');
-      auth = await deps.runSetup();
-      allCubes = await deps.listCubes(auth.apiUrl, auth.token);
-    } else {
-      throw err;
-    }
+    return reportServerFailure(deps, authority.apiUrl, err);
   }
   const existingCube = allCubes.find((c) => c.name === cubeName);
-
-  // gh#312: cross-account typo guard. If the user typed owner@example.com:cube-name
-  // and the cube isn't found, error out — don't silently create a new cube.
-  if (!existingCube && crossAccountRef) {
-    deps.stderr(
-      `No cube named '${crossAccountRef.cubeName}' accessible to you owned by '${crossAccountRef.ownerEmail}'. Did you accept their invite? See borgmcp.ai/dashboard.\n`
-    );
-    return 1;
-  }
 
   // ----- Step 4: Fetch detail OR create cube -----
   let cubeDetail: CubeDetail;
@@ -773,21 +820,40 @@ export async function runAssimilate(
   const hasPersistedIdentity = existing !== null || await deps.hasPersistedActiveCube();
   const wantSibling =
     args.flags.worktree !== undefined || (existing !== null && !args.flags.here);
-  const localAttachOperation: LocalAttachOperation = {
-    // Capture the source repository before a successful attach changes cwd to
-    // the newly-created sibling. This is the stable state namespace for both
-    // preparation and completion.
+  // `let`: the bound-pending resume path (CR#2) OVERRIDES this from the stored
+  // operation so a rerun re-derives the EXACT original sibling seat ref.
+  let sessionOperation: ServerSessionOperation = {
+    // Capture the source repository before a successful sibling attach changes
+    // cwd. This is the stable seat/sibling namespace for the pending bearer, so a
+    // deliberate sibling never collides with the durable in-place seat's bearer.
     projectRoot,
     kind: wantSibling ? 'sibling' : 'seat',
+    // CR1(a): an implicit sibling's operation key must be COLLISION-SAFE — two
+    // unnamed siblings of the same (origin,trust,cube,role) must get DISTINCT seat
+    // refs, else prepareSeat reuses the first sibling's ACTIVE record and the
+    // activate+bind step overwrites its worktree (an active seat silently unseated
+    // and rebound). A named sibling already keys on its name; an unnamed one derives
+    // a per-invocation-unique key so every distinct implicit sibling target mints a
+    // distinct bearer / seat ref.
     operationKey: wantSibling
       ? (args.flags.worktree === undefined
-        ? 'implicit-sibling'
+        ? `implicit-sibling:${randomUUID()}`
         : `named-sibling:${args.flags.worktree}`)
       : 'current-worktree',
   };
   let reattachPriorId: string | undefined;
   let remintInvalidPrior = false;
   let savedLocalRole: Role | undefined;
+  // Set when the pre-attach gate recovers a crash-in-gap PENDING seat: the
+  // composite FINALIZE must then declare EXACT-ref (the credential is pending,
+  // not active, so no live-bearer digest is pinned) so it re-persists the extant
+  // binding and flips pending→ACTIVE, rather than aborting on an ABSENT check.
+  let resumeCredentialRef: string | undefined;
+  let resumeDroneId: string | undefined;
+  // CR#2: 'pending' when the resumed record is a bound-PENDING sibling (activation
+  // failed) — it re-sends the identical bearer under an ABSENT/pending-reuse
+  // expectation; 'active' when resuming a live in-place seat (EXACT expectation).
+  let resumeState: 'pending' | 'active' | undefined;
   if (existing && args.flags.here && existing.cubeId !== cubeDetail.id) {
     deps.stderr(
       authority.kind === 'server'
@@ -799,13 +865,104 @@ export async function runAssimilate(
   }
 
   if (authority.kind === 'server') {
+    // CR#3: recover an in-flight IMPLICIT-sibling attempt (persisted + collision-safe).
+    // An implicit sibling mints a per-invocation-unique operationKey; a crash AFTER the
+    // server accepts but BEFORE the worktree bind leaves an UNBOUND pending sibling
+    // record whose random key would otherwise be undiscoverable — a rerun would mint a
+    // NEW bearer and the server (digest-correlating) would create a GHOST seat. The
+    // unbound pending sibling record IS the persisted attempt identity, discoverable by
+    // source repo: adopt its EXACT operation (→ same seat ref) AND its role, and declare
+    // a PENDING resume so prepareSeat REUSES the identical bearer (server reuses the
+    // seat). Only for an IMPLICIT sibling (no --worktree name); a named sibling already
+    // keys collision-safe on its name. Skipped once the attempt is bound/activated (it is
+    // no longer an unbound pending sibling), so a completed sibling frees the key.
+    if (
+      wantSibling &&
+      args.flags.worktree === undefined &&
+      auth.serverTrustIdentity !== undefined &&
+      deps.findIncompleteSiblingAttempt
+    ) {
+      const inflight = await deps.findIncompleteSiblingAttempt({
+        origin: auth.apiUrl,
+        trustIdentity: auth.serverTrustIdentity,
+        cubeId: cubeDetail.id,
+        projectRoot,
+      });
+      if (inflight) {
+        const inflightRole = cubeDetail.roles.find((role) => role.id === inflight.roleId);
+        if (inflightRole) {
+          // Adopt the EXACT stored operation (same operationKey → same R_sib) + role, and
+          // resume PENDING so prepareSeat re-sends the identical bearer and converges.
+          sessionOperation = inflight.operation;
+          savedLocalRole = inflightRole;
+          resumeCredentialRef = inflight.credentialRef;
+          resumeState = 'pending';
+        }
+      }
+    }
     if (!existing && hasPersistedIdentity) {
-      deps.stderr(
-        `This worktree has saved seat metadata for ${authority.apiUrl}, but its secure session ` +
-          'could not be loaded. No new seat was created. Unlock or restore the OS ' +
-          `keychain, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
-      );
-      return 1;
+      // getActiveCube() is null AND metadata is persisted. Two distinct states:
+      //   (a) crash-in-gap RESUME — the composite FINALIZE wrote the binding, then
+      //       a crash/throw preceded the pending→ACTIVE flip. The credential is
+      //       still a PENDING record (non-hydratable → getActiveCube null), the
+      //       binding is intact, and re-sending the identical pending bearer
+      //       converges. Ratified clause 4: this state is RERUNNABLE and must be
+      //       truthfully reported, NOT misdiagnosed as keychain loss.
+      //   (b) genuine keychain loss/lock — no record at the ref. Truthful error,
+      //       and NEVER a new seat (record-absent invariant).
+      // A pure PEEK (no create/mutate) at the deterministic per-seat ref
+      // distinguishes them. Resume only applies to an in-place attach (a
+      // --worktree sibling is a NEW seat, not a resume of this worktree's seat).
+      const persisted = deps.readPersistedLocalSeat
+        ? await deps.readPersistedLocalSeat()
+        : null;
+      let resumeRole: Role | undefined;
+      let recordPresent = false;
+      if (
+        persisted &&
+        !wantSibling &&
+        persisted.apiUrl === auth.apiUrl &&
+        persisted.serverTrustIdentity === auth.serverTrustIdentity
+      ) {
+        recordPresent = deps.peekServerSessionRecord
+          ? await deps.peekServerSessionRecord(persisted.localSessionCredentialRef, {
+            origin: auth.apiUrl,
+            trustIdentity: auth.serverTrustIdentity!,
+            cubeId: persisted.cubeId,
+          })
+          : false;
+        if (recordPresent && persisted.roleName) {
+          resumeRole = cubeDetail.roles.find((role) => role.name === persisted.roleName);
+        }
+      }
+      if (persisted && recordPresent && resumeRole) {
+        // RESUME: reuse the persisted role (the ref binds the role, so a resume MUST
+        // re-derive the exact same account) and converge on the exact stored record.
+        savedLocalRole = resumeRole;
+        resumeCredentialRef = persisted.localSessionCredentialRef;
+        resumeState = persisted.state;
+        // CR#2: re-derive the EXACT pending seat ref from the STORED operation. A
+        // bound-PENDING sibling's record still carries its ORIGINAL sibling operation
+        // (projectRoot+kind+operationKey), NOT the rerun worktree's derived
+        // current-worktree seat operation — overriding here makes the rerun
+        // re-mint-or-reuse the identical pending bearer at the original R_sib and
+        // converge (no ghost seat). For an ACTIVE in-place resume the stored operation
+        // equals the already-derived one, so this is a no-op.
+        sessionOperation = persisted.operation;
+        // Only an ACTIVE resume pins the drone id (EXACT expectation below). A
+        // bound-PENDING record declares ABSENT/pending-reuse and does not pin it.
+        if (persisted.state === 'active' && persisted.droneId !== undefined) {
+          resumeDroneId = persisted.droneId;
+        }
+      } else {
+        deps.stderr(
+          `This worktree has saved seat metadata for ${authority.apiUrl}, but its local session ` +
+            'credential could not be loaded from the local seat store. No new seat was created. Run ' +
+            `${resetLocalSeatCommand(authority.apiUrl)} to clear this worktree's saved seat, then ` +
+            `ask the operator for a new invitation and rerun ${localAssimilateCommand(authority.apiUrl, true)}.\n`,
+        );
+        return 1;
+      }
     }
     if (
       existing && args.flags.here &&
@@ -820,42 +977,11 @@ export async function runAssimilate(
       return 1;
     }
 
-    const pendingCandidates = (await Promise.all(cubeDetail.roles.map(async (role) => ({
-      role,
-      pending: await deps.getPendingLocalAttach(
-        auth.apiUrl,
-        auth.serverTrustIdentity!,
-        cubeDetail.id,
-        role.id,
-        localAttachOperation,
-      ),
-    })))).filter((candidate) => candidate.pending !== null);
-    if (pendingCandidates.length > 1) {
-      deps.stderr(
-        `Multiple unfinished seat attachments exist for ${authority.apiUrl}. ` +
-          'No new seat was created. Finish or repair the saved local state, then rerun ' +
-          `${localAssimilateCommand(authority.apiUrl)}.\n`,
-      );
-      return 1;
-    }
-    const pendingCandidate = pendingCandidates[0];
-    if (pendingCandidate?.pending) {
-      if (
-        existing && args.flags.here &&
-        pendingCandidate.pending.priorDroneId !== undefined &&
-        pendingCandidate.pending.priorDroneId !== existing.droneId
-      ) {
-        deps.stderr(
-          `The unfinished attachment for ${authority.apiUrl} does not match this worktree's ` +
-            'saved seat. No new seat was created. Repair the saved local state, then rerun ' +
-            `${localAssimilateCommand(authority.apiUrl)}.\n`,
-        );
-        return 1;
-      }
-      savedLocalRole = pendingCandidate.role;
-      reattachPriorId = pendingCandidate.pending.priorDroneId;
-      remintInvalidPrior = pendingCandidate.pending.remintInvalidPrior;
-    } else if (existing && args.flags.here) {
+    // The per-seat PENDING bearer is the resume mechanism: a lost attach
+    // response is recovered when the next attach re-sends the identical bearer,
+    // so there is no separate unfinished-attach store to scan. Reattach identity
+    // for `--here` comes from this worktree's saved active cube below.
+    if (existing && args.flags.here) {
       savedLocalRole = existing.roleName
         ? cubeDetail.roles.find((role) => role.name === existing.roleName)
         : undefined;
@@ -864,15 +990,62 @@ export async function runAssimilate(
         auth.apiUrl,
         auth.serverTrustIdentity,
       );
-      if (status === 'frozen') {
+      // Canonical rotated/revoked path: a pin-matched 401 on THIS worktree's
+      // saved bearer. PURE DIAGNOSIS — attach never mutates local state on a
+      // rejection; it points at the offline `borg reset-local-seat` command.
+      // Distinct from unreachable/404/5xx/trust-mismatch, which stay
+      // indeterminate below.
+      if (status === 'rejected') {
+        return diagnoseSessionRejected(deps, auth.apiUrl);
+      }
+      // CR #6: distinct causes get cause-accurate, non-destructive recovery —
+      // never the generic "restart the server" advice.
+      if (status === 'credential-rejected') {
+        // The saved SESSION bearer was rejected WITHOUT the typed takeover code
+        // (a bare/other 401). Non-destructive: re-enroll, never a seat reset.
         deps.stderr(
-          `This worktree's saved seat on ${authority.apiUrl} is temporarily frozen. ` +
-            'No new seat was created. Ask the server operator to restore access, then rerun ' +
+          `The saved enrollment for ${authority.apiUrl} was rejected. No new seat was created ` +
+            `and nothing was changed. Re-enroll with ${localAssimilateCommand(authority.apiUrl, true)} ` +
+            'from the operator’s terminal.\n',
+        );
+        return 1;
+      }
+      if (status === 'trust-mismatch') {
+        // Terminal: the pinned identity changed. Restarting the server does NOT
+        // fix it — verify this is the expected server / re-initialization.
+        deps.stderr(
+          `Borg could not verify the expected server identity for ${authority.apiUrl}. ` +
+            'No new seat was created. Verify that this is the expected server; if it was ' +
+            're-initialized, restore the expected identity, then rerun ' +
             `${localAssimilateCommand(authority.apiUrl)}.\n`,
         );
         return 1;
       }
-      if (status === 'indeterminate') {
+      if (status === 'endpoint-mismatch') {
+        // CR5: a verified server returned 404 for the drone endpoint — a protocol /
+        // client-server VERSION mismatch, not a transient blip. Restarting does not
+        // fix it; align versions. Non-destructive: no seat created, nothing reset.
+        deps.stderr(
+          `Borg reached ${authority.apiUrl} but it did not recognize this worktree's drone ` +
+            'endpoint — the client and server versions are likely incompatible. No new seat ' +
+            'was created and nothing was changed. Update the Borg client and/or server so ' +
+            `their versions match, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
+        );
+        return 1;
+      }
+      if (status === 'server-failure') {
+        // CR5: a verified server returned 5xx — its own internal error. Transient:
+        // check the server, then retry. Non-destructive.
+        deps.stderr(
+          `Borg reached ${authority.apiUrl} but it returned a server error while verifying ` +
+            "this worktree's saved seat. No new seat was created. Check the server (its logs / " +
+            `\`borg-mcp-server start\`), then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`,
+        );
+        return 1;
+      }
+      if (status === 'unreachable' || status === 'indeterminate') {
+        // CR5: transport failure / timeout (unreachable) or a genuinely ambiguous
+        // failure (indeterminate) — both transient. Start or restart the server.
         deps.stderr(
           `Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +
             'No new seat was created. Start or restart the server with ' +
@@ -989,6 +1162,51 @@ export async function runAssimilate(
     return 1;
   }
 
+  // The TYPED prepare-time expectation (ratified clause 3 / CR #1). Declared HERE,
+  // BEFORE the mint+send, and revalidated at BOTH the cube-lock-held PREPARE (so a
+  // reset that wins before PREPARE aborts before any credential is created/sent)
+  // and FINALIZE. resume/reattach/remint pin the FULL prior binding (ref + drone
+  // id [+ live digest]); fresh/sibling declare ABSENT.
+  let sessionExpected: ExpectedBinding;
+  if (resumeCredentialRef && resumeState === 'pending') {
+    // CR#2: a bound-PENDING resume (a sibling whose activation failed) re-sends the
+    // identical pending bearer the server already digest-bound. A PENDING record is
+    // NOT a live binding, so it declares ABSENT (pending-reuse): prepareSeat REUSES
+    // the existing pending record (identical bearer). An EXACT expectation would be
+    // rejected by prepareSeat's `prior.state==='active'` guard and abort the only
+    // ghost-free recovery.
+    sessionExpected = { kind: 'absent' };
+  } else if (resumeCredentialRef) {
+    sessionExpected = {
+      kind: 'exact',
+      credentialRef: resumeCredentialRef,
+      ...(resumeDroneId ? { droneId: resumeDroneId } : {}),
+    };
+  } else if (remintInvalidPrior && existing?.localSessionCredentialRef) {
+    sessionExpected = {
+      kind: 'exact',
+      credentialRef: existing.localSessionCredentialRef,
+      ...(existing.droneId ? { droneId: existing.droneId } : {}),
+    };
+  } else if (reattachPriorId != null && existing?.localSessionCredentialRef && existing.sessionToken) {
+    sessionExpected = {
+      kind: 'exact',
+      credentialRef: existing.localSessionCredentialRef,
+      ...(existing.droneId ? { droneId: existing.droneId } : {}),
+      sessionDigest: createHash('sha256').update(existing.sessionToken).digest('hex'),
+    };
+  } else {
+    sessionExpected = { kind: 'absent' };
+  }
+  // CR1(b): PREPARE-time revalidation is preserved for siblings too. A sibling
+  // declares an ABSENT expectation: a PENDING record at the ref (a lost-response
+  // retry / crash-in-gap) stays reusable so the identical bearer is re-sent, but an
+  // ACTIVE record holding the ref is a mismatch → abort (never silently reuse/move
+  // a live binding). With the collision-safe sibling key above the fresh ref is
+  // normally empty, so ABSENT passes and the mint proceeds; the check is the
+  // defense that stops an active seat from being unseated.
+  const revalidateAtPrepare = true;
+
   // ----- Step 6: API assimilate (no FS state yet — clean exit on failure) -----
   // gh#653 B4: progress for the seat-mint round-trip (silent-window stall).
   deps.stderr(`Joining cube '${cubeDetail.name}' as ${resolvedRole.name}…\n`);
@@ -1003,7 +1221,11 @@ export async function runAssimilate(
       ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
       ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
       ...(authority.kind === 'server'
-        ? { local_attach_operation: localAttachOperation }
+        ? {
+          session_operation: sessionOperation,
+          session_expected: sessionExpected,
+          revalidate_at_prepare: revalidateAtPrepare,
+        }
         : {}),
     };
     result = auth.serverTrustIdentity === undefined
@@ -1035,11 +1257,38 @@ export async function runAssimilate(
       }
       return 1;
     }
+    // Pin-matched SESSION_REJECTED (revoked / taken-over seat): PURE DIAGNOSIS.
+    // Reached only after a successful pinned-TLS attach, so it is pin-matched by
+    // construction — a pin mismatch throws a distinct trust error and never
+    // enters this branch. Attach mutates NOTHING; it recommends the offline
+    // `borg reset-local-seat` command.
+    if (
+      err instanceof BorgServerError &&
+      err.code === 'SESSION_REJECTED' &&
+      authority.kind === 'server' &&
+      reattachPriorId != null
+    ) {
+      return diagnoseSessionRejected(deps, authority.apiUrl);
+    }
     if (authority.kind === 'server') {
       return reportServerFailure(deps, authority.apiUrl, err);
     }
     const message = err instanceof Error ? err.message : String(err);
     deps.stderr(`assimilate failed: ${message}\n`);
+    return 1;
+  }
+
+  if (authority.kind === 'server' && result.prepareAborted) {
+    // CR #1: the cube-lock-held PREPARE revalidation aborted BEFORE any credential
+    // was minted or sent — this worktree's saved seat changed under us (a
+    // concurrent offline reset, or a competing enroll). No FS/network mutation
+    // happened; never silently recreate.
+    deps.stderr(
+      `This worktree's saved local seat on ${authority.apiUrl} changed before the attach ` +
+        '(a concurrent reset or enroll); no credential was created or sent and nothing was ' +
+        `changed. Re-run ${localAssimilateCommand(authority.apiUrl)} to attach against the ` +
+        'current state.\n',
+    );
     return 1;
   }
 
@@ -1050,11 +1299,6 @@ export async function runAssimilate(
       new Error('Borg server did not return compatible secure session metadata'),
     );
   }
-  if (authority.kind === 'cloud' && !result.session_token) {
-    deps.stderr('assimilate failed: Borg Cloud did not return a session token\n');
-    return 1;
-  }
-
   // The server may assimilate a member into a DIFFERENT role than the client's
   // auto-picked default (gh#700 fallback: when the member's invite doesn't
   // grant the default role, the server picks one of their GRANTED roles).
@@ -1064,11 +1308,12 @@ export async function runAssimilate(
   // displayed role name + worktree slug with what was actually assigned.
   const assignedRole =
     cubeDetail.roles.find((r) => r.id === result.role_id) ?? resolvedRole;
-  if (result.reattached) {
-    // gh#780: the seat's existing role is authoritative on a reattach —
-    // a role difference is expected, not a grant fallback.
+  if (result.result === 'reused') {
+    // The seat's existing role is authoritative on an idempotent reattach —
+    // a role difference is expected, not a grant fallback. The bearer is
+    // reused, not rotated: no new drone minted.
     deps.stderr(
-      `re-attached to existing seat ${result.drone_label} (session token rotated, no new drone minted)\n`
+      `re-attached to existing seat ${result.drone_label} (same session, no new drone minted)\n`
     );
   } else if (assignedRole.id !== resolvedRole.id) {
     deps.stderr(
@@ -1194,58 +1439,153 @@ export async function runAssimilate(
     }
     deps.stderr(
       `spawned sibling worktree at ${candidate} on branch ${wtBranch} (${startRef}); ` +
-      `original dir is registered as active (edit ~/.config/borgmcp/cubes.json if stale).\n`
+      `the original dir keeps its active seat — run \`borg reset-local-seat\` there if that binding is stale.\n`
     );
     deps.chdir(candidate);
     deps.stderr(renderWorktreeSteeringNote(candidate, wtBranch, projectRoot));
     spawnedWorktreePath = deps.cwd();
   }
 
-  // ----- Step 8: setActiveCube (narrow rollback — worktree exists if spawned) -----
-  try {
-    await deps.setActiveCube({
-      cubeId: result.cube_id,
-      droneId: result.drone_id,
-      name: cubeDetail.name,
-      droneLabel: result.drone_label,
-      apiUrl: auth.apiUrl,
-      ...(auth.serverTrustIdentity === undefined
-        ? { sessionToken: result.session_token! }
-        : {
-          serverTrustIdentity: auth.serverTrustIdentity,
-          localSessionCredentialRef: result.local_session!.credential_ref,
-          localSessionGeneration: result.local_session!.generation,
-          localSessionExpiresAt: result.local_session!.expires_at,
-        }),
-      // gh#899: persist the assimilated role so the connect-time ListTools
-      // handler can role-scope the native tool surface.
-      roleName: assignedRole.name,
-      isHumanSeat: assignedRole.is_human_seat,
-      ...(assignedRole.role_class ? { roleClass: assignedRole.role_class } : {}),
-    });
-    if (
-      auth.serverTrustIdentity !== undefined &&
-      result.local_attach_completion !== undefined
-    ) {
-      // cubes.json is now the durable consumer of the rotated session. Only
-      // now may a crash-safe attach tuple leave PENDING state.
-      await deps.completeLocalAttach(result.local_attach_completion);
+  // ----- Step 8: persist the binding (narrow rollback — worktree exists if spawned) -----
+  const activeCube: ActiveCube = {
+    cubeId: result.cube_id,
+    droneId: result.drone_id,
+    name: cubeDetail.name,
+    droneLabel: result.drone_label,
+    apiUrl: auth.apiUrl,
+    ...(auth.serverTrustIdentity === undefined
+      ? { sessionToken: result.session_token! }
+      : {
+        serverTrustIdentity: auth.serverTrustIdentity,
+        localSessionCredentialRef: result.local_session!.credential_ref,
+        localSessionExpiresAt: result.local_session!.expires_at,
+      }),
+    // gh#899: persist the assimilated role so the connect-time ListTools
+    // handler can role-scope the native tool surface.
+    roleName: assignedRole.name,
+    isHumanSeat: assignedRole.is_human_seat,
+    ...(assignedRole.role_class ? { roleClass: assignedRole.role_class } : {}),
+  };
+
+  const rollbackWorktree = (): void => {
+    if (!spawnedWorktreePath) return;
+    const rm = deps.runSync('git', ['worktree', 'remove', '--force', spawnedWorktreePath], projectRoot);
+    if (rm.status === 0) {
+      deps.stderr(`rolled back spawned worktree at ${spawnedWorktreePath}\n`);
+    } else {
+      deps.stderr(
+        `manual cleanup needed: \`git worktree remove --force ${spawnedWorktreePath}\` ` +
+        `(rollback attempt failed: ${safeStderr(rm.stderr).trim() || 'unknown'})\n`
+      );
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    deps.stderr(`setActiveCube failed: ${message}\n`);
-    if (spawnedWorktreePath) {
-      const rm = deps.runSync('git', ['worktree', 'remove', '--force', spawnedWorktreePath], projectRoot);
-      if (rm.status === 0) {
-        deps.stderr(`rolled back spawned worktree at ${spawnedWorktreePath}\n`);
-      } else {
+  };
+
+  // Local-server authority: drive the COMPOSITE cube-owned FINALIZE (Race 2).
+  // The cube lock is held OUTER across revalidate → binding-write → activate; the
+  // typed expectation is declared HERE at the orchestration layer (reattach =
+  // EXACT prior binding with its live-bearer digest; eviction remint = EXACT ref
+  // only, bearer intentionally replaced; fresh/sibling = ABSENT).
+  if (
+    auth.serverTrustIdentity !== undefined &&
+    result.finalize !== undefined &&
+    deps.finalizeServerSeat !== undefined
+  ) {
+    // The SAME typed expectation declared before PREPARE is revalidated again at
+    // FINALIZE (commit-time revalidation, ratified clause 3).
+    let outcome: FinalizeServerSeatOutcome;
+    try {
+      outcome = await deps.finalizeServerSeat({
+        active: activeCube,
+        expected: sessionExpected,
+        activate: result.finalize.activate,
+        scrubPending: result.finalize.scrubPending,
+      });
+    } catch (err) {
+      // A BINDING-WRITE (or revalidate) failure BEFORE the binding landed. Nothing
+      // owns the spawned worktree yet, so rolling it back is safe.
+      const message = err instanceof Error ? err.message : String(err);
+      deps.stderr(`setActiveCube failed: ${message}\n`);
+      rollbackWorktree();
+      return 1;
+    }
+    if (!outcome.committed) {
+      if (outcome.reason === 'activation-failed') {
+        // CR #5: the atomic activate+bind did NOT commit (missing/replaced/threw), so
+        // the record stays PENDING with no worktree of its own. CR#2/CR#4: bind that
+        // exact pending record to THIS preserved worktree WITHOUT activating it — the
+        // record stays pending (non-hydratable) but becomes DISCOVERABLE from here, so
+        // a rerun FROM this worktree re-derives the exact original operation and
+        // re-sends the identical bearer, converging on the SAME seat (no ghost).
+        //
+        // CR#4 (SR-seven false-success revocation): the bindPending OUTCOME is
+        // load-bearing and must be BRANCHED. A blanket "safe to re-run / identical
+        // seat reused" claim on a missing/replaced/thrown bind is a FALSE-SUCCESS
+        // revocation failure — the worktree would NOT own a durable locator, yet the
+        // operator would be told convergence is guaranteed. Preserve the spawned
+        // worktree ONLY when it owns a durable locator (a `bound` outcome).
+        let bindOutcome: BindPendingSeatOutcome | 'threw' | 'unavailable' = 'unavailable';
+        if (result.finalize?.bindPending) {
+          try {
+            bindOutcome = (await result.finalize.bindPending({
+              worktree: deps.findProjectRoot(deps.cwd()),
+              name: activeCube.name,
+              droneLabel: activeCube.droneLabel,
+              ...(activeCube.roleName !== undefined ? { roleName: activeCube.roleName } : {}),
+              ...(activeCube.roleClass !== undefined ? { roleClass: activeCube.roleClass } : {}),
+              ...(activeCube.isHumanSeat !== undefined ? { isHumanSeat: activeCube.isHumanSeat } : {}),
+            })) as BindPendingSeatOutcome;
+          } catch {
+            bindOutcome = 'threw';
+          }
+        }
+        if (bindOutcome === 'bound') {
+          // The worktree now owns a durable locator (the bound-pending record points
+          // here). PRESERVE it. Truthful convergence copy: a rerun FROM here re-sends
+          // the identical bearer (no duplicate), and `reset-local-seat` from here now
+          // discovers + clears the bound-pending record.
+          deps.stderr(
+            `This worktree's secure session on ${auth.apiUrl} did not finish activating, but ` +
+              'its resumable seat state was PRESERVED here. This worktree was NOT removed. From ' +
+              `here, re-run ${localAssimilateCommand(auth.apiUrl)} to converge (the identical seat ` +
+              `is reused — no duplicate is minted), or run ${resetLocalSeatCommand(auth.apiUrl)} to ` +
+              'clear it.\n',
+          );
+          return 1;
+        }
+        // missing / replaced / threw / unavailable: the worktree owns NO durable
+        // locator, so make NO convergence claim. Roll back the just-spawned worktree
+        // (preserve ONLY when it owns a durable locator) and point at the offline reset.
         deps.stderr(
-          `manual cleanup needed: \`git worktree remove --force ${spawnedWorktreePath}\` ` +
-          `(rollback attempt failed: ${safeStderr(rm.stderr).trim() || 'unknown'})\n`
+          `This worktree's secure session on ${auth.apiUrl} did not finish activating, and its ` +
+            'seat state could NOT be preserved to this worktree (it was concurrently reset or ' +
+            'replaced, or the local seat store could not be written). No usable seat remains here. ' +
+            `Run ${resetLocalSeatCommand(auth.apiUrl)} to clear any saved seat, then re-run ` +
+            `${localAssimilateCommand(auth.apiUrl)} to attach against the current state.\n`,
         );
+        rollbackWorktree();
+        return 1;
       }
+      // 'expectation-mismatch': the binding was NEVER written (this worktree's
+      // saved seat changed under us between PREPARE and FINALIZE — a concurrent
+      // reset or enroll). The composite scrubbed only our own pending record — no
+      // orphan ACTIVE credential — so a just-spawned worktree is safe to remove.
+      deps.stderr(
+        `This worktree's saved local seat on ${auth.apiUrl} changed during attach ` +
+          '(a concurrent reset or enroll); no seat was created and nothing was overwritten. ' +
+          `Re-run ${localAssimilateCommand(auth.apiUrl)} to attach against the current state.\n`,
+      );
+      rollbackWorktree();
+      return 1;
     }
-    return 1;
+  } else {
+    try {
+      await deps.setActiveCube(activeCube);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.stderr(`setActiveCube failed: ${message}\n`);
+      rollbackWorktree();
+      return 1;
+    }
   }
 
   // The worktree, not a reminted drone UUID, is the stable local seat identity

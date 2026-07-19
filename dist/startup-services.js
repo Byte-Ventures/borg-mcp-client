@@ -12,7 +12,6 @@ export async function runMcpStartupServices(readinessProbe, services) {
         services.auditHook,
         services.sseStream,
         services.openCode,
-        services.healthBeat,
     ];
     for (const task of tasks) {
         try {

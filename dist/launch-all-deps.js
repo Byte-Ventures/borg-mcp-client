@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSyn
 import { homedir as osHomedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { readAllProjectIdentities as cubesReadAllProjectIdentities, getProjectCliPreferenceForPath, findProjectRoot, getActiveCube, } from './cubes.js';
-import { getRoster, getCube, getValidToken, API_URL } from './remote-client.js';
+import { getRoster, getCube } from './remote-client.js';
 import { defaultProbeSeat } from './seat-probe.js';
 /** Real-IO factory wiring production modules (spec §10). Test code stubs LaunchAllDeps directly. */
 export function buildDefaultLaunchAllDeps() {
@@ -68,16 +68,8 @@ export function buildDefaultLaunchAllDeps() {
                 return [];
             }
         },
-        getCachedAuth: async () => {
-            try {
-                return { token: await getValidToken(), apiUrl: API_URL };
-            }
-            catch {
-                return null;
-            }
-        },
         getRoster: (token, apiUrl, since, serverTrustIdentity) => getRoster(token, apiUrl, since, serverTrustIdentity),
-        // getCube uses the user OAuth token via authedFetch (cubeId-only); apiUrl/token unused.
+        // getCube uses the drone session token via authedFetch (cubeId-only); apiUrl/token unused.
         getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
         probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
         getCliPreferenceForPath: (projectPath) => getProjectCliPreferenceForPath(projectPath),

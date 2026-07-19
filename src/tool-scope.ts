@@ -30,7 +30,6 @@ export const UNIVERSAL_TOOLS = [
   'borg_cube',
   'borg_role',
   'borg_role-rationale',
-  'borg_report-friction',
   'borg_assimilate',
   'borg_playbook', // gh#912: on-demand operating-playbook chapter — every role needs it
   'borg_docs', // gh#docs-site B: in-product docs lookup — every role can answer "how does borgmcp work"
@@ -56,14 +55,6 @@ export const MANAGEMENT_TOOLS = [
   'borg_list-roles',
   'borg_list-templates',
   'borg_remove-decision',
-] as const;
-
-/** Subscription/billing — native for management seats, deferred for workers. */
-export const BILLING_TOOLS = [
-  'borg_subscribe',
-  'borg_upgrade-subscription',
-  'borg_subscription_status',
-  'borg_open_dashboard',
 ] as const;
 
 /**
@@ -102,7 +93,7 @@ export function isManagementSeat(scope: RoleScope): boolean {
 export function deferredToolNames(scope: RoleScope | null): Set<string> {
   if (!scope || !scope.roleName) return new Set(); // role unknown → full set
   if (isManagementSeat(scope)) return new Set(); // management seat → full set
-  return new Set<string>([...MANAGEMENT_TOOLS, ...BILLING_TOOLS]); // worker → defer
+  return new Set<string>([...MANAGEMENT_TOOLS]); // worker → defer
 }
 
 /**

@@ -1,1 +1,1 @@
-{"version":3,"file":"unknown-subcommand.d.ts","sourceRoot":"","sources":["../src/unknown-subcommand.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;GAWG;AAEH,0EAA0E;AAC1E,eAAO,MAAM,iBAAiB,4EAOpB,CAAC;AAEX;;;;GAIG;AACH,wBAAgB,iBAAiB,CAAC,KAAK,EAAE,MAAM,GAAG,SAAS,GAAG,MAAM,GAAG,IAAI,CAK1E"}
+{"version":3,"file":"unknown-subcommand.d.ts","sourceRoot":"","sources":["../src/unknown-subcommand.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;GAWG;AAEH,0EAA0E;AAC1E,eAAO,MAAM,iBAAiB,gGAQpB,CAAC;AAEX;;;;GAIG;AACH,wBAAgB,iBAAiB,CAAC,KAAK,EAAE,MAAM,GAAG,SAAS,GAAG,MAAM,GAAG,IAAI,CAK1E"}

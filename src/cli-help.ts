@@ -21,16 +21,16 @@ export function topLevelHelpText(version: string): string {
   return (
     `borgmcp ${version} — run several AI coding agents on one project, together.\n` +
     `              They coordinate through a shared log (a "cube"). For Claude Code, Codex & OpenCode.\n\n` +
-    `Docs & quickstart: https://borgmcp.ai/get-started\n\n` +
+    `Docs & quickstart: https://github.com/Byte-Ventures/borg-mcp-client#readme\n\n` +
     `Install Claude Code, Codex, or OpenCode first. Type \`borg ...\` in your terminal;\n` +
     `type \`borg_...\` inside your agent session once you've joined a cube ("assimilate").\n\n` +
     `Usage:\n` +
     `  borg                     Launch your agent CLI; in a TTY, bare borg may show the launch menu\n` +
     `  borg setup               Set up borg MCP server + agent CLI integration\n` +
-    `  borg setup --no-browser  Set up from SSH/headless terminals\n` +
     `  borg assimilate [role]   Join or create a cube\n` +
     `  borg assimilate --host <host>   Join or create on an explicit server\n` +
     `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
+    `  borg reset-local-seat    Clear ONLY this worktree's saved local seat (offline; after a rejection)\n` +
     `  borg sync [--prune]      Sync this worktree's branch to origin/main\n` +
     `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
     `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
@@ -70,9 +70,33 @@ export function assimilateHelpText(version: string): string {
     `  --yes, -y                  Skip confirmation prompts\n\n` +
     `An enrolled owner client may create an idempotent repository cube; ordinary clients\n` +
     `require an explicit cube grant. Agent seats begin only after enrollment. Preview only.\n` +
-    `See docs/LOCAL_SERVER.md for current release blockers.\n\n` +
+    `See docs/LOCAL_SERVER.md for self-hosted setup and current status.\n\n` +
     `For local or provider-specific models, configure the selected agent CLI directly.\n` +
     `OpenCode supports Ollama and other providers through its own model configuration.\n`
+  );
+}
+
+/**
+ * Help text for `borg reset-local-seat --help`. The offline, network-free seat
+ * reset recommended by the pin-matched SESSION_REJECTED diagnostic (#1082).
+ */
+export function resetLocalSeatHelpText(version: string): string {
+  return (
+    `borg reset-local-seat (borgmcp ${version}) — clear ONLY this worktree's saved local seat\n\n` +
+    `Offline and network-free: it contacts no server and revokes nothing server-side. It clears\n` +
+    `just this worktree's saved local seat — its credential and cube binding together — from the\n` +
+    `local seat store on this machine. Server, trust anchor, cube, and every sibling worktree are\n` +
+    `left untouched.\n\n` +
+    `Use it after \`borg assimilate\` reports this worktree's seat was revoked or taken over\n` +
+    `(a pin-matched rejection), then ask the operator for a new invitation and re-enroll.\n\n` +
+    `Usage:\n` +
+    `  borg reset-local-seat                 Reset this worktree's saved seat (TTY confirms [y/N])\n` +
+    `  borg reset-local-seat --host <host>   No-op unless this worktree's seat is on <host>\n` +
+    `  borg reset-local-seat --yes           Reset without a prompt (required when non-interactive)\n` +
+    `  borg reset-local-seat --help          Show this help\n\n` +
+    `Flags:\n` +
+    `  --host <host>              Only act if this worktree's saved seat is on <host> (else no-op)\n` +
+    `  --yes, -y                  Skip the confirmation prompt (required in non-TTY contexts)\n`
   );
 }
 
@@ -87,9 +111,6 @@ export function setupHelpText(version: string): string {
     `Borg MCP needs Claude Code, Codex, or OpenCode installed first.\n\n` +
     `Usage:\n` +
     `  borg setup               Run the interactive setup wizard\n` +
-    `  borg setup --no-browser  Use device-code flow for SSH / headless / container\n` +
-    `                           terminals when Cloud sign-in is selected. Alias: --device.\n` +
-    `                           Auto-detected on SSH/headless; this forces it.\n` +
     `  borg setup --help        Show this help\n`
   );
 }

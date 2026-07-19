@@ -6,10 +6,9 @@
  * is identified by walking up from cwd to find a .git directory; if none is
  * found, cwd itself is used as the project key.
  *
- * Cloud session tokens retain their legacy plaintext persistence for rollout
- * compatibility. Local-server session tokens never enter this file: only an
- * opaque generation-specific keychain reference is stored and hydrated at
- * read time.
+ * Local-server session tokens never enter this file: only an opaque keychain
+ * reference is stored and hydrated at read time. An entry without verified
+ * local-server trust can no longer be hydrated (no cloud plaintext tokens).
  *
  * apiUrl is captured at assimilate time so subprocess invocations (e.g. the
  * SessionStart hook firing borg-regen) don't need BORG_API_URL in their env
@@ -17,57 +16,38 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
 import {
-  clearServerSessionCredential,
-  getServerSessionCredential,
-} from './config.js';
+  getActiveSeatCredential,
+  getActiveSeatForWorktree,
+  getSeatForWorktree,
+  hasSeatForWorktree,
+  observeSeat,
+  readAllActiveSeats,
+  refreshSeatMetadata,
+  resetSeatForWorktree,
+  seatRef,
+  type SeatObservation,
+  type SeatOperation,
+  type SeatRecord,
+} from './seats.js';
+
+// The unified 0600 seat store (seats.ts / seats.json) is now the SOLE home of the
+// per-worktree ACTIVE-CUBE seat map: each seat = credential + worktree binding +
+// display as ONE atomic record. cubes.json no longer holds a seat map — the
+// functions below are thin adapters over seats.ts. Only launch.json,
+// codex-wake-targets.json, and the inbox tree remain owned by this module.
+
+/** Re-exported from seats.ts for call-site parity (the retired cross-store name). */
+export type { SeatExpectation as ExpectedBinding } from './seats.js';
 
 const CUBES_DIR = join(homedir(), '.config', 'borgmcp');
-const CUBES_FILE = join(CUBES_DIR, 'cubes.json');
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
 const CODEX_WAKE_TARGETS_FILE = join(CUBES_DIR, 'codex-wake-targets.json');
 const INBOX_DIR = join(CUBES_DIR, 'inboxes');
-const CUBES_WRITE_LOCK = `${CUBES_FILE}.lock`;
-const CUBES_LOCK_STALE_MS = 30_000;
-
-async function withCubesWriteLock<T>(operation: () => Promise<T>): Promise<T> {
-  await mkdir(dirname(CUBES_WRITE_LOCK), { recursive: true });
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    let handle;
-    try {
-      handle = await open(CUBES_WRITE_LOCK, 'wx', 0o600);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      try {
-        const metadata = await stat(CUBES_WRITE_LOCK);
-        if (Date.now() - metadata.mtimeMs > CUBES_LOCK_STALE_MS) {
-          await unlink(CUBES_WRITE_LOCK);
-          continue;
-        }
-      } catch (inspectionError) {
-        if ((inspectionError as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw inspectionError;
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
-      continue;
-    }
-    try {
-      return await operation();
-    } finally {
-      await handle.close();
-      try {
-        await unlink(CUBES_WRITE_LOCK);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-    }
-  }
-  throw new Error('Borg cube state is busy');
-}
 
 export type BorgCli = 'claude' | 'codex' | 'opencode';
 
@@ -78,12 +58,10 @@ export interface ActiveCube {
   sessionToken: string;
   droneLabel: string;
   apiUrl: string;
-  /** Verified local-server CA identity; absent for Borg Cloud cubes. */
+  /** Verified local-server CA identity; absent until a local server is selected. */
   serverTrustIdentity?: string;
   /** Opaque local-session keychain reference; never a bearer. */
   localSessionCredentialRef?: string;
-  /** Server-owned monotonic local-session generation. */
-  localSessionGeneration?: number;
   localSessionExpiresAt?: string | null;
   // gh#899: the assimilated role, persisted so the connect-time ListTools
   // handler can role-scope the NATIVE tool surface (UX/context only — never an
@@ -98,12 +76,6 @@ export interface ActiveCube {
 export type ActiveCubeInput = Omit<ActiveCube, 'sessionToken'> & {
   sessionToken?: string;
 };
-
-type PersistedActiveCube = ActiveCubeInput;
-
-interface CubesFile {
-  projects: Record<string, PersistedActiveCube>;
-}
 
 interface LaunchFile {
   projects: Record<string, { cli: BorgCli }>;
@@ -153,51 +125,6 @@ export function inboxPathForDrone(cubeId: string, droneId: string): string {
   if (!UUID_RE.test(cubeId)) throw new Error(`Invalid cubeId: ${cubeId}`);
   if (!UUID_RE.test(droneId)) throw new Error(`Invalid droneId: ${droneId}`);
   return join(INBOX_DIR, cubeId, `${droneId}.log`);
-}
-
-/**
- * Type guard: true iff the parsed JSON looks like the new schema. Anything
- * else (old single-cube schema, malformed, missing) is treated as "no state".
- */
-function isCubesFile(data: any): data is CubesFile {
-  return (
-    data !== null &&
-    typeof data === 'object' &&
-    typeof data.projects === 'object' &&
-    data.projects !== null &&
-    !Array.isArray(data.projects)
-  );
-}
-
-/**
- * Read the cubes.json file. Returns null if the file does not exist, is
- * unparseable, or is in the old single-cube schema (per the project's no-
- * backward-compat stance, the old shape is treated as absent — it will be
- * overwritten the next time setActiveCube() runs).
- */
-async function readCubesFile(): Promise<CubesFile | null> {
-  let raw: string;
-  try {
-    raw = await readFile(CUBES_FILE, 'utf8');
-  } catch (error: any) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-  let parsed: any;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!isCubesFile(parsed)) return null;
-  return parsed;
-}
-
-/**
- * Write the cubes.json file, ensuring the parent directory exists.
- */
-async function writeCubesFile(data: CubesFile): Promise<void> {
-  await atomicWriteFile(CUBES_FILE, JSON.stringify(data, null, 2) + '\n');
 }
 
 // gh#894: crash-safe write. A plain truncate-write (open-for-write then write)
@@ -316,117 +243,59 @@ async function writeCodexWakeTargetsFile(data: CodexWakeTargetsFile): Promise<vo
  * refresh.
  */
 export async function getActiveCube(): Promise<ActiveCube | null> {
-  const data = await readCubesFile();
-  if (!data) return null;
-  const key = findProjectRoot();
-  const entry = data.projects[key];
-  if (!entry || typeof entry.cubeId !== 'string' || !entry.cubeId) return null;
-  if (typeof entry.droneId !== 'string' || !entry.droneId) return null;
-  return hydrateActiveCube(entry);
+  const record = await getActiveSeatForWorktree(findProjectRoot());
+  if (!record || !record.cubeId || !record.droneId) return null;
+  return hydrateActiveCube(record);
 }
 
 /**
- * Distinguish a genuinely new worktree from one whose persisted local seat can
- * no longer be hydrated (for example, because its keychain item is missing).
- * No authority-bearing fields are returned through this diagnostic seam.
+ * True iff this worktree has an ACTIVE bound seat in seats.json. In the collapsed
+ * single-store model the credential and the worktree binding are one atomic unit,
+ * so there is no "binding present but credential lost" partial state to diagnose:
+ * an active bound seat always hydrates.
  */
 export async function hasPersistedActiveCube(): Promise<boolean> {
-  const data = await readCubesFile();
-  if (!data) return false;
-  return Object.prototype.hasOwnProperty.call(data.projects, findProjectRoot());
+  return hasSeatForWorktree(findProjectRoot());
 }
-
-async function hydrateActiveCube(entry: PersistedActiveCube): Promise<ActiveCube | null> {
-  if (entry.serverTrustIdentity !== undefined) {
-    if (
-      typeof entry.localSessionCredentialRef !== 'string' ||
-      !Number.isSafeInteger(entry.localSessionGeneration) ||
-      (entry.localSessionGeneration ?? 0) < 1
-    ) {
-      return null;
-    }
-    const sessionToken = await getServerSessionCredential(
-      entry.localSessionCredentialRef,
-      {
-        origin: entry.apiUrl,
-        trustIdentity: entry.serverTrustIdentity,
-        cubeId: entry.cubeId,
-        droneId: entry.droneId,
-        generation: entry.localSessionGeneration!,
-      },
-    );
-    if (!sessionToken) return null;
-    return { ...entry, sessionToken };
-  }
-  if (typeof entry.sessionToken !== 'string' || !entry.sessionToken) return null;
-  return entry as ActiveCube;
-}
-
-let activeCubeWriteQueue: Promise<void> = Promise.resolve();
 
 /**
- * Set the active cube for the current project. Preserves entries for all
- * other projects.
+ * Compose an ActiveCube from an ACTIVE SeatRecord, hydrating the session bearer via
+ * the SOLE raw-bearer reader (getActiveSeatCredential). Returns null if the bearer
+ * can no longer be resolved (record concurrently reset/replaced).
  */
-export async function setActiveCube(active: ActiveCubeInput): Promise<void> {
-  const operation = activeCubeWriteQueue.then(() => withCubesWriteLock(async () => {
-    const existing = (await readCubesFile()) ?? { projects: {} };
-    const projectKey = findProjectRoot();
-    const prior = existing.projects[projectKey];
+async function hydrateActiveCube(record: SeatRecord): Promise<ActiveCube | null> {
+  const ref = seatRef(record);
+  const sessionToken = await getActiveSeatCredential(ref, {
+    origin: record.origin,
+    trustIdentity: record.trustIdentity,
+    cubeId: record.cubeId,
+  });
+  if (!sessionToken) return null;
+  return {
+    cubeId: record.cubeId,
+    droneId: record.droneId!,
+    name: record.name ?? '',
+    droneLabel: record.droneLabel ?? '',
+    sessionToken,
+    apiUrl: record.origin,
+    serverTrustIdentity: record.trustIdentity,
+    localSessionCredentialRef: ref,
+    ...(record.expiresAt !== undefined ? { localSessionExpiresAt: record.expiresAt } : {}),
+    ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
+    ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),
+    ...(record.isHumanSeat !== undefined ? { isHumanSeat: record.isHumanSeat } : {}),
+  };
+}
 
-    if (active.serverTrustIdentity !== undefined) {
-      if (
-        typeof active.localSessionCredentialRef !== 'string' ||
-        !Number.isSafeInteger(active.localSessionGeneration) ||
-        (active.localSessionGeneration ?? 0) < 1
-      ) {
-        throw new Error('local Borg server session metadata is incomplete');
-      }
-      const nextGeneration = active.localSessionGeneration!;
-      if (
-        prior?.serverTrustIdentity === active.serverTrustIdentity &&
-        prior.apiUrl === active.apiUrl &&
-        prior.cubeId === active.cubeId &&
-        prior.droneId === active.droneId &&
-        typeof prior.localSessionGeneration === 'number' &&
-        prior.localSessionGeneration >= nextGeneration
-      ) {
-        if (prior.localSessionCredentialRef !== active.localSessionCredentialRef) {
-          await clearServerSessionCredential(active.localSessionCredentialRef);
-        }
-        throw new Error('stale Borg server session generation was discarded');
-      }
-
-      const { sessionToken: _discardLocalBearer, ...persisted } = active;
-      existing.projects[projectKey] = persisted;
-      try {
-        await writeCubesFile(existing);
-      } catch (error) {
-        try {
-          await clearServerSessionCredential(active.localSessionCredentialRef);
-        } catch {
-          // Preserve the metadata-write error; a future attach rotation can
-          // overwrite an orphaned, unreferenced keychain generation.
-        }
-        throw error;
-      }
-      if (
-        prior?.localSessionCredentialRef &&
-        prior.localSessionCredentialRef !== active.localSessionCredentialRef
-      ) {
-        await clearServerSessionCredential(prior.localSessionCredentialRef);
-      }
-      return;
-    }
-
-    if (typeof active.sessionToken !== 'string' || !active.sessionToken) {
-      throw new Error('Cloud cube session token is missing');
-    }
-    existing.projects[projectKey] = active;
-    await writeCubesFile(existing);
-  }));
-  activeCubeWriteQueue = operation.catch(() => {});
-  await operation;
+/**
+ * Legacy binding-only writer. In the collapsed single-store model an ACTIVE seat is
+ * created ONLY by the atomic mint→activate+bind path in seats.ts (driven by the
+ * attach FINALIZE); there is no standalone binding write, and the
+ * severed cloud path has no plaintext session to persist. Retained solely as the
+ * fail-closed cloud/no-finalize branch seam.
+ */
+export async function setActiveCube(_active: ActiveCubeInput): Promise<void> {
+  throw new Error('local Borg server session metadata is incomplete');
 }
 
 export function activeCubeWithFreshRegenIdentity(
@@ -439,33 +308,172 @@ export function activeCubeWithFreshRegenIdentity(
   return { ...active, name, droneLabel };
 }
 
+// The ONLY sanctioned seat-clear is resetLocalSeatBinding → seats.ts
+// resetSeatForWorktree, which under the single store flock re-checks the FULL
+// binding (ref + drone id) + the token-safe observation and DELETES the whole
+// record (credential AND binding together — no cross-store 'partial').
+
+export interface LocalSeatSnapshot {
+  apiUrl: string;
+  serverTrustIdentity: string;
+  cubeId: string;
+  /** The FULL binding includes the prior drone identity (CR #3): a drone-id
+   *  change at recheck is a full-binding change and aborts the reset. CR#4: a
+   *  bound-PENDING record (a sibling whose activation failed) may carry NO drone id
+   *  yet — the snapshot then omits it and the reset matches on undefined-vs-undefined,
+   *  still deleting the exact record. */
+  droneId?: string;
+  credentialRef: string;
+  worktree: string;
+  /** Token-safe TYPED seat observation: active|pending (with digest) or absent. */
+  observation: SeatObservation;
+}
+
+export type ResetLocalSeatOutcome =
+  // The whole record (credential + binding) was deleted in one commit. In the
+  // single store there is no cross-store 'partial'/'repair-required' state.
+  | { outcome: 'reset'; credentialRef: string }
+  | { outcome: 'no-binding' }
+  | { outcome: 'changed' };
+
 /**
- * Clear the active cube for the current project. If the projects map
- * becomes empty as a result, remove the file entirely rather than leave
- * an empty {projects:{}} skeleton.
+ * Snapshot this worktree's exact FULL local-seat binding (incl drone id) plus a
+ * token-safe TYPED observation (active + digest | absent). Read-only. Returns null
+ * when this worktree has no ACTIVE bound seat to reset: an honest no-op.
  */
-export async function clearActiveCube(): Promise<void> {
-  const operation = activeCubeWriteQueue.then(() => withCubesWriteLock(async () => {
-    const existing = await readCubesFile();
-    if (!existing) return;
-    const key = findProjectRoot();
-    if (!(key in existing.projects)) return;
-    const removedCredentialRef = existing.projects[key].localSessionCredentialRef;
-    delete existing.projects[key];
-    if (Object.keys(existing.projects).length === 0) {
-      try {
-        await unlink(CUBES_FILE);
-      } catch (error: any) {
-        if (error?.code !== 'ENOENT') throw error;
-      }
-      if (removedCredentialRef) await clearServerSessionCredential(removedCredentialRef);
-      return;
-    }
-    await writeCubesFile(existing);
-    if (removedCredentialRef) await clearServerSessionCredential(removedCredentialRef);
-  }));
-  activeCubeWriteQueue = operation.catch(() => {});
-  await operation;
+export async function snapshotLocalSeat(): Promise<LocalSeatSnapshot | null> {
+  const worktree = findProjectRoot();
+  // CR#4: discover an ACTIVE seat OR a bound-PENDING record (a sibling whose
+  // activation failed, bound to THIS worktree by the attach bind-pending step).
+  // getActiveSeatForWorktree would MISS the bound-pending record (it requires
+  // state==='active' + a drone id), so `reset-local-seat` would FALSELY report
+  // "nothing to reset" (exit 0) while a resumable, server-digest-bound bearer
+  // persists at rest — a FALSE-SUCCESS revocation failure. getSeatForWorktree sees
+  // both, and the offline reset's exact re-check + delete cover the bound-pending
+  // record too.
+  const record = await getSeatForWorktree(worktree);
+  if (!record || !record.cubeId) return null;
+  const ref = seatRef(record);
+  const observation = await observeSeat(ref, {
+    origin: record.origin,
+    trustIdentity: record.trustIdentity,
+    cubeId: record.cubeId,
+  });
+  return {
+    apiUrl: record.origin,
+    serverTrustIdentity: record.trustIdentity,
+    cubeId: record.cubeId,
+    ...(record.droneId !== undefined ? { droneId: record.droneId } : {}),
+    credentialRef: ref,
+    worktree,
+    observation,
+  };
+}
+
+export interface PersistedLocalSeat {
+  cubeId: string;
+  /** Optional: a bound-PENDING record (a sibling whose activation failed) may carry
+   *  no drone id yet — the ACTIVE resume path still has it. */
+  droneId?: string;
+  name: string;
+  droneLabel: string;
+  apiUrl: string;
+  serverTrustIdentity: string;
+  localSessionCredentialRef: string;
+  localSessionExpiresAt?: string | null;
+  roleName?: string;
+  roleClass?: 'queen' | 'worker';
+  isHumanSeat?: boolean;
+  /** The STORED seat operation (projectRoot + kind + operationKey). The resume path
+   *  re-derives the EXACT seat ref from this: for a bound-PENDING sibling it is the
+   *  ORIGINAL sibling operation, NOT the rerun worktree's derived seat operation —
+   *  so the rerun re-mints-or-reuses the identical pending bearer and converges. */
+  operation: SeatOperation;
+  /** The record state: a bound-PENDING record resumes with an ABSENT/pending-reuse
+   *  expectation (re-send the identical bearer); an ACTIVE one resumes with EXACT. */
+  state: 'pending' | 'active';
+}
+
+/**
+ * Read the RAW persisted local-server seat bound to the current worktree — ACTIVE
+ * or a bound-PENDING record — WITHOUT hydrating its credential. Used by the resume
+ * path to recover the seat identity, its stored `operation`, and its `state`.
+ *
+ * CR#2: a SIBLING attach whose activation failed leaves a PENDING record BOUND to
+ * the preserved worktree (via the attach path's bind-pending step). This surfaces it so the
+ * rerun-from-that-worktree re-derives the EXACT sibling ref and re-sends the
+ * identical bearer (ghost-free convergence). A crash-in-gap PENDING record that was
+ * NEVER bound to a worktree still returns null here (it carries no worktree locator)
+ * and is resumed by prepareSeat's idempotent mint-or-reuse; a genuine absence is
+ * likewise null and a fresh enroll mints correctly.
+ */
+export async function readPersistedLocalSeat(): Promise<PersistedLocalSeat | null> {
+  const record = await getSeatForWorktree(findProjectRoot());
+  if (!record || !record.cubeId) return null;
+  return {
+    cubeId: record.cubeId,
+    ...(record.droneId !== undefined ? { droneId: record.droneId } : {}),
+    name: record.name ?? '',
+    droneLabel: record.droneLabel ?? '',
+    apiUrl: record.origin,
+    serverTrustIdentity: record.trustIdentity,
+    localSessionCredentialRef: seatRef(record),
+    operation: record.operation,
+    state: record.state,
+    ...(record.expiresAt !== undefined ? { localSessionExpiresAt: record.expiresAt } : {}),
+    ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
+    ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),
+    ...(record.isHumanSeat !== undefined ? { isHumanSeat: record.isHumanSeat } : {}),
+  };
+}
+
+/**
+ * Reset this worktree's seat: delegate to the single-store resetSeatForWorktree,
+ * which under ONE flock re-checks the exact FULL binding (ref + drone id, CR #3)
+ * plus the token-safe observation and DELETES the whole record — credential AND
+ * binding vanish together in one commit. Any drift / missing / same-ref digest
+ * replacement is an honest no-op ('changed'); no cross-store 'partial' exists.
+ */
+export async function resetLocalSeatBinding(
+  expected: LocalSeatSnapshot,
+): Promise<ResetLocalSeatOutcome> {
+  const outcome = await resetSeatForWorktree({
+    worktree: expected.worktree,
+    ref: expected.credentialRef,
+    droneId: expected.droneId,
+    observation: expected.observation,
+  });
+  if (outcome.outcome === 'reset') return { outcome: 'reset', credentialRef: outcome.ref };
+  if (outcome.outcome === 'no-binding') return { outcome: 'no-binding' };
+  return { outcome: 'changed' };
+}
+
+export type FinalizeServerSeatOutcome =
+  // Activate+bind committed atomically (credential ACTIVE and worktree bound).
+  | { committed: true }
+  // Aborted at PREPARE-time revalidation — nothing minted/bound (safe to roll back
+  // a just-spawned worktree; the own pending record was scrubbed). Produced only by
+  // the prepare stage (result.prepareAborted); never by the merged activate+bind.
+  | { committed: false; reason: 'expectation-mismatch' }
+  // The merged activate+bind did not commit (missing/replaced/threw). The PENDING
+  // record is the rerunnable locator; the caller must PRESERVE the worktree (CR #5).
+  | { committed: false; reason: 'activation-failed' };
+
+/**
+ * Metadata-only refresh (cube name / drone label / role display) of the CURRENT
+ * worktree's ACTIVE seat — delegates to seats.ts refreshSeatMetadata, which CANNOT
+ * alter the credential, ref, identity, or worktree binding. A no-op when this
+ * worktree has no active seat, so a stale regen identity can never resurrect or
+ * mutate a seat ref.
+ */
+export async function refreshActiveCubeMetadata(active: ActiveCubeInput): Promise<void> {
+  await refreshSeatMetadata(findProjectRoot(), {
+    name: active.name,
+    droneLabel: active.droneLabel,
+    ...(active.roleName !== undefined ? { roleName: active.roleName } : {}),
+    ...(active.roleClass !== undefined ? { roleClass: active.roleClass } : {}),
+    ...(active.isHumanSeat !== undefined ? { isHumanSeat: active.isHumanSeat } : {}),
+  });
 }
 
 export async function getProjectCliPreference(): Promise<BorgCli | null> {
@@ -488,30 +496,18 @@ export async function getProjectCliPreferenceForPath(dir: string): Promise<BorgC
 }
 
 /**
- * gh#556 Part 2 — returns all persisted project identities from cubes.json.
- * Used by `borg launch-all` to enumerate drones across all known worktrees
- * (scheme-agnostic — covers both old sibling paths and new ~/.borg paths).
- * Returns an empty array if the file is absent or malformed.
+ * gh#556 Part 2 — returns all persisted project identities from the seat store.
+ * Used by `borg launch-all` to enumerate drones across all known worktrees.
+ * Returns an empty array when no ACTIVE bound seats exist.
  */
 export async function readAllProjectIdentities(): Promise<
   Array<{ projectPath: string; cube: ActiveCube }>
 > {
-  const data = await readCubesFile();
-  if (!data) return [];
-  const persisted = Object.entries(data.projects)
-    .filter(
-      ([, entry]) =>
-        entry !== null &&
-        typeof entry === 'object' &&
-        typeof entry.cubeId === 'string' &&
-        entry.cubeId.length > 0 &&
-        typeof entry.droneId === 'string' &&
-        entry.droneId.length > 0
-    );
+  const seats = await readAllActiveSeats();
   const hydrated = await Promise.all(
-    persisted.map(async ([projectPath, cube]) => ({
-      projectPath,
-      cube: await hydrateActiveCube(cube),
+    seats.map(async ({ worktree, record }) => ({
+      projectPath: worktree,
+      cube: await hydrateActiveCube(record),
     })),
   );
   return hydrated.flatMap(({ projectPath, cube }) =>

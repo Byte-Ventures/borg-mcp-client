@@ -271,7 +271,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
   });
 });
 
-describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted/frozen seats)', () => {
+describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted seats)', () => {
   const stderrOf = (deps: LaunchAllDeps): string =>
     (deps.stderr as any).mock.calls.map((c: any[]) => c[0]).join('');
   const dispatched = (deps: LaunchAllDeps): boolean =>
@@ -318,15 +318,37 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted/f
     const deps = depsFor(identities, async () => 'evicted');
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     // 4b-specific phrasing — distinct from the 4a lock-live 'appear live; nothing to launch'.
-    expect(stdoutOf(deps)).toMatch(/have evicted\/frozen seats; nothing to launch/);
+    expect(stdoutOf(deps)).toMatch(/are not launchable .*nothing to launch/);
     expect(dispatched(deps)).toBe(false);
   });
 
-  it('a FROZEN seat is SKIPPED (paused — avoids a duplicate mint; not relaunched)', async () => {
+  it('a REJECTED seat is SKIPPED (not launched, not pruned) with the EXECUTABLE bound recovery (reset → scoped invite → assimilate --enroll)', async () => {
     const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'frozen' : 'live'));
+    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'rejected' : 'live'));
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
-    expect(stderrOf(deps)).toMatch(/seat frozen .* paused, not relaunching/);
+    // The live seat still launches; the rejected one is skipped, never launched.
+    expect(dispatched(deps)).toBe(true);
+    const err = stderrOf(deps);
+    expect(err).toMatch(/drone-b.*no longer accepted/);
+    // The full executable recovery contract — no inference required from the
+    // aggregate launch surface: reset THIS worktree → operator mints a scoped
+    // invitation while the server stays running → the exact assimilate command.
+    expect(err).toContain('borg reset-local-seat');
+    expect(err).toMatch(/scoped invitation \(the server stays running\)/);
+    expect(err).toMatch(/borg assimilate --host \S+ --enroll/);
+    expect(err).not.toMatch(/drone-b.*evicted/);
+  });
+
+  it('ALL seats rejected → nothing launched, accurate summary (never called "evicted")', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async () => 'rejected');
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(dispatched(deps)).toBe(false);
+    const out = stdoutOf(deps);
+    expect(out).toMatch(/are not launchable .*nothing to launch/);
+    // Accurate cause counts — an all-rejected sweep must NOT claim "evicted".
+    expect(out).toContain('no longer accepted');
+    expect(out).not.toMatch(/evicted/);
   });
 
   it('an INDETERMINATE (transient) seat is LAUNCHED (fail-OPEN) with a soft note', async () => {
@@ -335,6 +357,37 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted/f
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toMatch(/could not confirm drone-b.*launching anyway/);
+  });
+
+  it('SR-seven (b): a TRUST-MISMATCH seat is a TERMINAL SKIP (never fail-open-launched)', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'trust-mismatch' : 'live'));
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    // The live one launches; the trust-mismatch one is SKIPPED, not launched.
+    expect(dispatched(deps)).toBe(true);
+    const err = stderrOf(deps);
+    expect(err).toMatch(/skipping drone-b.*could not verify the server identity/);
+    expect(err).toMatch(/terminal/);
+    expect(err).not.toMatch(/drone-b.*launching anyway/);
+  });
+
+  it('SR-seven (b): ALL trust-mismatch → nothing launched, terminal cause named (never fail-open)', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async () => 'trust-mismatch');
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(dispatched(deps)).toBe(false);
+    expect(stdoutOf(deps)).toMatch(/changed \(terminal\) server identity/);
+  });
+
+  it('SR-seven (b): a CREDENTIAL-REJECTED seat is a cause-accurate SKIP (not fail-open), re-enroll guidance', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'credential-rejected' : 'live'));
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(dispatched(deps)).toBe(true);
+    const err = stderrOf(deps);
+    expect(err).toMatch(/skipping drone-b.*saved credential was rejected/);
+    expect(err).toContain('--enroll');
+    expect(err).not.toMatch(/drone-b.*launching anyway/);
   });
 
   it('--force does NOT override an eviction skip (distinct from the lock-live --force re-launch)', async () => {
@@ -354,10 +407,10 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted/f
     expect(out).not.toContain('drone-b');
   });
 
-  it('a MIXED run (evicted + frozen + live + indeterminate) launches exactly live+indeterminate, skips evicted+frozen', async () => {
-    const labels = ['ev', 'fr', 'li', 'in'];
-    const statusByTok: Record<string, 'evicted' | 'frozen' | 'live' | 'indeterminate'> = {
-      'tok-ev': 'evicted', 'tok-fr': 'frozen', 'tok-li': 'live', 'tok-in': 'indeterminate',
+  it('a MIXED run (evicted + live + indeterminate) launches exactly live+indeterminate, skips evicted', async () => {
+    const labels = ['ev', 'li', 'in'];
+    const statusByTok: Record<string, 'evicted' | 'live' | 'indeterminate'> = {
+      'tok-ev': 'evicted', 'tok-li': 'live', 'tok-in': 'indeterminate',
     };
     const identities = labels.map((l, i) => ({
       projectPath: `/home/test/.borg/worktrees/myrepo/${l}`,
@@ -370,10 +423,8 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted/f
     expect(out).toContain('drone-li');
     expect(out).toContain('drone-in'); // indeterminate launches (fail-OPEN)
     expect(out).not.toContain('drone-ev'); // evicted skipped
-    expect(out).not.toContain('drone-fr'); // frozen skipped
     const err = stderrOf(deps);
     expect(err).toMatch(/drone-ev.*evicted/);
-    expect(err).toMatch(/drone-fr.*frozen .* paused, not relaunching/);
     expect(err).toMatch(/could not confirm drone-in.*launching anyway/);
   });
 

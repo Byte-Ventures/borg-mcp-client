@@ -34,11 +34,6 @@ export interface LaunchAllDeps {
     statMtime: (p: string) => number | null;
     /** Directory entries, or [] if absent. */
     listDir: (p: string) => string[];
-    /** Cached auth (OAuth/user token) for roster reconciliation + role lookup. */
-    getCachedAuth: () => Promise<{
-        token: string;
-        apiUrl: string;
-    } | null>;
     /** Roster call (wraps getRoster from remote-client.ts). */
     getRoster: (token: string, apiUrl: string, since?: string, serverTrustIdentity?: string) => Promise<{
         drones: Array<{
@@ -57,7 +52,7 @@ export interface LaunchAllDeps {
     }>;
     /**
      * Probe ONE saved seat's server-side liveness using ITS OWN token (gh#877
-     * reuse via seat-probe.ts). Lets launch-all skip evicted/frozen seats instead
+     * reuse via seat-probe.ts). Lets launch-all skip evicted seats instead
      * of relaunching them (which silently re-mints a fresh drone — resurrection).
      */
     probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;

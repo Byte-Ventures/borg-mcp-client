@@ -4,9 +4,8 @@
  *
  * stdio MCP server that:
  * 1. Connects to Claude Code via stdio transport
- * 2. Authenticates via Google OAuth device flow
- * 3. Proxies MCP tools to remote server at api.borgmcp.ai
- * 4. Provides the borg: cube tool surface (assimilate / cube / role /
+ * 2. Proxies MCP tools to a verified local (self-hosted) Borg server
+ * 3. Provides the borg: cube tool surface (assimilate / cube / role /
  *    roster / read-log) so Claude can act as a Drone in a hive of
  *    collaborating sessions.
  */
@@ -29,8 +28,6 @@ import {
   getRoster,
   readLog,
   appendLog,
-  submitReport,
-  fetchReports,
   ackLogEntry,
   recordDecision,
   removeDecision,
@@ -48,17 +45,11 @@ import {
   reassignDrone,
   evictDrone,
   getCube,
-  checkSubscriptionStatus,
-  createBillingPortalSession,
-  createSubscription,
   syncRoles,
   applyTemplate,
   whoami,
   roleRationale,
-  API_URL,
-  getValidToken,
 } from './remote-client.js';
-import { startHealthBeatTick } from './health-beat.js';
 import {
   getTemplate,
   listTemplateNames,
@@ -71,7 +62,7 @@ import {
 import {
   activeCubeWithFreshRegenIdentity,
   getActiveCube,
-  setActiveCube,
+  refreshActiveCubeMetadata,
   findProjectRoot,
   inboxPathForDrone,
 } from './cubes.js';
@@ -103,12 +94,9 @@ import {
 import { formatRoleAgentLabel, formatWorkingRepoLabel, renderRoster } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
 import { resolveDroneIdByLabel, isUuidShape } from './evict-drone.js';
-import { authRecoveryMessage } from './auth-recovery.js';
 import {
   DroneEvictedError,
-  DroneFrozenError,
   formatEvictedToolResult,
-  formatFrozenToolResult,
 } from './drone-lifecycle.js';
 import {
   classifyInSessionAssimilate,
@@ -119,14 +107,11 @@ import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
 import { renderSyncRolesResult } from './sync-roles-render.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import {
-  isCodexRemoteWakeEnabled,
   resolveSessionAgentKind,
-  probeCodexBridgeArmed,
 } from './codex-app-wake.js';
 import {
   connectOpenCodeDrone,
   injectOpenCodeEntry,
-  probeOpenCodeDroneArmed,
   computeOpenCodePort,
   getOpenCodeConnectionState,
 } from './opencode-drone.js';
@@ -140,18 +125,6 @@ import {
 import {
   normalizeDirectLogRecipients,
 } from './direct-log.js';
-import open from 'open';
-import os from 'os';
-
-function resolveRuntimeHostname(): string | null {
-  try {
-    const h = os.hostname();
-    return h && h.trim() ? h.trim().slice(0, 255) : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
@@ -189,7 +162,7 @@ async function requireActiveCube() {
  */
 export async function main() {
   // Honor `--version` / `-v` BEFORE any side-effecting work (hooks,
-  // OAuth checks, stream consumer spawn, MCP handshake). Lets
+  // readiness checks, stream consumer spawn, MCP handshake). Lets
   // operators run `borg-mcp --version` cleanly to confirm the
   // installed client version.
   handleVersionFlag();
@@ -244,37 +217,6 @@ export async function main() {
         });
         setModuleInjectOpenCode(injectOpenCodeEntry);
       }
-    },
-
-  // gh#541 WU-2: periodic client health beat. The MCP-client child POSTs its
-  // wake-path receipt + SSE/Monitor state to /api/drone/health every ~60s —
-  // below the agent classifier (independent of agent tool-calls), so the
-  // server can tell a DEAF seat (Monitor down) from a merely POST-BLOCKED one
-  // even during a classifier outage. Best-effort; never breaks the server.
-    healthBeat: () => {
-      startHealthBeatTick({
-      getActiveCube,
-      getStreamConnected: () => getStreamStatus().connected,
-      getInboxPath: (active) => inboxPathForDrone(active.cubeId, active.droneId),
-      checkMonitor: (inboxPath) =>
-        checkInboxMonitorHealthy(
-          inboxPath,
-          monitorStateRootForWorktree(findProjectRoot())
-        ),
-      // gh#633: agnostic wake_armed — codex drones probe the app-server bridge
-      // (no tail-F Monitor by design); claude falls through to checkMonitor.
-      isCodexRemoteWake: isCodexRemoteWakeEnabled,
-      probeBridgeArmed: (active) =>
-        probeCodexBridgeArmed({ cubeId: active.cubeId, droneId: active.droneId }),
-      // gh#opencode: opencode wake-path probe via SDK health endpoint.
-      probeOpenCodeDrone: () => probeOpenCodeDroneArmed(),
-      // gh#634: live runtime agent_kind, beated to self-heal the recorded column.
-      resolveAgentKind: resolveSessionAgentKind,
-      resolveHostname: resolveRuntimeHostname,
-      resolveVersion: getPackageVersion,
-      getToken: getValidToken,
-      fetchImpl: globalThis.fetch.bind(globalThis),
-      });
     },
   });
 
@@ -396,7 +338,7 @@ export async function main() {
           });
           const freshActive = activeCubeWithFreshRegenIdentity(active, result);
           if (freshActive !== active) {
-            await setActiveCube(freshActive);
+            await refreshActiveCubeMetadata(freshActive);
           }
 
           // Wake-path self-heal (gh#43): SSE delivery to the inbox file
@@ -445,60 +387,6 @@ export async function main() {
           return { content: [{ type: 'text', text: versionHeader + prefix + formatRegenMarkdown(result, { mode }) }] };
         }
 
-        case 'borg_subscribe': {
-          const checkoutUrl = await createSubscription();
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Complete your subscription at: ${checkoutUrl}`,
-              },
-            ],
-          };
-        }
-
-        case 'borg_upgrade-subscription': {
-          const portalUrl = await createBillingPortalSession();
-          try {
-            await open(portalUrl);
-          } catch {
-            // Returning the URL is sufficient when a headless agent cannot open a browser.
-          }
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Manage your Borg MCP subscription at: ${portalUrl}`,
-              },
-            ],
-          };
-        }
-
-        case 'borg_subscription_status': {
-          const status = await checkSubscriptionStatus();
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(status, null, 2),
-              },
-            ],
-          };
-        }
-
-        case 'borg_open_dashboard': {
-          const dashboardUrl = 'https://borgmcp.ai/dashboard';
-          await open(dashboardUrl);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `◼ Opened dashboard in browser: ${dashboardUrl}`,
-              },
-            ],
-          };
-        }
-
         case 'borg_assimilate': {
           const cubeName = args?.cube_name as string;
           if (!cubeName) throw new Error('cube_name is required');
@@ -526,7 +414,7 @@ export async function main() {
             });
             const freshActive = activeCubeWithFreshRegenIdentity(active!, result);
             if (freshActive !== active) {
-              await setActiveCube(freshActive);
+              await refreshActiveCubeMetadata(freshActive);
             }
             const header = [
               `# Re-attached to cube: ${freshActive.name}`,
@@ -541,9 +429,6 @@ export async function main() {
             };
           } catch (err: any) {
             const failure = reattachFailureMessage(err ?? {});
-            // Auth-class failures rethrow so the auth funnel below owns
-            // the advice (borg setup / transient-wait), not this handler.
-            if (!failure) throw err;
             return { content: [{ type: 'text', text: failure }], isError: true };
           }
         }
@@ -842,74 +727,6 @@ export async function main() {
             : '';
           const text = `Logged to cube "${active.name}" as ${active.droneLabel}. (entry id: ${result.entry.id})${echo}${unreachable}`;
           return { content: [{ type: 'text', text }] };
-        }
-
-        case 'borg_report-friction': {
-          const message = args?.message as string;
-          if (!message || typeof message !== 'string') throw new Error('message is required');
-          const active = await getActiveCube();
-          if (!active) throw new Error('Not assimilated to a cube. Use borg_assimilate <cube-name> first.');
-          const kind: 'friction' | 'bug' = args?.kind === 'bug' ? 'bug' : 'friction';
-          const metadata =
-            args?.metadata && typeof args.metadata === 'object' && !Array.isArray(args.metadata)
-              ? (args.metadata as Record<string, string>)
-              : undefined;
-          // Server scrubs secrets + stamps reporter_user_id; the response is opaque {ok}.
-          const result = await submitReport(
-            active.sessionToken,
-            active.apiUrl,
-            { kind, message, metadata },
-            active.serverTrustIdentity,
-          );
-          const text = result.ok
-            ? 'Report submitted — thank you. The borgmcp team will see it. (Write-only: you cannot read reports back.)'
-            : 'Report did not submit. Try again, or raise it in the cube log.';
-          return { content: [{ type: 'text', text }] };
-        }
-
-        case 'borg_reports': {
-          // gh#956: builder/dogfooder-tier triage read. OAuth-only (not
-          // cube-scoped); the server enforces the builder gate (403).
-          const result = await fetchReports();
-          if (result.forbidden) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: 'Reports triage is builder/dogfooder-tier only. Your account is not on the dogfooder (builder) tier, so the friction-reports store is not readable. (Server-enforced gate.)',
-                },
-              ],
-            };
-          }
-          if (!result.reports.length) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: 'No reports yet. Submissions via borg_report-friction will appear here, newest first.',
-                },
-              ],
-            };
-          }
-          const lines = result.reports.map((r) => {
-            const meta =
-              r.metadata && Object.keys(r.metadata).length
-                ? ' · ' +
-                  Object.entries(r.metadata)
-                    .map(([k, v]) => `${k}=${v}`)
-                    .join(', ')
-                : '';
-            const scrub = r.redacted ? ' · [secrets-scrubbed]' : '';
-            return `**[${r.kind}]** ${r.created_at} · ${r.reporter_email}${meta}${scrub}\n${r.message}`;
-          });
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Reports (${result.reports.length}, newest first):\n\n${lines.join('\n\n---\n\n')}`,
-              },
-            ],
-          };
         }
 
         case 'borg_ack': {
@@ -1282,7 +1099,7 @@ export async function main() {
           // for use with borg_reassign-drone (e.g. promoting a drone to Queen).
           // Uses the same owner-scoped GET /api/cubes/:id endpoint as
           // borg_list-drones — data is already accessible to the cube owner
-          // via the dashboard surface; this tool just makes role IDs
+          // over the local server; this tool just makes role IDs
           // discoverable inside the MCP tool namespace per drone-7's UX-FEEDBACK.
           // Render logic extracted to list-roles-render.ts for testability
           // per drone-3 QA-FAIL 2026-05-18T13:27:53Z.
@@ -1347,31 +1164,14 @@ export async function main() {
           throw new Error(`Unknown tool: ${name}`);
       }
     } catch (error: any) {
-      // gh#877: drone-lifecycle verdicts return a RECOGNIZABLE tool RESULT (not
-      // a generic "Error: ..." the agent retries) so the /loop + role playbook
-      // can branch deterministically. Checked FIRST: an evicted/frozen seat is
-      // a lifecycle terminal/pause, not an auth blip — it must never fall into
-      // the auth-recovery "re-assimilate" advice below.
+      // gh#877: the drone-lifecycle verdict returns a RECOGNIZABLE tool RESULT
+      // (not a generic "Error: ..." the agent retries) so the /loop + role
+      // playbook can branch deterministically. Checked FIRST: an evicted seat is
+      // a lifecycle terminal — it gets its own recognizable result rather than
+      // the generic error rendering below.
       if (error instanceof DroneEvictedError) {
         return {
           content: [{ type: 'text', text: formatEvictedToolResult(error.message) }],
-          isError: true,
-        };
-      }
-      if (error instanceof DroneFrozenError) {
-        return {
-          content: [{ type: 'text', text: formatFrozenToolResult(error.message) }],
-          isError: true,
-        };
-      }
-      // gh#780: auth-class failures get the RIGHT recovery advice. The old
-      // funnel said "Run: borg assimilate" for every auth error — and the
-      // in-session borg_assimilate tool minted a NEW drone row, so each
-      // auth blip spawned an orphan seat. See auth-recovery.ts.
-      const authAdvice = authRecoveryMessage(error ?? {});
-      if (authAdvice) {
-        return {
-          content: [{ type: 'text', text: authAdvice }],
           isError: true,
         };
       }
@@ -1388,58 +1188,15 @@ export async function main() {
     }
   });
 
-  // Register prompts listing
+  // Register prompts listing — the client exposes no prompts.
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
-    return {
-      prompts: [
-        {
-          name: 'borg_subscribe',
-          description: 'Set up Borg MCP Cube tier subscription ($1/month per cube; each cube adds 8 pooled agent sessions + 1000 req/hr). Free tier is permanent (1 cube + 3 agent sessions + 100 req/hr); no trial.',
-        },
-        {
-          name: 'dashboard',
-          description: 'Open Borg MCP dashboard to manage cubes',
-        },
-      ],
-    };
+    return { prompts: [] };
   });
 
   // Register prompt getter
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     const { name } = request.params;
-
-    switch (name) {
-      case 'borg_subscribe':
-        return {
-          description: 'Set up Borg MCP Cube tier subscription ($1/month per cube; each cube adds 8 pooled agent sessions + 1000 req/hr). Free tier is permanent (1 cube + 3 agent sessions + 100 req/hr); no trial.',
-          messages: [
-            {
-              role: 'user',
-              content: {
-                type: 'text',
-                text: 'Please help me set up a Borg MCP subscription using the subscribe tool.',
-              },
-            },
-          ],
-        };
-
-      case 'dashboard':
-        return {
-          description: 'Open Borg MCP dashboard to manage cubes',
-          messages: [
-            {
-              role: 'user',
-              content: {
-                type: 'text',
-                text: 'Please open the Borg MCP dashboard using the borg_open_dashboard tool.',
-              },
-            },
-          ],
-        };
-
-      default:
-        throw new Error(`Unknown prompt: ${name}`);
-    }
+    throw new Error(`Unknown prompt: ${name}`);
   });
 
   // Create stdio transport

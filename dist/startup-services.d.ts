@@ -5,7 +5,6 @@ export interface McpStartupServices {
     auditHook: McpStartupTask;
     sseStream: McpStartupTask;
     openCode: McpStartupTask;
-    healthBeat: McpStartupTask;
 }
 /**
  * Run normal long-lived MCP child startup work. The assimilation readiness

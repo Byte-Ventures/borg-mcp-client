@@ -2,7 +2,9 @@ import type { Role, RoleOccupant } from './role-resolver.js';
 import { type CodexRemoteLaunch } from './codex-remote.js';
 import type { BorgCli } from './cubes.js';
 import type { SeatStatus } from './seat-probe.js';
-import type { LocalAttachCompletion, LocalAttachOperation } from './server-attach-state.js';
+import type { ServerSessionOperation } from './config.js';
+import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } from './cubes.js';
+import type { SeatBinding } from './seats.js';
 import { type LaunchApprovalDecision } from './cli-tool-approval.js';
 export interface AssimilateFlags {
     worktree?: string;
@@ -38,12 +40,15 @@ export interface AssimilateResult {
     role_id: string;
     local_session?: {
         credential_ref: string;
-        generation: number;
         expires_at: string | null;
     };
-    reattached?: boolean;
-    /** Exact prepared binding used only to complete durable local attach state. */
-    local_attach_completion?: LocalAttachCompletion;
+    result?: 'created' | 'reused';
+    finalize?: {
+        activate: (binding: SeatBinding) => Promise<unknown>;
+        scrubPending: () => Promise<unknown>;
+        bindPending?: (binding: SeatBinding) => Promise<unknown>;
+    };
+    prepareAborted?: boolean;
 }
 export interface ActiveCube {
     cubeId: string;
@@ -52,10 +57,9 @@ export interface ActiveCube {
     sessionToken?: string;
     droneLabel: string;
     apiUrl: string;
-    /** Verified local-server CA identity; absent for Borg Cloud cubes. */
+    /** Verified local-server CA identity; absent until a local server is selected. */
     serverTrustIdentity?: string;
     localSessionCredentialRef?: string;
-    localSessionGeneration?: number;
     localSessionExpiresAt?: string | null;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
@@ -84,24 +88,49 @@ export interface AssimilateDeps {
     setTerminalTitle: (label: string, cubeName: string) => void;
     getActiveCube: () => Promise<ActiveCube | null>;
     hasPersistedActiveCube: () => Promise<boolean>;
-    probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
-    getPendingLocalAttach: (apiUrl: string, serverTrustIdentity: string, cubeId: string, roleId: string, operation: LocalAttachOperation) => Promise<{
-        priorDroneId?: string;
-        remintInvalidPrior: boolean;
+    /** Read the RAW persisted local seat for this worktree WITHOUT hydrating its
+     *  keychain credential — used to recover a crash-in-gap PENDING seat when
+     *  getActiveCube() returns null purely because the credential is non-hydratable
+     *  (binding written by FINALIZE, then a crash before the pending→ACTIVE flip). */
+    readPersistedLocalSeat?: () => Promise<PersistedLocalSeat | null>;
+    /** Pure PEEK: is a resumable session RECORD (pending or active) present at the
+     *  per-seat ref? Distinguishes a rerunnable crash-in-gap state from genuine
+     *  keychain loss without creating or mutating anything. */
+    peekServerSessionRecord?: (credentialRef: string, binding: {
+        origin: string;
+        trustIdentity: string;
+        cubeId: string;
+    }) => Promise<boolean>;
+    /** CR#3: recover an in-flight IMPLICIT-sibling attempt (a crash-orphaned UNBOUND
+     *  pending sibling record) keyed by source repo, so a rerun re-derives the EXACT
+     *  seat ref + re-sends the identical bearer (server reuses — no ghost). Returns the
+     *  stored operation + role so the rerun adopts them. Absent from unit stubs that
+     *  fully mock `assimilate`. */
+    findIncompleteSiblingAttempt?: (binding: {
+        origin: string;
+        trustIdentity: string;
+        cubeId: string;
+        projectRoot: string;
+    }) => Promise<{
+        operation: ServerSessionOperation;
+        roleId: string;
+        credentialRef: string;
     } | null>;
-    completeLocalAttach: (completion: LocalAttachCompletion) => Promise<void>;
+    probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
     setActiveCube: (a: ActiveCube) => Promise<void>;
+    /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
+     *  typed expectation, persist the binding FIRST, then run `activate` (keychain
+     *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and
+     *  report an honest abort. Wired to the merged activate+bind FINALIZE in
+     *  production; absent from unit stubs that fully mock `assimilate`. */
+    finalizeServerSeat?: (input: {
+        active: ActiveCube;
+        expected: ExpectedBinding;
+        activate: (binding: SeatBinding) => Promise<unknown>;
+        scrubPending: () => Promise<unknown>;
+    }) => Promise<FinalizeServerSeatOutcome>;
     findProjectRoot: (cwd: string) => string;
     installProjectSessionHook: (projectRoot: string) => void;
-    getCachedAuth: () => Promise<{
-        token: string;
-        apiUrl: string;
-    } | null>;
-    runSetup: () => Promise<{
-        token: string;
-        apiUrl: string;
-    }>;
-    cloudApiUrl: string;
     /** gh#27: optional test seam — when set, selectAssimilationAuthority uses
      *  this instead of prompting/failing. Not wired in production. */
     defaultAuthority?: AssimilationAuthority;
@@ -133,7 +162,9 @@ export interface AssimilateDeps {
         remint_invalid_prior?: boolean;
         model?: string | null;
         agent_kind?: 'claude' | 'codex' | 'opencode' | null;
-        local_attach_operation?: LocalAttachOperation;
+        session_operation?: ServerSessionOperation;
+        session_expected?: ExpectedBinding;
+        revalidate_at_prepare?: boolean;
     }, serverTrustIdentity?: string) => Promise<AssimilateResult>;
     listTemplates: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<Array<{
         name: string;
@@ -155,9 +186,6 @@ export interface AssimilateDeps {
     }) => Promise<string | null>;
 }
 type AssimilationAuthority = {
-    kind: 'cloud';
-    apiUrl: string;
-} | {
     kind: 'server';
     apiUrl: string;
 };

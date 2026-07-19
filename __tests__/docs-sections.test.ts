@@ -3,21 +3,24 @@ import { DOCS_SECTIONS, matchDocsSections, formatDocsIndex } from '../src/docs-s
 import { TOOL_MANIFEST } from '../src/tool-manifest';
 
 describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
-  it('every section is well-formed (slug/title/url/summary/keywords; url under borgmcp.ai/docs)', () => {
+  it('every section is well-formed (slug/title/url/summary/keywords; url is repository-local, never hosted)', () => {
     expect(DOCS_SECTIONS.length).toBeGreaterThan(0);
     for (const s of DOCS_SECTIONS) {
       expect(s.slug).toBeTruthy();
       expect(s.title).toBeTruthy();
       expect(s.summary.trim().length).toBeGreaterThan(0);
-      expect(s.url).toMatch(/^https:\/\/borgmcp\.ai\/docs/);
+      expect(s.url).toMatch(/^https:\/\/github\.com\/Byte-Ventures\/borg-mcp-client/);
+      expect(s.url).not.toMatch(/borgmcp\.ai/);
       expect(s.keywords.length).toBeGreaterThan(0);
     }
   });
 
-  it('each URL matches its page file (index → /docs, X → /docs/X)', () => {
+  it('each URL points at its repository-local page (README, or docs/LOCAL_SERVER.md for server topics)', () => {
     for (const s of DOCS_SECTIONS) {
       const expected =
-        s.page === 'index' ? 'https://borgmcp.ai/docs' : `https://borgmcp.ai/docs/${s.page}`;
+        s.page === 'README.md'
+          ? 'https://github.com/Byte-Ventures/borg-mcp-client#readme'
+          : `https://github.com/Byte-Ventures/borg-mcp-client/blob/main/${s.page}`;
       expect(s.url).toBe(expected);
     }
   });

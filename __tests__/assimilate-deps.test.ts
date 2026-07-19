@@ -63,90 +63,6 @@ describe('probeMcpReady (real production wiring)', () => {
 // Seam 2: remote-client.createCube + getCube wire-shape unwrap
 // ---------------------------------------------------------------------------
 
-describe('remote-client wire-shape unwrap (fetch-mocked)', () => {
-  // BUG-2 regression class: server returns wrapped `{cube, roles}`; wrapper
-  // must return flat `{...cube, roles, drones}`. The Phase G test stubs
-  // returned the FLAT shape directly, hiding the wire mismatch. This test
-  // exercises the actual wrapper code against the WIRE shape.
-
-  beforeEach(() => {
-    // Mock the global fetch + the keychain dependency chain. The wrapper
-    // uses authedFetch which calls getValidToken which calls config/auth
-    // — we mock these at module level so the wrapper exercises its
-    // unwrap logic without keychain access.
-    vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.resetModules();
-  });
-
-  it('createCube unwraps server {cube, roles} into flat {...cube, roles, drones}', async () => {
-    // Mock getValidToken to avoid keychain dependency.
-    vi.doMock('../src/config.js', () => ({
-      getIdToken: vi.fn(async () => 'test-token'),
-      getRefreshToken: vi.fn(async () => null),
-      clearTokens: vi.fn(async () => {}),
-    }));
-    vi.doMock('../src/auth.js', () => ({
-      refreshIdToken: vi.fn(),
-      RefreshTokenInvalidError: class extends Error {},
-    }));
-
-    const fetchSpy = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          cube: { id: 'cube-uuid', name: 'myrepo', cube_directive: 'rules', owner_id: 'u' },
-          roles: [{ id: 'r1', name: 'Builder', is_default: true }],
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      )
-    );
-    vi.stubGlobal('fetch', fetchSpy);
-
-    const { createCube } = await import('../src/remote-client.js');
-    const result = await createCube('myrepo', 'rules');
-    // Flat shape: cube fields lifted to top level + roles + drones.
-    expect(result.id).toBe('cube-uuid');
-    expect(result.name).toBe('myrepo');
-    expect(result.roles).toHaveLength(1);
-    expect(result.roles[0].name).toBe('Builder');
-    // drones defaults to [] when absent from the server response.
-    expect(result.drones).toEqual([]);
-  });
-
-  it('getCube unwraps server {cube, roles, drones} into flat shape', async () => {
-    vi.doMock('../src/config.js', () => ({
-      getIdToken: vi.fn(async () => 'test-token'),
-      getRefreshToken: vi.fn(async () => null),
-      clearTokens: vi.fn(async () => {}),
-    }));
-    vi.doMock('../src/auth.js', () => ({
-      refreshIdToken: vi.fn(),
-      RefreshTokenInvalidError: class extends Error {},
-    }));
-
-    const fetchSpy = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          cube: { id: 'cube-uuid', name: 'myrepo' },
-          roles: [{ id: 'r1', name: 'Builder' }, { id: 'r2', name: 'Coordinator' }],
-          drones: [{ id: 'd1', label: 'drone-1' }],
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      )
-    );
-    vi.stubGlobal('fetch', fetchSpy);
-
-    const { getCube } = await import('../src/remote-client.js');
-    const result = await getCube('cube-uuid');
-    expect(result.id).toBe('cube-uuid');
-    expect(result.name).toBe('myrepo');
-    expect(result.roles).toHaveLength(2);
-    expect(result.drones).toHaveLength(1);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Seam 3: getInboxPath — real path computation
@@ -201,20 +117,6 @@ describe('cubes.json fs persistence round-trip', () => {
     vi.resetModules();
   });
 
-  it('setActiveCube → getActiveCube round-trips the same ActiveCube', async () => {
-    const { setActiveCube, getActiveCube } = await import('../src/cubes.js');
-    const active = {
-      cubeId: '11111111-1111-1111-1111-111111111111',
-      droneId: '22222222-2222-2222-2222-222222222222',
-      name: 'myrepo',
-      sessionToken: 'a'.repeat(64),
-      droneLabel: 'drone-1',
-      apiUrl: 'https://api.example.invalid',
-    };
-    await setActiveCube(active);
-    const read = await getActiveCube();
-    expect(read).toEqual(active);
-  });
 
   it('refreshes stale cached identity from regen before stream-status warning render', async () => {
     const { activeCubeWithFreshRegenIdentity } = await import('../src/cubes.js');
@@ -255,21 +157,6 @@ describe('cubes.json fs persistence round-trip', () => {
     expect(out).not.toContain('stale-cache-label');
   });
 
-  it('cubes.json file is written under ~/.config/borgmcp/', async () => {
-    const { setActiveCube } = await import('../src/cubes.js');
-    await setActiveCube({
-      cubeId: '11111111-1111-1111-1111-111111111111',
-      droneId: '22222222-2222-2222-2222-222222222222',
-      name: 'myrepo',
-      sessionToken: 'a'.repeat(64),
-      droneLabel: 'drone-1',
-      apiUrl: 'https://api.example.invalid',
-    });
-    const cubesPath = join(tmpHome, '.config', 'borgmcp', 'cubes.json');
-    expect(existsSync(cubesPath)).toBe(true);
-    const parsed = JSON.parse(readFileSync(cubesPath, 'utf-8'));
-    expect(parsed.projects).toBeDefined();
-  });
 
   it('getActiveCube returns null when cubes.json contains malformed JSON', async () => {
     // Seed a malformed file at the expected location and verify graceful

@@ -24,7 +24,7 @@ import {
   findProjectRoot,
   getActiveCube,
 } from './cubes.js';
-import { getRoster, getCube, getValidToken, API_URL } from './remote-client.js';
+import { getRoster, getCube } from './remote-client.js';
 import { defaultProbeSeat, type SeatStatus } from './seat-probe.js';
 
 /** Subprocess runner — sync, returns stdout, THROWS on non-zero exit or ENOENT. */
@@ -60,8 +60,6 @@ export interface LaunchAllDeps {
   statMtime: (p: string) => number | null;
   /** Directory entries, or [] if absent. */
   listDir: (p: string) => string[];
-  /** Cached auth (OAuth/user token) for roster reconciliation + role lookup. */
-  getCachedAuth: () => Promise<{ token: string; apiUrl: string } | null>;
   /** Roster call (wraps getRoster from remote-client.ts). */
   getRoster: (
     token: string,
@@ -77,7 +75,7 @@ export interface LaunchAllDeps {
   ) => Promise<{ id: string; name: string; roles: Array<{ id: string; name: string }> }>;
   /**
    * Probe ONE saved seat's server-side liveness using ITS OWN token (gh#877
-   * reuse via seat-probe.ts). Lets launch-all skip evicted/frozen seats instead
+   * reuse via seat-probe.ts). Lets launch-all skip evicted seats instead
    * of relaunching them (which silently re-mints a fresh drone — resurrection).
    */
   probeSeat: (
@@ -159,16 +157,9 @@ export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
         return [];
       }
     },
-    getCachedAuth: async () => {
-      try {
-        return { token: await getValidToken(), apiUrl: API_URL };
-      } catch {
-        return null;
-      }
-    },
     getRoster: (token, apiUrl, since, serverTrustIdentity) =>
       getRoster(token, apiUrl, since, serverTrustIdentity),
-    // getCube uses the user OAuth token via authedFetch (cubeId-only); apiUrl/token unused.
+    // getCube uses the drone session token via authedFetch (cubeId-only); apiUrl/token unused.
     getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
     probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>
       defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),

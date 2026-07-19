@@ -1,31 +1,31 @@
 /**
- * Remote HTTP client for api.borgmcp.ai
+ * HTTP client for a verified local (self-hosted) Borg server.
  *
  * Handles:
- * - HTTP requests to remote MCP server
- * - Automatic token injection
+ * - Pinned-TLS requests to the selected local server
+ * - Drone-session / enrollment-credential injection
  * - Network failure handling with retry + exponential backoff
- * - Offline queue for pending operations
+ *
+ * There is no hosted-authority path: every request must carry verified local
+ * server trust or it fails closed before any network or credential use.
  */
-import { clearTokens, getIdToken, getRefreshToken, getServerCredential, } from './config.js';
+import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeProtocolEnvelope } from 'borgmcp-shared/protocol';
-import { refreshIdToken, RefreshTokenInvalidError, RefreshTransientError } from './auth.js';
+import { createProtocolEnvelope, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
 import { consolePrefix } from './console-prefix.js';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
-import { DroneEvictedError, DroneFrozenError, DRONE_EVICTED_CODE, DRONE_FROZEN_CODE, errorCodeFromBody, } from './drone-lifecycle.js';
+import { DroneEvictedError, DRONE_EVICTED_CODE, errorCodeFromBody, } from './drone-lifecycle.js';
 import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
 import { loadBorgServerTrust } from './server-trust.js';
+import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { CANONICAL_HOSTED_API_URL, isCanonicalHostedApiUrl, } from './authority.js';
 import { resolveLocalLogRecipients } from './local-log-routing.js';
 // Compatibility validation for the deprecated request field. The CLI no longer
 // offers provider configuration, but older callers may still send this shape.
 const LEGACY_MODEL_DESCRIPTOR_REGEX = /^(claude|ollama):[A-Za-z0-9._:\/-]+$/;
-export const API_URL = process.env.BORG_API_URL || CANONICAL_HOSTED_API_URL;
 // gh#330: honor the server's Retry-After on 429 instead of failing the
 // (often required) coordination signal outright. Bounded so a CLI call
 // never blocks unboundedly; capped per attempt so a large window-reset
@@ -33,25 +33,11 @@ export const API_URL = process.env.BORG_API_URL || CANONICAL_HOSTED_API_URL;
 const RATE_LIMIT_MAX_RETRIES = 3;
 const RATE_LIMIT_MAX_WAIT_MS = 60_000; // cap a single Retry-After honor
 export const LOCAL_SERVER_RESPONSE_LIMIT_BYTES = 32 * 1024 * 1024;
+// A typed auth-error envelope is tiny; anything larger is hostile and the
+// bounded read throws → the 401 fails closed to non-destructive CREDENTIAL_REJECTED.
+const AUTH_ERROR_ENVELOPE_LIMIT_BYTES = 64 * 1024;
 export const LOCAL_SERVER_REQUEST_TIMEOUT_MS = 5_000;
 const LOCAL_SERVER_RESPONSE_LIMIT_MESSAGE = 'Local Borg server response exceeded the response limit';
-// gh#794 (CR note-3): single-flight the token refresh. getValidToken runs
-// per-request, so concurrent borg API calls near the 5-min expiry buffer could
-// each fire a redundant refresh against Google. Share ONE in-flight refresh
-// (mirrors #708's catchUpInFlight): the first caller starts it, the rest await
-// the same promise, then all re-read the freshly-persisted id_token. The
-// promise is cleared on settle so the next near-expiry window retries. A
-// rejection (dead/transient) propagates to every awaiter, each handling it per
-// its own catch (clearTokens-on-dead etc. stays in the callers).
-let refreshInFlight = null;
-function refreshIdTokenSingleFlight(refreshToken) {
-    if (refreshInFlight)
-        return refreshInFlight;
-    refreshInFlight = refreshIdToken(refreshToken).finally(() => {
-        refreshInFlight = null;
-    });
-    return refreshInFlight;
-}
 /**
  * Parse a `Retry-After` header (delta-seconds form, which the worker
  * emits — mcp-server.ts:382/583) into milliseconds. Returns null when
@@ -144,14 +130,11 @@ async function localAuthorityContext(sessionToken, apiUrl, expectedServerTrustId
         }
         return matched;
     }
-    // An explicit drone-session endpoint outside the canonical hosted
-    // authority is self-hosted by definition. Missing/removed trust metadata
-    // must never downgrade that request into the Cloud OAuth path: cubes.json is
-    // mutable local state and BORG_API_URL is mutable process configuration.
-    // Neither a legacy-looking sessionToken nor an environment endpoint override
-    // proves Cloud authority. A matching hydrated local ActiveCube carries the
-    // verified trust anchor; otherwise fail before OAuth or network.
-    if (!matched && !isCanonicalHostedApiUrl(apiUrl)) {
+    // Only a hydrated local ActiveCube carrying the verified trust anchor
+    // authorizes the request. cubes.json is mutable local state and a
+    // legacy-looking sessionToken proves nothing — fail closed before any
+    // network use when no verified local authority is present.
+    if (!matched) {
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
     return matched;
@@ -191,7 +174,8 @@ async function decodeLocalProtocolResponse(request, allowNoContent) {
     }
     catch (error) {
         if (controller.signal.aborted) {
-            throw new Error('Local Borg server request timed out');
+            // CR5: a TYPED transport-timeout verdict (message kept for call-site parity).
+            throw new BorgServerUnreachableError('Local Borg server request timed out');
         }
         throw error;
     }
@@ -301,152 +285,6 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 /**
- * Get valid auth token (refreshes if expired).
- *
- * Exported so the SSE log-stream consumer (`src/log-stream.ts`)
- * can attach the same Bearer header that `authedFetch` uses for REST,
- * without duplicating the refresh-token plumbing.
- */
-export async function getValidToken() {
-    let token = await getIdToken();
-    if (!token) {
-        // Token expired (incl. within the config.ts 5-min expiry buffer — that
-        // buffer IS the CLI's refresh-before-expiry: any command in the window
-        // refreshes here), try to refresh.
-        const refreshToken = await getRefreshToken();
-        // gh#794: remember whether a saved login EXISTED so the recovery message
-        // can distinguish a DEAD/expired session from never-signed-in — a boolean,
-        // never the token value (SR#1 secret-free).
-        const hadRefreshToken = refreshToken != null;
-        if (refreshToken) {
-            try {
-                await refreshIdTokenSingleFlight(refreshToken);
-                token = await getIdToken();
-            }
-            catch (error) {
-                // gh#34: only `clearTokens()` on the canonical revocation
-                // signal (`RefreshTokenInvalidError`). Transient failures
-                // (network/DNS/timeout/Google 5xx/parse fail) leave the
-                // keychain intact so the next call can retry — a single
-                // transient blip no longer destroys a durable session.
-                if (error instanceof RefreshTokenInvalidError) {
-                    // Canonical revocation → clear + fall through to the DEAD-login
-                    // "expired / re-consent" recovery (gh#794). The ONLY path that
-                    // legitimately advises re-consent.
-                    await clearTokens();
-                }
-                else if (error instanceof RefreshTransientError) {
-                    throw error;
-                }
-                else {
-                    // gh#858: an UNKNOWN refresh failure (neither revocation nor a
-                    // classified transient — e.g. an unclassified credential-store write
-                    // error) must NOT fall through to the "Authentication expired —
-                    // re-consent / run borg setup" message below. The refresh_token may
-                    // be perfectly valid; re-consent is the wrong advice and the old
-                    // fall-through wedged long-running sessions on a locked keychain.
-                    // Surface it accurately, tokens preserved, retry.
-                    throw new RefreshTransientError(`Token refresh failed unexpectedly (your saved login was NOT cleared — ` +
-                        `retry; if it persists, restart the borg session): ` +
-                        `${error?.message ?? 'unknown'}`);
-                }
-            }
-        }
-        if (!token) {
-            // gh#780/#794: point recovery at `borg setup` (re-consent), never at
-            // assimilate — assimilate rides this same broken Bearer and the
-            // in-session tool minted orphan drone seats.
-            //
-            // gh#794: differentiate a DEAD saved login from never-signed-in for an
-            // accurate message — while EMBEDDING the matcher substring. The
-            // 'Authentication expired' / 'Authentication required' substrings are
-            // LOAD-BEARING: assimilate-cmd.ts's + auth-recovery.ts's in-session
-            // re-auth keys on `includes('Authentication required'|'Authentication
-            // expired')` (CR be72b00d copy↔matcher contract — see auth tests). Zero
-            // token material (SR#1): the distinction rides `hadRefreshToken`.
-            throw new Error(hadRefreshToken
-                ? 'Authentication expired — your saved login has expired. Run: borg setup'
-                : 'Authentication required — you are not signed in. Run: borg setup');
-        }
-    }
-    return token;
-}
-/**
- * Force-refresh the ID token using the stored refresh token, regardless
- * of local expiry timestamp.
- *
- * Returns the new token on success, or null if no refresh token is stored
- * or the refresh failed (in which case stored tokens are cleared so the
- * next getValidToken() throws "Authentication required").
- *
- * Used by the 401-retry path: when the worker rejects a token the client
- * thinks is fresh (clock skew, JWKS rotation, transient validation
- * glitch), force a refresh and retry once before bothering the user.
- */
-async function forceRefreshToken() {
-    const refreshToken = await getRefreshToken();
-    if (!refreshToken) {
-        return null;
-    }
-    try {
-        await refreshIdTokenSingleFlight(refreshToken);
-        return await getIdToken();
-    }
-    catch (error) {
-        // gh#34: only `clearTokens()` on the canonical revocation
-        // signal (`RefreshTokenInvalidError`). Transient failures
-        // preserve the keychain so subsequent calls (and the next
-        // session's wake) can retry. The pre-gh#34 shape called
-        // `clearTokens()` unconditionally — a single network blip
-        // would destroy the durable session in a way no auto-retry
-        // could recover from.
-        if (error instanceof RefreshTokenInvalidError) {
-            await clearTokens();
-        }
-        if (error instanceof RefreshTransientError) {
-            throw error;
-        }
-        return null;
-    }
-}
-/**
- * gh#794: classify the stored session into valid | dead | transient.
- *
- * ⚠ EFFECTFUL — NOT a read-only probe. The expired branch ATTEMPTS a refresh,
- * which on success PERSISTS the new id_token (via refreshIdToken → storeIdToken,
- * AES-256-GCM-re-encrypted) and on a dead refresh_token `clearTokens()`s. So a
- * `valid` result may have just refreshed-and-stored the session. `clearTokens`
- * fires ONLY on `dead` (RefreshTokenInvalidError / invalid_grant), NEVER on
- * `transient` — a network blip must not nuke a valid keychain (gh#34 invariant).
- *
- *   - cached id_token still valid (outside the config.ts 5-min buffer) → 'valid'
- *   - expired/within-buffer + refresh succeeds → 'valid' (refreshed + persisted)
- *   - expired + RefreshTokenInvalidError → 'dead' (cleared — re-auth needed)
- *   - expired + RefreshTransientError / unknown → 'transient' (keychain intact)
- *   - no refresh_token at all → 'dead' (never set up / already cleared)
- */
-export async function probeSession() {
-    const token = await getIdToken();
-    if (token)
-        return 'valid';
-    const refreshToken = await getRefreshToken();
-    if (!refreshToken)
-        return 'dead';
-    try {
-        await refreshIdTokenSingleFlight(refreshToken);
-        const refreshed = await getIdToken();
-        return refreshed ? 'valid' : 'transient';
-    }
-    catch (error) {
-        if (error instanceof RefreshTokenInvalidError) {
-            await clearTokens();
-            return 'dead';
-        }
-        // RefreshTransientError or unknown — keychain intact (gh#34), retry later.
-        return 'transient';
-    }
-}
-/**
  * Authenticated fetch helper.
  *
  * Adds the Bearer token + optional drone-session header, parses errors
@@ -461,49 +299,54 @@ export async function probeSession() {
 async function authedFetch(path, init = {}) {
     const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, headers, ...rest } = init;
     const hasExplicitAuth = authToken !== undefined;
-    const baseUrl = apiUrl ?? API_URL;
-    if (droneSession !== undefined &&
-        apiUrl !== undefined &&
-        suppliedTrustIdentity === undefined &&
-        !isCanonicalHostedApiUrl(baseUrl)) {
+    // No hosted default: a destination requires an explicit apiUrl. Fail closed
+    // before any network or credential use when none is given.
+    if (apiUrl === undefined) {
+        // Preserve the "active cube is a local server that lacks this capability"
+        // diagnostic for callers that supply neither an endpoint nor credentials.
+        if (droneSession === undefined && authToken === undefined) {
+            const active = await getActiveCube();
+            if (active?.serverTrustIdentity !== undefined) {
+                localUnsupported(`the ${path} capability`);
+            }
+        }
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
+    const baseUrl = apiUrl;
+    // A drone-session call must carry its verified trust identity explicitly; a
+    // missing one can no longer be excused by a hosted authority.
+    if (droneSession !== undefined && suppliedTrustIdentity === undefined) {
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
     let serverTrustIdentity = suppliedTrustIdentity;
-    if (apiUrl === undefined && droneSession === undefined && authToken === undefined) {
-        const active = await getActiveCube();
-        if (active?.serverTrustIdentity !== undefined) {
-            localUnsupported(`the ${path} capability`);
-        }
-    }
-    if (serverTrustIdentity === undefined && apiUrl !== undefined && droneSession !== undefined) {
+    if (serverTrustIdentity === undefined) {
+        // Owner-scoped calls may recover the verified anchor from the active cube
+        // when it targets the same local endpoint.
         const active = await getActiveCube();
         if (active?.apiUrl === baseUrl)
             serverTrustIdentity = active.serverTrustIdentity;
     }
-    const hasServerAuthority = serverTrustIdentity !== undefined;
-    // BORG_API_URL is only routing configuration. It cannot authorize either a
-    // keychain-sourced Cloud bearer or a caller-supplied token for an arbitrary
-    // endpoint. Every noncanonical destination must instead arrive through the
-    // separately verified local-server trust path below.
-    if (!hasServerAuthority && !isCanonicalHostedApiUrl(baseUrl)) {
+    // Every destination must arrive through verified local-server trust. Without
+    // it there is no hosted fallback — fail closed.
+    if (serverTrustIdentity === undefined) {
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
-    if (hasServerAuthority && !/^\/api\/cubes(?:\/|$)/.test(path)) {
+    const hasServerAuthority = true;
+    if (!/^\/api\/cubes(?:\/|$)/.test(path)) {
         localUnsupported(`the ${path} capability`);
     }
     let requestFetch = fetch;
     let token;
-    if (hasServerAuthority) {
+    {
         const trust = await loadBorgServerTrust(baseUrl);
         if (trust.identity !== serverTrustIdentity) {
-            throw new Error('Borg server trust identity changed; refusing the connection');
+            // CR5: a TYPED terminal trust verdict — never inferred from error text.
+            throw new BorgServerTrustError('Borg server trust identity changed; refusing the connection');
         }
         requestFetch = trust.fetchImpl;
         if (droneSession !== undefined) {
             // Local attach credentials are already cube/drone-scoped Bearers. The
-            // server authenticates this single narrower principal directly; unlike
-            // Borg Cloud, it neither needs nor accepts an OAuth-style parent Bearer
-            // plus X-Drone-Session composition.
+            // server authenticates this single narrower principal directly.
             token = droneSession;
         }
         else if (authToken !== undefined) {
@@ -517,21 +360,14 @@ async function authedFetch(path, init = {}) {
             token = stored;
         }
     }
-    else {
-        token = authToken ?? await getValidToken();
-    }
     const method = (rest.method ?? 'GET').toUpperCase();
     const buildRequest = async (tok) => {
         const finalHeaders = {
             'Authorization': `Bearer ${tok}`,
             ...headers,
         };
-        if (droneSession && !hasServerAuthority) {
-            finalHeaders['X-Drone-Session'] = droneSession;
-        }
-        // --debug / BORG_DEBUG: trace every HTTP attempt (initial + 401/429
-        // retries). Logs method/path/status ONLY — never the Authorization
-        // header or any token material (debugLog no-ops when debug is off).
+        // --debug / BORG_DEBUG: trace every HTTP attempt. Logs method/path/status
+        // ONLY — never the Authorization header or any token material.
         debugLog(`→ ${method} ${path}`);
         const res = await requestFetch(`${baseUrl}${path}`, {
             ...rest,
@@ -541,25 +377,28 @@ async function authedFetch(path, init = {}) {
         return res;
     };
     let response = await buildRequest(token);
-    // 401 on a token getValidToken just handed us means the local expiry
-    // tracker disagrees with the server. Causes seen in practice: worker
-    // JWKS cache miss after Google key rotation, clock skew, transient
-    // validation glitch. Force a refresh and retry once before forcing
-    // the user back through re-auth (`borg setup`).
-    if (response.status === 401 && !hasServerAuthority && !hasExplicitAuth) {
-        const refreshed = await forceRefreshToken();
-        if (refreshed) {
-            token = refreshed;
-            response = await buildRequest(token);
-        }
-    }
     if (response.status === 401) {
-        if (hasServerAuthority || hasExplicitAuth) {
-            throw new Error('Authentication required by the selected Borg server');
+        // Reached only after pinned-TLS trust is verified (localAuthorityContext
+        // fails closed otherwise). The DESTRUCTIVE worktree-seat reset is permitted
+        // ONLY when BOTH hold: (a) this request used the drone SESSION bearer, and
+        // (b) the server's bounded-decoded shared-v2 error envelope carries the EXACT
+        // typed code SESSION_REJECTED. A bare 401 is never sufficient. Any other or
+        // absent/malformed/oversized code — or a parent enrollment/client credential
+        // (authToken/stored) — is CREDENTIAL_REJECTED → non-destructive re-enroll
+        // recovery, never a seat reset. The body is read (and thus consumed) here,
+        // bounded to reject oversized hostile payloads (fail closed to non-reset).
+        let rejectedCode;
+        try {
+            const body = await readBoundedResponseBody(response, AUTH_ERROR_ENVELOPE_LIMIT_BYTES, 'Local Borg server auth error response exceeded the response limit');
+            rejectedCode = decodeProtocolErrorEnvelope(JSON.parse(body)).error.code;
         }
-        // gh#780: see getValidToken — `borg setup` is the recovery, never
-        // assimilate (same prefix kept for the assimilate-cmd matcher).
-        throw new Error('Authentication required. Run: borg setup');
+        catch {
+            rejectedCode = undefined;
+        }
+        if (droneSession !== undefined && rejectedCode === ErrorCode.SESSION_REJECTED) {
+            throw new BorgServerError('SESSION_REJECTED', 'the selected Borg server rejected this worktree session (revoked or taken over)');
+        }
+        throw new BorgServerError('CREDENTIAL_REJECTED', 'the selected Borg server rejected the credential');
     }
     // gh#330: honor the server's Retry-After on 429 instead of failing the
     // (often required) coordination signal — borg_log / read-log / regen /
@@ -578,7 +417,10 @@ async function authedFetch(path, init = {}) {
         if (hasServerAuthority || hasExplicitAuth) {
             await response.body?.cancel().catch(() => { });
             debugLog(`✗ ${response.status} ${method} ${path}`);
-            throw new Error(`Borg server request failed (HTTP ${response.status})`);
+            // CR5: carry the raw status in a TYPED error so a probe distinguishes an
+            // endpoint/protocol-mismatch (404) from a server-failure (5xx) by code, not
+            // by matching mutable message text. Message kept identical for call-site parity.
+            throw new BorgServerHttpError(response.status, `Borg server request failed (HTTP ${response.status})`);
         }
         // Read the body ONCE (the stream can only be consumed once) and reuse
         // it for both the debug trace and the thrown error. The server error
@@ -589,19 +431,14 @@ async function authedFetch(path, init = {}) {
         // Enrich the 429 message with the server's retry guidance so a
         // still-exhausted limit surfaces an actionable wait, not a bare code.
         const message = extractHttpErrorMessage(body);
-        // gh#877 Path-B: the AUTHORITATIVE drone-lifecycle verdicts. All drone-authed
+        // gh#877 Path-B: the AUTHORITATIVE drone-lifecycle verdict. All drone-authed
         // calls funnel through here, so this single detection point guarantees the
         // eventual catch. Keyed on the STRUCTURED code, not the bare status (SEC
         // R2/R4): 410+DRONE_EVICTED is TERMINAL → DroneEvictedError (the index tool
-        // funnel maps it to a recognizable EVICTED result so the agent shuts down);
-        // 423+DRONE_FROZEN is REVERSIBLE → DroneFrozenError (distinct friendly
-        // message; the agent keeps looping, never tears down).
+        // funnel maps it to a recognizable EVICTED result so the agent shuts down).
         const code = errorCodeFromBody(body);
         if (response.status === 410 && code === DRONE_EVICTED_CODE) {
             throw new DroneEvictedError(message);
-        }
-        if (response.status === 423 && code === DRONE_FROZEN_CODE) {
-            throw new DroneFrozenError(message);
         }
         if (response.status === 429) {
             const retryAfter = response.headers.get('Retry-After');
@@ -1030,47 +867,6 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
     return await response.json();
 }
 /**
- * gh#716 — submit a friction/bug report to the borgmcp dev team (borg_report-friction).
- * WRITE-ONLY: the caller never reads reports back. The server scrubs secrets before
- * persist and stamps reporter_user_id from the authenticated session (never client input).
- * Drone-session authed (POST /api/drone/report). Opaque `{ ok: true }` response.
- */
-export async function submitReport(sessionToken, apiUrl, input, serverTrustIdentity) {
-    if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
-        localUnsupported('friction reports');
-    }
-    const body = {
-        kind: input.kind ?? 'friction',
-        message: input.message,
-        ...(input.metadata ? { metadata: input.metadata } : {}),
-    };
-    const response = await authedFetch('/api/drone/report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-        body: JSON.stringify(body),
-    });
-    return await response.json();
-}
-/**
- * gh#956: read counterpart to submitReport — fetch friction/bug reports for
- * triage. OAuth-only (mirrors listCubes; not cube-scoped). The server gates
- * non-builder callers with 403, surfaced here as `{ forbidden: true }` so the
- * tool can show a clear tier message instead of throwing.
- */
-export async function fetchReports() {
-    const response = await authedFetch('/api/reports', { method: 'GET' });
-    if (response.status === 403)
-        return { forbidden: true };
-    if (!response.ok) {
-        throw new Error(`Failed to fetch reports: ${response.status}`);
-    }
-    const data = (await response.json());
-    return { forbidden: false, reports: data.reports };
-}
-/**
  * List all cubes owned by the authenticated user. Owner-scoped via the
  * Bearer token alone; no drone session needed.
  */
@@ -1307,13 +1103,6 @@ export async function applyTemplate(cubeId, templateName) {
     return await response.json();
 }
 /**
- * Check subscription status
- */
-export async function checkSubscriptionStatus() {
-    const response = await authedFetch('/api/subscription/status', { method: 'GET' });
-    return await response.json();
-}
-/**
  * gh#473 PR2 — NON-CLOBBERING sync of a cube's roles + message_taxonomy
  * against the current built-in template. Dry-run by default classifies
  * each fragment (role-text SECTION / short_description / flags / taxonomy
@@ -1331,30 +1120,5 @@ export async function syncRoles(cubeId, templateName = 'software-dev', apply = f
         body: JSON.stringify({ template_name: templateName, apply, ...(decisions ? { decisions } : {}) }),
     });
     return await response.json();
-}
-/**
- * Create subscription (returns checkout URL)
- */
-export async function createSubscription() {
-    const response = await authedFetch('/api/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-    });
-    const data = (await response.json());
-    if (!data.checkout_url) {
-        throw new Error('No checkout URL in response');
-    }
-    return data.checkout_url;
-}
-export async function createBillingPortalSession() {
-    const response = await authedFetch('/api/subscription/portal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-    });
-    const data = (await response.json());
-    if (!data.portal_url) {
-        throw new Error(data.message || 'No portal URL in response');
-    }
-    return data.portal_url;
 }
 //# sourceMappingURL=remote-client.js.map

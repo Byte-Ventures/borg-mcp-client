@@ -64,7 +64,7 @@ export function getPackageVersion(): string {
  *   - `borg --version`    → "borgmcp 0.6.0"
  *   - `borg-mcp -v`       → "borgmcp 0.6.0"
  *   - `borg assimilate`   → continues to assimilation flow
- *   - `borg-setup`        → continues to interactive OAuth wizard
+ *   - `borg-setup`        → continues to interactive setup wizard
  */
 /**
  * gh#285: read the on-disk package.json version fresh (not cached).

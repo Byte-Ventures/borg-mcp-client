@@ -281,8 +281,8 @@ describe('buildCleanupReport classification', () => {
     const { rows } = await buildCleanupReport({ ...(deps as any) });
     expect(rows.find((r) => r.worktreePath === wt)?.reason).toBe('SURVIVES-detached');
   });
-  it('SURVIVES-frozen on 423 DRONE_FROZEN (reversible — never delete)', async () => {
-    expect(await reasonFor({}, 'frozen')).toBe('SURVIVES-frozen');
+  it('SURVIVES-rejected on a pin-matched 401 (revoked/taken over) — recoverable, NEVER pruned', async () => {
+    expect(await reasonFor({}, 'rejected')).toBe('SURVIVES-rejected');
   });
   it('SURVIVES-live when the seat resolves', async () => {
     expect(await reasonFor({}, 'live')).toBe('SURVIVES-live');
@@ -387,6 +387,24 @@ describe('runCleanup prune behavior', () => {
     const branchDeletes = calls.filter((c) => c.args[0] === 'branch');
     expect(branchDeletes.every((c) => c.args.includes('-d') && !c.args.includes('-D'))).toBe(true);
     expect(branchDeletes.some((c) => c.args.includes('wt-dead1'))).toBe(true);
+  });
+
+  it('EXECUTING --prune over a REJECTED-only fleet removes ZERO rows (rejected is recoverable, never deleted)', async () => {
+    // Part (E): a pin-matched 401 (revoked/taken over) is SURVIVES-rejected, not
+    // PRUNABLE. Even under --prune, no worktree remove / branch delete fires — the
+    // seat is recoverable via `borg reset-local-seat` + re-enroll, never destroyed.
+    const rejected1 = `${WT_HOME}/repo/rejected1`;
+    const { deps, calls, out } = makeDeps(
+      [{ path: rejected1, merged: true }],
+      [seat(rejected1, '1')],
+      () => 'rejected' as SeatStatus,
+    );
+    const code = await runCleanup(deps, { prune: true });
+    expect(code).toBe(0);
+    expect(calls.some((c) => c.args[0] === 'worktree' && c.args[1] === 'remove')).toBe(false);
+    expect(calls.some((c) => c.args[0] === 'branch')).toBe(false);
+    expect(out.join('')).toMatch(/SURVIVES-rejected/);
+    expect(out.join('')).toMatch(/Nothing to prune/i);
   });
 
   it('--prune also deletes the dangling derived wt-<suffix> base branch when HEAD was a feature branch (gh#884)', async () => {

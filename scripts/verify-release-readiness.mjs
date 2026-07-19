@@ -29,9 +29,9 @@ const DEPENDENCY_FIELDS = [
   'peerDependencies',
   'devDependencies',
 ];
-const SHARED_VERSION = '0.3.0';
-const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.3.0.tgz';
-const SHARED_INTEGRITY = 'sha512-vXY4kZLBlyS0nqnveLAiAhbkc4pzP2C/V9nDRZ80lmv1z389A3yGLLSKx+ZHBb3qI17bTuDg1ILYN2qIVLWIIw==';
+const SHARED_VERSION = '0.4.0';
+const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.4.0.tgz';
+const SHARED_INTEGRITY = 'sha512-P5FmTiN10b3ogzHPkqr6l8K8w2ceRSSZP1D9XFBYI/qlV4JtardnWFCjFCUg9l9KHGCiorI3yj3YtA/McKzOXg==';
 
 async function exists(path) {
   try {
@@ -127,7 +127,7 @@ function verifySharedLock(lock) {
   );
   assert(
     shared.integrity === SHARED_INTEGRITY,
-    'borgmcp-shared lock entry must match the audited 0.3.0 SHA-512 integrity.',
+    `borgmcp-shared lock entry must match the audited ${SHARED_VERSION} SHA-512 integrity.`,
   );
   const duplicates = Object.keys(lock.packages ?? {}).filter((key) => key.endsWith('/node_modules/borgmcp-shared'));
   assert(duplicates.length === 0, 'Lockfile must not contain duplicate borgmcp-shared versions.');

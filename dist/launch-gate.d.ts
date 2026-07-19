@@ -28,8 +28,8 @@
  * SR-BINDING (1482e7f9): BORG_SESSION is ACTIVATION-ONLY. It is
  * user-settable by design (manual BORG_SESSION=1 is a supported override
  * for power users/tests) and MUST NEVER be consulted for an access or
- * security decision — server-side OAuth + drone-session auth are the
- * security boundary and are unchanged by this gate.
+ * security decision — server-side drone-session auth is the
+ * security boundary and is unchanged by this gate.
  */
 export declare const BORG_SESSION_ENV = "BORG_SESSION";
 /** True when this process runs inside a borg-launched session. */

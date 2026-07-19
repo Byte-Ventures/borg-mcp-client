@@ -12,7 +12,6 @@
  */
 
 import type { ActiveCube } from './cubes.js';
-import { authRecoveryMessage } from './auth-recovery.js';
 
 export type AssimilateDecision =
   | { kind: 'reattach' }
@@ -66,9 +65,7 @@ export function reattachOnlyRefusal(
 /**
  * Failure advice when a re-attach's server-validated calls fail.
  *
- * Returns null for auth-class failures — the index.ts auth funnel
- * (auth-recovery.ts) owns that advice; the caller rethrows. For everything
- * else (evicted seat, revoked session, dead cube) the seat is unreachable:
+ * The seat is unreachable (evicted seat, revoked session, dead cube):
  * surface the server error verbatim plus CLI guidance. NEVER advise an
  * in-session re-mint (SR cond-4: no fabricated success, lean on server
  * re-validation).
@@ -76,8 +73,7 @@ export function reattachOnlyRefusal(
 export function reattachFailureMessage(error: {
   name?: string;
   message?: string;
-}): string | null {
-  if (authRecoveryMessage(error)) return null;
+}): string {
   const detail = error.message ?? String(error);
   return (
     `◼ Re-attach failed — this worktree's saved seat is unreachable (likely evicted or its ` +

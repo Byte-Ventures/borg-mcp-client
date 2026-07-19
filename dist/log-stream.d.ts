@@ -97,8 +97,6 @@ export interface StreamDeps {
     appendLine?: (cubeId: string, droneId: string, line: string) => Promise<void>;
     /** Override durable inbox-entry dedup (tests avoid real filesystem). */
     hasInboxEntryId?: (cubeId: string, droneId: string, entryId: string, renderedLine: string) => Promise<boolean>;
-    /** Override the auth-token fetch (tests skip the OS keychain). */
-    getToken?: () => Promise<string>;
     /** Optional Codex app-server wake sink; tests inject a spy. */
     wakeCodex?: (reason: string) => void;
     /** Override the heartbeat watchdog timeout. */
@@ -111,14 +109,6 @@ export interface StreamDeps {
     ownerDeps?: import('./stream-owner.js').StreamOwnerDeps;
     /** Override owner stale threshold in focused duplicate-process tests. */
     ownerStaleMs?: number;
-    /**
-     * gh#541 WU-2: invoked after a delivered inbound entry is freshly written to
-     * the inbox file (the wake-path RECEIPT — the event that should wake the
-     * agent). Default records the receipt watermark + emits a best-effort health
-     * beat (child-process HTTP via the real global fetch — its own wire, NOT the
-     * SSE stream's fetchImpl — below the agent classifier). Tests inject a spy.
-     */
-    onInboxReceipt?: (active: ActiveCube, token: string) => void;
     /**
      * Optional opencode entry injector for autonomous drone processing.
      * When provided AND the injection succeeds, the inbox file write is skipped
