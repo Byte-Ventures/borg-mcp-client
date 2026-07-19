@@ -17,6 +17,16 @@ export interface LocalServerCursorBinding {
   trustIdentity: string;
   cubeId: string;
   droneId: string;
+  /**
+   * client#41: cursor-purpose namespace. Absent (the default) is the UNREAD
+   * WATERMARK — the point `read-log unread_only` reads from and advances only
+   * on an explicit successful drain. `'stream'` is the SSE DELIVERY/RESUME
+   * cursor the live tail advances as it delivers events. Keeping these under
+   * separate keys stops SSE delivery from consuming the unread watermark (a
+   * wake-triggering entry would otherwise disappear from `unread_only` before
+   * the agent drained it — a silent missed wake).
+   */
+  purpose?: 'stream';
 }
 
 interface CursorFile {
@@ -32,15 +42,22 @@ function cursorKey(binding: LocalServerCursorBinding): string {
   ) {
     throw new Error('invalid local Borg server cursor binding');
   }
-  return createHash('sha256')
+  const hash = createHash('sha256')
     .update(binding.origin)
     .update('\0')
     .update(binding.trustIdentity)
     .update('\0')
     .update(binding.cubeId)
     .update('\0')
-    .update(binding.droneId)
-    .digest('hex');
+    .update(binding.droneId);
+  // The purpose component is appended ONLY when present, so the unread-watermark
+  // key (purpose absent) stays byte-identical to the pre-client#41 key — already
+  // persisted watermarks are not orphaned by the upgrade. The 'stream' delivery
+  // cursor gets a distinct key.
+  if (binding.purpose) {
+    hash.update('\0').update(binding.purpose);
+  }
+  return hash.digest('hex');
 }
 
 function validCursor(value: unknown): value is LocalServerCursor {
@@ -140,6 +157,27 @@ export async function advanceLocalServerCursor(
       return;
     }
     state.cursors[key] = cursor;
+    await writeState(state);
+  });
+}
+
+/**
+ * client#42: reset (delete) a persisted cursor for `binding`. Used by the SSE
+ * recovery path when the server returns 410 CURSOR_EXPIRED for the stream's
+ * resume cursor — the pointed-at entry has been pruned server-side, so the
+ * stale cursor can never be resumed and must be cleared, letting the next
+ * stream connect re-establish from a fresh valid point (the current tail)
+ * instead of looping forever on the dead cursor. No-op when no cursor is
+ * stored for the binding.
+ */
+export async function clearLocalServerCursor(
+  binding: LocalServerCursorBinding,
+): Promise<void> {
+  const key = cursorKey(binding);
+  await withLock(async () => {
+    const state = await readState();
+    if (!(key in state.cursors)) return;
+    delete state.cursors[key];
     await writeState(state);
   });
 }
