@@ -319,8 +319,9 @@ Error: Borg server request failed (HTTP 404)</pre>
       <h2>Implementation acceptance</h2>
       <ul>
         <li>Only server-declared management operations use the selected parent client credential. Unsupported local tools remain explicitly unsupported.</li>
-        <li>The server returns typed <code>403 ACCESS_DENIED</code> only for an authenticated, known-cube read/write client that lacks manage access. Unknown, no-grant, and foreign-cube requests remain 404.</li>
-        <li>The client maps only a management operation's typed denial to <code>[LOCAL-MANAGE-REQUIRED]</code>. It does not map generic 403/404 responses.</li>
+        <li>The server returns typed <code>403 ACCESS_DENIED</code> for an authenticated, known-cube read/write client that lacks manage access or a valid bound live drone session attempting administration. Unknown, no-grant, and foreign-cube requests remain 404.</li>
+        <li>The client selects only the parent credential for management. It maps only that parent credential's management-operation denial to <code>[LOCAL-MANAGE-REQUIRED]</code>; a drone credential remains non-managing, is never selected for management, and does not enter this copy path.</li>
+        <li>The client does not map generic 403/404 responses from other operations.</li>
         <li>Every target reference comes directly from the validated tool input. Reassignment uses drone and role UUIDs; eviction echoes the supplied label or drone UUID. Denial rendering performs no lookup.</li>
         <li>The denied action performs zero mutation, is not retried, and never falls back to Cloud.</li>
         <li>Managing success plus readback and same-cube non-manage denial plus no-write are end-to-end release gates.</li>
