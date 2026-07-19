@@ -20,5 +20,15 @@ export interface LocalServerCursorBinding {
 }
 export declare function getLocalServerCursor(binding: LocalServerCursorBinding): Promise<LocalServerCursor | null>;
 export declare function advanceLocalServerCursor(binding: LocalServerCursorBinding, cursor: LocalServerCursor): Promise<void>;
+/**
+ * client#42: reset (delete) a persisted cursor for `binding`. Used by the SSE
+ * recovery path when the server returns 410 CURSOR_EXPIRED for the stream's
+ * resume cursor — the pointed-at entry has been pruned server-side, so the
+ * stale cursor can never be resumed and must be cleared, letting the next
+ * stream connect re-establish from a fresh valid point (the current tail)
+ * instead of looping forever on the dead cursor. No-op when no cursor is
+ * stored for the binding.
+ */
+export declare function clearLocalServerCursor(binding: LocalServerCursorBinding): Promise<void>;
 export declare function encodeLocalServerCursor(cursor: LocalServerCursor): string;
 //# sourceMappingURL=local-server-cursor.d.ts.map

@@ -28,6 +28,23 @@ import { getActiveCube } from './cubes.js';
 import { type LocalServerCursor } from './local-server-cursor.js';
 import { acquireStreamLease, type StreamOwnershipSnapshot } from './stream-owner.js';
 export declare const LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES: number;
+/**
+ * client#42: the server's structured code for an expired stream resume cursor
+ * (server 410 CURSOR_EXPIRED — the pointed-at entry was pruned). Recoverable,
+ * NOT terminal: distinct from DRONE_EVICTED.
+ */
+export declare const CURSOR_EXPIRED_CODE = "CURSOR_EXPIRED";
+/**
+ * client#42: recoverable stream error thrown when the server rejects the resume
+ * cursor as expired. The resume cursor is reset BEFORE this is thrown, so the
+ * reconnect loop's next connect re-establishes from a fresh valid point instead
+ * of looping forever on the dead cursor. Deliberately NOT a DroneEvictedError —
+ * the reconnect loop treats only DroneEvictedError as terminal, so this falls
+ * through to the ordinary backoff-reconnect (which now recovers).
+ */
+export declare class StreamCursorExpiredError extends Error {
+    constructor(message?: string);
+}
 export declare function setModuleInjectOpenCode(fn: (text: string) => Promise<boolean>): void;
 export declare const INBOX_TAIL_LINES_CAP = 512;
 export declare const INBOX_TAIL_TRIM_THRESHOLD_LINES: number;
