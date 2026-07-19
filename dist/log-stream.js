@@ -444,6 +444,10 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
             trustIdentity: active.serverTrustIdentity,
             cubeId: active.cubeId,
             droneId: active.droneId,
+            // client#41: the stream resumes from its OWN delivery cursor, NOT the
+            // unread watermark. Advancing the watermark is the exclusive job of an
+            // explicit read-log drain.
+            purpose: 'stream',
         });
         const query = cursor ? `?cursor=${encodeURIComponent(encodeLocalServerCursor(cursor))}` : '';
         streamPath = `/api/cubes/${active.cubeId}/stream${query}`;
@@ -608,11 +612,16 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         markEventPersisted(ev.id, ev.data?.created_at ?? '');
         markBroadcastPersisted(broadcastHwmFromLogEvent(ev));
         if (isLocal && ev.cursor) {
+            // client#41: delivery advances the STREAM cursor only. The unread
+            // watermark (read-log unread_only) is deliberately NOT touched here, so a
+            // wake-triggering entry stays unread until the agent drains it — SSE
+            // delivery must not consume the unread state (silent missed wake).
             await advanceLocalServerCursor({
                 origin: active.apiUrl,
                 trustIdentity: active.serverTrustIdentity,
                 cubeId: active.cubeId,
                 droneId: active.droneId,
+                purpose: 'stream',
             }, ev.cursor);
         }
     };
