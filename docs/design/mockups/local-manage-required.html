@@ -203,14 +203,14 @@ Use a session whose local client already has management access to this cube.</pr
 Tool result
 <span class="marker">[LOCAL-MANAGE-REQUIRED]</span> This session cannot remove builder-7a12 from cube "borg-mcp" because the selected local client does not have cube management access.
 
-Coordinator and Queen are workflow roles; they do not grant server permissions. Nothing was changed. Do not retry this request from this session.
+Coordinator and Queen are workflow roles; they do not grant server permissions. No drone was removed. Do not retry this request from this session.
 
 Use a session whose local client already has management access to this cube.</pre>
         <div class="notes"><strong>Required outcome</strong>
           <ul>
             <li>Reuse the authority explanation and recovery path.</li>
             <li>Name the attempted operation and target.</li>
-            <li>Use "Nothing was changed" outside decision recording.</li>
+            <li>State the exact outcome: "No drone was removed."</li>
           </ul>
         </div>
       </article>
@@ -252,14 +252,19 @@ Error: Borg server request failed (HTTP 404)</pre>
             <td>Nothing was recorded.</td>
           </tr>
           <tr>
-            <td>Evict or reassign drone</td>
-            <td>This session cannot remove/reassign "&lt;label&gt;" in cube "&lt;name&gt;"...</td>
-            <td>Nothing was changed.</td>
+            <td>Evict drone</td>
+            <td>This session cannot remove "&lt;label&gt;" from cube "&lt;name&gt;"...</td>
+            <td>No drone was removed.</td>
+          </tr>
+          <tr>
+            <td>Reassign drone</td>
+            <td>This session cannot reassign "&lt;label&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No drone was reassigned.</td>
           </tr>
           <tr>
             <td>Update cube configuration</td>
             <td>This session cannot update "&lt;setting&gt;" in cube "&lt;name&gt;"...</td>
-            <td>Nothing was changed.</td>
+            <td>No cube settings were changed.</td>
           </tr>
         </tbody>
       </table>
