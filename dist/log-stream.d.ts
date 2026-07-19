@@ -25,7 +25,8 @@
  */
 import { type BroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import { getActiveCube } from './cubes.js';
-import { type LocalServerCursor } from './local-server-cursor.js';
+import { loadBorgServerTrust } from './server-trust.js';
+import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
 import { acquireStreamLease, type StreamOwnershipSnapshot } from './stream-owner.js';
 export declare const LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES: number;
 /**
@@ -110,6 +111,10 @@ export declare function startLogStream(opts?: {
 export interface StreamDeps {
     /** Override the global fetch (tests inject a controlled Response). */
     fetchImpl?: typeof fetch;
+    /** Override persisted trust loading to verify pre-network confinement. */
+    loadTrust?: typeof loadBorgServerTrust;
+    /** Override stream cursor loading to verify pre-storage confinement. */
+    getCursor?: typeof getLocalServerCursor;
     /** Override the inbox-line append (tests assert against the calls). */
     appendLine?: (cubeId: string, droneId: string, line: string) => Promise<void>;
     /** Override durable inbox-entry dedup (tests avoid real filesystem). */

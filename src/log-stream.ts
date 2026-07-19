@@ -29,6 +29,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { compareBroadcastHwm, type BroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import { getActiveCube, inboxPathForDrone } from './cubes.js';
+import { assertUuidShape } from './evict-drone.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import {
   advanceLocalServerCursor,
@@ -346,6 +347,10 @@ export function startLogStream(opts: { runForever?: () => void } = {}): void {
 export interface StreamDeps {
   /** Override the global fetch (tests inject a controlled Response). */
   fetchImpl?: typeof fetch;
+  /** Override persisted trust loading to verify pre-network confinement. */
+  loadTrust?: typeof loadBorgServerTrust;
+  /** Override stream cursor loading to verify pre-storage confinement. */
+  getCursor?: typeof getLocalServerCursor;
   /** Override the inbox-line append (tests assert against the calls). */
   appendLine?: (
     cubeId: string,
@@ -382,6 +387,8 @@ export interface StreamDeps {
 
 const defaultDeps: Required<StreamDeps> = {
   fetchImpl: globalThis.fetch.bind(globalThis),
+  loadTrust: loadBorgServerTrust,
+  getCursor: getLocalServerCursor,
   appendLine: defaultAppendLine,
   hasInboxEntryId: defaultHasInboxEntryId,
   wakeCodex: wakeCodexViaAppServer,
@@ -606,6 +613,8 @@ export async function streamOnce(
 ): Promise<void> {
   const {
     fetchImpl,
+    loadTrust,
+    getCursor,
     appendLine,
     hasInboxEntryId,
     wakeCodex,
@@ -615,6 +624,8 @@ export async function streamOnce(
     injectOpenCode,
   } = { ...defaultDeps, ...deps };
 
+  assertUuidShape(active.cubeId, 'cube_id');
+  assertUuidShape(active.droneId, 'drone_id');
   if (active.serverTrustIdentity === undefined) {
     throw new Error('Selected Borg server authority state is missing or unreadable');
   }
@@ -625,13 +636,13 @@ export async function streamOnce(
   };
   let requestFetch = fetchImpl;
   if (deps.fetchImpl === undefined) {
-    const trust = await loadBorgServerTrust(active.apiUrl);
+    const trust = await loadTrust(active.apiUrl);
     if (trust.identity !== active.serverTrustIdentity) {
       throw new Error('Borg server trust identity changed; refusing the stream');
     }
     requestFetch = trust.fetchImpl;
   }
-  const cursor = await getLocalServerCursor({
+  const cursor = await getCursor({
     origin: active.apiUrl,
     trustIdentity: active.serverTrustIdentity,
     cubeId: active.cubeId,
