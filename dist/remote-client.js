@@ -18,7 +18,7 @@ import { assertUuidShape } from './evict-drone.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE, errorCodeFromBody, } from './drone-lifecycle.js';
 import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
 import { loadBorgServerTrust } from './server-trust.js';
-import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, } from './server-errors.js';
+import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, LocalManageRequiredError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
@@ -198,6 +198,37 @@ async function localServerRequest(active, path, method, payload) {
                 body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
             }),
     }), true);
+}
+async function localManageRequest(active, path, method, operation, payload) {
+    const trustIdentity = active.serverTrustIdentity;
+    const authToken = await getServerCredential(active.apiUrl, trustIdentity);
+    if (!authToken) {
+        throw new LocalManageRequiredError(operation.operation, operation.cubeName, operation.noMutation);
+    }
+    try {
+        return await decodeLocalProtocolResponse((signal) => authedFetch(path, {
+            method,
+            signal,
+            apiUrl: active.apiUrl,
+            authToken,
+            serverTrustIdentity: trustIdentity,
+            redirect: 'error',
+            ...(payload === undefined
+                ? { headers: { Accept: 'application/json' } }
+                : {
+                    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                    body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
+                }),
+        }), true);
+    }
+    catch (error) {
+        if (error instanceof BorgServerHttpError &&
+            error.status === 403 &&
+            error.code === ErrorCode.ACCESS_DENIED) {
+            throw new LocalManageRequiredError(operation.operation, operation.cubeName, operation.noMutation);
+        }
+        throw error;
+    }
 }
 async function localConnectionRequest(connection, path) {
     return decodeLocalProtocolResponse((signal) => authedFetch(path, {
@@ -413,14 +444,22 @@ async function authedFetch(path, init = {}) {
         // A selected self-hosted authority is not the trusted hosted Worker. Do
         // not copy its response body into errors or debug output: a malicious or
         // misconfigured server could reflect bearer/invitation material or inject
-        // terminal controls. Status is sufficient for fail-closed recovery.
+        // terminal controls. Decode only the bounded protocol error code for typed
+        // branching; never surface the server-provided message or details.
         if (hasServerAuthority || hasExplicitAuth) {
-            await response.body?.cancel().catch(() => { });
+            let code;
+            try {
+                const body = await readBoundedResponseBody(response, AUTH_ERROR_ENVELOPE_LIMIT_BYTES, 'Local Borg server error response exceeded the response limit');
+                code = decodeProtocolErrorEnvelope(JSON.parse(body)).error.code;
+            }
+            catch {
+                code = undefined;
+            }
             debugLog(`✗ ${response.status} ${method} ${path}`);
             // CR5: carry the raw status in a TYPED error so a probe distinguishes an
             // endpoint/protocol-mismatch (404) from a server-failure (5xx) by code, not
             // by matching mutable message text. Message kept identical for call-site parity.
-            throw new BorgServerHttpError(response.status, `Borg server request failed (HTTP ${response.status})`);
+            throw new BorgServerHttpError(response.status, `Borg server request failed (HTTP ${response.status})`, code);
         }
         // Read the body ONCE (the stream can only be consumed once) and reuse
         // it for both the debug trace and the thrown error. The server error
@@ -684,7 +723,11 @@ export async function ackLogEntry(sessionToken, apiUrl, entryId, kind = 'ack', s
 export async function recordDecision(sessionToken, apiUrl, input, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     if (local) {
-        const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'POST', input);
+        const payload = await localManageRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'POST', {
+            operation: 'record a decision',
+            cubeName: local.name,
+            noMutation: 'Nothing was recorded.',
+        }, input);
         if (!payload)
             throw new Error('Local Borg server returned an empty decision response');
         return payload;
@@ -969,7 +1012,11 @@ export async function updateCube(cubeId, updates) {
         if (Object.prototype.hasOwnProperty.call(updates, 'message_taxonomy')) {
             payload.message_taxonomy = updates.message_taxonomy ?? null;
         }
-        const result = await localServerRequest(active, `/api/cubes/${cubeId}`, 'PATCH', payload);
+        const result = await localManageRequest(active, `/api/cubes/${cubeId}`, 'PATCH', {
+            operation: 'change cube settings',
+            cubeName: cubeId === active.cubeId ? active.name : cubeId,
+            noMutation: 'No cube settings were changed.',
+        }, payload);
         if (!result)
             throw new Error('Local Borg server returned an empty cube response');
         return result;
@@ -989,6 +1036,19 @@ export async function updateCube(cubeId, updates) {
  * Bearer token.
  */
 export async function patchTaxonomyClass(cubeId, op) {
+    const active = await getActiveCube();
+    if (active?.serverTrustIdentity !== undefined) {
+        const className = op.action === 'remove' ? op.class : op.class_def.class;
+        const pastTense = op.action === 'add' ? 'added' : op.action === 'replace' ? 'replaced' : 'removed';
+        const result = await localManageRequest(active, `/api/cubes/${cubeId}/taxonomy-patch`, 'POST', {
+            operation: `${op.action} taxonomy class "${className}"`,
+            cubeName: cubeId === active.cubeId ? active.name : cubeId,
+            noMutation: `No class was ${pastTense}.`,
+        }, op);
+        if (!result)
+            throw new Error('Local Borg server returned an empty taxonomy response');
+        return result;
+    }
     const response = await authedFetch(`/api/cubes/${cubeId}/taxonomy-patch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1014,7 +1074,11 @@ export async function createRole(cubeId, data) {
         // only the server-known fields. default_model has no local server route.
         if (data.default_model !== undefined)
             localUnsupported('per-role default model');
-        const result = await localServerRequest(active, `/api/cubes/${cubeId}/roles`, 'POST', buildLocalRoleFields(data));
+        const result = await localManageRequest(active, `/api/cubes/${cubeId}/roles`, 'POST', {
+            operation: `create role "${data.name}"`,
+            cubeName: cubeId === active.cubeId ? active.name : cubeId,
+            noMutation: 'No role was created.',
+        }, buildLocalRoleFields(data));
         if (!result)
             throw new Error('Local Borg server returned an empty role response');
         return result;
@@ -1036,7 +1100,11 @@ export async function updateRole(roleId, updates) {
         // (/api/cubes/:cubeId/roles/:roleId), NOT the cube-unscoped cloud path.
         if (updates.default_model !== undefined)
             localUnsupported('per-role default model');
-        const result = await localServerRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}`, 'PATCH', buildLocalRoleFields(updates));
+        const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}`, 'PATCH', {
+            operation: `update role "${roleId}"`,
+            cubeName: active.name,
+            noMutation: 'No role was updated.',
+        }, buildLocalRoleFields(updates));
         if (!result)
             throw new Error('Local Borg server returned an empty role response');
         return result;
@@ -1084,7 +1152,11 @@ export async function patchRoleSection(roleId, op) {
     if (active?.serverTrustIdentity !== undefined) {
         // Local (self-hosted) authority: section-patch rides the cube-scoped route
         // (/api/cubes/:cubeId/roles/:roleId/section-patch), NOT the cloud path.
-        const result = await localServerRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}/section-patch`, 'POST', { ...op });
+        const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}/section-patch`, 'POST', {
+            operation: `${op.action} section "${op.heading}" in role "${roleId}"`,
+            cubeName: active.name,
+            noMutation: `No section was ${op.action === 'insert' ? 'inserted' : op.action === 'replace' ? 'replaced' : 'deleted'}.`,
+        }, { ...op });
         if (!result)
             throw new Error('Local Borg server returned an empty role response');
         return result;
@@ -1115,6 +1187,17 @@ export async function reassignDrone(droneId, roleId) {
     // ("../cubes/<uuid>") must never reach URL construction. role_id rides
     // in the JSON body, not the path, so it is not interpolation-exposed.
     assertUuidShape(droneId, 'drone_id');
+    const active = await getActiveCube();
+    if (active?.serverTrustIdentity !== undefined) {
+        const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/drones/${droneId}`, 'PATCH', {
+            operation: `reassign "${droneId}"`,
+            cubeName: active.name,
+            noMutation: 'No drone was reassigned.',
+        }, { role_id: roleId });
+        if (!result)
+            throw new Error('Local Borg server returned an empty drone response');
+        return result;
+    }
     const response = await authedFetch(`/api/drones/${droneId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1131,11 +1214,20 @@ export async function reassignDrone(droneId, roleId) {
  * and its activity-log attribution anonymized; the route returns 204 No
  * Content (no body).
  */
-export async function evictDrone(droneId) {
+export async function evictDrone(droneId, targetLabel = droneId) {
     // gh#782: same pre-network gate as reassignDrone — defense-in-depth at
     // the layer that interpolates the path (the borg_evict-drone tool layer
     // keeps its friendlier label-hint validation above this).
     assertUuidShape(droneId, 'drone_id');
+    const active = await getActiveCube();
+    if (active?.serverTrustIdentity !== undefined) {
+        await localManageRequest(active, `/api/cubes/${active.cubeId}/drones/${droneId}`, 'DELETE', {
+            operation: `remove "${targetLabel}"`,
+            cubeName: active.name,
+            noMutation: 'No drone was removed.',
+        });
+        return;
+    }
     await authedFetch(`/api/drones/${droneId}`, { method: 'DELETE' });
 }
 export async function listRoles(cubeId) {

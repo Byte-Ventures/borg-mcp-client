@@ -418,7 +418,7 @@ export declare function reassignDrone(droneId: string, roleId: string): Promise<
  * and its activity-log attribution anonymized; the route returns 204 No
  * Content (no body).
  */
-export declare function evictDrone(droneId: string): Promise<void>;
+export declare function evictDrone(droneId: string, targetLabel?: string): Promise<void>;
 export declare function listRoles(cubeId: string): Promise<any[]>;
 /**
  * Fetch a cube's full detail: directive, roles (with detailed

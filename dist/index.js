@@ -915,7 +915,7 @@ export async function main() {
                     else {
                         throw new Error('Provide drone_id, or label + cube_id, to identify the drone to evict');
                     }
-                    await evictDrone(targetId);
+                    await evictDrone(targetId, targetLabel);
                     return { content: [{ type: 'text', text: `Evicted drone ${targetLabel} (${targetId}). Soft-deleted: removed from the roster and freed its seat; log history preserved with anonymized attribution.` }] };
                 }
                 case 'borg_list-drones': {

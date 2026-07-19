@@ -15,10 +15,28 @@ export class BorgServerError extends Error {
  */
 export class BorgServerHttpError extends Error {
     status;
-    constructor(status, message) {
+    code;
+    constructor(status, message, code) {
         super(message);
         this.status = status;
+        this.code = code;
         this.name = 'BorgServerHttpError';
+    }
+}
+export class LocalManageRequiredError extends Error {
+    operation;
+    cubeName;
+    noMutation;
+    constructor(operation, cubeName, noMutation) {
+        super(`[LOCAL-MANAGE-REQUIRED] This session cannot ${operation} in cube "${cubeName}" because ` +
+            'the selected local client does not have cube management access.\n\n' +
+            'Coordinator and Queen are workflow roles; they do not grant server permissions. ' +
+            `${noMutation} Do not retry this request from this session.\n\n` +
+            'Use a session whose local client already has management access to this cube.');
+        this.operation = operation;
+        this.cubeName = cubeName;
+        this.noMutation = noMutation;
+        this.name = 'LocalManageRequiredError';
     }
 }
 /**

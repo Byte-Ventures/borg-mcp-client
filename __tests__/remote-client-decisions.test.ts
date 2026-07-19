@@ -35,10 +35,14 @@ describe('decision registry request shapes (local path)', () => {
         fetchImpl: fetchSpy,
       })),
     }));
+    vi.doMock('../src/config.js', () => ({
+      getServerCredential: vi.fn(async () => 'p'.repeat(43)),
+    }));
     vi.doMock('../src/cubes.js', () => ({
       getActiveCube: vi.fn(async () => ({
         cubeId: CUBE_ID,
         droneId: DRONE_ID,
+        name: 'local-cube',
         sessionToken: SESSION,
         apiUrl: ORIGIN,
         serverTrustIdentity: TRUST_IDENTITY,

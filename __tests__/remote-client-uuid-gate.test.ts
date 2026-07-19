@@ -26,6 +26,7 @@ const DRONE_ID = '33333333-3333-4333-8333-333333333333';
 const ORIGIN = 'https://localhost:8787';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
+const PARENT = 'p'.repeat(43);
 
 const VALID_UUID = '22222222-2222-4222-8222-222222222222';
 const TRAVERSAL_ID = `../cubes/${VALID_UUID}`;
@@ -49,7 +50,19 @@ describe('remote-client path-interpolation gate (gh#782, local path)', () => {
 
   beforeEach(() => {
     vi.resetModules();
-    fetchSpy = vi.fn(async () => new Response(null, { status: 204 }));
+    fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        return new Response(JSON.stringify({
+          protocol_version: '2',
+          request_id: 'local-response-1',
+          payload: { drone: { id: VALID_UUID, role_id: 'role-1' } },
+        }), { status: 200 });
+      }
+      return new Response(null, { status: 204 });
+    });
+    vi.doMock('../src/config.js', () => ({
+      getServerCredential: vi.fn(async () => PARENT),
+    }));
     vi.doMock('../src/server-trust.js', () => ({
       loadBorgServerTrust: vi.fn(async () => ({
         identity: TRUST_IDENTITY,
@@ -60,6 +73,7 @@ describe('remote-client path-interpolation gate (gh#782, local path)', () => {
       getActiveCube: vi.fn(async () => ({
         cubeId: CUBE_ID,
         droneId: DRONE_ID,
+        name: 'local-cube',
         sessionToken: SESSION,
         apiUrl: ORIGIN,
         serverTrustIdentity: TRUST_IDENTITY,
@@ -83,17 +97,23 @@ describe('remote-client path-interpolation gate (gh#782, local path)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('reassignDrone with a valid UUID clears the gate, then fails closed at the local transport', async () => {
+  it('reassignDrone with a valid UUID clears the gate and reaches the cube-scoped local route', async () => {
     const { reassignDrone } = await import('../src/remote-client.js');
-    await expect(reassignDrone(VALID_UUID, 'role-1'))
-      .rejects.toThrow(/Local Borg server does not support/);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    await expect(reassignDrone(VALID_UUID, 'role-1')).resolves.toMatchObject({
+      drone: { id: VALID_UUID },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(new URL(String(url)).pathname).toBe(`/api/cubes/${CUBE_ID}/drones/${VALID_UUID}`);
+    expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${PARENT}`);
   });
 
-  it('evictDrone with a valid UUID clears the gate, then fails closed at the local transport', async () => {
+  it('evictDrone with a valid UUID clears the gate and reaches the cube-scoped local route', async () => {
     const { evictDrone } = await import('../src/remote-client.js');
-    await expect(evictDrone(VALID_UUID))
-      .rejects.toThrow(/Local Borg server does not support/);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    await expect(evictDrone(VALID_UUID)).resolves.toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(new URL(String(url)).pathname).toBe(`/api/cubes/${CUBE_ID}/drones/${VALID_UUID}`);
+    expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${PARENT}`);
   });
 });
