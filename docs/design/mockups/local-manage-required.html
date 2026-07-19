@@ -201,7 +201,7 @@ Use a session whose local client already has management access to this cube.</pr
 }
 
 Tool result
-<span class="marker">[LOCAL-MANAGE-REQUIRED]</span> This session cannot remove builder-7a12 from cube "borg-mcp" because the selected local client does not have cube management access.
+<span class="marker">[LOCAL-MANAGE-REQUIRED]</span> This session cannot remove "builder-7a12" from cube "borg-mcp" because the selected local client does not have cube management access.
 
 Coordinator and Queen are workflow roles; they do not grant server permissions. No drone was removed. Do not retry this request from this session.
 
@@ -262,8 +262,48 @@ Error: Borg server request failed (HTTP 404)</pre>
             <td>No drone was reassigned.</td>
           </tr>
           <tr>
-            <td>Update cube configuration</td>
-            <td>This session cannot update "&lt;setting&gt;" in cube "&lt;name&gt;"...</td>
+            <td>Create role</td>
+            <td>This session cannot create role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role was created.</td>
+          </tr>
+          <tr>
+            <td>Update role</td>
+            <td>This session cannot update role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role was updated.</td>
+          </tr>
+          <tr>
+            <td>Insert role section</td>
+            <td>This session cannot insert section "&lt;section&gt;" in role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role section was inserted.</td>
+          </tr>
+          <tr>
+            <td>Replace role section</td>
+            <td>This session cannot replace section "&lt;section&gt;" in role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role section was replaced.</td>
+          </tr>
+          <tr>
+            <td>Delete role section</td>
+            <td>This session cannot delete section "&lt;section&gt;" from role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No role section was deleted.</td>
+          </tr>
+          <tr>
+            <td>Add taxonomy class</td>
+            <td>This session cannot add message class "&lt;class&gt;" to cube "&lt;name&gt;"...</td>
+            <td>No message class was added.</td>
+          </tr>
+          <tr>
+            <td>Replace taxonomy class</td>
+            <td>This session cannot replace message class "&lt;class&gt;" in cube "&lt;name&gt;"...</td>
+            <td>No message class was replaced.</td>
+          </tr>
+          <tr>
+            <td>Remove taxonomy class</td>
+            <td>This session cannot remove message class "&lt;class&gt;" from cube "&lt;name&gt;"...</td>
+            <td>No message class was removed.</td>
+          </tr>
+          <tr>
+            <td>Update cube directive or whole taxonomy</td>
+            <td>This session cannot update cube settings in cube "&lt;name&gt;"...</td>
             <td>No cube settings were changed.</td>
           </tr>
         </tbody>
