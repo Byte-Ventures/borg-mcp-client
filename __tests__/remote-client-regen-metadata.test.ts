@@ -53,6 +53,13 @@ describe('regen() advisory metadata (local path)', () => {
           entries: [], cursor: null, behind_by: 0, has_more: false, claims: [],
         })), { status: 200 });
       }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/decisions` && method === 'PUT') {
+        return new Response(JSON.stringify(localEnvelope({
+          decisions: [
+            { id: 'd1', topic: 'release cadence', decision: 'weekly', status: 'active' },
+          ],
+        })), { status: 200 });
+      }
       throw new Error(`unexpected local request ${method} ${url.pathname}`);
     });
 
@@ -115,6 +122,72 @@ describe('regen() advisory metadata (local path)', () => {
     for (const [url] of fetchSpy.mock.calls) {
       expect(new URL(String(url)).search).toBe('');
     }
+  });
+
+  it('fetches the cube decisions and includes them in the composed regen payload (rendered by regen-format)', async () => {
+    const { regen } = await import('../src/remote-client.js');
+    const { formatRegenMarkdown } = await import('../src/regen-format.js');
+
+    const out = await regen(SESSION, ORIGIN);
+
+    // The local composition fetched the ratified decisions via the existing
+    // listDecisions route (PUT /api/cubes/:id/decisions) and included them.
+    const decisionsCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        new URL(String(url)).pathname === `/api/cubes/${CUBE_ID}/decisions` &&
+        (init?.method ?? 'GET') === 'PUT',
+    );
+    expect(decisionsCall).toBeDefined();
+    expect(out.decisions).toEqual([
+      { id: 'd1', topic: 'release cadence', decision: 'weekly', status: 'active' },
+    ]);
+
+    // The regen renderer surfaces the decisions section from the composed payload.
+    const rendered = formatRegenMarkdown(out as any);
+    expect(rendered).toContain('## Ratified decisions');
+    expect(rendered).toContain('**release cadence:** weekly');
+  });
+
+  it('degrades gracefully when the decisions fetch fails (regen still composes without decisions)', async () => {
+    fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input.toString());
+      const method = init?.method ?? 'GET';
+      if (url.pathname === `/api/cubes/${CUBE_ID}` && method === 'GET') {
+        return new Response(JSON.stringify(localEnvelope({
+          cube: { id: CUBE_ID, name: 'local-cube', cube_directive: '' },
+        })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/roles` && method === 'GET') {
+        return new Response(JSON.stringify(localEnvelope({
+          roles: [{ id: ROLE_ID, name: 'Builder', is_human_seat: false }],
+        })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/drones` && method === 'GET') {
+        return new Response(JSON.stringify(localEnvelope({
+          drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID }],
+        })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/logs` && method === 'PUT') {
+        return new Response(JSON.stringify(localEnvelope({
+          entries: [], cursor: null, behind_by: 0, has_more: false, claims: [],
+        })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/decisions` && method === 'PUT') {
+        return new Response('server error', { status: 500 });
+      }
+      throw new Error(`unexpected local request ${method} ${url.pathname}`);
+    });
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => ({ identity: TRUST_IDENTITY, fetchImpl: fetchSpy })),
+    }));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { regen } = await import('../src/remote-client.js');
+    const out = await regen(SESSION, ORIGIN);
+    expect(out).toMatchObject({ cube: { id: CUBE_ID }, drone: { id: DRONE_ID } });
+    expect(out.decisions).toEqual([]);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it('never lets a secret-bearing raw origin reach the wire on the local path', async () => {
