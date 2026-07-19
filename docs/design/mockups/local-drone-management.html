@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local drone management CLI states</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --page: #f3f0e8;
+      --ink: #1b1d1c;
+      --muted: #626761;
+      --panel: #fffdf8;
+      --line: #cbc7bc;
+      --terminal: #151917;
+      --terminal-ink: #e9eee9;
+      --success: #236b45;
+      --warning: #8b4b12;
+      --focus: #235caa;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      font: 16px/1.55 system-ui, sans-serif;
+    }
+
+    main {
+      width: min(1100px, calc(100% - 32px));
+      margin: 48px auto 80px;
+    }
+
+    h1, h2 { line-height: 1.15; }
+    h1 { max-width: 760px; font-size: clamp(2rem, 5vw, 4rem); margin-bottom: 12px; }
+    h2 { margin: 0; font-size: 1.3rem; }
+    p { max-width: 760px; }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+    .lede { color: var(--muted); font-size: 1.1rem; }
+    .grid { display: grid; gap: 24px; margin-top: 40px; }
+
+    article {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .state { color: var(--muted); font-size: .85rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .terminal { margin: 0; padding: 22px; overflow-x: auto; background: var(--terminal); color: var(--terminal-ink); font: 14px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
+    .prompt { color: #8fd5ac; }
+    .warning { color: #f4b574; }
+
+    .notes { padding: 16px 20px 18px; }
+    .notes strong { color: var(--success); }
+    .notes ul { margin: 8px 0 0; padding-left: 20px; }
+
+    .rules {
+      margin-top: 32px;
+      padding: 22px;
+      border-left: 4px solid var(--focus);
+      background: var(--panel);
+    }
+
+    @media (min-width: 840px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+      article:first-child { grid-column: 1 / -1; }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page: #151816;
+        --ink: #edf0ec;
+        --muted: #aeb5ae;
+        --panel: #1d211e;
+        --line: #3a403b;
+        --terminal: #0c0f0d;
+        --success: #8fd5ac;
+        --warning: #f4b574;
+        --focus: #82b4f2;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="state">Interaction mockup / borg-mcp-client</p>
+    <h1>Local drone management and eviction recovery</h1>
+    <p class="lede">Exact terminal outcomes for the operator removing a seat, the removed session receiving its terminal signal, and later worktree cleanup. Eviction ends the current Borg seat; it does not delete project files or silently enroll a replacement.</p>
+
+    <section class="grid" aria-label="Drone management interaction states">
+      <article>
+        <header>
+          <h2>Operator evicts a drone</h2>
+          <span class="state">Success</span>
+        </header>
+        <pre class="terminal"><span class="prompt">MCP tool call</span>  borg_evict-drone
+{
+  "label": "builder-7a12",
+  "cube_id": "326ea162-1234-4abc-8def-1234567890ab"
+}
+
+Tool result
+Removed builder-7a12 from cube borg-mcp.
+The seat credential is revoked. The session will stop after its next Borg request.
+The worktree and project files were not deleted. Activity history remains attributed to the removed seat.
+After its work is merged, run `borg cleanup` to review whether the worktree can be pruned.</pre>
+        <div class="notes"><strong>Required outcome</strong>
+          <ul>
+            <li>Name the human-readable drone label and cube.</li>
+            <li>Distinguish seat removal from file deletion.</li>
+            <li>Do not claim attribution was anonymized unless the server actually does so.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article>
+        <header>
+          <h2>Operator reassigns a drone</h2>
+          <span class="state">Success</span>
+        </header>
+        <pre class="terminal"><span class="prompt">MCP tool call</span>  borg_reassign-drone
+{
+  "drone_id": "7a120000-1234-4abc-8def-1234567890ab",
+  "role_id": "d22109c3-1234-4abc-8def-1234567890ab"
+}
+
+Tool result
+Reassigned builder-7a12 in cube borg-mcp to role Code Reviewer.
+Drone id: 7a120000-1234-4abc-8def-1234567890ab
+Role id: d22109c3-1234-4abc-8def-1234567890ab</pre>
+        <div class="notes"><strong>Required outcome</strong>
+          <ul>
+            <li>Confirm the drone label, cube name, and destination role name.</li>
+            <li>Keep stable identifiers secondary for audit and follow-up calls.</li>
+            <li>Do not make a role UUID the only description of the result.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article>
+        <header>
+          <h2>Removed session wakes</h2>
+          <span class="state">Terminal</span>
+        </header>
+        <pre class="terminal"><span class="warning">[CUBE-EVICTED]</span> This seat was removed from cube borg-mcp.
+
+Borg has stopped listening for activity for this seat. Do not retry this request or restart the loop.
+
+Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.
+
+To rejoin later, start a new session and use a new invitation from the server operator. Do not re-assimilate from this evicted session.</pre>
+        <div class="notes"><strong>Required outcome</strong>
+          <ul>
+            <li>Lead with the terminal state, not the HTTP code.</li>
+            <li>Give one unambiguous recovery path.</li>
+            <li>Keep protocol detail available to logs, not as the primary instruction.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article>
+        <header>
+          <h2>Cleanup reviews the worktree</h2>
+          <span class="state">Safe dry-run</span>
+        </header>
+        <pre class="terminal"><span class="prompt">operator $</span> borg cleanup
+
+borg cleanup report
+  PRUNABLE  ~/.borg/worktrees/borg-mcp/builder-7a12
+            seat removed; worktree clean; branch merged into origin/main
+
+1 prunable, 0 kept.
+Dry-run: nothing was deleted. Re-run with `--prune` to remove this worktree.</pre>
+        <div class="notes"><strong>Required outcome</strong>
+          <ul>
+            <li>Translate the server verdict into user-relevant language.</li>
+            <li>Keep dry-run and destructive action visibly distinct.</li>
+            <li>Never make a bare 410 status the primary explanation.</li>
+          </ul>
+        </div>
+      </article>
+    </section>
+
+    <section class="rules">
+      <h2>Behavior rules</h2>
+      <p>Eviction is authoritative only after the pinned local authority returns the typed eviction verdict. Generic authentication failures, expired credentials, network errors, trust mismatches, and unknown responses remain non-destructive. Drone management is authorized by a server-derived principal with cube management permission. Coordinator and Queen are workflow labels, not authorization capabilities.</p>
+    </section>
+
+    <section class="rules">
+      <h2>Implementation acceptance</h2>
+      <ul>
+        <li><code>src/index.ts</code> matches the eviction and reassignment results above and makes no anonymized-attribution claim.</li>
+        <li><code>src/tool-manifest.ts</code> describes retained attribution and cube management permission; it removes the hosted-era Owner-scoped promise and does not present a role label as an authorization boundary.</li>
+        <li><code>src/remote-client.ts</code> describes the local cube-scoped management contract and retained attribution without hosted RLS, ownership, or anonymization claims.</li>
+        <li><code>src/drone-lifecycle.ts</code> gives the removed session one recovery path: stop this session, then rejoin later from a new session with a new invitation.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
