@@ -209,7 +209,7 @@ Use a session whose local client already has management access to this cube.</pr
         <div class="notes"><strong>Required outcome</strong>
           <ul>
             <li>Reuse the authority explanation and recovery path.</li>
-            <li>Name the attempted operation and target.</li>
+            <li>Copy the target reference from the caller's input; never perform a lookup to improve denial copy.</li>
             <li>State the exact outcome: "No drone was removed."</li>
           </ul>
         </div>
@@ -252,13 +252,18 @@ Error: Borg server request failed (HTTP 404)</pre>
             <td>Nothing was recorded.</td>
           </tr>
           <tr>
-            <td>Evict drone</td>
+            <td>Evict drone by label</td>
             <td>This session cannot remove "&lt;label&gt;" from cube "&lt;name&gt;"...</td>
             <td>No drone was removed.</td>
           </tr>
           <tr>
+            <td>Evict drone by UUID</td>
+            <td>This session cannot remove "&lt;drone-id&gt;" from cube "&lt;name&gt;"...</td>
+            <td>No drone was removed.</td>
+          </tr>
+          <tr>
             <td>Reassign drone</td>
-            <td>This session cannot reassign "&lt;label&gt;" in cube "&lt;name&gt;"...</td>
+            <td>This session cannot reassign drone "&lt;drone-id&gt;" to role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
             <td>No drone was reassigned.</td>
           </tr>
           <tr>
@@ -268,22 +273,22 @@ Error: Borg server request failed (HTTP 404)</pre>
           </tr>
           <tr>
             <td>Update role</td>
-            <td>This session cannot update role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>This session cannot update role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
             <td>No role was updated.</td>
           </tr>
           <tr>
             <td>Insert role section</td>
-            <td>This session cannot insert section "&lt;section&gt;" in role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>This session cannot insert section "&lt;heading&gt;" in role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
             <td>No role section was inserted.</td>
           </tr>
           <tr>
             <td>Replace role section</td>
-            <td>This session cannot replace section "&lt;section&gt;" in role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>This session cannot replace section "&lt;heading&gt;" in role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
             <td>No role section was replaced.</td>
           </tr>
           <tr>
             <td>Delete role section</td>
-            <td>This session cannot delete section "&lt;section&gt;" from role "&lt;role&gt;" in cube "&lt;name&gt;"...</td>
+            <td>This session cannot delete section "&lt;heading&gt;" from role "&lt;role-id&gt;" in cube "&lt;name&gt;"...</td>
             <td>No role section was deleted.</td>
           </tr>
           <tr>
@@ -316,6 +321,7 @@ Error: Borg server request failed (HTTP 404)</pre>
         <li>Only server-declared management operations use the selected parent client credential. Unsupported local tools remain explicitly unsupported.</li>
         <li>The server returns typed <code>403 ACCESS_DENIED</code> only for an authenticated, known-cube read/write client that lacks manage access. Unknown, no-grant, and foreign-cube requests remain 404.</li>
         <li>The client maps only a management operation's typed denial to <code>[LOCAL-MANAGE-REQUIRED]</code>. It does not map generic 403/404 responses.</li>
+        <li>Every target reference comes directly from the validated tool input. Reassignment uses drone and role UUIDs; eviction echoes the supplied label or drone UUID. Denial rendering performs no lookup.</li>
         <li>The denied action performs zero mutation, is not retried, and never falls back to Cloud.</li>
         <li>Managing success plus readback and same-cube non-manage denial plus no-write are end-to-end release gates.</li>
       </ul>
