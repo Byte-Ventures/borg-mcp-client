@@ -31,8 +31,8 @@ const TLS_TRUST_ERROR_CODES = new Set([
  * wrong cert. `CERT_*` covers the OpenSSL verify family (CERT_HAS_EXPIRED,
  * CERT_NOT_YET_VALID, CERT_REVOKED, …); `ERR_TLS_CERT*` covers Node's SAN check.
  */
-function isPinnedTransportTrustFailure(code: string | undefined): boolean {
-  if (!code) return false;
+function isPinnedTransportTrustFailure(code: unknown): boolean {
+  if (typeof code !== 'string') return false;
   return (
     code.startsWith('CERT_') ||
     code.startsWith('ERR_TLS_CERT') ||

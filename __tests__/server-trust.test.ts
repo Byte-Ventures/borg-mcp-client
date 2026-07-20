@@ -165,4 +165,41 @@ describe('CR5 pinned-transport trust verdicts (real wrong cert)', () => {
     const pinned = createPinnedServerFetch(origin, ca.cert);
     await expect(pinned(`${origin}/api/cubes`)).rejects.not.toBeInstanceOf(BorgServerTrustError);
   });
+
+  it('an abort DOMException with numeric code remains a raw cancellation, never a trust verdict', async () => {
+    const dir = tmp();
+    const serverCert = genSelfSigned(dir, 'srv', '/CN=127.0.0.1', 'IP:127.0.0.1');
+    const server = createHttpsServer({ cert: serverCert.cert, key: serverCert.key });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const controller = new AbortController();
+    const pinned = createPinnedServerFetch(origin, serverCert.cert);
+    const request = pinned(`${origin}/api/cubes`, { signal: controller.signal });
+    controller.abort(new DOMException('cancelled', 'AbortError'));
+
+    await expect(request).rejects.not.toBeInstanceOf(BorgServerTrustError);
+  });
+
+  it('a post-header pinned abort does not invoke the trust classifier as a TypeError', async () => {
+    const dir = tmp();
+    const serverCert = genSelfSigned(dir, 'srv', '/CN=127.0.0.1', 'IP:127.0.0.1');
+    const server = createHttpsServer({ cert: serverCert.cert, key: serverCert.key }, (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.flushHeaders();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const controller = new AbortController();
+    const response = await createPinnedServerFetch(origin, serverCert.cert)(`${origin}/stream`, {
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    const pending = reader.read();
+    controller.abort(new DOMException('cancelled', 'AbortError'));
+
+    await expect(pending).rejects.not.toThrow(/startsWith/);
+    reader.releaseLock();
+  });
 });

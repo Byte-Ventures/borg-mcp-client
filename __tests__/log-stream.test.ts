@@ -1187,6 +1187,48 @@ describe('streamOnce', () => {
       streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(fetchImpl))
     ).rejects.toThrow(/HTTP 401/);
   });
+
+  it('uses the issued abort reason when a pinned-stream body resets after abort', async () => {
+    const external = new AbortController();
+    const abortReason = new Error('authorized stream shutdown');
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    let response!: Response;
+    const fetchImpl: typeof fetch = vi.fn(async (_input, init) => {
+      response = new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          init!.signal!.addEventListener('abort', () => controller.error(reset), { once: true });
+        },
+      }));
+      return response;
+    });
+
+    const run = streamOnce(
+      ACTIVE_CUBE,
+      null,
+      vi.fn(),
+      { ...makeDeps(fetchImpl), abortSignal: external.signal },
+    );
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    external.abort(abortReason);
+
+    await expect(run).rejects.toBe(abortReason);
+    expect(response.body!.locked).toBe(false);
+  });
+
+  it('preserves a pinned-stream body reset that occurs before abort', async () => {
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(reset); },
+    }));
+
+    await expect(streamOnce(
+      ACTIVE_CUBE,
+      null,
+      vi.fn(),
+      makeDeps(vi.fn(async () => response) as typeof fetch),
+    )).rejects.toBe(reset);
+    expect(response.body!.locked).toBe(false);
+  });
 });
 
 // ---------------- T1.2: content-vs-wire freshness split ----------------
