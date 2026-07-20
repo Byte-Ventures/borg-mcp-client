@@ -123,6 +123,65 @@ function frame(value: unknown): Buffer {
   throw new Error('instrumented app-server response exceeded 65535 bytes');
 }
 
+async function fetchWithBodyLifetime(
+  fetchImpl: typeof fetch,
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = 10_000,
+): Promise<Response> {
+  const controller = new AbortController();
+  let settled = false;
+  const abort = () => controller.abort(init.signal?.reason);
+  const cleanup = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    init.signal?.removeEventListener('abort', abort);
+  };
+  const timer = setTimeout(() => controller.abort(new Error('request timeout')), timeoutMs);
+  if (init.signal?.aborted) abort();
+  else init.signal?.addEventListener('abort', abort, { once: true });
+  try {
+    const response = await fetchImpl(input, { ...init, signal: controller.signal });
+    if (!response.body) {
+      cleanup();
+      return response;
+    }
+    const reader = response.body.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(streamController) {
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            cleanup();
+            streamController.close();
+          } else {
+            streamController.enqueue(chunk.value);
+          }
+        } catch (error) {
+          cleanup();
+          streamController.error(error);
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } finally {
+          cleanup();
+        }
+      },
+    });
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
 function decodeFrame(buffer: Buffer): { value: any; consumed: number } | null {
   if (buffer.length < 6) return null;
   const lengthCode = buffer[1] & 0x7f;
@@ -240,6 +299,75 @@ describe('Sprint 4 E2E harness validation', () => {
     };
     expect(() => decodeWriterRefs([writer, writer], active)).toThrow(/distinct/);
   });
+
+  it.each(['eof', 'error'] as const)('releases the upstream abort bridge when the response body reaches %s', async (outcome) => {
+    const removeEventListener = vi.fn();
+    const signal = {
+      aborted: false,
+      addEventListener: vi.fn(),
+      removeEventListener,
+    } as unknown as AbortSignal;
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (outcome === 'eof') controller.close();
+        else controller.error(new Error('stalled transport failed'));
+      },
+    });
+    const response = await fetchWithBodyLifetime(
+      vi.fn(async () => new Response(source)),
+      'https://127.0.0.1:7443/stream',
+      { signal },
+    );
+    const reader = response.body!.getReader();
+    if (outcome === 'eof') await expect(reader.read()).resolves.toMatchObject({ done: true });
+    else await expect(reader.read()).rejects.toThrow('stalled transport failed');
+    expect(removeEventListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the upstream abort bridge when the response body is cancelled', async () => {
+    const removeEventListener = vi.fn();
+    const signal = {
+      aborted: false,
+      addEventListener: vi.fn(),
+      removeEventListener,
+    } as unknown as AbortSignal;
+    let sourceCancelled = 0;
+    const response = await fetchWithBodyLifetime(
+      vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+        cancel() { sourceCancelled += 1; },
+      }))),
+      'https://127.0.0.1:7443/stream',
+      { signal },
+    );
+    await response.body!.cancel(new Error('consumer stopped'));
+    expect(sourceCancelled).toBe(1);
+    expect(removeEventListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the upstream abort bridge until a stalled response body is cancelled', async () => {
+    const upstream = new AbortController();
+    const removeEventListener = vi.spyOn(upstream.signal, 'removeEventListener');
+    let sourceController!: ReadableStreamDefaultController<Uint8Array>;
+    let transportAborted = false;
+    const fetchImpl: typeof fetch = vi.fn(async (_input, init) => {
+      init!.signal!.addEventListener('abort', () => {
+        transportAborted = true;
+        sourceController.error(init!.signal!.reason);
+      }, { once: true });
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { sourceController = controller; },
+      }));
+    });
+    const response = await fetchWithBodyLifetime(fetchImpl, 'https://127.0.0.1:7443/stream', {
+      signal: upstream.signal,
+    });
+    const reader = response.body!.getReader();
+    const pending = reader.read();
+    upstream.abort(new Error('external stream shutdown'));
+    await expect(pending).rejects.toThrow('external stream shutdown');
+    expect(transportAborted).toBe(true);
+    expect(removeEventListener).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
@@ -305,12 +433,8 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         throw new Error(`cross-authority request refused: ${url.href}`);
       }
       requestUrls.push(url.href);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(new Error('request timeout')), 10_000);
-      const abort = () => controller.abort(init.signal?.reason);
-      init.signal?.addEventListener('abort', abort, { once: true });
       try {
-        const response = await pinnedFetch(input, { ...init, signal: controller.signal });
+        const response = await fetchWithBodyLifetime(pinnedFetch, input, init);
         statuses.set(response.status, (statuses.get(response.status) ?? 0) + 1);
         return response;
       } catch (error: any) {
@@ -319,9 +443,6 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
           message: error?.message ?? String(error),
         });
         throw error;
-      } finally {
-        clearTimeout(timer);
-        init.signal?.removeEventListener('abort', abort);
       }
     };
     vi.doMock('../src/server-trust.js', () => ({
