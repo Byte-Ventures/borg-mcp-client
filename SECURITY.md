@@ -4,4 +4,4 @@ Report vulnerabilities through [GitHub private vulnerability reporting](https://
 
 Security fixes are supported on the latest reviewed client revision and, after publication, the latest published version. Reports should include affected versions, impact, reproduction steps, and suggested remediation. Avoid including live credentials or customer data.
 
-GitHub Actions currently prepares one reviewed npm candidate without publishing it. Future publication requires a separately authorized protected-environment change using Trusted Publishing, followed by exact registry-integrity and `npm audit signatures` verification.
+GitHub Actions publishes only an immutable reviewed tag through the protected npm environment and Trusted Publishing. The workflow verifies exact registry integrity and runs `npm audit signatures` after publication.

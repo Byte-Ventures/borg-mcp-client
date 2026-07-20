@@ -1,4 +1,4 @@
-name: Prepare npm release candidate
+name: Verify and publish npm release
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-release-candidate-${{ github.ref }}
+  group: npm-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -22,6 +22,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Reject immutable release reruns
         shell: bash
@@ -129,7 +130,7 @@ jobs:
             "${consumer}/lib/node_modules/borgmcp" \
             "${consumer}/bin/borg-mcp"
 
-      - name: Upload exact candidate for security review
+      - name: Upload same-run release artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: npm-release-${{ steps.release.outputs.version }}
@@ -139,7 +140,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publication-readiness:
+  publish:
     needs: verify
     runs-on: ubuntu-latest
     environment:
@@ -147,16 +148,37 @@ jobs:
       url: https://www.npmjs.com/package/borgmcp/v/${{ needs.verify.outputs.version }}
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Check out reviewed release helpers
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up exact Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.2
 
-      - name: Download same-run release candidate
+      - name: Set up Trusted Publishing npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_prefix="${RUNNER_TEMP}/npm-11.18.0"
+          bootstrap_userconfig="${RUNNER_TEMP}/npm-bootstrap.npmrc"
+          bootstrap_cache="${RUNNER_TEMP}/npm-bootstrap-cache"
+          printf '%s\n' 'registry=https://registry.npmjs.org/' > "${bootstrap_userconfig}"
+          NPM_CONFIG_USERCONFIG="${bootstrap_userconfig}" NPM_CONFIG_CACHE="${bootstrap_cache}" \
+            npm install --prefix "${npm_prefix}" --ignore-scripts --no-save \
+            --registry=https://registry.npmjs.org npm@11.18.0
+          exact_npm="${npm_prefix}/node_modules/.bin/npm"
+          test "$(NPM_CONFIG_USERCONFIG="${bootstrap_userconfig}" "${exact_npm}" --version)" = "11.18.0"
+          test "$(NPM_CONFIG_USERCONFIG="${bootstrap_userconfig}" "${exact_npm}" config get registry)" = "https://registry.npmjs.org/"
+          echo "${npm_prefix}/node_modules/.bin" >> "${GITHUB_PATH}"
+          echo "NPM_CONFIG_USERCONFIG=${bootstrap_userconfig}" >> "${GITHUB_ENV}"
+          echo "NPM_CONFIG_CACHE=${bootstrap_cache}" >> "${GITHUB_ENV}"
+
+      - name: Download same-run release artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: npm-release-${{ needs.verify.outputs.version }}
@@ -168,7 +190,47 @@ jobs:
           EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
           NPM_EXPECTED_OWNER: ${{ vars.NPM_EXPECTED_OWNER }}
 
-      - name: Confirm publication remains deferred
-        run: test "${CLIENT_NPM_PUBLICATION}" = "deferred"
+      - name: Publish same-run tarball with Trusted Publishing provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_ACTIONS}" = "true"
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+          test -z "${NODE_AUTH_TOKEN:-}"
+          npm publish "./release/${{ needs.verify.outputs.tarball }}" --ignore-scripts --access public --provenance --registry=https://registry.npmjs.org
+
+  registry-verification:
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out reviewed release helpers
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up exact Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.2
+
+      - name: Download same-run release report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: npm-release-${{ needs.verify.outputs.version }}
+          path: release
+
+      - name: Verify bounded registry integrity
+        run: node scripts/verify-registry-release.mjs postpublish release/artifact-report.json
         env:
-          CLIENT_NPM_PUBLICATION: deferred
+          EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
+
+      - name: Verify registry signatures and Trusted Publishing attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir registry-verification
+          npm install --prefix registry-verification --ignore-scripts --save-exact --registry=https://registry.npmjs.org "borgmcp@${{ needs.verify.outputs.version }}"
+          npm audit signatures --prefix registry-verification --registry=https://registry.npmjs.org
