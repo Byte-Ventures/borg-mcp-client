@@ -285,15 +285,19 @@ export declare function scrubPendingSeat(ref: string, binding: {
 }, expectedPendingDigest: string): Promise<boolean>;
 /** Discard any record for one seat ref (eviction remint before a fresh mint). */
 export declare function clearSeat(ref: string): Promise<void>;
-/** Metadata-only refresh (name/label/role display) of the ACTIVE seat bound to
- *  `worktree` — CANNOT alter the credential, ref, identity, or worktree binding. */
-export declare function refreshSeatMetadata(worktree: string, display: {
+/** Metadata-only refresh of one exact ACTIVE seat. The expected tuple prevents
+ * a delayed response from updating a replacement seat that reused the worktree. */
+export declare function refreshSeatMetadata(worktree: string, expected: {
+    credentialRef: string;
+    cubeId: string;
+    droneId: string;
+}, display: {
     name: string;
     droneLabel: string;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
-}): Promise<void>;
+}): Promise<boolean>;
 /** @internal Test-only: point the store at a fixture path is done via HOME; this
  *  clears the module cache (there is none — every op reads fresh under the lock). */
 //# sourceMappingURL=seats.d.ts.map

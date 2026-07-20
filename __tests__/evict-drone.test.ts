@@ -1,8 +1,8 @@
 /**
  * Tests for the `borg_evict-drone` label→id resolver (gh#718).
  *
- * The retired eviction route and persistence implementation
- * take a drone UUID, but Coordinators see drone LABELS everywhere (roster,
+ * The local eviction route takes a drone UUID, but Coordinators see drone
+ * LABELS everywhere (roster,
  * regen, cube log) and rarely the UUIDs. `resolveDroneIdByLabel` lets the tool
  * accept a label and resolve it to a drone id client-side against the
  * cube-grant-scoped detail (getCube), mirroring how borg_list-drones surfaces
@@ -11,6 +11,8 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  formatEvictDroneSuccess,
+  formatReassignDroneSuccess,
   resolveDroneIdByLabel,
   isUuidShape,
   type EvictableDrone,
@@ -89,5 +91,31 @@ describe('isUuidShape (gh#782 — drone_id input validation)', () => {
   it('rejects empty and whitespace-only strings', () => {
     expect(isUuidShape('')).toBe(false);
     expect(isUuidShape('   ')).toBe(false);
+  });
+});
+
+describe('local drone management success copy', () => {
+  it('renders server-derived reassignment readback with names before stable ids', () => {
+    expect(formatReassignDroneSuccess({
+      droneLabel: 'builder-7a12',
+      cubeName: 'borg-mcp',
+      roleName: 'Code Reviewer',
+      droneId: '7a120000-1234-4abc-8def-1234567890ab',
+      roleId: 'd22109c3-1234-4abc-8def-1234567890ab',
+    })).toBe(
+      'Reassigned builder-7a12 in cube borg-mcp to role Code Reviewer.\n' +
+      'Drone id: 7a120000-1234-4abc-8def-1234567890ab\n' +
+      'Role id: d22109c3-1234-4abc-8def-1234567890ab',
+    );
+  });
+
+  it('renders eviction without claiming file deletion or anonymized attribution', () => {
+    const text = formatEvictDroneSuccess('builder-7a12', 'borg-mcp');
+    expect(text).toBe(
+      'Removed builder-7a12 from cube borg-mcp.\n' +
+      'The seat credential is revoked. The session will stop after its next Borg request.\n' +
+      'The worktree and project files were not deleted. Activity history remains attributed to the removed seat.\n' +
+      'After its work is merged, run `borg cleanup` to review whether the worktree can be pruned.',
+    );
   });
 });

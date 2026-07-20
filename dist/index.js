@@ -13,7 +13,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
-import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, reassignDrone, getCube, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
+import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, getCube, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
@@ -42,6 +42,7 @@ import { setModuleInjectOpenCode } from './log-stream.js';
 import { lifecycleSignalForMessage, recordLifecycleLog, shouldSuppressLifecycleLog, } from './lifecycle-log-guard.js';
 import { normalizeDirectLogRecipients, } from './direct-log.js';
 import { formatLocalManageToolResult } from './local-manage-tool-result.js';
+import { runEvictDroneTool, runReassignDroneTool, } from './drone-management.js';
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
@@ -875,17 +876,17 @@ export async function main() {
                     return { content: [{ type: 'text', text: `Deleted role ${roleId}.` }] };
                 }
                 case 'borg_reassign-drone': {
-                    const droneId = args?.drone_id;
-                    const roleId = args?.role_id;
-                    if (!droneId)
-                        throw new Error('drone_id is required');
-                    if (!roleId)
-                        throw new Error('role_id is required');
-                    return await reassignDrone(droneId, roleId);
+                    return {
+                        content: [{ type: 'text', text: await runReassignDroneTool({
+                                    droneId: args?.drone_id,
+                                    roleId: args?.role_id,
+                                }) }],
+                    };
                 }
                 case 'borg_evict-drone': {
-                    void args;
-                    throw new Error('Local Borg server does not support drone eviction');
+                    return {
+                        content: [{ type: 'text', text: await runEvictDroneTool(args) }],
+                    };
                 }
                 case 'borg_list-drones': {
                     const cubeId = args?.cube_id;
@@ -985,8 +986,9 @@ export async function main() {
             // a lifecycle terminal — it gets its own recognizable result rather than
             // the generic error rendering below.
             if (error instanceof DroneEvictedError) {
+                const active = await getActiveCube();
                 return {
-                    content: [{ type: 'text', text: formatEvictedToolResult(error.message) }],
+                    content: [{ type: 'text', text: formatEvictedToolResult(active?.name) }],
                     isError: true,
                 };
             }

@@ -86,6 +86,11 @@ export declare function activeCubeWithFreshRegenIdentity(active: ActiveCube, res
     drone?: {
         label?: string | null;
     };
+    role?: {
+        name?: string | null;
+        role_class?: 'queen' | 'worker' | null;
+        is_human_seat?: boolean | null;
+    };
 }): ActiveCube;
 export interface LocalSeatSnapshot {
     apiUrl: string;
@@ -177,7 +182,7 @@ export type FinalizeServerSeatOutcome = {
  * worktree has no active seat, so a stale regen identity can never resurrect or
  * mutate a seat ref.
  */
-export declare function refreshActiveCubeMetadata(active: ActiveCubeInput): Promise<void>;
+export declare function refreshActiveCubeMetadata(active: ActiveCubeInput): Promise<boolean>;
 export declare function getProjectCliPreference(): Promise<BorgCli | null>;
 /**
  * gh#556 Part 2 — like getProjectCliPreference, but keyed on an arbitrary

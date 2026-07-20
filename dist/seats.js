@@ -523,27 +523,27 @@ export async function clearSeat(ref) {
         }
     });
 }
-/** Metadata-only refresh (name/label/role display) of the ACTIVE seat bound to
- *  `worktree` — CANNOT alter the credential, ref, identity, or worktree binding. */
-export async function refreshSeatMetadata(worktree, display) {
-    await withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
-        let changed = false;
-        for (const [ref, record] of Object.entries(txn.data.seats)) {
-            if (record.state === 'active' && record.worktree === worktree && seatRef(record) === ref) {
-                txn.data.seats[ref] = {
-                    ...record,
-                    name: display.name,
-                    droneLabel: display.droneLabel,
-                    ...(display.roleName !== undefined ? { roleName: display.roleName } : {}),
-                    ...(display.roleClass !== undefined ? { roleClass: display.roleClass } : {}),
-                    ...(display.isHumanSeat !== undefined ? { isHumanSeat: display.isHumanSeat } : {}),
-                };
-                changed = true;
-                break;
-            }
-        }
-        if (changed)
-            await txn.commit();
+/** Metadata-only refresh of one exact ACTIVE seat. The expected tuple prevents
+ * a delayed response from updating a replacement seat that reused the worktree. */
+export async function refreshSeatMetadata(worktree, expected, display) {
+    if (!REF_RE.test(expected.credentialRef))
+        return false;
+    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
+        const record = txn.data.seats[expected.credentialRef];
+        if (record?.state !== 'active' || record.worktree !== worktree ||
+            record.cubeId !== expected.cubeId || record.droneId !== expected.droneId ||
+            seatRef(record) !== expected.credentialRef)
+            return false;
+        txn.data.seats[expected.credentialRef] = {
+            ...record,
+            name: display.name,
+            droneLabel: display.droneLabel,
+            ...(display.roleName !== undefined ? { roleName: display.roleName } : {}),
+            ...(display.roleClass !== undefined ? { roleClass: display.roleClass } : {}),
+            ...(display.isHumanSeat !== undefined ? { isHumanSeat: display.isHumanSeat } : {}),
+        };
+        await txn.commit();
+        return true;
     });
 }
 /** @internal Test-only: point the store at a fixture path is done via HOME; this

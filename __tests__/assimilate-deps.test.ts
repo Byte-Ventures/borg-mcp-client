@@ -128,11 +128,15 @@ describe('cubes.json fs persistence round-trip', () => {
       sessionToken: 'a'.repeat(64),
       droneLabel: 'stale-cache-label',
       apiUrl: 'https://api.example.invalid',
+      roleName: 'Builder',
+      roleClass: 'worker' as const,
+      isHumanSeat: false,
     };
 
     const refreshed = activeCubeWithFreshRegenIdentity(active, {
       cube: { name: 'borg-mcp' },
       drone: { label: 'fresh-server-label' },
+      role: { name: 'Coordinator', role_class: 'queen', is_human_seat: true },
     });
     const out = renderStreamStatus({
       status: {
@@ -153,6 +157,9 @@ describe('cubes.json fs persistence round-trip', () => {
     });
 
     expect(refreshed.droneLabel).toBe('fresh-server-label');
+    expect(refreshed.roleName).toBe('Coordinator');
+    expect(refreshed.roleClass).toBe('queen');
+    expect(refreshed.isHumanSeat).toBe(true);
     expect(out).toContain('borg inbox for fresh-server-label on cube borg-mcp');
     expect(out).not.toContain('stale-cache-label');
   });

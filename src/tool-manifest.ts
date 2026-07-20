@@ -496,7 +496,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_reassign-drone',
           description:
-            'Drone reassignment is not exposed by the local server yet. Invoking this tool returns an explicit unsupported result without selecting a credential or making a network request. Role labels grant no server permission.',
+            'Reassign a drone within the current cube using the selected local client\'s cube-management grant. Returns server-derived drone, cube, and role readback. Coordinator and Queen are workflow labels, not server permissions.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -509,12 +509,12 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_evict-drone',
           description:
-            'Drone eviction is not exposed by the local server yet. Invoking this tool returns an explicit unsupported result without selecting a credential or making a network request. Role labels grant no server permission.',
+            'Remove a drone using the selected local client\'s cube-management grant. The seat credential is revoked, project files remain, and activity history keeps the removed seat\'s attribution. Accepts drone_id for the current cube or label with cube_id.',
           inputSchema: {
             type: 'object',
             properties: {
               drone_id: { type: 'string', description: 'UUID of the drone to evict. Provide this OR (label + cube_id).' },
-              label: { type: 'string', description: 'Drone label to evict, e.g. "two-of-seventeen-builder". Requires cube_id. Ignored when drone_id is given.' },
+              label: { type: 'string', description: 'Drone label to evict, e.g. "two-of-seventeen-builder". Requires cube_id and cannot be combined with drone_id.' },
               cube_id: { type: 'string', description: 'UUID of the cube the labelled drone belongs to. Required when evicting by label.' },
             },
           },

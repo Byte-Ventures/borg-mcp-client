@@ -57,3 +57,26 @@ export function resolveDroneIdByLabel(
   const match = drones.find((d) => d.label === target);
   return match ? { id: match.id, label: match.label } : null;
 }
+
+export function formatReassignDroneSuccess(input: {
+  droneLabel: string;
+  cubeName: string;
+  roleName: string;
+  droneId: string;
+  roleId: string;
+}): string {
+  return (
+    `Reassigned ${input.droneLabel} in cube ${input.cubeName} to role ${input.roleName}.\n` +
+    `Drone id: ${input.droneId}\n` +
+    `Role id: ${input.roleId}`
+  );
+}
+
+export function formatEvictDroneSuccess(droneLabel: string, cubeName: string): string {
+  return (
+    `Removed ${droneLabel} from cube ${cubeName}.\n` +
+    'The seat credential is revoked. The session will stop after its next Borg request.\n' +
+    'The worktree and project files were not deleted. Activity history remains attributed to the removed seat.\n' +
+    'After its work is merged, run `borg cleanup` to review whether the worktree can be pruned.'
+  );
+}

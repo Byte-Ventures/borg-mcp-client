@@ -90,6 +90,76 @@ describe('seats store — one atomic unit (ACTIVE-without-binding unreachable)',
   });
 });
 
+describe('seats store — exact-seat metadata refresh', () => {
+  it('updates only the expected credential-ref/cube/drone tuple', async () => {
+    const { seats } = await load();
+    const bearer = 'b'.repeat(43);
+    await seats.mintPendingSeat({ ...SEAT, credential: bearer });
+    await activateOk(seats, bearer);
+    const ref = seats.seatRef(SEAT);
+
+    await expect(seats.refreshSeatMetadata('/work/repo', {
+      credentialRef: ref,
+      cubeId: SEAT.cubeId,
+      droneId: STAMP.droneId,
+    }, {
+      name: 'local-cube',
+      droneLabel: 'builder-1',
+      roleName: 'Code Reviewer',
+      roleClass: 'worker',
+      isHumanSeat: false,
+    })).resolves.toBe(true);
+    expect(await seats.getActiveSeatForWorktree('/work/repo')).toMatchObject({
+      droneId: STAMP.droneId,
+      roleName: 'Code Reviewer',
+    });
+  });
+
+  it('does not update a replacement seat that reused the worktree', async () => {
+    const { seats } = await load();
+    const originalBearer = 'o'.repeat(43);
+    await seats.mintPendingSeat({ ...SEAT, credential: originalBearer });
+    await activateOk(seats, originalBearer);
+    const originalRef = seats.seatRef(SEAT);
+    await seats.clearSeat(originalRef);
+
+    const replacement = {
+      ...SEAT,
+      cubeId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      roleId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    };
+    const replacementBearer = 'r'.repeat(43);
+    await seats.mintPendingSeat({ ...replacement, credential: replacementBearer });
+    await seats.activateAndBindSeat({
+      ...replacement,
+      droneId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      expiresAt: STAMP.expiresAt,
+      expectedPendingDigest: digestOf(replacementBearer),
+      worktree: '/work/repo',
+      name: 'replacement-cube',
+      droneLabel: 'replacement-builder',
+      roleName: 'Builder',
+    });
+
+    await expect(seats.refreshSeatMetadata('/work/repo', {
+      credentialRef: originalRef,
+      cubeId: SEAT.cubeId,
+      droneId: STAMP.droneId,
+    }, {
+      name: 'local-cube',
+      droneLabel: 'stale-builder',
+      roleName: 'Code Reviewer',
+    })).resolves.toBe(false);
+    expect(await seats.getActiveSeatForWorktree('/work/repo')).toMatchObject({
+      cubeId: replacement.cubeId,
+      droneId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      droneLabel: 'replacement-builder',
+      roleName: 'Builder',
+    });
+  });
+});
+
 describe('seats store — atomic compare-and-activate fails closed (CR#2)', () => {
   it('REPLACED: a same-ref replacement (fresh bearer) is never activated with this response’s metadata', async () => {
     const { dir, seats } = await load();

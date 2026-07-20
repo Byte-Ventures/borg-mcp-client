@@ -10,12 +10,9 @@
  * values like "../cubes/<uuid>" never reach URL construction), and must not
  * change behavior for valid UUIDs.
  *
- * The local server does not expose drone mutation
- * routes are not carried by the local server, so a VALID drone_id passes the
- * UUID gate and then fails closed at the local transport with "does not
- * support" — still WITHOUT any network call. The security property under test
- * (the gate rejects path-traversal shapes before URL construction and network)
- * is unchanged. The old cloud drone routes are dead code.
+ * Valid identifiers continue to the current declared local management routes.
+ * The security property under test is that path-shaped identifiers fail before
+ * credential selection or URL construction.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,6 +23,7 @@ const DRONE_ID = '33333333-3333-4333-8333-333333333333';
 const ORIGIN = 'https://localhost:8787';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
+const PARENT = 'p'.repeat(43);
 
 const VALID_UUID = '22222222-2222-4222-8222-222222222222';
 const TRAVERSAL_ID = `../cubes/${VALID_UUID}`;
@@ -50,6 +48,9 @@ describe('remote-client path-interpolation gate (gh#782, local path)', () => {
   beforeEach(() => {
     vi.resetModules();
     fetchSpy = vi.fn();
+    vi.doMock('../src/config.js', () => ({
+      getServerCredential: vi.fn(async () => PARENT),
+    }));
     vi.doMock('../src/server-trust.js', () => ({
       loadBorgServerTrust: vi.fn(async () => ({
         identity: TRUST_IDENTITY,
@@ -84,15 +85,15 @@ describe('remote-client path-interpolation gate (gh#782, local path)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('reassignDrone with a valid UUID remains unsupported without a network call', async () => {
+  it('reassignDrone rejects an invalid role id before credential lookup or network access', async () => {
     const { reassignDrone } = await import('../src/remote-client.js');
-    await expect(reassignDrone(VALID_UUID, 'role-1')).rejects.toThrow(/Local Borg server does not support/);
+    await expect(reassignDrone(VALID_UUID, TRAVERSAL_ID)).rejects.toThrow(/not a UUID/);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('evictDrone with a valid UUID remains unsupported without a network call', async () => {
+  it('evictDrone rejects an invalid cube id before credential lookup or network access', async () => {
     const { evictDrone } = await import('../src/remote-client.js');
-    await expect(evictDrone(VALID_UUID)).rejects.toThrow(/Local Borg server does not support/);
+    await expect(evictDrone(VALID_UUID, { cubeId: TRAVERSAL_ID })).rejects.toThrow(/not a UUID/);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -11,7 +11,7 @@
  */
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
+import { createProtocolEnvelope, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, ErrorCode, } from 'borgmcp-shared/protocol';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
@@ -121,7 +121,7 @@ function waitForLocalRequest(promise, signal) {
         });
     });
 }
-async function decodeLocalProtocolResponse(request, allowNoContent) {
+async function decodeLocalProtocolResponse(request, allowNoContent, decodePayload = (value) => value) {
     const controller = new AbortController();
     const timeout = setTimeout(() => {
         controller.abort(new Error('Local Borg server request timed out'));
@@ -138,7 +138,7 @@ async function decodeLocalProtocolResponse(request, allowNoContent) {
         catch {
             throw new Error('Local Borg server returned an invalid protocol envelope');
         }
-        return decodeProtocolEnvelope(body, (value) => value).payload;
+        return decodeProtocolEnvelope(body, decodePayload).payload;
     }
     catch (error) {
         if (controller.signal.aborted) {
@@ -170,8 +170,10 @@ async function localServerRequest(active, path, method, payload) {
 function manageCopyValue(value) {
     return JSON.stringify(value);
 }
-async function localManageRequest(active, path, method, operation, payload) {
+async function localManageConnection(active, operation) {
     const trustIdentity = active.serverTrustIdentity;
+    if (!trustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
     let authToken;
     try {
         authToken = await getServerCredential(active.apiUrl, trustIdentity);
@@ -182,13 +184,17 @@ async function localManageRequest(active, path, method, operation, payload) {
     if (!authToken) {
         throw new LocalManageCredentialUnavailableError(operation.operation, operation.cubeName, operation.noMutation);
     }
+    return { apiUrl: active.apiUrl, authToken, serverTrustIdentity: trustIdentity };
+}
+async function localManageRequest(active, path, method, operation, payload, decodePayload) {
+    const connection = await localManageConnection(active, operation);
     try {
         return await decodeLocalProtocolResponse((signal) => authedFetch(path, {
             method,
             signal,
-            apiUrl: active.apiUrl,
-            authToken,
-            serverTrustIdentity: trustIdentity,
+            apiUrl: connection.apiUrl,
+            authToken: connection.authToken,
+            serverTrustIdentity: connection.serverTrustIdentity,
             redirect: 'error',
             ...(payload === undefined
                 ? { headers: { Accept: 'application/json' } }
@@ -196,7 +202,7 @@ async function localManageRequest(active, path, method, operation, payload) {
                     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
                     body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
                 }),
-        }), true);
+        }), true, decodePayload);
     }
     catch (error) {
         if (error instanceof BorgServerHttpError &&
@@ -826,23 +832,42 @@ export async function deleteRole(roleId) {
  * the seat returns an error. The class-hierarchy guard also rejects
  * direct promotion from non-human-seat roles.
  */
-export async function reassignDrone(droneId, roleId) {
-    // gh#782: validate BEFORE any await — a path-shaped drone_id
-    // ("../cubes/<uuid>") must never reach URL construction. role_id rides
-    // in the JSON body, not the path, so it is not interpolation-exposed.
+export async function reassignDrone(droneId, roleId, activeOverride) {
+    // Validate both identifiers before credential lookup or network access.
     assertUuidShape(droneId, 'drone_id');
-    void roleId;
-    localUnsupported('drone reassignment');
+    assertUuidShape(roleId, 'role_id');
+    const active = activeOverride ?? await getActiveCube();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    assertUuidShape(active.cubeId, 'cube_id');
+    const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/drones/${droneId}`, 'PATCH', {
+        operation: `reassign drone ${manageCopyValue(droneId)} to role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
+        cubeName: active.name,
+        noMutation: 'No drone was reassigned.',
+    }, { role_id: roleId }, decodeReassignDroneResult);
+    if (!result)
+        throw new Error('Local Borg server returned an empty drone reassignment response');
+    return result;
 }
-/**
- * Drone eviction is not exposed by the local server yet.
- */
-export async function evictDrone(droneId) {
-    // gh#782: same pre-network gate as reassignDrone — defense-in-depth at
-    // the layer that interpolates the path (the borg_evict-drone tool layer
-    // keeps its friendlier label-hint validation above this).
+export async function evictDrone(droneId, options = {}) {
     assertUuidShape(droneId, 'drone_id');
-    localUnsupported('drone eviction');
+    if (options.cubeId !== undefined)
+        assertUuidShape(options.cubeId, 'cube_id');
+    const active = options.active ?? await getActiveCube();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    const cubeId = options.cubeId ?? active.cubeId;
+    assertUuidShape(cubeId, 'cube_id');
+    const cubeName = options.cubeName ?? (cubeId === active.cubeId ? active.name : cubeId);
+    const targetReference = options.targetReference ?? droneId;
+    const result = await localManageRequest(active, `/api/cubes/${cubeId}/drones/${droneId}`, 'DELETE', {
+        operation: `remove ${manageCopyValue(targetReference)} from cube ${manageCopyValue(cubeName)}`,
+        cubeName,
+        noMutation: 'No drone was removed.',
+    }, {}, decodeEvictDroneResult);
+    if (!result)
+        throw new Error('Local Borg server returned an empty drone eviction response');
+    return result;
 }
 export async function listRoles(cubeId) {
     assertUuidShape(cubeId, 'cube_id');
@@ -854,6 +879,13 @@ export async function listRoles(cubeId) {
         throw new Error('Local Borg server returned an invalid roles response');
     }
     return result.roles;
+}
+export async function getCubeForManagement(cubeId, operation, activeOverride) {
+    assertUuidShape(cubeId, 'cube_id');
+    const active = activeOverride ?? await getActiveCube();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    return getCube(cubeId, await localManageConnection(active, operation));
 }
 /**
  * Fetch a cube's full detail: directive, roles (with detailed
