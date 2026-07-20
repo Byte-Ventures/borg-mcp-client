@@ -21,6 +21,7 @@ import {
 import { smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
+const CLIENT_VERSION = '2.0.1';
 const SHARED_VERSION = '0.4.2';
 const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.4.2.tgz';
 const SHARED_INTEGRITY = 'sha512-fdbArU0d9iQkxeyrxWij4DZu5YYncEc0996JiCyf7VLGXASDWgrC3PuWymsIt6szn56DQpTgz3wttrwNb93UWg==';
@@ -32,7 +33,7 @@ async function validPackage(directory) {
   await mkdir(join(packageRoot, 'docs'), { recursive: true });
   const manifest = {
     name: 'borgmcp',
-    version: '2.0.0',
+    version: CLIENT_VERSION,
     license: 'Apache-2.0',
     repository: {
       type: 'git',
@@ -57,10 +58,10 @@ async function validPackage(directory) {
   };
   const lock = {
     name: 'borgmcp',
-    version: '2.0.0',
+    version: CLIENT_VERSION,
     lockfileVersion: 3,
     packages: {
-      '': { name: 'borgmcp', version: '2.0.0', dependencies: { 'borgmcp-shared': SHARED_VERSION } },
+      '': { name: 'borgmcp', version: CLIENT_VERSION, dependencies: { 'borgmcp-shared': SHARED_VERSION } },
       'node_modules/borgmcp-shared': {
         version: SHARED_VERSION,
         resolved: SHARED_TARBALL,
@@ -114,7 +115,7 @@ async function packedFixture(mutator) {
   const fixture = await validPackage(directory);
   await mutator?.(fixture);
   await rm(join(fixture.packageRoot, 'package-lock.json'));
-  const tarball = join(directory, 'borgmcp-2.0.0.tgz');
+  const tarball = join(directory, `borgmcp-${CLIENT_VERSION}.tgz`);
   execFileSync('tar', ['-czf', tarball, '-C', directory, 'package']);
   return { directory, tarball };
 }
@@ -220,9 +221,10 @@ test('release documentation describes the activated minimal publication lane', a
   const readme = await readFile(join(root, 'README.md'), 'utf8');
   const security = await readFile(join(root, 'SECURITY.md'), 'utf8');
   const releasing = await readFile(join(root, 'docs', 'RELEASING.md'), 'utf8');
+  const extraction = await readFile(join(root, 'docs', 'EXTRACTION_PROVENANCE.md'), 'utf8');
 
   assert.match(readme, /After verified publication/);
-  assert.match(readme, /npm install -g borgmcp@2\.0\.0/);
+  assert.match(readme, /npm install -g borgmcp@2\.0\.1/);
   assert.doesNotMatch(readme, /npm install -g borgmcp(?:\s|$)/);
   assert.match(security, /protected npm environment and Trusted Publishing/);
   for (const boundary of [
@@ -233,6 +235,16 @@ test('release documentation describes the activated minimal publication lane', a
     'npm audit signatures',
     'fixed attempt and delay',
   ]) assert.ok(releasing.includes(boundary), `Missing release boundary: ${boundary}`);
+  for (const evidence of [
+    'v2.0.0',
+    '90a078264f4d61c0140ad0a30357a4df42c34ab0',
+    '29693915689',
+    'v2.0.1',
+  ]) assert.ok(releasing.includes(evidence), `Missing recovery evidence: ${evidence}`);
+  assert.match(releasing, /failed before package\s+creation or npm publication/);
+  assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
+  assert.match(extraction, /borgmcp-server@0\.1\.7/);
+  assert.match(extraction, /reviewed `v2\.0\.1` source/);
   assert.doesNotMatch(`${readme}\n${security}\n${releasing}`, /publication is deferred|not yet published/);
 });
 
@@ -247,17 +259,17 @@ test('release attempt guard rejects reruns of an immutable tag workflow', () => 
 });
 
 test('release trigger rejects non-tag events, malformed tags, and version mismatch', () => {
-  const valid = { eventName: 'push', refType: 'tag', refName: 'v2.0.0', version: '2.0.0' };
-  assert.deepEqual(verifyReleaseTrigger(valid), { tag: 'v2.0.0', version: '2.0.0' });
+  const valid = { eventName: 'push', refType: 'tag', refName: `v${CLIENT_VERSION}`, version: CLIENT_VERSION };
+  assert.deepEqual(verifyReleaseTrigger(valid), { tag: `v${CLIENT_VERSION}`, version: CLIENT_VERSION });
   assert.throws(() => verifyReleaseTrigger({ ...valid, eventName: 'workflow_dispatch' }), /tag push event/);
   assert.throws(() => verifyReleaseTrigger({ ...valid, refType: 'branch' }), /tag ref/);
   assert.throws(() => verifyReleaseTrigger({ ...valid, refName: 'latest' }), /v<major>/);
-  assert.throws(() => verifyReleaseTrigger({ ...valid, refName: 'v2.0.1' }), /exactly match/);
+  assert.throws(() => verifyReleaseTrigger({ ...valid, refName: 'v2.0.0' }), /exactly match/);
 });
 
 test('release readiness accepts the extracted standalone client', async () => {
   const report = await verifyReleaseReadiness(root);
-  assert.deepEqual(report, { name: 'borgmcp', version: '2.0.0', shared: SHARED_VERSION });
+  assert.deepEqual(report, { name: 'borgmcp', version: CLIENT_VERSION, shared: SHARED_VERSION });
 });
 
 test('public-source scan ignores a linked-worktree .git file', async (t) => {
@@ -322,7 +334,7 @@ test('release readiness accepts one canonical registry-resolved shared dependenc
   t.after(() => rm(directory, { recursive: true, force: true }));
   await validPackage(directory);
   const report = await verifyReleaseReadiness(join(directory, 'package'));
-  assert.deepEqual(report, { name: 'borgmcp', version: '2.0.0', shared: SHARED_VERSION });
+  assert.deepEqual(report, { name: 'borgmcp', version: CLIENT_VERSION, shared: SHARED_VERSION });
 });
 
 test('repository npm config is rejected before any release bootstrap may run', async (t) => {
@@ -400,7 +412,7 @@ test('release readiness rejects prerelease versions before default latest public
   const directory = await mkdtemp(join(tmpdir(), 'borgmcp-client-readiness-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { packageRoot, manifest } = await validPackage(directory);
-  manifest.version = '2.0.0-beta.1';
+  manifest.version = `${CLIENT_VERSION}-beta.1`;
   await writeFile(join(packageRoot, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   await assert.rejects(() => verifyReleaseReadiness(packageRoot), /explicit semantic version/);
 });
@@ -606,7 +618,7 @@ test('packed artifact verifier accepts readable source and executable bins', asy
   t.after(() => rm(directory, { recursive: true, force: true }));
   const report = await verifyPackedArtifact(tarball, { repositoryRoot: directory });
   assert.equal(report.name, 'borgmcp');
-  assert.equal(report.version, '2.0.0');
+  assert.equal(report.version, CLIENT_VERSION);
   assert.equal(report.sourceMapCount, 2);
   assert.match(report.integrity, /^sha512-/);
 });
@@ -619,7 +631,7 @@ test('exact tarball installs cleanly and completes MCP initialize plus tool disc
   const { consumer, packageRoot, binPath } = await installFixtureConsumer(directory, tarball);
   execFileSync('npm', ['ls', '--global', '--prefix', consumer, '--omit=dev', '--all', '--package-lock=false'], { encoding: 'utf8' });
   const report = await smokePackedClient(packageRoot, { binPath });
-  assert.deepEqual(report, { name: 'borgmcp', version: '2.0.0', toolCount: 1 });
+  assert.deepEqual(report, { name: 'borgmcp', version: CLIENT_VERSION, toolCount: 1 });
 });
 
 test('exact tarball smoke rejects a missing packaged MCP entrypoint', async (t) => {
@@ -716,11 +728,11 @@ test('packed artifact verifier rejects indexed maps with absolute nested sources
 test('registry release helpers reject wrong package, version, owner, and existing versions', async () => {
   const report = {
     name: 'borgmcp',
-    version: '2.0.0',
+    version: CLIENT_VERSION,
     integrity: `sha512-${Buffer.from('a'.repeat(128), 'hex').toString('base64')}`,
   };
   assert.throws(() => verifyArtifactReport({ ...report, name: 'other' }, report.version), /must be borgmcp/);
-  assert.throws(() => verifyArtifactReport(report, '2.0.1'), /exactly 2\.0\.1/);
+  assert.throws(() => verifyArtifactReport(report, '2.0.0'), /exactly 2\.0\.0/);
 
   const existing = async () => new Response('{}', { status: 200 });
   await assert.rejects(
@@ -747,7 +759,7 @@ test('registry release helpers reject wrong package, version, owner, and existin
 test('postpublish helper bounds registry propagation and requires exact integrity', async () => {
   const report = {
     name: 'borgmcp',
-    version: '2.0.0',
+    version: CLIENT_VERSION,
     integrity: `sha512-${Buffer.from('a'.repeat(128), 'hex').toString('base64')}`,
   };
   let requests = 0;
