@@ -1,12 +1,10 @@
 /**
  * gh#899: role-scope the NATIVE MCP tool surface to cut the per-call tool tax
  * for simpler models. This is a token-surface UX / context optimization ONLY —
- * it carries ZERO authorization semantics. Server enforcement is USER/OWNER-
- * level (RLS + cube ownership), independent of which tool SCHEMAS are pre-loaded
- * at connect: a NON-OWNER is rejected regardless of role, and an OWNER's own
- * drone is NOT — so reaching a "management" tool via the dispatcher is correct
- * when the caller owns the cube, never a "worker is server-rejected" case. The
- * dispatcher bypasses NO server check that exists (identical CallTool path).
+ * it carries ZERO authorization semantics. Server enforcement uses the selected
+ * local client's live per-cube `read|write|manage` grant, independent of which
+ * tool schemas are pre-loaded. Reaching a management tool through the dispatcher
+ * bypasses no server check because it uses the identical CallTool path.
  * Never treat this filter as a security boundary.
  *
  * Deferred (filtered-out) tools are never lost — they remain reachable through
@@ -21,9 +19,9 @@ export declare const UNIVERSAL_TOOLS: readonly ["borg_regen", "borg_log", "borg_
 export declare const MANAGEMENT_TOOLS: readonly ["borg_create-cube", "borg_update-cube", "borg_delete-cube", "borg_create-role", "borg_update-role", "borg_delete-role", "borg_patch-role-section", "borg_patch-taxonomy-class", "borg_reassign-drone", "borg_evict-drone", "borg_sync-roles", "borg_apply-template", "borg_list-cubes", "borg_list-drones", "borg_list-roles", "borg_list-templates", "borg_remove-decision"];
 /**
  * Highest-stakes subset of the management set — filtered from a worker's native
- * surface for context economy only. NOT an auth list: server enforcement is
- * owner-level (RLS + cube ownership) and independent of this client-side filter
- * (a non-owner is rejected regardless of role; an owner's own drone is not).
+ * surface for context economy only. NOT an auth list: server access is enforced
+ * by live per-client cube grants (`read|write|manage`) and is independent
+ * of this client-side UX filter. Role labels never grant server permission.
  * Named here only to focus reviewer attention.
  */
 export declare const AUTH_SENSITIVE_TOOLS: readonly ["borg_evict-drone", "borg_delete-cube", "borg_delete-role", "borg_reassign-drone"];

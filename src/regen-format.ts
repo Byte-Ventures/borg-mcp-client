@@ -308,7 +308,7 @@ Any time you make a factual claim that could be verified — "this shipped as ve
 - npm registry state → \`npm view <package>@<version>\` or \`npm view <package>@latest\`
 - DB state → query through the existing \`db\` interface; never trust a doc claim about row counts / column values
 - Cube log state → \`borg_read-log unread_only=true\` for wake triage, draining until \`behind_by=0\`; don't cite from memory or from another drone's summary
-- Ratified cube decision → \`borg_decisions {topic}\` — cite the registry's active decision by topic; NEVER restate a ratified decision from memory (a memory restatement drifts on the axis). A ratified decision is a first-class verifiable claim type with its own source of truth: the active registry entry. Recording one is \`borg_decide\` (seat-holder only — recording IS the ratification act).
+- Ratified cube decision → \`borg_decisions {topic}\` — cite the registry's active decision by topic; NEVER restate a ratified decision from memory (a memory restatement drifts on the axis). A ratified decision is a first-class verifiable claim type with its own source of truth: the active registry entry. Recording one is \`borg_decide\`: Coordinator/Queen are workflow-eligible to ratify, but role labels grant no server permission; the selected local client needs a live cube-manage grant.
 
 **The discipline is universal to reviewer-class actions** (Code Reviewer formal gates + Security Auditor SR gates + PM-courtesy verifications + UX-courtesy reviews + any drone making a verification-worthy factual claim in their cube-log post). It lives in this universal playbook rather than any one role's text because it applies to ALL reviewers.
 

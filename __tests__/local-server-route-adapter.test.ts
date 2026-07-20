@@ -16,15 +16,11 @@ function envelope(payload: unknown, requestId = 'local-response-1') {
 
 describe('local server route adapter', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
-  const getIdToken = vi.fn(async () => 'cloud-token-must-not-be-read');
-  const getRefreshToken = vi.fn(async () => 'cloud-refresh-must-not-be-read');
   const getServerCredential = vi.fn(async () => 'parent-enrollment-token');
   const advanceCursor = vi.fn(async () => {});
 
   beforeEach(() => {
     vi.resetModules();
-    getIdToken.mockClear();
-    getRefreshToken.mockClear();
     getServerCredential.mockClear();
     advanceCursor.mockClear();
 
@@ -115,8 +111,6 @@ describe('local server route adapter', () => {
     });
 
     vi.doMock('../src/config.js', () => ({
-      getIdToken,
-      getRefreshToken,
       getServerCredential,
       clearTokens: vi.fn(async () => {}),
     }));
@@ -199,11 +193,8 @@ describe('local server route adapter', () => {
     }));
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.every(({ url }) => url.startsWith(`${ORIGIN}/api/cubes`))).toBe(true);
-    expect(calls.every(({ url }) => !url.includes('/api/drone/'))).toBe(true);
     expect(calls.every(({ headers }) => headers.get('Authorization') === `Bearer ${SESSION}`)).toBe(true);
     expect(calls.every(({ headers }) => !headers.has('X-Drone-Session'))).toBe(true);
-    expect(getIdToken).not.toHaveBeenCalled();
-    expect(getRefreshToken).not.toHaveBeenCalled();
   });
 
   it('uses the parent credential only for pre-attach cube selection', async () => {
@@ -257,8 +248,6 @@ describe('local server route adapter', () => {
       visibility: 'direct',
       recipientDroneIds: [COORDINATOR_DRONE_ID],
     });
-    expect(getIdToken).not.toHaveBeenCalled();
-    expect(getRefreshToken).not.toHaveBeenCalled();
   });
 
   it('rejects contradictory local to: plus broadcast before authority lookup or POST', async () => {
@@ -274,8 +263,6 @@ describe('local server route adapter', () => {
     );
 
     expect(fetchSpy.mock.calls).toHaveLength(before);
-    expect(getIdToken).not.toHaveBeenCalled();
-    expect(getRefreshToken).not.toHaveBeenCalled();
   });
 
   it('fails closed on an unknown local recipient before log mutation', async () => {

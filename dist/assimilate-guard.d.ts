@@ -2,7 +2,7 @@
  * gh#780 option (ii): in-session borg_assimilate is RE-ATTACH-ONLY
  * (Queen ruling 33a62d94).
  *
- * Root-cause context: the tool used to POST /api/assimilate, which ALWAYS
+ * Root-cause context: the retired attach path always
  * mints a new drone row — so agents
  * "recovering" from auth blips spawned orphan seats. The tool is now
  * structurally incapable of minting: it either re-attaches to the
@@ -21,7 +21,7 @@ export type AssimilateDecision = {
 };
 /**
  * Classify an in-session assimilate request against the worktree's saved
- * identity. Pure — the caller owns I/O and rendering.
+ * identity. Pure — I/O and rendering stay outside this helper.
  */
 export declare function classifyInSessionAssimilate(active: Pick<ActiveCube, 'name'> | null, requestedCubeName: string): AssimilateDecision;
 /**

@@ -27,9 +27,42 @@ export class BorgServerHttpError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly code?: ErrorCode,
   ) {
     super(message);
     this.name = 'BorgServerHttpError';
+  }
+}
+
+export class LocalManageRequiredError extends Error {
+  constructor(
+    public readonly operation: string,
+    public readonly cubeName: string,
+    public readonly noMutation: string,
+  ) {
+    super(
+      `[LOCAL-MANAGE-REQUIRED] This session cannot ${operation} because ` +
+      'the selected local client does not have cube management access.\n\n' +
+      'Coordinator and Queen are workflow roles; they do not grant server permissions. ' +
+      `${noMutation} Do not retry this request from this session.\n\n` +
+      'Use a session whose local client already has management access to this cube.',
+    );
+    this.name = 'LocalManageRequiredError';
+  }
+}
+
+export class LocalManageCredentialUnavailableError extends Error {
+  constructor(
+    public readonly operation: string,
+    public readonly cubeName: string,
+    public readonly noMutation: string,
+  ) {
+    super(
+      `The selected local client credential for cube "${cubeName}" is missing or unreadable. ` +
+      `This session cannot ${operation}. ${noMutation} Restore or re-enroll the selected local ` +
+      'client before retrying.',
+    );
+    this.name = 'LocalManageCredentialUnavailableError';
   }
 }
 
@@ -57,3 +90,4 @@ export class BorgServerUnreachableError extends Error {
     this.name = 'BorgServerUnreachableError';
   }
 }
+import type { ErrorCode } from 'borgmcp-shared/protocol';

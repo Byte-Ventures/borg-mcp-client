@@ -40,20 +40,14 @@ import {
 // (parse, dedup, hwm divergence, own-post filter, ack fan-out) is exercised
 // through this local path.
 const ACTIVE_CUBE = {
-  cubeId: 'cube-1',
-  droneId: 'drone-1',
-  sessionToken: 'token-1',
-  apiUrl: 'https://127.0.0.1:8443',
-  serverTrustIdentity: 'trust-1',
-};
-
-const UUID_ACTIVE_CUBE = {
   cubeId: '11111111-1111-4111-8111-111111111111',
   droneId: '22222222-2222-4222-8222-222222222222',
   sessionToken: 'token-1',
   apiUrl: 'https://127.0.0.1:8443',
   serverTrustIdentity: 'trust-1',
 };
+
+const UUID_ACTIVE_CUBE = ACTIVE_CUBE;
 
 // Local SSE cursor is disk-backed; stub it so the stream logic runs without
 // touching ~/.config and without a persisted cursor.
@@ -65,7 +59,7 @@ vi.mock('../src/local-server-cursor.js', () => ({
 
 /**
  * Build a Response whose body emits the given SSE event blocks then
- * closes — mimics the worker side of /api/drone/stream.
+ * closes — mimics the local server stream.
  */
 function makeSSEResponse(blocks: string[]): Response {
   const encoder = new TextEncoder();
@@ -303,6 +297,29 @@ describe('parseSSE', () => {
 // ---------------- streamOnce ----------------
 
 describe('streamOnce', () => {
+  it.each([
+    ['cube_id', { cubeId: '../protocol' }],
+    ['drone_id', { droneId: 'not-a-uuid' }],
+  ])('rejects a malformed persisted %s before trust, cursor, or network access', async (label, invalid) => {
+    const networkFetch = vi.fn();
+    const loadTrust = vi.fn(async () => ({
+      identity: UUID_ACTIVE_CUBE.serverTrustIdentity,
+      fetchImpl: networkFetch as typeof fetch,
+    }));
+    const getCursor = vi.fn();
+
+    await expect(streamOnce(
+      { ...UUID_ACTIVE_CUBE, ...invalid },
+      null,
+      vi.fn(),
+      { loadTrust, getCursor },
+    )).rejects.toThrow(new RegExp(`${label} .* not a UUID`));
+
+    expect(loadTrust).not.toHaveBeenCalled();
+    expect(getCursor).not.toHaveBeenCalled();
+    expect(networkFetch).not.toHaveBeenCalled();
+  });
+
   it('duplicate-process boundary: only stream owner fetches and appends', async () => {
     const locksDir = await mkdtemp(path.join(tmpdir(), 'borg-stream-owner-boundary-'));
     const appendLine = vi.fn().mockResolvedValue(undefined);
@@ -471,7 +488,7 @@ describe('streamOnce', () => {
       const blocks = [
         'event: bookmark\ndata: {"as_of":"2026-05-11T12:00:00Z"}\n\n',
         'event: heartbeat\ndata: {"ts":"2026-05-11T12:00:01Z","hwm":{"id":"e_broadcast","created_at":"2026-05-11T12:00:01Z"}}\n\n',
-        'event: log\nid: e_direct\ndata: {"id":"e_direct","visibility":"direct","recipient_drone_ids":["drone-1"],"drone_id":"drone-2","message":"secret","created_at":"2026-05-11T12:00:02Z"}\n\n',
+        `event: log\nid: e_direct\ndata: {"id":"e_direct","visibility":"direct","recipient_drone_ids":["${ACTIVE_CUBE.droneId}"],"drone_id":"drone-2","message":"secret","created_at":"2026-05-11T12:00:02Z"}\n\n`,
         'event: heartbeat\ndata: {"ts":"2026-05-11T12:00:03Z","hwm":{"id":"e_broadcast","created_at":"2026-05-11T12:00:01Z"}}\n\n',
       ];
       let requestSignal: AbortSignal | null = null;

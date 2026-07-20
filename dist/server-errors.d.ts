@@ -12,7 +12,20 @@ export declare class BorgServerError extends Error {
  */
 export declare class BorgServerHttpError extends Error {
     readonly status: number;
-    constructor(status: number, message: string);
+    readonly code?: ErrorCode | undefined;
+    constructor(status: number, message: string, code?: ErrorCode | undefined);
+}
+export declare class LocalManageRequiredError extends Error {
+    readonly operation: string;
+    readonly cubeName: string;
+    readonly noMutation: string;
+    constructor(operation: string, cubeName: string, noMutation: string);
+}
+export declare class LocalManageCredentialUnavailableError extends Error {
+    readonly operation: string;
+    readonly cubeName: string;
+    readonly noMutation: string;
+    constructor(operation: string, cubeName: string, noMutation: string);
 }
 /**
  * CR5: a STABLE TYPED terminal trust verdict — the pinned server identity no longer
@@ -33,4 +46,5 @@ export declare class BorgServerUnreachableError extends Error {
         cause?: unknown;
     });
 }
+import type { ErrorCode } from 'borgmcp-shared/protocol';
 //# sourceMappingURL=server-errors.d.ts.map

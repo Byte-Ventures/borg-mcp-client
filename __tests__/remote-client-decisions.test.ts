@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *    CLIENT-side — there is no ?topic= query param on the local wire.
  *  - removeDecision is not carried by the local server: it fails closed with
  *    a "does not support" error BEFORE any network call (egress-safe). The old
- *    cloud DELETE /api/drone/decisions route is dead code.
+ *    decision-removal route is not exposed by the local server.
  */
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
@@ -35,10 +35,14 @@ describe('decision registry request shapes (local path)', () => {
         fetchImpl: fetchSpy,
       })),
     }));
+    vi.doMock('../src/config.js', () => ({
+      getServerCredential: vi.fn(async () => 'p'.repeat(43)),
+    }));
     vi.doMock('../src/cubes.js', () => ({
       getActiveCube: vi.fn(async () => ({
         cubeId: CUBE_ID,
         droneId: DRONE_ID,
+        name: 'local-cube',
         sessionToken: SESSION,
         apiUrl: ORIGIN,
         serverTrustIdentity: TRUST_IDENTITY,

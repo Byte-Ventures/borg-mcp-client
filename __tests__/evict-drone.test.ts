@@ -1,11 +1,11 @@
 /**
  * Tests for the `borg_evict-drone` label→id resolver (gh#718).
  *
- * The eviction worker route (DELETE /api/drones/:id) and CubeStore.evictDrone
+ * The retired eviction route and persistence implementation
  * take a drone UUID, but Coordinators see drone LABELS everywhere (roster,
  * regen, cube log) and rarely the UUIDs. `resolveDroneIdByLabel` lets the tool
  * accept a label and resolve it to a drone id client-side against the
- * owner-scoped cube detail (getCube), mirroring how borg_list-drones surfaces
+ * cube-grant-scoped detail (getCube), mirroring how borg_list-drones surfaces
  * id+label pairs. Pure-function tests; no MCP server, no live worker.
  */
 

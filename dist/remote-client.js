@@ -12,20 +12,15 @@
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
 import { createProtocolEnvelope, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
-import { consolePrefix } from './console-prefix.js';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
-import { DroneEvictedError, DRONE_EVICTED_CODE, errorCodeFromBody, } from './drone-lifecycle.js';
-import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
+import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { loadBorgServerTrust } from './server-trust.js';
-import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, } from './server-errors.js';
+import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { resolveLocalLogRecipients } from './local-log-routing.js';
-// Compatibility validation for the deprecated request field. The CLI no longer
-// offers provider configuration, but older callers may still send this shape.
-const LEGACY_MODEL_DESCRIPTOR_REGEX = /^(claude|ollama):[A-Za-z0-9._:\/-]+$/;
 // gh#330: honor the server's Retry-After on 429 instead of failing the
 // (often required) coordination signal outright. Bounded so a CLI call
 // never blocks unboundedly; capped per attempt so a large window-reset
@@ -63,35 +58,6 @@ export function rateLimitWaitMs(retryAfterMs, attempt, capMs = RATE_LIMIT_MAX_WA
     const base = retryAfterMs != null ? retryAfterMs : 1000 * (attempt + 1);
     return Math.min(base, capMs) + jitter();
 }
-export function extractHttpErrorMessage(body) {
-    const joinMessageDetails = (message, details) => `${message}${/[.:!?]$/.test(message) ? '' : ':'} ${details}`;
-    try {
-        const parsed = JSON.parse(body);
-        if (typeof parsed?.error === 'string') {
-            return typeof parsed.details === 'string'
-                ? joinMessageDetails(parsed.error, parsed.details)
-                : parsed.error;
-        }
-        if (parsed?.error && typeof parsed.error === 'object') {
-            const message = parsed.error.message;
-            const details = parsed.error.details ?? parsed.details;
-            if (typeof message === 'string' && typeof details === 'string') {
-                return joinMessageDetails(message, details);
-            }
-            if (typeof message === 'string')
-                return message;
-        }
-        if (typeof parsed?.message === 'string' && typeof parsed?.details === 'string') {
-            return joinMessageDetails(parsed.message, parsed.details);
-        }
-        if (typeof parsed?.message === 'string')
-            return parsed.message;
-    }
-    catch {
-        // Not JSON — fall through to the raw body.
-    }
-    return body;
-}
 /**
  * Given an ALREADY-OBTAINED response, while it is a 429 and retries
  * remain, wait per `rateLimitWaitMs` (honoring the CURRENT response's
@@ -124,8 +90,13 @@ async function localAuthorityContext(sessionToken, apiUrl, expectedServerTrustId
         active.sessionToken === sessionToken
         ? active
         : null;
+    if (!matched) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
+    assertUuidShape(matched.cubeId, 'cube_id');
+    assertUuidShape(matched.droneId, 'drone_id');
     if (expectedServerTrustIdentity !== undefined) {
-        if (!matched || matched.serverTrustIdentity !== expectedServerTrustIdentity) {
+        if (matched.serverTrustIdentity !== expectedServerTrustIdentity) {
             throw new Error('Selected Borg server authority state is missing or unreadable');
         }
         return matched;
@@ -134,9 +105,6 @@ async function localAuthorityContext(sessionToken, apiUrl, expectedServerTrustId
     // authorizes the request. cubes.json is mutable local state and a
     // legacy-looking sessionToken proves nothing — fail closed before any
     // network use when no verified local authority is present.
-    if (!matched) {
-        throw new Error('Selected Borg server authority state is missing or unreadable');
-    }
     return matched;
 }
 function localUnsupported(capability) {
@@ -199,6 +167,46 @@ async function localServerRequest(active, path, method, payload) {
             }),
     }), true);
 }
+function manageCopyValue(value) {
+    return JSON.stringify(value);
+}
+async function localManageRequest(active, path, method, operation, payload) {
+    const trustIdentity = active.serverTrustIdentity;
+    let authToken;
+    try {
+        authToken = await getServerCredential(active.apiUrl, trustIdentity);
+    }
+    catch {
+        throw new LocalManageCredentialUnavailableError(operation.operation, operation.cubeName, operation.noMutation);
+    }
+    if (!authToken) {
+        throw new LocalManageCredentialUnavailableError(operation.operation, operation.cubeName, operation.noMutation);
+    }
+    try {
+        return await decodeLocalProtocolResponse((signal) => authedFetch(path, {
+            method,
+            signal,
+            apiUrl: active.apiUrl,
+            authToken,
+            serverTrustIdentity: trustIdentity,
+            redirect: 'error',
+            ...(payload === undefined
+                ? { headers: { Accept: 'application/json' } }
+                : {
+                    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                    body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
+                }),
+        }), true);
+    }
+    catch (error) {
+        if (error instanceof BorgServerHttpError &&
+            error.status === 403 &&
+            error.code === ErrorCode.ACCESS_DENIED) {
+            throw new LocalManageRequiredError(operation.operation, operation.cubeName, operation.noMutation);
+        }
+        throw error;
+    }
+}
 async function localConnectionRequest(connection, path) {
     return decodeLocalProtocolResponse((signal) => authedFetch(path, {
         method: 'GET',
@@ -209,6 +217,22 @@ async function localConnectionRequest(connection, path) {
         redirect: 'error',
         headers: { Accept: 'application/json' },
     }), false);
+}
+async function localOwnerConnection(connection) {
+    if (connection)
+        return connection;
+    const active = await getActiveCube();
+    if (!active?.serverTrustIdentity) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
+    const authToken = await getServerCredential(active.apiUrl, active.serverTrustIdentity);
+    if (!authToken)
+        throw new Error('No credential is stored for the selected Borg server identity');
+    return {
+        apiUrl: active.apiUrl,
+        authToken,
+        serverTrustIdentity: active.serverTrustIdentity,
+    };
 }
 async function localCubeComposition(active) {
     const base = `/api/cubes/${active.cubeId}`;
@@ -298,44 +322,18 @@ function sleep(ms) {
  */
 async function authedFetch(path, init = {}) {
     const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, headers, ...rest } = init;
-    const hasExplicitAuth = authToken !== undefined;
-    // No hosted default: a destination requires an explicit apiUrl. Fail closed
-    // before any network or credential use when none is given.
     if (apiUrl === undefined) {
-        // Preserve the "active cube is a local server that lacks this capability"
-        // diagnostic for callers that supply neither an endpoint nor credentials.
-        if (droneSession === undefined && authToken === undefined) {
-            const active = await getActiveCube();
-            if (active?.serverTrustIdentity !== undefined) {
-                localUnsupported(`the ${path} capability`);
-            }
-        }
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
     const baseUrl = apiUrl;
-    // A drone-session call must carry its verified trust identity explicitly; a
-    // missing one can no longer be excused by a hosted authority.
-    if (droneSession !== undefined && suppliedTrustIdentity === undefined) {
+    if (suppliedTrustIdentity === undefined) {
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
-    let serverTrustIdentity = suppliedTrustIdentity;
-    if (serverTrustIdentity === undefined) {
-        // Owner-scoped calls may recover the verified anchor from the active cube
-        // when it targets the same local endpoint.
-        const active = await getActiveCube();
-        if (active?.apiUrl === baseUrl)
-            serverTrustIdentity = active.serverTrustIdentity;
-    }
-    // Every destination must arrive through verified local-server trust. Without
-    // it there is no hosted fallback — fail closed.
-    if (serverTrustIdentity === undefined) {
-        throw new Error('Selected Borg server authority state is missing or unreadable');
-    }
-    const hasServerAuthority = true;
+    const serverTrustIdentity = suppliedTrustIdentity;
     if (!/^\/api\/cubes(?:\/|$)/.test(path)) {
         localUnsupported(`the ${path} capability`);
     }
-    let requestFetch = fetch;
+    let requestFetch;
     let token;
     {
         const trust = await loadBorgServerTrust(baseUrl);
@@ -376,7 +374,7 @@ async function authedFetch(path, init = {}) {
         debugLog(`← ${res.status} ${method} ${path}`);
         return res;
     };
-    let response = await buildRequest(token);
+    const response = await buildRequest(token);
     if (response.status === 401) {
         // Reached only after pinned-TLS trust is verified (localAuthorityContext
         // fails closed otherwise). The DESTRUCTIVE worktree-seat reset is permitted
@@ -400,146 +398,41 @@ async function authedFetch(path, init = {}) {
         }
         throw new BorgServerError('CREDENTIAL_REJECTED', 'the selected Borg server rejected the credential');
     }
-    // gh#330: honor the server's Retry-After on 429 instead of failing the
-    // (often required) coordination signal — borg_log / read-log / regen /
-    // roster / ack all route through here. Bounded + capped + jittered.
-    if (response.status === 429 && !hasServerAuthority) {
-        response = await retryOn429(response, () => buildRequest(token), {
-            sleep,
-            log: (msg) => console.error(`${consolePrefix()}${msg}`),
-        });
-    }
     if (!response.ok) {
-        // A selected self-hosted authority is not the trusted hosted Worker. Do
-        // not copy its response body into errors or debug output: a malicious or
+        // Do not copy a server response body into errors or debug output: a malicious or
         // misconfigured server could reflect bearer/invitation material or inject
-        // terminal controls. Status is sufficient for fail-closed recovery.
-        if (hasServerAuthority || hasExplicitAuth) {
-            await response.body?.cancel().catch(() => { });
-            debugLog(`✗ ${response.status} ${method} ${path}`);
-            // CR5: carry the raw status in a TYPED error so a probe distinguishes an
-            // endpoint/protocol-mismatch (404) from a server-failure (5xx) by code, not
-            // by matching mutable message text. Message kept identical for call-site parity.
-            throw new BorgServerHttpError(response.status, `Borg server request failed (HTTP ${response.status})`);
+        // terminal controls. Decode only the bounded protocol error code for typed
+        // branching; never surface the server-provided message or details.
+        let code;
+        try {
+            const body = await readBoundedResponseBody(response, AUTH_ERROR_ENVELOPE_LIMIT_BYTES, 'Local Borg server error response exceeded the response limit');
+            code = decodeProtocolErrorEnvelope(JSON.parse(body)).error.code;
         }
-        // Read the body ONCE (the stream can only be consumed once) and reuse
-        // it for both the debug trace and the thrown error. The server error
-        // body is token-free (it never echoes the Authorization header), so it
-        // is safe to surface under --debug.
-        const body = await response.text();
-        debugLog(`✗ ${response.status} ${method} ${path}: ${body}`);
-        // Enrich the 429 message with the server's retry guidance so a
-        // still-exhausted limit surfaces an actionable wait, not a bare code.
-        const message = extractHttpErrorMessage(body);
-        // gh#877 Path-B: the AUTHORITATIVE drone-lifecycle verdict. All drone-authed
-        // calls funnel through here, so this single detection point guarantees the
-        // eventual catch. Keyed on the STRUCTURED code, not the bare status (SEC
-        // R2/R4): 410+DRONE_EVICTED is TERMINAL → DroneEvictedError (the index tool
-        // funnel maps it to a recognizable EVICTED result so the agent shuts down).
-        const code = errorCodeFromBody(body);
-        if (response.status === 410 && code === DRONE_EVICTED_CODE) {
-            throw new DroneEvictedError(message);
+        catch {
+            code = undefined;
         }
-        if (response.status === 429) {
-            const retryAfter = response.headers.get('Retry-After');
-            const hint = retryAfter ? ` (retry after ${retryAfter}s)` : '';
-            throw new Error(`HTTP 429: rate limited${hint}: ${message}`);
+        debugLog(`✗ ${response.status} ${method} ${path}`);
+        if (droneSession !== undefined && response.status === 410 && code === DRONE_EVICTED_CODE) {
+            throw new DroneEvictedError();
         }
-        throw new Error(`HTTP ${response.status}: ${message}`);
+        throw new BorgServerHttpError(response.status, `Borg server request failed (HTTP ${response.status})`, code);
     }
     return response;
-}
-/**
- * Connect this client as a Drone to a Cube.
- *
- * Returns the cube definition, the drone's assigned role (with full
- * detailed_description), the drone record, and an opaque session token
- * the caller is expected to persist via cubes.ts.
- */
-export async function assimilate(
-// gh#780: prior_drone_id is the caller's saved seat id for this cube
-// (per-worktree cubes.json) — an UNTRUSTED hint the server's ownership
-// predicate validates; on a match the seat is re-attached (token
-// rotated) instead of minted. Pre-gh#780 workers ignore unknown body
-// fields only after PR-C's worker deploys — the CLI only sends it on
-// the --here same-cube recovery flow, which is publish-gated on that
-// deploy.
-cubeNameOrSelector, apiUrl, hostname, agentKind, authToken, serverTrustIdentity) {
-    // String first arg → legacy cube_name-only path (backwards compat).
-    // Object first arg → orchestrator path with optional cube_id /
-    // role_id / role_name; assimilate-cmd uses this shape.
-    const body = { hostname: hostname ?? null };
-    if (agentKind === 'claude' || agentKind === 'codex' || agentKind === 'opencode')
-        body.agent_kind = agentKind;
-    if (typeof cubeNameOrSelector === 'string') {
-        body.cube_name = cubeNameOrSelector;
-    }
-    else {
-        if (cubeNameOrSelector.cube_id)
-            body.cube_id = cubeNameOrSelector.cube_id;
-        if (cubeNameOrSelector.cube_name)
-            body.cube_name = cubeNameOrSelector.cube_name;
-        if (cubeNameOrSelector.role_id)
-            body.role_id = cubeNameOrSelector.role_id;
-        if (cubeNameOrSelector.role_name)
-            body.role_name = cubeNameOrSelector.role_name;
-        if (cubeNameOrSelector.prior_drone_id)
-            body.prior_drone_id = cubeNameOrSelector.prior_drone_id;
-        // gh#890: model was forwarded into the selector by assimilate-deps but
-        // never copied onto the wire here — the sole drop point that left
-        // drones.model NULL despite the server accepting + persisting it.
-        // gh#896: defense-in-depth — reject a malformed descriptor client-side with
-        // a clear error BEFORE the wire. Belt-and-suspenders: the descriptor is
-        // already flag-parse-validated upstream and server-gated by the same regex,
-        // so this only sharpens the failure (clear local error vs a 400 round-trip).
-        if (cubeNameOrSelector.model != null) {
-            if (!LEGACY_MODEL_DESCRIPTOR_REGEX.test(cubeNameOrSelector.model)) {
-                throw new Error(`Invalid model descriptor: "${cubeNameOrSelector.model}" (expected "<claude|ollama>:<model>").`);
-            }
-            body.model = cubeNameOrSelector.model;
-        }
-    }
-    const response = await authedFetch('/api/assimilate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        apiUrl,
-        authToken,
-        serverTrustIdentity,
-    });
-    return await response.json();
 }
 /**
  * Get the active cube's directive + role registry.
  */
 export async function getCubeInfo(sessionToken, apiUrl, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    if (local) {
-        const composed = await localCubeComposition(local);
-        return { cube: composed.cube, roles: composed.roles };
-    }
-    const response = await authedFetch('/api/drone/cube', {
-        method: 'GET',
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
-    return await response.json();
+    const composed = await localCubeComposition(local);
+    return { cube: composed.cube, roles: composed.roles };
 }
 /**
  * Get this drone's assigned role (with detailed_description).
  */
 export async function getRoleInfo(sessionToken, apiUrl, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    if (local)
-        return { role: (await localCubeComposition(local)).role };
-    const response = await authedFetch('/api/drone/role', {
-        method: 'GET',
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
-    return await response.json();
+    return { role: (await localCubeComposition(local)).role };
 }
 /**
  * Get a named role's full playbook (detailed_description). Any drone in
@@ -548,42 +441,23 @@ export async function getRoleInfo(sessionToken, apiUrl, serverTrustIdentity) {
  */
 export async function getRoleInfoByName(sessionToken, apiUrl, role, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    if (local) {
-        const roles = (await localCubeComposition(local)).roles;
-        const matched = roles.find((candidate) => candidate.id === role || candidate.name.toLowerCase() === role.toLowerCase());
-        if (!matched)
-            throw new Error(`Local Borg server has no role named ${JSON.stringify(role)}`);
-        return { role: matched };
-    }
-    const params = new URLSearchParams({ role });
-    const response = await authedFetch(`/api/drone/role?${params.toString()}`, {
-        method: 'GET',
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
-    return await response.json();
+    const roles = (await localCubeComposition(local)).roles;
+    const matched = roles.find((candidate) => candidate.id === role || candidate.name.toLowerCase() === role.toLowerCase());
+    if (!matched)
+        throw new Error(`Local Borg server has no role named ${JSON.stringify(role)}`);
+    return { role: matched };
 }
 export async function whoami(sessionToken, apiUrl, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    if (local) {
-        const composed = await localCubeComposition(local);
-        return {
-            cube_id: composed.cube.id,
-            cube_name: composed.cube.name,
-            drone_id: composed.drone.id,
-            drone_label: composed.drone.label,
-            role_id: composed.role.id,
-            role_name: composed.role.name,
-        };
-    }
-    const response = await authedFetch('/api/drone/whoami', {
-        method: 'GET',
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
-    return await response.json();
+    const composed = await localCubeComposition(local);
+    return {
+        cube_id: composed.cube.id,
+        cube_name: composed.cube.name,
+        drone_id: composed.drone.id,
+        drone_label: composed.drone.label,
+        role_id: composed.role.id,
+        role_name: composed.role.name,
+    };
 }
 /**
  * List all currently-connected drones in this cube.
@@ -599,61 +473,33 @@ export async function whoami(sessionToken, apiUrl, serverTrustIdentity) {
  */
 export async function getRoster(sessionToken, apiUrl, since, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    if (local) {
-        if (since !== undefined)
-            localUnsupported('roster liveness filtering');
-        const composed = await localCubeComposition(local);
-        return { drones: composed.drones, roles: composed.roles, message_taxonomy: null };
-    }
-    const qs = since ? `?since=${encodeURIComponent(since)}` : '';
-    const response = await authedFetch(`/api/drone/roster${qs}`, {
-        method: 'GET',
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
-    return await response.json();
+    if (since !== undefined)
+        localUnsupported('roster liveness filtering');
+    const composed = await localCubeComposition(local);
+    return { drones: composed.drones, roles: composed.roles, message_taxonomy: null };
 }
 /**
  * Read recent log entries for the cube.
  */
 export async function readLog(sessionToken, apiUrl, opts = {}) {
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
-    if (local) {
-        let cursor = null;
-        if (opts.unreadOnly)
-            cursor = await getLocalServerCursor(localCursorBinding(local));
-        if (opts.since !== undefined) {
-            cursor = await resolveLocalLogCursor(local, opts.since);
-        }
-        const page = await localReadLogPage(local, { cursor, limit: opts.limit });
-        if (opts.unreadOnly && page.cursor) {
-            await advanceLocalServerCursor(localCursorBinding(local), page.cursor);
-        }
-        const composed = await localCubeComposition(local);
-        return {
-            entries: page.entries,
-            drones: composed.drones,
-            roles: composed.roles,
-            behind_by: page.behind_by,
-            has_more: page.has_more,
-        };
-    }
-    const params = new URLSearchParams();
-    if (opts.since)
-        params.set('since', opts.since);
-    if (opts.limit !== undefined)
-        params.set('limit', String(opts.limit));
+    let cursor = null;
     if (opts.unreadOnly)
-        params.set('unread_only', 'true');
-    const qs = params.toString();
-    const response = await authedFetch(`/api/drone/log${qs ? `?${qs}` : ''}`, {
-        method: 'GET',
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity: opts.serverTrustIdentity,
-    });
-    return await response.json();
+        cursor = await getLocalServerCursor(localCursorBinding(local));
+    if (opts.since !== undefined)
+        cursor = await resolveLocalLogCursor(local, opts.since);
+    const page = await localReadLogPage(local, { cursor, limit: opts.limit });
+    if (opts.unreadOnly && page.cursor) {
+        await advanceLocalServerCursor(localCursorBinding(local), page.cursor);
+    }
+    const composed = await localCubeComposition(local);
+    return {
+        entries: page.entries,
+        drones: composed.drones,
+        roles: composed.roles,
+        behind_by: page.behind_by,
+        has_more: page.has_more,
+    };
 }
 /**
  * Sprint 25 log substrate refactor: explicit ack on a log entry.
@@ -665,38 +511,19 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
 // 'claim' is advisory review-gate ownership; 'ack' preserves the original wire default.
 export async function ackLogEntry(sessionToken, apiUrl, entryId, kind = 'ack', serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    if (local) {
-        await localServerRequest(local, `/api/cubes/${local.cubeId}/acks`, 'POST', { entry_id: entryId, kind });
-        return;
-    }
-    await authedFetch(`/api/drone/log/${entryId}/ack`, {
-        method: 'POST',
-        body: JSON.stringify({ kind }),
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
+    await localServerRequest(local, `/api/cubes/${local.cubeId}/acks`, 'POST', { entry_id: entryId, kind });
 }
-/**
- * gh#740: record a ratified cube decision (seat-holder only — the worker
- * enforces the seat gate). Supersedes the active decision on the same topic.
- */
+/** Record a ratified cube decision using the local client's cube-manage grant. */
 export async function recordDecision(sessionToken, apiUrl, input, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    if (local) {
-        const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'POST', input);
-        if (!payload)
-            throw new Error('Local Borg server returned an empty decision response');
-        return payload;
-    }
-    const response = await authedFetch('/api/drone/decide', {
-        method: 'POST',
-        body: JSON.stringify(input),
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
-    return (await response.json());
+    const payload = await localManageRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'POST', {
+        operation: `record a decision in cube ${manageCopyValue(local.name)}`,
+        cubeName: local.name,
+        noMutation: 'Nothing was recorded.',
+    }, input);
+    if (!payload)
+        throw new Error('Local Borg server returned an empty decision response');
+    return payload;
 }
 /**
  * gh#740: list active ratified decisions for the cube (any member). With
@@ -704,38 +531,22 @@ export async function recordDecision(sessionToken, apiUrl, input, serverTrustIde
  */
 export async function listDecisions(sessionToken, apiUrl, topic, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    if (local) {
-        const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'PUT', {});
-        if (!payload)
-            throw new Error('Local Borg server returned an empty decisions response');
-        return {
-            decisions: topic === undefined
-                ? payload.decisions
-                : payload.decisions.filter((decision) => decision.topic === topic),
-        };
-    }
-    const qs = topic ? `?topic=${encodeURIComponent(topic)}` : '';
-    const response = await authedFetch(`/api/drone/decisions${qs}`, {
-        method: 'GET',
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
-    return (await response.json());
+    const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'PUT', {});
+    if (!payload)
+        throw new Error('Local Borg server returned an empty decisions response');
+    return {
+        decisions: topic === undefined
+            ? payload.decisions
+            : payload.decisions.filter((decision) => decision.topic === topic),
+    };
 }
 /** Remove one active ratified decision. The worker enforces the seat gate. */
 export async function removeDecision(sessionToken, apiUrl, selector, serverTrustIdentity) {
-    if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
-        localUnsupported('decision removal');
-    }
-    const response = await authedFetch('/api/drone/decisions', {
-        method: 'DELETE',
-        body: JSON.stringify(selector),
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
-    return (await response.json());
+    void sessionToken;
+    void apiUrl;
+    void selector;
+    void serverTrustIdentity;
+    localUnsupported('decision removal');
 }
 /**
  * Regen: one-shot composite of everything a drone needs to be oriented.
@@ -755,67 +566,36 @@ export async function removeDecision(sessionToken, apiUrl, selector, serverTrust
  */
 export async function regen(sessionToken, apiUrl, opts = {}) {
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
-    if (local) {
-        const composed = await localCubeComposition(local);
-        const cursor = opts.since === undefined
-            ? await getLocalServerCursor(localCursorBinding(local))
-            : await resolveLocalLogCursor(local, opts.since);
-        const page = await localReadLogPage(local, { cursor, limit: 1 });
-        // gh#740: fetch the cube's active ratified decisions so local regen
-        // renders the decisions section, matching cloud regen. Resilient: a
-        // decisions-fetch failure must not break orientation (warn + continue).
-        let decisions = [];
-        try {
-            decisions = (await listDecisions(sessionToken, apiUrl, undefined, opts.serverTrustIdentity)).decisions;
-        }
-        catch (error) {
-            console.warn(`Local regen: failed to fetch ratified decisions (${error instanceof Error ? error.message : String(error)}); continuing without them.`);
-        }
-        return {
-            cube: composed.cube,
-            role: composed.role,
-            drone: composed.drone,
-            roles: composed.roles,
-            drones: composed.drones,
-            recentLog: [],
-            behind_by: page.entries.length + page.behind_by,
-            decisions,
-        };
+    const composed = await localCubeComposition(local);
+    const cursor = opts.since === undefined
+        ? await getLocalServerCursor(localCursorBinding(local))
+        : await resolveLocalLogCursor(local, opts.since);
+    const page = await localReadLogPage(local, { cursor, limit: 1 });
+    let decisions = [];
+    try {
+        decisions = (await listDecisions(sessionToken, apiUrl, undefined, opts.serverTrustIdentity)).decisions;
     }
-    const params = new URLSearchParams();
-    if (opts.since)
-        params.set('since', opts.since);
-    if (opts.reportedModel)
-        params.set('reported_model', opts.reportedModel);
-    if (opts.workingRepo) {
-        params.set('working_repo_reported', '1');
-        const origin = opts.workingRepo.origin
-            ? canonicalizeWorkingRepoIdentity(opts.workingRepo.origin)
-            : null;
-        if (origin)
-            params.set('working_repo_origin', origin);
+    catch (error) {
+        console.warn(`Local regen: failed to fetch ratified decisions (${error instanceof Error ? error.message : String(error)}); continuing without them.`);
     }
-    const qs = params.toString();
-    const response = await authedFetch(`/api/drone/regen${qs ? `?${qs}` : ''}`, {
-        method: 'GET',
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity: opts.serverTrustIdentity,
-    });
-    return await response.json();
+    return {
+        cube: composed.cube,
+        role: composed.role,
+        drone: composed.drone,
+        roles: composed.roles,
+        drones: composed.drones,
+        recentLog: [],
+        behind_by: page.entries.length + page.behind_by,
+        decisions,
+    };
 }
 export async function roleRationale(sessionToken, apiUrl, role, section, serverTrustIdentity) {
-    if (await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity)) {
-        localUnsupported('role rationale sections');
-    }
-    const params = new URLSearchParams({ role, section });
-    const response = await authedFetch(`/api/drone/role-rationale?${params.toString()}`, {
-        method: 'GET',
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity,
-    });
-    return await response.json();
+    void sessionToken;
+    void apiUrl;
+    void role;
+    void section;
+    void serverTrustIdentity;
+    localUnsupported('role rationale sections');
 }
 /**
  * Append a message to the cube's shared activity log.
@@ -826,90 +606,50 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
             'Remove visibility to direct to recipients, or remove to: to broadcast.');
     }
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
-    if (local) {
-        let visibility = opts.visibility;
-        let recipientDroneIds = opts.recipientDroneIds;
-        if (visibility !== 'broadcast' &&
-            (!recipientDroneIds || recipientDroneIds.length === 0) &&
-            opts.to !== undefined) {
-            const base = `/api/cubes/${local.cubeId}`;
-            const [rolePayload, dronePayload] = await Promise.all([
-                localServerRequest(local, `${base}/roles`, 'GET'),
-                localServerRequest(local, `${base}/drones`, 'GET'),
-            ]);
-            if (!rolePayload || !dronePayload) {
-                throw new Error('Local Borg server returned an incomplete cube roster');
-            }
-            recipientDroneIds = resolveLocalLogRecipients(opts.to, dronePayload.drones, rolePayload.roles);
-            visibility = 'direct';
+    let visibility = opts.visibility;
+    let recipientDroneIds = opts.recipientDroneIds;
+    if (visibility !== 'broadcast' &&
+        (!recipientDroneIds || recipientDroneIds.length === 0) &&
+        opts.to !== undefined) {
+        const base = `/api/cubes/${local.cubeId}`;
+        const [rolePayload, dronePayload] = await Promise.all([
+            localServerRequest(local, `${base}/roles`, 'GET'),
+            localServerRequest(local, `${base}/drones`, 'GET'),
+        ]);
+        if (!rolePayload || !dronePayload) {
+            throw new Error('Local Borg server returned an incomplete cube roster');
         }
-        else if (visibility === undefined && recipientDroneIds !== undefined) {
-            visibility = 'direct';
-        }
-        const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs`, 'POST', {
-            message,
-            ...(visibility ? { visibility } : {}),
-            ...(visibility === 'direct' && recipientDroneIds
-                ? { recipientDroneIds }
-                : {}),
-            // server#48 append-time taxonomy routing: forward the requested class
-            // so the server can classify/route. It is honored only when no explicit
-            // visibility/recipients override it (server resolveMessageRouting).
-            ...(opts.class ? { class: opts.class } : {}),
-        });
-        if (!payload)
-            throw new Error('Local Borg server returned an empty log response');
-        return { entry: payload.entry };
+        recipientDroneIds = resolveLocalLogRecipients(opts.to, dronePayload.drones, rolePayload.roles);
+        visibility = 'direct';
     }
-    const body = {
+    else if (visibility === undefined && recipientDroneIds !== undefined) {
+        visibility = 'direct';
+    }
+    const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs`, 'POST', {
         message,
-        ...(opts.visibility ? { visibility: opts.visibility } : {}),
-        ...(opts.recipientDroneIds ? { recipientDroneIds: opts.recipientDroneIds } : {}),
+        ...(visibility ? { visibility } : {}),
+        ...(visibility === 'direct' && recipientDroneIds
+            ? { recipientDroneIds }
+            : {}),
+        // server#48 append-time taxonomy routing: forward the requested class
+        // so the server can classify/route. It is honored only when no explicit
+        // visibility/recipients override it (server resolveMessageRouting).
         ...(opts.class ? { class: opts.class } : {}),
-        ...(opts.to ? { to: opts.to } : {}),
-    };
-    const response = await authedFetch('/api/drone/log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        droneSession: sessionToken,
-        apiUrl,
-        serverTrustIdentity: opts.serverTrustIdentity,
-        body: JSON.stringify(body),
     });
-    return await response.json();
+    if (!payload)
+        throw new Error('Local Borg server returned an empty log response');
+    return { entry: payload.entry };
 }
 /**
- * List all cubes owned by the authenticated user. Owner-scoped via the
- * Bearer token alone; no drone session needed.
+ * List cubes readable by the local client's live grants.
  */
 export async function listCubes(connection) {
-    if (connection?.serverTrustIdentity !== undefined) {
-        return localConnectionRequest(connection, '/api/cubes');
-    }
-    const response = await authedFetch('/api/cubes', {
-        method: 'GET',
-        apiUrl: connection?.apiUrl,
-        authToken: connection?.authToken,
-        serverTrustIdentity: connection?.serverTrustIdentity,
-    });
-    return await response.json();
+    return localConnectionRequest(await localOwnerConnection(connection), '/api/cubes');
 }
 /**
  * List bundled cube templates. Used by the `borg assimilate` orchestrator
  * to surface the interactive template prompt on first-drone bootstrap.
  */
-export async function listTemplates(connection) {
-    if (connection?.serverTrustIdentity !== undefined) {
-        localUnsupported('cube templates');
-    }
-    const response = await authedFetch('/api/templates', {
-        method: 'GET',
-        apiUrl: connection?.apiUrl,
-        authToken: connection?.authToken,
-        serverTrustIdentity: connection?.serverTrustIdentity,
-    });
-    return await response.json();
-}
 /**
  * Create a new cube. Server-side seeds a default "Drone" role atomically
  * so the cube is assimilatable immediately, OR applies the named template
@@ -921,137 +661,114 @@ export async function listTemplates(connection) {
  * Existing callers that read `body.cube` keep working (forward-compat).
  */
 export async function createCube(name, cubeDirective, opts, connection) {
-    if (connection?.serverTrustIdentity !== undefined) {
-        localUnsupported('cube creation');
-    }
-    const body = { cube_directive: cubeDirective };
-    if (name)
-        body.name = name;
-    if (opts?.template)
-        body.template = opts.template;
-    if (opts && Object.prototype.hasOwnProperty.call(opts, 'message_taxonomy')) {
-        body.message_taxonomy = opts.message_taxonomy ?? null;
-    }
-    const response = await authedFetch('/api/cubes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        apiUrl: connection?.apiUrl,
-        authToken: connection?.authToken,
-        serverTrustIdentity: connection?.serverTrustIdentity,
-    });
-    // BUG-2 fix (v0.9.2, drone-1 dispatch 2026-05-18T10:48Z): server
-    // returns `{ cube, roles }` (Phase B wire shape). Unwrap at this
-    // boundary so callers receive a flat shape `{ id, name, ...cube,
-    // roles, drones }` consistent with the orchestrator's CubeDetail
-    // expectation. The `body.cube ?` ternary preserves backwards-compat
-    // for any future endpoint that might return a non-wrapped shape.
-    const responseBody = await response.json();
-    return responseBody.cube
-        ? { ...responseBody.cube, roles: responseBody.roles ?? [], drones: responseBody.drones ?? [] }
-        : responseBody;
+    void name;
+    void cubeDirective;
+    void opts;
+    void connection;
+    localUnsupported('cube creation');
 }
 /**
  * Update a cube's name and/or cube_directive. Both fields are optional;
  * pass only what changes.
  */
 export async function updateCube(cubeId, updates) {
+    assertUuidShape(cubeId, 'cube_id');
     const active = await getActiveCube();
-    if (active?.serverTrustIdentity !== undefined) {
-        // Local (self-hosted) authority: the manage-scoped cube PATCH accepts
-        // only cube_directive and message_taxonomy — the local server carries no
-        // cube-rename route, so a name change fails closed cause-accurately.
-        if (updates.name !== undefined)
-            localUnsupported('cube rename');
-        const payload = {};
-        if (updates.cube_directive !== undefined)
-            payload.cube_directive = updates.cube_directive;
-        if (Object.prototype.hasOwnProperty.call(updates, 'message_taxonomy')) {
-            payload.message_taxonomy = updates.message_taxonomy ?? null;
-        }
-        const result = await localServerRequest(active, `/api/cubes/${cubeId}`, 'PATCH', payload);
-        if (!result)
-            throw new Error('Local Borg server returned an empty cube response');
-        return result;
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    if (updates.name !== undefined)
+        localUnsupported('cube rename');
+    const payload = {};
+    if (updates.cube_directive !== undefined)
+        payload.cube_directive = updates.cube_directive;
+    if (Object.prototype.hasOwnProperty.call(updates, 'message_taxonomy')) {
+        payload.message_taxonomy = updates.message_taxonomy ?? null;
     }
-    const response = await authedFetch(`/api/cubes/${cubeId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-    });
-    return await response.json();
+    const result = await localManageRequest(active, `/api/cubes/${cubeId}`, 'PATCH', {
+        operation: `update cube settings in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
+        cubeName: cubeId === active.cubeId ? active.name : cubeId,
+        noMutation: 'No cube settings were changed.',
+    }, payload);
+    if (!result)
+        throw new Error('Local Borg server returned an empty cube response');
+    return result;
 }
 /**
  * gh#473 PR1 — granular per-class taxonomy patch. Add / replace-by-name
  * / remove a single class within the cube's message_taxonomy, leaving
- * other classes unchanged. The worker re-validates the FULL resulting
- * array (cross-class invariants) before persist. Owner-scoped via the
- * Bearer token.
+ * other classes unchanged. The server re-validates the full resulting
+ * array and requires the selected local client's live cube-manage grant.
  */
 export async function patchTaxonomyClass(cubeId, op) {
-    const response = await authedFetch(`/api/cubes/${cubeId}/taxonomy-patch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(op),
-    });
-    return await response.json();
+    assertUuidShape(cubeId, 'cube_id');
+    const active = await getActiveCube();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    const className = op.action === 'remove' ? op.class : op.class_def.class;
+    const preposition = op.action === 'add' ? 'to' : op.action === 'replace' ? 'in' : 'from';
+    const pastTense = op.action === 'add' ? 'added' : op.action === 'replace' ? 'replaced' : 'removed';
+    const cubeName = cubeId === active.cubeId ? active.name : cubeId;
+    const result = await localManageRequest(active, `/api/cubes/${cubeId}/taxonomy-patch`, 'POST', {
+        operation: `${op.action} message class ${manageCopyValue(className)} ${preposition} cube ${manageCopyValue(cubeName)}`,
+        cubeName,
+        noMutation: `No message class was ${pastTense}.`,
+    }, op);
+    if (!result)
+        throw new Error('Local Borg server returned an empty taxonomy response');
+    return result;
 }
 /**
  * Delete a cube. Cascade-deletes all roles, drones, and log entries.
- * Owner-scoped via the Bearer token; the worker enforces ownership.
+ * Requires a live cube-manage grant on the selected local client.
  */
 export async function deleteCube(cubeId) {
-    await authedFetch(`/api/cubes/${cubeId}`, { method: 'DELETE' });
+    void cubeId;
+    localUnsupported('cube deletion');
 }
 /**
  * Create a role inside a cube. is_default=true demotes the previous
  * default role; the cube always has exactly one default.
  */
 export async function createRole(cubeId, data) {
+    assertUuidShape(cubeId, 'cube_id');
     const active = await getActiveCube();
-    if (active?.serverTrustIdentity !== undefined) {
-        // Local (self-hosted) authority: the cube-scoped role-create route accepts
-        // only the server-known fields. default_model has no local server route.
-        if (data.default_model !== undefined)
-            localUnsupported('per-role default model');
-        const result = await localServerRequest(active, `/api/cubes/${cubeId}/roles`, 'POST', buildLocalRoleFields(data));
-        if (!result)
-            throw new Error('Local Borg server returned an empty role response');
-        return result;
-    }
-    const response = await authedFetch(`/api/cubes/${cubeId}/roles`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    });
-    return await response.json();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    if (data.default_model !== undefined)
+        localUnsupported('per-role default model');
+    const result = await localManageRequest(active, `/api/cubes/${cubeId}/roles`, 'POST', {
+        operation: `create role ${manageCopyValue(data.name)} in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
+        cubeName: cubeId === active.cubeId ? active.name : cubeId,
+        noMutation: 'No role was created.',
+    }, buildLocalRoleFields(data));
+    if (!result)
+        throw new Error('Local Borg server returned an empty role response');
+    return result;
 }
 /**
  * Update a role. All fields optional; pass only what changes.
  */
 export async function updateRole(roleId, updates) {
+    assertUuidShape(roleId, 'role_id');
     const active = await getActiveCube();
-    if (active?.serverTrustIdentity !== undefined) {
-        // Local (self-hosted) authority: role update rides the cube-scoped route
-        // (/api/cubes/:cubeId/roles/:roleId), NOT the cube-unscoped cloud path.
-        if (updates.default_model !== undefined)
-            localUnsupported('per-role default model');
-        const result = await localServerRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}`, 'PATCH', buildLocalRoleFields(updates));
-        if (!result)
-            throw new Error('Local Borg server returned an empty role response');
-        return result;
-    }
-    const response = await authedFetch(`/api/roles/${roleId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-    });
-    return await response.json();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    assertUuidShape(active.cubeId, 'cube_id');
+    if (updates.default_model !== undefined)
+        localUnsupported('per-role default model');
+    const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}`, 'PATCH', {
+        operation: `update role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
+        cubeName: active.name,
+        noMutation: 'No role was updated.',
+    }, buildLocalRoleFields(updates));
+    if (!result)
+        throw new Error('Local Borg server returned an empty role response');
+    return result;
 }
 /**
  * Project a create/update-role field bag onto the exact snake_case keys the
  * self-hosted coordination API accepts, dropping undefined entries and the
- * cloud-only default_model (rejected before this call). name is included only
+ * unsupported default_model (rejected before this call). name is included only
  * when present so a partial update PATCHes just the supplied fields.
  */
 function buildLocalRoleFields(fields) {
@@ -1075,33 +792,32 @@ function buildLocalRoleFields(fields) {
 /**
  * gh#473 PR1 — granular role-text section patch. Replace / insert /
  * delete a single named section of a role's detailed_description,
- * leaving the rest of the field byte-identical. Owner-scoped via the
- * Bearer token. Sections are delimited by plain-label lines (e.g.
+ * leaving the rest of the field byte-identical. Requires the selected local
+ * client's live cube-manage grant. Sections are delimited by plain-label lines (e.g.
  * `Workflow:`), NOT markdown headings.
  */
 export async function patchRoleSection(roleId, op) {
+    assertUuidShape(roleId, 'role_id');
     const active = await getActiveCube();
-    if (active?.serverTrustIdentity !== undefined) {
-        // Local (self-hosted) authority: section-patch rides the cube-scoped route
-        // (/api/cubes/:cubeId/roles/:roleId/section-patch), NOT the cloud path.
-        const result = await localServerRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}/section-patch`, 'POST', { ...op });
-        if (!result)
-            throw new Error('Local Borg server returned an empty role response');
-        return result;
-    }
-    const response = await authedFetch(`/api/roles/${roleId}/section-patch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(op),
-    });
-    return await response.json();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    assertUuidShape(active.cubeId, 'cube_id');
+    const result = await localManageRequest(active, `/api/cubes/${active.cubeId}/roles/${roleId}/section-patch`, 'POST', {
+        operation: `${op.action} section ${manageCopyValue(op.heading)} ${op.action === 'delete' ? 'from' : 'in'} role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
+        cubeName: active.name,
+        noMutation: `No role section was ${op.action === 'insert' ? 'inserted' : op.action === 'replace' ? 'replaced' : 'deleted'}.`,
+    }, { ...op });
+    if (!result)
+        throw new Error('Local Borg server returned an empty role response');
+    return result;
 }
 /**
  * Delete a role. Worker refuses if any drone is still assigned to it
  * (reassign or evict those drones first).
  */
 export async function deleteRole(roleId) {
-    await authedFetch(`/api/roles/${roleId}`, { method: 'DELETE' });
+    void roleId;
+    localUnsupported('role deletion');
 }
 /**
  * Reassign a drone to a different role within the same cube.
@@ -1115,71 +831,49 @@ export async function reassignDrone(droneId, roleId) {
     // ("../cubes/<uuid>") must never reach URL construction. role_id rides
     // in the JSON body, not the path, so it is not interpolation-exposed.
     assertUuidShape(droneId, 'drone_id');
-    const response = await authedFetch(`/api/drones/${droneId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role_id: roleId }),
-    });
-    return await response.json();
+    void roleId;
+    localUnsupported('drone reassignment');
 }
 /**
- * Evict (soft-delete) a drone from its cube (gh#718). Owner-authed via the
- * Bearer token, exactly like reassignDrone — the worker's `DELETE
- * /api/drones/:id` route scopes the delete to cubes the caller owns
- * (CubeStore.evictDrone RLS owner-scope), so a non-owner can never evict
- * another account's drone. The drone row is preserved with `evicted_at` set
- * and its activity-log attribution anonymized; the route returns 204 No
- * Content (no body).
+ * Drone eviction is not exposed by the local server yet.
  */
 export async function evictDrone(droneId) {
     // gh#782: same pre-network gate as reassignDrone — defense-in-depth at
     // the layer that interpolates the path (the borg_evict-drone tool layer
     // keeps its friendlier label-hint validation above this).
     assertUuidShape(droneId, 'drone_id');
-    await authedFetch(`/api/drones/${droneId}`, { method: 'DELETE' });
+    localUnsupported('drone eviction');
 }
 export async function listRoles(cubeId) {
+    assertUuidShape(cubeId, 'cube_id');
     const active = await getActiveCube();
-    if (active?.serverTrustIdentity !== undefined) {
-        const result = await localServerRequest(active, `/api/cubes/${cubeId}/roles`, 'GET');
-        if (!result || !Array.isArray(result.roles)) {
-            throw new Error('Local Borg server returned an invalid roles response');
-        }
-        return result.roles;
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    const result = await localServerRequest(active, `/api/cubes/${cubeId}/roles`, 'GET');
+    if (!result || !Array.isArray(result.roles)) {
+        throw new Error('Local Borg server returned an invalid roles response');
     }
-    return (await getCube(cubeId)).roles;
+    return result.roles;
 }
 /**
  * Fetch a cube's full detail: directive, roles (with detailed
- * descriptions), and drones. Accessible to owners and active members via
- * the Bearer token; no drone session needed.
+ * descriptions), and drones. Access is enforced by the local client's live
+ * per-cube grant.
  */
 export async function getCube(cubeId, connection) {
-    if (connection?.serverTrustIdentity !== undefined) {
-        const base = `/api/cubes/${cubeId}`;
-        const [cubePayload, rolePayload, dronePayload] = await Promise.all([
-            localConnectionRequest(connection, base),
-            localConnectionRequest(connection, `${base}/roles`),
-            localConnectionRequest(connection, `${base}/drones`),
-        ]);
-        return {
-            ...cubePayload.cube,
-            roles: rolePayload.roles,
-            drones: dronePayload.drones,
-        };
-    }
-    const response = await authedFetch(`/api/cubes/${cubeId}`, {
-        method: 'GET',
-        apiUrl: connection?.apiUrl,
-        authToken: connection?.authToken,
-        serverTrustIdentity: connection?.serverTrustIdentity,
-    });
-    // BUG-2 fix (v0.9.2): same unwrap pattern as createCube — server
-    // returns `{ cube, roles, drones }`; callers get flat shape.
-    const responseBody = await response.json();
-    return responseBody.cube
-        ? { ...responseBody.cube, roles: responseBody.roles ?? [], drones: responseBody.drones ?? [] }
-        : responseBody;
+    assertUuidShape(cubeId, 'cube_id');
+    const resolved = await localOwnerConnection(connection);
+    const base = `/api/cubes/${cubeId}`;
+    const [cubePayload, rolePayload, dronePayload] = await Promise.all([
+        localConnectionRequest(resolved, base),
+        localConnectionRequest(resolved, `${base}/roles`),
+        localConnectionRequest(resolved, `${base}/drones`),
+    ]);
+    return {
+        ...cubePayload.cube,
+        roles: rolePayload.roles,
+        drones: dronePayload.drones,
+    };
 }
 /**
  * gh#473 PR2 — apply a named template to an existing cube via the
@@ -1191,12 +885,9 @@ export async function getCube(cubeId, connection) {
  * conflicting fragments, use `syncRoles` with a `decisions` map instead.
  */
 export async function applyTemplate(cubeId, templateName) {
-    const response = await authedFetch(`/api/cubes/${cubeId}/apply-template`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template_name: templateName }),
-    });
-    return await response.json();
+    void cubeId;
+    void templateName;
+    localUnsupported('template application');
 }
 /**
  * gh#473 PR2 — NON-CLOBBERING sync of a cube's roles + message_taxonomy
@@ -1210,11 +901,10 @@ export async function applyTemplate(cubeId, templateName) {
  * never touched. Returns a NonClobberSyncResult.
  */
 export async function syncRoles(cubeId, templateName = 'software-dev', apply = false, decisions) {
-    const response = await authedFetch(`/api/cubes/${cubeId}/sync-roles`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template_name: templateName, apply, ...(decisions ? { decisions } : {}) }),
-    });
-    return await response.json();
+    void cubeId;
+    void templateName;
+    void apply;
+    void decisions;
+    localUnsupported('role synchronization');
 }
 //# sourceMappingURL=remote-client.js.map

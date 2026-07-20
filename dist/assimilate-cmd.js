@@ -105,7 +105,7 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
     // Distinct from a protocol/version mismatch and from a rejected enrollment:
     // only this worktree's saved local seat is affected, and recovery is scoped to
     // this worktree — no server/trust-anchor/cube/other-worktree reset, no restart
-    // or version-alignment advice, and never a Cloud fallback (#1082).
+    // or version-alignment advice (#1082).
     if (error instanceof BorgServerError && error.code === 'SESSION_REJECTED') {
         // Attach is PURE DIAGNOSIS on a rejection — it mutates nothing. This copy
         // claims NO mutation of its own; it points at the dedicated OFFLINE
@@ -183,7 +183,7 @@ function resetLocalSeatCommand(apiUrl) {
  * bearer (revoked, or taken over by another session). We stop and recommend the
  * dedicated OFFLINE `borg reset-local-seat` command, which is the ONLY writer
  * that clears a worktree's saved seat. Nothing here contacts the server further,
- * emits unselected/cloud egress, or touches local state. The recovery is
+ * emits unselected egress, or touches local state. The recovery is
  * live-safe: the operator is never told to stop/restart the server.
  */
 function diagnoseSessionRejected(deps, apiUrl) {
@@ -214,9 +214,7 @@ export async function runAssimilate(args, deps) {
             return 1;
         }
     }
-    // ----- Step 1: Authority selection, then authority-specific auth -----
-    // This MUST precede cloud token lookup/setup. A selected local server never
-    // receives Google credentials and never falls back to Cloud.
+    // ----- Step 1: Select and authenticate the local server -----
     const authority = await selectAssimilationAuthority(args.flags, deps);
     if (!authority)
         return 1;
@@ -356,9 +354,7 @@ export async function runAssimilate(args, deps) {
     deps.stderr('Checking your cubes…\n');
     let allCubes;
     try {
-        allCubes = auth.serverTrustIdentity === undefined
-            ? await deps.listCubes(auth.apiUrl, auth.token)
-            : await deps.listCubes(auth.apiUrl, auth.token, auth.serverTrustIdentity);
+        allCubes = await deps.listCubes(auth.apiUrl, auth.token, auth.serverTrustIdentity);
     }
     catch (err) {
         return reportServerFailure(deps, authority.apiUrl, err);
@@ -369,70 +365,23 @@ export async function runAssimilate(args, deps) {
     let isFirstDrone;
     if (existingCube) {
         try {
-            cubeDetail = auth.serverTrustIdentity === undefined
-                ? await deps.getCube(auth.apiUrl, auth.token, existingCube.id)
-                : await deps.getCube(auth.apiUrl, auth.token, existingCube.id, auth.serverTrustIdentity);
+            cubeDetail = await deps.getCube(auth.apiUrl, auth.token, existingCube.id, auth.serverTrustIdentity);
         }
         catch (error) {
-            if (authority.kind === 'server')
-                return reportServerFailure(deps, authority.apiUrl, error);
-            throw error;
+            return reportServerFailure(deps, authority.apiUrl, error);
         }
         isFirstDrone = false;
     }
     else {
         // ----- Step 4a: First-drone bootstrap (template selection) -----
         let chosenTemplate;
-        if (authority.kind === 'server') {
-            if (args.flags.noTemplate ||
-                (args.flags.template !== undefined && args.flags.template !== 'default')) {
-                deps.stderr(`Borg server ${authority.apiUrl} supports its default cube template only. ` +
-                    `Rerun ${localAssimilateCommand(authority.apiUrl)} without \`--template\` or \`--no-template\`.\n`);
-                return 1;
-            }
-            chosenTemplate = 'default';
+        if (args.flags.noTemplate ||
+            (args.flags.template !== undefined && args.flags.template !== 'default')) {
+            deps.stderr(`Borg server ${authority.apiUrl} supports its default cube template only. ` +
+                `Rerun ${localAssimilateCommand(authority.apiUrl)} without \`--template\` or \`--no-template\`.\n`);
+            return 1;
         }
-        else if (args.flags.template) {
-            chosenTemplate = args.flags.template;
-        }
-        else if (args.flags.noTemplate) {
-            chosenTemplate = undefined;
-        }
-        else if (!deps.isTTY()) {
-            if (!args.flags.yes) {
-                deps.stderr('cube creation needs a template choice but stdin is non-interactive.\n' +
-                    'Pass --template <name>, --no-template, or --yes (defaults to starter).\n');
-                return 1;
-            }
-            chosenTemplate = 'starter';
-        }
-        else if (args.flags.yes) {
-            chosenTemplate = 'starter';
-        }
-        else {
-            let templates;
-            try {
-                templates = auth.serverTrustIdentity === undefined
-                    ? await deps.listTemplates(auth.apiUrl, auth.token)
-                    : await deps.listTemplates(auth.apiUrl, auth.token, auth.serverTrustIdentity);
-            }
-            catch (error) {
-                throw error;
-            }
-            const lines = ['First drone joining a new cube. Apply a template?'];
-            templates.forEach((t, i) => {
-                const tag = i === 0 ? ' (default)' : '';
-                lines.push(`  ${i + 1}) ${t.name}${tag} — ${t.description}`);
-            });
-            lines.push(`  ${templates.length + 1}) skip — no template`);
-            const answer = (await deps.prompt(lines.join('\n') + '\n[1]: ')).trim();
-            const choice = answer === '' ? 1 : parseInt(answer, 10);
-            if (Number.isNaN(choice) || choice < 1 || choice > templates.length + 1) {
-                deps.stderr(`invalid choice "${answer}"\n`);
-                return 1;
-            }
-            chosenTemplate = choice <= templates.length ? templates[choice - 1].name : undefined;
-        }
+        chosenTemplate = 'default';
         // gh#653 B4: progress for the create round-trip (silent-window stall).
         deps.stderr(cubeName ? `Creating cube '${cubeName}'…\n` : 'Creating your cube…\n');
         try {
@@ -440,17 +389,13 @@ export async function runAssimilate(args, deps) {
                 ? {
                     name: cubeName ?? undefined,
                     template: chosenTemplate,
-                    ...(authority.kind === 'server' ? { projectRoot } : {}),
+                    projectRoot,
                 }
                 : { name: cubeName ?? undefined };
-            cubeDetail = auth.serverTrustIdentity === undefined
-                ? await deps.createCube(auth.apiUrl, auth.token, createParams)
-                : await deps.createCube(auth.apiUrl, auth.token, createParams, auth.serverTrustIdentity);
+            cubeDetail = await deps.createCube(auth.apiUrl, auth.token, createParams, auth.serverTrustIdentity);
         }
         catch (error) {
-            if (authority.kind === 'server')
-                return reportServerFailure(deps, authority.apiUrl, error);
-            throw error;
+            return reportServerFailure(deps, authority.apiUrl, error);
         }
         isFirstDrone = true;
     }
@@ -496,10 +441,8 @@ export async function runAssimilate(args, deps) {
     // expectation; 'active' when resuming a live in-place seat (EXACT expectation).
     let resumeState;
     if (existing && args.flags.here && existing.cubeId !== cubeDetail.id) {
-        deps.stderr(authority.kind === 'server'
-            ? `This directory already hosts an active drone for another cube on ${authority.apiUrl}. ` +
-                `Remove \`--here\` or use a fresh worktree, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`
-            : 'this directory already hosts an active drone; remove --here or run from a fresh worktree\n');
+        deps.stderr(`This directory already hosts an active drone for another cube on ${authority.apiUrl}. ` +
+            `Remove \`--here\` or use a fresh worktree, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`);
         return 1;
     }
     if (authority.kind === 'server') {
@@ -739,7 +682,7 @@ export async function runAssimilate(args, deps) {
     // state only after API success; this hoists only the abort case.)
     //
     // PR-D refinement: --here + existing + SAME authority/cube is the
-    // saved-seat recovery flow. Cloud passes prior_drone_id to its API. Local
+    // saved-seat recovery flow. The local
     // seats first prove liveness with their keychained session, then reuse the
     // saved role/retry binding; only authoritative eviction rotates that retry.
     // Role defaults and local launch state do not select the model. The explicit
@@ -825,17 +768,11 @@ export async function runAssimilate(args, deps) {
             model: effectiveModel,
             ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
             ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
-            ...(authority.kind === 'server'
-                ? {
-                    session_operation: sessionOperation,
-                    session_expected: sessionExpected,
-                    revalidate_at_prepare: revalidateAtPrepare,
-                }
-                : {}),
+            session_operation: sessionOperation,
+            session_expected: sessionExpected,
+            revalidate_at_prepare: revalidateAtPrepare,
         };
-        result = auth.serverTrustIdentity === undefined
-            ? await deps.assimilate(auth.apiUrl, auth.token, assimilateParams)
-            : await deps.assimilate(auth.apiUrl, auth.token, assimilateParams, auth.serverTrustIdentity);
+        result = await deps.assimilate(auth.apiUrl, auth.token, assimilateParams, auth.serverTrustIdentity);
     }
     catch (err) {
         // gh#877 follow-up: a re-attach (`--here`) whose saved seat was evicted is
@@ -844,15 +781,9 @@ export async function runAssimilate(args, deps) {
         // "assimilate failed". Only on a reattach attempt (reattachPriorId set);
         // a non-reattach DroneEvictedError falls through to the generic message.
         if (err instanceof DroneEvictedError && reattachPriorId != null) {
-            if (authority.kind === 'server') {
-                deps.stderr(`This worktree's saved seat on ${authority.apiUrl} was evicted. ` +
-                    `Remove this worktree, or from a fresh worktree run ` +
-                    `${localAssimilateCommand(authority.apiUrl)}.\n`);
-            }
-            else {
-                deps.stderr(`seat evicted — this worktree's saved seat was evicted from the cube. ` +
-                    `Re-assimilate fresh from a terminal, or remove this worktree.\n`);
-            }
+            deps.stderr(`This worktree's saved seat on ${authority.apiUrl} was evicted. ` +
+                `Remove this worktree, or from a fresh worktree run ` +
+                `${localAssimilateCommand(authority.apiUrl)}.\n`);
             return 1;
         }
         // Pin-matched SESSION_REJECTED (revoked / taken-over seat): PURE DIAGNOSIS.
@@ -862,7 +793,6 @@ export async function runAssimilate(args, deps) {
         // `borg reset-local-seat` command.
         if (err instanceof BorgServerError &&
             err.code === 'SESSION_REJECTED' &&
-            authority.kind === 'server' &&
             reattachPriorId != null) {
             return diagnoseSessionRejected(deps, authority.apiUrl);
         }
@@ -1021,13 +951,9 @@ export async function runAssimilate(args, deps) {
         name: cubeDetail.name,
         droneLabel: result.drone_label,
         apiUrl: auth.apiUrl,
-        ...(auth.serverTrustIdentity === undefined
-            ? { sessionToken: result.session_token }
-            : {
-                serverTrustIdentity: auth.serverTrustIdentity,
-                localSessionCredentialRef: result.local_session.credential_ref,
-                localSessionExpiresAt: result.local_session.expires_at,
-            }),
+        serverTrustIdentity: auth.serverTrustIdentity,
+        localSessionCredentialRef: result.local_session.credential_ref,
+        localSessionExpiresAt: result.local_session.expires_at,
         // gh#899: persist the assimilated role so the connect-time ListTools
         // handler can role-scope the native tool surface.
         roleName: assignedRole.name,
@@ -1051,9 +977,12 @@ export async function runAssimilate(args, deps) {
     // typed expectation is declared HERE at the orchestration layer (reattach =
     // EXACT prior binding with its live-bearer digest; eviction remint = EXACT ref
     // only, bearer intentionally replaced; fresh/sibling = ABSENT).
-    if (auth.serverTrustIdentity !== undefined &&
-        result.finalize !== undefined &&
-        deps.finalizeServerSeat !== undefined) {
+    if (result.finalize === undefined || deps.finalizeServerSeat === undefined) {
+        deps.stderr('Local Borg server session metadata is incomplete; no seat was saved.\n');
+        rollbackWorktree();
+        return 1;
+    }
+    {
         // The SAME typed expectation declared before PREPARE is revalidated again at
         // FINALIZE (commit-time revalidation, ratified clause 3).
         let outcome;
@@ -1134,17 +1063,6 @@ export async function runAssimilate(args, deps) {
             deps.stderr(`This worktree's saved local seat on ${auth.apiUrl} changed during attach ` +
                 '(a concurrent reset or enroll); no seat was created and nothing was overwritten. ' +
                 `Re-run ${localAssimilateCommand(auth.apiUrl)} to attach against the current state.\n`);
-            rollbackWorktree();
-            return 1;
-        }
-    }
-    else {
-        try {
-            await deps.setActiveCube(activeCube);
-        }
-        catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            deps.stderr(`setActiveCube failed: ${message}\n`);
             rollbackWorktree();
             return 1;
         }

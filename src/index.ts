@@ -94,7 +94,6 @@ import {
 } from './stream-status.js';
 import { formatRoleAgentLabel, formatWorkingRepoLabel, renderRoster } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
-import { resolveDroneIdByLabel, isUuidShape } from './evict-drone.js';
 import {
   DroneEvictedError,
   formatEvictedToolResult,
@@ -126,6 +125,7 @@ import {
 import {
   normalizeDirectLogRecipients,
 } from './direct-log.js';
+import { formatLocalManageToolResult } from './local-manage-tool-result.js';
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
@@ -244,7 +244,7 @@ export async function main() {
 
   // Register tool listing — role-scope the native surface (gh#899). Missing role
   // (old cubes.json / pre-assimilate) → full set; deferred tools stay reachable
-  // via borg_tool. Never an auth boundary — server RLS/ownership is unchanged.
+  // via borg_tool. Never an auth boundary — live per-client cube grants govern.
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     let scope: { roleName?: string; roleClass?: 'queen' | 'worker'; isHumanSeat?: boolean } | null = null;
     try {
@@ -281,7 +281,7 @@ export async function main() {
 
     // gh#899: borg_tool dispatcher — unwrap to the inner tool and fall through
     // to the SAME switch below (identical activation gate + per-tool auth/Zod
-    // validation; no weaker entry — the server RLS/ownership boundary is
+    // validation; no weaker entry — the server's live cube-grant boundary is
     // unchanged). Guards against dispatcher self-reference / recursion.
     if (name === 'borg_tool') {
       const inner = typeof args?.name === 'string' ? args.name : '';
@@ -392,7 +392,7 @@ export async function main() {
           const cubeName = args?.cube_name as string;
           if (!cubeName) throw new Error('cube_name is required');
           // gh#780 (Queen ruling 33a62d94): RE-ATTACH-ONLY. The old handler
-          // POSTed /api/assimilate, which always MINTS a new drones row —
+          // used the retired attach path, which always minted a new drone row —
           // so agents "recovering" from auth blips spawned orphan seats.
           // This tool now re-attaches to the worktree's saved identity or
           // refuses with CLI guidance; it is structurally incapable of
@@ -707,13 +707,14 @@ export async function main() {
             args?.visibility === 'broadcast' || args?.visibility === 'direct'
               ? args.visibility
               : undefined;
+          if (!active.serverTrustIdentity) {
+            throw new Error('Selected Borg server authority state is missing or unreadable');
+          }
           const appendOpts = {
             ...(explicitClass ? { class: explicitClass } : {}),
             ...(hasTo ? { to: recipients ?? [] } : {}),
             ...(visibility ? { visibility } : {}),
-            ...(active.serverTrustIdentity === undefined
-              ? {}
-              : { serverTrustIdentity: active.serverTrustIdentity }),
+            serverTrustIdentity: active.serverTrustIdentity,
           };
           const result = await appendLog(active.sessionToken, active.apiUrl, message, appendOpts);
           await recordLifecycleLog(active, message);
@@ -1031,43 +1032,12 @@ export async function main() {
           const roleId = args?.role_id as string;
           if (!droneId) throw new Error('drone_id is required');
           if (!roleId) throw new Error('role_id is required');
-          const { drone } = await reassignDrone(droneId, roleId);
-          return { content: [{ type: 'text', text: `Reassigned drone ${drone.label} (${drone.id}) to role ${drone.role_id}.` }] };
+          return await reassignDrone(droneId, roleId);
         }
 
         case 'borg_evict-drone': {
-          const droneIdArg = (args?.drone_id as string | undefined)?.trim();
-          const label = (args?.label as string | undefined)?.trim();
-          const cubeId = (args?.cube_id as string | undefined)?.trim();
-
-          let targetId: string;
-          let targetLabel: string;
-          if (droneIdArg) {
-            // Explicit UUID path — mirrors borg_reassign-drone. gh#782:
-            // validate the shape BEFORE building the URL so a label (or a
-            // path-shaped value) passed as drone_id gets a clear error
-            // instead of a confusing not-found / malformed request path.
-            if (!isUuidShape(droneIdArg)) {
-              throw new Error(`drone_id "${droneIdArg}" is not a UUID — if that's a drone label, pass it as label + cube_id instead.`);
-            }
-            targetId = droneIdArg;
-            targetLabel = droneIdArg;
-          } else if (label) {
-            // Label path: resolve to id against the owner-scoped cube roster.
-            if (!cubeId) throw new Error('cube_id is required when evicting by label');
-            const { drones } = await getCube(cubeId);
-            const match = resolveDroneIdByLabel(drones, label);
-            if (!match) {
-              throw new Error(`No active drone labelled "${label}" in cube ${cubeId} (it may already be evicted; check borg_list-drones).`);
-            }
-            targetId = match.id;
-            targetLabel = match.label;
-          } else {
-            throw new Error('Provide drone_id, or label + cube_id, to identify the drone to evict');
-          }
-
-          await evictDrone(targetId);
-          return { content: [{ type: 'text', text: `Evicted drone ${targetLabel} (${targetId}). Soft-deleted: removed from the roster and freed its seat; log history preserved with anonymized attribution.` }] };
+          void args;
+          throw new Error('Local Borg server does not support drone eviction');
         }
 
         case 'borg_list-drones': {
@@ -1098,7 +1068,7 @@ export async function main() {
         case 'borg_list-roles': {
           // Sprint 6 / gh#153: surface role IDs to Coordinator-class drones
           // for use with borg_reassign-drone (e.g. promoting a drone to Queen).
-          // Uses the same owner-scoped GET /api/cubes/:id endpoint as
+          // Uses the same cube-grant-scoped GET /api/cubes/:id endpoint as
           // borg_list-drones — data is already accessible to the cube owner
           // over the local server; this tool just makes role IDs
           // discoverable inside the MCP tool namespace per drone-7's UX-FEEDBACK.
@@ -1176,6 +1146,9 @@ export async function main() {
           isError: true,
         };
       }
+
+      const localManageResult = formatLocalManageToolResult(error);
+      if (localManageResult) return localManageResult;
 
       return {
         content: [

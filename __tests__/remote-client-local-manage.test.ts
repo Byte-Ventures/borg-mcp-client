@@ -11,10 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *  - role update     → PATCH /api/cubes/:cubeId/roles/:roleId
  *  - section patch   → POST  /api/cubes/:cubeId/roles/:roleId/section-patch
  *
- * These assert the EXACT request the local adapter issues: cube-scoped path
- * plus the enveloped payload the server decodes. The cloud paths the old code
- * used (/api/roles/:roleId, /api/roles/:roleId/section-patch, and raw
- * non-enveloped bodies) are incompatible with the local server and are gone.
+ * These assert the exact cube-scoped request and protocol-enveloped payload
+ * decoded by the local server.
  */
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
@@ -75,10 +73,14 @@ describe('local-adapter management writes (client#39)', () => {
         fetchImpl: fetchSpy,
       })),
     }));
+    vi.doMock('../src/config.js', () => ({
+      getServerCredential: vi.fn(async () => 'p'.repeat(43)),
+    }));
     vi.doMock('../src/cubes.js', () => ({
       getActiveCube: vi.fn(async () => ({
         cubeId: CUBE_ID,
         droneId: DRONE_ID,
+        name: 'Hive',
         sessionToken: SESSION,
         apiUrl: ORIGIN,
         serverTrustIdentity: TRUST_IDENTITY,
@@ -151,7 +153,7 @@ describe('local-adapter management writes (client#39)', () => {
     });
   });
 
-  it('updates a role via the cube-scoped role PATCH (not the cloud /api/roles path)', async () => {
+  it('updates a role via the cube-scoped role PATCH', async () => {
     const { updateRole } = await import('../src/remote-client.js');
     await updateRole(ROLE_ID, { detailed_description: 'Workflow: revised', role_class: 'worker' });
     const { body } = call(`/api/cubes/${CUBE_ID}/roles/${ROLE_ID}`, 'PATCH');
