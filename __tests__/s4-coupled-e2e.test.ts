@@ -110,6 +110,10 @@ function decodeWriterRefs(value: unknown, active: ActiveCube): WriterRef[] {
   return refs;
 }
 
+function trackInnerReaderRelease(): ReturnType<typeof vi.spyOn> {
+  return vi.spyOn(ReadableStreamDefaultReader.prototype, 'releaseLock');
+}
+
 function frame(value: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(value));
   if (payload.length < 126) return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
@@ -131,12 +135,14 @@ async function fetchWithBodyLifetime(
 ): Promise<Response> {
   const controller = new AbortController();
   let settled = false;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   const abort = () => controller.abort(init.signal?.reason);
-  const cleanup = () => {
+  const finalize = () => {
     if (settled) return;
     settled = true;
     clearTimeout(timer);
     init.signal?.removeEventListener('abort', abort);
+    reader?.releaseLock();
   };
   const timer = setTimeout(() => controller.abort(new Error('request timeout')), timeoutMs);
   if (init.signal?.aborted) abort();
@@ -144,22 +150,22 @@ async function fetchWithBodyLifetime(
   try {
     const response = await fetchImpl(input, { ...init, signal: controller.signal });
     if (!response.body) {
-      cleanup();
+      finalize();
       return response;
     }
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
     const body = new ReadableStream<Uint8Array>({
       async pull(streamController) {
         try {
           const chunk = await reader.read();
           if (chunk.done) {
-            cleanup();
+            finalize();
             streamController.close();
           } else {
             streamController.enqueue(chunk.value);
           }
         } catch (error) {
-          cleanup();
+          finalize();
           streamController.error(error);
         }
       },
@@ -167,7 +173,7 @@ async function fetchWithBodyLifetime(
         try {
           await reader.cancel(reason);
         } finally {
-          cleanup();
+          finalize();
         }
       },
     });
@@ -177,7 +183,7 @@ async function fetchWithBodyLifetime(
       headers: response.headers,
     });
   } catch (error) {
-    cleanup();
+    finalize();
     throw error;
   }
 }
@@ -226,6 +232,7 @@ afterEach(() => {
   vi.doUnmock('../src/cubes.js');
   vi.doUnmock('../src/server-trust.js');
   vi.doUnmock('../src/local-server-cursor.js');
+  vi.restoreAllMocks();
   vi.resetModules();
 });
 
@@ -313,8 +320,10 @@ describe('Sprint 4 E2E harness validation', () => {
         else controller.error(new Error('stalled transport failed'));
       },
     });
+    const sourceResponse = new Response(source);
+    const releaseLock = trackInnerReaderRelease();
     const response = await fetchWithBodyLifetime(
-      vi.fn(async () => new Response(source)),
+      vi.fn(async () => sourceResponse),
       'https://127.0.0.1:7443/stream',
       { signal },
     );
@@ -322,6 +331,10 @@ describe('Sprint 4 E2E harness validation', () => {
     if (outcome === 'eof') await expect(reader.read()).resolves.toMatchObject({ done: true });
     else await expect(reader.read()).rejects.toThrow('stalled transport failed');
     expect(removeEventListener).toHaveBeenCalledTimes(1);
+    expect(sourceResponse.body!.locked).toBe(false);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+    await reader.cancel().catch(() => {});
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it('releases the upstream abort bridge when the response body is cancelled', async () => {
@@ -332,16 +345,20 @@ describe('Sprint 4 E2E harness validation', () => {
       removeEventListener,
     } as unknown as AbortSignal;
     let sourceCancelled = 0;
+    const sourceResponse = new Response(new ReadableStream<Uint8Array>({
+      cancel() { sourceCancelled += 1; },
+    }));
+    const releaseLock = trackInnerReaderRelease();
     const response = await fetchWithBodyLifetime(
-      vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
-        cancel() { sourceCancelled += 1; },
-      }))),
+      vi.fn(async () => sourceResponse),
       'https://127.0.0.1:7443/stream',
       { signal },
     );
     await response.body!.cancel(new Error('consumer stopped'));
     expect(sourceCancelled).toBe(1);
     expect(removeEventListener).toHaveBeenCalledTimes(1);
+    expect(sourceResponse.body!.locked).toBe(false);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the upstream abort bridge until a stalled response body is cancelled', async () => {
@@ -349,14 +366,18 @@ describe('Sprint 4 E2E harness validation', () => {
     const removeEventListener = vi.spyOn(upstream.signal, 'removeEventListener');
     let sourceController!: ReadableStreamDefaultController<Uint8Array>;
     let transportAborted = false;
+    let sourceResponse!: Response;
+    let releaseLock!: ReturnType<typeof vi.spyOn>;
     const fetchImpl: typeof fetch = vi.fn(async (_input, init) => {
       init!.signal!.addEventListener('abort', () => {
         transportAborted = true;
         sourceController.error(init!.signal!.reason);
       }, { once: true });
-      return new Response(new ReadableStream<Uint8Array>({
+      sourceResponse = new Response(new ReadableStream<Uint8Array>({
         start(controller) { sourceController = controller; },
       }));
+      releaseLock = trackInnerReaderRelease();
+      return sourceResponse;
     });
     const response = await fetchWithBodyLifetime(fetchImpl, 'https://127.0.0.1:7443/stream', {
       signal: upstream.signal,
@@ -367,6 +388,8 @@ describe('Sprint 4 E2E harness validation', () => {
     await expect(pending).rejects.toThrow('external stream shutdown');
     expect(transportAborted).toBe(true);
     expect(removeEventListener).toHaveBeenCalledTimes(1);
+    expect(sourceResponse.body!.locked).toBe(false);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 });
 
