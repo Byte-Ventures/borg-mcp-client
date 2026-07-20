@@ -17,7 +17,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 - Kept self-hosted `--host --enroll` preview-only while implementing the
   client-generated PENDING credential/retry tuple and capability-gated,
   repository-idempotent cube creation required for local dogfood.
-- Retained the existing package version `1.1.15`; extraction does not authorize a version bump or release.
+- Set the standalone package identity to `2.0.0`; extraction and versioning do not authorize publication.
 
 ## Review Holds
 

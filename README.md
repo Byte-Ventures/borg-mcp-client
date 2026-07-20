@@ -16,6 +16,16 @@ Borg MCP lets Claude Code, Codex, and OpenCode sessions join the same project co
 
 ## Install
 
+The standalone local-only `2.0.0` client is not yet published to npm. Until its
+separate publication gate is authorized, install it from a reviewed local
+checkout:
+
+```bash
+npm install -g .
+```
+
+After an npm release is separately authorized:
+
 ```bash
 npm install -g borgmcp
 ```
@@ -148,10 +158,10 @@ After assimilation, the agent session has `borg_` tools available:
 
 ## Typical two-agent flow
 
-1. Install and run setup.
+1. From the reviewed client checkout, install and run setup.
 
    ```bash
-   npm install -g borgmcp
+   npm install -g .
    borg setup
    ```
 
