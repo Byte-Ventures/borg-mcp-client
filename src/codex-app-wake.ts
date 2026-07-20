@@ -1,6 +1,12 @@
-import { getActiveCube, getCodexWakeTarget, setCodexWakeTarget } from './cubes.js';
+import {
+  getActiveCube,
+  getCodexWakeTarget,
+  setCodexWakeTarget,
+  type ActiveCube,
+} from './cubes.js';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { checkCodexBridgeHealthy } from './codex-remote.js';
+import { hasPendingWakeActivity } from './remote-client.js';
 import {
   BORG_CODEX_REMOTE_WAKE_ENV,
   resolveSessionAgentKind,
@@ -176,6 +182,10 @@ export interface CodexWakeDeps {
   // WAKE_RETRY_MAX_ATTEMPTS); small values let tests prove the loop terminates
   // under a non-advancing clock without running thousands of iterations.
   maxAttempts?: number;
+  // client#76: token-free, non-mutating preflight for the periodic backstop.
+  // Per-entry and retry-drain paths do not use this: their pending obligation is
+  // already established by a concrete delivered/deferred event.
+  hasPendingWork?: (active: ActiveCube) => Promise<boolean>;
   // gh#861 finding 2: lease-ownership gate for the heartbeat tick — a lease-LOSING
   // duplicate child must NOT tick/inject (symmetry with the per-entry path, which
   // only fires inside an SSE session that holds the stream lease). Heartbeat-only;
@@ -403,16 +413,13 @@ async function runRetryDrainLoop(deps: CodexWakeDeps): Promise<void> {
 export const CODEX_HEARTBEAT_CADENCE_MS = 20 * 60_000;
 
 /**
- * gh#857 WI-2: one tick of the codex /loop-equivalent heartbeat — a periodic,
- * independent re-engagement that injects a borg_read-log (unread_only=true) DRAIN turn so an
- * idle codex drone re-syncs even if every per-entry wake was missed. SKIPS when a
- * delivery (per-entry wake, retry-drain, or a prior heartbeat) already landed
- * within the cadence window (shouldFireHeartbeat), so an active cube with flowing
- * wakes never gets a redundant injection. Unlike the per-entry path it does NOT
- * consult deliveredWakeKeys — the cadence gate is the throttle, and the static
- * drain prompt is intentionally re-delivered each idle window. Best-effort: a
- * mid-turn thread / transient error / unresolved target just skips this tick (the
- * next tick retries). Never throws.
+ * gh#857/client#76: one tick of the codex catch-up backstop. The cadence only
+ * initiates a token-free unread-state preflight; a DRAIN turn is injected when
+ * that authoritative scan finds real work that a per-entry wake missed. Recent
+ * delivery still suppresses redundant preflights. Unlike the per-entry path it
+ * does not consult deliveredWakeKeys because the unread cursor is authoritative.
+ * Best-effort: a failed preflight, mid-turn thread, transient error, or unresolved
+ * target skips this tick and lets the next cadence retry. Never throws.
  */
 export async function fireCodexHeartbeatTick(
   deps: CodexWakeDeps = {},
@@ -434,6 +441,11 @@ export async function fireCodexHeartbeatTick(
   try {
     const active = await (deps.getActiveCube ?? getActiveCube)();
     if (!active) return;
+    // Elapsed time alone must never cross the model boundary. Query the
+    // authoritative unread state without advancing its cursor; only then touch
+    // the app-server socket or resolve a thread.
+    const hasPendingWork = deps.hasPendingWork ?? hasPendingWakeActivity;
+    if (!(await hasPendingWork(active))) return;
     const resolved = await resolveFreshCodexWakeTarget(active, deps);
     if (!resolved) return; // thread not loaded yet → next tick retries
     const client = makeCodexClient(resolved.socketPath, deps);

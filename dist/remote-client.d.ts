@@ -13,6 +13,7 @@ import { type EvictDroneResult, type ReassignDroneResult } from 'borgmcp-shared/
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import type { WorkingRepo } from './working-repo.js';
 import { type ActiveCube } from './cubes.js';
+import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
 export interface RemoteConnection {
     apiUrl: string;
     authToken: string;
@@ -58,6 +59,29 @@ export interface LocalManageOperation {
     cubeName: string;
     noMutation: string;
 }
+interface PendingWakePage {
+    entries: Array<{
+        drone_id?: unknown;
+        message?: unknown;
+        visibility?: unknown;
+        recipient_drone_ids?: unknown;
+    }>;
+    cursor: LocalServerCursor | null;
+    has_more: boolean;
+}
+/**
+ * client#76: inspect authoritative unread log state without advancing the
+ * agent-owned unread cursor. The scan mirrors the SSE wake filters: unaddressed
+ * direct entries and ordinary own posts are not work for this seat. A full
+ * paginated scan prevents a run of skipped entries from hiding later real work.
+ */
+export declare function hasPendingWakeActivity(active: ActiveCube, deps?: {
+    getCursor?: typeof getLocalServerCursor;
+    readPage?: (active: ActiveCube, opts: {
+        cursor: LocalServerCursor | null;
+        limit: number;
+    }) => Promise<PendingWakePage>;
+}): Promise<boolean>;
 /**
  * Get the active cube's directive + role registry.
  */
@@ -406,4 +430,5 @@ export declare function applyTemplate(cubeId: string, templateName: string): Pro
  * never touched. Returns a NonClobberSyncResult.
  */
 export declare function syncRoles(cubeId: string, templateName?: string, apply?: boolean, decisions?: Record<string, 'accept' | 'reject'>): Promise<any>;
+export {};
 //# sourceMappingURL=remote-client.d.ts.map

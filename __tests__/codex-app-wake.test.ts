@@ -813,12 +813,40 @@ describe('gh#857 WI-2 — codex /loop-equivalent heartbeat', () => {
   });
   const deps = (client: any, now: number) => ({
     getActiveCube: vi.fn(async () => ACTIVE),
+    hasPendingWork: vi.fn(async () => true),
     getCodexWakeTarget: vi.fn(async () => ({ threadId: 'th', socketPath: '/s' })),
     createClient: vi.fn(() => client),
     now: () => now,
   });
 
-  it('FIRES the drain when idle and no delivery landed within the cadence window', async () => {
+  it('SKIPS repeated idle cadences when the token-free preflight finds no pending work', async () => {
+    const client = idleClient();
+    const idleDeps = {
+      ...deps(client, 100_000),
+      hasPendingWork: vi.fn(async () => false),
+    };
+
+    await fireCodexHeartbeatTick(idleDeps, CADENCE);
+    await fireCodexHeartbeatTick({ ...idleDeps, now: () => 100_000 + CADENCE }, CADENCE);
+
+    expect(idleDeps.hasPendingWork).toHaveBeenCalledTimes(2);
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.startTurn).not.toHaveBeenCalled();
+    expect(getLastDeliveredAt()).toBeNull();
+  });
+
+  it('fails closed without a model turn when the pending-work preflight fails', async () => {
+    const client = idleClient();
+    await fireCodexHeartbeatTick({
+      ...deps(client, 100_000),
+      hasPendingWork: vi.fn(async () => { throw new Error('preflight unavailable'); }),
+    }, CADENCE);
+
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.startTurn).not.toHaveBeenCalled();
+  });
+
+  it('FIRES the drain when pending work exists and no delivery landed within the cadence window', async () => {
     const client = idleClient();
     await fireCodexHeartbeatTick(deps(client, 100_000), CADENCE);
     expect(client.startTurn).toHaveBeenCalledWith('th', CODEX_CATCHUP_PROMPT);
@@ -840,7 +868,7 @@ describe('gh#857 WI-2 — codex /loop-equivalent heartbeat', () => {
     expect(getLastDeliveredAt()).toBeNull();
   });
 
-  it('FIRES again after a full cadence — no dedup (repeats each idle window)', async () => {
+  it('FIRES again after a full cadence when pending work still exists', async () => {
     const c1 = idleClient();
     await fireCodexHeartbeatTick(deps(c1, 0), CADENCE); // fires @0
     const c2 = idleClient();
@@ -962,6 +990,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     const p = fireCodexHeartbeatTick(
       {
         getActiveCube: async () => ACTIVE,
+        hasPendingWork: async () => true,
         getCodexWakeTarget: target as any,
         createClient: () => hbClient as any,
         now: () => 100_000,
@@ -1012,6 +1041,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     await fireCodexHeartbeatTick(
       {
         getActiveCube: async () => ACTIVE,
+        hasPendingWork: async () => true,
         getCodexWakeTarget: target as any,
         createClient: () => hbClient as any,
         now: () => 100_000,
@@ -1030,6 +1060,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     await fireCodexHeartbeatTick(
       {
         getActiveCube: async () => ACTIVE,
+        hasPendingWork: async () => true,
         getCodexWakeTarget: target as any,
         createClient: () => client as any,
         now: () => 100_000,
@@ -1046,6 +1077,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     await fireCodexHeartbeatTick(
       {
         getActiveCube: async () => ACTIVE,
+        hasPendingWork: async () => true,
         getCodexWakeTarget: target as any,
         createClient: () => client as any,
         now: () => 100_000,
@@ -1068,6 +1100,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     await fireCodexHeartbeatTick(
       {
         getActiveCube: async () => ACTIVE,
+        hasPendingWork: async () => true,
         env: { BORG_CODEX_APP_SERVER_SOCKET: '/gone.sock' } as any,
         createClient: () => deadClient as any,
         now: () => 100_000,
@@ -1092,6 +1125,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     await fireCodexHeartbeatTick(
       {
         getActiveCube: async () => ACTIVE,
+        hasPendingWork: async () => true,
         env: { BORG_CODEX_APP_SERVER_SOCKET: '/flaky.sock' } as any,
         createClient: () => flakyClient as any,
         now: () => 100_000,
@@ -1106,13 +1140,13 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
   it('finding 1: lock is released after a delivery — a later inject can proceed', async () => {
     const c1 = idleClient();
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, getCodexWakeTarget: target as any, createClient: () => c1 as any, now: () => 0, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => c1 as any, now: () => 0, isStreamOwner: () => true },
       CADENCE
     );
     expect(c1.startTurn).toHaveBeenCalledTimes(1);
     const c2 = idleClient();
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, getCodexWakeTarget: target as any, createClient: () => c2 as any, now: () => CADENCE, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => c2 as any, now: () => CADENCE, isStreamOwner: () => true },
       CADENCE
     );
     expect(c2.startTurn).toHaveBeenCalledTimes(1); // lock was freed; second tick delivers
@@ -1134,14 +1168,14 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
       close: vi.fn(),
     };
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, getCodexWakeTarget: target as any, createClient: () => activeClient as any, now: () => 0, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => activeClient as any, now: () => 0, isStreamOwner: () => true },
       CADENCE
     );
     expect(activeClient.startTurn).not.toHaveBeenCalled(); // mid-turn → skipped (no inject, not delivered)
 
     const idle = idleClient();
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, getCodexWakeTarget: target as any, createClient: () => idle as any, now: () => CADENCE, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => idle as any, now: () => CADENCE, isStreamOwner: () => true },
       CADENCE
     );
     // If the lock leaked on the mid-turn skip, this tick would early-return at
@@ -1160,6 +1194,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     await fireCodexHeartbeatTick(
       {
         getActiveCube: async () => ACTIVE,
+        hasPendingWork: async () => true,
         env: { BORG_CODEX_APP_SERVER_SOCKET: '/gone.sock' } as any,
         createClient: () => deadClient as any,
         now: () => 0,
@@ -1172,7 +1207,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
 
     const idle = idleClient();
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, getCodexWakeTarget: target as any, createClient: () => idle as any, now: () => CADENCE, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => idle as any, now: () => CADENCE, isStreamOwner: () => true },
       CADENCE
     );
     // If the lock leaked on the error path, this tick would early-return → no inject.
