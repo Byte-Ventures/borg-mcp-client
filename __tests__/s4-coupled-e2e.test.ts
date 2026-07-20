@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // Ordinary `npm test` runs only the input-validation cases and skips the E2E.
 const EXPECTED_CLIENT_SHA = '710e9a90446de07a819291307f6d75f9a21784aa';
 const enabled = process.env.BORG_S4_COUPLED_E2E === '1';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface Cursor {
   id: string;
@@ -119,6 +120,13 @@ describe('Sprint 4 E2E harness validation', () => {
     'https://127.0.0.1:7443/path',
   ])('rejects non-numeric, non-loopback, non-TLS, or non-origin input %s', (value) => {
     expect(() => loopbackOrigin(value)).toThrow(/numeric loopback HTTPS origin/);
+  });
+
+  it('accepts only canonical authenticated writer UUIDs', () => {
+    expect(UUID_RE.test('11111111-1111-4111-8111-111111111111')).toBe(true);
+    expect(UUID_RE.test('')).toBe(false);
+    expect(UUID_RE.test('writer-1')).toBe(false);
+    expect(UUID_RE.test('11111111-1111-4111-7111-111111111111')).toBe(false);
   });
 });
 
@@ -395,6 +403,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       const directedDrain = await drainUnread(20);
       const directedOccurrences = directedDrain.entries.filter((entry) => entry.id === directed.id).length;
       const expectedIds: string[] = [];
+      const authenticatedWriterIds = new Set<string>();
       for (let offset = 0; offset < 150; offset += 30) {
         const batch = Array.from({ length: Math.min(30, 150 - offset) }, (_, index) => {
           const sequence = offset + index;
@@ -404,7 +413,11 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
           );
         });
         for (const entry of await bounded(Promise.all(batch), `burst batch ${offset / 30 + 1}`)) {
+          if (typeof entry.drone_id !== 'string' || !UUID_RE.test(entry.drone_id)) {
+            throw new Error('burst append response omitted a valid authenticated writer drone_id');
+          }
           expectedIds.push(entry.id);
+          authenticatedWriterIds.add(entry.drone_id);
         }
       }
 
@@ -423,6 +436,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         directedTurns === 1 &&
         directedOccurrences === 1 &&
         expectedIds.length === 150 &&
+        authenticatedWriterIds.size >= 2 &&
         drainedExpected.length === 150 &&
         unique.size === 150 &&
         missing.length === 0 &&
@@ -442,6 +456,8 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         directed_items: 1,
         directed_accepted_model_turns: directedTurns,
         directed_unread_occurrences: directedOccurrences,
+        authenticated_writer_ids: [...authenticatedWriterIds].sort(),
+        authenticated_writer_count: authenticatedWriterIds.size,
         burst_expected: expectedIds.length,
         burst_drained: drainedExpected.length,
         burst_unique: unique.size,
@@ -504,5 +520,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       turn_validation_errors: [],
       cleanup_verified: true,
     });
+    expect(output.authenticated_writer_count).toEqual(expect.any(Number));
+    expect(output.authenticated_writer_count as number).toBeGreaterThanOrEqual(2);
   }, 45_000);
 });
