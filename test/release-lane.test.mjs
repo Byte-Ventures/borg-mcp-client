@@ -221,7 +221,9 @@ test('release documentation describes the activated minimal publication lane', a
   const security = await readFile(join(root, 'SECURITY.md'), 'utf8');
   const releasing = await readFile(join(root, 'docs', 'RELEASING.md'), 'utf8');
 
-  assert.match(readme, /npm install -g borgmcp/);
+  assert.match(readme, /After verified publication/);
+  assert.match(readme, /npm install -g borgmcp@2\.0\.0/);
+  assert.doesNotMatch(readme, /npm install -g borgmcp(?:\s|$)/);
   assert.match(security, /protected npm environment and Trusted Publishing/);
   for (const boundary of [
     'same-run artifact',
