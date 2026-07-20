@@ -891,12 +891,23 @@ export async function streamOnce(
   }
 
   streamState.connected = true;
+  const iterator = parseSSE(response.body, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES);
+  let hasPrimaryError = false;
 
   try {
-    for await (const event of parseSSE(
-      response.body,
-      LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES,
-    )) {
+    while (true) {
+      let next: IteratorResult<ParsedEvent>;
+      try {
+        next = await iterator.next();
+      } catch (error) {
+        // Destroying the pinned HTTPS request after an authorized abort can
+        // surface as a raw body ECONNRESET. Give the already-issued abort
+        // reason precedence only at this transport iteration boundary.
+        if (ac.signal.aborted) throw ac.signal.reason ?? error;
+        throw error;
+      }
+      if (next.done) break;
+      const event = next.value;
       bumpWatchdog();
       const nowIso = new Date().toISOString();
       streamState.lastWireActivityAt = nowIso;
@@ -1068,12 +1079,14 @@ export async function streamOnce(
       }
     }
   } catch (error) {
-    // Destroying the pinned HTTPS request after an authorized abort can surface
-    // as a raw body ECONNRESET. The abort reason is authoritative only after
-    // this stream's internal signal has actually been aborted.
-    if (ac.signal.aborted) throw ac.signal.reason ?? error;
+    hasPrimaryError = true;
     throw error;
   } finally {
+    try {
+      await iterator.return?.(undefined);
+    } catch (error) {
+      if (!hasPrimaryError) throw error;
+    }
     abortSignal.removeEventListener('abort', abortFromExternal);
     if (watchdog) clearTimeout(watchdog);
     clearPendingHwmDivergence();

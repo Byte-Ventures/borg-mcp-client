@@ -1229,6 +1229,27 @@ describe('streamOnce', () => {
     )).rejects.toBe(reset);
     expect(response.body!.locked).toBe(false);
   });
+
+  it('does not mask an inbox persistence failure when abort races event handling', async () => {
+    const external = new AbortController();
+    const abortReason = new Error('authorized stream shutdown');
+    const persistenceError = new Error('inbox write failed');
+    const response = makeSSEResponse([
+      'event: log\nid: e1\ndata: {"id":"e1","drone_id":"another-drone","message":"persist me"}\n\n',
+    ]);
+    const appendLine = vi.fn(async () => {
+      external.abort(abortReason);
+      throw persistenceError;
+    });
+
+    await expect(streamOnce(
+      ACTIVE_CUBE,
+      null,
+      vi.fn(),
+      { ...makeDeps(vi.fn(async () => response), appendLine), abortSignal: external.signal },
+    )).rejects.toBe(persistenceError);
+    expect(response.body!.locked).toBe(false);
+  });
 });
 
 // ---------------- T1.2: content-vs-wire freshness split ----------------
