@@ -146,13 +146,25 @@ async function installFixtureConsumer(directory, tarball) {
   };
 }
 
-test('release workflow prepares one candidate and remains structurally non-publishing', async () => {
+test('release workflow uses one package authority, one protected publish, and one read-only registry readback', async () => {
   const workflow = await readFile(join(root, '.github', 'workflows', 'publish.yml'), 'utf8');
+  const [verification = '', afterVerify = ''] = workflow.split('\n  publish:\n');
+  const [publication = '', registryVerification = ''] = afterVerify.split('\n  registry-verification:\n');
+
   assert.doesNotMatch(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /environment:\n\s+name: npm-publish/);
-  assert.equal((workflow.match(/id-token: write/g) ?? []).length, 0);
-  assert.equal((workflow.match(/NPM_TOKEN|NODE_AUTH_TOKEN/g) ?? []).length, 0);
-  assert.doesNotMatch(workflow, /npm publish|--provenance|SHA512SUMS|sha512sum|DSSE|in-toto|SLSA/);
+  assert.doesNotMatch(verification, /environment:/);
+  assert.doesNotMatch(verification, /id-token: write/);
+  assert.match(publication, /needs: verify/);
+  assert.match(publication, /environment:\n\s+name: npm-publish/);
+  assert.match(publication, /id-token: write/);
+  assert.match(registryVerification, /needs: \[verify, publish\]/);
+  assert.doesNotMatch(registryVerification, /environment:/);
+  assert.doesNotMatch(registryVerification, /id-token: write/);
+  assert.equal((workflow.match(/id-token: write/g) ?? []).length, 1);
+  assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN|NPM_TOKEN_PRESENT/);
+  assert.equal((workflow.match(/npm publish "\.\/release\//g) ?? []).length, 1);
+  assert.equal((workflow.match(/--provenance/g) ?? []).length, 1);
+  assert.doesNotMatch(workflow, /SHA512SUMS|sha512sum|DSSE|in-toto|SLSA/);
   assert.equal((workflow.match(/verify-release-trigger\.mjs/g) ?? []).length, 1);
   assert.equal((workflow.match(/test "\$\{GITHUB_RUN_ATTEMPT\}" = "1"/g) ?? []).length, 1);
   assert.equal((workflow.match(/npm install --global --prefix "\$\{consumer\}"/g) ?? []).length, 1);
@@ -162,17 +174,17 @@ test('release workflow prepares one candidate and remains structurally non-publi
   const configGuards = [...workflow.matchAll(/run: test ! -e \.npmrc/g)].map((match) => match.index);
   const setupNodes = [...workflow.matchAll(/uses: actions\/setup-node@/g)].map((match) => match.index);
   const bootstraps = [...workflow.matchAll(/npm install --prefix "\$\{npm_prefix\}"/g)].map((match) => match.index);
-  assert.equal(checkouts.length, 2);
+  assert.equal(checkouts.length, 3);
   assert.equal(attemptGuards.length, 1);
   assert.equal(configGuards.length, 1);
-  assert.equal(setupNodes.length, 2);
-  assert.equal(bootstraps.length, 1);
+  assert.equal(setupNodes.length, 3);
+  assert.equal(bootstraps.length, 2);
   assert.ok(checkouts[0] < attemptGuards[0]);
   assert.ok(attemptGuards[0] < configGuards[0]);
   assert.ok(configGuards[0] < setupNodes[0]);
   assert.ok(setupNodes[0] < bootstraps[0]);
   assert.doesNotMatch(workflow, /registry-url:/);
-  assert.equal((workflow.match(/--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/g) ?? []).length, 1);
+  assert.equal((workflow.match(/--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/g) ?? []).length, 2);
   assert.equal((workflow.match(/npm ci --ignore-scripts/g) ?? []).length, 1);
   assert.equal((workflow.match(/npm audit --audit-level=high/g) ?? []).length, 1);
   assert.equal((workflow.match(/npm run check/g) ?? []).length, 1);
@@ -187,14 +199,41 @@ test('release workflow prepares one candidate and remains structurally non-publi
   assert.ok(publicSource > 0 && publicSource < readiness && readiness < install);
   assert.match(workflow, /name: npm-release-\$\{\{ steps\.release\.outputs\.version \}\}/);
   assert.match(workflow, /name: npm-release-\$\{\{ needs\.verify\.outputs\.version \}\}/);
-  assert.match(workflow, /verify-registry-release\.mjs prepublish release\/artifact-report\.json/);
-  assert.doesNotMatch(workflow, /verify-registry-release\.mjs postpublish/);
-  assert.match(workflow, /CLIENT_NPM_PUBLICATION: deferred/);
+  assert.match(publication, /verify-registry-release\.mjs prepublish release\/artifact-report\.json/);
+  assert.match(publication, /NPM_EXPECTED_OWNER: \$\{\{ vars\.NPM_EXPECTED_OWNER \}\}/);
+  assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_URL:-\}"/);
+  assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_TOKEN:-\}"/);
+  assert.match(publication, /test -z "\$\{NODE_AUTH_TOKEN:-\}"/);
+  assert.match(registryVerification, /verify-registry-release\.mjs postpublish release\/artifact-report\.json/);
+  assert.match(registryVerification, /"borgmcp@\$\{\{ needs\.verify\.outputs\.version \}\}"/);
+  assert.match(registryVerification, /npm audit signatures --prefix registry-verification/);
+  assert.doesNotMatch(registryVerification, /npm publish|--provenance/);
+  assert.doesNotMatch(workflow, /CLIENT_NPM_PUBLICATION|Confirm publication remains deferred/);
 
   const ci = await readFile(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
   for (const line of `${workflow}\n${ci}`.split('\n').filter((value) => value.trim().startsWith('uses:'))) {
     assert.match(line, /@[0-9a-f]{40}(?:\s+#.*)?$/, `Action is not pinned by full SHA: ${line.trim()}`);
   }
+});
+
+test('release documentation describes the activated minimal publication lane', async () => {
+  const readme = await readFile(join(root, 'README.md'), 'utf8');
+  const security = await readFile(join(root, 'SECURITY.md'), 'utf8');
+  const releasing = await readFile(join(root, 'docs', 'RELEASING.md'), 'utf8');
+
+  assert.match(readme, /After verified publication/);
+  assert.match(readme, /npm install -g borgmcp@2\.0\.0/);
+  assert.doesNotMatch(readme, /npm install -g borgmcp(?:\s|$)/);
+  assert.match(security, /protected npm environment and Trusted Publishing/);
+  for (const boundary of [
+    'same-run artifact',
+    'NPM_EXPECTED_OWNER',
+    'id-token: write',
+    'NODE_AUTH_TOKEN',
+    'npm audit signatures',
+    'fixed attempt and delay',
+  ]) assert.ok(releasing.includes(boundary), `Missing release boundary: ${boundary}`);
+  assert.doesNotMatch(`${readme}\n${security}\n${releasing}`, /publication is deferred|not yet published/);
 });
 
 test('release attempt guard rejects reruns of an immutable tag workflow', () => {
