@@ -1,175 +1,120 @@
-# Publishing `borgmcp`
+# Preparing `borgmcp` Release Candidates
 
-This repository publishes immutable public releases from a protected GitHub
-Actions environment. The workflow builds one tarball, exposes that exact
-artifact for Security review, and publishes only the reviewed bytes. This
-runbook is an operator procedure; it does not authorize a tag or publication.
+Client npm publication is deferred. The current GitHub Actions workflow prepares
+one immutable npm release candidate for review but contains no publication
+command, OIDC permission, npm token, or registry mutation. A tag or successful
+candidate run does not authorize publication.
 
 ## Current Release Blockers
 
-The standalone client source was extracted from private-monorepo commit
+The standalone client was extracted from private-monorepo commit
 `17ff8ce14e12122a8cc9089f6b94174c02fa2a04` without importing its Git history.
-A release remains blocked until all of these conditions are independently
+Publication remains blocked until all of these conditions are independently
 reviewed and satisfied:
 
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- the exact audited registry dependency `borgmcp-shared@0.4.2` remains locked
-  to its canonical tarball and integrity, and the matching server passes the
-  process-level local dogfood gate;
-- an unused stable package version is selected and authorized separately;
-- registry package `borgmcp-shared@0.4.2` remains bound to one canonical
-  lockfile resolution and SHA-512 integrity;
-- the client package passes its full tests, type checks, build, clean packed
-  installation, MCP stdio, and local-server compatibility gates;
-- the repository is public and the settings below pass an operator audit; and
-- the exact release commit has the required Code Review, Security, Release
-  Quality, extraction, and explicit release-authorization gates.
+- the exact audited registry dependency `borgmcp-shared@0.4.2` remains locked to
+  its canonical tarball and integrity;
+- the client and matching server pass the complete local dogfood gate;
+- an unused stable client version and exact release commit are selected;
+- the repository and protected npm environment settings pass an operator audit;
+- the exact release candidate passes Code Review, Security Review, Release
+  Quality, extraction, and package gates; and
+- a separate change explicitly activates Trusted Publishing and receives human
+  publication authorization.
 
 `scripts/verify-release-readiness.mjs` makes the source-side blockers
 machine-checkable. A release tag created before they are resolved fails before
-dependency installation or artifact creation.
+dependency installation or candidate creation.
 
-## Required Repository Configuration
+## Repository Controls
 
-Configure and independently verify these controls before creating a release
-tag. Repository settings are operator-owned; source changes do not apply them.
+Repository settings are operator-owned and are not changed by this workflow.
+Before preparing a candidate, independently verify:
 
-1. Create an `npm-publish` environment. Disable administrator bypass and
-   require the reviewer set ratified for client releases. Restrict deployment
-   branches to protected tags matching `v*.*.*`. Add environment variable
-   `NPM_EXPECTED_OWNER` only after comparing it with the live maintainers of the
-   existing `borgmcp` npm package. Store no long-lived npm token: client
-   releases use npm Trusted Publishing through OIDC.
-2. Configure npm Trusted Publishing for organization `Byte-Ventures`,
+1. The `npm-publish` environment disables administrator bypass, requires the
+   reviewed human approver, and allows only the protected release refs. Its
+   `NPM_EXPECTED_OWNER` variable must match the sole reviewed maintainer of the
+   existing `borgmcp` package. It must contain no npm token.
+2. npm Trusted Publishing is configured for organization `Byte-Ventures`,
    repository `borg-mcp-client`, workflow `publish.yml`, and environment
-   `npm-publish`. Do not assume package control from the repository name;
-   verify the authenticated npm account and the live package maintainers first.
-3. Protect `refs/tags/v*.*.*` from unauthorized creation, update, deletion, and
-   non-fast-forward changes. Releases require annotated tags whose commits are
-   on protected `main`. Never move, reuse, or rerun a failed release tag.
-4. Protect `main` from deletion and non-fast-forward updates. Require resolved
-   review threads and the repository CI checks with strict status checking.
-   Keep integration through reviewed pull requests; do not add a bypass that
-   silently defeats the cube review gates.
-5. Restrict Actions to the pinned GitHub-owned actions present in this
-   repository. Require full commit-SHA pins. Keep the default workflow token
-   read-only and prevent Actions from approving pull requests.
-6. Enable private vulnerability reporting, secret scanning, push protection,
-   and Dependabot security updates. Enable validity checks and non-provider
-   patterns when the organization plan supports them.
+   `npm-publish`. This configuration is dormant while publication is deferred.
+3. `refs/tags/v*.*.*` cannot be updated, deleted, or force-moved. Candidate tags
+   are annotated, match the package version, and point to a commit on protected
+   `main`.
+4. `main` requires reviewed pull requests, resolved threads, and current CI.
+5. GitHub Actions permits only the full-SHA-pinned GitHub-owned actions present
+   in this repository. The default workflow token remains read-only.
+6. Private vulnerability reporting, secret scanning, push protection, CodeQL,
+   and Dependabot security updates remain enabled.
 
-## Public-Source Sensitivity Controls
+## Candidate Workflow
 
-This is a local-only client with no OAuth/Cloud material. `scripts/verify-public-source.mjs`
-forbids ANY Google OAuth client ID or `GOCSPX` value, database URLs, private
-Worker/test endpoints, developer-local paths, and monorepo-only imports anywhere
-in the source or packed artifact; never disable the provider patterns or
-repository push protection.
+The only trigger is a protected annotated `v<package version>` tag. Manual
+dispatch is intentionally absent so a second run cannot rebuild another
+candidate for an existing tag. The workflow rejects reruns, root `.npmrc`
+configuration, non-tag events, lightweight or malformed tags, version mismatch,
+source/tag mismatch, and tags whose commits are not on protected `main`.
 
-Immediately after checkout, both jobs reject immutable reruns and then reject a
-checked-out root `.npmrc`, before `setup-node` or any npm command. The exact npm
-bootstrap then uses an isolated user config, cache, and prefix under the runner
-temporary directory, forces `https://registry.npmjs.org`, disables scripts, and
-asserts both npm version and active registry. The repository root remains
-config-free through artifact verification.
+The unprivileged `verify` job performs one sequence:
 
-Current verified control-plane snapshot: the repository is public; secret
-scanning, push protection, Dependabot, and CodeQL are enabled; Actions permits
-only GitHub-owned actions with mandatory full-SHA pins, a read-only default
-token, and no pull-request approval; and active rulesets protect `main` and make
-`v*.*.*` tags immutable with Queen-only bypass. The `npm-publish` environment
-and npm Trusted Publisher remain outstanding and gated until this source
-workflow is approved. The Coordinator must execute and verify those remaining
-controls under decision `client-server-release-lanes-autonomy` without treating
-that decision as tag or publication authorization.
+1. Verify the public-source boundary, extraction readiness, exact shared-package
+   pin, and canonical registry lock metadata.
+2. Install the lockfile once with lifecycle scripts disabled and audit it.
+3. Run type checks, tests, and one readable build; reject generated `dist` drift.
+4. Produce one npm tarball.
+5. Verify that tarball once for package identity, license/notice, source and map
+   completeness, executable bins, archive safety, dependency integrity, and
+   absence of credentials, private endpoints, local paths, links, or lifecycle
+   hooks.
+6. Install the exact local tarball once with scripts disabled and require package
+   import plus MCP initialize/tool discovery through npm's generated bin shim.
+7. Upload only the tarball and its verifier-generated report as the same-run
+   candidate artifact.
 
-## Source And Tag Gate
+The protected `publication-readiness` job downloads that same-run artifact and
+performs read-only preflight. It rejects a report whose package name or version
+differs from the candidate, a version that already exists, an unclaimed package,
+or an owner set that differs from `NPM_EXPECTED_OWNER`. It then exits successfully
+without publishing. It does not rebuild or reverify the package.
 
-The only publishing trigger is a protected annotated `v<package version>` tag.
-The manual workflow input is verification-only and must be dispatched from
-protected `main`; it can never enter the publish environment. In both paths the
-workflow independently fetches the remote annotated tag into an isolated ref,
-binds its peeled commit to the checked-out source, proves main ancestry, and
-requires `GITHUB_RUN_ATTEMPT=1`. GitHub Actions reruns of a failed release or
-verification attempt fail closed; recovery starts from reviewed source and a
-newly authorized version/tag rather than reusing the old run.
+No separate checksum file is needed: the tarball verifier records canonical
+SHA-512 SRI in the artifact report. GitHub's same-run artifact transport and the
+report bind the reviewed candidate without repeated SHA512 choreography.
 
-Before creating a tag:
+## Separately Authorized Activation
 
-1. Fetch the current protected `main` and verify the intended commit and package
-   version.
-2. Run the complete project gates and `node scripts/verify-release-readiness.mjs`.
-3. Verify `npm view borgmcp maintainers --json` against the reviewed expected
-   owner and confirm the target version does not exist.
-4. Confirm Trusted Publishing, environment protection, Actions restrictions,
-   tag/main protections, security settings, and all required gates against live
-   control-plane surfaces.
-5. Obtain explicit authorization for the exact version, commit, and annotated
-   tag. Release-lane setup authorization is not release authorization.
+Actual publication requires a separate reviewed workflow change. That change
+must preserve the candidate job unchanged and add only the minimum protected
+mutation and readback path:
 
-## Exact Artifact Gate
+1. The protected publish job alone receives `id-token: write`; no long-lived npm
+   token is stored or exposed.
+2. It consumes the already-produced same-run tarball and report. It does not run
+   dependency installation, project tests, build, pack, or packed-artifact
+   verification again.
+3. Immediately before mutation it repeats only immutable version availability,
+   exact package identity, and reviewed-owner preflight.
+4. It publishes the exact absolute tarball path once through npm Trusted
+   Publishing with provenance and lifecycle scripts disabled.
+5. A dependent verification job polls registry visibility with fixed attempt and
+   delay bounds, compares `dist.integrity` exactly with the report, installs the
+   exact version with scripts disabled, and runs `npm audit signatures`.
 
-The unprivileged `verify` job installs locked dependencies with lifecycle
-scripts disabled, audits dependencies, runs project gates, rebuilds readable
-tracked output, and rejects drift. It then creates one npm tarball and enforces:
+Rely on npm's signature and Trusted Publishing attestation validation. Do not
+reconstruct DSSE, in-toto, SLSA, workflow-ref, or builder statements locally.
+Do not add cross-run tuple variables, cross-run artifact selection, duplicate
+builds, duplicate package verification, checksum bundles, or SBOM ceremony.
 
-- public-file and file-type allowlists, size/count bounds, and path safety;
-- canonical Apache-2.0 `LICENSE` and the approved `NOTICE` attribution;
-- readable TypeScript source, source maps whose targets are shipped, executable
-  CLI bins, and no consumer lifecycle hooks;
-- no credentials, keys, private service URLs, database URLs, local paths,
-  `.npmrc`, environment files, symlinks, or special archive entries;
-- exact `borgmcp` identity and public provenance repository; and
-- registry-only dependencies with exact audited `borgmcp-shared@0.4.2`.
-
-Every lock entry is bound to its package-path identity, version, exact canonical
-npm tarball URL, and full SHA-512 SRI. The release gate fetches official
-name/version metadata from the canonical registry and compares both tarball URL
-and integrity for every entry, including duplicates and platform-skipped
-optional packages.
-
-The workflow records the tarball SHA-512 and uses an explicit filesystem path
-for npm dry-run/publish. Bare `release/<file>.tgz` package specs are forbidden:
-npm may parse them as GitHub shorthand instead of local files.
-
-Before upload, the workflow globally installs that exact tarball with lifecycle
-scripts disabled into an isolated temporary prefix, requires a clean production
-dependency tree, imports the shipped root export, launches npm's generated
-`borg-mcp` bin shim, and requires successful MCP initialization plus non-empty
-tool discovery over stdio. Non-JSON stdout, missing exports, broken shebang/bin
-mapping, missing runtime files/dependencies, startup failure, timeout, or empty
-tool discovery blocks the release.
-
-Security must download and approve the exact workflow artifact. The protected
-environment must remain pending until that approval and separate release
-authorization exist. The publish job downloads the same bytes, verifies the
-checksum and artifact again, proves package ownership and version availability,
-and publishes that tarball with OIDC provenance. No local rebuild may replace
-it.
-
-## Post-Publish Verification
-
-Before changing any consumer or announcing a release, require all workflow
-checks to pass:
-
-- registry `dist.integrity` equals the audited tarball integrity;
-- the sole reviewed maintainer set is unchanged;
-- the signed in-toto/SLSA statement binds package, version, SHA-512 digest,
-  repository, workflow, protected tag, push event, commit, and GitHub-hosted
-  builder; and
-- `npm audit signatures` verifies registry signatures and attestations from a
-  clean install.
-
-If npm accepted a version but any integrity, ownership, or provenance check
-fails, block all consumer migration and treat it as a release incident.
+A post-publication verification failure is a release incident; it never means
+the immutable npm publication did not happen and never authorizes a rerun.
 
 ## Stop And Recovery Conditions
 
-Stop without approving the environment when any source, settings, ownership,
-tag, artifact, test, audit, review, or authorization claim cannot be verified.
-Versions and release tags are immutable evidence. Never force-push, move a tag,
-rerun a failed tag workflow, overwrite a package version, unpublish to hide a
-failure, or publish a local rebuild. Recovery requires a fresh reviewed source
-fix and a separately authorized new version and annotated tag.
+Stop when source, settings, ownership, tag, artifact, test, audit, review, or
+authorization evidence is missing or inconsistent. Never move or reuse a failed
+tag, rerun a failed release workflow, overwrite an npm version, unpublish to hide
+a failure, or substitute a local rebuild. Recovery starts from a fresh reviewed
+source change and, after any registry mutation, a separately authorized version.

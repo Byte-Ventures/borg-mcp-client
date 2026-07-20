@@ -6,7 +6,12 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { verifyPackedArtifact } from '../scripts/verify-packed-artifact.mjs';
 import { verifyLockRegistry, verifyRegistryMetadata } from '../scripts/verify-lock-registry.mjs';
-import { verifyProvenanceStatement } from '../scripts/verify-registry-release.mjs';
+import {
+  verifyArtifactReport,
+  verifyPostpublish,
+  verifyPrepublish,
+} from '../scripts/verify-registry-release.mjs';
+import { verifyReleaseTrigger } from '../scripts/verify-release-trigger.mjs';
 import {
   lockRegistryEntries,
   registryCompatible,
@@ -141,21 +146,16 @@ async function installFixtureConsumer(directory, tarball) {
   };
 }
 
-test('release workflow separates unprivileged verification from protected OIDC publication', async () => {
+test('release workflow prepares one candidate and remains structurally non-publishing', async () => {
   const workflow = await readFile(join(root, '.github', 'workflows', 'publish.yml'), 'utf8');
-  assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /if: github\.event_name == 'push'/);
+  assert.doesNotMatch(workflow, /workflow_dispatch:/);
   assert.match(workflow, /environment:\n\s+name: npm-publish/);
-  assert.equal((workflow.match(/id-token: write/g) ?? []).length, 1);
+  assert.equal((workflow.match(/id-token: write/g) ?? []).length, 0);
   assert.equal((workflow.match(/NPM_TOKEN|NODE_AUTH_TOKEN/g) ?? []).length, 0);
-  assert.doesNotMatch(workflow, /release_tag="\$\{\{ inputs\.tag \}\}"/);
-  assert.match(workflow, /DISPATCH_TAG: \$\{\{ inputs\.tag \}\}/);
-  assert.match(workflow, /test "\$\{GITHUB_REF_NAME\}" = "main"/);
-  assert.equal((workflow.match(/test "\$\{GITHUB_RUN_ATTEMPT\}" = "1"/g) ?? []).length, 2);
-  assert.match(workflow, /if: github\.event_name == 'push' && github\.run_attempt == 1/);
-  assert.equal((workflow.match(/npm publish "\$\{PWD\}\/release\//g) ?? []).length, 2);
+  assert.doesNotMatch(workflow, /npm publish|--provenance|SHA512SUMS|sha512sum|DSSE|in-toto|SLSA/);
+  assert.equal((workflow.match(/verify-release-trigger\.mjs/g) ?? []).length, 1);
+  assert.equal((workflow.match(/test "\$\{GITHUB_RUN_ATTEMPT\}" = "1"/g) ?? []).length, 1);
   assert.equal((workflow.match(/npm install --global --prefix "\$\{consumer\}"/g) ?? []).length, 1);
-  assert.doesNotMatch(workflow, /NODE_AUTH_TOKEN: \$\{\{ secrets\./);
   const checkouts = [...workflow.matchAll(/uses: actions\/checkout@/g)].map((match) => match.index);
   const attemptGuards = [...workflow.matchAll(/run: test "\$\{GITHUB_RUN_ATTEMPT\}" = "1"/g)]
     .map((match) => match.index);
@@ -163,21 +163,33 @@ test('release workflow separates unprivileged verification from protected OIDC p
   const setupNodes = [...workflow.matchAll(/uses: actions\/setup-node@/g)].map((match) => match.index);
   const bootstraps = [...workflow.matchAll(/npm install --prefix "\$\{npm_prefix\}"/g)].map((match) => match.index);
   assert.equal(checkouts.length, 2);
-  assert.equal(attemptGuards.length, 2);
-  assert.equal(configGuards.length, 2);
+  assert.equal(attemptGuards.length, 1);
+  assert.equal(configGuards.length, 1);
   assert.equal(setupNodes.length, 2);
-  assert.equal(bootstraps.length, 2);
-  for (const position of [0, 1]) {
-    assert.ok(checkouts[position] < attemptGuards[position]);
-    assert.ok(attemptGuards[position] < configGuards[position]);
-    assert.ok(configGuards[position] < setupNodes[position]);
-    assert.ok(setupNodes[position] < bootstraps[position]);
-  }
+  assert.equal(bootstraps.length, 1);
+  assert.ok(checkouts[0] < attemptGuards[0]);
+  assert.ok(attemptGuards[0] < configGuards[0]);
+  assert.ok(configGuards[0] < setupNodes[0]);
+  assert.ok(setupNodes[0] < bootstraps[0]);
   assert.doesNotMatch(workflow, /registry-url:/);
-  assert.equal((workflow.match(/--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/g) ?? []).length, 2);
-  assert.equal((workflow.match(/NPM_CONFIG_USERCONFIG=/g) ?? []).length, 8);
-  assert.equal((workflow.match(/NPM_CONFIG_CACHE=/g) ?? []).length, 4);
-  assert.equal((workflow.match(/config get registry/g) ?? []).length, 2);
+  assert.equal((workflow.match(/--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/g) ?? []).length, 1);
+  assert.equal((workflow.match(/npm ci --ignore-scripts/g) ?? []).length, 1);
+  assert.equal((workflow.match(/npm audit --audit-level=high/g) ?? []).length, 1);
+  assert.equal((workflow.match(/npm run check/g) ?? []).length, 1);
+  assert.equal((workflow.match(/npm test/g) ?? []).length, 1);
+  assert.equal((workflow.match(/npm run build/g) ?? []).length, 1);
+  assert.equal((workflow.match(/npm pack --ignore-scripts/g) ?? []).length, 1);
+  assert.equal((workflow.match(/verify-packed-artifact\.mjs/g) ?? []).length, 1);
+  assert.equal((workflow.match(/smoke-packed-client\.mjs/g) ?? []).length, 1);
+  const publicSource = workflow.indexOf('verify-public-source.mjs');
+  const readiness = workflow.indexOf('verify-release-readiness.mjs');
+  const install = workflow.indexOf('npm ci --ignore-scripts');
+  assert.ok(publicSource > 0 && publicSource < readiness && readiness < install);
+  assert.match(workflow, /name: npm-release-\$\{\{ steps\.release\.outputs\.version \}\}/);
+  assert.match(workflow, /name: npm-release-\$\{\{ needs\.verify\.outputs\.version \}\}/);
+  assert.match(workflow, /verify-registry-release\.mjs prepublish release\/artifact-report\.json/);
+  assert.doesNotMatch(workflow, /verify-registry-release\.mjs postpublish/);
+  assert.match(workflow, /CLIENT_NPM_PUBLICATION: deferred/);
 
   const ci = await readFile(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
   for (const line of `${workflow}\n${ci}`.split('\n').filter((value) => value.trim().startsWith('uses:'))) {
@@ -193,6 +205,15 @@ test('release attempt guard rejects reruns of an immutable tag workflow', () => 
     env: { ...process.env, GITHUB_RUN_ATTEMPT: '2' },
     stdio: 'pipe',
   }));
+});
+
+test('release trigger rejects non-tag events, malformed tags, and version mismatch', () => {
+  const valid = { eventName: 'push', refType: 'tag', refName: 'v2.0.0', version: '2.0.0' };
+  assert.deepEqual(verifyReleaseTrigger(valid), { tag: 'v2.0.0', version: '2.0.0' });
+  assert.throws(() => verifyReleaseTrigger({ ...valid, eventName: 'workflow_dispatch' }), /tag push event/);
+  assert.throws(() => verifyReleaseTrigger({ ...valid, refType: 'branch' }), /tag ref/);
+  assert.throws(() => verifyReleaseTrigger({ ...valid, refName: 'latest' }), /v<major>/);
+  assert.throws(() => verifyReleaseTrigger({ ...valid, refName: 'v2.0.1' }), /exactly match/);
 });
 
 test('release readiness accepts the extracted standalone client', async () => {
@@ -551,23 +572,6 @@ test('packed artifact verifier accepts readable source and executable bins', asy
   assert.match(report.integrity, /^sha512-/);
 });
 
-test('npm treats the audited absolute tarball path as a local publish dry-run', async (t) => {
-  const { directory, tarball } = await packedFixture();
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const result = JSON.parse(execFileSync('npm', [
-    'publish',
-    tarball,
-    '--dry-run',
-    '--ignore-scripts',
-    '--access',
-    'public',
-    '--json',
-  ], { cwd: directory, encoding: 'utf8' }));
-  const publication = result.borgmcp ?? (Array.isArray(result) ? result[0] : result);
-  assert.equal(publication.name, 'borgmcp');
-  assert.equal(publication.version, '2.0.0');
-});
-
 test('exact tarball installs cleanly and completes MCP initialize plus tool discovery', async (t) => {
   const { directory, tarball } = await packedFixture(async ({ packageRoot }) => {
     await removeFixtureRuntimeDependencies(packageRoot);
@@ -670,46 +674,79 @@ test('packed artifact verifier rejects indexed maps with absolute nested sources
   await assert.rejects(() => verifyPackedArtifact(tarball, { repositoryRoot: directory }), /Indexed source maps are forbidden/);
 });
 
-test('provenance verifier binds exact client package, digest, workflow, tag, and commit', () => {
-  const integrity = `sha512-${Buffer.from('a'.repeat(128), 'hex').toString('base64')}`;
-  const commit = '1'.repeat(40);
-  const statement = {
-    _type: 'https://in-toto.io/Statement/v1',
-    predicateType: 'https://slsa.dev/provenance/v1',
-    subject: [{ name: 'pkg:npm/borgmcp@2.0.0', digest: { sha512: 'a'.repeat(128) } }],
-    predicate: {
-      buildDefinition: {
-        externalParameters: {
-          workflow: {
-            repository: 'https://github.com/Byte-Ventures/borg-mcp-client',
-            path: '.github/workflows/publish.yml',
-            ref: 'refs/tags/v2.0.0',
-          },
-        },
-        internalParameters: { github: { event_name: 'push' } },
-        resolvedDependencies: [{
-          uri: 'git+https://github.com/Byte-Ventures/borg-mcp-client@refs/tags/v2.0.0',
-          digest: { gitCommit: commit },
-        }],
-      },
-      runDetails: { builder: { id: 'https://github.com/actions/runner/github-hosted' } },
-    },
+test('registry release helpers reject wrong package, version, owner, and existing versions', async () => {
+  const report = {
+    name: 'borgmcp',
+    version: '2.0.0',
+    integrity: `sha512-${Buffer.from('a'.repeat(128), 'hex').toString('base64')}`,
   };
-  assert.doesNotThrow(() => verifyProvenanceStatement(
-    statement,
-    'application/vnd.in-toto+json',
-    'borgmcp',
-    '2.0.0',
-    integrity,
-    commit,
-  ));
-  statement.predicate.buildDefinition.externalParameters.workflow.repository = 'https://github.com/example/fork';
-  assert.throws(() => verifyProvenanceStatement(
-    statement,
-    'application/vnd.in-toto+json',
-    'borgmcp',
-    '2.0.0',
-    integrity,
-    commit,
-  ), /workflow identity/);
+  assert.throws(() => verifyArtifactReport({ ...report, name: 'other' }, report.version), /must be borgmcp/);
+  assert.throws(() => verifyArtifactReport(report, '2.0.1'), /exactly 2\.0\.1/);
+
+  const existing = async () => new Response('{}', { status: 200 });
+  await assert.rejects(
+    () => verifyPrepublish(report, { expectedOwner: 'byteventures', request: existing }),
+    /already exists and is immutable/,
+  );
+
+  const wrongOwnerResponses = [
+    new Response('', { status: 404 }),
+    new Response(JSON.stringify({ maintainers: [{ name: 'other' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  ];
+  await assert.rejects(
+    () => verifyPrepublish(report, {
+      expectedOwner: 'byteventures',
+      request: async () => wrongOwnerResponses.shift(),
+    }),
+    /ownership differs/,
+  );
+});
+
+test('postpublish helper bounds registry propagation and requires exact integrity', async () => {
+  const report = {
+    name: 'borgmcp',
+    version: '2.0.0',
+    integrity: `sha512-${Buffer.from('a'.repeat(128), 'hex').toString('base64')}`,
+  };
+  let requests = 0;
+  const waits = [];
+  const result = await verifyPostpublish(report, {
+    attempts: 3,
+    intervalMs: 7,
+    request: async () => {
+      requests += 1;
+      return requests < 3
+        ? new Response('', { status: 404 })
+        : new Response(JSON.stringify({ dist: { integrity: report.integrity } }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+    },
+    wait: async (ms) => waits.push(ms),
+  });
+  assert.equal(requests, 3);
+  assert.deepEqual(waits, [7, 7]);
+  assert.equal(result.integrity, report.integrity);
+
+  await assert.rejects(
+    () => verifyPostpublish(report, {
+      attempts: 2,
+      intervalMs: 0,
+      request: async () => new Response('', { status: 404 }),
+      wait: async () => {},
+    }),
+    /returned HTTP 404/,
+  );
+  await assert.rejects(
+    () => verifyPostpublish(report, {
+      request: async () => new Response(JSON.stringify({ dist: { integrity: 'sha512-wrong' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    }),
+    /Registry integrity mismatch/,
+  );
 });

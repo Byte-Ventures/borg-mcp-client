@@ -1,20 +1,14 @@
-name: Publish to npm
+name: Prepare npm release candidate
 
 on:
   push:
     tags: ['v*.*.*']
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing immutable release tag to verify without publishing
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: npm-publish-${{ github.ref }}
+  group: npm-release-candidate-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -28,7 +22,6 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Reject immutable release reruns
         shell: bash
@@ -65,40 +58,27 @@ jobs:
         id: release
         shell: bash
         env:
-          DISPATCH_TAG: ${{ inputs.tag }}
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
         run: |
           set -euo pipefail
           test "$(node --version)" = "v22.22.2"
           test "$(npm --version)" = "11.18.0"
           test "${REPOSITORY_PRIVATE}" = "false"
+          node scripts/verify-release-trigger.mjs
           version="$(node -p "require('./package.json').version")"
           release_tag="${GITHUB_REF_NAME}"
-          if test "${GITHUB_EVENT_NAME}" = "workflow_dispatch"; then
-            test "${GITHUB_REF_TYPE}" = "branch"
-            test "${GITHUB_REF_NAME}" = "main"
-            test "${GITHUB_REF}" = "refs/heads/main"
-            protected_main_ref="refs/release-verification/main"
-            git fetch --no-tags origin "refs/heads/main:${protected_main_ref}"
-            git merge-base --is-ancestor "${GITHUB_SHA}" "${protected_main_ref}"
-            release_tag="${DISPATCH_TAG}"
-          else
-            test "${GITHUB_EVENT_NAME}" = "push"
-            test "${GITHUB_REF_TYPE}" = "tag"
-          fi
-          [[ "${release_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          test "${release_tag}" = "v${version}"
           verification_ref="refs/release-verification/${release_tag}"
           git fetch --no-tags origin "refs/tags/${release_tag}:${verification_ref}"
           test "$(git cat-file -t "${verification_ref}")" = "tag"
           release_commit="$(git rev-parse "${verification_ref}^{commit}")"
           test "$(git rev-parse HEAD)" = "${release_commit}"
-          if test "${GITHUB_EVENT_NAME}" = "push"; then
-            test "${release_commit}" = "${GITHUB_SHA}"
-          fi
-          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor "${release_commit}" refs/remotes/origin/main
+          test "${release_commit}" = "${GITHUB_SHA}"
+          git fetch --no-tags origin refs/heads/main:refs/release-verification/main
+          git merge-base --is-ancestor "${release_commit}" refs/release-verification/main
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify public-source boundary
+        run: node scripts/verify-public-source.mjs
 
       - name: Verify extraction and shared-package readiness
         run: node scripts/verify-release-readiness.mjs
@@ -136,13 +116,6 @@ jobs:
       - name: Verify exact release tarball
         run: node scripts/verify-packed-artifact.mjs "release/${{ steps.pack.outputs.tarball }}" > release/artifact-report.json
 
-      - name: Record exact release checksum
-        working-directory: release
-        run: sha512sum "${{ steps.pack.outputs.tarball }}" > SHA512SUMS
-
-      - name: Exercise publish metadata without publishing
-        run: npm publish "${PWD}/release/${{ steps.pack.outputs.tarball }}" --dry-run --ignore-scripts --access public --registry=https://registry.npmjs.org
-
       - name: Install and exercise the exact packed client
         shell: bash
         run: |
@@ -156,19 +129,17 @@ jobs:
             "${consumer}/lib/node_modules/borgmcp" \
             "${consumer}/bin/borg-mcp"
 
-      - name: Upload tarball for security audit
+      - name: Upload exact candidate for security review
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: npm-release-${{ steps.release.outputs.version }}
           path: |
             release/${{ steps.pack.outputs.tarball }}
             release/artifact-report.json
-            release/SHA512SUMS
           if-no-files-found: error
           retention-days: 7
 
-  publish:
-    if: github.event_name == 'push' && github.run_attempt == 1
+  publication-readiness:
     needs: verify
     runs-on: ubuntu-latest
     environment:
@@ -176,73 +147,28 @@ jobs:
       url: https://www.npmjs.com/package/borgmcp/v/${{ needs.verify.outputs.version }}
     permissions:
       contents: read
-      id-token: write
     steps:
-      - name: Check out tagged source
+      - name: Check out reviewed release helpers
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Reject immutable release reruns
-        shell: bash
-        run: test "${GITHUB_RUN_ATTEMPT}" = "1"
-
-      - name: Reject checked-out repository npm config
-        shell: bash
-        run: test ! -e .npmrc
 
       - name: Set up exact Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.22.2
 
-      - name: Set up exact npm
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm_prefix="${RUNNER_TEMP}/npm-11.18.0"
-          bootstrap_userconfig="${RUNNER_TEMP}/npm-bootstrap.npmrc"
-          bootstrap_cache="${RUNNER_TEMP}/npm-bootstrap-cache"
-          printf '%s\n' 'registry=https://registry.npmjs.org/' > "${bootstrap_userconfig}"
-          NPM_CONFIG_USERCONFIG="${bootstrap_userconfig}" NPM_CONFIG_CACHE="${bootstrap_cache}" \
-            npm install --prefix "${npm_prefix}" --ignore-scripts --no-save \
-            --registry=https://registry.npmjs.org npm@11.18.0
-          exact_npm="${npm_prefix}/node_modules/.bin/npm"
-          test "$(NPM_CONFIG_USERCONFIG="${bootstrap_userconfig}" "${exact_npm}" --version)" = "11.18.0"
-          test "$(NPM_CONFIG_USERCONFIG="${bootstrap_userconfig}" "${exact_npm}" config get registry)" = "https://registry.npmjs.org/"
-          echo "${npm_prefix}/node_modules/.bin" >> "${GITHUB_PATH}"
-          echo "NPM_CONFIG_USERCONFIG=${bootstrap_userconfig}" >> "${GITHUB_ENV}"
-          echo "NPM_CONFIG_CACHE=${bootstrap_cache}" >> "${GITHUB_ENV}"
-
-      - name: Download security-audited tarball
+      - name: Download same-run release candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: npm-release-${{ needs.verify.outputs.version }}
           path: release
 
-      - name: Verify downloaded checksum
-        working-directory: release
-        run: sha512sum --check SHA512SUMS
-
-      - name: Re-verify exact release tarball
-        run: node scripts/verify-packed-artifact.mjs "release/${{ needs.verify.outputs.tarball }}"
-
-      - name: Verify version availability and ownership
-        run: node scripts/verify-registry-release.mjs prepublish "release/${{ needs.verify.outputs.tarball }}"
+      - name: Verify immutable version and reviewed owner
+        run: node scripts/verify-registry-release.mjs prepublish release/artifact-report.json
         env:
+          EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
           NPM_EXPECTED_OWNER: ${{ vars.NPM_EXPECTED_OWNER }}
 
-      - name: Publish exact audited tarball with provenance
-        run: npm publish "${PWD}/release/${{ needs.verify.outputs.tarball }}" --ignore-scripts --access public --provenance --registry=https://registry.npmjs.org
-
-      - name: Verify registry integrity, ownership, and provenance
-        run: node scripts/verify-registry-release.mjs postpublish "release/${{ needs.verify.outputs.tarball }}"
+      - name: Confirm publication remains deferred
+        run: test "${CLIENT_NPM_PUBLICATION}" = "deferred"
         env:
-          GITHUB_SHA: ${{ github.sha }}
-          NPM_EXPECTED_OWNER: ${{ vars.NPM_EXPECTED_OWNER }}
-
-      - name: Cryptographically verify registry signatures and attestations
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir registry-verification
-          npm install --prefix registry-verification --ignore-scripts --save-exact "borgmcp@${{ needs.verify.outputs.version }}"
-          npm audit signatures --prefix registry-verification
+          CLIENT_NPM_PUBLICATION: deferred

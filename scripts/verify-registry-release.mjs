@@ -1,135 +1,122 @@
-import { setTimeout as delay } from 'node:timers/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { verifyPackedArtifact } from './verify-packed-artifact.mjs';
 
 const REGISTRY = 'https://registry.npmjs.org';
+const PACKAGE_NAME = 'borgmcp';
+const INTEGRITY_RE = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
 
-async function request(path) {
+async function requestRegistry(path) {
   return fetch(`${REGISTRY}/${path}`, {
     headers: { accept: 'application/json' },
     cache: 'no-store',
   });
 }
 
-async function json(response, description) {
+async function responseJson(response, description) {
   if (!response.ok) throw new Error(`${description} returned HTTP ${response.status}.`);
   return response.json();
 }
 
-function verifyOwner(packument, expectedOwner) {
+export function verifyArtifactReport(report, expectedVersion) {
+  if (report?.name !== PACKAGE_NAME) {
+    throw new Error(`Release candidate package must be ${PACKAGE_NAME}.`);
+  }
+  if (typeof report.version !== 'string' || report.version !== expectedVersion) {
+    throw new Error(`Release candidate version must be exactly ${expectedVersion}.`);
+  }
+  if (!INTEGRITY_RE.test(report.integrity ?? '') ||
+      Buffer.from(report.integrity.slice('sha512-'.length), 'base64').byteLength !== 64) {
+    throw new Error('Release candidate must have a full SHA-512 integrity.');
+  }
+  return { name: report.name, version: report.version, integrity: report.integrity };
+}
+
+export function verifyOwner(packument, expectedOwner) {
   if (!expectedOwner) throw new Error('NPM_EXPECTED_OWNER must be configured in the protected environment.');
-  const maintainers = (packument.maintainers ?? []).map((maintainer) => maintainer.name).sort();
+  const maintainers = (packument?.maintainers ?? []).map((maintainer) => maintainer.name).sort();
   if (maintainers.length !== 1 || maintainers[0] !== expectedOwner) {
     throw new Error(`Package ownership differs from the reviewed owner; registry maintainers: ${maintainers.join(', ')}`);
   }
 }
 
-async function prepublish(name, version) {
-  const versionResponse = await request(`${encodeURIComponent(name)}/${encodeURIComponent(version)}`);
+export async function verifyPrepublish(
+  report,
+  {
+    expectedVersion = report?.version,
+    expectedOwner,
+    request = requestRegistry,
+  } = {},
+) {
+  const artifact = verifyArtifactReport(report, expectedVersion);
+  const versionResponse = await request(
+    `${encodeURIComponent(artifact.name)}/${encodeURIComponent(artifact.version)}`,
+  );
   if (versionResponse.status !== 404) {
-    if (versionResponse.ok) throw new Error(`${name}@${version} already exists and is immutable.`);
+    if (versionResponse.ok) throw new Error(`${artifact.name}@${artifact.version} already exists and is immutable.`);
     throw new Error(`Version availability check returned HTTP ${versionResponse.status}.`);
   }
-  const packageResponse = await request(encodeURIComponent(name));
+  const packageResponse = await request(encodeURIComponent(artifact.name));
   if (packageResponse.status === 404) {
-    throw new Error(`${name} is unexpectedly unclaimed; do not bootstrap package ownership from this workflow.`);
+    throw new Error(`${artifact.name} is unexpectedly unclaimed; do not bootstrap package ownership from this workflow.`);
   }
-  const packument = await json(packageResponse, 'Package ownership check');
-  verifyOwner(packument, process.env.NPM_EXPECTED_OWNER);
-  return { name, version, registryState: 'owned' };
+  verifyOwner(await responseJson(packageResponse, 'Package ownership check'), expectedOwner);
+  return { name: artifact.name, version: artifact.version, registryState: 'owned' };
 }
 
-function decodePayload(attestation) {
-  try {
-    return JSON.parse(Buffer.from(attestation.bundle.dsseEnvelope.payload, 'base64').toString('utf8'));
-  } catch {
-    throw new Error('Registry provenance contains an invalid DSSE payload.');
+export async function verifyPostpublish(
+  report,
+  {
+    expectedVersion = report?.version,
+    request = requestRegistry,
+    wait = delay,
+    attempts = 12,
+    intervalMs = 5_000,
+  } = {},
+) {
+  const artifact = verifyArtifactReport(report, expectedVersion);
+  if (!Number.isSafeInteger(attempts) || attempts < 1 ||
+      !Number.isSafeInteger(intervalMs) || intervalMs < 0) {
+    throw new Error('Registry visibility retry bounds are invalid.');
   }
-}
-
-export function verifyProvenanceStatement(statement, payloadType, name, version, integrity, commit) {
-  if (payloadType !== 'application/vnd.in-toto+json' ||
-      statement?._type !== 'https://in-toto.io/Statement/v1' ||
-      statement?.predicateType !== 'https://slsa.dev/provenance/v1') {
-    throw new Error('Signed provenance statement is not in-toto Statement v1 with SLSA provenance v1.');
-  }
-  const digest = Buffer.from(integrity.slice('sha512-'.length), 'base64').toString('hex');
-  if (statement.subject?.length !== 1 ||
-      statement.subject[0].name !== `pkg:npm/${name}@${version}` ||
-      statement.subject[0].digest?.sha512 !== digest) {
-    throw new Error('Provenance subject does not match the audited npm tarball.');
-  }
-  const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
-  if (workflow?.repository !== 'https://github.com/Byte-Ventures/borg-mcp-client' ||
-      workflow?.path !== '.github/workflows/publish.yml' ||
-      workflow?.ref !== `refs/tags/v${version}`) {
-    throw new Error('Provenance workflow identity does not match the protected client release workflow.');
-  }
-  const github = statement.predicate?.buildDefinition?.internalParameters?.github;
-  if (github?.event_name !== 'push') throw new Error('Provenance was not generated by a tag push.');
-  const dependency = statement.predicate?.buildDefinition?.resolvedDependencies?.find(
-    (item) => item.uri === `git+https://github.com/Byte-Ventures/borg-mcp-client@refs/tags/v${version}`,
-  );
-  if (!commit || dependency?.digest?.gitCommit !== commit) {
-    throw new Error('Provenance source commit does not match the release workflow commit.');
-  }
-  if (statement.predicate?.runDetails?.builder?.id !== 'https://github.com/actions/runner/github-hosted') {
-    throw new Error('Provenance was not generated by a GitHub-hosted runner.');
-  }
-}
-
-async function verifyProvenance(attestationsUrl, name, version, integrity) {
-  const response = await fetch(attestationsUrl, { headers: { accept: 'application/json' }, cache: 'no-store' });
-  const document = await json(response, 'Provenance bundle verification');
-  const attestation = document.attestations?.find(
-    (item) => item.predicateType === 'https://slsa.dev/provenance/v1',
-  );
-  if (!attestation) throw new Error('Registry attestation bundle has no SLSA provenance statement.');
-  verifyProvenanceStatement(
-    decodePayload(attestation),
-    attestation.bundle.dsseEnvelope.payloadType,
-    name,
-    version,
-    integrity,
-    process.env.GITHUB_SHA,
-  );
-  return attestationsUrl;
-}
-
-async function postpublish(name, version, integrity) {
   let versionResponse;
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
-    versionResponse = await request(`${encodeURIComponent(name)}/${encodeURIComponent(version)}`);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    versionResponse = await request(
+      `${encodeURIComponent(artifact.name)}/${encodeURIComponent(artifact.version)}`,
+    );
     if (versionResponse.ok) break;
-    if (versionResponse.status !== 404 || attempt === 12) {
+    if (versionResponse.status !== 404 || attempt === attempts) {
       throw new Error(`Published version verification returned HTTP ${versionResponse.status}.`);
     }
-    await delay(5_000);
+    await wait(intervalMs);
   }
-  const published = await json(versionResponse, 'Published version verification');
-  if (published.dist?.integrity !== integrity) {
-    throw new Error(`Registry integrity mismatch: expected ${integrity}, received ${published.dist?.integrity}.`);
+  const published = await responseJson(versionResponse, 'Published version verification');
+  if (published.dist?.integrity !== artifact.integrity) {
+    throw new Error(`Registry integrity mismatch: expected ${artifact.integrity}, received ${published.dist?.integrity}.`);
   }
-  if (published.dist?.attestations?.provenance?.predicateType !== 'https://slsa.dev/provenance/v1' ||
-      !published.dist?.attestations?.url) {
-    throw new Error('Registry response does not contain the required SLSA provenance attestation.');
-  }
-  const provenance = await verifyProvenance(published.dist.attestations.url, name, version, integrity);
-  const packageResponse = await request(encodeURIComponent(name));
-  verifyOwner(await json(packageResponse, 'Post-publish ownership check'), process.env.NPM_EXPECTED_OWNER);
-  return { name, version, integrity, provenance, registryState: 'verified' };
+  return {
+    name: artifact.name,
+    version: artifact.version,
+    integrity: artifact.integrity,
+    registryState: 'verified',
+  };
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  const [mode, tarball] = process.argv.slice(2);
-  if (!['prepublish', 'postpublish'].includes(mode) || !tarball) {
-    throw new Error('Usage: node scripts/verify-registry-release.mjs <prepublish|postpublish> <package.tgz>');
+  const [mode, reportPath] = process.argv.slice(2);
+  if (!['prepublish', 'postpublish'].includes(mode) || !reportPath) {
+    throw new Error('Usage: node scripts/verify-registry-release.mjs <prepublish|postpublish> <artifact-report.json>');
   }
-  const artifact = await verifyPackedArtifact(tarball);
-  const report = mode === 'prepublish'
-    ? await prepublish(artifact.name, artifact.version)
-    : await postpublish(artifact.name, artifact.version, artifact.integrity);
-  console.log(JSON.stringify(report, null, 2));
+  const report = JSON.parse(await readFile(reportPath, 'utf8'));
+  const expectedVersion = process.env.EXPECTED_VERSION;
+  if (!expectedVersion) throw new Error('EXPECTED_VERSION is required.');
+  const result = mode === 'prepublish'
+    ? await verifyPrepublish(report, {
+        expectedVersion,
+        expectedOwner: process.env.NPM_EXPECTED_OWNER,
+      })
+    : await verifyPostpublish(report, { expectedVersion });
+  console.log(JSON.stringify(result, null, 2));
 }
