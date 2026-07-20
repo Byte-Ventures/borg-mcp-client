@@ -30,6 +30,16 @@ interface ActiveCube {
   serverTrustIdentity: string;
 }
 
+interface WriterRef {
+  endpoint: string;
+  trust_identity: string;
+  cube_id: string;
+  drone_id: string;
+  session_credential: string;
+  role_id?: string;
+  session_id?: string;
+}
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
@@ -45,6 +55,59 @@ function loopbackOrigin(value: string): string {
     throw new Error('BORG_API_URL must be a canonical numeric loopback HTTPS origin');
   }
   return parsed.origin;
+}
+
+function canonicalUuid(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !UUID_RE.test(value)) {
+    throw new Error(`${field} must be a canonical UUID`);
+  }
+  return value;
+}
+
+function decodeWriterRefs(value: unknown, active: ActiveCube): WriterRef[] {
+  if (!Array.isArray(value) || value.length < 2) {
+    throw new Error('BORG_E2E_WRITER_REFS must contain at least two writer refs');
+  }
+  const refs = value.map((candidate, index): WriterRef => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error(`writer ref ${index} must be an object`);
+    }
+    const ref = candidate as Record<string, unknown>;
+    const endpoint = loopbackOrigin(String(ref.endpoint ?? ''));
+    if (endpoint !== active.apiUrl || ref.trust_identity !== active.serverTrustIdentity) {
+      throw new Error(`writer ref ${index} endpoint/trust does not match the reader active seat`);
+    }
+    const cubeId = canonicalUuid(ref.cube_id, `writer ref ${index}.cube_id`);
+    if (cubeId !== active.cubeId) {
+      throw new Error(`writer ref ${index} cube_id does not match BORG_E2E_CUBE_ID`);
+    }
+    const droneId = canonicalUuid(ref.drone_id, `writer ref ${index}.drone_id`);
+    if (droneId === active.droneId) {
+      throw new Error(`writer ref ${index} is cross-wired to the reader drone_id`);
+    }
+    if (typeof ref.session_credential !== 'string' || ref.session_credential.length < 43) {
+      throw new Error(`writer ref ${index}.session_credential is missing or invalid`);
+    }
+    if (ref.session_credential === active.sessionToken) {
+      throw new Error(`writer ref ${index} is cross-wired to the reader session credential`);
+    }
+    if (ref.role_id !== undefined) canonicalUuid(ref.role_id, `writer ref ${index}.role_id`);
+    if (ref.session_id !== undefined) canonicalUuid(ref.session_id, `writer ref ${index}.session_id`);
+    return {
+      endpoint,
+      trust_identity: active.serverTrustIdentity,
+      cube_id: cubeId,
+      drone_id: droneId,
+      session_credential: ref.session_credential,
+      ...(typeof ref.role_id === 'string' ? { role_id: ref.role_id } : {}),
+      ...(typeof ref.session_id === 'string' ? { session_id: ref.session_id } : {}),
+    };
+  });
+  if (new Set(refs.map((ref) => ref.drone_id)).size !== refs.length ||
+    new Set(refs.map((ref) => ref.session_credential)).size !== refs.length) {
+    throw new Error('writer refs must have distinct server-attributed drone_id and session_credential values');
+  }
+  return refs;
 }
 
 function frame(value: unknown): Buffer {
@@ -128,6 +191,55 @@ describe('Sprint 4 E2E harness validation', () => {
     expect(UUID_RE.test('writer-1')).toBe(false);
     expect(UUID_RE.test('11111111-1111-4111-7111-111111111111')).toBe(false);
   });
+
+  it.each([
+    ['cube mismatch', { cube_id: '22222222-2222-4222-8222-222222222222' }, /cube_id/],
+    ['malformed UUID', { drone_id: 'writer-1' }, /drone_id/],
+    ['missing session', { session_credential: undefined }, /session_credential/],
+    ['reader cross-wire', { drone_id: '11111111-1111-4111-8111-111111111111' }, /cross-wired/],
+    ['endpoint mismatch', { endpoint: 'https://127.0.0.1:7444' }, /endpoint\/trust/],
+  ])('rejects writer ref %s before any append', (_case, patch, message) => {
+    const active: ActiveCube = {
+      cubeId: '11111111-1111-4111-8111-111111111111',
+      droneId: '11111111-1111-4111-8111-111111111111',
+      name: 'cube',
+      droneLabel: 'reader',
+      sessionToken: 'r'.repeat(43),
+      apiUrl: 'https://127.0.0.1:7443',
+      serverTrustIdentity: 'spki-sha256:test',
+    };
+    const writer = (drone: string, credential: string) => ({
+      endpoint: active.apiUrl,
+      trust_identity: active.serverTrustIdentity,
+      cube_id: active.cubeId,
+      drone_id: drone,
+      session_credential: credential,
+    });
+    expect(() => decodeWriterRefs([
+      { ...writer('22222222-2222-4222-8222-222222222222', 'a'.repeat(43)), ...patch },
+      writer('33333333-3333-4333-8333-333333333333', 'b'.repeat(43)),
+    ], active)).toThrow(message);
+  });
+
+  it('rejects duplicate writer identity and credential before any append', () => {
+    const active: ActiveCube = {
+      cubeId: '11111111-1111-4111-8111-111111111111',
+      droneId: '11111111-1111-4111-8111-111111111111',
+      name: 'cube',
+      droneLabel: 'reader',
+      sessionToken: 'r'.repeat(43),
+      apiUrl: 'https://127.0.0.1:7443',
+      serverTrustIdentity: 'spki-sha256:test',
+    };
+    const writer = {
+      endpoint: active.apiUrl,
+      trust_identity: active.serverTrustIdentity,
+      cube_id: active.cubeId,
+      drone_id: '22222222-2222-4222-8222-222222222222',
+      session_credential: 'a'.repeat(43),
+    };
+    expect(() => decodeWriterRefs([writer, writer], active)).toThrow(/distinct/);
+  });
 });
 
 describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
@@ -136,25 +248,20 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     const origin = loopbackOrigin(required('BORG_API_URL'));
     const caPath = path.resolve(required('BORG_E2E_CA_PATH'));
     const trustIdentity = required('BORG_E2E_TRUST_IDENTITY');
-    const writerTokens = JSON.parse(required('BORG_E2E_WRITER_TOKENS')) as unknown;
-    if (
-      !Array.isArray(writerTokens) ||
-      writerTokens.length < 2 ||
-      writerTokens.some((token) => typeof token !== 'string' || token.length < 43) ||
-      new Set(writerTokens).size !== writerTokens.length
-    ) {
-      throw new Error('BORG_E2E_WRITER_TOKENS must contain at least two distinct writer credentials');
-    }
 
     const active: ActiveCube = {
-      cubeId: required('BORG_E2E_CUBE_ID'),
-      droneId: required('BORG_E2E_READER_DRONE_ID'),
+      cubeId: canonicalUuid(required('BORG_E2E_CUBE_ID'), 'BORG_E2E_CUBE_ID'),
+      droneId: canonicalUuid(required('BORG_E2E_READER_DRONE_ID'), 'BORG_E2E_READER_DRONE_ID'),
       name: 's4-coupled-e2e',
       droneLabel: 's4-reader',
       sessionToken: required('BORG_E2E_READER_TOKEN'),
       apiUrl: origin,
       serverTrustIdentity: trustIdentity,
     };
+    const writerRefs = decodeWriterRefs(
+      JSON.parse(required('BORG_E2E_WRITER_REFS')) as unknown,
+      active,
+    );
     const runtimeDir = await mkdtemp(path.join(tmpdir(), 'borg-client-s4-coupled-'));
     const socketPath = path.join(runtimeDir, 'instrumented-app-server.sock');
     const sockets = new Set<net.Socket>();
@@ -388,7 +495,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         return body.payload.entry;
       };
 
-      const directed = await append(writerTokens[0], `s4-directed-${randomUUID()}`, true);
+      const directed = await append(writerRefs[0].session_credential, `s4-directed-${randomUUID()}`, true);
       await bounded((async () => {
         while (acceptedTurns < 1) await new Promise((resolve) => setTimeout(resolve, 10));
       })(), 'directed turn');
@@ -408,7 +515,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         const batch = Array.from({ length: Math.min(30, 150 - offset) }, (_, index) => {
           const sequence = offset + index;
           return append(
-            writerTokens[sequence % writerTokens.length],
+            writerRefs[sequence % writerRefs.length].session_credential,
             `s4-burst-${String(sequence).padStart(3, '0')}-${randomUUID()}`,
           );
         });
@@ -457,6 +564,12 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         directed_accepted_model_turns: directedTurns,
         directed_unread_occurrences: directedOccurrences,
         authenticated_writer_ids: [...authenticatedWriterIds].sort(),
+        validated_writer_refs: writerRefs.map(({ cube_id, drone_id, role_id, session_id }) => ({
+          cube_id,
+          drone_id,
+          ...(role_id ? { role_id } : {}),
+          ...(session_id ? { session_id } : {}),
+        })),
         authenticated_writer_count: authenticatedWriterIds.size,
         burst_expected: expectedIds.length,
         burst_drained: drainedExpected.length,
