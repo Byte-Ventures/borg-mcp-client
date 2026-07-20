@@ -435,17 +435,17 @@ describe('Template.cube_directive field', () => {
     expect(status?.prefixes).toContain('STARTING');
   });
 
-  it('routes every taxonomy class except cube-wide directly', () => {
+  it('broadcasts only completion gates and cube-wide events', () => {
     for (const name of ['software-dev', 'starter'] as const) {
       const taxonomy = getTemplate(name)!.message_taxonomy ?? [];
-      // exactly one broadcast class — cube-wide (DECISION/HALT) — exists.
+      const broadcastClasses = new Set(['completion-gate', 'cube-wide']);
       expect(
         taxonomy.some((entry) => entry.class === 'cube-wide'),
         `${name} has a cube-wide class`,
       ).toBe(true);
       for (const entry of taxonomy) {
-        if (entry.class === 'cube-wide') {
-          expect(entry.routing, `${name} cube-wide stays broadcast`).toBe('broadcast');
+        if (broadcastClasses.has(entry.class)) {
+          expect(entry.routing, `${name} ${entry.class} stays broadcast`).toBe('broadcast');
         } else {
           // A class silently regressing to broadcast would reopen broad fan-out.
           expect(entry.routing, `${name} ${entry.class} stays directed`).toBe('directed');

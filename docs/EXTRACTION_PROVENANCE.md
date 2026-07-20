@@ -8,7 +8,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 
 ## Deliberate Transformations
 
-- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release `borgmcp-shared@0.4.0` and a fresh standalone lockfile.
+- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release `borgmcp-shared@0.4.2` and a fresh standalone lockfile.
 - Replaced local template, role-section, drone-address, and log high-water-mark implementations with `borgmcp-shared` exports.
 - Removed monorepo-only website anti-drift tests and re-anchored remaining filesystem tests to this repository.
 - Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
@@ -33,5 +33,5 @@ Local enrollment now uses the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
 resolves to
-the audited registry `borgmcp-shared@0.4.0`; release remains blocked until the
+the audited registry `borgmcp-shared@0.4.2`; release remains blocked until the
 matching server passes the process-level setup→create→attach→restart→log/SSE gate.
