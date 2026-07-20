@@ -17,7 +17,9 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 - Kept self-hosted `--host --enroll` preview-only while implementing the
   client-generated PENDING credential/retry tuple and capability-gated,
   repository-idempotent cube creation required for local dogfood.
-- Set the standalone package identity to `2.0.0`; extraction and versioning do not authorize publication.
+- Initially set the standalone package identity to `2.0.0`. Its immutable
+  lightweight release tag failed before packaging, so the reviewed recovery
+  identity is `2.0.1`; extraction and versioning do not authorize publication.
 
 ## Review Holds
 
@@ -32,6 +34,7 @@ artifact reaches no hosted authority.
 Local enrollment now uses the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
-resolves to
-the audited registry `borgmcp-shared@0.4.2`; release remains blocked until the
-matching server passes the process-level setup→create→attach→restart→log/SSE gate.
+resolves to the audited registry `borgmcp-shared@0.4.2`. The matching
+`borgmcp-server@0.1.7` release is published and registry-verified; client
+publication remains gated by reviewed `v2.0.1` source, a fresh annotated tag,
+and exact registry integrity and signature verification.
