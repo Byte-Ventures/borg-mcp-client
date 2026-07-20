@@ -1,4 +1,4 @@
-import { getActiveCube, getCodexWakeTarget, setCodexWakeTarget } from './cubes.js';
+import { getActiveCube, getCodexWakeTarget, setCodexWakeTarget, type ActiveCube } from './cubes.js';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { checkCodexBridgeHealthy } from './codex-remote.js';
 export declare const CODEX_WAKE_PROMPT = "New Borg cube-log activity arrived.";
@@ -45,6 +45,7 @@ export interface CodexWakeDeps {
     now?: () => number;
     jitter?: () => number;
     maxAttempts?: number;
+    hasPendingWork?: (active: ActiveCube) => Promise<boolean>;
     isStreamOwner?: () => boolean;
     onAppServerSocketDead?: () => void;
 }
@@ -57,16 +58,13 @@ export declare function wakeCodexViaAppServer(reason?: string, env?: NodeJS.Proc
  */
 export declare const CODEX_HEARTBEAT_CADENCE_MS: number;
 /**
- * gh#857 WI-2: one tick of the codex /loop-equivalent heartbeat — a periodic,
- * independent re-engagement that injects a borg_read-log (unread_only=true) DRAIN turn so an
- * idle codex drone re-syncs even if every per-entry wake was missed. SKIPS when a
- * delivery (per-entry wake, retry-drain, or a prior heartbeat) already landed
- * within the cadence window (shouldFireHeartbeat), so an active cube with flowing
- * wakes never gets a redundant injection. Unlike the per-entry path it does NOT
- * consult deliveredWakeKeys — the cadence gate is the throttle, and the static
- * drain prompt is intentionally re-delivered each idle window. Best-effort: a
- * mid-turn thread / transient error / unresolved target just skips this tick (the
- * next tick retries). Never throws.
+ * gh#857/client#76: one tick of the codex catch-up backstop. The cadence only
+ * initiates a token-free unread-state preflight; a DRAIN turn is injected when
+ * that authoritative scan finds real work that a per-entry wake missed. Recent
+ * delivery still suppresses redundant preflights. Unlike the per-entry path it
+ * does not consult deliveredWakeKeys because the unread cursor is authoritative.
+ * Best-effort: a failed preflight, mid-turn thread, transient error, or unresolved
+ * target skips this tick and lets the next cadence retry. Never throws.
  */
 export declare function fireCodexHeartbeatTick(deps?: CodexWakeDeps, cadenceMs?: number): Promise<void>;
 /**

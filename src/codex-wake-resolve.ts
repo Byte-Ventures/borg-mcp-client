@@ -140,10 +140,10 @@ export function wakeRetryExpired(
 }
 
 /**
- * WI-2 double-fire avoidance: the periodic heartbeat fires only when no wake (or
- * prior heartbeat) delivery landed within the cadence window — so an active cube
- * with flowing per-entry wakes doesn't get redundant heartbeat injections. A
- * never-delivered seat (null) always fires.
+ * WI-2 double-fire avoidance: the periodic catch-up preflight runs only when no
+ * wake delivery landed within the cadence window. A never-delivered seat (null)
+ * is eligible for preflight; client#76 separately requires pending unread work
+ * before a model turn can start.
  */
 export function shouldFireHeartbeat(
   lastDeliveredAt: number | null,

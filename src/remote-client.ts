@@ -404,6 +404,66 @@ async function localReadLogPage(
   return payload;
 }
 
+interface PendingWakePage {
+  entries: Array<{
+    drone_id?: unknown;
+    message?: unknown;
+    visibility?: unknown;
+    recipient_drone_ids?: unknown;
+  }>;
+  cursor: LocalServerCursor | null;
+  has_more: boolean;
+}
+
+function isPendingWakeEntry(
+  entry: PendingWakePage['entries'][number],
+  droneId: string,
+): boolean {
+  if (entry.visibility === 'direct') {
+    const recipients = Array.isArray(entry.recipient_drone_ids)
+      ? entry.recipient_drone_ids.filter((recipient): recipient is string => typeof recipient === 'string')
+      : [];
+    if (!recipients.includes(droneId)) return false;
+  }
+
+  const isHeartbeatPing =
+    typeof entry.message === 'string' && entry.message.startsWith('[HEARTBEAT-PING]');
+  return entry.drone_id !== droneId || isHeartbeatPing;
+}
+
+/**
+ * client#76: inspect authoritative unread log state without advancing the
+ * agent-owned unread cursor. The scan mirrors the SSE wake filters: unaddressed
+ * direct entries and ordinary own posts are not work for this seat. A full
+ * paginated scan prevents a run of skipped entries from hiding later real work.
+ */
+export async function hasPendingWakeActivity(
+  active: ActiveCube,
+  deps: {
+    getCursor?: typeof getLocalServerCursor;
+    readPage?: (active: ActiveCube, opts: { cursor: LocalServerCursor | null; limit: number }) => Promise<PendingWakePage>;
+  } = {},
+): Promise<boolean> {
+  if (!active.serverTrustIdentity) {
+    throw new Error('Selected Borg server authority state is missing or unreadable');
+  }
+
+  const getCursor = deps.getCursor ?? getLocalServerCursor;
+  const readPage = deps.readPage ?? localReadLogPage;
+  let cursor = await getCursor(localCursorBinding(active));
+
+  for (;;) {
+    const page: PendingWakePage = await readPage(active, { cursor, limit: 500 });
+    if (page.entries.some((entry) => isPendingWakeEntry(entry, active.droneId))) return true;
+    if (!page.has_more) return false;
+    if (!page.cursor ||
+      (cursor && page.cursor.id === cursor.id && page.cursor.created_at === cursor.created_at)) {
+      throw new Error('Local Borg server returned a non-advancing log cursor');
+    }
+    cursor = page.cursor;
+  }
+}
+
 async function resolveLocalLogCursor(
   active: ActiveCube,
   since: string,
