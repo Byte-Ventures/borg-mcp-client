@@ -5,14 +5,14 @@
  * Two distinct, NON-conflated outcomes when a drone's session stops resolving:
  *
  *  - DroneEvictedError (server 410 / code DRONE_EVICTED) — TERMINAL. The seat is
- *    gone. The agent shuts down gracefully (print terminal message, TaskStop the
- *    inbox Monitor, do NOT reschedule /loop). This is the SOLE authoritative
+ *    gone. The client emits one harness-neutral stop-session recovery path. This
+ *    is the SOLE authoritative
  *    teardown trigger (SEC R2): an SSE eviction frame or inbox sentinel is only
  *    a WAKE HINT — the agent confirms via an authed call returning this code.
  */
 export const DRONE_EVICTED_CODE = 'DRONE_EVICTED';
 export class DroneEvictedError extends Error {
-    constructor(message = 'This drone has been evicted from the cube. Re-assimilate to rejoin.') {
+    constructor(message = 'This seat was removed from the cube.') {
         super(message);
         this.name = 'DroneEvictedError';
     }
@@ -27,12 +27,12 @@ export const EVICTED_RESULT_MARKER = '[CUBE-EVICTED]';
  * AUTHORITATIVE 410 DRONE_EVICTED. Spells out the sanctioned graceful-shutdown
  * sequence so the agent acts on it deterministically.
  */
-export function formatEvictedToolResult(detail) {
-    return (`${EVICTED_RESULT_MARKER} ${detail ?? 'This drone has been evicted from the cube.'}\n\n` +
-        `This is the AUTHORITATIVE terminal signal (server 410 DRONE_EVICTED). Shut down gracefully:\n` +
-        `1. Print a clear final message ("evicted from cube — shutting down").\n` +
-        `2. TaskStop the inbox Monitor — the SANCTIONED exception to "never TaskStop the Monitor"; eviction is the terminal case.\n` +
-        `3. Do NOT reschedule /loop (let the loop end). Do NOT re-assimilate in-session — the seat is gone.`);
+export function formatEvictedToolResult(cubeName) {
+    const cube = cubeName ?? 'the selected cube';
+    return (`${EVICTED_RESULT_MARKER} This seat was removed from cube ${cube}.\n\n` +
+        'Borg has stopped listening for activity for this seat. Do not retry this request or restart the loop.\n\n' +
+        'Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.\n\n' +
+        'To rejoin later, start a new session and use a new invitation from the server operator. Do not re-assimilate from this evicted session.');
 }
 /**
  * Extract the structured error code from a worker error body. The worker error

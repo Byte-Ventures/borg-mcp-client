@@ -1385,8 +1385,7 @@ export function formatEvictionSentinelLine(reason: string | null): string {
   const detail = reason && reason.trim().length > 0 ? reason : 'evicted from cube';
   return (
     `${ts} SYSTEM (eviction): ${EVICTED_RESULT_MARKER} ${detail} — ` +
-    `confirm with any borg_* call; on DRONE_EVICTED (410) shut down: ` +
-    `print the terminal message, TaskStop the inbox Monitor, do NOT reschedule /loop.`
+    'confirm with any borg_* call; on typed DRONE_EVICTED, stop this session without retrying or restarting the loop.'
   );
 }
 

@@ -40,4 +40,12 @@ export declare function assertUuidShape(value: string, label: string): void;
  * explicit `drone_id` input instead.
  */
 export declare function resolveDroneIdByLabel(drones: ReadonlyArray<EvictableDrone>, label: string): EvictableDrone | null;
+export declare function formatReassignDroneSuccess(input: {
+    droneLabel: string;
+    cubeName: string;
+    roleName: string;
+    droneId: string;
+    roleId: string;
+}): string;
+export declare function formatEvictDroneSuccess(droneLabel: string, cubeName: string): string;
 //# sourceMappingURL=evict-drone.d.ts.map

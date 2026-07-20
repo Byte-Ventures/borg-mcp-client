@@ -219,9 +219,14 @@ export async function setActiveCube(_active) {
 export function activeCubeWithFreshRegenIdentity(active, result) {
     const name = result.cube?.name ?? active.name;
     const droneLabel = result.drone?.label ?? active.droneLabel;
-    if (name === active.name && droneLabel === active.droneLabel)
+    const roleName = result.role?.name ?? active.roleName;
+    const roleClass = result.role?.role_class ?? active.roleClass;
+    const isHumanSeat = result.role?.is_human_seat ?? active.isHumanSeat;
+    if (name === active.name && droneLabel === active.droneLabel &&
+        roleName === active.roleName && roleClass === active.roleClass &&
+        isHumanSeat === active.isHumanSeat)
         return active;
-    return { ...active, name, droneLabel };
+    return { ...active, name, droneLabel, roleName, roleClass, isHumanSeat };
 }
 /**
  * Snapshot this worktree's exact FULL local-seat binding (incl drone id) plus a
@@ -318,7 +323,13 @@ export async function resetLocalSeatBinding(expected) {
  * mutate a seat ref.
  */
 export async function refreshActiveCubeMetadata(active) {
-    await refreshSeatMetadata(findProjectRoot(), {
+    if (!active.localSessionCredentialRef)
+        return false;
+    return refreshSeatMetadata(findProjectRoot(), {
+        credentialRef: active.localSessionCredentialRef,
+        cubeId: active.cubeId,
+        droneId: active.droneId,
+    }, {
         name: active.name,
         droneLabel: active.droneLabel,
         ...(active.roleName !== undefined ? { roleName: active.roleName } : {}),

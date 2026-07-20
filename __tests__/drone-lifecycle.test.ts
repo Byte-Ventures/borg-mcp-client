@@ -42,17 +42,20 @@ describe('error classes', () => {
     const e = new DroneEvictedError();
     expect(e.name).toBe('DroneEvictedError');
     expect(e).toBeInstanceOf(Error);
-    expect(e.message).toMatch(/evicted/i);
+    expect(e.message).toMatch(/removed from the cube/i);
   });
 });
 
 describe('tool-result formatters', () => {
-  it('EVICTED result marks terminal + spells out the sanctioned shutdown sequence', () => {
-    const text = formatEvictedToolResult('Drone evicted.');
-    expect(text).toContain(EVICTED_RESULT_MARKER);
-    expect(text).toMatch(/TaskStop the inbox Monitor/i);
-    expect(text).toMatch(/do NOT reschedule \/loop/i);
-    expect(text).toMatch(/410/);
+  it('EVICTED result matches the terminal recovery contract without harness-specific commands', () => {
+    const text = formatEvictedToolResult('borg-mcp');
+    expect(text).toBe(
+      `${EVICTED_RESULT_MARKER} This seat was removed from cube borg-mcp.\n\n` +
+      'Borg has stopped listening for activity for this seat. Do not retry this request or restart the loop.\n\n' +
+      'Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.\n\n' +
+      'To rejoin later, start a new session and use a new invitation from the server operator. Do not re-assimilate from this evicted session.',
+    );
+    expect(text).not.toMatch(/TaskStop|410|\/loop/);
   });
 
 });

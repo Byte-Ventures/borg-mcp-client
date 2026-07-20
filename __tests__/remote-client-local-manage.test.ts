@@ -64,6 +64,14 @@ describe('local-adapter management writes (client#39)', () => {
           role: { id: ROLE_ID, name: 'Builder' },
         })), { status: 200 });
       }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/drones/${DRONE_ID}` && method === 'PATCH') {
+        return new Response(JSON.stringify(localEnvelope({
+          drone: { id: DRONE_ID, cube_id: CUBE_ID, role_id: ROLE_ID, label: 'builder-1' },
+        })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/drones/${DRONE_ID}` && method === 'DELETE') {
+        return new Response(JSON.stringify(localEnvelope({ drone_id: DRONE_ID, evicted: true })), { status: 200 });
+      }
       throw new Error(`unexpected local request ${method} ${url.pathname}`);
     });
 
@@ -172,5 +180,25 @@ describe('local-adapter management writes (client#39)', () => {
       heading: 'Workflow',
       body: 'do the thing',
     });
+  });
+
+  it('reassigns a drone via the cube-scoped drone PATCH', async () => {
+    const { reassignDrone } = await import('../src/remote-client.js');
+    const out = await reassignDrone(DRONE_ID, ROLE_ID);
+    const { body } = call(`/api/cubes/${CUBE_ID}/drones/${DRONE_ID}`, 'PATCH');
+    expect(body.payload).toEqual({ role_id: ROLE_ID });
+    expect(out.drone).toEqual({ id: DRONE_ID, cube_id: CUBE_ID, role_id: ROLE_ID, label: 'builder-1' });
+  });
+
+  it('evicts a drone via the cube-scoped drone DELETE', async () => {
+    const { evictDrone } = await import('../src/remote-client.js');
+    const out = await evictDrone(DRONE_ID, {
+      cubeId: CUBE_ID,
+      cubeName: 'Hive',
+      targetReference: DRONE_ID,
+    });
+    const { body } = call(`/api/cubes/${CUBE_ID}/drones/${DRONE_ID}`, 'DELETE');
+    expect(body.payload).toEqual({});
+    expect(out).toEqual({ drone_id: DRONE_ID, evicted: true });
   });
 });

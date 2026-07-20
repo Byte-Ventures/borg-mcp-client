@@ -5,8 +5,8 @@
  * Two distinct, NON-conflated outcomes when a drone's session stops resolving:
  *
  *  - DroneEvictedError (server 410 / code DRONE_EVICTED) — TERMINAL. The seat is
- *    gone. The agent shuts down gracefully (print terminal message, TaskStop the
- *    inbox Monitor, do NOT reschedule /loop). This is the SOLE authoritative
+ *    gone. The client emits one harness-neutral stop-session recovery path. This
+ *    is the SOLE authoritative
  *    teardown trigger (SEC R2): an SSE eviction frame or inbox sentinel is only
  *    a WAKE HINT — the agent confirms via an authed call returning this code.
  */
@@ -24,7 +24,7 @@ export declare const EVICTED_RESULT_MARKER = "[CUBE-EVICTED]";
  * AUTHORITATIVE 410 DRONE_EVICTED. Spells out the sanctioned graceful-shutdown
  * sequence so the agent acts on it deterministically.
  */
-export declare function formatEvictedToolResult(detail?: string): string;
+export declare function formatEvictedToolResult(cubeName?: string): string;
 /**
  * Extract the structured error code from a worker error body. The worker error
  * funnel (sanitizeError → createHttpError) emits `{ code, message }`; some

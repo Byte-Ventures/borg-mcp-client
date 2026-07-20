@@ -1122,8 +1122,7 @@ export function formatEvictionSentinelLine(reason) {
     const ts = new Date().toISOString();
     const detail = reason && reason.trim().length > 0 ? reason : 'evicted from cube';
     return (`${ts} SYSTEM (eviction): ${EVICTED_RESULT_MARKER} ${detail} — ` +
-        `confirm with any borg_* call; on DRONE_EVICTED (410) shut down: ` +
-        `print the terminal message, TaskStop the inbox Monitor, do NOT reschedule /loop.`);
+        'confirm with any borg_* call; on typed DRONE_EVICTED, stop this session without retrying or restarting the loop.');
 }
 async function defaultAppendLine(cubeId, droneId, line) {
     const p = inboxPathForDrone(cubeId, droneId);

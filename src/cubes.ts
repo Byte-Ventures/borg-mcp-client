@@ -66,8 +66,8 @@ export interface ActiveCube {
   // gh#899: the assimilated role, persisted so the connect-time ListTools
   // handler can role-scope the NATIVE tool surface (UX/context only — never an
   // auth boundary). Absent on pre-gh#899 cubes.json entries → the filter
-  // defaults to the FULL set (no capability hidden). Stale after a mid-session
-  // reassign until the next relaunch; the dispatcher covers capability meantime.
+  // defaults to the FULL set (no capability hidden). Regen and a successful
+  // self-reassignment refresh this display metadata without changing seat identity.
   roleName?: string;
   roleClass?: 'queen' | 'worker';
   isHumanSeat?: boolean;
@@ -299,12 +299,25 @@ export async function setActiveCube(_active: ActiveCubeInput): Promise<void> {
 
 export function activeCubeWithFreshRegenIdentity(
   active: ActiveCube,
-  result: { cube?: { name?: string | null }; drone?: { label?: string | null } }
+  result: {
+    cube?: { name?: string | null };
+    drone?: { label?: string | null };
+    role?: {
+      name?: string | null;
+      role_class?: 'queen' | 'worker' | null;
+      is_human_seat?: boolean | null;
+    };
+  }
 ): ActiveCube {
   const name = result.cube?.name ?? active.name;
   const droneLabel = result.drone?.label ?? active.droneLabel;
-  if (name === active.name && droneLabel === active.droneLabel) return active;
-  return { ...active, name, droneLabel };
+  const roleName = result.role?.name ?? active.roleName;
+  const roleClass = result.role?.role_class ?? active.roleClass;
+  const isHumanSeat = result.role?.is_human_seat ?? active.isHumanSeat;
+  if (name === active.name && droneLabel === active.droneLabel &&
+      roleName === active.roleName && roleClass === active.roleClass &&
+      isHumanSeat === active.isHumanSeat) return active;
+  return { ...active, name, droneLabel, roleName, roleClass, isHumanSeat };
 }
 
 // The ONLY sanctioned seat-clear is resetLocalSeatBinding → seats.ts
@@ -465,8 +478,13 @@ export type FinalizeServerSeatOutcome =
  * worktree has no active seat, so a stale regen identity can never resurrect or
  * mutate a seat ref.
  */
-export async function refreshActiveCubeMetadata(active: ActiveCubeInput): Promise<void> {
-  await refreshSeatMetadata(findProjectRoot(), {
+export async function refreshActiveCubeMetadata(active: ActiveCubeInput): Promise<boolean> {
+  if (!active.localSessionCredentialRef) return false;
+  return refreshSeatMetadata(findProjectRoot(), {
+    credentialRef: active.localSessionCredentialRef,
+    cubeId: active.cubeId,
+    droneId: active.droneId,
+  }, {
     name: active.name,
     droneLabel: active.droneLabel,
     ...(active.roleName !== undefined ? { roleName: active.roleName } : {}),

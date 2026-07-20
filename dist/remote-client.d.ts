@@ -9,8 +9,10 @@
  * There is no hosted-authority path: every request must carry verified local
  * server trust or it fails closed before any network or credential use.
  */
+import { type EvictDroneResult, type ReassignDroneResult } from 'borgmcp-shared/protocol';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import type { WorkingRepo } from './working-repo.js';
+import { type ActiveCube } from './cubes.js';
 export interface RemoteConnection {
     apiUrl: string;
     authToken: string;
@@ -51,6 +53,11 @@ export declare function retryOn429(initialResponse: Response, doRequest: () => P
     jitter?: () => number;
     log?: (msg: string) => void;
 }): Promise<Response>;
+export interface LocalManageOperation {
+    operation: string;
+    cubeName: string;
+    noMutation: string;
+}
 /**
  * Get the active cube's directive + role registry.
  */
@@ -346,12 +353,22 @@ export declare function deleteRole(roleId: string): Promise<void>;
  * the seat returns an error. The class-hierarchy guard also rejects
  * direct promotion from non-human-seat roles.
  */
-export declare function reassignDrone(droneId: string, roleId: string): Promise<never>;
-/**
- * Drone eviction is not exposed by the local server yet.
- */
-export declare function evictDrone(droneId: string): Promise<void>;
+export declare function reassignDrone(droneId: string, roleId: string, activeOverride?: ActiveCube): Promise<ReassignDroneResult>;
+export interface EvictDroneOptions {
+    cubeId?: string;
+    cubeName?: string;
+    targetReference?: string;
+    active?: ActiveCube;
+}
+export declare function evictDrone(droneId: string, options?: EvictDroneOptions): Promise<EvictDroneResult>;
 export declare function listRoles(cubeId: string): Promise<any[]>;
+export declare function getCubeForManagement(cubeId: string, operation: LocalManageOperation, activeOverride?: ActiveCube): Promise<{
+    id: string;
+    name: string;
+    roles: any[];
+    drones: any[];
+    [k: string]: any;
+}>;
 /**
  * Fetch a cube's full detail: directive, roles (with detailed
  * descriptions), and drones. Access is enforced by the local client's live

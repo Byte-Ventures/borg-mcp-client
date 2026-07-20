@@ -83,6 +83,16 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     }
   });
 
+  it('drone management tools describe local manage authority and retained attribution', () => {
+    const reassign = TOOL_MANIFEST.find((entry) => entry.name === 'borg_reassign-drone');
+    const evict = TOOL_MANIFEST.find((entry) => entry.name === 'borg_evict-drone');
+    expect(reassign?.description).toContain('cube-management grant');
+    expect(reassign?.description).toContain('workflow labels, not server permissions');
+    expect(evict?.description).toContain('cube-management grant');
+    expect(evict?.description).toContain('activity history keeps');
+    expect(`${reassign?.description}\n${evict?.description}`).not.toMatch(/not exposed|unsupported|Cloud/i);
+  });
+
   it('empty role updates do not recommend retired model selection (gh#1019)', () => {
     const errorCopy = [...clientEntrySource.matchAll(/Pass at least one of:[^']+/g)]
       .map((match) => match[0])
