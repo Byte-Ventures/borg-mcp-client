@@ -152,6 +152,34 @@ Role id: d22109c3-1234-4abc-8def-1234567890ab</pre>
 
       <article>
         <header>
+          <h2>Server committed; local display refresh failed</h2>
+          <span class="state">Success with warning</span>
+        </header>
+        <pre class="terminal"><span class="prompt">MCP tool call</span>  borg_reassign-drone
+{
+  "drone_id": "7a120000-1234-4abc-8def-1234567890ab",
+  "role_id": "d22109c3-1234-4abc-8def-1234567890ab"
+}
+
+Tool result
+Reassigned builder-7a12 in cube borg-mcp to role Code Reviewer.
+Drone id: 7a120000-1234-4abc-8def-1234567890ab
+Role id: d22109c3-1234-4abc-8def-1234567890ab
+
+<span class="warning">Local display warning:</span> The server committed this change, but Borg could not refresh this worktree's saved seat metadata. Local role details may be stale. Do not retry the reassignment.
+
+Run `borg_regen` to refresh the server-authoritative role. If this session still shows the previous role, restart this agent session once. Do not re-assimilate or repeat the management request.</pre>
+        <div class="notes"><strong>Required outcome</strong>
+          <ul>
+            <li>Lead with the successful server mutation; the warning is ancillary local state.</li>
+            <li>Say that local display details may be stale, never that the server result is uncertain.</li>
+            <li>Prohibit retry, then give one bounded recovery sequence: regen first, session restart only if still stale.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article>
+        <header>
           <h2>Removed session wakes</h2>
           <span class="state">Terminal</span>
         </header>
@@ -196,7 +224,7 @@ Dry-run: nothing was deleted. Re-run with `--prune` to remove this worktree.</pr
 
     <section class="rules">
       <h2>Behavior rules</h2>
-      <p>Eviction is authoritative only after the pinned local authority returns the typed eviction verdict. Generic authentication failures, expired credentials, network errors, trust mismatches, and unknown responses remain non-destructive. Drone management is authorized by a server-derived principal with cube management permission. Coordinator and Queen are workflow labels, not authorization capabilities.</p>
+      <p>Reassignment and eviction are authoritative after the pinned local authority returns their typed success verdicts; no second network read is required to prove commit. Generic authentication failures, expired credentials, network errors, trust mismatches, and unknown responses remain non-destructive. Drone management is authorized by a server-derived principal with cube management permission. Coordinator and Queen are workflow labels, not authorization capabilities.</p>
     </section>
 
     <section class="rules">
@@ -206,6 +234,8 @@ Dry-run: nothing was deleted. Re-run with `--prune` to remove this worktree.</pr
         <li><code>src/tool-manifest.ts</code> describes retained attribution and cube management permission; it removes the hosted-era Owner-scoped promise and does not present a role label as an authorization boundary.</li>
         <li><code>src/remote-client.ts</code> describes the local cube-scoped management contract and retained attribution without hosted RLS, ownership, or anonymization claims.</li>
         <li><code>src/drone-lifecycle.ts</code> gives the removed session one recovery path: stop this session, then rejoin later from a new session with a new invitation.</li>
+        <li>A confirmed mutation is never reported as failed because ancillary local metadata refresh failed. The result keeps the success copy, adds the exact non-retry warning above, and performs no post-commit network request.</li>
+        <li>Self-role metadata refresh updates only the exact original seat identity under lock (worktree, credential reference, cube, and drone). A concurrent replacement is an honest no-op, never an overwrite.</li>
       </ul>
     </section>
   </main>
