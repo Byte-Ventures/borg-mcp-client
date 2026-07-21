@@ -2,7 +2,7 @@
  * Real-fs tests for the 0600 flocked atomic store primitive (Queen rescope).
  * Verifies SR-seven's file-store checklist items 1–4 against the real filesystem.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chmodSync,
   existsSync,
@@ -12,6 +12,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -99,6 +100,46 @@ describe('seat-store atomic 0600 write (checklist #1, #2, #3)', () => {
     expect(mode(join(tight, 'seats.json'))).toBe(0o600);
   });
 
+  it('rejects non-canonical store paths before writing', async () => {
+    const dir = fixture();
+    const nonCanonical = `${dir}/nested/../seats.json`;
+    await expect(atomicWrite0600(nonCanonical, '{"secret":true}')).rejects.toThrow(/canonical/i);
+    expect(existsSync(join(dir, 'seats.json'))).toBe(false);
+  });
+
+  it('rejects a symlinked credential-store directory', async () => {
+    const dir = fixture();
+    const real = join(dir, 'real');
+    const linked = join(dir, 'linked');
+    mkdirSync(real, { mode: 0o700 });
+    symlinkSync(real, linked, 'dir');
+    await expect(atomicWrite0600(join(linked, 'seats.json'), '{}')).rejects.toThrow(/symlink|canonical/i);
+    expect(existsSync(join(real, 'seats.json'))).toBe(false);
+  });
+
+  it('rejects a symlinked store file without reading its target', async () => {
+    const dir = fixture();
+    const target = join(dir, 'target.json');
+    const linked = join(dir, 'seats.json');
+    writeFileSync(target, '{"secret":"must-not-read"}', { mode: 0o600 });
+    symlinkSync(target, linked);
+    await expect(readStoreFile(linked)).rejects.toThrow(/symlink|canonical/i);
+  });
+
+  it('rejects a credential file not owned by the current user', async () => {
+    if (typeof process.getuid !== 'function') return;
+    const dir = fixture();
+    const store = join(dir, 'seats.json');
+    writeFileSync(store, '{}', { mode: 0o600 });
+    const actualUid = process.getuid();
+    const getuid = vi.spyOn(process, 'getuid').mockReturnValue(actualUid + 1);
+    try {
+      await expect(readStoreFile(store)).rejects.toThrow(/owned by the current user/i);
+    } finally {
+      getuid.mockRestore();
+    }
+  });
+
   it('a failed write (parent is a file) cleans up the temp and throws', async () => {
     const dir = fixture();
     // Make the intended parent path a FILE so mkdir/open fails.
@@ -178,6 +219,7 @@ describe('seat-store single-lock RCW (checklist #4)', () => {
     const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
     await new Promise<void>((r) => child.on('spawn', () => r()));
     writeFileSync(lock, JSON.stringify({ pid: child.pid, startTime: new Date().toISOString() }));
+    chmodSync(lock, 0o600);
     // Backdate mtime far past any legacy age threshold — option (b) has NO age gate,
     // so a live holder is STILL never stolen (only ever waited on, then busy).
     const old = new Date(Date.now() - 10 * 60 * 1000);
@@ -197,6 +239,7 @@ describe('seat-store single-lock RCW (checklist #4)', () => {
     const lock = join(dir, 'seats.json.lock');
     // A PID that is essentially certain to be dead, plus a recorded start time.
     writeFileSync(lock, JSON.stringify({ pid: 2 ** 30, startTime: '2020-01-01T00:00:00.000Z' }));
+    chmodSync(lock, 0o600);
     // Fail closed: the message names the EXACT lockfile path and is 'stale'.
     await expect(
       withStoreLock(lock, async () => { /* unreachable */ }, { attempts: 50, waitMs: 5 }),
@@ -212,6 +255,7 @@ describe('seat-store single-lock RCW (checklist #4)', () => {
     const dir = fixture();
     const lock = join(dir, 'seats.json.lock');
     writeFileSync(lock, 'not-json-garbage');
+    chmodSync(lock, 0o600);
     await expect(
       withStoreLock(lock, async () => { /* unreachable */ }, { attempts: 3, waitMs: 1 }),
     ).rejects.toThrow(/stale/i);

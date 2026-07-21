@@ -62,7 +62,8 @@ describe('borg server help', () => {
       `  setup    Prepare local server identity and data; does not start the server.\n` +
       `  start    Start the verified server in the foreground.\n` +
       `  status   Report verified runtime evidence.\n` +
-      `  update   Verify and activate a local server artifact.\n\n` +
+      `  update   Verify and activate a local server artifact.\n` +
+      `  invite   Create a single-use invitation in an interactive terminal.\n\n` +
       `Run borg server <command> --help for server command options.\n`,
     );
   });

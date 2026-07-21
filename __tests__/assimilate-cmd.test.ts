@@ -2970,6 +2970,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(prompt).toHaveBeenCalledTimes(1); // authority; local server owns its fixed template
     expect(String(prompt.mock.calls[0][0])).toContain('Local Borg server detected');
     expect(connectServer).toHaveBeenCalledWith('https://localhost:8787');
+    expect(deps.promptSecret).not.toHaveBeenCalled();
     expect(deps.createCube).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),

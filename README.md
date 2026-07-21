@@ -86,14 +86,15 @@ and recovery flow in [`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md).
 Open a second operator terminal in the project checkout and run:
 
 ```bash
-borg assimilate --host 127.0.0.1:7091 --enroll
+borg assimilate
 ```
 
-At the labeled hidden prompt, enter the owner enrollment invitation (single-use,
-shown once by server setup or `borg-mcp-server owner-invite`). Borg enrolls the
-owner client, creates or joins the repository cube, attaches a drone to a role
-seat, and launches the selected agent. Agent seats begin only after the owner
-client and cube exist; do not ask an agent seat to run the enrollment command.
+Setup provisions the first same-machine owner credential in the owner-only
+`~/.borg/credentials` file. Bare assimilation uses that credential without an
+invitation prompt, creates or joins the repository cube, attaches a drone to a
+role seat, and launches the selected agent. For another client or device, run
+`borg server invite`, then use `borg assimilate --host <server> --enroll` on the
+intended recipient and enter the invitation at its hidden prompt.
 In the launched agent, run `borg_whoami` and `borg_roster` to verify the seat and
 begin coordinating.
 

@@ -30,9 +30,16 @@ Commands:
   start    Start the verified server in the foreground.
   status   Report verified runtime evidence.
   update   Verify and activate a local server artifact.
+  invite   Create a single-use invitation in an interactive terminal.
 
 Run borg server <command> --help for server command options.
 ```
+
+Local server client credentials are stored in the owner-controlled
+`~/.borg/credentials` file with mode 0600. Fresh same-machine setup provisions
+the first owner record there, so bare `borg assimilate` can use it without an
+invitation prompt. Use `borg server invite` explicitly when another client or
+device needs a single-use invitation; its output is owned by the server.
 
 Status reports only runtime evidence supplied by the server: running/stopped
 state, exact running artifact and immutable build identity when available,
@@ -48,36 +55,32 @@ Keep the foreground server running. Open a second operator terminal in the
 project checkout and run:
 
 ```bash
-borg assimilate --host 127.0.0.1:7091 --enroll
+borg assimilate
 ```
 
-The labeled hidden prompt awaits the owner enrollment invitation (single-use,
-shown once). An owner enrollment invitation comes from setup or the offline
-`borg-mcp-server owner-invite` recovery command. A later ordinary client uses a
-client enrollment invitation from `borg-mcp-server client-invite`. Never put an
-enrollment invitation in argv, environment variables, logs, or diagnostics.
-The offline replacement commands visibly prompt for the recovery credential;
-never put that credential in argv or environment variables either.
+Setup provisions the first same-machine owner credential directly, so this flow
+does not ask for an invitation. For another client or device, run `borg server
+invite` in the server operator's interactive terminal. On the intended recipient,
+run `borg assimilate --host <server> --enroll` and enter the single-use invitation
+at the labeled hidden prompt. Never put an invitation in argv, environment
+variables, logs, or diagnostics.
 
-Before sending the invitation,
-the client generates a 256-bit credential and UUID retry key and persists the
-exact tuple as `PENDING` in the local seat store on this machine — a
-0600-permission file store, parity with the server's TLS keys. An ambiguous
-exchange retries that tuple exactly; the credential becomes active only after the
-versioned response is decoded and the authenticated protocol handshake succeeds.
-A new process resumes that pending enrollment before displaying another
-invitation prompt.
+For explicit invitation enrollment, the client generates a 256-bit credential
+and UUID retry key and persists the exact tuple as `PENDING` in the 0600
+credential file before network I/O. An ambiguous exchange retries that tuple
+exactly; the credential becomes active only after the versioned response is
+decoded and the authenticated protocol handshake succeeds. A new process
+resumes that pending enrollment before displaying another invitation prompt.
 
 `--cube-name <name>` explicitly selects the repository cube name. Without an
 explicit name, Borg uses the `origin` repository name or, when `origin` is
-absent, proposes the sanitized repository-directory basename before consuming
-an enrollment invitation. Confirm interactively or pass `--yes`; bare
-repositories fail closed.
+absent, proposes the sanitized repository-directory basename. Confirm
+interactively or pass `--yes`; bare repositories fail closed.
 
 The connection is HTTPS-only. Borg validates the server trust material, stores
-enrollment and session credentials in the local seat store on this machine (a
-0600-permission file store), and persists only an opaque credential reference
-with the active cube. Local requests
+parent enrollment credentials in `~/.borg/credentials` and session credentials
+in the existing 0600 seat store, and persists only an opaque credential
+reference with the active cube. Local requests
 use the server's `/api/cubes/*` coordination routes. They cannot use hosted OAuth
 credentials or change authority implicitly.
 
@@ -110,16 +113,15 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 
 ## Recovery commands
 
-- No saved or rejected enrollment: rerun `borg assimilate --host <server> --enroll`
-  from the operator's interactive terminal.
+- No saved or rejected enrollment: generate a single-use invitation with
+  `borg server invite`, then run `borg assimilate --host <server> --enroll` from
+  the intended recipient's interactive terminal.
 - Rejected or expired invitation: keep the server running and mint a replacement
-  scoped invitation with `borg-mcp-server owner-invite` for an unclaimed owner
-  client or `borg-mcp-server client-invite` for an ordinary client, then rerun
-  `borg assimilate --host <server> --enroll` with the replacement invitation.
+  invitation with `borg server invite`, then rerun `borg assimilate --host
+  <server> --enroll` with the replacement invitation.
 - Rejected or unloadable local seat: run `borg reset-local-seat --host <server>`
-  to clear ONLY this worktree's saved local seat, then — with the server still
-  running — ask the operator for a fresh scoped invitation and rerun
-  `borg assimilate --host <server> --enroll`.
+  to clear ONLY this worktree's saved local seat, then rerun `borg assimilate
+  --host <server>` with the server still running.
 - Unreachable server: start or restart it with `borg server start`, then
   rerun `borg assimilate --host <server>`.
 - Trust mismatch after an intentional server re-initialization: verify the

@@ -13,7 +13,9 @@
  *   2. ATOMIC RENAME — temp in the SAME dir/fs, created 0600, fsync THEN rename;
  *      a crash never leaves a torn/readable partial, and the temp is cleaned up
  *      on any write failure.
- *   3. PARENT DIR 0700 — created with mode 0700.
+ *   3. PARENT DIR — private stores require 0700. The canonical ~/.borg parent
+ *      may explicitly use the owner-controlled policy (0755 accepted, 0022
+ *      forbidden) without rewriting its established mode.
  *   4. flock DISCIPLINE — a single advisory lock (O_EXCL lockfile), RULED option
  *      (b) (Coordinator cca6957a): NO automatic reclaim, EVER. Acquire is an atomic
  *      `open(lockPath,'wx',0o600)`; the whole read-compare-write runs inside ONE
@@ -28,20 +30,24 @@
  * this module never logs it, and the digest-only observation discipline of the
  * callers keeps the raw bearer from leaving the store owner.
  */
+export interface SecureStoreOptions {
+    secureRoot?: string;
+    rootMode?: 'private' | 'owner-controlled';
+}
 /**
  * Atomic 0600 write (checklist #1 + #2): write to a same-dir temp opened
  * O_CREAT|O_EXCL at mode 0600 (never write-then-chmod), fsync the data, then
  * rename over the target (atomic; the mode carries across). A failed write
  * cleans up the temp so no leftover file ever holds the secret.
  */
-export declare function atomicWrite0600(filePath: string, data: string): Promise<void>;
+export declare function atomicWrite0600(filePath: string, data: string, options?: SecureStoreOptions): Promise<void>;
 /**
  * Read the store file, or null when it does not exist (ONLY the missing-file
  * no-op path initializes empty). When the file exists, the 0600-store + 0700-parent
  * perms are enforced BEFORE the bytes are read (CR#2) — a loosely-permissioned
  * secret fails closed and is never read.
  */
-export declare function readStoreFile(filePath: string): Promise<string | null>;
+export declare function readStoreFile(filePath: string, options?: SecureStoreOptions): Promise<string | null>;
 /**
  * Acquire the single advisory lock (checklist #4, RULED option b), run `op`, and
  * release it on EVERY path (finally) by unlinking OUR OWN lock. Acquire is an atomic
@@ -58,7 +64,7 @@ export declare function readStoreFile(filePath: string): Promise<string | null>;
 export declare function withStoreLock<T>(lockPath: string, op: () => Promise<T>, opts?: {
     attempts?: number;
     waitMs?: number;
-}): Promise<T>;
+} & SecureStoreOptions): Promise<T>;
 /** A locked, in-memory transaction over one store file. */
 export interface StoreTxn<S> {
     /** The mutable in-memory state, loaded under the lock. Mutate then commit(). */
@@ -72,5 +78,5 @@ export interface StoreTxn<S> {
  * + an atomic commit, and release the lock on every path. The entire read →
  * compare → (mutate) → commit happens inside ONE lock hold — no TOCTOU.
  */
-export declare function withStore<S, T>(storePath: string, emptyState: () => S, parse: (raw: string) => S | null, op: (txn: StoreTxn<S>) => Promise<T>): Promise<T>;
+export declare function withStore<S, T>(storePath: string, emptyState: () => S, parse: (raw: string) => S | null, op: (txn: StoreTxn<S>) => Promise<T>, options?: SecureStoreOptions): Promise<T>;
 //# sourceMappingURL=seat-store.d.ts.map

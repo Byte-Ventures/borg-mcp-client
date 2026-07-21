@@ -2,7 +2,7 @@ import { spawn as spawnChild, type SpawnOptions } from 'node:child_process';
 import { constants } from 'node:os';
 import { serverHelpText } from './cli-help.js';
 
-export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'status', 'update'] as const;
+export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'status', 'update', 'invite'] as const;
 export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
 
 export type ParsedServerFacadeArgs =
@@ -86,7 +86,7 @@ function inertCommand(command: string): string {
 export function unknownServerCommandText(command: string): string {
   return (
     `Unknown server command: ${inertCommand(command)}.\n` +
-    `Available commands: setup, start, status, update.\n` +
+    `Available commands: setup, start, status, update, invite.\n` +
     `Next: run borg server --help.\n`
   );
 }

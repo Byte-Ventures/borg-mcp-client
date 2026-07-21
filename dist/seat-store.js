@@ -13,7 +13,9 @@
  *   2. ATOMIC RENAME — temp in the SAME dir/fs, created 0600, fsync THEN rename;
  *      a crash never leaves a torn/readable partial, and the temp is cleaned up
  *      on any write failure.
- *   3. PARENT DIR 0700 — created with mode 0700.
+ *   3. PARENT DIR — private stores require 0700. The canonical ~/.borg parent
+ *      may explicitly use the owner-controlled policy (0755 accepted, 0022
+ *      forbidden) without rewriting its established mode.
  *   4. flock DISCIPLINE — a single advisory lock (O_EXCL lockfile), RULED option
  *      (b) (Coordinator cca6957a): NO automatic reclaim, EVER. Acquire is an atomic
  *      `open(lockPath,'wx',0o600)`; the whole read-compare-write runs inside ONE
@@ -28,11 +30,74 @@
  * this module never logs it, and the digest-only observation discipline of the
  * callers keeps the raw bearer from leaving the store owner.
  */
-import { open, link, mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { constants } from 'node:fs';
+import { open, link, lstat, mkdir, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 const LOCK_WAIT_MS = 10;
 const LOCK_ATTEMPTS = 500;
+function expectedUid() {
+    return typeof process.getuid === 'function' ? process.getuid() : null;
+}
+async function assertSecureRoot(root, rootMode = 'private') {
+    if (!isAbsolute(root) || resolve(root) !== root) {
+        throw new Error(`Borg credential store path ${root} is not canonical`);
+    }
+    let metadata;
+    try {
+        metadata = await lstat(root);
+    }
+    catch (error) {
+        if (error.code !== 'ENOENT')
+            throw error;
+        await mkdir(root, { recursive: true, mode: 0o700 });
+        metadata = await lstat(root);
+    }
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+        throw new Error(`Borg credential store root ${root} must be a real directory, not a symlink`);
+    }
+    const mode = metadata.mode & 0o777;
+    if (rootMode === 'private' ? mode !== 0o700 : (mode & 0o022) !== 0) {
+        throw new Error(`Borg credential store root ${root} has insecure permissions; ` +
+            (rootMode === 'private' ? 'expected 0700' : 'group/world write access is forbidden'));
+    }
+    const uid = expectedUid();
+    if (uid !== null && metadata.uid !== uid) {
+        throw new Error(`Borg credential store root ${root} is not owned by the current user`);
+    }
+    if (await realpath(root) !== root) {
+        throw new Error(`Borg credential store root ${root} is not canonical or contains a symlink`);
+    }
+}
+async function assertSecureFile(filePath) {
+    let metadata;
+    try {
+        metadata = await lstat(filePath);
+    }
+    catch (error) {
+        if (error.code === 'ENOENT')
+            return null;
+        throw error;
+    }
+    if (metadata.isSymbolicLink() || !metadata.isFile()) {
+        throw new Error(`Borg credential store file ${filePath} must be a regular file, not a symlink`);
+    }
+    if ((metadata.mode & 0o777) !== 0o600) {
+        throw new Error(`Borg credential store file ${filePath} has insecure permissions; expected 0600`);
+    }
+    const uid = expectedUid();
+    if (uid !== null && metadata.uid !== uid) {
+        throw new Error(`Borg credential store file ${filePath} is not owned by the current user`);
+    }
+    return metadata;
+}
+async function assertSecurePath(filePath, options) {
+    const secureRoot = options.secureRoot;
+    if (!isAbsolute(filePath) || resolve(filePath) !== filePath || dirname(filePath) !== secureRoot) {
+        throw new Error(`Borg credential store file path ${filePath} is not canonical`);
+    }
+    await assertSecureRoot(secureRoot, options.rootMode);
+}
 /**
  * Liveness check for the alive/dead branch (RULED option b). `process.kill(pid, 0)`
  * sends no signal but validates the target: ESRCH ⇒ no such process (DEAD → fail
@@ -91,19 +156,29 @@ function staleLockError(lockPath, held) {
  * beneath it.
  */
 async function ensureParentDir(filePath) {
+    if (!isAbsolute(filePath) || resolve(filePath) !== filePath) {
+        throw new Error(`Borg store file path ${filePath} is not canonical`);
+    }
     const dir = dirname(filePath);
     let existing = null;
     try {
-        existing = await stat(dir);
+        existing = await lstat(dir);
     }
     catch (err) {
         if (err.code !== 'ENOENT')
             throw err;
     }
     if (existing) {
+        if (existing.isSymbolicLink() || !existing.isDirectory()) {
+            throw new Error(`Borg store directory ${dir} must be a real directory, not a symlink`);
+        }
         if ((existing.mode & 0o777) !== 0o700) {
             throw new Error(`Borg store directory ${dir} has insecure permissions ` +
                 `(0${(existing.mode & 0o777).toString(8)}, expected 0700); refusing to write a credential under it`);
+        }
+        const uid = expectedUid();
+        if (uid !== null && existing.uid !== uid) {
+            throw new Error(`Borg store directory ${dir} is not owned by the current user`);
         }
         return;
     }
@@ -115,8 +190,13 @@ async function ensureParentDir(filePath) {
  * rename over the target (atomic; the mode carries across). A failed write
  * cleans up the temp so no leftover file ever holds the secret.
  */
-export async function atomicWrite0600(filePath, data) {
-    await ensureParentDir(filePath);
+export async function atomicWrite0600(filePath, data, options = {}) {
+    if (options.secureRoot)
+        await assertSecurePath(filePath, options);
+    else
+        await ensureParentDir(filePath);
+    if (options.secureRoot)
+        await assertSecureFile(filePath);
     const tmp = `${filePath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
     const handle = await open(tmp, 'wx', 0o600);
     try {
@@ -130,6 +210,10 @@ export async function atomicWrite0600(filePath, data) {
     }
     await handle.close();
     try {
+        if (options.secureRoot) {
+            await assertSecurePath(filePath, options);
+            await assertSecureFile(filePath);
+        }
         await rename(tmp, filePath);
     }
     catch (err) {
@@ -169,15 +253,56 @@ async function assertSecureStorePerms(filePath, fileMode) {
  * perms are enforced BEFORE the bytes are read (CR#2) — a loosely-permissioned
  * secret fails closed and is never read.
  */
-export async function readStoreFile(filePath) {
+export async function readStoreFile(filePath, options = {}) {
+    if (!isAbsolute(filePath) || resolve(filePath) !== filePath) {
+        throw new Error(`Borg store file path ${filePath} is not canonical`);
+    }
+    if (options.secureRoot)
+        await assertSecurePath(filePath, options);
+    if (options.secureRoot) {
+        const before = await assertSecureFile(filePath);
+        if (!before)
+            return null;
+        let handle;
+        try {
+            handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        }
+        catch (error) {
+            if (error.code === 'ENOENT')
+                return null;
+            throw error;
+        }
+        try {
+            const opened = await handle.stat();
+            if (opened.dev !== before.dev || opened.ino !== before.ino) {
+                throw new Error('Borg credential store file changed while it was being opened');
+            }
+            const raw = await handle.readFile('utf8');
+            const after = await handle.stat();
+            if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size) {
+                throw new Error('Borg credential store file changed while it was being read');
+            }
+            return raw;
+        }
+        finally {
+            await handle.close();
+        }
+    }
     let fileStat;
     try {
-        fileStat = await stat(filePath);
+        fileStat = await lstat(filePath);
     }
     catch (err) {
         if (err.code === 'ENOENT')
             return null;
         throw err;
+    }
+    if (fileStat.isSymbolicLink() || !fileStat.isFile()) {
+        throw new Error(`Borg store file ${filePath} must be a regular file, not a symlink`);
+    }
+    const uid = expectedUid();
+    if (uid !== null && fileStat.uid !== uid) {
+        throw new Error(`Borg store file ${filePath} is not owned by the current user`);
     }
     await assertSecureStorePerms(filePath, fileStat.mode);
     try {
@@ -205,7 +330,10 @@ export async function readStoreFile(filePath) {
 export async function withStoreLock(lockPath, op, opts = {}) {
     const attempts = opts.attempts ?? LOCK_ATTEMPTS;
     const waitMs = opts.waitMs ?? LOCK_WAIT_MS;
-    await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
+    if (opts.secureRoot)
+        await assertSecurePath(lockPath, opts);
+    else
+        await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
     const myPayload = JSON.stringify({ pid: process.pid, startTime: processStartTime() });
     // Stage the FULLY-WRITTEN payload in a same-dir temp, then acquire by atomically
     // hard-linking it into place. `link` is atomic (EEXIST when the lock is held), and
@@ -232,7 +360,12 @@ export async function withStoreLock(lockPath, op, opts = {}) {
                 // The lock is held. Inspect the holder — but NEVER reclaim/steal it.
                 let raw;
                 try {
-                    raw = await readFile(lockPath, 'utf8');
+                    const stored = await readStoreFile(lockPath, opts.secureRoot
+                        ? { secureRoot: opts.secureRoot, rootMode: opts.rootMode }
+                        : {});
+                    if (stored === null)
+                        continue;
+                    raw = stored;
                 }
                 catch (readErr) {
                     if (readErr.code === 'ENOENT')
@@ -273,9 +406,9 @@ export async function withStoreLock(lockPath, op, opts = {}) {
  * + an atomic commit, and release the lock on every path. The entire read →
  * compare → (mutate) → commit happens inside ONE lock hold — no TOCTOU.
  */
-export async function withStore(storePath, emptyState, parse, op) {
+export async function withStore(storePath, emptyState, parse, op, options = {}) {
     return withStoreLock(`${storePath}.lock`, async () => {
-        const raw = await readStoreFile(storePath);
+        const raw = await readStoreFile(storePath, options);
         // CR4 fail-closed: ONLY a missing file (ENOENT → readStoreFile returns null)
         // may initialize an empty state. A present-but-malformed / wrong-version /
         // schema-invalid store must NEVER be silently mapped to empty and then
@@ -301,9 +434,9 @@ export async function withStore(storePath, emptyState, parse, op) {
         }
         const txn = {
             data,
-            commit: () => atomicWrite0600(storePath, JSON.stringify(data, null, 2) + '\n'),
+            commit: () => atomicWrite0600(storePath, JSON.stringify(data, null, 2) + '\n', options),
         };
         return op(txn);
-    });
+    }, options);
 }
 //# sourceMappingURL=seat-store.js.map

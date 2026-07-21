@@ -41,10 +41,11 @@ async function runServerFacadeSmoke(generatedBin, timeoutMs) {
   const directory = await mkdtemp(join(tmpdir(), 'borgmcp-server-facade-smoke-'));
   const fakeServer = join(directory, 'borg-mcp-server');
   const expected = 'status\0--json';
+  const expectedInvite = 'invite\0--server-owned';
   await writeFile(fakeServer, `#!/usr/bin/env node
 const args = process.argv.slice(2).join('\\0');
 process.stdout.write(args);
-process.exit(args === ${JSON.stringify(expected)} ? 37 : 96);
+process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringify(expectedInvite)} ? 41 : 96);
 `);
   await chmod(fakeServer, 0o755);
 
@@ -82,6 +83,22 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : 96);
       );
     }
 
+    const invite = spawnSync(generatedBin, ['server', 'invite', '--server-owned'], {
+      env: {
+        ...process.env,
+        PATH: `${directory}${delimiter}${process.env.PATH ?? ''}`,
+        CI: '1',
+        NO_COLOR: '1',
+      },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    if (invite.error || invite.status !== 41 || invite.stdout !== expectedInvite || invite.stderr !== '') {
+      throw new Error(
+        `Packed invite facade failed: status=${invite.status}, stdout=${JSON.stringify(invite.stdout)}, stderr=${JSON.stringify(invite.stderr)}, error=${invite.error?.message ?? ''}`,
+      );
+    }
+
     await chmod(fakeServer, 0o644);
     const unavailable = spawnSync(process.execPath, [generatedBin, 'server', 'update'], {
       env: { ...process.env, PATH: directory, CI: '1', NO_COLOR: '1' },
@@ -115,6 +132,7 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : 96);
     }
     return {
       serverFacadeExitCode: code,
+      serverFacadeInviteExitCode: invite.status,
       serverFacadeStartupFailureExitCode: unavailable.status,
       serverFacadeMissingExitCode: missing.status,
     };

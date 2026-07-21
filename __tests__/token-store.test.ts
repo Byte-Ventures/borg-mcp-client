@@ -4,7 +4,7 @@
  * rescope; local-server credentials now rest in the 0600 file store exclusively.
  */
 import { afterEach, describe, it, expect } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeFileBackend } from '../src/token-store.js';
@@ -15,7 +15,7 @@ describe('makeFileBackend (0600 credential store — Queen rescope)', () => {
     for (const f of fixtures.splice(0)) rmSync(f, { recursive: true, force: true });
   });
   const store = () => {
-    const dir = mkdtempSync(join(tmpdir(), 'borg-file-backend-'));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'borg-file-backend-')));
     fixtures.push(dir);
     return join(dir, 'credentials.json');
   };
