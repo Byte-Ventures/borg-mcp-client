@@ -312,6 +312,41 @@ async function bounded<T>(promise: Promise<T>, label: string, ms = 10_000): Prom
   }
 }
 
+async function cleanupJoinedFixture({
+  streamAbort,
+  streamPromise,
+  sockets,
+  appServer,
+  runtimeDir,
+  restoreAgentTrace,
+}: {
+  streamAbort?: AbortController;
+  streamPromise?: Promise<void>;
+  sockets: Iterable<Pick<net.Socket, 'destroy'>>;
+  appServer?: Pick<net.Server, 'close'>;
+  runtimeDir?: string;
+  restoreAgentTrace: () => void;
+}): Promise<void> {
+  try {
+    streamAbort?.abort();
+    await bounded(streamPromise?.catch(() => {}) ?? Promise.resolve(), 'final stream cleanup').catch(() => {});
+    for (const socket of sockets) {
+      try {
+        socket.destroy();
+      } catch {
+        // Cleanup continues so global tracing is restored after partial setup failures.
+      }
+    }
+    await bounded(new Promise<void>((resolve) => {
+      if (appServer) appServer.close(() => resolve());
+      else resolve();
+    }), 'app-server close').catch(() => {});
+    if (runtimeDir) rmSync(runtimeDir, { recursive: true, force: true });
+  } finally {
+    restoreAgentTrace();
+  }
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.doUnmock('../src/cubes.js');
@@ -714,6 +749,34 @@ describe('Sprint 4 E2E harness validation', () => {
     expect(agent.addRequest).toBe(original);
     expect(calls).toEqual([]);
   });
+
+  it('cleans joined resources before restoring tracing and tolerates setup optionals', async () => {
+    const order: string[] = [];
+    const abort = new AbortController();
+    const streamPromise = new Promise<void>((resolve) => {
+      abort.signal.addEventListener('abort', () => {
+        order.push('abort');
+        resolve();
+      }, { once: true });
+    }).then(() => { order.push('settled'); });
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), 'borg-client-s4-cleanup-'));
+    await cleanupJoinedFixture({
+      streamAbort: abort,
+      streamPromise,
+      sockets: [{ destroy: () => { order.push('socket'); } }],
+      appServer: { close: (callback: () => void) => { order.push('server'); callback(); } },
+      runtimeDir,
+      restoreAgentTrace: () => { order.push('restore'); },
+    });
+    expect(order).toEqual(['abort', 'settled', 'socket', 'server', 'restore']);
+    expect(existsSync(runtimeDir)).toBe(false);
+
+    await expect(cleanupJoinedFixture({
+      sockets: [],
+      restoreAgentTrace: () => { order.push('optional-restore'); },
+    })).resolves.toBeUndefined();
+    expect(order.at(-1)).toBe('optional-restore');
+  });
 });
 
 describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
@@ -764,11 +827,11 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     let result: Record<string, unknown> | undefined;
     let operationError: unknown;
     let appServer: net.Server | undefined;
+    let streamAbort: AbortController | undefined;
+    let streamPromise: Promise<void> | undefined;
     try {
     let forbiddenFetchAttempts = 0;
     let acceptedTurns = 0;
-    let streamAbort: AbortController | undefined;
-    let streamPromise: Promise<void> | undefined;
 
     const cursorKey = (binding: { purpose?: string }) => binding.purpose ?? 'unread';
     vi.doMock('../src/local-server-cursor.js', () => ({
@@ -1091,15 +1154,14 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     } catch (error) {
       operationError = error;
     } finally {
-      streamAbort?.abort();
-      await bounded(streamPromise?.catch(() => {}) ?? Promise.resolve(), 'final stream cleanup').catch(() => {});
-      for (const socket of sockets) socket.destroy();
-      await bounded(new Promise<void>((resolve) => {
-        if (appServer) appServer.close(() => resolve());
-        else resolve();
-      }), 'app-server close').catch(() => {});
-      rmSync(runtimeDir, { recursive: true, force: true });
-      restoreAgentTrace();
+      await cleanupJoinedFixture({
+        streamAbort,
+        streamPromise,
+        sockets,
+        appServer,
+        runtimeDir,
+        restoreAgentTrace,
+      });
     }
 
     const cleanupVerified = !existsSync(runtimeDir) && sockets.size === 0;
