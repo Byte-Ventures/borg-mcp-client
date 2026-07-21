@@ -2,6 +2,7 @@ import crypto, { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import net, { isIP } from 'node:net';
+import { globalAgent } from 'node:https';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -38,6 +39,39 @@ interface WriterRef {
   session_credential: string;
   role_id?: string;
   session_id?: string;
+}
+
+function installAgentTrace(events: Array<Record<string, unknown>>): () => void {
+  const original = globalAgent.addRequest;
+  const socketIds = new WeakMap<net.Socket, string>();
+  const listeners = new Map<net.Socket, Array<[string, (...args: any[]) => void]>>();
+  let nextSocketId = 1;
+  globalAgent.addRequest = function tracedAddRequest(request: any, options: any) {
+    const method = String(options?.method ?? 'GET').toUpperCase();
+    const pathname = new URL(`https://fixture.invalid${String(options?.path ?? '/')}`).pathname;
+    request.once('socket', (socket: net.Socket) => {
+      let socketId = socketIds.get(socket);
+      if (!socketId) {
+        socketId = `socket-${nextSocketId++}`;
+        socketIds.set(socket, socketId);
+        const socketListeners: Array<[string, (...args: any[]) => void]> = [
+          ['close', () => events.push({ event: 'socket_close', socket_id: socketId })],
+          ['error', (error: any) => events.push({ event: 'socket_error', socket_id: socketId, code: typeof error?.code === 'string' ? error.code : null })],
+          ['free', () => events.push({ event: 'socket_free', socket_id: socketId })],
+        ];
+        for (const [event, listener] of socketListeners) socket.on(event, listener);
+        listeners.set(socket, socketListeners);
+      }
+      events.push({ event: 'request_socket', method, pathname, socket_id: socketId, reused: request.reusedSocket === true, destroyed: socket.destroyed });
+    });
+    return original.call(this, request, options);
+  };
+  return () => {
+    globalAgent.addRequest = original;
+    for (const [socket, socketListeners] of listeners) {
+      for (const [event, listener] of socketListeners) socket.removeListener(event, listener);
+    }
+  };
 }
 
 function required(name: string): string {
@@ -504,6 +538,23 @@ describe('Sprint 4 E2E harness validation', () => {
     expect(removeEventListener).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
+
+  it('attributes an injected post-abort directed-drain body reset without masking it', async () => {
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const phase = 'post_abort_directed_drain';
+    const source = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(reset); },
+    }));
+    const response = await fetchWithBodyLifetime(
+      vi.fn(async () => source),
+      'https://127.0.0.1:7443/api/cubes/11111111-1111-4111-8111-111111111111/logs',
+    );
+    await expect(response.json()).rejects.toBe(reset);
+    expect({ method: 'PUT', pathname: '/api/cubes/11111111-1111-4111-8111-111111111111/logs', phase, origin: 'response_body', code: reset.code }).toEqual({
+      method: 'PUT', pathname: '/api/cubes/11111111-1111-4111-8111-111111111111/logs', phase: 'post_abort_directed_drain', origin: 'response_body', code: 'ECONNRESET',
+    });
+    expect(source.body!.locked).toBe(false);
+  });
 });
 
 describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
@@ -545,7 +596,12 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       abort_issued_at: null as string | null,
       abort_reason: null as string | null,
       stream_error: null as { origin: 'bootstrap' | 'iterator'; code: string | null; message: string } | null,
+      directed_drain: 'not_started' as 'not_started' | 'started' | 'succeeded' | 'failed',
+      requests: [] as Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }>,
+      sockets: [] as Array<Record<string, unknown>>,
     };
+    let requestPhase = 'setup';
+    const restoreAgentTrace = installAgentTrace(phase.sockets);
     let forbiddenFetchAttempts = 0;
     let acceptedTurns = 0;
     let streamAbort: AbortController | undefined;
@@ -581,6 +637,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       }
       requestUrls.push(url.href);
       const streamRequest = url.pathname.endsWith('/stream');
+      const requestRecord = { method: String(init.method ?? 'GET').toUpperCase(), pathname: url.pathname, phase: requestPhase };
       try {
         const response = await fetchWithBodyLifetime(pinnedFetch, input, init, {
           clearDeadlineAfterHeaders: (candidate) => streamRequest && candidate.ok &&
@@ -591,6 +648,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         statuses.set(response.status, (statuses.get(response.status) ?? 0) + 1);
         return response;
       } catch (error: any) {
+        phase.requests.push({ ...requestRecord, origin: 'bootstrap', code: typeof (error?.code ?? error?.cause?.code) === 'string' ? (error.code ?? error.cause?.code) : null, message: error?.message ?? String(error) });
         if (streamRequest) phase.stream_error = {
           origin: 'bootstrap',
           code: typeof (error?.code ?? error?.cause?.code) === 'string'
@@ -803,7 +861,16 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       }), 'stream shutdown');
       streamPromise = undefined;
 
-      const directedDrain = await drainUnread(20);
+      requestPhase = 'post_abort_directed_drain';
+      phase.directed_drain = 'started';
+      const directedDrain = await drainUnread(20).then((value) => {
+        phase.directed_drain = 'succeeded';
+        return value;
+      }, (error) => {
+        phase.directed_drain = 'failed';
+        throw error;
+      });
+      requestPhase = 'burst';
       const directedOccurrences = directedDrain.entries.filter((entry) => entry.id === directed.id).length;
       const expectedIds: string[] = [];
       const authenticatedWriterIds = new Set<string>();
@@ -887,6 +954,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     } catch (error) {
       operationError = error;
     } finally {
+      restoreAgentTrace();
       streamAbort?.abort();
       await bounded(streamPromise?.catch(() => {}) ?? Promise.resolve(), 'final stream cleanup').catch(() => {});
       for (const socket of sockets) socket.destroy();
