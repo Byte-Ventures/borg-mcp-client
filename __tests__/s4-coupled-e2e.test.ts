@@ -1,4 +1,5 @@
 import crypto, { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import net, { isIP } from 'node:net';
@@ -41,12 +42,12 @@ interface WriterRef {
   session_id?: string;
 }
 
-function installAgentTrace(events: Array<Record<string, unknown>>): () => void {
-  const original = globalAgent.addRequest;
+function installAgentTrace(events: Array<Record<string, unknown>>, agent: Pick<typeof globalAgent, 'addRequest'> = globalAgent): () => void {
+  const original = agent.addRequest;
   const socketIds = new WeakMap<net.Socket, string>();
   const listeners = new Map<net.Socket, Array<[string, (...args: any[]) => void]>>();
   let nextSocketId = 1;
-  globalAgent.addRequest = function tracedAddRequest(request: any, options: any) {
+  agent.addRequest = function tracedAddRequest(request: any, options: any) {
     const method = String(options?.method ?? 'GET').toUpperCase();
     const pathname = new URL(`https://fixture.invalid${String(options?.path ?? '/')}`).pathname;
     request.once('socket', (socket: net.Socket) => {
@@ -67,7 +68,7 @@ function installAgentTrace(events: Array<Record<string, unknown>>): () => void {
     return original.call(this, request, options);
   };
   return () => {
-    globalAgent.addRequest = original;
+    agent.addRequest = original;
     for (const [socket, socketListeners] of listeners) {
       for (const [event, listener] of socketListeners) socket.removeListener(event, listener);
     }
@@ -165,9 +166,9 @@ async function fetchWithBodyLifetime(
   fetchImpl: typeof fetch,
   input: RequestInfo | URL,
   init: RequestInit = {},
-  options: { timeoutMs?: number; clearDeadlineAfterHeaders?: (response: Response) => boolean; onDeadline?: () => void } = {},
+  options: { timeoutMs?: number; clearDeadlineAfterHeaders?: (response: Response) => boolean; onDeadline?: () => void; onBodyError?: (error: unknown) => void } = {},
 ): Promise<Response> {
-  const { timeoutMs = 10_000, clearDeadlineAfterHeaders, onDeadline } = options;
+  const { timeoutMs = 10_000, clearDeadlineAfterHeaders, onDeadline, onBodyError } = options;
   const controller = new AbortController();
   let settled = false;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -204,6 +205,7 @@ async function fetchWithBodyLifetime(
             streamController.enqueue(chunk.value);
           }
         } catch (error) {
+          onBodyError?.(error);
           finalize();
           streamController.error(error);
         }
@@ -225,6 +227,37 @@ async function fetchWithBodyLifetime(
     finalize();
     throw error;
   }
+}
+
+function createRecordingFetch(
+  rawFetch: typeof fetch,
+  origin: string,
+  getPhase: () => string,
+  requests: Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }>,
+  statuses = new Map<number, number>(),
+  stream: { headersReady?: () => void; deadline?: () => void } = {},
+): typeof fetch {
+  return async (input, init = {}) => {
+    const url = new URL(input.toString());
+    if (url.origin !== origin || loopbackOrigin(url.origin) !== origin) {
+      throw new Error(`cross-authority request refused: ${url.href}`);
+    }
+    const record = () => ({ method: String(init.method ?? 'GET').toUpperCase(), pathname: url.pathname, phase: getPhase() });
+    const streamRequest = url.pathname.endsWith('/stream');
+    try {
+      const response = await fetchWithBodyLifetime(rawFetch, input, init, {
+        clearDeadlineAfterHeaders: (candidate) => streamRequest && candidate.ok && candidate.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream',
+        onDeadline: () => { if (streamRequest) stream.deadline?.(); },
+        onBodyError: (error: any) => requests.push({ ...record(), origin: 'response_body', code: typeof (error?.code ?? error?.cause?.code) === 'string' ? (error.code ?? error.cause?.code) : null, message: error?.message ?? String(error) }),
+      });
+      if (streamRequest) stream.headersReady?.();
+      statuses.set(response.status, (statuses.get(response.status) ?? 0) + 1);
+      return response;
+    } catch (error: any) {
+      requests.push({ ...record(), origin: 'bootstrap', code: typeof (error?.code ?? error?.cause?.code) === 'string' ? (error.code ?? error.cause?.code) : null, message: error?.message ?? String(error) });
+      throw error;
+    }
+  };
 }
 
 function decodeFrame(buffer: Buffer): { value: any; consumed: number } | null {
@@ -541,19 +574,79 @@ describe('Sprint 4 E2E harness validation', () => {
 
   it('attributes an injected post-abort directed-drain body reset without masking it', async () => {
     const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
-    const phase = 'post_abort_directed_drain';
+    const records: Array<Record<string, unknown>> = [];
     const source = new Response(new ReadableStream<Uint8Array>({
       start(controller) { controller.error(reset); },
     }));
     const response = await fetchWithBodyLifetime(
       vi.fn(async () => source),
       'https://127.0.0.1:7443/api/cubes/11111111-1111-4111-8111-111111111111/logs',
+      {},
+      { onBodyError: (error: any) => records.push({ method: 'PUT', pathname: '/api/cubes/11111111-1111-4111-8111-111111111111/logs', phase: 'post_abort_directed_drain', origin: 'response_body', code: error.code }) },
     );
     await expect(response.json()).rejects.toBe(reset);
-    expect({ method: 'PUT', pathname: '/api/cubes/11111111-1111-4111-8111-111111111111/logs', phase, origin: 'response_body', code: reset.code }).toEqual({
+    expect(records).toEqual([{
       method: 'PUT', pathname: '/api/cubes/11111111-1111-4111-8111-111111111111/logs', phase: 'post_abort_directed_drain', origin: 'response_body', code: 'ECONNRESET',
-    });
+    }]);
     expect(source.body!.locked).toBe(false);
+  });
+
+  it('attributes a real local directed-drain readLog body reset', async () => {
+    const origin = 'https://127.0.0.1:7443';
+    const cubeId = '11111111-1111-4111-8111-111111111111';
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const records: Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }> = [];
+    let requestPhase = 'post_abort_directed_drain';
+    const recordingFetch = createRecordingFetch(
+      vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.error(reset); },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })),
+      origin,
+      () => requestPhase,
+      records,
+    );
+    vi.doMock('../src/cubes.js', () => ({
+      getActiveCube: vi.fn(async () => ({ cubeId, droneId: '22222222-2222-4222-8222-222222222222', sessionToken: 's'.repeat(43), apiUrl: origin, serverTrustIdentity: 'spki-sha256:test' })),
+    }));
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => ({ identity: 'spki-sha256:test', fetchImpl: recordingFetch })),
+    }));
+    const remote = await import('../src/remote-client.js');
+    await expect(remote.readLog('s'.repeat(43), origin, { unreadOnly: true, limit: 20 })).rejects.toBe(reset);
+    expect(records).toContainEqual(expect.objectContaining({
+      method: 'PUT',
+      pathname: `/api/cubes/${cubeId}/logs`,
+      phase: 'post_abort_directed_drain',
+      origin: 'response_body',
+      code: 'ECONNRESET',
+    }));
+    requestPhase = 'changed-after-read';
+  });
+
+  it('traces and restores a scoped agent request lifecycle', () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const agent = { addRequest: vi.fn() } as unknown as Pick<typeof globalAgent, 'addRequest'>;
+    const original = agent.addRequest;
+    const restore = installAgentTrace(calls, agent);
+    const request = new EventEmitter() as any;
+    request.reusedSocket = true;
+    const socket = new EventEmitter() as any;
+    socket.destroyed = false;
+    agent.addRequest(request, { method: 'PUT', path: '/api/cubes/11111111-1111-4111-8111-111111111111/logs' } as any);
+    request.emit('socket', socket);
+    socket.emit('free');
+    socket.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }));
+    socket.destroyed = true;
+    socket.emit('close');
+    restore();
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: 'request_socket', method: 'PUT', reused: true, destroyed: false }),
+      expect.objectContaining({ event: 'socket_free' }),
+      expect.objectContaining({ event: 'socket_error', code: 'ECONNRESET' }),
+      expect.objectContaining({ event: 'socket_close' }),
+    ]));
+    expect(agent.addRequest).toBe(original);
+    expect(socket.listenerCount('free')).toBe(0);
   });
 });
 
@@ -630,39 +723,13 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
 
     const actualTrust = await vi.importActual<typeof import('../src/server-trust.js')>('../src/server-trust.js');
     const pinnedFetch = actualTrust.createPinnedServerFetch(origin, readFileSync(caPath, 'utf8'));
-    const recordingFetch: typeof fetch = async (input, init = {}) => {
-      const url = new URL(input.toString());
-      if (url.origin !== origin || loopbackOrigin(url.origin) !== origin) {
-        throw new Error(`cross-authority request refused: ${url.href}`);
-      }
-      requestUrls.push(url.href);
-      const streamRequest = url.pathname.endsWith('/stream');
-      const requestRecord = { method: String(init.method ?? 'GET').toUpperCase(), pathname: url.pathname, phase: requestPhase };
-      try {
-        const response = await fetchWithBodyLifetime(pinnedFetch, input, init, {
-          clearDeadlineAfterHeaders: (candidate) => streamRequest && candidate.ok &&
-            candidate.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream',
-          onDeadline: () => { if (streamRequest) phase.deadline_fired = true; },
-        });
-        if (streamRequest) phase.stream_headers_ready_at = new Date().toISOString();
-        statuses.set(response.status, (statuses.get(response.status) ?? 0) + 1);
-        return response;
-      } catch (error: any) {
-        phase.requests.push({ ...requestRecord, origin: 'bootstrap', code: typeof (error?.code ?? error?.cause?.code) === 'string' ? (error.code ?? error.cause?.code) : null, message: error?.message ?? String(error) });
-        if (streamRequest) phase.stream_error = {
-          origin: 'bootstrap',
-          code: typeof (error?.code ?? error?.cause?.code) === 'string'
-            ? (error.code ?? error.cause?.code)
-            : null,
-          message: error?.message ?? String(error),
-        };
-        transportErrors.push({
-          code: error?.code ?? error?.cause?.code ?? null,
-          message: error?.message ?? String(error),
-        });
-        throw error;
-      }
-    };
+    const recordingFetch = createRecordingFetch(async (input, init) => {
+      requestUrls.push(new URL(input.toString()).href);
+      return pinnedFetch(input, init);
+    }, origin, () => requestPhase, phase.requests, statuses, {
+      headersReady: () => { phase.stream_headers_ready_at = new Date().toISOString(); },
+      deadline: () => { phase.deadline_fired = true; },
+    });
     vi.doMock('../src/server-trust.js', () => ({
       ...actualTrust,
       loadBorgServerTrust: vi.fn(async () => ({ identity: trustIdentity, fetchImpl: recordingFetch })),
