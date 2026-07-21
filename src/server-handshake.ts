@@ -40,7 +40,11 @@ import {
   type SeatBinding,
   type SeatOperation as ServerSessionOperation,
 } from './seats.js';
-import { BorgServerError, BorgServerUnreachableError } from './server-errors.js';
+import {
+  BorgServerError,
+  BorgServerTrustError,
+  BorgServerUnreachableError,
+} from './server-errors.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
 import {
@@ -277,6 +281,7 @@ export async function sendBorgServerAttach(
         })),
       });
     } catch (error) {
+      if (error instanceof BorgServerTrustError) throw error;
       throw new BorgServerUnreachableError('Borg server attach transport failed', { cause: error });
     }
     if (response.status === 401 || response.status === 403 || response.status === 410) {
@@ -404,6 +409,7 @@ export async function sendBorgServerAttach(
         }),
     };
   } catch (error) {
+    if (error instanceof BorgServerTrustError) throw error;
     if (controller.signal.aborted && !(error instanceof BorgServerUnreachableError)) {
       throw new BorgServerUnreachableError('Borg server attach transport timed out', { cause: error });
     }

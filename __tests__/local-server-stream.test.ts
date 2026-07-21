@@ -354,6 +354,59 @@ describe('local server SSE adapter', () => {
     expect(sleep.mock.calls[0][0]).toBeLessThanOrEqual(1000);
   });
 
+  it('keeps a pinned attach trust failure terminal with zero backoff or second attach', async () => {
+    const active = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'cube',
+      droneLabel: 'builder-1',
+      sessionToken: 'expired-session',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+      localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+      localSessionExpiresAt: '2026-07-21T00:00:00.000Z',
+    };
+    const { BorgServerError, BorgServerTrustError } = await import('../src/server-errors.js');
+    const { sendBorgServerAttach } = await import('../src/server-handshake.js');
+    const pinnedAttachFetch = vi.fn(async () => {
+      throw new BorgServerTrustError('pinned certificate rejected');
+    });
+    const recoverExpiredSession = vi.fn(async () => sendBorgServerAttach(
+      active.apiUrl,
+      active.serverTrustIdentity,
+      'p'.repeat(43),
+      {
+        cubeId: CUBE_ID,
+        roleId: '66666666-6666-4666-8666-666666666666',
+        operation: { projectRoot: '/work/repo', kind: 'seat', operationKey: 'current-worktree' },
+        priorDroneId: DRONE_ID,
+      },
+      'r'.repeat(43),
+      { fetchImpl: pinnedAttachFetch as typeof fetch },
+    ));
+    vi.doMock('../src/stream-owner.js', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../src/stream-owner.js')>(),
+      readOwnershipSnapshot: vi.fn(async () => ({ state: 'owned', ownerPid: 1 })),
+    }));
+    const streamOnce = vi.fn(async () => { throw new BorgServerError('AUTH_EXPIRED', 'expired'); });
+    const lease = { refresh: vi.fn(async () => true), release: vi.fn(async () => {}) };
+    const sleep = vi.fn(async () => {});
+    const { __runLoopForTest } = await import('../src/log-stream.js');
+
+    await expect(__runLoopForTest({
+      getActiveCube: vi.fn(async () => active),
+      acquireStreamLease: vi.fn(async () => lease as any),
+      streamOnce,
+      recoverExpiredSession: recoverExpiredSession as any,
+      sleep,
+      maxIterations: 2,
+    })).rejects.toMatchObject({ name: 'TerminalStreamError' });
+    expect(streamOnce).toHaveBeenCalledTimes(1);
+    expect(recoverExpiredSession).toHaveBeenCalledTimes(1);
+    expect(pinnedAttachFetch).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['revoked', 'SESSION_REVOKED'],
     ['taken over', 'SESSION_REJECTED'],
