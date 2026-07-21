@@ -131,9 +131,9 @@ async function fetchWithBodyLifetime(
   fetchImpl: typeof fetch,
   input: RequestInfo | URL,
   init: RequestInit = {},
-  options: { timeoutMs?: number; clearDeadlineAfterHeaders?: boolean; onDeadline?: () => void } = {},
+  options: { timeoutMs?: number; clearDeadlineAfterHeaders?: (response: Response) => boolean; onDeadline?: () => void } = {},
 ): Promise<Response> {
-  const { timeoutMs = 10_000, clearDeadlineAfterHeaders = false, onDeadline } = options;
+  const { timeoutMs = 10_000, clearDeadlineAfterHeaders, onDeadline } = options;
   const controller = new AbortController();
   let settled = false;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -157,7 +157,7 @@ async function fetchWithBodyLifetime(
       finalize();
       return response;
     }
-    if (clearDeadlineAfterHeaders) clearTimeout(timer);
+    if (clearDeadlineAfterHeaders?.(response)) clearTimeout(timer);
     reader = response.body.getReader();
     const body = new ReadableStream<Uint8Array>({
       async pull(streamController) {
@@ -415,11 +415,13 @@ describe('Sprint 4 E2E harness validation', () => {
     const sse = await fetchWithBodyLifetime(
       vi.fn(async (_input, init) => {
         init!.signal!.addEventListener('abort', () => controller.error(init!.signal!.reason), { once: true });
-        return new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }));
+        return new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }), {
+          headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+        });
       }),
       'https://127.0.0.1:7443/stream',
       { signal: upstream.signal },
-      { timeoutMs: 10, clearDeadlineAfterHeaders: true, onDeadline: () => { deadlineFired = true; } },
+      { timeoutMs: 10, clearDeadlineAfterHeaders: (response) => response.headers.get('content-type')?.startsWith('text/event-stream') === true, onDeadline: () => { deadlineFired = true; } },
     );
     const reader = sse.body!.getReader();
     const pending = reader.read();
@@ -427,6 +429,35 @@ describe('Sprint 4 E2E harness validation', () => {
     expect(deadlineFired).toBe(false);
     upstream.abort(new Error('external stream shutdown'));
     await expect(pending).rejects.toThrow('external stream shutdown');
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['error status', 500, 'text/event-stream'],
+    ['wrong content type', 200, 'application/json'],
+    ['missing content type', 200, undefined],
+  ])('keeps a /stream %s body under the deadline', async (_case, status, contentType) => {
+    vi.useFakeTimers();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    let deadlineFired = false;
+    const response = await fetchWithBodyLifetime(
+      vi.fn(async (_input, init) => {
+        init!.signal!.addEventListener('abort', () => controller.error(init!.signal!.reason), { once: true });
+        return new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }), {
+          status,
+          headers: contentType ? { 'Content-Type': contentType } : {},
+        });
+      }),
+      'https://127.0.0.1:7443/stream',
+      {},
+      { timeoutMs: 10, clearDeadlineAfterHeaders: (value) => value.ok && value.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream', onDeadline: () => { deadlineFired = true; } },
+    );
+    const reader = response.body!.getReader();
+    const pending = reader.read();
+    const rejected = expect(pending).rejects.toThrow('request timeout');
+    await vi.advanceTimersByTimeAsync(10);
+    await rejected;
+    expect(deadlineFired).toBe(true);
     vi.useRealTimers();
   });
 
@@ -541,7 +572,8 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       const streamRequest = url.pathname.endsWith('/stream');
       try {
         const response = await fetchWithBodyLifetime(pinnedFetch, input, init, {
-          clearDeadlineAfterHeaders: streamRequest,
+          clearDeadlineAfterHeaders: (candidate) => streamRequest && candidate.ok &&
+            candidate.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream',
           onDeadline: () => { if (streamRequest) phase.deadline_fired = true; },
         });
         if (streamRequest) phase.stream_headers_ready_at = new Date().toISOString();
