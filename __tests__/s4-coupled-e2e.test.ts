@@ -157,6 +157,32 @@ function decodeWriterRefs(value: unknown, active: ActiveCube): WriterRef[] {
   return refs;
 }
 
+function sameCursor(left: Cursor | undefined, right: Cursor | undefined): boolean {
+  return left?.id === right?.id && left?.created_at === right?.created_at;
+}
+
+function compareEntryOrder(left: { created_at: string; id: string }, right: { created_at: string; id: string }): number {
+  return left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id);
+}
+
+// The one-line runner output is valid only when every independently emitted proof holds.
+function proofComplete(proof: {
+  idleTurns: number; idleLogStable: boolean; idleCursorStable: boolean;
+  directedTurns: number; directedOccurrences: number; expected: number; writerCount: number;
+  writerIdsMatchConfigured: boolean; drained: number; unique: number; missing: number;
+  duplicates: number; unexpected: number; orderExact: boolean; has429: boolean; resets: number;
+  transportErrors: number; requestErrors: number; forbiddenFetches: number; sameOrigin: boolean;
+  turnErrors: number; phaseComplete: boolean;
+}): boolean {
+  return proof.idleTurns === 0 && proof.idleLogStable && proof.idleCursorStable &&
+    proof.directedTurns === 1 && proof.directedOccurrences === 1 && proof.expected === 150 &&
+    proof.writerCount >= 2 && proof.writerIdsMatchConfigured && proof.drained === 150 &&
+    proof.unique === 150 && proof.missing === 0 && proof.duplicates === 0 &&
+    proof.unexpected === 0 && proof.orderExact && !proof.has429 && proof.resets === 0 &&
+    proof.transportErrors === 0 && proof.requestErrors === 0 && proof.forbiddenFetches === 0 &&
+    proof.sameOrigin && proof.turnErrors === 0 && proof.phaseComplete;
+}
+
 function trackInnerReaderRelease(): ReturnType<typeof vi.spyOn> {
   return vi.spyOn(ReadableStreamDefaultReader.prototype, 'releaseLock');
 }
@@ -357,6 +383,21 @@ afterEach(() => {
 });
 
 describe('Sprint 4 E2E harness validation', () => {
+  it('rejects each non-success proof class from the strict result validator', () => {
+    const complete = {
+      idleTurns: 0, idleLogStable: true, idleCursorStable: true, directedTurns: 1,
+      directedOccurrences: 1, expected: 150, writerCount: 2, writerIdsMatchConfigured: true,
+      drained: 150, unique: 150, missing: 0, duplicates: 0, unexpected: 0, orderExact: true,
+      has429: false, resets: 0, transportErrors: 0, requestErrors: 0, forbiddenFetches: 0,
+      sameOrigin: true, turnErrors: 0, phaseComplete: true,
+    };
+    expect(proofComplete(complete)).toBe(true);
+    for (const patch of [
+      { idleCursorStable: false }, { idleLogStable: false }, { phaseComplete: false },
+      { writerIdsMatchConfigured: false }, { orderExact: false }, { duplicates: 1 },
+      { transportErrors: 1 }, { requestErrors: 1 }, { resets: 1 }, { has429: true },
+    ]) expect(proofComplete({ ...complete, ...patch })).toBe(false);
+  });
   it('accepts canonical numeric IPv4 and IPv6 loopback origins', () => {
     expect(loopbackOrigin('https://127.0.0.1:7443')).toBe('https://127.0.0.1:7443');
     expect(loopbackOrigin('https://[::1]:7443')).toBe('https://[::1]:7443');
@@ -818,6 +859,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       abort_issued_at: null as string | null,
       abort_reason: null as string | null,
       stream_error: null as { origin: 'bootstrap' | 'iterator'; code: string | null; message: string } | null,
+      stream_shutdown_clean: false,
       directed_drain: 'not_started' as 'not_started' | 'started' | 'succeeded' | 'failed',
       requests: [] as Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }>,
       sockets: [] as Array<Record<string, unknown>>,
@@ -972,6 +1014,11 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       await drainUnread(500);
       const unreadBaseline = cursorState.get('unread');
       if (unreadBaseline) cursorState.set('stream', unreadBaseline);
+      const idleLogBefore = await remote.readLog(active.sessionToken, origin, {
+        limit: 500,
+        serverTrustIdentity: trustIdentity,
+      });
+      const idleCursorBefore = cursorState.get('unread');
 
       wake.resetCodexWakeForTests();
       await wake.fireCodexHeartbeatTick({
@@ -985,6 +1032,14 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         now: () => 2 * wake.CODEX_HEARTBEAT_CADENCE_MS,
       });
       const idleTurns = acceptedTurns;
+      const idleLogAfter = await remote.readLog(active.sessionToken, origin, {
+        limit: 500,
+        serverTrustIdentity: trustIdentity,
+      });
+      const idleCursorAfter = cursorState.get('unread');
+      const idleLogStable = idleLogBefore.entries.length === idleLogAfter.entries.length &&
+        idleLogBefore.has_more === idleLogAfter.has_more;
+      const idleCursorStable = sameCursor(idleCursorBefore, idleCursorAfter);
 
       let streamReadyResolve!: () => void;
       const streamReady = new Promise<void>((resolve) => { streamReadyResolve = resolve; });
@@ -1059,6 +1114,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       await bounded(streamPromise.catch((error) => {
         if (!/abort|directed observation complete/i.test(error?.message ?? '')) throw error;
       }), 'stream shutdown');
+      phase.stream_shutdown_clean = true;
       streamPromise = undefined;
 
       requestPhase = 'post_abort_directed_drain';
@@ -1072,7 +1128,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       });
       requestPhase = 'burst';
       const directedOccurrences = directedDrain.entries.filter((entry) => entry.id === directed.id).length;
-      const expectedIds: string[] = [];
+      const expectedEntries: Array<{ id: string; created_at: string }> = [];
       const authenticatedWriterIds = new Set<string>();
       for (let offset = 0; offset < 150; offset += 30) {
         const batch = Array.from({ length: Math.min(30, 150 - offset) }, (_, index) => {
@@ -1086,12 +1142,16 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
           if (typeof entry.drone_id !== 'string' || !UUID_RE.test(entry.drone_id)) {
             throw new Error('burst append response omitted a valid authenticated writer drone_id');
           }
-          expectedIds.push(entry.id);
+          if (typeof entry.id !== 'string' || typeof entry.created_at !== 'string') {
+            throw new Error('burst append response omitted a canonical entry ordering tuple');
+          }
+          expectedEntries.push({ id: entry.id, created_at: entry.created_at });
           authenticatedWriterIds.add(entry.drone_id);
         }
       }
 
       const burstDrain = await drainUnread(17);
+      const expectedIds = expectedEntries.map((entry) => entry.id);
       const expected = new Set(expectedIds);
       const drainedIds = burstDrain.entries.map((entry) => entry.id);
       const drainedExpected = drainedIds.filter((id) => expected.has(id));
@@ -1099,30 +1159,43 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       const missing = expectedIds.filter((id) => !unique.has(id));
       const duplicates = drainedExpected.length - unique.size;
       const unexpected = drainedIds.filter((id) => !expected.has(id));
+      const expectedOrder = [...expectedEntries].sort(compareEntryOrder).map((entry) => entry.id);
+      const orderMismatchCount = Math.max(expectedOrder.length, drainedIds.length) -
+        expectedOrder.filter((id, index) => drainedIds[index] === id).length;
+      const burstOrderExact = orderMismatchCount === 0;
       const resets = transportErrors.filter((error) => error.code === 'ECONNRESET');
       const allRequestsSameOrigin = requestUrls.every((value) => new URL(value).origin === origin);
-      const pass =
-        idleTurns === 0 &&
-        directedTurns === 1 &&
-        directedOccurrences === 1 &&
-        expectedIds.length === 150 &&
-        authenticatedWriterIds.size >= 2 &&
-        drainedExpected.length === 150 &&
-        unique.size === 150 &&
-        missing.length === 0 &&
-        duplicates === 0 &&
-        unexpected.length === 0 &&
-        !statuses.has(429) &&
-        resets.length === 0 &&
-        forbiddenFetchAttempts === 0 &&
-        allRequestsSameOrigin &&
-        turnErrors.length === 0;
+      const configuredWriterIds = new Set(writerRefs.map((ref) => ref.drone_id));
+      const writerIdsMatchConfigured = authenticatedWriterIds.size === configuredWriterIds.size &&
+        [...authenticatedWriterIds].every((id) => configuredWriterIds.has(id));
+      const expectedAbort = phase.stream_error?.origin === 'iterator' &&
+        /abort|directed observation complete/i.test(phase.stream_error.message);
+      const phaseComplete = phase.stream_headers_ready_at !== null && !phase.deadline_fired &&
+        phase.directed_append_succeeded && phase.directed_turn_count === 1 &&
+        phase.quiescence_started_at !== null && phase.quiescence_ended_at !== null &&
+        phase.abort_issued_at !== null && phase.abort_reason === 'directed observation complete' &&
+        expectedAbort && phase.stream_shutdown_clean && phase.directed_drain === 'succeeded';
+      const pass = proofComplete({
+        idleTurns, idleLogStable, idleCursorStable, directedTurns, directedOccurrences,
+        expected: expectedIds.length, writerCount: authenticatedWriterIds.size, writerIdsMatchConfigured,
+        drained: drainedExpected.length, unique: unique.size, missing: missing.length,
+        duplicates, unexpected: unexpected.length, orderExact: burstOrderExact,
+        has429: statuses.has(429), resets: resets.length, transportErrors: transportErrors.length,
+        requestErrors: phase.requests.length, forbiddenFetches: forbiddenFetchAttempts,
+        sameOrigin: allRequestsSameOrigin, turnErrors: turnErrors.length, phaseComplete,
+      });
       result = {
         pass,
         client_sha: EXPECTED_CLIENT_SHA,
         origin,
         simulated_idle_ms: 2 * wake.CODEX_HEARTBEAT_CADENCE_MS,
         idle_accepted_model_turns: idleTurns,
+        idle_log_before_count: idleLogBefore.entries.length,
+        idle_log_after_count: idleLogAfter.entries.length,
+        idle_log_stable: idleLogStable,
+        idle_cursor_before: idleCursorBefore ?? null,
+        idle_cursor_after: idleCursorAfter ?? null,
+        idle_cursor_stable: idleCursorStable,
         directed_items: 1,
         directed_accepted_model_turns: directedTurns,
         directed_unread_occurrences: directedOccurrences,
@@ -1134,9 +1207,13 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
           ...(session_id ? { session_id } : {}),
         })),
         authenticated_writer_count: authenticatedWriterIds.size,
+        writer_ids_match_configured: writerIdsMatchConfigured,
         burst_expected: expectedIds.length,
         burst_drained: drainedExpected.length,
         burst_unique: unique.size,
+        order_expected_count: expectedOrder.length,
+        order_mismatch_count: orderMismatchCount,
+        burst_order_exact: burstOrderExact,
         drain_pages: burstDrain.pages,
         missing_ids: missing,
         duplicate_count: duplicates,
@@ -1147,6 +1224,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         transport_errors: transportErrors,
         forbidden_fetch_attempts: forbiddenFetchAttempts,
         all_requests_same_origin: allRequestsSameOrigin,
+        phase_complete: phaseComplete,
         turn_validation_errors: turnErrors,
         app_server_methods: methods,
         phase,
@@ -1186,11 +1264,16 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     expect(output).toMatchObject({
       pass: true,
       idle_accepted_model_turns: 0,
+      idle_log_stable: true,
+      idle_cursor_stable: true,
       directed_accepted_model_turns: 1,
       directed_unread_occurrences: 1,
       burst_expected: 150,
       burst_drained: 150,
       burst_unique: 150,
+      order_expected_count: 150,
+      order_mismatch_count: 0,
+      burst_order_exact: true,
       missing_ids: [],
       duplicate_count: 0,
       unexpected_ids: [],
@@ -1198,6 +1281,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       econnreset_count: 0,
       forbidden_fetch_attempts: 0,
       all_requests_same_origin: true,
+      phase_complete: true,
       turn_validation_errors: [],
       cleanup_verified: true,
     });
