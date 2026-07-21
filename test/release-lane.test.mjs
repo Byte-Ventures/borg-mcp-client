@@ -21,7 +21,7 @@ import {
 import { smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const CLIENT_VERSION = '2.0.1';
+const CLIENT_VERSION = '2.0.2';
 const SHARED_VERSION = '0.4.3';
 const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.4.3.tgz';
 const SHARED_INTEGRITY = 'sha512-VuQ+nOVhNY5xTzQENK4CnwI4QR5G8bucwoXvWNW0R+IfXx3utCN/CLy5D2WJF9RRVkbbbvApyquok7PV4FX1Uw==';
@@ -224,7 +224,7 @@ test('release documentation describes the activated minimal publication lane', a
   const extraction = await readFile(join(root, 'docs', 'EXTRACTION_PROVENANCE.md'), 'utf8');
 
   assert.match(readme, /After verified publication/);
-  assert.match(readme, /npm install -g borgmcp@2\.0\.1/);
+  assert.match(readme, /npm install -g borgmcp@2\.0\.2/);
   assert.doesNotMatch(readme, /npm install -g borgmcp(?:\s|$)/);
   assert.match(security, /protected npm environment and Trusted Publishing/);
   for (const boundary of [
@@ -240,11 +240,16 @@ test('release documentation describes the activated minimal publication lane', a
     '90a078264f4d61c0140ad0a30357a4df42c34ab0',
     '29693915689',
     'v2.0.1',
-  ]) assert.ok(releasing.includes(evidence), `Missing recovery evidence: ${evidence}`);
+    'def12ee40af665fc6c3af4873a7d566b3f844fc1',
+    'b30fc54a4d73bda98db4630864cca796c8923dd9',
+    '29748931957',
+    'sha512-Ah8IY2izZ774gYLKthRL9lfrV+JBk2o9HSlrWUplyZgoGqwVjVboHNon0hWWF5i/fObiCGikFOMY6qZ+vaeyCw==',
+    'v2.0.2',
+  ]) assert.ok(releasing.includes(evidence), `Missing immutable release evidence: ${evidence}`);
   assert.match(releasing, /failed before package\s+creation or npm publication/);
   assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
   assert.match(extraction, /borgmcp-server@0\.1\.7/);
-  assert.match(extraction, /reviewed `v2\.0\.1` source/);
+  assert.match(extraction, /reviewed `v2\.0\.2` source/);
   assert.doesNotMatch(`${readme}\n${security}\n${releasing}`, /publication is deferred|not yet published/);
 });
 
