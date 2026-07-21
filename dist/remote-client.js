@@ -21,6 +21,7 @@ import { getActiveCube } from './cubes.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { resolveLocalLogRecipients } from './local-log-routing.js';
+import { ensureLocalSessionFresh, recoverExpiredLocalSession } from './session-continuity.js';
 // gh#330: honor the server's Retry-After on 429 instead of failing the
 // (often required) coordination signal outright. Bounded so a CLI call
 // never blocks unboundedly; capped per attempt so a large window-reset
@@ -152,12 +153,15 @@ async function decodeLocalProtocolResponse(request, allowNoContent, decodePayloa
     }
 }
 async function localServerRequest(active, path, method, payload) {
-    return decodeLocalProtocolResponse((signal) => authedFetch(path, {
+    let current = active.localSessionCredentialRef && active.localSessionExpiresAt
+        ? await ensureLocalSessionFresh(active)
+        : active;
+    const request = (candidate) => decodeLocalProtocolResponse((signal) => authedFetch(path, {
         method,
         signal,
-        droneSession: active.sessionToken,
-        apiUrl: active.apiUrl,
-        serverTrustIdentity: active.serverTrustIdentity,
+        droneSession: candidate.sessionToken,
+        apiUrl: candidate.apiUrl,
+        serverTrustIdentity: candidate.serverTrustIdentity,
         redirect: 'error',
         ...(payload === undefined
             ? { headers: { Accept: 'application/json' } }
@@ -166,6 +170,17 @@ async function localServerRequest(active, path, method, payload) {
                 body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
             }),
     }), true);
+    try {
+        return await request(current);
+    }
+    catch (error) {
+        if (!(error instanceof BorgServerError) || error.code !== 'AUTH_EXPIRED')
+            throw error;
+        if (current.sessionToken !== active.sessionToken)
+            throw error;
+        current = await recoverExpiredLocalSession(current);
+        return request(current);
+    }
 }
 function manageCopyValue(value) {
     return JSON.stringify(value);
@@ -435,6 +450,9 @@ async function authedFetch(path, init = {}) {
         }
         catch {
             rejectedCode = undefined;
+        }
+        if (droneSession !== undefined && rejectedCode === ErrorCode.AUTH_EXPIRED) {
+            throw new BorgServerError('AUTH_EXPIRED', 'the selected Borg server session expired');
         }
         if (droneSession !== undefined && rejectedCode === ErrorCode.SESSION_REJECTED) {
             throw new BorgServerError('SESSION_REJECTED', 'the selected Borg server rejected this worktree session (revoked or taken over)');

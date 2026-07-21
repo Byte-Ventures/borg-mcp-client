@@ -41,6 +41,7 @@ import {
   type SeatOperation as ServerSessionOperation,
 } from './seats.js';
 import { BorgServerError } from './server-errors.js';
+import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
 import {
   loadBorgServerTrust,
@@ -273,12 +274,12 @@ export async function sendBorgServerAttach(
           : { prior_drone_id: request.priorDroneId }),
       })),
     });
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401 || response.status === 403 || response.status === 410) {
       // A typed SESSION_REJECTED body means the presented bearer targets a seat
       // already bound to a different session (takeover), distinct from a rejected
       // parent enrollment credential. Decode defensively; any anomaly falls back
       // to the generic credential rejection below. Never echo the response body.
-      if (response.status === 401) {
+      if (response.status === 401 || response.status === 410) {
         let rejectedCode: ErrorCode | undefined;
         try {
           rejectedCode = decodeProtocolErrorEnvelope(
@@ -293,7 +294,23 @@ export async function sendBorgServerAttach(
             'Borg server rejected the session: the seat is already bound to another session',
           );
         }
+        if (rejectedCode === ErrorCode.AUTH_EXPIRED) {
+          throw new BorgServerError(
+            'AUTH_EXPIRED',
+            'Borg server session expired',
+          );
+        }
+        if (rejectedCode === ErrorCode.SESSION_REVOKED) {
+          throw new BorgServerError(
+            'SESSION_REVOKED',
+            'Borg server session was revoked',
+          );
+        }
+        if (response.status === 410 && rejectedCode === DRONE_EVICTED_CODE) {
+          throw new DroneEvictedError();
+        }
       }
+      if (response.status === 410) throw new Error('Borg server attach failed (HTTP 410)');
       throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
     }
     if (response.status === 409) {

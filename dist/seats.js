@@ -110,6 +110,17 @@ function isValidSeatRecord(ref, value) {
         (typeof r.expiresAt !== 'string' || !Number.isFinite(Date.parse(r.expiresAt)))) {
         return false;
     }
+    if (r.replacement !== undefined) {
+        if (r.state !== 'active' ||
+            r.replacement === null ||
+            typeof r.replacement !== 'object' ||
+            Array.isArray(r.replacement) ||
+            Object.keys(r.replacement).length !== 1 ||
+            typeof r.replacement.credential !== 'string' ||
+            !/^[A-Za-z0-9_-]{43}$/.test(r.replacement.credential)) {
+            return false;
+        }
+    }
     // State-consistency invariants (no inconsistent active|pending).
     if (r.state === 'active') {
         // An ACTIVE record MUST carry its full server session + worktree binding.
@@ -214,6 +225,14 @@ export async function getActiveSeatCredential(ref, binding) {
     if (!recordMatches(record, ref, binding) || record.state !== 'active')
         return null;
     return record.credential;
+}
+/** Exact ACTIVE record for the internal continuity coordinator. */
+export async function getActiveSeat(ref, binding) {
+    if (!REF_RE.test(ref))
+        return null;
+    const store = await readStore();
+    const record = store.seats[ref];
+    return recordMatches(record, ref, binding) && record.state === 'active' ? record : null;
 }
 // ─── PREPARE / mint (no worktree yet) ────────────────────────────────────────
 /**
@@ -343,6 +362,106 @@ export async function activateAndBindSeat(input) {
         };
         await txn.commit();
         return 'activated';
+    });
+}
+/**
+ * Preserve the exact ACTIVE seat while preparing one durable replacement bearer.
+ * A lost response or process restart reuses the stored replacement; a changed
+ * authority, drone, or active bearer fails before any mutation.
+ */
+export async function prepareSeatReplacement(input) {
+    if (!REF_RE.test(input.ref) || !/^[A-Za-z0-9_-]{43}$/.test(input.replacementCredential)) {
+        return { ok: false, reason: 'expectation-mismatch' };
+    }
+    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
+        const record = txn.data.seats[input.ref];
+        if (!recordMatches(record, input.ref, input.binding) ||
+            record.state !== 'active' ||
+            record.droneId !== input.expectedDroneId ||
+            digestOf(record.credential) !== input.expectedActiveDigest) {
+            return { ok: false, reason: 'expectation-mismatch' };
+        }
+        if (record.replacement) {
+            return {
+                ok: true,
+                credential: record.replacement.credential,
+                digest: digestOf(record.replacement.credential),
+            };
+        }
+        record.replacement = { credential: input.replacementCredential };
+        await txn.commit();
+        return {
+            ok: true,
+            credential: input.replacementCredential,
+            digest: digestOf(input.replacementCredential),
+        };
+    });
+}
+/** Update only the committed expiry for an exact same-bearer session renewal. */
+export async function refreshActiveSeatSession(input) {
+    if (!UUID_RE.test(input.expectedDroneId) || !UUID_RE.test(input.expectedSessionId)) {
+        throw new Error('invalid Borg server session identity');
+    }
+    if (!Number.isFinite(Date.parse(input.expiresAt))) {
+        throw new Error('invalid Borg server session expiry');
+    }
+    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
+        const record = txn.data.seats[input.ref];
+        if (!recordMatches(record, input.ref, input.binding) ||
+            record.state !== 'active' ||
+            record.droneId !== input.expectedDroneId ||
+            record.sessionId !== input.expectedSessionId ||
+            digestOf(record.credential) !== input.expectedActiveDigest) {
+            return false;
+        }
+        record.expiresAt = input.expiresAt;
+        await txn.commit();
+        return true;
+    });
+}
+/** Atomically promote only the response-bound replacement onto the same ACTIVE seat. */
+export async function promoteSeatReplacement(input) {
+    if (!UUID_RE.test(input.expectedDroneId) || !UUID_RE.test(input.sessionId)) {
+        throw new Error('invalid Borg server session identity');
+    }
+    if (!Number.isFinite(Date.parse(input.expiresAt))) {
+        throw new Error('invalid Borg server session expiry');
+    }
+    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
+        const record = txn.data.seats[input.ref];
+        if (!recordMatches(record, input.ref, input.binding) || record.state !== 'active')
+            return 'missing';
+        if (record.droneId !== input.expectedDroneId ||
+            digestOf(record.credential) !== input.expectedActiveDigest ||
+            !record.replacement ||
+            digestOf(record.replacement.credential) !== input.expectedReplacementDigest) {
+            return 'replaced';
+        }
+        const { replacement, ...active } = record;
+        txn.data.seats[input.ref] = {
+            ...active,
+            credential: replacement.credential,
+            sessionId: input.sessionId,
+            expiresAt: input.expiresAt,
+        };
+        await txn.commit();
+        return 'promoted';
+    });
+}
+/** Remove only the caller's exact pending replacement, never the ACTIVE seat. */
+export async function scrubSeatReplacement(input) {
+    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
+        const record = txn.data.seats[input.ref];
+        if (!recordMatches(record, input.ref, input.binding) ||
+            record.state !== 'active' ||
+            digestOf(record.credential) !== input.expectedActiveDigest ||
+            !record.replacement ||
+            digestOf(record.replacement.credential) !== input.expectedReplacementDigest) {
+            return false;
+        }
+        delete record.replacement;
+        await txn.commit();
+        return true;
     });
 }
 /**

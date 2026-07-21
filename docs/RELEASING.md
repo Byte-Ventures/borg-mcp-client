@@ -23,7 +23,7 @@ Before creating the release tag, independently verify all of these conditions:
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- the exact audited registry dependency `borgmcp-shared@0.4.2` remains locked to
+- the exact audited registry dependency `borgmcp-shared@0.4.3` remains locked to
   its canonical tarball and integrity;
 - the client and matching server pass the complete local dogfood gate;
 - the selected stable client version is unused and the exact release commit is

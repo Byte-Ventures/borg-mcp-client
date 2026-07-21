@@ -74,7 +74,11 @@ describe('seat single-store writer guard (SR#5)', () => {
     for (const fn of [
       'export async function mintPendingSeat',
       'export async function prepareSeat',
-      'export async function activateAndBindSeat',
+       'export async function activateAndBindSeat',
+       'export async function prepareSeatReplacement',
+       'export async function promoteSeatReplacement',
+       'export async function scrubSeatReplacement',
+       'export async function refreshActiveSeatSession',
       'export async function bindPendingSeatToWorktree',
       'export async function resetSeatForWorktree',
       'export async function scrubPendingSeat',
@@ -109,6 +113,10 @@ describe('seat single-store writer guard (SR#5)', () => {
     // it is called only by the cubes.ts hydration adapter and defined in seats.ts.
     // No command, remote-client, or handshake path resolves a bearer directly.
     expect(filesReferencing('getActiveSeatCredential', ['seats.ts', 'cubes.ts'])).toEqual([]);
+  });
+
+  it('the continuity-only active-record reader is resolved ONLY by the renewal coordinator', () => {
+    expect(filesReferencing('getActiveSeat(', ['seats.ts', 'session-continuity.ts'])).toEqual([]);
   });
 
   it('the cubes.ts hydration adapter never reaches a raw store backend', () => {
@@ -161,7 +169,11 @@ describe('seat single-store writer guard (SR#5)', () => {
     for (const writer of [
       'mintPendingSeat',
       'prepareSeat',
-      'activateAndBindSeat',
+       'activateAndBindSeat',
+       'prepareSeatReplacement',
+       'promoteSeatReplacement',
+       'scrubSeatReplacement',
+       'refreshActiveSeatSession',
       'bindPendingSeatToWorktree',
       'resetSeatForWorktree',
       'scrubPendingSeat',

@@ -659,21 +659,25 @@ describe('self-hosted server handshake', () => {
     expect((error as Error).message).not.toContain(reflected);
   });
 
-  it('classifies a typed SESSION_REJECTED takeover distinctly from a credential rejection', async () => {
-    const rejectedWith = (code: string) => vi.fn(async () => new Response(JSON.stringify({
+  it('classifies typed attach lifecycle failures without trusting server messages', async () => {
+    const rejectedWith = (code: string, status = 401) => vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',
       error: { code, message: 'rejected' },
-    }), { status: 401 }));
+    }), { status }));
     const send = (fetchImpl: typeof fetch) => sendBorgServerAttach(
       'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
       { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
       's'.repeat(43),
       { fetchImpl },
     );
-    // A typed takeover rejection surfaces its own code...
     await expect(send(rejectedWith('SESSION_REJECTED') as typeof fetch))
       .rejects.toMatchObject({ code: 'SESSION_REJECTED' });
-    // ...while any other 401 falls back to the generic credential rejection.
+    await expect(send(rejectedWith('AUTH_EXPIRED') as typeof fetch))
+      .rejects.toMatchObject({ code: 'AUTH_EXPIRED' });
+    await expect(send(rejectedWith('SESSION_REVOKED') as typeof fetch))
+      .rejects.toMatchObject({ code: 'SESSION_REVOKED' });
+    await expect(send(rejectedWith('DRONE_EVICTED', 410) as typeof fetch))
+      .rejects.toMatchObject({ name: 'DroneEvictedError' });
     await expect(send(rejectedWith('AUTH_INVALID') as typeof fetch))
       .rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
   });
