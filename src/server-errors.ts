@@ -4,7 +4,9 @@ export type BorgServerErrorCode =
   | 'INVITATION_REJECTED'
   | 'CREATE_CUBE_DENIED'
   | 'ATTACH_CONFLICT'
-  | 'SESSION_REJECTED';
+  | 'SESSION_REJECTED'
+  | 'SESSION_REVOKED'
+  | 'AUTH_EXPIRED';
 
 /** Safe, non-secret state code for deterministic authority recovery copy. */
 export class BorgServerError extends Error {

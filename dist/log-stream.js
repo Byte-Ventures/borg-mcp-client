@@ -27,6 +27,7 @@ import { Buffer } from 'node:buffer';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { compareBroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
+import { decodeProtocolErrorEnvelope, ErrorCode } from 'borgmcp-shared/protocol';
 import { getActiveCube, inboxPathForDrone } from './cubes.js';
 import { assertUuidShape } from './evict-drone.js';
 import { loadBorgServerTrust } from './server-trust.js';
@@ -34,6 +35,8 @@ import { advanceLocalServerCursor, clearLocalServerCursor, encodeLocalServerCurs
 import { DroneEvictedError, DRONE_EVICTED_CODE, EVICTED_RESULT_MARKER, errorCodeFromBody, } from './drone-lifecycle.js';
 import { CODEX_HEARTBEAT_CADENCE_MS, fireCodexHeartbeatTick, formatCodexWakePrompt, startCodexHeartbeat, wakeCodexViaAppServer, } from './codex-app-wake.js';
 import { readBoundedResponseBody } from './server-response.js';
+import { BorgServerError, BorgServerUnreachableError } from './server-errors.js';
+import { recoverExpiredLocalSession } from './session-continuity.js';
 import { acquireStreamLease, readOwnershipSnapshot, STREAM_OWNER_STALE_MS, } from './stream-owner.js';
 // ------------------------------------------------------------------
 // Tuning constants
@@ -63,6 +66,12 @@ export class StreamCursorExpiredError extends Error {
     constructor(message = 'stream resume cursor expired — reset for catchup, reconnecting') {
         super(message);
         this.name = 'StreamCursorExpiredError';
+    }
+}
+class TerminalStreamError extends Error {
+    constructor() {
+        super('terminal local session state');
+        this.name = 'TerminalStreamError';
     }
 }
 function isProcessAlive(pid) {
@@ -260,6 +269,8 @@ function runStreamLoopForever() {
                 process.stderr.write('[borg-mcp log stream] runLoop returned unexpectedly; restarting in 5s\n');
             }
             catch (err) {
+                if (err instanceof TerminalStreamError)
+                    return;
                 process.stderr.write(`[borg-mcp log stream] runLoop threw: ${err?.message ?? err}; restarting in 5s\n`);
             }
             streamState.runLoopRestartCount += 1;
@@ -294,6 +305,7 @@ async function runLoop(testDeps = {}) {
     const _getActiveCube = testDeps.getActiveCube ?? getActiveCube;
     const _acquireStreamLease = testDeps.acquireStreamLease ?? acquireStreamLease;
     const _streamOnce = testDeps.streamOnce ?? streamOnce;
+    const _recoverExpiredSession = testDeps.recoverExpiredSession ?? recoverExpiredLocalSession;
     const _sleep = testDeps.sleep ?? sleep;
     const _maxIterations = testDeps.maxIterations ?? Infinity;
     let _iterations = 0;
@@ -302,6 +314,7 @@ async function runLoop(testDeps = {}) {
     let currentCubeId = null;
     let lease = null;
     let leaseKey = null;
+    let lastRecoveredToken = null;
     try {
         while (_iterations < _maxIterations) {
             _iterations += 1;
@@ -383,6 +396,7 @@ async function runLoop(testDeps = {}) {
                 }
                 // Clean disconnect (e.g. server-side rollout). Reset backoff.
                 attempt = 0;
+                lastRecoveredToken = null;
                 streamState.reconnectAttempts = 0;
             }
             catch (err) {
@@ -408,7 +422,29 @@ async function runLoop(testDeps = {}) {
                     streamState.connected = false;
                     streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
                     process.stderr.write(`[borg-mcp log stream] drone evicted — stream terminated (no reconnect).\n`);
-                    return;
+                    throw new TerminalStreamError();
+                }
+                if (err instanceof BorgServerError) {
+                    if (err.code !== 'AUTH_EXPIRED' || lastRecoveredToken === active.sessionToken) {
+                        throw new TerminalStreamError();
+                    }
+                    try {
+                        const renewed = await _recoverExpiredSession(active);
+                        lastRecoveredToken = renewed.sessionToken;
+                        attempt = 0;
+                        streamState.reconnectAttempts = 0;
+                        continue;
+                    }
+                    catch (recoveryError) {
+                        if (!(recoveryError instanceof BorgServerUnreachableError)) {
+                            throw new TerminalStreamError();
+                        }
+                        // The replacement bearer is durable and intentionally survives an
+                        // ambiguous transport failure. Fall through to the ordinary bounded
+                        // reconnect backoff; the next AUTH_EXPIRED response resumes that exact
+                        // replacement instead of permanently silencing the stream.
+                        err = recoveryError;
+                    }
                 }
                 streamState.connected = false;
                 const delay = Math.min(RECONNECT_MIN_MS * 2 ** attempt, RECONNECT_MAX_MS) +
@@ -574,7 +610,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     // Set + FIFO array for O(1) membership + bounded memory.
     const recentIds = new Set();
     const recentIdsOrder = [];
-    let isCatchingUp = lastEventId !== null;
+    let isCatchingUp = lastEventId !== null || cursor !== null;
     // gh#29 quality-stream (#5): shared inbox-write + cursor-advance helpers,
     // extracted from the previously-duplicated ack / regular-log branches in the
     // event loop below. Behavior-preserving — the per-branch comments document
@@ -663,6 +699,26 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         // off forever against a dead seat. Keyed on the structured code, not the
         // bare status (SEC R2). Any other status falls through to the generic throw
         // so the reconnect loop keeps retrying transient failures.
+        if (response.status === 401) {
+            const body = await readBoundedResponseBody(response, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES, 'Local Borg server SSE response exceeded the response limit', ac.signal).catch(() => '');
+            let code;
+            try {
+                code = decodeProtocolErrorEnvelope(JSON.parse(body)).error.code;
+            }
+            catch {
+                code = undefined;
+            }
+            if (code === ErrorCode.AUTH_EXPIRED) {
+                throw new BorgServerError('AUTH_EXPIRED', 'Borg server session expired');
+            }
+            if (code === ErrorCode.SESSION_REJECTED) {
+                throw new BorgServerError('SESSION_REJECTED', 'Borg server session was rejected');
+            }
+            if (code === ErrorCode.SESSION_REVOKED) {
+                throw new BorgServerError('SESSION_REVOKED', 'Borg server session was revoked');
+            }
+            throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server rejected the stream credential');
+        }
         if (response.status === 410) {
             const body = await readBoundedResponseBody(response, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES, 'Local Borg server SSE response exceeded the response limit', ac.signal).catch(() => '');
             const code = errorCodeFromBody(body);

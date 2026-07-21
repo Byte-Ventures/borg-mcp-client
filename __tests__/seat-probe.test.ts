@@ -217,8 +217,8 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
     ).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
   });
 
-  it('drone-SESSION 401 with ANY non-SESSION_REJECTED typed code → CREDENTIAL_REJECTED (never reset)', async () => {
-    for (const code of ['AUTH_INVALID', 'AUTH_EXPIRED', 'AUTH_MISSING', 'SESSION_REVOKED', 'ACCESS_DENIED']) {
+  it('drone-SESSION 401 with a non-recoverable typed code → CREDENTIAL_REJECTED (never reset)', async () => {
+    for (const code of ['AUTH_INVALID', 'AUTH_MISSING', 'SESSION_REVOKED', 'ACCESS_DENIED']) {
       vi.resetModules();
       wireMocks({ fetchImpl: vi.fn(async () => new Response(errorEnvelope(code), { status: 401 })) });
       const { whoami } = await import('../src/remote-client.js');

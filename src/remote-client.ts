@@ -47,6 +47,7 @@ import {
 } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { resolveLocalLogRecipients } from './local-log-routing.js';
+import { ensureLocalSessionFresh, recoverExpiredLocalSession } from './session-continuity.js';
 
 export interface RemoteConnection {
   apiUrl: string;
@@ -228,20 +229,31 @@ async function localServerRequest<T>(
   method: 'GET' | 'POST' | 'PUT' | 'PATCH',
   payload?: Record<string, unknown>,
 ): Promise<T | null> {
-  return decodeLocalProtocolResponse<T>((signal) => authedFetch(path, {
-    method,
-    signal,
-    droneSession: active.sessionToken,
-    apiUrl: active.apiUrl,
-    serverTrustIdentity: active.serverTrustIdentity,
-    redirect: 'error',
-    ...(payload === undefined
-      ? { headers: { Accept: 'application/json' } }
-      : {
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
-      }),
-  }), true);
+  let current = active.localSessionCredentialRef && active.localSessionExpiresAt
+    ? await ensureLocalSessionFresh(active)
+    : active;
+  const request = (candidate: ActiveCube) => decodeLocalProtocolResponse<T>((signal) => authedFetch(path, {
+      method,
+      signal,
+      droneSession: candidate.sessionToken,
+      apiUrl: candidate.apiUrl,
+      serverTrustIdentity: candidate.serverTrustIdentity,
+      redirect: 'error',
+      ...(payload === undefined
+        ? { headers: { Accept: 'application/json' } }
+        : {
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
+        }),
+    }), true);
+  try {
+    return await request(current);
+  } catch (error) {
+    if (!(error instanceof BorgServerError) || error.code !== 'AUTH_EXPIRED') throw error;
+    if (current.sessionToken !== active.sessionToken) throw error;
+    current = await recoverExpiredLocalSession(current);
+    return request(current);
+  }
 }
 
 export interface LocalManageOperation {
@@ -608,6 +620,12 @@ async function authedFetch(
       rejectedCode = decodeProtocolErrorEnvelope(JSON.parse(body)).error.code;
     } catch {
       rejectedCode = undefined;
+    }
+    if (droneSession !== undefined && rejectedCode === ErrorCode.AUTH_EXPIRED) {
+      throw new BorgServerError(
+        'AUTH_EXPIRED',
+        'the selected Borg server session expired',
+      );
     }
     if (droneSession !== undefined && rejectedCode === ErrorCode.SESSION_REJECTED) {
       throw new BorgServerError(

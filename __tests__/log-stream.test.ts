@@ -320,6 +320,22 @@ describe('streamOnce', () => {
     expect(networkFetch).not.toHaveBeenCalled();
   });
 
+  it('classifies only an exact bounded 401 AUTH_EXPIRED envelope as recoverable expiry', async () => {
+    const expired = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '2',
+      error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
+    }), { status: 401 }));
+    await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(expired as typeof fetch)))
+      .rejects.toMatchObject({ code: 'AUTH_EXPIRED' });
+
+    const stale = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '2',
+      error: { code: 'SESSION_REJECTED', message: 'Authentication failed.' },
+    }), { status: 401 }));
+    await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(stale as typeof fetch)))
+      .rejects.toMatchObject({ code: 'SESSION_REJECTED' });
+  });
+
   it('duplicate-process boundary: only stream owner fetches and appends', async () => {
     const locksDir = await mkdtemp(path.join(tmpdir(), 'borg-stream-owner-boundary-'));
     const appendLine = vi.fn().mockResolvedValue(undefined);
@@ -715,6 +731,36 @@ describe('streamOnce', () => {
     ]);
     expect(wakeCodex).toHaveBeenCalledTimes(1);
     expect(secondCursor).toHaveBeenCalledWith('e_A');
+  });
+
+  it('uses the persisted stream cursor to dedup catchup after process restart', async () => {
+    const cursor = {
+      id: '11111111-1111-4111-8111-111111111111',
+      created_at: '2026-05-11T12:00:00.000Z',
+    };
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const hasInboxEntryId = vi.fn().mockResolvedValue(true);
+    const wakeCodex = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e_A\ndata: {"id":"e_A","drone_label":"drone-2","role_name":"Reviewer","message":"first","created_at":"2026-05-11T12:00:01Z"}\n\n',
+      'event: bookmark\ndata: {"as_of":"2026-05-11T12:00:02Z"}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      getCursor: vi.fn(async () => cursor),
+      hasInboxEntryId,
+      wakeCodex,
+    });
+
+    expect(hasInboxEntryId).toHaveBeenCalledWith(
+      ACTIVE_CUBE.cubeId,
+      ACTIVE_CUBE.droneId,
+      'e_A',
+      expect.stringContaining('[entry_id: e_A]'),
+    );
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(wakeCodex).not.toHaveBeenCalled();
   });
 
   it('writes reconnect catchup entries that are not already in the inbox file', async () => {
@@ -1179,13 +1225,13 @@ describe('streamOnce', () => {
     expect(onEventId).toHaveBeenLastCalledWith('e_new');
   });
 
-  it('throws on non-200 response so the outer loop reconnects with backoff', async () => {
+  it('keeps an ambiguous 401 terminal instead of reconnecting or renewing', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response('Unauthorized', { status: 401 })
     );
     await expect(
       streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(fetchImpl))
-    ).rejects.toThrow(/HTTP 401/);
+    ).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
   });
 });
 

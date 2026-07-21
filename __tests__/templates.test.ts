@@ -133,7 +133,7 @@ describe('Template.cube_directive field', () => {
     expect(releaseQuality).toContain('source of shipped behavior');
     expect(releaseQuality).toContain('planned behavior from shipped behavior');
     expect(releaseQuality).toContain('generated-document and version-discipline');
-    expect(releaseQuality).toContain('testing`, `docs`, or `both`');
+    expect(releaseQuality).toContain('RQ-APPROVED [testing|docs|both]');
 
     const productDesign = roles.get('Product Design')!;
     expect(productDesign).toContain('keyboard navigation');
@@ -292,7 +292,7 @@ describe('Template.cube_directive field', () => {
       expect(text, roleName).toContain('client-only, user-interface-only, documentation-only, tests-only, or database-migration-only');
       expect(text, roleName).toContain('DRY-RUN-REQUEST: <SHA> — worker-bundle surface: <paths/reason>');
       expect(text, roleName).toContain('never `BLOCKED` and never a self-claimed pass');
-      expect(text, roleName).toContain('Code Review and Security Review proceed while the request is pending');
+      expect(text, roleName).toContain('ordered review chain may proceed while the request is pending');
       expect(text, roleName).toContain('Coordinator, Queen, or a named unsandboxed delegate');
       expect(text, roleName).toContain('exact final `REVIEW-READY` SHA');
       expect(text, roleName).toContain('Any new commit invalidates that pass');
@@ -346,17 +346,10 @@ describe('Template.cube_directive field', () => {
       default_to: ['coordinator', 'queen'],
     });
     expect(byClass.get('status-claim')?.prefixes).toContain('STARTING');
-    // REVIEW-READY is directed to the Coordinator + every reviewer role.
+    // REVIEW-READY wakes only the coordinating seat, which routes the first gate.
     expect(byClass.get('review-request')).toMatchObject({ routing: 'directed' });
     expect(byClass.get('review-request')?.prefixes).toContain('REVIEW-READY');
-    expect(byClass.get('review-request')?.default_to).toEqual([
-      'coordinator',
-      'queen',
-      'code-reviewer',
-      'security-auditor',
-      'release-quality',
-      'product-design',
-    ]);
+    expect(byClass.get('review-request')?.default_to).toEqual(['coordinator', 'queen']);
     // Only DECISION / HALT stay genuinely cube-wide.
     expect(byClass.get('cube-wide')).toMatchObject({ routing: 'broadcast' });
     expect(byClass.get('cube-wide')?.prefixes).toEqual(['DECISION', 'HALT']);
@@ -435,10 +428,12 @@ describe('Template.cube_directive field', () => {
     expect(status?.prefixes).toContain('STARTING');
   });
 
-  it('broadcasts only completion gates and cube-wide events', () => {
+  it('limits broadcasts to each template\'s declared cube-wide events', () => {
     for (const name of ['software-dev', 'starter'] as const) {
       const taxonomy = getTemplate(name)!.message_taxonomy ?? [];
-      const broadcastClasses = new Set(['completion-gate', 'cube-wide']);
+      const broadcastClasses = new Set(
+        name === 'starter' ? ['completion-gate', 'cube-wide'] : ['cube-wide'],
+      );
       expect(
         taxonomy.some((entry) => entry.class === 'cube-wide'),
         `${name} has a cube-wide class`,

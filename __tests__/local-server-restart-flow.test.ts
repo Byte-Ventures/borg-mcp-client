@@ -75,7 +75,7 @@ describe('local owner enrollment to restart flow', () => {
           cube: { id: cubeId, name: 'local-cube' },
           role: { id: roleId, name: 'Builder', role_class: 'worker', is_human_seat: false },
           drone: { id: droneId, label: 'builder-1' },
-          session: { id: sessionId, expires_at: '2026-07-14T16:00:00.000Z' },
+          session: { id: sessionId, expires_at: '2099-07-14T16:00:00.000Z' },
         }, 201);
       }
       if (path === `/api/cubes/${cubeId}` && method === 'GET') {

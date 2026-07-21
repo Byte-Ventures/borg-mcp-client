@@ -7,6 +7,8 @@ const OTHER_RECIPIENT_ID = '55555555-5555-4555-8555-555555555555';
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.doUnmock('../src/session-continuity.js');
+  vi.doUnmock('../src/stream-owner.js');
   vi.resetModules();
 });
 
@@ -237,5 +239,253 @@ describe('local server SSE adapter', () => {
       type: 'bookmark',
       as_of: '2026-07-14T14:00:01.000Z',
     }]);
+  });
+
+  it('restores once on AUTH_EXPIRED and reconnects with the fresh same-seat bearer', async () => {
+    const old = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'cube',
+      droneLabel: 'builder-1',
+      sessionToken: 'old-session',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+      localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+      localSessionExpiresAt: '2026-07-21T00:00:00.000Z',
+    };
+    const fresh = { ...old, sessionToken: 'fresh-session', localSessionExpiresAt: '2026-07-22T00:00:00.000Z' };
+    let current = old;
+    const recoverExpiredSession = vi.fn(async () => {
+      current = fresh;
+      return fresh;
+    });
+    vi.doMock('../src/stream-owner.js', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../src/stream-owner.js')>(),
+      readOwnershipSnapshot: vi.fn(async () => ({ state: 'owned', ownerPid: 1 })),
+    }));
+    const { BorgServerError } = await import('../src/server-errors.js');
+    const streamOnce = vi.fn()
+      .mockRejectedValueOnce(new BorgServerError('AUTH_EXPIRED', 'expired'))
+      .mockResolvedValueOnce(undefined);
+    const lease = { refresh: vi.fn(async () => true), release: vi.fn(async () => {}) };
+    const { __runLoopForTest } = await import('../src/log-stream.js');
+
+    await __runLoopForTest({
+      getActiveCube: vi.fn(async () => current),
+      acquireStreamLease: vi.fn(async () => lease as any),
+      streamOnce,
+      recoverExpiredSession,
+      sleep: vi.fn(async () => {}),
+      maxIterations: 2,
+    });
+
+    expect(recoverExpiredSession).toHaveBeenCalledTimes(1);
+    expect(streamOnce.mock.calls.map(([value]) => value.sessionToken))
+      .toEqual(['old-session', 'fresh-session']);
+  });
+
+  it('backs off after an ambiguous restore transport failure, reuses recovery, and catches up once', async () => {
+    const { BorgServerError, BorgServerUnreachableError } = await import('../src/server-errors.js');
+    const old = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'cube',
+      droneLabel: 'builder-1',
+      sessionToken: 'old-session',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+      localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+      localSessionExpiresAt: '2026-07-21T00:00:00.000Z',
+    };
+    const fresh = {
+      ...old,
+      sessionToken: 'fresh-session',
+      localSessionExpiresAt: '2026-07-22T00:00:00.000Z',
+    };
+    let current = old;
+    const recoverExpiredSession = vi.fn()
+      .mockRejectedValueOnce(new BorgServerUnreachableError('connection reset'))
+      .mockImplementationOnce(async () => {
+        current = fresh;
+        return fresh;
+      });
+    const catchupWake = vi.fn();
+    let streamAttempt = 0;
+    const observedCursors: Array<string | null> = [];
+    const streamOnce = vi.fn(async (
+      _active: typeof old,
+      lastEventId: string | null,
+      onEventId: (id: string) => void,
+    ) => {
+      observedCursors.push(lastEventId);
+      streamAttempt += 1;
+      if (streamAttempt <= 2) throw new BorgServerError('AUTH_EXPIRED', 'expired');
+      if (lastEventId !== LOG_ID) {
+        catchupWake(LOG_ID);
+        onEventId(LOG_ID);
+      }
+    });
+    vi.doMock('../src/stream-owner.js', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../src/stream-owner.js')>(),
+      readOwnershipSnapshot: vi.fn(async () => ({ state: 'owned', ownerPid: 1 })),
+    }));
+    const lease = { refresh: vi.fn(async () => true), release: vi.fn(async () => {}) };
+    const sleep = vi.fn(async () => {});
+    const { __runLoopForTest } = await import('../src/log-stream.js');
+
+    await __runLoopForTest({
+      getActiveCube: vi.fn(async () => current),
+      acquireStreamLease: vi.fn(async () => lease as any),
+      streamOnce: streamOnce as any,
+      recoverExpiredSession,
+      sleep,
+      maxIterations: 4,
+    });
+
+    expect(recoverExpiredSession).toHaveBeenCalledTimes(2);
+    expect(streamOnce.mock.calls.map(([value]) => value.droneId))
+      .toEqual([DRONE_ID, DRONE_ID, DRONE_ID, DRONE_ID]);
+    expect(streamOnce.mock.calls.map(([value]) => value.sessionToken))
+      .toEqual(['old-session', 'old-session', 'fresh-session', 'fresh-session']);
+    expect(observedCursors).toEqual([null, null, null, LOG_ID]);
+    expect(catchupWake).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep.mock.calls[0][0]).toBeGreaterThanOrEqual(500);
+    expect(sleep.mock.calls[0][0]).toBeLessThanOrEqual(1000);
+  });
+
+  it('keeps a pinned attach trust failure terminal with zero backoff or second attach', async () => {
+    const active = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'cube',
+      droneLabel: 'builder-1',
+      sessionToken: 'expired-session',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+      localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+      localSessionExpiresAt: '2026-07-21T00:00:00.000Z',
+    };
+    const { BorgServerError, BorgServerTrustError } = await import('../src/server-errors.js');
+    const { sendBorgServerAttach } = await import('../src/server-handshake.js');
+    const pinnedAttachFetch = vi.fn(async () => {
+      throw new BorgServerTrustError('pinned certificate rejected');
+    });
+    const recoverExpiredSession = vi.fn(async () => sendBorgServerAttach(
+      active.apiUrl,
+      active.serverTrustIdentity,
+      'p'.repeat(43),
+      {
+        cubeId: CUBE_ID,
+        roleId: '66666666-6666-4666-8666-666666666666',
+        operation: { projectRoot: '/work/repo', kind: 'seat', operationKey: 'current-worktree' },
+        priorDroneId: DRONE_ID,
+      },
+      'r'.repeat(43),
+      { fetchImpl: pinnedAttachFetch as typeof fetch },
+    ));
+    vi.doMock('../src/stream-owner.js', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../src/stream-owner.js')>(),
+      readOwnershipSnapshot: vi.fn(async () => ({ state: 'owned', ownerPid: 1 })),
+    }));
+    const streamOnce = vi.fn(async () => { throw new BorgServerError('AUTH_EXPIRED', 'expired'); });
+    const lease = { refresh: vi.fn(async () => true), release: vi.fn(async () => {}) };
+    const sleep = vi.fn(async () => {});
+    const { __runLoopForTest } = await import('../src/log-stream.js');
+
+    await expect(__runLoopForTest({
+      getActiveCube: vi.fn(async () => active),
+      acquireStreamLease: vi.fn(async () => lease as any),
+      streamOnce,
+      recoverExpiredSession: recoverExpiredSession as any,
+      sleep,
+      maxIterations: 2,
+    })).rejects.toMatchObject({ name: 'TerminalStreamError' });
+    expect(streamOnce).toHaveBeenCalledTimes(1);
+    expect(recoverExpiredSession).toHaveBeenCalledTimes(1);
+    expect(pinnedAttachFetch).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['revoked', 'SESSION_REVOKED'],
+    ['taken over', 'SESSION_REJECTED'],
+    ['ambiguous auth', 'CREDENTIAL_REJECTED'],
+    ['evicted', 'DRONE_EVICTED'],
+    ['trust mismatch', 'TRUST_MISMATCH'],
+  ] as const)('keeps a %s restore failure terminal with zero retry', async (_case, terminalCode) => {
+    const { BorgServerError, BorgServerTrustError } = await import('../src/server-errors.js');
+    const { DroneEvictedError } = await import('../src/drone-lifecycle.js');
+    const terminalError = terminalCode === 'DRONE_EVICTED'
+      ? new DroneEvictedError()
+      : terminalCode === 'TRUST_MISMATCH'
+        ? new BorgServerTrustError('trust changed')
+        : new BorgServerError(terminalCode, 'terminal session state');
+    const active = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'cube',
+      droneLabel: 'builder-1',
+      sessionToken: 'expired-session',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+      localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+      localSessionExpiresAt: '2026-07-21T00:00:00.000Z',
+    };
+    const recoverExpiredSession = vi.fn(async () => { throw terminalError; });
+    vi.doMock('../src/stream-owner.js', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../src/stream-owner.js')>(),
+      readOwnershipSnapshot: vi.fn(async () => ({ state: 'owned', ownerPid: 1 })),
+    }));
+    const streamOnce = vi.fn(async () => { throw new BorgServerError('AUTH_EXPIRED', 'expired'); });
+    const lease = { refresh: vi.fn(async () => true), release: vi.fn(async () => {}) };
+    const sleep = vi.fn(async () => {});
+    const { __runLoopForTest } = await import('../src/log-stream.js');
+
+    await expect(__runLoopForTest({
+      getActiveCube: vi.fn(async () => active),
+      acquireStreamLease: vi.fn(async () => lease as any),
+      streamOnce,
+      recoverExpiredSession,
+      sleep,
+      maxIterations: 2,
+    })).rejects.toMatchObject({ name: 'TerminalStreamError' });
+    expect(recoverExpiredSession).toHaveBeenCalledTimes(1);
+    expect(streamOnce).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('keeps stale SESSION_REJECTED terminal and never starts a second restore cycle', async () => {
+    const active = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'cube',
+      droneLabel: 'builder-1',
+      sessionToken: 'stale-session',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+      localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+      localSessionExpiresAt: '2026-07-21T00:00:00.000Z',
+    };
+    const recoverExpiredSession = vi.fn();
+    vi.doMock('../src/stream-owner.js', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../src/stream-owner.js')>(),
+      readOwnershipSnapshot: vi.fn(async () => ({ state: 'owned', ownerPid: 1 })),
+    }));
+    const { BorgServerError } = await import('../src/server-errors.js');
+    const streamOnce = vi.fn(async () => { throw new BorgServerError('SESSION_REJECTED', 'stale'); });
+    const lease = { refresh: vi.fn(async () => true), release: vi.fn(async () => {}) };
+    const { __runLoopForTest } = await import('../src/log-stream.js');
+
+    await expect(__runLoopForTest({
+      getActiveCube: vi.fn(async () => active),
+      acquireStreamLease: vi.fn(async () => lease as any),
+      streamOnce,
+      recoverExpiredSession,
+      sleep: vi.fn(async () => {}),
+      maxIterations: 2,
+    })).rejects.toMatchObject({ name: 'TerminalStreamError' });
+    expect(recoverExpiredSession).not.toHaveBeenCalled();
+    expect(streamOnce).toHaveBeenCalledTimes(1);
   });
 });

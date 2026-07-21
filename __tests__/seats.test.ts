@@ -187,6 +187,145 @@ describe('seats store — atomic compare-and-activate fails closed (CR#2)', () =
   });
 });
 
+describe('seats store — atomic session replacement', () => {
+  async function seedActive(seats: typeof import('../src/seats.js'), bearer = 'o'.repeat(43)) {
+    await seats.mintPendingSeat({ ...SEAT, credential: bearer });
+    await activateOk(seats, bearer);
+    return { ref: seats.seatRef(SEAT), bearer };
+  }
+
+  it('keeps the active credential usable while reusing one durable pending replacement', async () => {
+    const { seats } = await load();
+    const { ref, bearer } = await seedActive(seats);
+    const first = await seats.prepareSeatReplacement({
+      ref,
+      binding: BIND,
+      expectedDroneId: STAMP.droneId,
+      expectedActiveDigest: digestOf(bearer),
+      replacementCredential: 'r'.repeat(43),
+    });
+    const retry = await seats.prepareSeatReplacement({
+      ref,
+      binding: BIND,
+      expectedDroneId: STAMP.droneId,
+      expectedActiveDigest: digestOf(bearer),
+      replacementCredential: 'x'.repeat(43),
+    });
+
+    expect(first).toEqual({ ok: true, credential: 'r'.repeat(43), digest: digestOf('r'.repeat(43)) });
+    expect(retry).toEqual(first);
+    expect(await seats.getActiveSeatCredential(ref, BIND)).toBe(bearer);
+    expect(await seats.getActiveSeatForWorktree('/work/repo')).toMatchObject({
+      state: 'active',
+      droneId: STAMP.droneId,
+      worktree: '/work/repo',
+    });
+  });
+
+  it.each([
+    ['active digest', { expectedActiveDigest: digestOf('wrong'.repeat(43)) }],
+    ['drone identity', { expectedDroneId: '99999999-9999-4999-8999-999999999999' }],
+    ['authority binding', { binding: { ...BIND, trustIdentity: 'sha256:other-server' } }],
+  ])('does not prepare a replacement after the %s changes', async (_case, patch) => {
+    const { seats } = await load();
+    const { ref, bearer } = await seedActive(seats);
+    await expect(seats.prepareSeatReplacement({
+      ref,
+      binding: BIND,
+      expectedDroneId: STAMP.droneId,
+      expectedActiveDigest: digestOf(bearer),
+      replacementCredential: 'r'.repeat(43),
+      ...patch,
+    })).resolves.toEqual({ ok: false, reason: 'expectation-mismatch' });
+    expect(await seats.getActiveSeatCredential(ref, BIND)).toBe(bearer);
+  });
+
+  it('promotes only the exact replacement and preserves seat identity and binding', async () => {
+    const { seats } = await load();
+    const { ref, bearer } = await seedActive(seats);
+    const replacement = 'r'.repeat(43);
+    await seats.prepareSeatReplacement({
+      ref,
+      binding: BIND,
+      expectedDroneId: STAMP.droneId,
+      expectedActiveDigest: digestOf(bearer),
+      replacementCredential: replacement,
+    });
+
+    await expect(seats.promoteSeatReplacement({
+      ref,
+      binding: BIND,
+      expectedDroneId: STAMP.droneId,
+      expectedActiveDigest: digestOf(bearer),
+      expectedReplacementDigest: digestOf(replacement),
+      sessionId: '55555555-5555-4555-8555-555555555555',
+      expiresAt: '2026-07-22T00:00:00.000Z',
+    })).resolves.toBe('promoted');
+    expect(await seats.getActiveSeatCredential(ref, BIND)).toBe(replacement);
+    expect(await seats.getActiveSeatForWorktree('/work/repo')).toMatchObject({
+      droneId: STAMP.droneId,
+      sessionId: '55555555-5555-4555-8555-555555555555',
+      expiresAt: '2026-07-22T00:00:00.000Z',
+      worktree: '/work/repo',
+      name: 'local-cube',
+    });
+  });
+
+  it('refreshes expiry only for the exact active session identity', async () => {
+    const { seats } = await load();
+    const { ref, bearer } = await seedActive(seats);
+    await expect(seats.refreshActiveSeatSession({
+      ref,
+      binding: BIND,
+      expectedDroneId: STAMP.droneId,
+      expectedActiveDigest: digestOf(bearer),
+      expectedSessionId: STAMP.sessionId,
+      expiresAt: '2026-07-21T00:00:00.000Z',
+    })).resolves.toBe(true);
+    expect(await seats.getActiveSeatForWorktree('/work/repo')).toMatchObject({
+      sessionId: STAMP.sessionId,
+      expiresAt: '2026-07-21T00:00:00.000Z',
+    });
+    await expect(seats.refreshActiveSeatSession({
+      ref,
+      binding: BIND,
+      expectedDroneId: STAMP.droneId,
+      expectedActiveDigest: digestOf(bearer),
+      expectedSessionId: '99999999-9999-4999-8999-999999999999',
+      expiresAt: '2026-07-22T00:00:00.000Z',
+    })).resolves.toBe(false);
+  });
+
+  it('leaves the active credential untouched after a stale promotion or exact scrub', async () => {
+    const { seats } = await load();
+    const { ref, bearer } = await seedActive(seats);
+    const replacement = 'r'.repeat(43);
+    await seats.prepareSeatReplacement({
+      ref,
+      binding: BIND,
+      expectedDroneId: STAMP.droneId,
+      expectedActiveDigest: digestOf(bearer),
+      replacementCredential: replacement,
+    });
+    await expect(seats.promoteSeatReplacement({
+      ref,
+      binding: BIND,
+      expectedDroneId: STAMP.droneId,
+      expectedActiveDigest: digestOf(bearer),
+      expectedReplacementDigest: digestOf('wrong'.repeat(43)),
+      sessionId: '55555555-5555-4555-8555-555555555555',
+      expiresAt: '2026-07-22T00:00:00.000Z',
+    })).resolves.toBe('replaced');
+    await expect(seats.scrubSeatReplacement({
+      ref,
+      binding: BIND,
+      expectedActiveDigest: digestOf(bearer),
+      expectedReplacementDigest: digestOf(replacement),
+    })).resolves.toBe(true);
+    expect(await seats.getActiveSeatCredential(ref, BIND)).toBe(bearer);
+  });
+});
+
 describe('seats store — reset deletes credential AND binding together', () => {
   async function seedActive(seats: typeof import('../src/seats.js'), bearer = 'b'.repeat(43)) {
     await seats.mintPendingSeat({ ...SEAT, credential: bearer });

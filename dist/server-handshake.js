@@ -2,7 +2,8 @@ import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCO
 import { createHash, randomUUID } from 'node:crypto';
 import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, } from './seats.js';
-import { BorgServerError } from './server-errors.js';
+import { BorgServerError, BorgServerTrustError, BorgServerUnreachableError, } from './server-errors.js';
+import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { loadBorgServerTrust, } from './server-trust.js';
 const HANDSHAKE_BODY_LIMIT = 64 * 1024;
@@ -104,30 +105,38 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
     try {
-        const response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, ATTACH_PATH), {
-            method: 'POST',
-            redirect: 'error',
-            signal: controller.signal,
-            headers: {
-                Accept: 'application/json',
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${parentCredential}`,
-            },
-            body: JSON.stringify(createAttachRequestEnvelope(randomUUID(), {
-                cube_id: request.cubeId,
-                role_id: request.roleId,
-                session_credential: pending.credential,
-                ...(request.priorDroneId === undefined
-                    ? {}
-                    : { prior_drone_id: request.priorDroneId }),
-            })),
-        });
-        if (response.status === 401 || response.status === 403) {
+        let response;
+        try {
+            response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, ATTACH_PATH), {
+                method: 'POST',
+                redirect: 'error',
+                signal: controller.signal,
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${parentCredential}`,
+                },
+                body: JSON.stringify(createAttachRequestEnvelope(randomUUID(), {
+                    cube_id: request.cubeId,
+                    role_id: request.roleId,
+                    session_credential: pending.credential,
+                    ...(request.priorDroneId === undefined
+                        ? {}
+                        : { prior_drone_id: request.priorDroneId }),
+                })),
+            });
+        }
+        catch (error) {
+            if (error instanceof BorgServerTrustError)
+                throw error;
+            throw new BorgServerUnreachableError('Borg server attach transport failed', { cause: error });
+        }
+        if (response.status === 401 || response.status === 403 || response.status === 410) {
             // A typed SESSION_REJECTED body means the presented bearer targets a seat
             // already bound to a different session (takeover), distinct from a rejected
             // parent enrollment credential. Decode defensively; any anomaly falls back
             // to the generic credential rejection below. Never echo the response body.
-            if (response.status === 401) {
+            if (response.status === 401 || response.status === 410) {
                 let rejectedCode;
                 try {
                     rejectedCode = decodeProtocolErrorEnvelope(JSON.parse(await readHandshakeBody(response, controller.signal))).error.code;
@@ -138,7 +147,18 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
                 if (rejectedCode === ErrorCode.SESSION_REJECTED) {
                     throw new BorgServerError('SESSION_REJECTED', 'Borg server rejected the session: the seat is already bound to another session');
                 }
+                if (rejectedCode === ErrorCode.AUTH_EXPIRED) {
+                    throw new BorgServerError('AUTH_EXPIRED', 'Borg server session expired');
+                }
+                if (rejectedCode === ErrorCode.SESSION_REVOKED) {
+                    throw new BorgServerError('SESSION_REVOKED', 'Borg server session was revoked');
+                }
+                if (response.status === 410 && rejectedCode === DRONE_EVICTED_CODE) {
+                    throw new DroneEvictedError();
+                }
             }
+            if (response.status === 410)
+                throw new Error('Borg server attach failed (HTTP 410)');
             throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
         }
         if (response.status === 409) {
@@ -218,6 +238,14 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
                 ...(binding.isHumanSeat !== undefined ? { isHumanSeat: binding.isHumanSeat } : {}),
             }),
         };
+    }
+    catch (error) {
+        if (error instanceof BorgServerTrustError)
+            throw error;
+        if (controller.signal.aborted && !(error instanceof BorgServerUnreachableError)) {
+            throw new BorgServerUnreachableError('Borg server attach transport timed out', { cause: error });
+        }
+        throw error;
     }
     finally {
         clearTimeout(timeout);
