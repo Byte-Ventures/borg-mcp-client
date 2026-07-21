@@ -157,6 +157,312 @@ function decodeWriterRefs(value: unknown, active: ActiveCube): WriterRef[] {
   return refs;
 }
 
+function sameCursor(left: Cursor | undefined, right: Cursor | undefined): boolean {
+  return left?.id === right?.id && left?.created_at === right?.created_at;
+}
+
+function compareEntryOrder(left: { created_at: string; id: string }, right: { created_at: string; id: string }): number {
+  return left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id);
+}
+
+const S4_SCHEMA_VERSION = 's4-coupled-e2e/v1' as const;
+// Covers timestamp sampling and timer scheduling jitter while rejecting clock adjustments.
+const QUIESCENCE_CLOCK_TOLERANCE_MS = 1_000;
+
+export interface S4CoupledE2EOutput {
+  schema_version: typeof S4_SCHEMA_VERSION;
+  pass: true;
+  client_sha: typeof EXPECTED_CLIENT_SHA;
+  origin: string;
+  simulated_idle_ms: number;
+  idle_accepted_model_turns: number;
+  idle_log_before_count: number;
+  idle_log_after_count: number;
+  idle_log_before: Array<{ id: string; created_at: string }>;
+  idle_log_after: Array<{ id: string; created_at: string }>;
+  idle_log_stable: true;
+  idle_cursor_before: { id: string; created_at: string } | null;
+  idle_cursor_after: { id: string; created_at: string } | null;
+  idle_cursor_stable: true;
+  directed_items: number;
+  directed_accepted_model_turns: number;
+  directed_unread_occurrences: number;
+  authenticated_writer_ids: string[];
+  validated_writer_refs: Array<{ cube_id: string; drone_id: string; role_id?: string; session_id?: string }>;
+  authenticated_writer_count: number;
+  writer_ids_match_configured: true;
+  burst_expected: number;
+  burst_drained: number;
+  burst_unique: number;
+  order_expected_count: number;
+  order_mismatch_count: number;
+  burst_order_exact: true;
+  drain_pages: number;
+  missing_ids: string[];
+  duplicate_count: number;
+  unexpected_ids: string[];
+  status_counts: Record<string, number>;
+  http_429_count: number;
+  econnreset_count: number;
+  transport_errors: Array<{ code: string | null; message: string }>;
+  forbidden_fetch_attempts: number;
+  all_requests_same_origin: true;
+  phase_complete: true;
+  turn_validation_errors: string[];
+  app_server_methods: string[];
+  phase: {
+    stream_headers_ready_at: string;
+    deadline_fired: false;
+    directed_append_succeeded: true;
+    directed_turn_count: number;
+    quiescence_started_at: string;
+    quiescence_ended_at: string;
+    quiescence_elapsed_ms: number;
+    wall_quiescence_elapsed_ms: number;
+    abort_issued_at: string;
+    abort_reason: 'directed observation complete';
+    stream_error: { origin: 'iterator'; code: string | null; message: string };
+    stream_shutdown_clean: true;
+    directed_drain: 'succeeded';
+    requests: Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }>;
+    sockets: Array<Record<string, unknown>>;
+  };
+  cleanup_verified: true;
+}
+
+type EntrySnapshot = { id: string; created_at: string };
+
+function entryIdentityOrderSnapshot(entries: unknown): EntrySnapshot[] {
+  if (!Array.isArray(entries)) throw new Error('log entries must be an array');
+  return entries.map((entry, index) => {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.created_at !== 'string') {
+      throw new Error(`log entry ${index} must have string id and created_at`);
+    }
+    return { id: entry.id, created_at: entry.created_at };
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isCanonicalTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
+}
+
+function hasSensitiveKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasSensitiveKey);
+  return isRecord(value) && Object.entries(value).some(([key, child]) =>
+    /(?:credential|token|secret|password|authorization|cookie|private.?key)/i.test(key) || hasSensitiveKey(child));
+}
+
+function isCursor(value: unknown): value is Cursor {
+  return isRecord(value) && hasExactKeys(value, ['id', 'created_at']) &&
+    typeof value.id === 'string' && UUID_RE.test(value.id) && isCanonicalTimestamp(value.created_at);
+}
+
+function isEntrySnapshot(value: unknown): value is EntrySnapshot {
+  return isCursor(value);
+}
+
+function sameEntrySnapshot(left: unknown, right: unknown): boolean {
+  return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+    left.every((entry, index) => isEntrySnapshot(entry) && isEntrySnapshot(right[index]) &&
+      entry.id === right[index].id && entry.created_at === right[index].created_at);
+}
+
+function isCanonicalLoopbackOrigin(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  try {
+    return loopbackOrigin(value) === value;
+  } catch {
+    return false;
+  }
+}
+
+function isRequestRecord(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ['method', 'pathname', 'phase', 'origin', 'code', 'message']) &&
+    typeof value.method === 'string' && typeof value.pathname === 'string' && typeof value.phase === 'string' &&
+    (value.origin === 'bootstrap' || value.origin === 'response_body') &&
+    (value.code === null || typeof value.code === 'string') && (value.message === null || typeof value.message === 'string');
+}
+
+function isStreamError(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ['origin', 'code', 'message']) &&
+    (value.origin === 'bootstrap' || value.origin === 'iterator') &&
+    (value.code === null || typeof value.code === 'string') && typeof value.message === 'string';
+}
+
+function isPhase(value: unknown): boolean {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'stream_headers_ready_at', 'deadline_fired', 'directed_append_succeeded', 'directed_turn_count',
+    'quiescence_started_at', 'quiescence_ended_at', 'quiescence_elapsed_ms', 'wall_quiescence_elapsed_ms', 'abort_issued_at', 'abort_reason', 'stream_error',
+    'stream_shutdown_clean', 'directed_drain', 'requests', 'sockets',
+  ])) return false;
+  const socket = (candidate: unknown): boolean => {
+    if (!isRecord(candidate) || typeof candidate.event !== 'string' || typeof candidate.socket_id !== 'string') return false;
+    if (candidate.event === 'request_socket') return hasExactKeys(candidate, ['event', 'method', 'pathname', 'socket_id', 'reused', 'destroyed']) &&
+      typeof candidate.method === 'string' && typeof candidate.pathname === 'string' && candidate.pathname.startsWith('/') &&
+      typeof candidate.reused === 'boolean' && typeof candidate.destroyed === 'boolean';
+    if (candidate.event === 'socket_close') return hasExactKeys(candidate, ['event', 'socket_id', 'destroyed']) && typeof candidate.destroyed === 'boolean';
+    if (candidate.event === 'socket_error') return hasExactKeys(candidate, ['event', 'socket_id', 'code']) &&
+      (candidate.code === null || typeof candidate.code === 'string');
+    return candidate.event === 'socket_free' && hasExactKeys(candidate, ['event', 'socket_id']);
+  };
+  return (value.stream_headers_ready_at === null || isCanonicalTimestamp(value.stream_headers_ready_at)) &&
+    typeof value.deadline_fired === 'boolean' && typeof value.directed_append_succeeded === 'boolean' &&
+    isNonNegativeInteger(value.directed_turn_count) &&
+    (value.quiescence_started_at === null || isCanonicalTimestamp(value.quiescence_started_at)) &&
+    (value.quiescence_ended_at === null || isCanonicalTimestamp(value.quiescence_ended_at)) &&
+    (value.quiescence_elapsed_ms === null || isNonNegativeInteger(value.quiescence_elapsed_ms)) &&
+    (value.wall_quiescence_elapsed_ms === null || isNonNegativeInteger(value.wall_quiescence_elapsed_ms)) &&
+    (value.abort_issued_at === null || isCanonicalTimestamp(value.abort_issued_at)) &&
+    (value.abort_reason === null || typeof value.abort_reason === 'string') &&
+    (value.stream_error === null || isStreamError(value.stream_error)) && typeof value.stream_shutdown_clean === 'boolean' &&
+    ['not_started', 'started', 'succeeded', 'failed'].includes(String(value.directed_drain)) &&
+    Array.isArray(value.requests) && value.requests.every(isRequestRecord) &&
+    Array.isArray(value.sockets) && value.sockets.every(socket);
+}
+
+function isValidatedWriterRef(value: unknown): boolean {
+  if (!isRecord(value) || !('cube_id' in value) || !('drone_id' in value)) return false;
+  const keys = Object.keys(value);
+  if (!keys.every((key) => ['cube_id', 'drone_id', 'role_id', 'session_id'].includes(key))) return false;
+  return typeof value.cube_id === 'string' && UUID_RE.test(value.cube_id) &&
+    typeof value.drone_id === 'string' && UUID_RE.test(value.drone_id) &&
+    (value.role_id === undefined || (typeof value.role_id === 'string' && UUID_RE.test(value.role_id))) &&
+    (value.session_id === undefined || (typeof value.session_id === 'string' && UUID_RE.test(value.session_id)));
+}
+
+function isStatusCounts(value: unknown): boolean {
+  return isRecord(value) && Object.entries(value).every(([status, count]) =>
+    /^(?:[1-5][0-9]{2})$/.test(status) && isNonNegativeInteger(count));
+}
+
+const SUCCESS_OUTPUT_KEYS = [
+  'schema_version', 'pass', 'client_sha', 'origin', 'simulated_idle_ms', 'idle_accepted_model_turns', 'idle_log_before_count',
+  'idle_log_after_count', 'idle_log_before', 'idle_log_after', 'idle_log_stable', 'idle_cursor_before',
+  'idle_cursor_after', 'idle_cursor_stable', 'directed_items', 'directed_accepted_model_turns',
+  'directed_unread_occurrences', 'authenticated_writer_ids', 'validated_writer_refs', 'authenticated_writer_count',
+  'writer_ids_match_configured', 'burst_expected', 'burst_drained', 'burst_unique', 'order_expected_count',
+  'order_mismatch_count', 'burst_order_exact', 'drain_pages', 'missing_ids', 'duplicate_count', 'unexpected_ids',
+  'status_counts', 'http_429_count', 'econnreset_count', 'transport_errors', 'forbidden_fetch_attempts',
+  'all_requests_same_origin', 'phase_complete', 'turn_validation_errors', 'app_server_methods', 'phase',
+  'cleanup_verified',
+] as const;
+
+/** Runtime contract for the credential-safe final JSON emitted after `S4_COUPLED_E2E `. */
+export function validateS4CoupledE2EOutput(value: unknown): value is S4CoupledE2EOutput {
+  if (!isRecord(value) || !hasExactKeys(value, SUCCESS_OUTPUT_KEYS) || value.pass !== true ||
+    value.cleanup_verified !== true || value.schema_version !== S4_SCHEMA_VERSION || value.client_sha !== EXPECTED_CLIENT_SHA ||
+    hasSensitiveKey(value) || !isCanonicalLoopbackOrigin(value.origin)) return false;
+  const before = value.idle_log_before;
+  const after = value.idle_log_after;
+  const writerIds = value.authenticated_writer_ids;
+  const writerRefs = value.validated_writer_refs;
+  const phase = value.phase as Record<string, unknown>;
+  const expectedAbort = isStreamError(phase.stream_error) && phase.stream_error.origin === 'iterator' &&
+    /abort|directed observation complete/i.test(phase.stream_error.message);
+  const wallQuiescenceElapsed = isCanonicalTimestamp(phase.quiescence_started_at) && isCanonicalTimestamp(phase.quiescence_ended_at)
+    ? Date.parse(phase.quiescence_ended_at) - Date.parse(phase.quiescence_started_at)
+    : Number.NaN;
+  const quiescenceComplete = Number.isSafeInteger(wallQuiescenceElapsed) && wallQuiescenceElapsed >= 6_000 &&
+    isNonNegativeInteger(phase.wall_quiescence_elapsed_ms) && phase.wall_quiescence_elapsed_ms === wallQuiescenceElapsed &&
+    isNonNegativeInteger(phase.quiescence_elapsed_ms) && phase.quiescence_elapsed_ms >= 6_000 &&
+    Math.abs(wallQuiescenceElapsed - phase.quiescence_elapsed_ms) <= QUIESCENCE_CLOCK_TOLERANCE_MS;
+  return value.simulated_idle_ms === 2 * 20 * 60 * 1000 && value.idle_accepted_model_turns === 0 &&
+    isNonNegativeInteger(value.idle_log_before_count) && value.idle_log_before_count === (Array.isArray(before) ? before.length : -1) &&
+    isNonNegativeInteger(value.idle_log_after_count) && value.idle_log_after_count === (Array.isArray(after) ? after.length : -1) &&
+    Array.isArray(before) && before.every(isEntrySnapshot) && Array.isArray(after) && after.every(isEntrySnapshot) &&
+    value.idle_log_stable === true && sameEntrySnapshot(before, after) &&
+    (value.idle_cursor_before === null || isCursor(value.idle_cursor_before)) &&
+    (value.idle_cursor_after === null || isCursor(value.idle_cursor_after)) && value.idle_cursor_stable === true &&
+    sameCursor(value.idle_cursor_before ?? undefined, value.idle_cursor_after ?? undefined) &&
+    value.directed_items === 1 && value.directed_accepted_model_turns === 1 && value.directed_unread_occurrences === 1 &&
+    Array.isArray(writerIds) && writerIds.length >= 2 && writerIds.every((id) => typeof id === 'string' && UUID_RE.test(id)) &&
+    new Set(writerIds).size === writerIds.length && Array.isArray(writerRefs) && writerRefs.length === writerIds.length &&
+    writerRefs.every(isValidatedWriterRef) && new Set(writerRefs.map((ref) => (ref as Record<string, string>).drone_id)).size === writerRefs.length &&
+    writerRefs.every((ref) => writerIds.includes((ref as Record<string, string>).drone_id)) &&
+    value.authenticated_writer_count === writerIds.length && value.writer_ids_match_configured === true &&
+    value.burst_expected === 150 && value.burst_drained === 150 && value.burst_unique === 150 &&
+    value.order_expected_count === 150 && value.order_mismatch_count === 0 && value.burst_order_exact === true &&
+    isNonNegativeInteger(value.drain_pages) && value.drain_pages >= 1 && Array.isArray(value.missing_ids) && value.missing_ids.length === 0 &&
+    value.duplicate_count === 0 && Array.isArray(value.unexpected_ids) && value.unexpected_ids.length === 0 &&
+    isStatusCounts(value.status_counts) && value.http_429_count === 0 && (value.status_counts['429'] ?? 0) === value.http_429_count && value.econnreset_count === 0 &&
+    Array.isArray(value.transport_errors) && value.transport_errors.length === 0 && value.forbidden_fetch_attempts === 0 &&
+    value.all_requests_same_origin === true && value.phase_complete === true &&
+    Array.isArray(value.turn_validation_errors) && value.turn_validation_errors.length === 0 &&
+    Array.isArray(value.app_server_methods) && value.app_server_methods.every((method) => typeof method === 'string') &&
+    isPhase(value.phase) && phase.stream_headers_ready_at !== null && phase.deadline_fired === false &&
+    phase.directed_append_succeeded === true && phase.directed_turn_count === 1 &&
+    quiescenceComplete && phase.abort_issued_at !== null &&
+    phase.abort_reason === 'directed observation complete' && expectedAbort && phase.stream_shutdown_clean === true &&
+    phase.directed_drain === 'succeeded' && Array.isArray(phase.requests) && phase.requests.length === 0;
+}
+
+export const isS4CoupledResult = validateS4CoupledE2EOutput;
+
+export function isS4CoupledOutput(value: unknown): boolean {
+  if (isS4CoupledResult(value)) return true;
+  return isRecord(value) && hasExactKeys(value, ['schema_version', 'pass', 'client_sha', 'origin', 'error', 'phase', 'cleanup_verified']) &&
+    value.schema_version === S4_SCHEMA_VERSION && value.pass === false && value.client_sha === EXPECTED_CLIENT_SHA && isCanonicalLoopbackOrigin(value.origin) &&
+    typeof value.error === 'string' && typeof value.cleanup_verified === 'boolean' && isPhase(value.phase);
+}
+
+function completeS4Output(): Record<string, unknown> {
+  const entry = { id: '11111111-1111-4111-8111-111111111111', created_at: '2026-01-01T00:00:00.000Z' };
+  const writerIds = ['22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
+  return {
+    schema_version: S4_SCHEMA_VERSION, pass: true, client_sha: EXPECTED_CLIENT_SHA, origin: 'https://127.0.0.1:7443', simulated_idle_ms: 2 * 20 * 60 * 1000,
+    idle_accepted_model_turns: 0, idle_log_before_count: 1, idle_log_after_count: 1,
+    idle_log_before: [entry], idle_log_after: [{ ...entry }], idle_log_stable: true,
+    idle_cursor_before: entry, idle_cursor_after: { ...entry }, idle_cursor_stable: true,
+    directed_items: 1, directed_accepted_model_turns: 1, directed_unread_occurrences: 1,
+    authenticated_writer_ids: writerIds, validated_writer_refs: writerIds.map((drone_id) => ({
+      cube_id: entry.id, drone_id,
+    })), authenticated_writer_count: 2, writer_ids_match_configured: true,
+    burst_expected: 150, burst_drained: 150, burst_unique: 150, order_expected_count: 150,
+    order_mismatch_count: 0, burst_order_exact: true, drain_pages: 9, missing_ids: [], duplicate_count: 0,
+    unexpected_ids: [], status_counts: { '200': 1 }, http_429_count: 0, econnreset_count: 0,
+    transport_errors: [], forbidden_fetch_attempts: 0, all_requests_same_origin: true, phase_complete: true,
+    turn_validation_errors: [], app_server_methods: ['thread/read', 'turn/start'], phase: {
+      stream_headers_ready_at: '2026-01-01T00:00:00.000Z', deadline_fired: false,
+      directed_append_succeeded: true, directed_turn_count: 1,
+      quiescence_started_at: '2026-01-01T00:00:01.000Z', quiescence_ended_at: '2026-01-01T00:00:07.000Z', quiescence_elapsed_ms: 6_000, wall_quiescence_elapsed_ms: 6_000,
+      abort_issued_at: '2026-01-01T00:00:07.000Z', abort_reason: 'directed observation complete',
+      stream_error: { origin: 'iterator', code: null, message: 'directed observation complete' },
+      stream_shutdown_clean: true, directed_drain: 'succeeded', requests: [], sockets: [],
+    }, cleanup_verified: true,
+  };
+}
+
+// The one-line runner output is valid only when every independently emitted proof holds.
+function proofComplete(proof: {
+  idleTurns: number; idleLogStable: boolean; idleCursorStable: boolean;
+  directedTurns: number; directedOccurrences: number; expected: number; writerCount: number;
+  writerIdsMatchConfigured: boolean; drained: number; unique: number; missing: number;
+  duplicates: number; unexpected: number; orderExact: boolean; has429: boolean; resets: number;
+  transportErrors: number; requestErrors: number; forbiddenFetches: number; sameOrigin: boolean;
+  turnErrors: number; phaseComplete: boolean;
+}): boolean {
+  return proof.idleTurns === 0 && proof.idleLogStable && proof.idleCursorStable &&
+    proof.directedTurns === 1 && proof.directedOccurrences === 1 && proof.expected === 150 &&
+    proof.writerCount >= 2 && proof.writerIdsMatchConfigured && proof.drained === 150 &&
+    proof.unique === 150 && proof.missing === 0 && proof.duplicates === 0 &&
+    proof.unexpected === 0 && proof.orderExact && !proof.has429 && proof.resets === 0 &&
+    proof.transportErrors === 0 && proof.requestErrors === 0 && proof.forbiddenFetches === 0 &&
+    proof.sameOrigin && proof.turnErrors === 0 && proof.phaseComplete;
+}
+
 function trackInnerReaderRelease(): ReturnType<typeof vi.spyOn> {
   return vi.spyOn(ReadableStreamDefaultReader.prototype, 'releaseLock');
 }
@@ -357,6 +663,96 @@ afterEach(() => {
 });
 
 describe('Sprint 4 E2E harness validation', () => {
+  it('accepts only the complete credential-safe success output schema', () => {
+    expect(isS4CoupledResult(completeS4Output())).toBe(true);
+    expect(isS4CoupledOutput(completeS4Output())).toBe(true);
+  });
+
+  it.each([
+    ['leaked credential field', (output: any) => { output.session_credential = 'secret'; }],
+    ['nested sensitive field', (output: any) => { output.phase.sockets.push({ event: 'socket_free', socket_id: 'socket-1', token: 'secret' }); }],
+    ['unknown nested field', (output: any) => { output.phase.extra = true; }],
+    ['same-count idle replacement', (output: any) => { output.idle_log_after[0].id = '44444444-4444-4444-8444-444444444444'; }],
+    ['idle order reversal', (output: any) => {
+      output.idle_log_before.push({ id: '44444444-4444-4444-8444-444444444444', created_at: '2026-01-01T00:00:01.000Z' });
+      output.idle_log_after = [...output.idle_log_before].reverse();
+      output.idle_log_before_count = 2;
+      output.idle_log_after_count = 2;
+    }],
+    ['coerced idle identity', (output: any) => { output.idle_log_before[0].id = 1; }],
+    ['idle timestamp tie-break mutation', (output: any) => { output.idle_log_after[0].created_at = '2026-01-01T00:00:00.001Z'; }],
+    ['cursor-only mutation', (output: any) => { output.idle_cursor_after.id = '44444444-4444-4444-8444-444444444444'; }],
+    ['equal quiescence timestamps', (output: any) => { output.phase.quiescence_ended_at = output.phase.quiescence_started_at; }],
+    ['reversed quiescence timestamps', (output: any) => { output.phase.quiescence_ended_at = '2026-01-01T00:00:00.000Z'; }],
+    ['noncanonical quiescence timestamp', (output: any) => { output.phase.quiescence_ended_at = '2026-01-01T00:00:07Z'; }],
+    ['missing quiescence elapsed', (output: any) => { delete output.phase.quiescence_elapsed_ms; }],
+    ['negative quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = -1; }],
+    ['NaN quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = Number.NaN; }],
+    ['fractional quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = 6_000.5; }],
+    ['zero quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = 0; }],
+    ['short quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = 5_999; }],
+    ['wall 1ms and monotonic 6000ms', (output: any) => { output.phase.quiescence_ended_at = '2026-01-01T00:00:01.001Z'; output.phase.wall_quiescence_elapsed_ms = 1; }],
+    ['wall 6000ms and monotonic 1ms', (output: any) => { output.phase.quiescence_elapsed_ms = 1; }],
+    ['wall 5999ms and monotonic 6000ms', (output: any) => { output.phase.quiescence_ended_at = '2026-01-01T00:00:06.999Z'; output.phase.wall_quiescence_elapsed_ms = 5_999; }],
+    ['excessive positive clock mismatch', (output: any) => { output.phase.quiescence_ended_at = '2026-01-01T00:00:08.001Z'; output.phase.wall_quiescence_elapsed_ms = 7_001; }],
+    ['excessive negative clock mismatch', (output: any) => { output.phase.quiescence_elapsed_ms = 7_001; }],
+    ['emitted wall delta inconsistent with timestamps', (output: any) => { output.phase.wall_quiescence_elapsed_ms = 6_001; }],
+    ['incomplete phase', (output: any) => { delete output.phase.directed_drain; }],
+    ['cross-wired writer inventory', (output: any) => { output.validated_writer_refs[1].drone_id = output.validated_writer_refs[0].drone_id; }],
+    ['non-empty zero-error list', (output: any) => { output.transport_errors.push({ code: 'ECONNRESET' }); }],
+  ])('rejects hostile success output with %s', (_case, mutate) => {
+    const output = structuredClone(completeS4Output());
+    mutate(output);
+    expect(isS4CoupledResult(output)).toBe(false);
+    expect(isS4CoupledOutput(output)).toBe(false);
+  });
+
+  it('accepts the exact and tolerance-boundary quiescence clock evidence', () => {
+    expect(isS4CoupledResult(completeS4Output())).toBe(true);
+    const toleranceBoundary = structuredClone(completeS4Output());
+    (toleranceBoundary.phase as any).quiescence_elapsed_ms = 7_000;
+    expect(isS4CoupledResult(toleranceBoundary)).toBe(true);
+  });
+
+  it('validates the closed failure output schema', () => {
+    const success = completeS4Output();
+    const failure = {
+      schema_version: S4_SCHEMA_VERSION,
+      pass: false,
+      client_sha: success.client_sha,
+      origin: success.origin,
+      error: 'stream failed',
+      phase: success.phase,
+      cleanup_verified: false,
+    };
+    expect(isS4CoupledOutput(failure)).toBe(true);
+    expect(isS4CoupledOutput({ ...failure, unexpected: true })).toBe(false);
+  });
+
+  it('rejects each non-success proof class from the strict result validator', () => {
+    const complete = {
+      idleTurns: 0, idleLogStable: true, idleCursorStable: true, directedTurns: 1,
+      directedOccurrences: 1, expected: 150, writerCount: 2, writerIdsMatchConfigured: true,
+      drained: 150, unique: 150, missing: 0, duplicates: 0, unexpected: 0, orderExact: true,
+      has429: false, resets: 0, transportErrors: 0, requestErrors: 0, forbiddenFetches: 0,
+      sameOrigin: true, turnErrors: 0, phaseComplete: true,
+    };
+    expect(proofComplete(complete)).toBe(true);
+    for (const patch of [
+      { idleCursorStable: false }, { idleLogStable: false }, { phaseComplete: false },
+      { writerIdsMatchConfigured: false }, { orderExact: false }, { duplicates: 1 },
+      { transportErrors: 1 }, { requestErrors: 1 }, { resets: 1 }, { has429: true },
+    ]) expect(proofComplete({ ...complete, ...patch })).toBe(false);
+  });
+
+  it('takes identity/order snapshots without mutating source entries', () => {
+    const source = [{ id: 'a', created_at: '2026-01-01T00:00:00.000Z', message: 'original' }];
+    const before = entryIdentityOrderSnapshot(source);
+    source[0].message = 'changed after snapshot';
+    const after = entryIdentityOrderSnapshot([{ id: 'b', created_at: '2026-01-01T00:00:00.000Z' }]);
+    expect(before).toEqual([{ id: 'a', created_at: '2026-01-01T00:00:00.000Z' }]);
+    expect(before).not.toEqual(after);
+  });
   it('accepts canonical numeric IPv4 and IPv6 loopback origins', () => {
     expect(loopbackOrigin('https://127.0.0.1:7443')).toBe('https://127.0.0.1:7443');
     expect(loopbackOrigin('https://[::1]:7443')).toBe('https://[::1]:7443');
@@ -815,9 +1211,12 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       directed_turn_count: 0,
       quiescence_started_at: null as string | null,
       quiescence_ended_at: null as string | null,
+      quiescence_elapsed_ms: null as number | null,
+      wall_quiescence_elapsed_ms: null as number | null,
       abort_issued_at: null as string | null,
       abort_reason: null as string | null,
       stream_error: null as { origin: 'bootstrap' | 'iterator'; code: string | null; message: string } | null,
+      stream_shutdown_clean: false,
       directed_drain: 'not_started' as 'not_started' | 'started' | 'succeeded' | 'failed',
       requests: [] as Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }>,
       sockets: [] as Array<Record<string, unknown>>,
@@ -972,6 +1371,11 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       await drainUnread(500);
       const unreadBaseline = cursorState.get('unread');
       if (unreadBaseline) cursorState.set('stream', unreadBaseline);
+      const idleLogBefore = await remote.readLog(active.sessionToken, origin, {
+        limit: 500,
+        serverTrustIdentity: trustIdentity,
+      });
+      const idleCursorBefore = cursorState.get('unread');
 
       wake.resetCodexWakeForTests();
       await wake.fireCodexHeartbeatTick({
@@ -985,6 +1389,16 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         now: () => 2 * wake.CODEX_HEARTBEAT_CADENCE_MS,
       });
       const idleTurns = acceptedTurns;
+      const idleLogAfter = await remote.readLog(active.sessionToken, origin, {
+        limit: 500,
+        serverTrustIdentity: trustIdentity,
+      });
+      const idleCursorAfter = cursorState.get('unread');
+      const idleLogBeforeSnapshot = entryIdentityOrderSnapshot(idleLogBefore.entries);
+      const idleLogAfterSnapshot = entryIdentityOrderSnapshot(idleLogAfter.entries);
+      const idleLogStable = JSON.stringify(idleLogBeforeSnapshot) === JSON.stringify(idleLogAfterSnapshot) &&
+        idleLogBefore.has_more === idleLogAfter.has_more;
+      const idleCursorStable = sameCursor(idleCursorBefore, idleCursorAfter);
 
       let streamReadyResolve!: () => void;
       const streamReady = new Promise<void>((resolve) => { streamReadyResolve = resolve; });
@@ -1050,8 +1464,11 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       })(), 'directed turn');
       phase.directed_turn_count = acceptedTurns - idleTurns;
       phase.quiescence_started_at = new Date().toISOString();
+      const quiescenceStartedAt = performance.now();
       await new Promise((resolve) => setTimeout(resolve, 6_000));
       phase.quiescence_ended_at = new Date().toISOString();
+      phase.quiescence_elapsed_ms = Math.floor(performance.now() - quiescenceStartedAt);
+      phase.wall_quiescence_elapsed_ms = Date.parse(phase.quiescence_ended_at) - Date.parse(phase.quiescence_started_at);
       const directedTurns = acceptedTurns - idleTurns;
       phase.abort_issued_at = new Date().toISOString();
       phase.abort_reason = 'directed observation complete';
@@ -1059,6 +1476,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       await bounded(streamPromise.catch((error) => {
         if (!/abort|directed observation complete/i.test(error?.message ?? '')) throw error;
       }), 'stream shutdown');
+      phase.stream_shutdown_clean = true;
       streamPromise = undefined;
 
       requestPhase = 'post_abort_directed_drain';
@@ -1072,7 +1490,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       });
       requestPhase = 'burst';
       const directedOccurrences = directedDrain.entries.filter((entry) => entry.id === directed.id).length;
-      const expectedIds: string[] = [];
+      const expectedEntries: Array<{ id: string; created_at: string }> = [];
       const authenticatedWriterIds = new Set<string>();
       for (let offset = 0; offset < 150; offset += 30) {
         const batch = Array.from({ length: Math.min(30, 150 - offset) }, (_, index) => {
@@ -1086,12 +1504,16 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
           if (typeof entry.drone_id !== 'string' || !UUID_RE.test(entry.drone_id)) {
             throw new Error('burst append response omitted a valid authenticated writer drone_id');
           }
-          expectedIds.push(entry.id);
+          if (typeof entry.id !== 'string' || typeof entry.created_at !== 'string') {
+            throw new Error('burst append response omitted a canonical entry ordering tuple');
+          }
+          expectedEntries.push({ id: entry.id, created_at: entry.created_at });
           authenticatedWriterIds.add(entry.drone_id);
         }
       }
 
       const burstDrain = await drainUnread(17);
+      const expectedIds = expectedEntries.map((entry) => entry.id);
       const expected = new Set(expectedIds);
       const drainedIds = burstDrain.entries.map((entry) => entry.id);
       const drainedExpected = drainedIds.filter((id) => expected.has(id));
@@ -1099,30 +1521,51 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       const missing = expectedIds.filter((id) => !unique.has(id));
       const duplicates = drainedExpected.length - unique.size;
       const unexpected = drainedIds.filter((id) => !expected.has(id));
+      const expectedOrder = [...expectedEntries].sort(compareEntryOrder).map((entry) => entry.id);
+      const orderMismatchCount = Math.max(expectedOrder.length, drainedIds.length) -
+        expectedOrder.filter((id, index) => drainedIds[index] === id).length;
+      const burstOrderExact = orderMismatchCount === 0;
       const resets = transportErrors.filter((error) => error.code === 'ECONNRESET');
       const allRequestsSameOrigin = requestUrls.every((value) => new URL(value).origin === origin);
-      const pass =
-        idleTurns === 0 &&
-        directedTurns === 1 &&
-        directedOccurrences === 1 &&
-        expectedIds.length === 150 &&
-        authenticatedWriterIds.size >= 2 &&
-        drainedExpected.length === 150 &&
-        unique.size === 150 &&
-        missing.length === 0 &&
-        duplicates === 0 &&
-        unexpected.length === 0 &&
-        !statuses.has(429) &&
-        resets.length === 0 &&
-        forbiddenFetchAttempts === 0 &&
-        allRequestsSameOrigin &&
-        turnErrors.length === 0;
+      const configuredWriterIds = new Set(writerRefs.map((ref) => ref.drone_id));
+      const writerIdsMatchConfigured = authenticatedWriterIds.size === configuredWriterIds.size &&
+        [...authenticatedWriterIds].every((id) => configuredWriterIds.has(id));
+      const expectedAbort = phase.stream_error?.origin === 'iterator' &&
+        /abort|directed observation complete/i.test(phase.stream_error.message);
+      const phaseComplete = phase.stream_headers_ready_at !== null && !phase.deadline_fired &&
+        phase.directed_append_succeeded && phase.directed_turn_count === 1 &&
+        phase.quiescence_started_at !== null && phase.quiescence_ended_at !== null &&
+        Date.parse(phase.quiescence_ended_at) > Date.parse(phase.quiescence_started_at) &&
+        phase.quiescence_elapsed_ms !== null && phase.quiescence_elapsed_ms >= 6_000 &&
+        phase.wall_quiescence_elapsed_ms !== null && phase.wall_quiescence_elapsed_ms >= 6_000 &&
+        phase.wall_quiescence_elapsed_ms === Date.parse(phase.quiescence_ended_at) - Date.parse(phase.quiescence_started_at) &&
+        Math.abs(phase.wall_quiescence_elapsed_ms - phase.quiescence_elapsed_ms) <= QUIESCENCE_CLOCK_TOLERANCE_MS &&
+        phase.abort_issued_at !== null && phase.abort_reason === 'directed observation complete' &&
+        expectedAbort && phase.stream_shutdown_clean && phase.directed_drain === 'succeeded';
+      const pass = proofComplete({
+        idleTurns, idleLogStable, idleCursorStable, directedTurns, directedOccurrences,
+        expected: expectedIds.length, writerCount: authenticatedWriterIds.size, writerIdsMatchConfigured,
+        drained: drainedExpected.length, unique: unique.size, missing: missing.length,
+        duplicates, unexpected: unexpected.length, orderExact: burstOrderExact,
+        has429: statuses.has(429), resets: resets.length, transportErrors: transportErrors.length,
+        requestErrors: phase.requests.length, forbiddenFetches: forbiddenFetchAttempts,
+        sameOrigin: allRequestsSameOrigin, turnErrors: turnErrors.length, phaseComplete,
+      });
       result = {
+        schema_version: S4_SCHEMA_VERSION,
         pass,
         client_sha: EXPECTED_CLIENT_SHA,
         origin,
         simulated_idle_ms: 2 * wake.CODEX_HEARTBEAT_CADENCE_MS,
         idle_accepted_model_turns: idleTurns,
+        idle_log_before_count: idleLogBefore.entries.length,
+        idle_log_after_count: idleLogAfter.entries.length,
+        idle_log_before: idleLogBeforeSnapshot,
+        idle_log_after: idleLogAfterSnapshot,
+        idle_log_stable: idleLogStable,
+        idle_cursor_before: idleCursorBefore ?? null,
+        idle_cursor_after: idleCursorAfter ?? null,
+        idle_cursor_stable: idleCursorStable,
         directed_items: 1,
         directed_accepted_model_turns: directedTurns,
         directed_unread_occurrences: directedOccurrences,
@@ -1134,9 +1577,13 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
           ...(session_id ? { session_id } : {}),
         })),
         authenticated_writer_count: authenticatedWriterIds.size,
+        writer_ids_match_configured: writerIdsMatchConfigured,
         burst_expected: expectedIds.length,
         burst_drained: drainedExpected.length,
         burst_unique: unique.size,
+        order_expected_count: expectedOrder.length,
+        order_mismatch_count: orderMismatchCount,
+        burst_order_exact: burstOrderExact,
         drain_pages: burstDrain.pages,
         missing_ids: missing,
         duplicate_count: duplicates,
@@ -1147,6 +1594,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         transport_errors: transportErrors,
         forbidden_fetch_attempts: forbiddenFetchAttempts,
         all_requests_same_origin: allRequestsSameOrigin,
+        phase_complete: phaseComplete,
         turn_validation_errors: turnErrors,
         app_server_methods: methods,
         phase,
@@ -1166,14 +1614,17 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
 
     const cleanupVerified = !existsSync(runtimeDir) && sockets.size === 0;
     if (operationError) {
-      console.log(`S4_COUPLED_E2E ${JSON.stringify({
+      const failureOutput = {
+        schema_version: S4_SCHEMA_VERSION,
         pass: false,
         client_sha: EXPECTED_CLIENT_SHA,
         origin,
         error: operationError instanceof Error ? operationError.message : String(operationError),
         phase,
         cleanup_verified: cleanupVerified,
-      })}`);
+      };
+      expect(isS4CoupledOutput(failureOutput)).toBe(true);
+      console.log(`S4_COUPLED_E2E ${JSON.stringify(failureOutput)}`);
       throw operationError;
     }
     const output = {
@@ -1181,16 +1632,26 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       pass: result?.pass === true && cleanupVerified,
       cleanup_verified: cleanupVerified,
     };
+    if (!validateS4CoupledE2EOutput(output)) {
+      throw new Error('final S4 coupled E2E output failed the success schema');
+    }
     console.log(`S4_COUPLED_E2E ${JSON.stringify(output)}`);
 
+    expect(validateS4CoupledE2EOutput(output)).toBe(true);
+    expect(isS4CoupledOutput(output)).toBe(true);
     expect(output).toMatchObject({
       pass: true,
       idle_accepted_model_turns: 0,
+      idle_log_stable: true,
+      idle_cursor_stable: true,
       directed_accepted_model_turns: 1,
       directed_unread_occurrences: 1,
       burst_expected: 150,
       burst_drained: 150,
       burst_unique: 150,
+      order_expected_count: 150,
+      order_mismatch_count: 0,
+      burst_order_exact: true,
       missing_ids: [],
       duplicate_count: 0,
       unexpected_ids: [],
@@ -1198,6 +1659,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       econnreset_count: 0,
       forbidden_fetch_attempts: 0,
       all_requests_same_origin: true,
+      phase_complete: true,
       turn_validation_errors: [],
       cleanup_verified: true,
     });
