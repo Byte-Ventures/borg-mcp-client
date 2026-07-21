@@ -56,7 +56,7 @@ function installAgentTrace(events: Array<Record<string, unknown>>, agent: Pick<t
         socketId = `socket-${nextSocketId++}`;
         socketIds.set(socket, socketId);
         const socketListeners: Array<[string, (...args: any[]) => void]> = [
-          ['close', () => events.push({ event: 'socket_close', socket_id: socketId })],
+          ['close', () => events.push({ event: 'socket_close', socket_id: socketId, destroyed: socket.destroyed === true })],
           ['error', (error: any) => events.push({ event: 'socket_error', socket_id: socketId, code: typeof error?.code === 'string' ? error.code : null })],
           ['free', () => events.push({ event: 'socket_free', socket_id: socketId })],
         ];
@@ -235,7 +235,7 @@ function createRecordingFetch(
   getPhase: () => string,
   requests: Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }>,
   statuses = new Map<number, number>(),
-  stream: { headersReady?: () => void; deadline?: () => void } = {},
+  stream: { headersReady?: () => void; deadline?: () => void; bootstrapError?: (error: unknown) => void } = {},
 ): typeof fetch {
   return async (input, init = {}) => {
     const url = new URL(input.toString());
@@ -254,6 +254,7 @@ function createRecordingFetch(
       statuses.set(response.status, (statuses.get(response.status) ?? 0) + 1);
       return response;
     } catch (error: any) {
+      if (streamRequest) stream.bootstrapError?.(error);
       requests.push({ ...record(), origin: 'bootstrap', code: typeof (error?.code ?? error?.cause?.code) === 'string' ? (error.code ?? error.cause?.code) : null, message: error?.message ?? String(error) });
       throw error;
     }
@@ -623,6 +624,23 @@ describe('Sprint 4 E2E harness validation', () => {
     requestPhase = 'changed-after-read';
   });
 
+  it('attributes a stream bootstrap reset through the shared helper', async () => {
+    const reset = Object.assign(new Error('connect ECONNRESET'), { code: 'ECONNRESET' });
+    const records: any[] = [];
+    let bootstrap: any;
+    const fetchImpl = createRecordingFetch(
+      vi.fn(async () => { throw reset; }),
+      'https://127.0.0.1:7443',
+      () => 'stream_bootstrap',
+      records,
+      undefined,
+      { bootstrapError: (error) => { bootstrap = error; } },
+    );
+    await expect(fetchImpl('https://127.0.0.1:7443/api/cubes/11111111-1111-4111-8111-111111111111/stream')).rejects.toBe(reset);
+    expect(bootstrap).toBe(reset);
+    expect(records).toContainEqual(expect.objectContaining({ origin: 'bootstrap', method: 'GET', pathname: '/api/cubes/11111111-1111-4111-8111-111111111111/stream', code: 'ECONNRESET' }));
+  });
+
   it('traces and restores a scoped agent request lifecycle', () => {
     const calls: Array<Record<string, unknown>> = [];
     const agent = { addRequest: vi.fn() } as unknown as Pick<typeof globalAgent, 'addRequest'>;
@@ -643,7 +661,7 @@ describe('Sprint 4 E2E harness validation', () => {
       expect.objectContaining({ event: 'request_socket', method: 'PUT', reused: true, destroyed: false }),
       expect.objectContaining({ event: 'socket_free' }),
       expect.objectContaining({ event: 'socket_error', code: 'ECONNRESET' }),
-      expect.objectContaining({ event: 'socket_close' }),
+      expect.objectContaining({ event: 'socket_close', destroyed: true }),
     ]));
     expect(agent.addRequest).toBe(original);
     expect(socket.listenerCount('free')).toBe(0);
@@ -729,6 +747,9 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     }, origin, () => requestPhase, phase.requests, statuses, {
       headersReady: () => { phase.stream_headers_ready_at = new Date().toISOString(); },
       deadline: () => { phase.deadline_fired = true; },
+      bootstrapError: (error: any) => {
+        phase.stream_error = { origin: 'bootstrap', code: typeof (error?.code ?? error?.cause?.code) === 'string' ? (error.code ?? error.cause?.code) : null, message: error?.message ?? String(error) };
+      },
     });
     vi.doMock('../src/server-trust.js', () => ({
       ...actualTrust,
