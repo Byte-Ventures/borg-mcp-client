@@ -215,6 +215,7 @@ export interface S4CoupledE2EOutput {
     directed_turn_count: number;
     quiescence_started_at: string;
     quiescence_ended_at: string;
+    quiescence_elapsed_ms: number;
     abort_issued_at: string;
     abort_reason: 'directed observation complete';
     stream_error: { origin: 'iterator'; code: string | null; message: string };
@@ -301,7 +302,7 @@ function isStreamError(value: unknown): boolean {
 function isPhase(value: unknown): boolean {
   if (!isRecord(value) || !hasExactKeys(value, [
     'stream_headers_ready_at', 'deadline_fired', 'directed_append_succeeded', 'directed_turn_count',
-    'quiescence_started_at', 'quiescence_ended_at', 'abort_issued_at', 'abort_reason', 'stream_error',
+    'quiescence_started_at', 'quiescence_ended_at', 'quiescence_elapsed_ms', 'abort_issued_at', 'abort_reason', 'stream_error',
     'stream_shutdown_clean', 'directed_drain', 'requests', 'sockets',
   ])) return false;
   const socket = (candidate: unknown): boolean => {
@@ -319,6 +320,7 @@ function isPhase(value: unknown): boolean {
     isNonNegativeInteger(value.directed_turn_count) &&
     (value.quiescence_started_at === null || isCanonicalTimestamp(value.quiescence_started_at)) &&
     (value.quiescence_ended_at === null || isCanonicalTimestamp(value.quiescence_ended_at)) &&
+    (value.quiescence_elapsed_ms === null || isNonNegativeInteger(value.quiescence_elapsed_ms)) &&
     (value.abort_issued_at === null || isCanonicalTimestamp(value.abort_issued_at)) &&
     (value.abort_reason === null || typeof value.abort_reason === 'string') &&
     (value.stream_error === null || isStreamError(value.stream_error)) && typeof value.stream_shutdown_clean === 'boolean' &&
@@ -366,6 +368,9 @@ export function validateS4CoupledE2EOutput(value: unknown): value is S4CoupledE2
   const phase = value.phase as Record<string, unknown>;
   const expectedAbort = isStreamError(phase.stream_error) && phase.stream_error.origin === 'iterator' &&
     /abort|directed observation complete/i.test(phase.stream_error.message);
+  const quiescenceComplete = isCanonicalTimestamp(phase.quiescence_started_at) &&
+    isCanonicalTimestamp(phase.quiescence_ended_at) && Date.parse(phase.quiescence_ended_at) > Date.parse(phase.quiescence_started_at) &&
+    isNonNegativeInteger(phase.quiescence_elapsed_ms) && phase.quiescence_elapsed_ms >= 6_000;
   return value.simulated_idle_ms === 2 * 20 * 60 * 1000 && value.idle_accepted_model_turns === 0 &&
     isNonNegativeInteger(value.idle_log_before_count) && value.idle_log_before_count === (Array.isArray(before) ? before.length : -1) &&
     isNonNegativeInteger(value.idle_log_after_count) && value.idle_log_after_count === (Array.isArray(after) ? after.length : -1) &&
@@ -391,7 +396,7 @@ export function validateS4CoupledE2EOutput(value: unknown): value is S4CoupledE2
     Array.isArray(value.app_server_methods) && value.app_server_methods.every((method) => typeof method === 'string') &&
     isPhase(value.phase) && phase.stream_headers_ready_at !== null && phase.deadline_fired === false &&
     phase.directed_append_succeeded === true && phase.directed_turn_count === 1 &&
-    phase.quiescence_started_at !== null && phase.quiescence_ended_at !== null && phase.abort_issued_at !== null &&
+    quiescenceComplete && phase.abort_issued_at !== null &&
     phase.abort_reason === 'directed observation complete' && expectedAbort && phase.stream_shutdown_clean === true &&
     phase.directed_drain === 'succeeded' && Array.isArray(phase.requests) && phase.requests.length === 0;
 }
@@ -424,7 +429,7 @@ function completeS4Output(): Record<string, unknown> {
     turn_validation_errors: [], app_server_methods: ['thread/read', 'turn/start'], phase: {
       stream_headers_ready_at: '2026-01-01T00:00:00.000Z', deadline_fired: false,
       directed_append_succeeded: true, directed_turn_count: 1,
-      quiescence_started_at: '2026-01-01T00:00:01.000Z', quiescence_ended_at: '2026-01-01T00:00:07.000Z',
+      quiescence_started_at: '2026-01-01T00:00:01.000Z', quiescence_ended_at: '2026-01-01T00:00:07.000Z', quiescence_elapsed_ms: 6_000,
       abort_issued_at: '2026-01-01T00:00:07.000Z', abort_reason: 'directed observation complete',
       stream_error: { origin: 'iterator', code: null, message: 'directed observation complete' },
       stream_shutdown_clean: true, directed_drain: 'succeeded', requests: [], sockets: [],
@@ -669,6 +674,15 @@ describe('Sprint 4 E2E harness validation', () => {
     ['coerced idle identity', (output: any) => { output.idle_log_before[0].id = 1; }],
     ['idle timestamp tie-break mutation', (output: any) => { output.idle_log_after[0].created_at = '2026-01-01T00:00:00.001Z'; }],
     ['cursor-only mutation', (output: any) => { output.idle_cursor_after.id = '44444444-4444-4444-8444-444444444444'; }],
+    ['equal quiescence timestamps', (output: any) => { output.phase.quiescence_ended_at = output.phase.quiescence_started_at; }],
+    ['reversed quiescence timestamps', (output: any) => { output.phase.quiescence_ended_at = '2026-01-01T00:00:00.000Z'; }],
+    ['noncanonical quiescence timestamp', (output: any) => { output.phase.quiescence_ended_at = '2026-01-01T00:00:07Z'; }],
+    ['missing quiescence elapsed', (output: any) => { delete output.phase.quiescence_elapsed_ms; }],
+    ['negative quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = -1; }],
+    ['NaN quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = Number.NaN; }],
+    ['fractional quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = 6_000.5; }],
+    ['zero quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = 0; }],
+    ['short quiescence elapsed', (output: any) => { output.phase.quiescence_elapsed_ms = 5_999; }],
     ['incomplete phase', (output: any) => { delete output.phase.directed_drain; }],
     ['cross-wired writer inventory', (output: any) => { output.validated_writer_refs[1].drone_id = output.validated_writer_refs[0].drone_id; }],
     ['non-empty zero-error list', (output: any) => { output.transport_errors.push({ code: 'ECONNRESET' }); }],
@@ -1176,6 +1190,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       directed_turn_count: 0,
       quiescence_started_at: null as string | null,
       quiescence_ended_at: null as string | null,
+      quiescence_elapsed_ms: null as number | null,
       abort_issued_at: null as string | null,
       abort_reason: null as string | null,
       stream_error: null as { origin: 'bootstrap' | 'iterator'; code: string | null; message: string } | null,
@@ -1427,8 +1442,10 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       })(), 'directed turn');
       phase.directed_turn_count = acceptedTurns - idleTurns;
       phase.quiescence_started_at = new Date().toISOString();
+      const quiescenceStartedAt = performance.now();
       await new Promise((resolve) => setTimeout(resolve, 6_000));
       phase.quiescence_ended_at = new Date().toISOString();
+      phase.quiescence_elapsed_ms = Math.floor(performance.now() - quiescenceStartedAt);
       const directedTurns = acceptedTurns - idleTurns;
       phase.abort_issued_at = new Date().toISOString();
       phase.abort_reason = 'directed observation complete';
@@ -1495,6 +1512,8 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       const phaseComplete = phase.stream_headers_ready_at !== null && !phase.deadline_fired &&
         phase.directed_append_succeeded && phase.directed_turn_count === 1 &&
         phase.quiescence_started_at !== null && phase.quiescence_ended_at !== null &&
+        Date.parse(phase.quiescence_ended_at) > Date.parse(phase.quiescence_started_at) &&
+        phase.quiescence_elapsed_ms !== null && phase.quiescence_elapsed_ms >= 6_000 &&
         phase.abort_issued_at !== null && phase.abort_reason === 'directed observation complete' &&
         expectedAbort && phase.stream_shutdown_clean && phase.directed_drain === 'succeeded';
       const pass = proofComplete({
