@@ -74,9 +74,14 @@ it up once, and keep it running:
 
 ```bash
 npm install -g borgmcp-server
-borg-mcp-server setup
-borg-mcp-server start
+borg server setup
+borg server start
 ```
+
+`borg server start` and `borg-mcp-server start` are foreground commands. They
+must never imply that a daemon, LaunchAgent, or systemd service was installed.
+Managed persistence is a separate explicit handoff. See the lifecycle commands
+and recovery flow in [`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md).
 
 Open a second operator terminal in the project checkout and run:
 

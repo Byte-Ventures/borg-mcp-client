@@ -4,12 +4,48 @@ Install and initialize the server in the human operator's terminal:
 
 ```bash
 npm install -g borgmcp-server
-borg-mcp-server setup
-borg-mcp-server start
+borg server setup
+borg server start
 ```
 
-Keep the server running. Open a second operator terminal in the project checkout
-and run:
+The client owns the `borg server` facade. It forwards commands and renders
+verified server evidence. It does not infer a checkout, activate an artifact,
+create a service, or claim a build identity by itself. The server owns artifact
+verification, activation, data and identity preservation, runtime build
+identity, rollback, and explicit Linux/macOS service adapters. The server
+executable remains the direct foreground authority.
+
+`borg server start` and `borg-mcp-server start` are foreground commands. They
+must never imply that a daemon, LaunchAgent, or systemd service was installed.
+Ctrl-C stops the foreground process. Managed persistence is a separate explicit
+handoff.
+
+The available lifecycle facade commands are:
+
+```text
+Usage: borg server <command> [arguments]
+
+Commands:
+  setup    Prepare local server identity and data; does not start the server.
+  start    Start the verified server in the foreground.
+  status   Report verified runtime evidence.
+  update   Verify and activate a local server artifact.
+
+Run borg server <command> --help for server command options.
+```
+
+Status reports only runtime evidence supplied by the server: running/stopped
+state, exact running artifact and immutable build identity when available,
+endpoint, process mode, and data-identity availability. If the running build
+identity is unavailable, status says it is unavailable. It never substitutes a
+source checkout, package cache, or guessed version.
+
+Update has four visible phases: verification, activation, result, and next
+action. Only a verified artifact may activate. A verification failure says no
+activation occurred and that the last verified runtime remains available.
+
+Keep the foreground server running. Open a second operator terminal in the
+project checkout and run:
 
 ```bash
 borg assimilate --host 127.0.0.1:7091 --enroll
@@ -45,11 +81,12 @@ with the active cube. Local requests
 use the server's `/api/cubes/*` coordination routes. They cannot use hosted OAuth
 credentials or change authority implicitly.
 
-The current client does not install or start `borgmcp-server`. The server must
-already be running and trusted. An owner enrollment carrying the persisted
-`create_cube` capability creates one idempotent cube per repository during
-normal assimilation, using the server-owned `default` role template; repeating
-an ambiguous request does not duplicate the cube, and distinct repositories can
+The lifecycle facade invokes the separately installed `borgmcp-server`; it does
+not bundle the server into the client. The server must be running and trusted
+before assimilation. An owner enrollment carrying the persisted `create_cube`
+capability creates one idempotent cube per repository during normal
+assimilation, using the server-owned `default` role template; repeating an
+ambiguous request does not duplicate the cube, and distinct repositories can
 create distinct bounded cubes. An ordinary enrolled client is denied before a
 create request is sent. Cloud-only capabilities fail explicitly rather than
 being redirected.
@@ -83,10 +120,10 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
   to clear ONLY this worktree's saved local seat, then — with the server still
   running — ask the operator for a fresh scoped invitation and rerun
   `borg assimilate --host <server> --enroll`.
-- Unreachable server: start or restart it with `borg-mcp-server start`, then
+- Unreachable server: start or restart it with `borg server start`, then
   rerun `borg assimilate --host <server>`.
 - Trust mismatch after an intentional server re-initialization: verify the
-  expected server identity, stop and restart `borg-mcp-server start`, then retry.
+  expected server identity, stop and restart `borg server start`, then retry.
 - Busy local seat store: wait for the other Borg process to finish, then rerun
   the same command. If the local seat store cannot be read or written, ensure its
   directory on this machine is readable and writable, then rerun.

@@ -1,6 +1,7 @@
-import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 async function runImportSmoke(packageRoot, exportTarget, timeoutMs) {
@@ -34,6 +35,72 @@ async function runImportSmoke(packageRoot, exportTarget, timeoutMs) {
       else resolveRun();
     });
   });
+}
+
+async function runServerFacadeSmoke(generatedBin, timeoutMs) {
+  const directory = await mkdtemp(join(tmpdir(), 'borgmcp-server-facade-smoke-'));
+  const fakeServer = join(directory, 'borg-mcp-server');
+  const expected = 'status\0--json';
+  await writeFile(fakeServer, `#!/usr/bin/env node
+const args = process.argv.slice(2).join('\\0');
+process.stdout.write(args);
+process.exit(args === ${JSON.stringify(expected)} ? 37 : 96);
+`);
+  await chmod(fakeServer, 0o755);
+
+  try {
+    const child = spawn(generatedBin, ['server', 'status', '--json'], {
+      env: {
+        ...process.env,
+        PATH: `${directory}${delimiter}${process.env.PATH ?? ''}`,
+        CI: '1',
+        NO_COLOR: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const code = await new Promise((resolveRun, rejectRun) => {
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        rejectRun(new Error(`Packed server facade timed out. stderr: ${stderr.slice(0, 1000)}`));
+      }, timeoutMs);
+      child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        rejectRun(error);
+      });
+      child.on('exit', (exitCode) => {
+        clearTimeout(timer);
+        resolveRun(exitCode);
+      });
+    });
+    if (code !== 37 || stdout !== expected || stderr !== '') {
+      throw new Error(
+        `Packed server facade failed: code=${code}, stdout=${JSON.stringify(stdout)}, stderr=${stderr.slice(0, 1000)}`,
+      );
+    }
+
+    await rm(fakeServer);
+    const missing = spawnSync(process.execPath, [generatedBin, 'server', 'update'], {
+      env: { ...process.env, PATH: directory, CI: '1', NO_COLOR: '1' },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    const expectedMissing =
+      `Local server command is unavailable: borg-mcp-server was not found.\n` +
+      `Next: install a verified borgmcp-server release, then rerun borg server update.\n` +
+      `No checkout fallback is attempted.\n`;
+    if (missing.error || missing.status !== 127 || missing.stdout !== '' || missing.stderr !== expectedMissing) {
+      throw new Error(
+        `Packed missing-server facade failed: status=${missing.status}, stdout=${JSON.stringify(missing.stdout)}, stderr=${JSON.stringify(missing.stderr)}, error=${missing.error?.message ?? ''}`,
+      );
+    }
+    return { serverFacadeExitCode: code, serverFacadeMissingExitCode: missing.status };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 export async function smokePackedClient(packageRoot, options = {}) {
@@ -147,7 +214,8 @@ export async function smokePackedClient(packageRoot, options = {}) {
   } finally {
     child.kill('SIGTERM');
   }
-  return result;
+  const borgBin = resolve(options.borgBinPath ?? join(dirname(generatedBin), 'borg'));
+  return { ...result, ...await runServerFacadeSmoke(borgBin, timeoutMs) };
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';

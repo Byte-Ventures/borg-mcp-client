@@ -98,7 +98,18 @@ lines.on('line', (line) => {
 });
 }
 `
-      : '#!/usr/bin/env node\nexport {};\n';
+      : `#!/usr/bin/env node
+import { spawn } from 'node:child_process';
+const [command, ...args] = process.argv.slice(3);
+const child = spawn('borg-mcp-server', [command, ...args], { shell: false, stdio: 'inherit' });
+child.on('error', () => {
+  process.stderr.write('Local server command is unavailable: borg-mcp-server was not found.\\n');
+  process.stderr.write('Next: install a verified borgmcp-server release, then rerun borg server ' + command + '.\\n');
+  process.stderr.write('No checkout fallback is attempted.\\n');
+  process.exit(127);
+});
+child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 1)));
+`;
     await writeFile(join(packageRoot, 'dist', `${name}.js`), content);
     await chmod(join(packageRoot, 'dist', `${name}.js`), 0o755);
     await writeFile(
@@ -636,7 +647,13 @@ test('exact tarball installs cleanly and completes MCP initialize plus tool disc
   const { consumer, packageRoot, binPath } = await installFixtureConsumer(directory, tarball);
   execFileSync('npm', ['ls', '--global', '--prefix', consumer, '--omit=dev', '--all', '--package-lock=false'], { encoding: 'utf8' });
   const report = await smokePackedClient(packageRoot, { binPath });
-  assert.deepEqual(report, { name: 'borgmcp', version: CLIENT_VERSION, toolCount: 1 });
+  assert.deepEqual(report, {
+    name: 'borgmcp',
+    version: CLIENT_VERSION,
+    toolCount: 1,
+    serverFacadeExitCode: 37,
+    serverFacadeMissingExitCode: 127,
+  });
 });
 
 test('exact tarball smoke rejects a missing packaged MCP entrypoint', async (t) => {
