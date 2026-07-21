@@ -138,9 +138,11 @@ describe('seat single-store writer guard (SR#5)', () => {
   it('SR NET-NEW: every credential backend .set/.delete in config.ts is lock-WRAPPED (behavioral, not placement)', () => {
     // A credential write outside a store-lock hold is exactly the CR3b regression
     // (an unlocked storeServerCredential) that the placement-only guards missed.
-    // Matches a store-lock hold: withStoreLock( or withStore(<generics>)( .
-    const heldsLock = (b: string) => /withStore(?:Lock)?\s*[<(]/.test(b);
+    // Matches the primitive lock or the sole credential-specific wrapper.
+    const heldsLock = (b: string) =>
+      /(?:withStore(?:Lock)?|withCredentialStoreLock)\s*[<(]/.test(b);
     const bodies = functionBodies(read('config.ts'));
+    expect(heldsLock(bodies.get('withCredentialStoreLock') ?? '')).toBe(true);
     // Documented UNLOCKED write bodies — invoked ONLY from inside a lock hold.
     // Every such helper's callers are lock-verified below, so its own body is exempt.
     const ALLOWLIST_UNLOCKED = ['writeServerCredentialRecord'];

@@ -14,6 +14,7 @@
  *                         fresh drone inside it (see spawn.ts)
  *   borg sync           → Advance the current worktree across the 5
  *                         lifecycle states (see sync.ts, gh#33)
+ *   borg server <cmd>   → Forward a lifecycle command to borg-mcp-server
  */
 import { spawn } from 'child_process';
 import { randomUUID } from 'node:crypto';
@@ -52,7 +53,11 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { connectOpenCodeDrone, computeOpenCodePort, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
+import { runEarlyServerFacade } from './server-facade.js';
 async function main() {
+    const serverExitCode = await runEarlyServerFacade(process.argv);
+    if (serverExitCode !== null)
+        process.exit(serverExitCode);
     // `--debug` / BORG_DEBUG: enable HTTP request/response logging to stderr
     // (observability for failures like the cross-account assimilate 404).
     // Done first so debug covers everything below; strips `--debug` from argv

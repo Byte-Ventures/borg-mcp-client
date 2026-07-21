@@ -6,6 +6,7 @@
  * The raw secret rests only in the 0600 file, parity with the server's own TLS
  * private keys; there is no keychain and no obfuscation-grade fallback.
  */
+import { type SecureStoreOptions } from './seat-store.js';
 export type TokenBackendName = 'file';
 /**
  * Account-agnostic key/value store over the 0600 credential file.
@@ -28,5 +29,5 @@ export interface TokenBackend {
  * lockfile. Pure reads (get) are safe lock-free because atomicWrite0600's rename
  * guarantees a reader only ever sees a complete file.
  */
-export declare function makeFileBackend(filePath: string): TokenBackend;
+export declare function makeFileBackend(filePath: string, storeOptions?: SecureStoreOptions): TokenBackend;
 //# sourceMappingURL=token-store.d.ts.map

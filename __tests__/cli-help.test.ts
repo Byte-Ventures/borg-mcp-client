@@ -7,7 +7,13 @@
  * glue (print + exit before the wizard import).
  */
 import { describe, it, expect } from 'vitest';
-import { isHelpFlag, setupHelpText, topLevelHelpText, assimilateHelpText } from '../src/cli-help';
+import {
+  assimilateHelpText,
+  isHelpFlag,
+  serverHelpText,
+  setupHelpText,
+  topLevelHelpText,
+} from '../src/cli-help';
 
 describe('gh#520 — borg setup --help', () => {
   it('isHelpFlag recognizes --help and -h only', () => {
@@ -41,6 +47,25 @@ describe('gh#611 — top-level borg --help', () => {
     expect(t).toContain('borg setup');
     // The removed Cloud device-code flow must not resurface in help.
     expect(t).not.toContain('--no-browser');
+  });
+});
+
+describe('borg server help', () => {
+  it('lists the facade in top-level help', () => {
+    expect(topLevelHelpText('9.9.9')).toContain('borg server <command> [arguments]');
+  });
+
+  it('uses the approved bounded client-owned copy', () => {
+    expect(serverHelpText()).toBe(
+      `Usage: borg server <command> [arguments]\n\n` +
+      `Commands:\n` +
+      `  setup    Prepare local server identity and data; does not start the server.\n` +
+      `  start    Start the verified server in the foreground.\n` +
+      `  status   Report verified runtime evidence.\n` +
+      `  update   Verify and activate a local server artifact.\n` +
+      `  invite   Create a single-use invitation in an interactive terminal.\n\n` +
+      `Run borg server <command> --help for server command options.\n`,
+    );
   });
 });
 

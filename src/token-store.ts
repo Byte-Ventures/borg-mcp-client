@@ -7,7 +7,8 @@
  * private keys; there is no keychain and no obfuscation-grade fallback.
  */
 
-import { atomicWrite0600, readStoreFile } from './seat-store.js';
+import { atomicWrite0600, readStoreFile, type SecureStoreOptions } from './seat-store.js';
+import { dirname } from 'node:path';
 
 // The OS-keychain backend was retired with the Queen rescope; the only backend
 // name is the 0600 file store.
@@ -37,9 +38,13 @@ export interface TokenBackend {
  * lockfile. Pure reads (get) are safe lock-free because atomicWrite0600's rename
  * guarantees a reader only ever sees a complete file.
  */
-export function makeFileBackend(filePath: string): TokenBackend {
+export function makeFileBackend(
+  filePath: string,
+  storeOptions: SecureStoreOptions = {},
+): TokenBackend {
+  const options = { secureRoot: dirname(filePath), ...storeOptions };
   const load = async (): Promise<Record<string, string>> => {
-    const raw = await readStoreFile(filePath);
+    const raw = await readStoreFile(filePath, options);
     // CR4 fail-closed: ONLY a missing file initializes empty. A present-but-
     // malformed / wrong-version / schema-invalid credential store MUST NOT read as
     // empty — a subsequent set/delete would OVERWRITE it and erase every stored
@@ -79,7 +84,7 @@ export function makeFileBackend(filePath: string): TokenBackend {
     return { ...(accounts as Record<string, string>) };
   };
   const save = (accounts: Record<string, string>): Promise<void> =>
-    atomicWrite0600(filePath, JSON.stringify({ version: 1, accounts }, null, 2) + '\n');
+    atomicWrite0600(filePath, JSON.stringify({ version: 1, accounts }, null, 2) + '\n', options);
   return {
     name: 'file',
     async get(account) {

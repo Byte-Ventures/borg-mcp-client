@@ -20,6 +20,7 @@ export const KNOWN_SUBCOMMANDS = [
   'sync',
   'cleanup',
   'launch-all',
+  'server',
 ] as const;
 
 /**

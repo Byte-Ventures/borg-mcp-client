@@ -1,14 +1,11 @@
 /**
  * Secure local-server credential storage.
  *
- * The self-hosted-server credential group (enrollment credentials, pending
- * enrollment/cube-creation records, and the per-seat drone-session bearers)
- * rests ONLY in the 0600 credential file store (Queen rescope) — parity with the
- * server's own TLS private keys. The OS keychain is gone; the raw secret never
- * leaves the 0600 file, and a single store flock serializes every read-compare-write.
+ * Parent enrollment credentials and pending enrollment/cube-creation records
+ * rest ONLY in the canonical 0600 credential file. Per-seat session credentials
+ * remain in the separate seat store. A single flock serializes every parent-store
+ * read-compare-write shared by client enrollment and same-machine server setup.
  */
-import os from 'os';
-import path from 'path';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import type { ServerCapability } from 'borgmcp-shared/protocol';
 import { withStoreLock } from './seat-store.js';
@@ -16,14 +13,15 @@ import {
   makeFileBackend,
   type TokenBackend,
 } from './token-store.js';
+import { BORG_USER_ROOT, SERVER_CREDENTIALS_FILE } from './credential-paths.js';
 
 const SERVER_CREDENTIAL_RECORD_VERSION = 2 as const;
 const SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 1 as const;
 const SERVER_CUBE_RETRY_RECORD_VERSION = 1 as const;
 // The 0600 credential store (Queen rescope: replaces the OS keychain). A single
-// file holds every server credential/session/enrollment record; a single flock
+// file holds every parent credential/enrollment record; a single flock
 // serializes every mutator + observer that must (SR-seven #4).
-const CREDENTIALS_FILE = path.join(os.homedir(), '.config', 'borgmcp', 'credentials.json');
+const CREDENTIALS_FILE = SERVER_CREDENTIALS_FILE;
 const CREDENTIALS_LOCK = `${CREDENTIALS_FILE}.lock`;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -199,15 +197,39 @@ function serverCubeRetryAccount(
 // parity with the server's TLS keys; no OS keychain, no obfuscation-grade
 // fallback). The single store lock (CREDENTIALS_LOCK) serializes the RCW.
 let serverCredentialBackendPromise: Promise<TokenBackend> | null = null;
+let testBackendInjected = false;
+let testLockTail: Promise<void> = Promise.resolve();
+async function withCredentialStoreLock<T>(operation: () => Promise<T>): Promise<T> {
+  if (!testBackendInjected) {
+    return withStoreLock(CREDENTIALS_LOCK, operation, {
+      secureRoot: BORG_USER_ROOT,
+      rootMode: 'owner-controlled',
+    });
+  }
+  const prior = testLockTail;
+  let release!: () => void;
+  testLockTail = new Promise<void>((resolveLock) => { release = resolveLock; });
+  await prior;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
 async function getServerCredentialBackend(): Promise<TokenBackend> {
   if (!serverCredentialBackendPromise) {
-    serverCredentialBackendPromise = Promise.resolve(makeFileBackend(CREDENTIALS_FILE));
+    serverCredentialBackendPromise = Promise.resolve(makeFileBackend(CREDENTIALS_FILE, {
+      secureRoot: BORG_USER_ROOT,
+      rootMode: 'owner-controlled',
+    }));
   }
   return serverCredentialBackendPromise;
 }
 
 /** Test-only credential-store backend injection. */
 export function __setServerCredentialBackendForTest(backend: TokenBackend | null): void {
+  testBackendInjected = backend !== null;
+  testLockTail = Promise.resolve();
   serverCredentialBackendPromise = backend ? Promise.resolve(backend) : null;
 }
 
@@ -252,7 +274,7 @@ async function writeServerCredentialRecord(
  */
 export async function storeServerCredential(record: ServerCredentialRecord): Promise<void> {
   const backend = await getServerCredentialBackend();
-  await withStoreLock(CREDENTIALS_LOCK, () => writeServerCredentialRecord(backend, record));
+  await withCredentialStoreLock(() => writeServerCredentialRecord(backend, record));
 }
 
 /** Read an authority-bound active client record, failing closed on corruption. */
@@ -346,7 +368,7 @@ export async function getPendingServerEnrollment(
   validateServerCredentialBinding(origin, trustIdentity);
   const backend = await getServerCredentialBackend();
   const account = serverPendingEnrollmentAccount(origin, trustIdentity);
-  return withStoreLock(CREDENTIALS_LOCK, async () => {
+  return withCredentialStoreLock(async () => {
     const stored = await backend.get(account);
     if (!stored) return null;
     try {
@@ -375,7 +397,7 @@ export async function getOrCreatePendingServerEnrollment(
   validateClientName(input.clientName);
   const backend = await getServerCredentialBackend();
   const account = serverPendingEnrollmentAccount(input.origin, input.trustIdentity);
-  return withStoreLock(CREDENTIALS_LOCK, async () => {
+  return withCredentialStoreLock(async () => {
     const stored = await backend.get(account);
     if (stored) {
       try {
@@ -432,7 +454,7 @@ export async function activatePendingServerEnrollment(
   const serverCapabilities = validateServerCapabilities(input.serverCapabilities);
   const backend = await getServerCredentialBackend();
   const pendingAccount = serverPendingEnrollmentAccount(input.origin, input.trustIdentity);
-  await withStoreLock(CREDENTIALS_LOCK, async () => {
+  await withCredentialStoreLock(async () => {
     const stored = await backend.get(pendingAccount);
     if (!stored) throw new Error('pending Borg server enrollment is missing');
     try {
@@ -469,7 +491,7 @@ export async function clearPendingServerEnrollment(
   validateUuid(retryKey, 'enrollment retry key');
   const backend = await getServerCredentialBackend();
   const account = serverPendingEnrollmentAccount(origin, trustIdentity);
-  await withStoreLock(CREDENTIALS_LOCK, async () => {
+  await withCredentialStoreLock(async () => {
     const stored = await backend.get(account);
     if (!stored) return;
     try {
@@ -510,7 +532,7 @@ export async function getOrCreatePendingServerCubeCreation(
     input.clientId,
     repositoryBinding,
   );
-  return withStoreLock(CREDENTIALS_LOCK, async () => {
+  return withCredentialStoreLock(async () => {
     const stored = await backend.get(account);
     if (stored) {
       try {
@@ -572,7 +594,7 @@ export async function clearPendingServerCubeCreation(
     record.clientId,
     record.repositoryBinding,
   );
-  await withStoreLock(CREDENTIALS_LOCK, async () => {
+  await withCredentialStoreLock(async () => {
     const stored = await backend.get(account);
     if (!stored) return;
     try {
@@ -588,7 +610,7 @@ export async function clearPendingServerCubeCreation(
 export async function clearServerCredential(origin: string, trustIdentity: string): Promise<void> {
   const backend = await getServerCredentialBackend();
   const pendingAccount = serverPendingEnrollmentAccount(origin, trustIdentity);
-  await withStoreLock(CREDENTIALS_LOCK, async () => {
+  await withCredentialStoreLock(async () => {
     await backend.delete(serverCredentialAccount(origin, trustIdentity));
     await backend.delete(pendingAccount);
   });

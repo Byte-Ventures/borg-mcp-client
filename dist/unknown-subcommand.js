@@ -19,6 +19,7 @@ export const KNOWN_SUBCOMMANDS = [
     'sync',
     'cleanup',
     'launch-all',
+    'server',
 ];
 /**
  * Returns the offending command string when argv[2] is an unknown non-flag

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeFileBackend } from '../src/token-store.js';
@@ -74,7 +74,7 @@ describe('self-hosted server credential storage', () => {
   });
 
   it('CR3b: concurrent credential writers on a REAL file backend all persist (locked RCW; no lost account)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'borg-cred-concurrency-'));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'borg-cred-concurrency-')));
     try {
       __setServerCredentialBackendForTest(makeFileBackend(join(dir, 'credentials.json')));
       // Distinct authorities → distinct accounts in ONE file. Without the store

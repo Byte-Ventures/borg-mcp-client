@@ -36,9 +36,24 @@ export function topLevelHelpText(version: string): string {
     `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
     `  borg launch-all [cube] --cli claude|codex|opencode\n` +
     `                           Launch all drone worktrees with that agent CLI\n` +
+    `  borg server <command> [arguments]\n` +
     `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
     `  borg --version           Show installed version\n\n` +
     `All other arguments are passed through to the selected agent CLI.\n`
+  );
+}
+
+/** Product Design-approved client-owned copy for `borg server --help`. */
+export function serverHelpText(): string {
+  return (
+    `Usage: borg server <command> [arguments]\n\n` +
+    `Commands:\n` +
+    `  setup    Prepare local server identity and data; does not start the server.\n` +
+    `  start    Start the verified server in the foreground.\n` +
+    `  status   Report verified runtime evidence.\n` +
+    `  update   Verify and activate a local server artifact.\n` +
+    `  invite   Create a single-use invitation in an interactive terminal.\n\n` +
+    `Run borg server <command> --help for server command options.\n`
   );
 }
 
