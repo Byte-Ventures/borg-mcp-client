@@ -181,6 +181,7 @@ const MAX_IDLE_ENTRIES = 500;
 const MAX_WRITERS = 16;
 const MAX_STATUS_KEYS = 16;
 const MAX_METHODS = 32;
+const MAX_REQUEST_ERRORS = 32;
 const MAX_SOCKET_EVENTS = 512;
 const MAX_STRING = 256;
 const MAX_COUNT = 10_000;
@@ -676,33 +677,74 @@ async function fetchWithBodyLifetime(
   }
 }
 
+type RequestErrorRecord = {
+  method: string;
+  pathname: string;
+  phase: string;
+  origin: 'bootstrap' | 'response_body';
+  code: string | null;
+  message: string | null;
+};
+
+type RecordingFetch = typeof fetch & {
+  reconcileExpectedAbortStreamBodyReset(options: {
+    expectedSignal: AbortSignal;
+    expectedReason: Error;
+    expectedPathname: string;
+    streamShutdownClean: boolean;
+    streamError: { origin: 'bootstrap' | 'iterator'; code: string | null; message: string } | null;
+  }): boolean;
+};
+
 function createRecordingFetch(
   rawFetch: typeof fetch,
   origin: string,
   getPhase: () => string,
-  requests: Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }>,
+  requests: RequestErrorRecord[],
   statuses = new Map<number, number>(),
   stream: { headersReady?: () => void; deadline?: () => void; bootstrapError?: (error: unknown) => void } = {},
   onRequestErrorCount: (count: number) => void = () => {},
-): typeof fetch {
+): RecordingFetch {
   let requestErrorCount = 0;
-  const recordError = (record: { method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string; message: string }) => {
+  let reconciledExpectedReset = false;
+  const bodyErrors: Array<{
+    record: RequestErrorRecord;
+    signal: AbortSignal | null;
+    abortReasonAtError: unknown;
+    sseResponse: boolean;
+  }> = [];
+  const recordError = (record: RequestErrorRecord) => {
     requestErrorCount += 1;
     onRequestErrorCount(requestErrorCount);
-    if (requests.length < 32) requests.push(record);
+    if (requests.length < MAX_REQUEST_ERRORS) requests.push(record);
   };
-  return async (input, init = {}) => {
+  const recordingFetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(input.toString());
     if (url.origin !== origin || loopbackOrigin(url.origin) !== origin) {
       throw new Error(`cross-authority request refused: ${url.href}`);
     }
     const record = () => ({ method: String(init.method ?? 'GET').toUpperCase(), pathname: url.pathname, phase: getPhase() });
     const streamRequest = url.pathname.endsWith('/stream');
+    let sseResponse = false;
     try {
       const response = await fetchWithBodyLifetime(rawFetch, input, init, {
-        clearDeadlineAfterHeaders: (candidate) => streamRequest && candidate.ok && candidate.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream',
+        clearDeadlineAfterHeaders: (candidate) => {
+          sseResponse = streamRequest && candidate.ok && candidate.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream';
+          return sseResponse;
+        },
         onDeadline: () => { if (streamRequest) stream.deadline?.(); },
-        onBodyError: (error: any) => recordError({ ...record(), origin: 'response_body', code: normalizeDiagnosticCode(error), message: 'transport failure' }),
+        onBodyError: (error: any) => {
+          const requestRecord: RequestErrorRecord = { ...record(), origin: 'response_body', code: normalizeDiagnosticCode(error), message: 'transport failure' };
+          recordError(requestRecord);
+          if (bodyErrors.length < MAX_REQUEST_ERRORS) {
+            bodyErrors.push({
+              record: requestRecord,
+              signal: init.signal ?? null,
+              abortReasonAtError: init.signal?.aborted === true ? init.signal.reason : undefined,
+              sseResponse,
+            });
+          }
+        },
       });
       if (streamRequest) stream.headersReady?.();
       statuses.set(response.status, (statuses.get(response.status) ?? 0) + 1);
@@ -713,6 +755,32 @@ function createRecordingFetch(
       throw error;
     }
   };
+  return Object.assign(recordingFetch, {
+    reconcileExpectedAbortStreamBodyReset(options: Parameters<RecordingFetch['reconcileExpectedAbortStreamBodyReset']>[0]) {
+      const expectedPath = options.expectedPathname.match(/^\/api\/cubes\/([^/]+)\/stream$/);
+      if (
+        reconciledExpectedReset || !options.streamShutdownClean ||
+        options.expectedReason.message !== ABORT_MESSAGE ||
+        options.expectedSignal.aborted !== true || options.expectedSignal.reason !== options.expectedReason ||
+        options.streamError?.origin !== 'iterator' || options.streamError.code !== ABORT_CODE ||
+        options.streamError.message !== ABORT_MESSAGE ||
+        !expectedPath || !UUID_RE.test(expectedPath[1])
+      ) return false;
+      const matches = bodyErrors.filter(({ record, signal, abortReasonAtError, sseResponse: isSse }) =>
+        record.method === 'GET' && record.pathname === options.expectedPathname && record.phase === 'setup' &&
+        record.origin === 'response_body' && record.code === 'ECONNRESET' && record.message === 'transport failure' &&
+        isSse && signal === options.expectedSignal && abortReasonAtError === options.expectedReason,
+      );
+      if (matches.length !== 1) return false;
+      const requestIndex = requests.indexOf(matches[0].record);
+      if (requestIndex < 0 || requestErrorCount < 1) return false;
+      requests.splice(requestIndex, 1);
+      requestErrorCount -= 1;
+      onRequestErrorCount(requestErrorCount);
+      reconciledExpectedReset = true;
+      return true;
+    },
+  });
 }
 
 function decodeFrame(buffer: Buffer): { value: any; consumed: number } | null {
@@ -1381,6 +1449,114 @@ describe('Sprint 4 E2E harness validation', () => {
     vi.useRealTimers();
   });
 
+  async function captureStreamBodyError(options: {
+    method?: string;
+    pathname?: string;
+    phase?: string;
+    contentType?: string;
+    error?: Error & { code?: string };
+    abortBeforeError?: boolean;
+    issuedReason?: Error;
+    abortReason?: Error;
+  } = {}) {
+    const origin = 'https://127.0.0.1:7443';
+    const cubeId = '11111111-1111-4111-8111-111111111111';
+    const pathname = options.pathname ?? `/api/cubes/${cubeId}/stream`;
+    const issuedReason = options.issuedReason ?? new Error(ABORT_MESSAGE);
+    const abortReason = options.abortReason ?? issuedReason;
+    const abort = new AbortController();
+    const records: Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }> = [];
+    let requestErrorCount = 0;
+    let sourceController!: ReadableStreamDefaultController<Uint8Array>;
+    const recordingFetch = createRecordingFetch(
+      vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { sourceController = controller; },
+      }), { status: 200, headers: { 'Content-Type': options.contentType ?? 'text/event-stream' } })),
+      origin,
+      () => options.phase ?? 'setup',
+      records,
+      undefined,
+      {},
+      (count) => { requestErrorCount = count; },
+    );
+    const response = await recordingFetch(`${origin}${pathname}`, {
+      method: options.method ?? 'GET',
+      signal: abort.signal,
+    });
+    const reader = response.body!.getReader();
+    const pending = reader.read();
+    if (options.abortBeforeError !== false) abort.abort(abortReason);
+    sourceController.error(options.error ?? Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }));
+    await pending.catch(() => {});
+    if (options.abortBeforeError === false) abort.abort(abortReason);
+    return {
+      abort,
+      issuedReason,
+      pathname,
+      records,
+      get requestErrorCount() { return requestErrorCount; },
+      reconcile: (patch: Record<string, unknown> = {}) => recordingFetch.reconcileExpectedAbortStreamBodyReset({
+        expectedSignal: abort.signal,
+        expectedReason: issuedReason,
+        expectedPathname: `/api/cubes/${cubeId}/stream`,
+        streamShutdownClean: true,
+        streamError: { origin: 'iterator', code: ABORT_CODE, message: ABORT_MESSAGE },
+        ...patch,
+      }),
+    };
+  }
+
+  it('excludes only the diagnosed post-abort SSE body reset after clean exact-identity shutdown', async () => {
+    const captured = await captureStreamBodyError();
+    const output = completeS4Output() as any;
+    output.phase.requests = captured.records;
+    output.phase.request_error_count = captured.requestErrorCount;
+    expect(captured.requestErrorCount).toBe(1);
+    expect(validateS4CoupledE2EOutput(output)).toBe(false);
+    expect(captured.records).toEqual([expect.objectContaining({
+      method: 'GET',
+      pathname: captured.pathname,
+      phase: 'setup',
+      origin: 'response_body',
+      code: 'ECONNRESET',
+    })]);
+    expect(captured.reconcile()).toBe(true);
+    expect(captured.requestErrorCount).toBe(0);
+    expect(captured.records).toEqual([]);
+    expect(captured.reconcile()).toBe(false);
+    output.phase.request_error_count = captured.requestErrorCount;
+    expect(validateS4CoupledE2EOutput(output)).toBe(true);
+  });
+
+  it('keeps an exact-shaped reset counted when reconciliation names a different signal', async () => {
+    const captured = await captureStreamBodyError();
+    const foreignAbort = new AbortController();
+    foreignAbort.abort(captured.issuedReason);
+    expect(captured.reconcile({ expectedSignal: foreignAbort.signal })).toBe(false);
+    expect(captured.requestErrorCount).toBe(1);
+    expect(captured.records).toHaveLength(1);
+  });
+
+  it.each([
+    ['pre-abort reset', { abortBeforeError: false }, {}],
+    ['non-stream path', { pathname: '/api/cubes/11111111-1111-4111-8111-111111111111/logs' }, {}],
+    ['wrong stream path', { pathname: '/api/cubes/44444444-4444-4444-8444-444444444444/stream' }, {}],
+    ['wrong method', { method: 'POST' }, {}],
+    ['wrong phase', { phase: 'post_abort_directed_drain' }, {}],
+    ['non-SSE response', { contentType: 'application/json' }, {}],
+    ['unrelated reset code', { error: Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }) }, {}],
+    ['wrong abort reason identity', { abortReason: new Error(ABORT_MESSAGE) }, {}],
+    ['unclean shutdown', {}, { streamShutdownClean: false }],
+    ['persistence failure', {}, { streamError: { origin: 'iterator', code: 'OTHER', message: 'transport failure' } }],
+    ['handler failure', {}, { streamError: { origin: 'bootstrap', code: ABORT_CODE, message: ABORT_MESSAGE } }],
+    ['wrong iterator reason', {}, { streamError: { origin: 'iterator', code: ABORT_CODE, message: 'transport failure' } }],
+  ])('keeps a %s counted as a raw request failure', async (_case, captureOptions, reconcilePatch) => {
+    const captured = await captureStreamBodyError(captureOptions);
+    expect(captured.reconcile(reconcilePatch)).toBe(false);
+    expect(captured.requestErrorCount).toBe(1);
+    expect(captured.records).toHaveLength(1);
+  });
+
   it('attributes an injected post-abort directed-drain body reset without masking it', async () => {
     const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
     const records: Array<Record<string, unknown>> = [];
@@ -1843,6 +2019,13 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       streamAbort.abort(expectedAbortReason);
       await bounded(requireExactAbortRejection(streamPromise, expectedAbortReason), 'stream shutdown');
       phase.stream_shutdown_clean = true;
+      recordingFetch.reconcileExpectedAbortStreamBodyReset({
+        expectedSignal: streamAbort.signal,
+        expectedReason: expectedAbortReason,
+        expectedPathname: `/api/cubes/${active.cubeId}/stream`,
+        streamShutdownClean: phase.stream_shutdown_clean,
+        streamError: phase.stream_error,
+      });
       streamPromise = undefined;
 
       requestPhase = 'post_abort_directed_drain';
