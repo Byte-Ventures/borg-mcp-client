@@ -183,6 +183,7 @@ const MAX_STATUS_KEYS = 16;
 const MAX_METHODS = 32;
 const MAX_SOCKET_EVENTS = 512;
 const MAX_STRING = 256;
+const MAX_COUNT = 10_000;
 const FAILURE_CODE = 'E2E_OPERATION_FAILED' as const;
 const ABORT_CODE = 'ABORT_ERR' as const;
 const ABORT_MESSAGE = 'directed observation complete' as const;
@@ -277,6 +278,10 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+function isBoundedCount(value: unknown): value is number {
+  return isNonNegativeInteger(value) && value <= MAX_COUNT;
+}
+
 function isBoundedString(value: unknown, max = MAX_STRING): value is string {
   return typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= max;
 }
@@ -356,8 +361,8 @@ function isPhase(value: unknown): boolean {
     (value.abort_reason === null || typeof value.abort_reason === 'string') &&
     (value.stream_error === null || isStreamError(value.stream_error)) && typeof value.stream_shutdown_clean === 'boolean' &&
     ['not_started', 'started', 'succeeded', 'failed'].includes(String(value.directed_drain)) &&
-    isNonNegativeInteger(value.request_error_count) && value.request_error_count >= (Array.isArray(value.requests) ? value.requests.length : 0) &&
-    isNonNegativeInteger(value.socket_event_count) && value.socket_event_count >= (Array.isArray(value.sockets) ? value.sockets.length : 0) &&
+    isBoundedCount(value.request_error_count) && value.request_error_count >= (Array.isArray(value.requests) ? value.requests.length : 0) &&
+    isBoundedCount(value.socket_event_count) && value.socket_event_count >= (Array.isArray(value.sockets) ? value.sockets.length : 0) &&
     Array.isArray(value.requests) && value.requests.length <= 32 && value.requests.every(isRequestRecord) &&
     Array.isArray(value.sockets) && value.sockets.length <= MAX_SOCKET_EVENTS && value.sockets.every(socket);
 }
@@ -374,7 +379,7 @@ function isValidatedWriterRef(value: unknown): boolean {
 
 function isStatusCounts(value: unknown): boolean {
   return isRecord(value) && Object.keys(value).length <= MAX_STATUS_KEYS && Object.entries(value).every(([status, count]) =>
-    /^(?:[1-5][0-9]{2})$/.test(status) && isNonNegativeInteger(count) && count <= 10_000);
+    /^(?:[1-5][0-9]{2})$/.test(status) && isBoundedCount(count));
 }
 
 const SUCCESS_OUTPUT_KEYS = [
@@ -810,6 +815,27 @@ describe('Sprint 4 E2E harness validation', () => {
     const output = completeS4Output() as any;
     output.phase.extra = deep;
     expect(() => isS4CoupledOutput(output)).not.toThrow();
+    expect(isS4CoupledOutput(output)).toBe(false);
+  });
+
+  it.each(['request_error_count', 'socket_event_count'])(
+    'enforces the shared count policy for phase.%s',
+    (field) => {
+      for (const invalid of [MAX_COUNT + 1, Number.MAX_SAFE_INTEGER, Number.POSITIVE_INFINITY, Number.NaN, 1.5, -1]) {
+        const output = completeS4Output() as any;
+        output.phase[field] = invalid;
+        expect(isS4CoupledOutput(output)).toBe(false);
+      }
+      const boundary = completeS4Output() as any;
+      boundary.phase[field] = MAX_COUNT;
+      expect(isS4CoupledOutput(boundary)).toBe(true);
+    },
+  );
+
+  it('rejects a phase total below its retained sample length', () => {
+    const output = completeS4Output() as any;
+    output.phase.sockets = [{ event: 'socket_free', socket_id: 'socket-1' }];
+    output.phase.socket_event_count = 0;
     expect(isS4CoupledOutput(output)).toBe(false);
   });
 
