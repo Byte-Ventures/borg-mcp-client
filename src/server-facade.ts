@@ -65,8 +65,22 @@ const defaultOutputDeps: ServerFacadeOutputDeps = {
   writeStderr: (text) => process.stderr.write(text),
 };
 
+const MAX_RENDERED_COMMAND_CODE_POINTS = 80;
+
 function inertCommand(command: string): string {
-  return JSON.stringify(command).slice(1, -1);
+  const rendered: string[] = [];
+  let truncated = false;
+  for (const codePoint of command) {
+    if (rendered.length === MAX_RENDERED_COMMAND_CODE_POINTS) {
+      truncated = true;
+      break;
+    }
+    rendered.push(/\p{Cc}/u.test(codePoint) ? '?' : codePoint);
+  }
+  if (truncated) {
+    return `${rendered.slice(0, MAX_RENDERED_COMMAND_CODE_POINTS - 3).join('')}...`;
+  }
+  return rendered.join('');
 }
 
 export function unknownServerCommandText(command: string): string {
@@ -83,6 +97,18 @@ export function missingServerExecutableText(command: ServerLifecycleCommand): st
     `Next: install a verified borgmcp-server release, then rerun borg server ${command}.\n` +
     `No checkout fallback is attempted.\n`
   );
+}
+
+export function serverCommandStartupFailureText(command: ServerLifecycleCommand): string {
+  return (
+    `Local server command could not be started.\n` +
+    `Next: check local permissions and system resources, then rerun borg server ${inertCommand(command)}.\n` +
+    `No server command was started.\n`
+  );
+}
+
+function isMissingServerExecutable(error: Error): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
 export function runServerFacadeProcess(
@@ -133,7 +159,7 @@ export function runServerFacadeProcess(
 
 function processResultExitCode(result: ServerFacadeProcessResult): number {
   if (result.kind === 'exited') return result.code;
-  if (result.kind === 'spawn-error') return 127;
+  if (result.kind === 'spawn-error') return isMissingServerExecutable(result.error) ? 127 : 1;
   return 128 + (constants.signals[result.signal] ?? 1);
 }
 
@@ -156,7 +182,11 @@ export async function runEarlyServerFacade(
 
   const result = await runServerFacadeProcess(parsed, deps);
   if (result.kind === 'spawn-error') {
-    output.writeStderr(missingServerExecutableText(parsed.command));
+    output.writeStderr(
+      isMissingServerExecutable(result.error)
+        ? missingServerExecutableText(parsed.command)
+        : serverCommandStartupFailureText(parsed.command),
+    );
   }
   return processResultExitCode(result);
 }

@@ -39,6 +39,7 @@ export type ServerFacadeProcessResult = {
 };
 export declare function unknownServerCommandText(command: string): string;
 export declare function missingServerExecutableText(command: ServerLifecycleCommand): string;
+export declare function serverCommandStartupFailureText(command: ServerLifecycleCommand): string;
 export declare function runServerFacadeProcess(input: {
     command: ServerLifecycleCommand;
     args: readonly string[];

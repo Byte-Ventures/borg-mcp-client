@@ -25,8 +25,21 @@ const defaultOutputDeps = {
     writeStdout: (text) => process.stdout.write(text),
     writeStderr: (text) => process.stderr.write(text),
 };
+const MAX_RENDERED_COMMAND_CODE_POINTS = 80;
 function inertCommand(command) {
-    return JSON.stringify(command).slice(1, -1);
+    const rendered = [];
+    let truncated = false;
+    for (const codePoint of command) {
+        if (rendered.length === MAX_RENDERED_COMMAND_CODE_POINTS) {
+            truncated = true;
+            break;
+        }
+        rendered.push(/\p{Cc}/u.test(codePoint) ? '?' : codePoint);
+    }
+    if (truncated) {
+        return `${rendered.slice(0, MAX_RENDERED_COMMAND_CODE_POINTS - 3).join('')}...`;
+    }
+    return rendered.join('');
 }
 export function unknownServerCommandText(command) {
     return (`Unknown server command: ${inertCommand(command)}.\n` +
@@ -37,6 +50,14 @@ export function missingServerExecutableText(command) {
     return (`Local server command is unavailable: borg-mcp-server was not found.\n` +
         `Next: install a verified borgmcp-server release, then rerun borg server ${command}.\n` +
         `No checkout fallback is attempted.\n`);
+}
+export function serverCommandStartupFailureText(command) {
+    return (`Local server command could not be started.\n` +
+        `Next: check local permissions and system resources, then rerun borg server ${inertCommand(command)}.\n` +
+        `No server command was started.\n`);
+}
+function isMissingServerExecutable(error) {
+    return error.code === 'ENOENT';
 }
 export function runServerFacadeProcess(input, deps = defaultProcessDeps) {
     const child = deps.spawn('borg-mcp-server', [input.command, ...input.args], { shell: false, stdio: 'inherit' });
@@ -78,7 +99,7 @@ function processResultExitCode(result) {
     if (result.kind === 'exited')
         return result.code;
     if (result.kind === 'spawn-error')
-        return 127;
+        return isMissingServerExecutable(result.error) ? 127 : 1;
     return 128 + (constants.signals[result.signal] ?? 1);
 }
 /** Routes every facade outcome before client initialization or network work. */
@@ -96,7 +117,9 @@ export async function runEarlyServerFacade(argv, deps = defaultProcessDeps, outp
     }
     const result = await runServerFacadeProcess(parsed, deps);
     if (result.kind === 'spawn-error') {
-        output.writeStderr(missingServerExecutableText(parsed.command));
+        output.writeStderr(isMissingServerExecutable(result.error)
+            ? missingServerExecutableText(parsed.command)
+            : serverCommandStartupFailureText(parsed.command));
     }
     return processResultExitCode(result);
 }

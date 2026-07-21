@@ -5,6 +5,7 @@ import {
   missingServerExecutableText,
   runEarlyServerFacade,
   runServerFacadeProcess,
+  serverCommandStartupFailureText,
   unknownServerCommandText,
   type ServerFacadeOutputDeps,
   type ServerFacadeProcessDeps,
@@ -157,11 +158,33 @@ describe('runEarlyServerFacade', () => {
     )).resolves.toBe(1);
     expect(output.stdout()).toBe('');
     expect(output.stderr()).toBe(
-      `Unknown server command: bad\\n\\u001b[31m.\n` +
+      `Unknown server command: bad??[31m.\n` +
       `Available commands: setup, start, status, update.\n` +
       `Next: run borg server --help.\n`,
     );
     expect(output.stderr()).not.toContain('--secret');
+    expect(deps.spawn).not.toHaveBeenCalled();
+  });
+
+  it('caps an oversized unknown command at 80 Unicode code points', async () => {
+    const child = new FakeChild();
+    const { deps } = processDeps(child);
+    const output = outputDeps();
+    const oversized = '😀'.repeat(1024 * 1024);
+
+    await expect(runEarlyServerFacade(
+      ['node', 'borg', 'server', oversized],
+      deps,
+      output.output,
+    )).resolves.toBe(1);
+    expect(output.stderr()).toBe(
+      `Unknown server command: ${'😀'.repeat(77)}....\n` +
+      `Available commands: setup, start, status, update.\n` +
+      `Next: run borg server --help.\n`,
+    );
+    const renderedToken = output.stderr().split('\n', 1)[0]
+      .slice('Unknown server command: '.length, -1);
+    expect(Array.from(renderedToken)).toHaveLength(80);
     expect(deps.spawn).not.toHaveBeenCalled();
   });
 
@@ -214,6 +237,30 @@ describe('runEarlyServerFacade', () => {
     );
     expect(output.stderr()).not.toContain('/secret/path');
   });
+
+  it.each(['EACCES', 'EMFILE'])(
+    'keeps %s distinct from a missing executable without exposing spawn details',
+    async (code) => {
+      const child = new FakeChild();
+      const { deps } = processDeps(child);
+      const output = outputDeps();
+      const pending = runEarlyServerFacade(
+        ['node', 'borg', 'server', 'update'],
+        deps,
+        output.output,
+      );
+
+      child.emit('error', Object.assign(new Error(`${code} /secret/path`), { code }));
+      await expect(pending).resolves.toBe(1);
+      expect(output.stdout()).toBe('');
+      expect(output.stderr()).toBe(
+        `Local server command could not be started.\n` +
+        `Next: check local permissions and system resources, then rerun borg server update.\n` +
+        `No server command was started.\n`,
+      );
+      expect(output.stderr()).not.toMatch(new RegExp(`${code}|/secret/path`));
+    },
+  );
 });
 
 describe('approved server facade copy', () => {
@@ -230,6 +277,14 @@ describe('approved server facade copy', () => {
       `Local server command is unavailable: borg-mcp-server was not found.\n` +
       `Next: install a verified borgmcp-server release, then rerun borg server update.\n` +
       `No checkout fallback is attempted.\n`,
+    );
+  });
+
+  it('renders the exact bounded non-ENOENT startup-failure text', () => {
+    expect(serverCommandStartupFailureText('start')).toBe(
+      `Local server command could not be started.\n` +
+      `Next: check local permissions and system resources, then rerun borg server start.\n` +
+      `No server command was started.\n`,
     );
   });
 });

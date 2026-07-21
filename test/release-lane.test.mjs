@@ -102,11 +102,17 @@ lines.on('line', (line) => {
 import { spawn } from 'node:child_process';
 const [command, ...args] = process.argv.slice(3);
 const child = spawn('borg-mcp-server', [command, ...args], { shell: false, stdio: 'inherit' });
-child.on('error', () => {
-  process.stderr.write('Local server command is unavailable: borg-mcp-server was not found.\\n');
-  process.stderr.write('Next: install a verified borgmcp-server release, then rerun borg server ' + command + '.\\n');
-  process.stderr.write('No checkout fallback is attempted.\\n');
-  process.exit(127);
+child.on('error', (error) => {
+  if (error.code === 'ENOENT') {
+    process.stderr.write('Local server command is unavailable: borg-mcp-server was not found.\\n');
+    process.stderr.write('Next: install a verified borgmcp-server release, then rerun borg server ' + command + '.\\n');
+    process.stderr.write('No checkout fallback is attempted.\\n');
+    process.exit(127);
+  }
+  process.stderr.write('Local server command could not be started.\\n');
+  process.stderr.write('Next: check local permissions and system resources, then rerun borg server ' + command + '.\\n');
+  process.stderr.write('No server command was started.\\n');
+  process.exit(1);
 });
 child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 1)));
 `;
@@ -652,6 +658,7 @@ test('exact tarball installs cleanly and completes MCP initialize plus tool disc
     version: CLIENT_VERSION,
     toolCount: 1,
     serverFacadeExitCode: 37,
+    serverFacadeStartupFailureExitCode: 1,
     serverFacadeMissingExitCode: 127,
   });
 });

@@ -82,6 +82,22 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : 96);
       );
     }
 
+    await chmod(fakeServer, 0o644);
+    const unavailable = spawnSync(process.execPath, [generatedBin, 'server', 'update'], {
+      env: { ...process.env, PATH: directory, CI: '1', NO_COLOR: '1' },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    const expectedUnavailable =
+      `Local server command could not be started.\n` +
+      `Next: check local permissions and system resources, then rerun borg server update.\n` +
+      `No server command was started.\n`;
+    if (unavailable.error || unavailable.status !== 1 || unavailable.stdout !== '' || unavailable.stderr !== expectedUnavailable) {
+      throw new Error(
+        `Packed unavailable-server facade failed: status=${unavailable.status}, stdout=${JSON.stringify(unavailable.stdout)}, stderr=${JSON.stringify(unavailable.stderr)}, error=${unavailable.error?.message ?? ''}`,
+      );
+    }
+
     await rm(fakeServer);
     const missing = spawnSync(process.execPath, [generatedBin, 'server', 'update'], {
       env: { ...process.env, PATH: directory, CI: '1', NO_COLOR: '1' },
@@ -97,7 +113,11 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : 96);
         `Packed missing-server facade failed: status=${missing.status}, stdout=${JSON.stringify(missing.stdout)}, stderr=${JSON.stringify(missing.stderr)}, error=${missing.error?.message ?? ''}`,
       );
     }
-    return { serverFacadeExitCode: code, serverFacadeMissingExitCode: missing.status };
+    return {
+      serverFacadeExitCode: code,
+      serverFacadeStartupFailureExitCode: unavailable.status,
+      serverFacadeMissingExitCode: missing.status,
+    };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
