@@ -165,6 +165,273 @@ function compareEntryOrder(left: { created_at: string; id: string }, right: { cr
   return left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id);
 }
 
+const S4_SCHEMA_VERSION = 's4-coupled-e2e/v1' as const;
+
+export interface S4CoupledE2EOutput {
+  schema_version: typeof S4_SCHEMA_VERSION;
+  pass: true;
+  client_sha: typeof EXPECTED_CLIENT_SHA;
+  origin: string;
+  simulated_idle_ms: number;
+  idle_accepted_model_turns: number;
+  idle_log_before_count: number;
+  idle_log_after_count: number;
+  idle_log_before: Array<{ id: string; created_at: string }>;
+  idle_log_after: Array<{ id: string; created_at: string }>;
+  idle_log_stable: true;
+  idle_cursor_before: { id: string; created_at: string } | null;
+  idle_cursor_after: { id: string; created_at: string } | null;
+  idle_cursor_stable: true;
+  directed_items: number;
+  directed_accepted_model_turns: number;
+  directed_unread_occurrences: number;
+  authenticated_writer_ids: string[];
+  validated_writer_refs: Array<{ cube_id: string; drone_id: string; role_id?: string; session_id?: string }>;
+  authenticated_writer_count: number;
+  writer_ids_match_configured: true;
+  burst_expected: number;
+  burst_drained: number;
+  burst_unique: number;
+  order_expected_count: number;
+  order_mismatch_count: number;
+  burst_order_exact: true;
+  drain_pages: number;
+  missing_ids: string[];
+  duplicate_count: number;
+  unexpected_ids: string[];
+  status_counts: Record<string, number>;
+  http_429_count: number;
+  econnreset_count: number;
+  transport_errors: Array<{ code: string | null; message: string }>;
+  forbidden_fetch_attempts: number;
+  all_requests_same_origin: true;
+  phase_complete: true;
+  turn_validation_errors: string[];
+  app_server_methods: string[];
+  phase: {
+    stream_headers_ready_at: string;
+    deadline_fired: false;
+    directed_append_succeeded: true;
+    directed_turn_count: number;
+    quiescence_started_at: string;
+    quiescence_ended_at: string;
+    abort_issued_at: string;
+    abort_reason: 'directed observation complete';
+    stream_error: { origin: 'iterator'; code: string | null; message: string };
+    stream_shutdown_clean: true;
+    directed_drain: 'succeeded';
+    requests: Array<{ method: string; pathname: string; phase: string; origin: 'bootstrap' | 'response_body'; code: string | null; message: string | null }>;
+    sockets: Array<Record<string, unknown>>;
+  };
+  cleanup_verified: true;
+}
+
+type EntrySnapshot = { id: string; created_at: string };
+
+function entryIdentityOrderSnapshot(entries: unknown): EntrySnapshot[] {
+  if (!Array.isArray(entries)) throw new Error('log entries must be an array');
+  return entries.map((entry, index) => {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.created_at !== 'string') {
+      throw new Error(`log entry ${index} must have string id and created_at`);
+    }
+    return { id: entry.id, created_at: entry.created_at };
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isCanonicalTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
+}
+
+function hasSensitiveKey(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasSensitiveKey);
+  return isRecord(value) && Object.entries(value).some(([key, child]) =>
+    /(?:credential|token|secret|password|authorization|cookie|private.?key)/i.test(key) || hasSensitiveKey(child));
+}
+
+function isCursor(value: unknown): value is Cursor {
+  return isRecord(value) && hasExactKeys(value, ['id', 'created_at']) &&
+    typeof value.id === 'string' && UUID_RE.test(value.id) && isCanonicalTimestamp(value.created_at);
+}
+
+function isEntrySnapshot(value: unknown): value is EntrySnapshot {
+  return isCursor(value);
+}
+
+function sameEntrySnapshot(left: unknown, right: unknown): boolean {
+  return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+    left.every((entry, index) => isEntrySnapshot(entry) && isEntrySnapshot(right[index]) &&
+      entry.id === right[index].id && entry.created_at === right[index].created_at);
+}
+
+function isCanonicalLoopbackOrigin(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  try {
+    return loopbackOrigin(value) === value;
+  } catch {
+    return false;
+  }
+}
+
+function isRequestRecord(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ['method', 'pathname', 'phase', 'origin', 'code', 'message']) &&
+    typeof value.method === 'string' && typeof value.pathname === 'string' && typeof value.phase === 'string' &&
+    (value.origin === 'bootstrap' || value.origin === 'response_body') &&
+    (value.code === null || typeof value.code === 'string') && (value.message === null || typeof value.message === 'string');
+}
+
+function isStreamError(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ['origin', 'code', 'message']) &&
+    (value.origin === 'bootstrap' || value.origin === 'iterator') &&
+    (value.code === null || typeof value.code === 'string') && typeof value.message === 'string';
+}
+
+function isPhase(value: unknown): boolean {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'stream_headers_ready_at', 'deadline_fired', 'directed_append_succeeded', 'directed_turn_count',
+    'quiescence_started_at', 'quiescence_ended_at', 'abort_issued_at', 'abort_reason', 'stream_error',
+    'stream_shutdown_clean', 'directed_drain', 'requests', 'sockets',
+  ])) return false;
+  const socket = (candidate: unknown): boolean => {
+    if (!isRecord(candidate) || typeof candidate.event !== 'string' || typeof candidate.socket_id !== 'string') return false;
+    if (candidate.event === 'request_socket') return hasExactKeys(candidate, ['event', 'method', 'pathname', 'socket_id', 'reused', 'destroyed']) &&
+      typeof candidate.method === 'string' && typeof candidate.pathname === 'string' && candidate.pathname.startsWith('/') &&
+      typeof candidate.reused === 'boolean' && typeof candidate.destroyed === 'boolean';
+    if (candidate.event === 'socket_close') return hasExactKeys(candidate, ['event', 'socket_id', 'destroyed']) && typeof candidate.destroyed === 'boolean';
+    if (candidate.event === 'socket_error') return hasExactKeys(candidate, ['event', 'socket_id', 'code']) &&
+      (candidate.code === null || typeof candidate.code === 'string');
+    return candidate.event === 'socket_free' && hasExactKeys(candidate, ['event', 'socket_id']);
+  };
+  return (value.stream_headers_ready_at === null || isCanonicalTimestamp(value.stream_headers_ready_at)) &&
+    typeof value.deadline_fired === 'boolean' && typeof value.directed_append_succeeded === 'boolean' &&
+    isNonNegativeInteger(value.directed_turn_count) &&
+    (value.quiescence_started_at === null || isCanonicalTimestamp(value.quiescence_started_at)) &&
+    (value.quiescence_ended_at === null || isCanonicalTimestamp(value.quiescence_ended_at)) &&
+    (value.abort_issued_at === null || isCanonicalTimestamp(value.abort_issued_at)) &&
+    (value.abort_reason === null || typeof value.abort_reason === 'string') &&
+    (value.stream_error === null || isStreamError(value.stream_error)) && typeof value.stream_shutdown_clean === 'boolean' &&
+    ['not_started', 'started', 'succeeded', 'failed'].includes(String(value.directed_drain)) &&
+    Array.isArray(value.requests) && value.requests.every(isRequestRecord) &&
+    Array.isArray(value.sockets) && value.sockets.every(socket);
+}
+
+function isValidatedWriterRef(value: unknown): boolean {
+  if (!isRecord(value) || !('cube_id' in value) || !('drone_id' in value)) return false;
+  const keys = Object.keys(value);
+  if (!keys.every((key) => ['cube_id', 'drone_id', 'role_id', 'session_id'].includes(key))) return false;
+  return typeof value.cube_id === 'string' && UUID_RE.test(value.cube_id) &&
+    typeof value.drone_id === 'string' && UUID_RE.test(value.drone_id) &&
+    (value.role_id === undefined || (typeof value.role_id === 'string' && UUID_RE.test(value.role_id))) &&
+    (value.session_id === undefined || (typeof value.session_id === 'string' && UUID_RE.test(value.session_id)));
+}
+
+function isStatusCounts(value: unknown): boolean {
+  return isRecord(value) && Object.entries(value).every(([status, count]) =>
+    /^(?:[1-5][0-9]{2})$/.test(status) && isNonNegativeInteger(count));
+}
+
+const SUCCESS_OUTPUT_KEYS = [
+  'schema_version', 'pass', 'client_sha', 'origin', 'simulated_idle_ms', 'idle_accepted_model_turns', 'idle_log_before_count',
+  'idle_log_after_count', 'idle_log_before', 'idle_log_after', 'idle_log_stable', 'idle_cursor_before',
+  'idle_cursor_after', 'idle_cursor_stable', 'directed_items', 'directed_accepted_model_turns',
+  'directed_unread_occurrences', 'authenticated_writer_ids', 'validated_writer_refs', 'authenticated_writer_count',
+  'writer_ids_match_configured', 'burst_expected', 'burst_drained', 'burst_unique', 'order_expected_count',
+  'order_mismatch_count', 'burst_order_exact', 'drain_pages', 'missing_ids', 'duplicate_count', 'unexpected_ids',
+  'status_counts', 'http_429_count', 'econnreset_count', 'transport_errors', 'forbidden_fetch_attempts',
+  'all_requests_same_origin', 'phase_complete', 'turn_validation_errors', 'app_server_methods', 'phase',
+  'cleanup_verified',
+] as const;
+
+/** Runtime contract for the credential-safe final JSON emitted after `S4_COUPLED_E2E `. */
+export function validateS4CoupledE2EOutput(value: unknown): value is S4CoupledE2EOutput {
+  if (!isRecord(value) || !hasExactKeys(value, SUCCESS_OUTPUT_KEYS) || value.pass !== true ||
+    value.cleanup_verified !== true || value.schema_version !== S4_SCHEMA_VERSION || value.client_sha !== EXPECTED_CLIENT_SHA ||
+    hasSensitiveKey(value) || !isCanonicalLoopbackOrigin(value.origin)) return false;
+  const before = value.idle_log_before;
+  const after = value.idle_log_after;
+  const writerIds = value.authenticated_writer_ids;
+  const writerRefs = value.validated_writer_refs;
+  const phase = value.phase as Record<string, unknown>;
+  const expectedAbort = isStreamError(phase.stream_error) && phase.stream_error.origin === 'iterator' &&
+    /abort|directed observation complete/i.test(phase.stream_error.message);
+  return value.simulated_idle_ms === 2 * 20 * 60 * 1000 && value.idle_accepted_model_turns === 0 &&
+    isNonNegativeInteger(value.idle_log_before_count) && value.idle_log_before_count === (Array.isArray(before) ? before.length : -1) &&
+    isNonNegativeInteger(value.idle_log_after_count) && value.idle_log_after_count === (Array.isArray(after) ? after.length : -1) &&
+    Array.isArray(before) && before.every(isEntrySnapshot) && Array.isArray(after) && after.every(isEntrySnapshot) &&
+    value.idle_log_stable === true && sameEntrySnapshot(before, after) &&
+    (value.idle_cursor_before === null || isCursor(value.idle_cursor_before)) &&
+    (value.idle_cursor_after === null || isCursor(value.idle_cursor_after)) && value.idle_cursor_stable === true &&
+    sameCursor(value.idle_cursor_before ?? undefined, value.idle_cursor_after ?? undefined) &&
+    value.directed_items === 1 && value.directed_accepted_model_turns === 1 && value.directed_unread_occurrences === 1 &&
+    Array.isArray(writerIds) && writerIds.length >= 2 && writerIds.every((id) => typeof id === 'string' && UUID_RE.test(id)) &&
+    new Set(writerIds).size === writerIds.length && Array.isArray(writerRefs) && writerRefs.length === writerIds.length &&
+    writerRefs.every(isValidatedWriterRef) && new Set(writerRefs.map((ref) => (ref as Record<string, string>).drone_id)).size === writerRefs.length &&
+    writerRefs.every((ref) => writerIds.includes((ref as Record<string, string>).drone_id)) &&
+    value.authenticated_writer_count === writerIds.length && value.writer_ids_match_configured === true &&
+    value.burst_expected === 150 && value.burst_drained === 150 && value.burst_unique === 150 &&
+    value.order_expected_count === 150 && value.order_mismatch_count === 0 && value.burst_order_exact === true &&
+    isNonNegativeInteger(value.drain_pages) && value.drain_pages >= 1 && Array.isArray(value.missing_ids) && value.missing_ids.length === 0 &&
+    value.duplicate_count === 0 && Array.isArray(value.unexpected_ids) && value.unexpected_ids.length === 0 &&
+    isStatusCounts(value.status_counts) && value.http_429_count === 0 && (value.status_counts['429'] ?? 0) === value.http_429_count && value.econnreset_count === 0 &&
+    Array.isArray(value.transport_errors) && value.transport_errors.length === 0 && value.forbidden_fetch_attempts === 0 &&
+    value.all_requests_same_origin === true && value.phase_complete === true &&
+    Array.isArray(value.turn_validation_errors) && value.turn_validation_errors.length === 0 &&
+    Array.isArray(value.app_server_methods) && value.app_server_methods.every((method) => typeof method === 'string') &&
+    isPhase(value.phase) && phase.stream_headers_ready_at !== null && phase.deadline_fired === false &&
+    phase.directed_append_succeeded === true && phase.directed_turn_count === 1 &&
+    phase.quiescence_started_at !== null && phase.quiescence_ended_at !== null && phase.abort_issued_at !== null &&
+    phase.abort_reason === 'directed observation complete' && expectedAbort && phase.stream_shutdown_clean === true &&
+    phase.directed_drain === 'succeeded' && Array.isArray(phase.requests) && phase.requests.length === 0;
+}
+
+export const isS4CoupledResult = validateS4CoupledE2EOutput;
+
+export function isS4CoupledOutput(value: unknown): boolean {
+  if (isS4CoupledResult(value)) return true;
+  return isRecord(value) && hasExactKeys(value, ['schema_version', 'pass', 'client_sha', 'origin', 'error', 'phase', 'cleanup_verified']) &&
+    value.schema_version === S4_SCHEMA_VERSION && value.pass === false && value.client_sha === EXPECTED_CLIENT_SHA && isCanonicalLoopbackOrigin(value.origin) &&
+    typeof value.error === 'string' && typeof value.cleanup_verified === 'boolean' && isPhase(value.phase);
+}
+
+function completeS4Output(): Record<string, unknown> {
+  const entry = { id: '11111111-1111-4111-8111-111111111111', created_at: '2026-01-01T00:00:00.000Z' };
+  const writerIds = ['22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
+  return {
+    schema_version: S4_SCHEMA_VERSION, pass: true, client_sha: EXPECTED_CLIENT_SHA, origin: 'https://127.0.0.1:7443', simulated_idle_ms: 2 * 20 * 60 * 1000,
+    idle_accepted_model_turns: 0, idle_log_before_count: 1, idle_log_after_count: 1,
+    idle_log_before: [entry], idle_log_after: [{ ...entry }], idle_log_stable: true,
+    idle_cursor_before: entry, idle_cursor_after: { ...entry }, idle_cursor_stable: true,
+    directed_items: 1, directed_accepted_model_turns: 1, directed_unread_occurrences: 1,
+    authenticated_writer_ids: writerIds, validated_writer_refs: writerIds.map((drone_id) => ({
+      cube_id: entry.id, drone_id,
+    })), authenticated_writer_count: 2, writer_ids_match_configured: true,
+    burst_expected: 150, burst_drained: 150, burst_unique: 150, order_expected_count: 150,
+    order_mismatch_count: 0, burst_order_exact: true, drain_pages: 9, missing_ids: [], duplicate_count: 0,
+    unexpected_ids: [], status_counts: { '200': 1 }, http_429_count: 0, econnreset_count: 0,
+    transport_errors: [], forbidden_fetch_attempts: 0, all_requests_same_origin: true, phase_complete: true,
+    turn_validation_errors: [], app_server_methods: ['thread/read', 'turn/start'], phase: {
+      stream_headers_ready_at: '2026-01-01T00:00:00.000Z', deadline_fired: false,
+      directed_append_succeeded: true, directed_turn_count: 1,
+      quiescence_started_at: '2026-01-01T00:00:01.000Z', quiescence_ended_at: '2026-01-01T00:00:07.000Z',
+      abort_issued_at: '2026-01-01T00:00:07.000Z', abort_reason: 'directed observation complete',
+      stream_error: { origin: 'iterator', code: null, message: 'directed observation complete' },
+      stream_shutdown_clean: true, directed_drain: 'succeeded', requests: [], sockets: [],
+    }, cleanup_verified: true,
+  };
+}
+
 // The one-line runner output is valid only when every independently emitted proof holds.
 function proofComplete(proof: {
   idleTurns: number; idleLogStable: boolean; idleCursorStable: boolean;
@@ -383,6 +650,50 @@ afterEach(() => {
 });
 
 describe('Sprint 4 E2E harness validation', () => {
+  it('accepts only the complete credential-safe success output schema', () => {
+    expect(isS4CoupledResult(completeS4Output())).toBe(true);
+    expect(isS4CoupledOutput(completeS4Output())).toBe(true);
+  });
+
+  it.each([
+    ['leaked credential field', (output: any) => { output.session_credential = 'secret'; }],
+    ['nested sensitive field', (output: any) => { output.phase.sockets.push({ event: 'socket_free', socket_id: 'socket-1', token: 'secret' }); }],
+    ['unknown nested field', (output: any) => { output.phase.extra = true; }],
+    ['same-count idle replacement', (output: any) => { output.idle_log_after[0].id = '44444444-4444-4444-8444-444444444444'; }],
+    ['idle order reversal', (output: any) => {
+      output.idle_log_before.push({ id: '44444444-4444-4444-8444-444444444444', created_at: '2026-01-01T00:00:01.000Z' });
+      output.idle_log_after = [...output.idle_log_before].reverse();
+      output.idle_log_before_count = 2;
+      output.idle_log_after_count = 2;
+    }],
+    ['coerced idle identity', (output: any) => { output.idle_log_before[0].id = 1; }],
+    ['idle timestamp tie-break mutation', (output: any) => { output.idle_log_after[0].created_at = '2026-01-01T00:00:00.001Z'; }],
+    ['cursor-only mutation', (output: any) => { output.idle_cursor_after.id = '44444444-4444-4444-8444-444444444444'; }],
+    ['incomplete phase', (output: any) => { delete output.phase.directed_drain; }],
+    ['cross-wired writer inventory', (output: any) => { output.validated_writer_refs[1].drone_id = output.validated_writer_refs[0].drone_id; }],
+    ['non-empty zero-error list', (output: any) => { output.transport_errors.push({ code: 'ECONNRESET' }); }],
+  ])('rejects hostile success output with %s', (_case, mutate) => {
+    const output = structuredClone(completeS4Output());
+    mutate(output);
+    expect(isS4CoupledResult(output)).toBe(false);
+    expect(isS4CoupledOutput(output)).toBe(false);
+  });
+
+  it('validates the closed failure output schema', () => {
+    const success = completeS4Output();
+    const failure = {
+      schema_version: S4_SCHEMA_VERSION,
+      pass: false,
+      client_sha: success.client_sha,
+      origin: success.origin,
+      error: 'stream failed',
+      phase: success.phase,
+      cleanup_verified: false,
+    };
+    expect(isS4CoupledOutput(failure)).toBe(true);
+    expect(isS4CoupledOutput({ ...failure, unexpected: true })).toBe(false);
+  });
+
   it('rejects each non-success proof class from the strict result validator', () => {
     const complete = {
       idleTurns: 0, idleLogStable: true, idleCursorStable: true, directedTurns: 1,
@@ -397,6 +708,15 @@ describe('Sprint 4 E2E harness validation', () => {
       { writerIdsMatchConfigured: false }, { orderExact: false }, { duplicates: 1 },
       { transportErrors: 1 }, { requestErrors: 1 }, { resets: 1 }, { has429: true },
     ]) expect(proofComplete({ ...complete, ...patch })).toBe(false);
+  });
+
+  it('takes identity/order snapshots without mutating source entries', () => {
+    const source = [{ id: 'a', created_at: '2026-01-01T00:00:00.000Z', message: 'original' }];
+    const before = entryIdentityOrderSnapshot(source);
+    source[0].message = 'changed after snapshot';
+    const after = entryIdentityOrderSnapshot([{ id: 'b', created_at: '2026-01-01T00:00:00.000Z' }]);
+    expect(before).toEqual([{ id: 'a', created_at: '2026-01-01T00:00:00.000Z' }]);
+    expect(before).not.toEqual(after);
   });
   it('accepts canonical numeric IPv4 and IPv6 loopback origins', () => {
     expect(loopbackOrigin('https://127.0.0.1:7443')).toBe('https://127.0.0.1:7443');
@@ -1037,7 +1357,9 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         serverTrustIdentity: trustIdentity,
       });
       const idleCursorAfter = cursorState.get('unread');
-      const idleLogStable = idleLogBefore.entries.length === idleLogAfter.entries.length &&
+      const idleLogBeforeSnapshot = entryIdentityOrderSnapshot(idleLogBefore.entries);
+      const idleLogAfterSnapshot = entryIdentityOrderSnapshot(idleLogAfter.entries);
+      const idleLogStable = JSON.stringify(idleLogBeforeSnapshot) === JSON.stringify(idleLogAfterSnapshot) &&
         idleLogBefore.has_more === idleLogAfter.has_more;
       const idleCursorStable = sameCursor(idleCursorBefore, idleCursorAfter);
 
@@ -1185,6 +1507,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         sameOrigin: allRequestsSameOrigin, turnErrors: turnErrors.length, phaseComplete,
       });
       result = {
+        schema_version: S4_SCHEMA_VERSION,
         pass,
         client_sha: EXPECTED_CLIENT_SHA,
         origin,
@@ -1192,6 +1515,8 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         idle_accepted_model_turns: idleTurns,
         idle_log_before_count: idleLogBefore.entries.length,
         idle_log_after_count: idleLogAfter.entries.length,
+        idle_log_before: idleLogBeforeSnapshot,
+        idle_log_after: idleLogAfterSnapshot,
         idle_log_stable: idleLogStable,
         idle_cursor_before: idleCursorBefore ?? null,
         idle_cursor_after: idleCursorAfter ?? null,
@@ -1244,14 +1569,17 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
 
     const cleanupVerified = !existsSync(runtimeDir) && sockets.size === 0;
     if (operationError) {
-      console.log(`S4_COUPLED_E2E ${JSON.stringify({
+      const failureOutput = {
+        schema_version: S4_SCHEMA_VERSION,
         pass: false,
         client_sha: EXPECTED_CLIENT_SHA,
         origin,
         error: operationError instanceof Error ? operationError.message : String(operationError),
         phase,
         cleanup_verified: cleanupVerified,
-      })}`);
+      };
+      expect(isS4CoupledOutput(failureOutput)).toBe(true);
+      console.log(`S4_COUPLED_E2E ${JSON.stringify(failureOutput)}`);
       throw operationError;
     }
     const output = {
@@ -1259,8 +1587,13 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       pass: result?.pass === true && cleanupVerified,
       cleanup_verified: cleanupVerified,
     };
+    if (!validateS4CoupledE2EOutput(output)) {
+      throw new Error('final S4 coupled E2E output failed the success schema');
+    }
     console.log(`S4_COUPLED_E2E ${JSON.stringify(output)}`);
 
+    expect(validateS4CoupledE2EOutput(output)).toBe(true);
+    expect(isS4CoupledOutput(output)).toBe(true);
     expect(output).toMatchObject({
       pass: true,
       idle_accepted_model_turns: 0,
