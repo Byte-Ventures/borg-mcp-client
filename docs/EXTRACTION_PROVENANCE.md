@@ -19,8 +19,9 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
   repository-idempotent cube creation required for local dogfood.
 - Initially set the standalone package identity to `2.0.0`. Its immutable
   lightweight release tag failed before packaging. The reviewed `2.0.1`
-  recovery was published and registry-verified; the next candidate identity is
-  `2.0.2`. Extraction and versioning do not authorize publication.
+  recovery and `2.0.2` successor were published and registry-verified; the next
+  candidate identity is `2.0.3`. Extraction and versioning do not authorize
+  publication.
 
 ## Review Holds
 
@@ -36,7 +37,7 @@ Local enrollment now uses the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
 resolves to the audited registry `borgmcp-shared@0.4.3`. The matching
-`borgmcp-server@0.1.7` release is published and registry-verified. Client
-`borgmcp@2.0.1` is published and registry-verified. Publication of the next
-candidate remains gated by reviewed `v2.0.2` source, a fresh annotated tag, and
+`borgmcp-server@0.1.8` release is published and registry-verified. Client
+`borgmcp@2.0.2` is published and registry-verified. Publication of the next
+candidate remains gated by reviewed `v2.0.3` source, a fresh annotated tag, and
 exact registry integrity and signature verification.
