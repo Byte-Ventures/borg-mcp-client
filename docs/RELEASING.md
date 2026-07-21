@@ -4,15 +4,24 @@ The GitHub Actions workflow publishes one immutable, reviewed `borgmcp` version
 from a protected annotated tag. The protected publish job uses npm Trusted
 Publishing; no long-lived npm token is stored or exposed.
 
-## Immutable Failed Release Evidence
+## Immutable Release Evidence
 
 The existing lightweight `v2.0.0` tag points to
 `90a078264f4d61c0140ad0a30357a4df42c34ab0`. Immutable workflow run
 `29693915689` rejected it at annotated-tag verification and failed before package
 creation or npm publication; the publish job was skipped and
 `borgmcp@2.0.0` remains absent from npm. Never delete, move, replace, reuse, or
-rerun that tag or run. Recovery uses the unused `v2.0.1` identity from a fresh
-reviewed protected-main commit and requires the complete release gate again.
+rerun that tag or run.
+
+The annotated `v2.0.1` tag object
+`def12ee40af665fc6c3af4873a7d566b3f844fc1` peels to protected-main commit
+`b30fc54a4d73bda98db4630864cca796c8923dd9`. Workflow run `29748931957`
+successfully published that exact source as `borgmcp@2.0.1`; the registry records
+integrity
+`sha512-Ah8IY2izZ774gYLKthRL9lfrV+JBk2o9HSlrWUplyZgoGqwVjVboHNon0hWWF5i/fObiCGikFOMY6qZ+vaeyCw==`.
+Never move, replace, reuse, or rerun that tag or workflow. The next candidate
+uses the unused `v2.0.2` identity from a fresh reviewed protected-main commit
+and requires the complete release gate again.
 
 ## Release Prerequisites
 
