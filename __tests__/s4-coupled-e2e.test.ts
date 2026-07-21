@@ -438,18 +438,24 @@ describe('Sprint 4 E2E harness validation', () => {
     ['missing content type', 200, undefined],
   ])('keeps a /stream %s body under the deadline', async (_case, status, contentType) => {
     vi.useFakeTimers();
+    const upstream = new AbortController();
+    const removeEventListener = vi.spyOn(upstream.signal, 'removeEventListener');
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     let deadlineFired = false;
+    const sourceResponse = new Response(new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+    }), {
+      status,
+      headers: contentType ? { 'Content-Type': contentType } : {},
+    });
+    const releaseLock = trackInnerReaderRelease();
     const response = await fetchWithBodyLifetime(
       vi.fn(async (_input, init) => {
         init!.signal!.addEventListener('abort', () => controller.error(init!.signal!.reason), { once: true });
-        return new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }), {
-          status,
-          headers: contentType ? { 'Content-Type': contentType } : {},
-        });
+        return sourceResponse;
       }),
       'https://127.0.0.1:7443/stream',
-      {},
+      { signal: upstream.signal },
       { timeoutMs: 10, clearDeadlineAfterHeaders: (value) => value.ok && value.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream', onDeadline: () => { deadlineFired = true; } },
     );
     const reader = response.body!.getReader();
@@ -458,6 +464,11 @@ describe('Sprint 4 E2E harness validation', () => {
     await vi.advanceTimersByTimeAsync(10);
     await rejected;
     expect(deadlineFired).toBe(true);
+    expect(sourceResponse.body!.locked).toBe(false);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+    expect(removeEventListener).toHaveBeenCalledTimes(1);
+    await reader.cancel().catch(() => {});
+    expect(releaseLock).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 
