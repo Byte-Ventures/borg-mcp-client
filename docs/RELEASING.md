@@ -20,7 +20,16 @@ successfully published that exact source as `borgmcp@2.0.1`; the registry record
 integrity
 `sha512-Ah8IY2izZ774gYLKthRL9lfrV+JBk2o9HSlrWUplyZgoGqwVjVboHNon0hWWF5i/fObiCGikFOMY6qZ+vaeyCw==`.
 Never move, replace, reuse, or rerun that tag or workflow. The next candidate
-uses the unused `v2.0.2` identity from a fresh reviewed protected-main commit
+must use a fresh unused identity and requires the complete release gate again.
+
+The annotated `v2.0.2` tag object
+`a1fc1f8f05c3f1b4d7ccbef86e244955642165b5` peels to protected-main commit
+`aced84956fdf41315904c8901e50a345f628152c`. Workflow run `29840120451`
+successfully published that exact source as `borgmcp@2.0.2`; the registry records
+integrity
+`sha512-w0O0t/2wzeJpXEqb4jQGuqZeavEkfFKdz6poRT8q1TxDKHTlOlwo3auctE+X1kWU2s5JkSDcUiUdQdyLwu84IA==`.
+Never move, replace, reuse, or rerun that tag or workflow. The next candidate
+uses the unused `v2.0.3` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
