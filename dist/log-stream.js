@@ -35,7 +35,7 @@ import { advanceLocalServerCursor, clearLocalServerCursor, encodeLocalServerCurs
 import { DroneEvictedError, DRONE_EVICTED_CODE, EVICTED_RESULT_MARKER, errorCodeFromBody, } from './drone-lifecycle.js';
 import { CODEX_HEARTBEAT_CADENCE_MS, fireCodexHeartbeatTick, formatCodexWakePrompt, startCodexHeartbeat, wakeCodexViaAppServer, } from './codex-app-wake.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { BorgServerError } from './server-errors.js';
+import { BorgServerError, BorgServerUnreachableError } from './server-errors.js';
 import { recoverExpiredLocalSession } from './session-continuity.js';
 import { acquireStreamLease, readOwnershipSnapshot, STREAM_OWNER_STALE_MS, } from './stream-owner.js';
 // ------------------------------------------------------------------
@@ -435,8 +435,15 @@ async function runLoop(testDeps = {}) {
                         streamState.reconnectAttempts = 0;
                         continue;
                     }
-                    catch {
-                        throw new TerminalStreamError();
+                    catch (recoveryError) {
+                        if (!(recoveryError instanceof BorgServerUnreachableError)) {
+                            throw new TerminalStreamError();
+                        }
+                        // The replacement bearer is durable and intentionally survives an
+                        // ambiguous transport failure. Fall through to the ordinary bounded
+                        // reconnect backoff; the next AUTH_EXPIRED response resumes that exact
+                        // replacement instead of permanently silencing the stream.
+                        err = recoveryError;
                     }
                 }
                 streamState.connected = false;

@@ -659,6 +659,21 @@ describe('self-hosted server handshake', () => {
     expect((error as Error).message).not.toContain(reflected);
   });
 
+  it('classifies an ambiguous attach transport failure as transient and token-safe', async () => {
+    const bearer = 's'.repeat(43);
+    const fetchImpl = vi.fn(async () => { throw new TypeError(`reset ${bearer}`); });
+
+    await expect(sendBorgServerAttach(
+      'https://server.example.com', 'spki-sha256:server-a', 'p'.repeat(43),
+      { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      bearer,
+      { fetchImpl: fetchImpl as typeof fetch },
+    )).rejects.toMatchObject({
+      name: 'BorgServerUnreachableError',
+      message: 'Borg server attach transport failed',
+    });
+  });
+
   it('classifies typed attach lifecycle failures without trusting server messages', async () => {
     const rejectedWith = (code: string, status = 401) => vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',

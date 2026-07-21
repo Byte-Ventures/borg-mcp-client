@@ -54,7 +54,7 @@ import {
   wakeCodexViaAppServer,
 } from './codex-app-wake.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { BorgServerError } from './server-errors.js';
+import { BorgServerError, BorgServerUnreachableError } from './server-errors.js';
 import { recoverExpiredLocalSession } from './session-continuity.js';
 import {
   acquireStreamLease,
@@ -586,8 +586,15 @@ async function runLoop(testDeps: RunLoopTestDeps = {}): Promise<void> {
           attempt = 0;
           streamState.reconnectAttempts = 0;
           continue;
-        } catch {
-          throw new TerminalStreamError();
+        } catch (recoveryError) {
+          if (!(recoveryError instanceof BorgServerUnreachableError)) {
+            throw new TerminalStreamError();
+          }
+          // The replacement bearer is durable and intentionally survives an
+          // ambiguous transport failure. Fall through to the ordinary bounded
+          // reconnect backoff; the next AUTH_EXPIRED response resumes that exact
+          // replacement instead of permanently silencing the stream.
+          err = recoveryError;
         }
       }
       streamState.connected = false;

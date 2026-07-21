@@ -40,7 +40,7 @@ import {
   type SeatBinding,
   type SeatOperation as ServerSessionOperation,
 } from './seats.js';
-import { BorgServerError } from './server-errors.js';
+import { BorgServerError, BorgServerUnreachableError } from './server-errors.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
 import {
@@ -256,24 +256,29 @@ export async function sendBorgServerAttach(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
   try {
-    const response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, ATTACH_PATH), {
-      method: 'POST',
-      redirect: 'error',
-      signal: controller.signal,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${parentCredential}`,
-      },
-      body: JSON.stringify(createAttachRequestEnvelope(randomUUID(), {
-        cube_id: request.cubeId,
-        role_id: request.roleId,
-        session_credential: pending.credential,
-        ...(request.priorDroneId === undefined
-          ? {}
-          : { prior_drone_id: request.priorDroneId }),
-      })),
-    });
+    let response: Response;
+    try {
+      response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, ATTACH_PATH), {
+        method: 'POST',
+        redirect: 'error',
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${parentCredential}`,
+        },
+        body: JSON.stringify(createAttachRequestEnvelope(randomUUID(), {
+          cube_id: request.cubeId,
+          role_id: request.roleId,
+          session_credential: pending.credential,
+          ...(request.priorDroneId === undefined
+            ? {}
+            : { prior_drone_id: request.priorDroneId }),
+        })),
+      });
+    } catch (error) {
+      throw new BorgServerUnreachableError('Borg server attach transport failed', { cause: error });
+    }
     if (response.status === 401 || response.status === 403 || response.status === 410) {
       // A typed SESSION_REJECTED body means the presented bearer targets a seat
       // already bound to a different session (takeover), distinct from a rejected
@@ -398,6 +403,11 @@ export async function sendBorgServerAttach(
           ...(binding.isHumanSeat !== undefined ? { isHumanSeat: binding.isHumanSeat } : {}),
         }),
     };
+  } catch (error) {
+    if (controller.signal.aborted && !(error instanceof BorgServerUnreachableError)) {
+      throw new BorgServerUnreachableError('Borg server attach transport timed out', { cause: error });
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
