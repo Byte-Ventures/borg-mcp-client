@@ -285,10 +285,18 @@ function snapshotPlainData(input: unknown): PlainSnapshot {
     }
     seen.add(value);
     const prototype = Object.getPrototypeOf(value);
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    const keys = Reflect.ownKeys(descriptors);
+    const keys = Reflect.ownKeys(value);
     if (keys.some((key) => typeof key === 'symbol') || (keysSeen += keys.length) > MAX_SNAPSHOT_KEYS) {
       throw new Error('invalid plain-data keys');
+    }
+    if (Array.isArray(value) && keys.some((key) => key !== 'length' && !/^(0|[1-9][0-9]*)$/.test(String(key)))) {
+      throw new Error('unexpected array key');
+    }
+    const descriptors: Record<string, PropertyDescriptor> = Object.create(null);
+    for (const key of keys as string[]) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+      if (!descriptor) throw new Error('inconsistent proxy descriptor');
+      descriptors[key] = descriptor;
     }
     if (Array.isArray(value)) {
       if (prototype !== Array.prototype) throw new Error('invalid array prototype');
@@ -746,6 +754,22 @@ async function bounded<T>(promise: Promise<T>, label: string, ms = 10_000): Prom
   }
 }
 
+const consumedAbortReasons = new WeakSet<object>();
+
+async function requireExactAbortRejection(promise: Promise<unknown>, expectedReason: object): Promise<void> {
+  if (consumedAbortReasons.has(expectedReason)) {
+    await promise.catch(() => {});
+    throw new Error('issued abort reason already consumed');
+  }
+  await promise.then(
+    () => { throw new Error('stream resolved without the issued abort reason'); },
+    (error) => {
+      if (error !== expectedReason) throw error;
+      consumedAbortReasons.add(expectedReason);
+    },
+  );
+}
+
 async function cleanupJoinedFixture({
   streamAbort,
   streamPromise,
@@ -961,6 +985,76 @@ describe('Sprint 4 E2E harness validation', () => {
     cyclic.phase.sockets = [cyclic];
     cyclic.phase.socket_event_count = 1;
     expect(isS4CoupledOutput(cyclic)).toBe(false);
+  });
+
+  it('rejects over-cap plain and proxy keys before descriptor work', () => {
+    let getterCalls = 0;
+    const plain: Record<string, unknown> = {};
+    for (let index = 0; index <= MAX_SNAPSHOT_KEYS; index += 1) {
+      Object.defineProperty(plain, `key${index}`, { enumerable: true, get: () => { getterCalls += 1; return index; } });
+    }
+    expect(snapshotPlainData(plain).ok).toBe(false);
+    expect(getterCalls).toBe(0);
+
+    let descriptorCalls = 0;
+    const overCapKeys = Array.from({ length: MAX_SNAPSHOT_KEYS + 1 }, (_, index) => `key${index}`);
+    const proxy = new Proxy({}, {
+      ownKeys: () => overCapKeys,
+      getOwnPropertyDescriptor: () => { descriptorCalls += 1; return { configurable: true, enumerable: true, value: 1 }; },
+    });
+    expect(snapshotPlainData(proxy).ok).toBe(false);
+    expect(descriptorCalls).toBe(0);
+  });
+
+  it('fetches each descriptor exactly once at the key cap', () => {
+    const target = Object.fromEntries(Array.from({ length: MAX_SNAPSHOT_KEYS }, (_, index) => [`key${index}`, index]));
+    let descriptorCalls = 0;
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor(value, key) {
+        descriptorCalls += 1;
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+    expect(snapshotPlainData(proxy).ok).toBe(true);
+    expect(descriptorCalls).toBe(MAX_SNAPSHOT_KEYS);
+  });
+
+  it('rejects unexpected array keys before descriptor work', () => {
+    const target: any[] & { extra?: boolean } = [];
+    target.extra = true;
+    let descriptorCalls = 0;
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor(value, key) {
+        descriptorCalls += 1;
+        return Reflect.getOwnPropertyDescriptor(value, key);
+      },
+    });
+    expect(snapshotPlainData(proxy).ok).toBe(false);
+    expect(descriptorCalls).toBe(0);
+  });
+
+  it('accepts only the exact issued abort reason once', async () => {
+    const issued = new Error(ABORT_MESSAGE);
+    await expect(requireExactAbortRejection(Promise.reject(issued), issued)).resolves.toBeUndefined();
+    await expect(requireExactAbortRejection(Promise.reject(issued), issued)).rejects.toThrow(/already consumed/);
+  });
+
+  it.each([
+    ['persistence', new Error('persistence aborted')],
+    ['handler', new Error('handler failure')],
+    ['iterator', new Error('iterator failure')],
+    ['same-shaped DOMException', new DOMException(ABORT_MESSAGE, 'AbortError')],
+    ['ECONNRESET', Object.assign(new Error('reset'), { code: 'ECONNRESET' })],
+  ])('preserves a distinct post-abort %s rejection', async (_case, operationalError) => {
+    const issued = new Error(ABORT_MESSAGE);
+    await expect(requireExactAbortRejection(Promise.reject(operationalError), issued)).rejects.toBe(operationalError);
+  });
+
+  it('preserves a late operational rejection after abort issuance', async () => {
+    const issued = new Error(ABORT_MESSAGE);
+    const operationalError = new Error('late persistence aborted');
+    const late = new Promise((_, reject) => setTimeout(() => reject(operationalError), 0));
+    await expect(requireExactAbortRejection(late, issued)).rejects.toBe(operationalError);
   });
 
   it.each(['request_error_count', 'socket_event_count'])(
@@ -1501,6 +1595,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     let appServer: net.Server | undefined;
     let streamAbort: AbortController | undefined;
     let streamPromise: Promise<void> | undefined;
+    let expectedAbortReason: Error | undefined;
     try {
     let forbiddenFetchAttempts = 0;
     let acceptedTurns = 0;
@@ -1694,10 +1789,11 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         abortSignal: streamAbort.signal,
       });
       void streamPromise.catch((error: any) => {
+        const exactExpectedAbort = expectedAbortReason !== undefined && error === expectedAbortReason;
         phase.stream_error ??= {
           origin: 'iterator',
-          code: streamAbort?.signal.aborted ? ABORT_CODE : normalizeDiagnosticCode(error),
-          message: streamAbort?.signal.aborted ? ABORT_MESSAGE : 'transport failure',
+          code: exactExpectedAbort ? ABORT_CODE : normalizeDiagnosticCode(error),
+          message: exactExpectedAbort ? ABORT_MESSAGE : 'transport failure',
         };
       });
       await bounded(Promise.race([
@@ -1743,10 +1839,9 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       const directedTurns = acceptedTurns - idleTurns;
       phase.abort_issued_at = new Date().toISOString();
       phase.abort_reason = 'directed observation complete';
-      streamAbort.abort(new Error('directed observation complete'));
-      await bounded(streamPromise.catch((error) => {
-        if (!/abort|directed observation complete/i.test(error?.message ?? '')) throw error;
-      }), 'stream shutdown');
+      expectedAbortReason = new Error(ABORT_MESSAGE);
+      streamAbort.abort(expectedAbortReason);
+      await bounded(requireExactAbortRejection(streamPromise, expectedAbortReason), 'stream shutdown');
       phase.stream_shutdown_clean = true;
       streamPromise = undefined;
 
