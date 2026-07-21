@@ -397,7 +397,7 @@ describe('Sprint 4 E2E harness validation', () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it('bounds stalled connect and non-SSE bodies while allowing an SSE body past its header deadline', async () => {
+  it('bounds a stalled connect while allowing an SSE body past its header deadline', async () => {
     vi.useFakeTimers();
     const connectFetch: typeof fetch = vi.fn((_input, init) => new Promise((_resolve, reject) => {
       init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
@@ -427,6 +427,39 @@ describe('Sprint 4 E2E harness validation', () => {
     expect(deadlineFired).toBe(false);
     upstream.abort(new Error('external stream shutdown'));
     await expect(pending).rejects.toThrow('external stream shutdown');
+    vi.useRealTimers();
+  });
+
+  it('keeps a non-SSE stalled body bounded through deadline cleanup', async () => {
+    vi.useFakeTimers();
+    const upstream = new AbortController();
+    const removeEventListener = vi.spyOn(upstream.signal, 'removeEventListener');
+    let sourceController!: ReadableStreamDefaultController<Uint8Array>;
+    let deadlineFired = false;
+    const sourceResponse = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { sourceController = controller; },
+    }), { headers: { 'Content-Type': 'application/json' } });
+    const releaseLock = trackInnerReaderRelease();
+    const response = await fetchWithBodyLifetime(
+      vi.fn(async (_input, init) => {
+        init!.signal!.addEventListener('abort', () => sourceController.error(init!.signal!.reason), { once: true });
+        return sourceResponse;
+      }),
+      'https://127.0.0.1:7443/logs',
+      { signal: upstream.signal },
+      { timeoutMs: 10, onDeadline: () => { deadlineFired = true; } },
+    );
+    const reader = response.body!.getReader();
+    const pending = reader.read();
+    const pendingRejected = expect(pending).rejects.toThrow('request timeout');
+    await vi.advanceTimersByTimeAsync(10);
+    await pendingRejected;
+    expect(deadlineFired).toBe(true);
+    expect(sourceResponse.body!.locked).toBe(false);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+    await reader.cancel().catch(() => {});
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+    expect(removeEventListener).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 });
