@@ -46,11 +46,16 @@ function installAgentTrace(events: Array<Record<string, unknown>>, agent: Pick<t
   const original = agent.addRequest;
   const socketIds = new WeakMap<net.Socket, string>();
   const listeners = new Map<net.Socket, Array<[string, (...args: any[]) => void]>>();
+  const pending = new Map<any, (socket: net.Socket) => void>();
   let nextSocketId = 1;
+  let active = true;
+  let restored = false;
   agent.addRequest = function tracedAddRequest(request: any, options: any) {
     const method = String(options?.method ?? 'GET').toUpperCase();
     const pathname = new URL(`https://fixture.invalid${String(options?.path ?? '/')}`).pathname;
-    request.once('socket', (socket: net.Socket) => {
+    const onSocket = (socket: net.Socket) => {
+      pending.delete(request);
+      if (!active) return;
       let socketId = socketIds.get(socket);
       if (!socketId) {
         socketId = `socket-${nextSocketId++}`;
@@ -64,11 +69,18 @@ function installAgentTrace(events: Array<Record<string, unknown>>, agent: Pick<t
         listeners.set(socket, socketListeners);
       }
       events.push({ event: 'request_socket', method, pathname, socket_id: socketId, reused: request.reusedSocket === true, destroyed: socket.destroyed });
-    });
+    };
+    pending.set(request, onSocket);
+    request.once('socket', onSocket);
     return original.call(this, request, options);
   };
   return () => {
+    if (restored) return;
+    restored = true;
+    active = false;
     agent.addRequest = original;
+    for (const [request, listener] of pending) request.removeListener('socket', listener);
+    pending.clear();
     for (const [socket, socketListeners] of listeners) {
       for (const [event, listener] of socketListeners) socket.removeListener(event, listener);
     }
@@ -666,6 +678,42 @@ describe('Sprint 4 E2E harness validation', () => {
     expect(agent.addRequest).toBe(original);
     expect(socket.listenerCount('free')).toBe(0);
   });
+
+  it('restores an inactive tracer before a pending request receives its socket', () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const agent = { addRequest: vi.fn() } as unknown as Pick<typeof globalAgent, 'addRequest'>;
+    const original = agent.addRequest;
+    const restore = installAgentTrace(calls, agent);
+    const request = new EventEmitter() as any;
+    const socket = new EventEmitter() as any;
+    socket.destroyed = false;
+    agent.addRequest(request, { method: 'GET', path: '/api/cubes/x/stream' } as any);
+    restore();
+    restore();
+    request.emit('socket', socket);
+    expect(calls).toEqual([]);
+    expect(socket.listenerCount('close')).toBe(0);
+    expect(agent.addRequest).toBe(original);
+  });
+
+  it('restores the original agent when setup fails immediately after installation', () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const agent = { addRequest: vi.fn() } as unknown as Pick<typeof globalAgent, 'addRequest'>;
+    const original = agent.addRequest;
+    try {
+      const restore = installAgentTrace(calls, agent);
+      try {
+        throw new Error('setup failed');
+      } finally {
+        restore();
+        restore();
+      }
+    } catch (error) {
+      expect((error as Error).message).toBe('setup failed');
+    }
+    expect(agent.addRequest).toBe(original);
+    expect(calls).toEqual([]);
+  });
 });
 
 describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
@@ -713,6 +761,10 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     };
     let requestPhase = 'setup';
     const restoreAgentTrace = installAgentTrace(phase.sockets);
+    let result: Record<string, unknown> | undefined;
+    let operationError: unknown;
+    let appServer: net.Server | undefined;
+    try {
     let forbiddenFetchAttempts = 0;
     let acceptedTurns = 0;
     let streamAbort: AbortController | undefined;
@@ -760,7 +812,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       throw new Error(`untrusted fetch forbidden: ${String(input)}`);
     }));
 
-    const appServer = net.createServer((socket) => {
+    appServer = net.createServer((socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));
       socket.on('error', (error) => turnErrors.push(`app-server socket: ${error.message}`));
@@ -826,12 +878,9 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       });
     });
 
-    let result: Record<string, unknown> | undefined;
-    let operationError: unknown;
-    try {
       await bounded(new Promise<void>((resolve, reject) => {
-        appServer.once('error', reject);
-        appServer.listen(socketPath, resolve);
+        appServer!.once('error', reject);
+        appServer!.listen(socketPath, resolve);
       }), 'app-server listen');
 
       const remote = await import('../src/remote-client.js');
@@ -1042,12 +1091,15 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     } catch (error) {
       operationError = error;
     } finally {
-      restoreAgentTrace();
       streamAbort?.abort();
       await bounded(streamPromise?.catch(() => {}) ?? Promise.resolve(), 'final stream cleanup').catch(() => {});
       for (const socket of sockets) socket.destroy();
-      await bounded(new Promise<void>((resolve) => appServer.close(() => resolve())), 'app-server close').catch(() => {});
+      await bounded(new Promise<void>((resolve) => {
+        if (appServer) appServer.close(() => resolve());
+        else resolve();
+      }), 'app-server close').catch(() => {});
       rmSync(runtimeDir, { recursive: true, force: true });
+      restoreAgentTrace();
     }
 
     const cleanupVerified = !existsSync(runtimeDir) && sockets.size === 0;
