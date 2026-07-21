@@ -131,8 +131,9 @@ async function fetchWithBodyLifetime(
   fetchImpl: typeof fetch,
   input: RequestInfo | URL,
   init: RequestInit = {},
-  timeoutMs = 10_000,
+  options: { timeoutMs?: number; clearDeadlineAfterHeaders?: boolean; onDeadline?: () => void } = {},
 ): Promise<Response> {
+  const { timeoutMs = 10_000, clearDeadlineAfterHeaders = false, onDeadline } = options;
   const controller = new AbortController();
   let settled = false;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -144,7 +145,10 @@ async function fetchWithBodyLifetime(
     init.signal?.removeEventListener('abort', abort);
     reader?.releaseLock();
   };
-  const timer = setTimeout(() => controller.abort(new Error('request timeout')), timeoutMs);
+  const timer = setTimeout(() => {
+    onDeadline?.();
+    controller.abort(new Error('request timeout'));
+  }, timeoutMs);
   if (init.signal?.aborted) abort();
   else init.signal?.addEventListener('abort', abort, { once: true });
   try {
@@ -153,6 +157,7 @@ async function fetchWithBodyLifetime(
       finalize();
       return response;
     }
+    if (clearDeadlineAfterHeaders) clearTimeout(timer);
     reader = response.body.getReader();
     const body = new ReadableStream<Uint8Array>({
       async pull(streamController) {
@@ -391,6 +396,39 @@ describe('Sprint 4 E2E harness validation', () => {
     expect(sourceResponse.body!.locked).toBe(false);
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
+
+  it('bounds stalled connect and non-SSE bodies while allowing an SSE body past its header deadline', async () => {
+    vi.useFakeTimers();
+    const connectFetch: typeof fetch = vi.fn((_input, init) => new Promise((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+    }));
+    const connect = fetchWithBodyLifetime(connectFetch, 'https://127.0.0.1:7443/logs', {}, {
+      timeoutMs: 10,
+    });
+    const connectRejected = expect(connect).rejects.toThrow('request timeout');
+    await vi.advanceTimersByTimeAsync(10);
+    await connectRejected;
+
+    const upstream = new AbortController();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    let deadlineFired = false;
+    const sse = await fetchWithBodyLifetime(
+      vi.fn(async (_input, init) => {
+        init!.signal!.addEventListener('abort', () => controller.error(init!.signal!.reason), { once: true });
+        return new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }));
+      }),
+      'https://127.0.0.1:7443/stream',
+      { signal: upstream.signal },
+      { timeoutMs: 10, clearDeadlineAfterHeaders: true, onDeadline: () => { deadlineFired = true; } },
+    );
+    const reader = sse.body!.getReader();
+    const pending = reader.read();
+    await vi.advanceTimersByTimeAsync(11);
+    expect(deadlineFired).toBe(false);
+    upstream.abort(new Error('external stream shutdown'));
+    await expect(pending).rejects.toThrow('external stream shutdown');
+    vi.useRealTimers();
+  });
 });
 
 describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
@@ -422,6 +460,17 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
     const transportErrors: Array<{ code: string | null; message: string }> = [];
     const turnErrors: string[] = [];
     const methods: string[] = [];
+    const phase = {
+      stream_headers_ready_at: null as string | null,
+      deadline_fired: false,
+      directed_append_succeeded: false,
+      directed_turn_count: 0,
+      quiescence_started_at: null as string | null,
+      quiescence_ended_at: null as string | null,
+      abort_issued_at: null as string | null,
+      abort_reason: null as string | null,
+      stream_error: null as { origin: 'bootstrap' | 'iterator'; code: string | null; message: string } | null,
+    };
     let forbiddenFetchAttempts = 0;
     let acceptedTurns = 0;
     let streamAbort: AbortController | undefined;
@@ -456,11 +505,23 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         throw new Error(`cross-authority request refused: ${url.href}`);
       }
       requestUrls.push(url.href);
+      const streamRequest = url.pathname.endsWith('/stream');
       try {
-        const response = await fetchWithBodyLifetime(pinnedFetch, input, init);
+        const response = await fetchWithBodyLifetime(pinnedFetch, input, init, {
+          clearDeadlineAfterHeaders: streamRequest,
+          onDeadline: () => { if (streamRequest) phase.deadline_fired = true; },
+        });
+        if (streamRequest) phase.stream_headers_ready_at = new Date().toISOString();
         statuses.set(response.status, (statuses.get(response.status) ?? 0) + 1);
         return response;
       } catch (error: any) {
+        if (streamRequest) phase.stream_error = {
+          origin: 'bootstrap',
+          code: typeof (error?.code ?? error?.cause?.code) === 'string'
+            ? (error.code ?? error.cause?.code)
+            : null,
+          message: error?.message ?? String(error),
+        };
         transportErrors.push({
           code: error?.code ?? error?.cause?.code ?? null,
           message: error?.message ?? String(error),
@@ -611,6 +672,15 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         ),
         abortSignal: streamAbort.signal,
       });
+      void streamPromise.catch((error: any) => {
+        phase.stream_error ??= {
+          origin: 'iterator',
+          code: typeof (error?.code ?? error?.cause?.code) === 'string'
+            ? (error.code ?? error.cause?.code)
+            : null,
+          message: error?.message ?? String(error),
+        };
+      });
       await bounded(Promise.race([
         streamReady,
         streamPromise.then(() => { throw new Error('stream ended before ready'); }),
@@ -640,11 +710,17 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
       };
 
       const directed = await append(writerRefs[0].session_credential, `s4-directed-${randomUUID()}`, true);
+      phase.directed_append_succeeded = true;
       await bounded((async () => {
         while (acceptedTurns < 1) await new Promise((resolve) => setTimeout(resolve, 10));
       })(), 'directed turn');
+      phase.directed_turn_count = acceptedTurns - idleTurns;
+      phase.quiescence_started_at = new Date().toISOString();
       await new Promise((resolve) => setTimeout(resolve, 6_000));
+      phase.quiescence_ended_at = new Date().toISOString();
       const directedTurns = acceptedTurns - idleTurns;
+      phase.abort_issued_at = new Date().toISOString();
+      phase.abort_reason = 'directed observation complete';
       streamAbort.abort(new Error('directed observation complete'));
       await bounded(streamPromise.catch((error) => {
         if (!/abort|directed observation complete/i.test(error?.message ?? '')) throw error;
@@ -730,6 +806,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         all_requests_same_origin: allRequestsSameOrigin,
         turn_validation_errors: turnErrors,
         app_server_methods: methods,
+        phase,
       };
     } catch (error) {
       operationError = error;
@@ -748,6 +825,7 @@ describe.runIf(enabled)('Sprint 4 joined client/server E2E', () => {
         client_sha: EXPECTED_CLIENT_SHA,
         origin,
         error: operationError instanceof Error ? operationError.message : String(operationError),
+        phase,
         cleanup_verified: cleanupVerified,
       })}`);
       throw operationError;
