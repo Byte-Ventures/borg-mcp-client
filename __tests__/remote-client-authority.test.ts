@@ -43,7 +43,7 @@ describe('remote-client explicit authority connection', () => {
     const auth = mockLocalAuthority();
     const fetchSpy = vi.fn(async () =>
       new Response(JSON.stringify({
-        protocol_version: '2',
+        protocol_version: '3',
         request_id: 'cubes-response-1',
         payload: { cubes: [] },
       }), {
@@ -92,7 +92,7 @@ describe('remote-client explicit authority connection', () => {
           ? { drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID }] }
           : { cube: { id: CUBE_ID, name: 'local-cube' } };
       return new Response(JSON.stringify({
-        protocol_version: '2',
+        protocol_version: '3',
         request_id: 'cube-response-1',
         payload,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -234,7 +234,7 @@ describe('remote-client explicit authority connection', () => {
   it('maps an exact trusted drone-session 410 DRONE_EVICTED envelope to the terminal error', async () => {
     mockLocalAuthority();
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '2',
+      protocol_version: '3',
       request_id: 'evicted-1',
       error: { code: 'DRONE_EVICTED', message: 'untrusted detail' },
     }), { status: 410 })));
@@ -250,7 +250,7 @@ describe('remote-client explicit authority connection', () => {
   it('never renews or retries an unexpected AUTH_EXPIRED response', async () => {
     mockLocalAuthority();
     const fetchSpy = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '2',
+      protocol_version: '3',
       error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
     }), { status: 401 }));
     vi.stubGlobal('fetch', fetchSpy);
@@ -264,8 +264,8 @@ describe('remote-client explicit authority connection', () => {
   });
 
   it.each([
-    ['SESSION_REJECTED', JSON.stringify({ protocol_version: '2', error: { code: 'SESSION_REJECTED', message: 'no' } }), 'SESSION_REJECTED'],
-    ['SESSION_REVOKED', JSON.stringify({ protocol_version: '2', error: { code: 'SESSION_REVOKED', message: 'no' } }), 'SESSION_REVOKED'],
+    ['SESSION_REJECTED', JSON.stringify({ protocol_version: '3', error: { code: 'SESSION_REJECTED', message: 'no' } }), 'SESSION_REJECTED'],
+    ['SESSION_REVOKED', JSON.stringify({ protocol_version: '3', error: { code: 'SESSION_REVOKED', message: 'no' } }), 'SESSION_REVOKED'],
     ['ambiguous 401', 'unauthorized', 'CREDENTIAL_REJECTED'],
   ])('preserves terminal %s without renewal', async (_case, body, code) => {
     mockLocalAuthority();
@@ -281,8 +281,8 @@ describe('remote-client explicit authority connection', () => {
   });
 
   it.each([
-    ['exact code on a parent request', JSON.stringify({ protocol_version: '2', request_id: 'parent-1', error: { code: 'DRONE_EVICTED', message: 'no' } })],
-    ['wrong code', JSON.stringify({ protocol_version: '2', request_id: 'wrong-1', error: { code: 'ACCESS_DENIED', message: 'no' } })],
+    ['exact code on a parent request', JSON.stringify({ protocol_version: '3', request_id: 'parent-1', error: { code: 'DRONE_EVICTED', message: 'no' } })],
+    ['wrong code', JSON.stringify({ protocol_version: '3', request_id: 'wrong-1', error: { code: 'ACCESS_DENIED', message: 'no' } })],
     ['bare body', 'gone'],
     ['malformed body', '{'],
   ])('keeps a trusted parent 410 with %s generic', async (_case, body) => {

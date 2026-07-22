@@ -23,7 +23,7 @@ const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '2', request_id: requestId, payload };
+  return { protocol_version: '3', request_id: requestId, payload };
 }
 
 describe('local-adapter management writes (client#39)', () => {

@@ -200,7 +200,7 @@ describe('release-status + reattach copy contract (item 7)', () => {
     // logic with a STATIC pattern (no dynamic RegExp built from the pin — that is
     // the incomplete-escaping class CodeQL flags): the guard flags a doc only when a
     // scanned `borgmcp-shared@X.Y.Z` differs from the pin.
-    const accurateDoc = `consumes the published borgmcp-shared@${pinnedShared} v2 registry release`;
+    const accurateDoc = `consumes the published borgmcp-shared@${pinnedShared} v3 registry release`;
     const mismatchedVersions = [...accurateDoc.matchAll(/borgmcp-shared@(\d+\.\d+\.\d+)/g)]
       .map((m) => m[1])
       .filter((v) => v !== pinnedShared);
