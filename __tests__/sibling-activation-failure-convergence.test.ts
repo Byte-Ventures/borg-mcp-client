@@ -80,14 +80,14 @@ function fakeDigestCorrelatingServer() {
       bySeatDigest.set(d, seat);
     }
     return new Response(JSON.stringify({
-      protocol_version: '2',
+      protocol_version: '3',
       request_id: 'attach-r',
       payload: {
         result: created ? 'created' : 'reused',
         cube: { id: CUBE_ID, name: 'myrepo' },
         role: { id: ROLE_ID, name: 'Drone', role_class: 'worker' },
         drone: { id: seat.droneId, label: 'one-of-one-drone' },
-        session: { id: '99999999-9999-4999-8999-999999999999', expires_at: '2026-07-20T00:00:00.000Z' },
+        session: { id: '99999999-9999-4999-8999-999999999999' },
       },
     }), { status: created ? 201 : 200 });
   });

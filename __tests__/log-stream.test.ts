@@ -322,14 +322,14 @@ describe('streamOnce', () => {
 
   it('treats obsolete AUTH_EXPIRED as a terminal credential rejection', async () => {
     const expired = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '2',
+      protocol_version: '3',
       error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
     }), { status: 401 }));
     await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(expired as typeof fetch)))
       .rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
 
     const stale = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '2',
+      protocol_version: '3',
       error: { code: 'SESSION_REJECTED', message: 'Authentication failed.' },
     }), { status: 401 }));
     await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(stale as typeof fetch)))

@@ -43,7 +43,7 @@ describe('local owner enrollment to restart flow', () => {
       delete: async (account: string) => { keychain.delete(account); },
     };
     const response = (payload: unknown, status = 200) => new Response(JSON.stringify({
-      protocol_version: '2',
+      protocol_version: '3',
       request_id: 'restart-response-1',
       payload,
     }), { status });
@@ -59,7 +59,7 @@ describe('local owner enrollment to restart flow', () => {
       }
       if (path === '/api/protocol') {
         // Credential-free tag-only preflight: bare exact tag, not enveloped.
-        return new Response(JSON.stringify({ protocol_version: '2' }), { status: 200 });
+        return new Response(JSON.stringify({ protocol_version: '3' }), { status: 200 });
       }
       if (path === '/api/cubes' && method === 'POST') {
         return response({
@@ -75,7 +75,7 @@ describe('local owner enrollment to restart flow', () => {
           cube: { id: cubeId, name: 'local-cube' },
           role: { id: roleId, name: 'Builder', role_class: 'worker', is_human_seat: false },
           drone: { id: droneId, label: 'builder-1' },
-          session: { id: sessionId, expires_at: '2099-07-14T16:00:00.000Z' },
+          session: { id: sessionId },
         }, 201);
       }
       if (path === `/api/cubes/${cubeId}` && method === 'GET') {
