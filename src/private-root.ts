@@ -109,6 +109,17 @@ function pathSegments(path: string): string[] {
   return resolve(path).slice(root.length).split(sep).filter(Boolean);
 }
 
+function ancestorPaths(path: string): string[] {
+  const paths: string[] = [];
+  let current = resolve(path);
+  while (true) {
+    paths.unshift(current);
+    const parent = dirname(current);
+    if (parent === current) return paths;
+    current = parent;
+  }
+}
+
 /**
  * Validate the user home boundary, `.config`, and Borg root without collapsing
  * symlinks. Static unsafe objects fail closed. The same-user final pathname race
@@ -121,20 +132,39 @@ export async function ensurePrivateBorgConfigRoot(): Promise<PrivateBorgConfigRo
   const config = join(home, '.config');
   const root = join(config, 'borgmcp');
   const uid = currentUid();
+  const ancestorPathsForHome = ancestorPaths(home);
+  const ancestorIdentities = await Promise.all(
+    ancestorPathsForHome.map(async (directory) => ({
+      directory,
+      identity: await inspectDirectory(directory, uid, null),
+    })),
+  );
+  const verifyAncestors = async (): Promise<void> => {
+    for (const ancestor of ancestorIdentities) {
+      const current = await inspectDirectory(ancestor.directory, uid, null);
+      if (!sameIdentity(ancestor.identity, current)) {
+        throw new Error('Borg private state ancestor identity changed');
+      }
+    }
+  };
 
-  await inspectDirectory(home, uid, null);
+  await verifyAncestors();
   try {
     await lstat(config);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await verifyAncestors();
     await mkdir(config, { mode: 0o700 });
+    await verifyAncestors();
   }
   await inspectDirectory(config, uid, null);
   try {
     await lstat(root);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await verifyAncestors();
     await mkdir(root, { mode: 0o700 });
+    await verifyAncestors();
   }
 
   const rootBefore = await inspectDirectory(root, uid, null);
@@ -150,7 +180,7 @@ export async function ensurePrivateBorgConfigRoot(): Promise<PrivateBorgConfigRo
   };
 
   const verify = async (): Promise<void> => {
-    await inspectDirectory(home, uid, null);
+    await verifyAncestors();
     await inspectDirectory(config, uid, null);
     const rootNow = await inspectDirectory(root, uid, 0o700);
     if (uid !== null && rootNow.uid !== uid) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 function fixtureHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'borg-private-root-'));
+  const home = mkdtempSync(join(realpathSync(tmpdir()), 'borg-private-root-'));
   fixtures.push(home);
   process.env.HOME = home;
   return home;
@@ -95,6 +95,22 @@ describe('private Borg config root', () => {
     const { ensurePrivateBorgConfigRoot } = await import('../src/private-root.js');
     await expect(ensurePrivateBorgConfigRoot()).rejects.toThrow('insecure permissions');
     expect(() => lstatSync(join(config, 'borgmcp'))).toThrow();
+  });
+
+  it('captures and revalidates lexical ancestors above HOME', async () => {
+    const parent = mkdtempSync(join(realpathSync(tmpdir()), 'borg-private-parent-'));
+    const home = join(parent, 'home');
+    fixtures.push(parent);
+    mkdirSync(home, { mode: 0o700 });
+    const { chmodSync } = await import('node:fs');
+    chmodSync(parent, 0o700);
+    process.env.HOME = home;
+
+    const { ensurePrivateBorgConfigRoot } = await import('../src/private-root.js');
+    const root = await ensurePrivateBorgConfigRoot();
+    chmodSync(parent, 0o770);
+    await expect(root.verify()).rejects.toThrow('insecure permissions');
+    await root.close();
   });
 
   it('keeps Borg child directories at 0700 and files at 0600 under umask 022', async () => {

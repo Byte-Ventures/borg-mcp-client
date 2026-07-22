@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,7 +22,7 @@ describe('local server cursor persistence', () => {
   };
 
   it('persists the tuple across restart and never regresses it', async () => {
-    const fixture = mkdtempSync(join(tmpdir(), 'borg-local-cursor-'));
+    const fixture = mkdtempSync(join(realpathSync(tmpdir()), 'borg-local-cursor-'));
     fixtures.push(fixture);
     process.env.HOME = fixture;
     vi.resetModules();

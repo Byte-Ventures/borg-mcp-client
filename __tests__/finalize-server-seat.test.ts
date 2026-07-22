@@ -11,7 +11,7 @@
  * resolves inside it.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 async function load() {
-  const dir = mkdtempSync(join(tmpdir(), 'borg-prepare-'));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'borg-prepare-'));
   fixtures.push(dir);
   process.env.HOME = dir;
   vi.resetModules();

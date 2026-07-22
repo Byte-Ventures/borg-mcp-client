@@ -181,7 +181,7 @@ const digestOf = (s: string) => createHash('sha256').update(s).digest('hex');
 type Seats = typeof import('../src/seats.js');
 
 async function setup() {
-  const fixture = mkdtempSync(join(tmpdir(), 'borg-reset-seat-'));
+  const fixture = mkdtempSync(join(realpathSync(tmpdir()), 'borg-reset-seat-'));
   fixtures.push(fixture);
   mkdirSync(join(fixture, 'project', '.git'), { recursive: true });
   // Resolve the realpath so the worktree binding matches findProjectRoot()

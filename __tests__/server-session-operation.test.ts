@@ -7,7 +7,7 @@
  * (origin, trust, cube, role) via the operation dimension — a distinct seat ref.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 async function load() {
-  const dir = mkdtempSync(join(tmpdir(), 'borg-seat-op-'));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'borg-seat-op-'));
   fixtures.push(dir);
   process.env.HOME = dir;
   vi.resetModules();

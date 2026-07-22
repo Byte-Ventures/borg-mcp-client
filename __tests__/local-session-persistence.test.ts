@@ -31,7 +31,7 @@ const BEARER = 'live-bearer-'.padEnd(43, 'k');
 const digestOf = (s: string) => createHash('sha256').update(s).digest('hex');
 
 async function setup() {
-  const fixture = mkdtempSync(join(tmpdir(), 'borg-local-session-'));
+  const fixture = mkdtempSync(join(realpathSync(tmpdir()), 'borg-local-session-'));
   fixtures.push(fixture);
   mkdirSync(join(fixture, 'project', '.git'), { recursive: true });
   const project = realpathSync(join(fixture, 'project'));

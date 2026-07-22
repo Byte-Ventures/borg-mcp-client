@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +16,7 @@ afterEach(() => {
 
 describe('local owner enrollment to restart flow', () => {
   it('enrolls, creates, attaches, restarts, then uses local log and SSE without Cloud', async () => {
-    const fixture = mkdtempSync(join(tmpdir(), 'borg-local-restart-'));
+    const fixture = mkdtempSync(join(realpathSync(tmpdir()), 'borg-local-restart-'));
     mkdirSync(join(fixture, 'project', '.git'), { recursive: true });
     // Realpath so the worktree binding matches findProjectRoot() (macOS symlink).
     const project = realpathSync(join(fixture, 'project'));
@@ -227,6 +227,125 @@ describe('local owner enrollment to restart flow', () => {
       expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('borgmcp.ai'))).toBe(false);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('converges a forced pre-attach failure and identical rerun to one persisted Coordinator seat', async () => {
+    const fixture = mkdtempSync(join(realpathSync(tmpdir()), 'borg-local-convergence-'));
+    const project = realpathSync(fixture);
+    const linkedHome = join(fixture, 'linked-home');
+    const cubeId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const roleId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const droneId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const sessionId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const origin = 'https://localhost:8787';
+    const trustIdentity = 'spki-sha256:convergence';
+    const operation = { projectRoot: project, kind: 'seat' as const, operationKey: 'current-worktree' };
+    const cubes: string[] = [];
+    const drones: string[] = [];
+    const sessions: string[] = [];
+    const credentials = new Set<string>();
+    const response = (payload: unknown, status = 200) => new Response(JSON.stringify({
+      protocol_version: '2', request_id: 'convergence-request', payload,
+    }), { status });
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(input.toString()).pathname;
+      const method = init?.method ?? 'GET';
+      if (path === '/api/protocol') return new Response(JSON.stringify({ protocol_version: '2' }), { status: 200 });
+      if (path === '/api/enrollment/exchange') {
+        return response({ purpose: 'owner', client_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', server_capabilities: ['create_cube'] }, 201);
+      }
+      if (path === '/api/cubes' && method === 'POST') {
+        if (cubes.length === 0) cubes.push(cubeId);
+        return response({ cube_id: cubeId, human_seat_role_id: roleId, default_worker_role_id: roleId, access: 'manage' }, 201);
+      }
+      if (path === '/api/client/attach') {
+        const body = JSON.parse(String(init?.body)) as { payload?: { session_credential?: string } };
+        const credential = body.payload?.session_credential;
+        if (!credential) throw new Error('missing session credential');
+        const result = credentials.has(credential) ? 'reused' : 'created';
+        credentials.add(credential);
+        if (drones.length === 0) drones.push(droneId);
+        if (sessions.length === 0) sessions.push(sessionId);
+        return response({
+          result,
+          cube: { id: cubeId, name: 'convergence-cube' },
+          role: { id: roleId, name: 'Coordinator', role_class: 'queen', is_human_seat: true },
+          drone: { id: droneId, label: 'coordinator-1' },
+          session: { id: sessionId, expires_at: '2099-07-14T16:00:00.000Z' },
+        }, 201);
+      }
+      throw new Error(`unexpected request ${method} ${path}`);
+    };
+
+    mkdirSync(join(fixture, 'real-home'), { recursive: true, mode: 0o700 });
+    symlinkSync(join(fixture, 'real-home'), linkedHome);
+    process.env.HOME = join(fixture, 'real-home');
+    try {
+      const { createBorgServerCube, enrollBorgServer, sendBorgServerAttach } = await import('../src/server-handshake.js');
+      const { SEATS_FILE, prepareSeat, getActiveSeatCredential } = await import('../src/seats.js');
+
+      const enrolled = await enrollBorgServer(origin, trustIdentity, 'invitation'.padEnd(43, 'i'), {
+        fetchImpl: fetchImpl as typeof fetch,
+        clientName: 'convergence-client',
+      });
+      await createBorgServerCube(origin, trustIdentity, enrolled.token, {
+        projectRoot: project,
+        name: 'convergence-cube',
+      }, { fetchImpl: fetchImpl as typeof fetch });
+      expect(cubes).toEqual([cubeId]);
+
+      process.env.HOME = linkedHome;
+      const { ensurePrivateBorgConfigRoot } = await import('../src/private-root.js');
+      await expect(ensurePrivateBorgConfigRoot()).rejects.toThrow('real directory');
+      expect(drones).toHaveLength(0);
+      expect(sessions).toHaveLength(0);
+      expect(() => readFileSync(SEATS_FILE, 'utf8')).toThrow();
+
+      process.env.HOME = join(fixture, 'real-home');
+      const bearer = 'coordinator-bearer'.padEnd(43, 'c');
+      const firstPrepare = await prepareSeat({
+        expected: { kind: 'absent' },
+        seed: { origin, trustIdentity, cubeId, roleId, operation, credential: bearer },
+      });
+      expect(firstPrepare.ok).toBe(true);
+      const first = await sendBorgServerAttach(origin, trustIdentity, enrolled.token, {
+        cubeId, roleId, operation,
+      }, bearer, { fetchImpl: fetchImpl as typeof fetch });
+      const firstOutcome = await first.activate({
+        worktree: project, name: 'convergence-cube', droneLabel: first.drone.label,
+        roleName: first.role.name, roleClass: first.role.role_class, isHumanSeat: first.role.is_human_seat,
+      });
+      expect(firstOutcome).toBe('activated');
+      const firstBindingBytes = readFileSync(SEATS_FILE, 'utf8');
+
+      const secondPrepare = await prepareSeat({
+        expected: { kind: 'exact', credentialRef: first.credentialRef, droneId, sessionDigest: first.pendingBearerDigest },
+        seed: { origin, trustIdentity, cubeId, roleId, operation, credential: 'ignored'.padEnd(43, 'i') },
+      });
+      expect(secondPrepare.ok).toBe(true);
+      const second = await sendBorgServerAttach(origin, trustIdentity, enrolled.token, {
+        cubeId, roleId, operation,
+      }, bearer, { fetchImpl: fetchImpl as typeof fetch });
+      const secondOutcome = await second.activate({
+        worktree: project, name: 'convergence-cube', droneLabel: second.drone.label,
+        roleName: second.role.name, roleClass: second.role.role_class, isHumanSeat: second.role.is_human_seat,
+      });
+      expect(secondOutcome).toBe('activated');
+      expect(readFileSync(SEATS_FILE, 'utf8')).toBe(firstBindingBytes);
+
+      const stored = JSON.parse(firstBindingBytes) as { seats: Record<string, { state: string; droneId?: string; sessionId?: string; roleName?: string }> };
+      expect(Object.keys(stored.seats)).toHaveLength(1);
+      expect(Object.values(stored.seats)[0]).toMatchObject({ state: 'active', droneId, sessionId, roleName: 'Coordinator' });
+      await expect(getActiveSeatCredential(first.credentialRef, { origin, trustIdentity, cubeId })).resolves.toBe(bearer);
+      expect(cubes).toHaveLength(1);
+      expect(drones).toHaveLength(1);
+      expect(sessions).toHaveLength(1);
+      expect(credentials).toHaveLength(1);
+    } finally {
+      process.env.HOME = originalHome;
+      rmSync(fixture, { recursive: true, force: true });
+      vi.resetModules();
     }
   });
 });

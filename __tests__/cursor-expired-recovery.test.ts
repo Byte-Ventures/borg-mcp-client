@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -41,7 +41,7 @@ const active = {
 
 describe('client#42 410 CURSOR_EXPIRED resets the stream cursor and recovers', () => {
   it('resets the stale cursor, does not treat it as DRONE_EVICTED, and resumes from a fresh point', async () => {
-    const fixture = mkdtempSync(join(tmpdir(), 'borg-cursor-expired-'));
+    const fixture = mkdtempSync(join(realpathSync(tmpdir()), 'borg-cursor-expired-'));
     fixtures.push(fixture);
     process.env.HOME = fixture;
     vi.resetModules();

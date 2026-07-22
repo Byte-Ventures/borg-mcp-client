@@ -25,7 +25,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 async function load() {
-  const dir = mkdtempSync(join(tmpdir(), 'borg-cr2-'));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'borg-cr2-'));
   fixtures.push(dir);
   process.env.HOME = dir;
   vi.resetModules();

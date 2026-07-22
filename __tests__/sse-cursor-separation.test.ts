@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,7 +34,7 @@ afterEach(() => {
 
 describe('client#41 SSE delivery does not consume the unread watermark', () => {
   it('leaves a delivered wake entry unread until an explicit drain advances the watermark', async () => {
-    const fixture = mkdtempSync(join(tmpdir(), 'borg-sse-cursor-sep-'));
+    const fixture = mkdtempSync(join(realpathSync(tmpdir()), 'borg-sse-cursor-sep-'));
     fixtures.push(fixture);
     process.env.HOME = fixture;
     vi.resetModules();

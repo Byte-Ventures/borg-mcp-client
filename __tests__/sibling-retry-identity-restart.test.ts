@@ -6,7 +6,7 @@
  * the real 0600 seat store (seats.json) persists across the restart.
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +32,7 @@ afterEach(async () => {
 
 describe('CR#3: implicit-sibling retry identity survives a PROCESS RESTART (ghost-free)', () => {
   it('a rerun (separate process) re-derives the EXACT ref and re-sends the identical bearer', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'borg-sibling-retry-'));
+    const home = await mkdtemp(join(await realpath(tmpdir()), 'borg-sibling-retry-'));
     fixtures.push(home);
 
     // Process 1: mint fresh → attach (server accepts) → crash before bind.

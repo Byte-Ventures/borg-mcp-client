@@ -7,7 +7,7 @@
  * resolves inside it.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 async function load() {
-  const dir = mkdtempSync(join(tmpdir(), 'borg-seats-'));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), 'borg-seats-'));
   fixtures.push(dir);
   process.env.HOME = dir;
   // Fresh module so SEATS_FILE (computed from HOME at load) resolves in-fixture.

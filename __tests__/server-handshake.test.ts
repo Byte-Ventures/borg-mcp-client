@@ -21,7 +21,7 @@ import {
 } from '../src/seats.js';
 import type { TokenBackend } from '../src/token-store.js';
 import type { ServerSessionOperation } from '../src/config.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -712,7 +712,7 @@ describe('sendBorgServerAttach real activate fails closed with NO expectation di
   const homeFixtures: string[] = [];
   let seats: typeof import('../src/seats.js');
   beforeEach(async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'borg-sh-seat-'));
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), 'borg-sh-seat-'));
     homeFixtures.push(dir);
     process.env.HOME = dir;
     vi.resetModules();
