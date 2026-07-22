@@ -120,9 +120,12 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 - Rejected or expired invitation: keep the server running and mint a replacement
   invitation with `borg server invite`, then rerun `borg assimilate --host
   <server> --enroll` with the replacement invitation.
-- Rejected or unloadable local seat: run `borg reset-local-seat --host <server>`
-  to clear ONLY this worktree's saved local seat, then rerun `borg assimilate
-  --host <server>` with the server still running.
+- Revoked or superseded local session: run `borg reset-local-seat`, ask the
+  operator for a new invitation from `borg server invite`, then run `borg
+  assimilate --host <server> --enroll` with the server still running.
+- Unloadable local seat: run `borg reset-local-seat --host <server>` to clear
+  ONLY this worktree's saved local seat, then rerun `borg assimilate --host
+  <server>` with the server still running.
 - Unreachable server: start or restart it with `borg server start`, then
   rerun `borg assimilate --host <server>`.
 - Trust mismatch after an intentional server re-initialization: verify the
