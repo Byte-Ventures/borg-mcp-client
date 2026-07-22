@@ -180,7 +180,7 @@ export interface ServerAttachResult {
 }
 
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v2.
+ * Attach an enrolled client principal to one granted cube/role over protocol v3.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
  * OS keychain (keyed by the stable per-seat identity) BEFORE this request, so an
  * interrupted/lost response is recovered by re-sending the exact same bearer —

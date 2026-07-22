@@ -83,7 +83,6 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       result: 'created' as const,
       local_session: {
         credential_ref: 'borg-server-session:' + 'a'.repeat(64),
-        expires_at: '2026-07-14T16:00:00.000Z',
       },
       finalize: {
         activate: vi.fn(async () => {}),
@@ -108,7 +107,6 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       result: result.result ?? 'created',
       local_session: result.local_session ?? {
         credential_ref: 'borg-server-session:' + 'a'.repeat(64),
-        expires_at: '2026-07-14T16:00:00.000Z',
       },
       finalize: result.finalize ?? {
         activate: vi.fn(async () => {}),
@@ -300,7 +298,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
 
   it('fails before minting a seat when selected-CLI MCP configuration cannot be ensured', async () => {
     const assimilate = vi.fn(async () => ({
-      cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'role-default',
+      cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'role-default',
     }));
     const exec = vi.fn(async () => 0);
     const probeMcpReady = vi.fn(async () => true);
@@ -344,7 +342,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
   it('Claude kickoff passes an explicit worktree-local monitor root with the new drone inbox path', async () => {
     const exec = vi.fn(async () => 0);
     const assimilate = vi.fn(async () => ({
-      cube_id: 'cube-1', drone_id: 'drone-uuid-1', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r',
+      cube_id: 'cube-1', drone_id: 'drone-uuid-1', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r',
     }));
     const getInboxPath = vi.fn((c: string, d: string) => `/test-inboxes/${c}/${d}.log`);
     const runSync = vi.fn((cmd: string, args: string[]) =>
@@ -1238,7 +1236,7 @@ describe('runAssimilate: step 7 (assimilate + persist)', () => {
   it('calls assimilate with cube + role IDs and finalizes the local seat', async () => {
     const assimilate = vi.fn(async () => ({
       cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
-      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) },
       role_id: 'r',
       finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}) },
     }));
@@ -1270,7 +1268,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
   const localResultWithFinalize = (activate: () => Promise<unknown>, scrubPending: () => Promise<unknown>) =>
     vi.fn(async () => ({
       cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
-      local_session: { credential_ref: REF, expires_at: '2026-07-14T16:00:00.000Z' },
+      local_session: { credential_ref: REF },
       role_id: 'r',
       finalize: { activate, scrubPending },
     }));
@@ -1373,7 +1371,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
   const localResultWithBind = (bindPending: () => Promise<unknown>) =>
     vi.fn(async () => ({
       cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
-      local_session: { credential_ref: REF, expires_at: '2026-07-14T16:00:00.000Z' },
+      local_session: { credential_ref: REF },
       role_id: 'r',
       finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}), bindPending },
     }));
@@ -1439,7 +1437,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     // A finalize handle that also exposes the CR#2 bind-pending thunk.
     const assimilate = vi.fn(async () => ({
       cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const,
-      local_session: { credential_ref: REF, expires_at: '2026-07-14T16:00:00.000Z' },
+      local_session: { credential_ref: REF },
       role_id: 'r',
       finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}), bindPending },
     }));
@@ -1517,7 +1515,6 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
         result: 'created' as const,
         local_session: {
           credential_ref: 'borg-server-session:' + 'b'.repeat(64),
-          expires_at: '2026-07-14T16:00:00.000Z',
         },
       }));
       const deps = makeStubDeps({
@@ -1557,7 +1554,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     const assimilate = vi.fn(async () => ({
       cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'drone-2', role_id: 'role-default',
       result: 'reused' as const,
-      local_session: { credential_ref: 'borg-server-session:' + 'c'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
+      local_session: { credential_ref: 'borg-server-session:' + 'c'.repeat(64) },
     }));
     const deps = makeStubDeps({
       assimilate,
@@ -1584,7 +1581,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
 
 describe('runAssimilate: step 6 (role resolution)', () => {
   it('first drone with no role → human-seat role', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coord' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-coord' }));
     const createCube = vi.fn(async () => ({
       id: 'c', name: 'myrepo',
       roles: [
@@ -1606,7 +1603,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
   });
 
   it('falls through to the default worker once the mandatory Coordinator seat is occupied', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-build' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-build' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1636,7 +1633,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
   // assimilate (non-first-drone path — cube already has a drone) must skip
   // the occupied default and pick the unoccupied worker role instead.
   it('bare assimilate skips the occupied default and picks the next worker role', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-reviewer' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-reviewer' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1663,7 +1660,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
   });
 
   it('bare assimilate treats a presumed-abandoned role as fillable', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-builder' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-builder' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1691,7 +1688,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
   });
 
   it('a live occupant still blocks its role when abandoned rows are also present', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-reviewer' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-reviewer' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1722,7 +1719,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
   });
 
   it('bare assimilate refills a mandatory role past the give-up advisory', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coordinator' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-coordinator' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1750,7 +1747,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
   });
 
   it('bare assimilate fills an unoccupied mandatory Coordinator before worker roles', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coordinator' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-coordinator' }));
     const getCube = vi.fn(async () => ({
       id: 'c-existing', name: 'myrepo',
       roles: [
@@ -1776,7 +1773,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
   });
 
   it('explicit role arg matched case-insensitively', async () => {
-    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-cr' }));
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-cr' }));
     const getCube = vi.fn(async () => ({
       id: 'c', name: 'myrepo',
       roles: [
@@ -2209,7 +2206,7 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       drone_label: 'one-of-one-builder',
       role_id: 'role-builder',
       result: 'reused' as const,
-      local_session: { credential_ref: 'borg-server-session:' + 'b'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
+      local_session: { credential_ref: 'borg-server-session:' + 'b'.repeat(64) },
     }));
     const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
     const deps = makeStubDeps({
@@ -2254,7 +2251,7 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       drone_label: 'one-of-one-builder',
       role_id: 'role-builder',
       result: 'created' as const,
-      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) },
     }));
     const deps = makeStubDeps({
       assimilate: assimilateSpy as any,
@@ -2435,7 +2432,7 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
       ],
     }));
     const assimilate = vi.fn(async () => ({
-      cube_id: 'c-new', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-coord',
+      cube_id: 'c-new', drone_id: 'd', drone_label: 'drone-1', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-coord',
     }));
     const runSync = vi.fn((cmd: string, args: string[]) =>
       args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
@@ -2459,7 +2456,7 @@ describe('runAssimilate: BUG-2 — wire shape unwrap', () => {
       drones: [],
     }));
     const assimilate = vi.fn(async () => ({
-      cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' }, role_id: 'r-build',
+      cube_id: 'c-existing', drone_id: 'd', drone_label: 'drone-2', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-build',
     }));
     const runSync = vi.fn((cmd: string, args: string[]) =>
       args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
@@ -3218,7 +3215,6 @@ describe('runAssimilate: local saved-seat idempotency', () => {
         result: (params.prior_drone_id === 'drone-saved' ? 'reused' : 'created') as 'created' | 'reused',
         local_session: {
           credential_ref: 'borg-server-session:' + 'c'.repeat(64),
-          expires_at: null,
         },
       };
     });
@@ -3277,7 +3273,6 @@ describe('runAssimilate: local saved-seat idempotency', () => {
       local_session: {
         credential_ref: 'borg-server-session:' + 'd'.repeat(64),
         generation: 1,
-        expires_at: null,
       },
     }));
     const deps = makeStubDeps({
@@ -3394,7 +3389,7 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     const assimilate = vi.fn(async () => ({
       cube_id: 'cube-1', drone_id: 'drone-saved', drone_label: 'one-of-one-drone',
       result: 'reused' as const, role_id: 'role-default',
-      local_session: { credential_ref: REF, expires_at: '2026-07-20T00:00:00.000Z' },
+      local_session: { credential_ref: REF },
       finalize: { activate, scrubPending },
     }));
     const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
@@ -3444,7 +3439,7 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     const assimilate = vi.fn(async () => ({
       cube_id: 'cube-1', drone_id: 'drone-saved', drone_label: 'one-of-one-drone',
       result: 'reused' as const, role_id: 'role-default',
-      local_session: { credential_ref: REF, expires_at: '2026-07-20T00:00:00.000Z' },
+      local_session: { credential_ref: REF },
       finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}) },
     }));
     const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
@@ -3603,7 +3598,7 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
         drone_id: 'drone-x',
         drone_label: 'drone-1',
         result: 'created' as const,
-        local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
+        local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) },
         role_id: 'role-builder',
       })),
       runSync: gitRemoteRunSync,
@@ -3622,7 +3617,7 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
       drone_id: 'drone-x',
       drone_label: 'drone-1',
       result: 'created' as const,
-      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) },
       role_id: 'role-builder',
     }));
     const exec = vi.fn(async () => 0);
@@ -3651,7 +3646,7 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
       drone_id: 'drone-x',
       drone_label: 'drone-1',
       result: 'created' as const,
-      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64), expires_at: '2026-07-14T16:00:00.000Z' },
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) },
       role_id: 'role-builder',
     }));
     const deps = successDeps({

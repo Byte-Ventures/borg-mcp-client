@@ -37,7 +37,7 @@ if (mode === 'ambiguous') {
           bodies.push(JSON.parse(String(init.body)));
           throw new Error('response lost');
         }
-        return new Response(JSON.stringify({ protocol_version: '2' }), { status: 200 });
+        return new Response(JSON.stringify({ protocol_version: '3' }), { status: 200 });
       }) as typeof fetch,
     });
   } catch (error) {
@@ -54,7 +54,7 @@ if (mode === 'resume') {
       if (init?.method === 'POST') {
         bodies.push(JSON.parse(String(init.body)));
         return new Response(JSON.stringify({
-          protocol_version: '2',
+          protocol_version: '3',
           request_id: 'resume-enrollment-1',
           payload: {
             purpose: 'owner',
@@ -64,7 +64,7 @@ if (mode === 'resume') {
         }), { status: 201 });
       }
       // Credential-free tag-only preflight: bare exact tag.
-      return new Response(JSON.stringify({ protocol_version: '2' }), { status: 200 });
+      return new Response(JSON.stringify({ protocol_version: '3' }), { status: 200 });
     }) as typeof fetch,
   });
   process.stdout.write(JSON.stringify({ bodies, token: resumed?.token }));

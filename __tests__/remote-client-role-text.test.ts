@@ -24,7 +24,7 @@ const SESSION = 's'.repeat(43);
 const ROLE_TEXT_LIMIT = 51_200;
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '2', request_id: requestId, payload };
+  return { protocol_version: '3', request_id: requestId, payload };
 }
 
 describe('MCP role-text proxy policy (local path)', () => {
