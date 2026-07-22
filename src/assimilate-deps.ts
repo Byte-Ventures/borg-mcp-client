@@ -59,6 +59,7 @@ import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
 import { findLoadedCodexThread } from './codex-app-server.js';
 import { defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
+import { ensurePrivateBorgConfigRoot } from './private-root.js';
 
 export function buildDefaultAssimilateDeps(): AssimilateDeps {
   return {
@@ -78,6 +79,7 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
     // ~/.borg credentials file's perms stay untouched).
     homedir: () => osHomedir(),
     mkdirp: (dir) => mkdirSync(dir, { recursive: true }),
+    preparePrivateRoot: () => ensurePrivateBorgConfigRoot(),
     exec: (cmd, args, cwd, env) =>
       new Promise<number>((resolveExit, rejectExit) => {
         // assimilate-cmd builds the complete child env before calling exec. Use
