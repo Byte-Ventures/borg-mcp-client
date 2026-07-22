@@ -51,6 +51,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     chdir: vi.fn(),
     homedir: vi.fn(() => '/home/test'),
     mkdirp: vi.fn(),
+    preparePrivateRoot: vi.fn(async () => {}),
     exec: vi.fn(async () => 0),
     getHostname: vi.fn(() => 'test-host.local'),
     setTerminalTitle: vi.fn(),
@@ -115,6 +116,48 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
   }) as AssimilateDeps['assimilate'];
   return deps;
 }
+
+describe('runAssimilate private-root preflight', () => {
+  it('stops before local reads and network access when the root cannot be prepared', async () => {
+    const deps = makeStubDeps({
+      preparePrivateRoot: vi.fn(async () => { throw new Error('mode 0755'); }),
+    });
+
+    await expect(runAssimilate({ role: undefined, flags: { server: 'localhost:8787' } }, deps))
+      .resolves.toBe(1);
+
+    expect(deps.getActiveCube).not.toHaveBeenCalled();
+    expect(deps.connectServer).not.toHaveBeenCalled();
+    expect(deps.listCubes).not.toHaveBeenCalled();
+    expect(deps.createCube).not.toHaveBeenCalled();
+    expect(deps.stderr).toHaveBeenCalledWith(
+      'Borg could not prepare its private local state directory. No server or cube change was made.\n',
+    );
+  });
+
+  it('keeps first-seat role selection when retrying an existing empty cube', async () => {
+    const assimilate = vi.fn(async () => ({
+      cube_id: 'cube-1', drone_id: 'drone-x', drone_label: 'coordinator-1',
+      role_id: 'role-coordinator', result: 'created' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) },
+      finalize: { activate: vi.fn(async () => {}), scrubPending: vi.fn(async () => {}) },
+    }));
+    const deps = makeStubDeps({
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1', name: 'myrepo', drones: [], roles: [
+          { id: 'role-coordinator', name: 'Coordinator', is_default: false, is_human_seat: true },
+          { id: 'role-builder', name: 'Builder', is_default: true, is_human_seat: false },
+        ],
+      })),
+      assimilate: assimilate as AssimilateDeps['assimilate'],
+    });
+
+    await expect(runAssimilate({ role: undefined, flags: { server: 'localhost:8787' } }, deps))
+      .resolves.toBe(0);
+    expect(assimilate.mock.calls[0][2]).toMatchObject({ role_id: 'role-coordinator' });
+  });
+});
 
 // Sprint 4 / gh#147 — defense-in-depth control-char strip from subprocess stderr.
 describe('safeStderr (Sprint 4 / gh#147)', () => {
