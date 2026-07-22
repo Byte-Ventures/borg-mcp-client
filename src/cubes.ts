@@ -151,10 +151,15 @@ export async function atomicWriteFile(
   const io = opts.io;
   const mode = opts.mode ?? 0o600;
   const root = isBorgConfigPath(filePath) ? await ensurePrivateBorgConfigRoot() : null;
-  try {
-    await root?.verify();
-    await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
-    await root?.verify();
+  if (root) {
+    try {
+      await root.atomicWrite(filePath, data, mode);
+    } finally {
+      await root.close();
+    }
+    return;
+  }
+  await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
   // Same-dir temp so rename() stays on one filesystem (atomicity requirement).
   // pid + counter keeps concurrent same-process writes from colliding.
     const tmp = `${filePath}.${process.pid}.${randomBytes(16).toString('hex')}.${atomicTmpCounter++}.tmp`;
@@ -179,27 +184,16 @@ export async function atomicWriteFile(
           await handle.close();
         }
       }
-      await root?.verify();
-      if (!io && ownedTemp && root) {
+      if (!io && ownedTemp) {
         const currentTemp = await lstat(tmp);
         if (currentTemp.dev !== ownedTemp.dev || currentTemp.ino !== ownedTemp.ino ||
           !currentTemp.isFile() || (currentTemp.mode & 0o777) !== mode) {
           throw new Error('Borg atomic temporary file changed before commit');
         }
-        try {
-          const destination = await lstat(filePath);
-          if (destination.isSymbolicLink() || !destination.isFile() ||
-            (destination.mode & 0o777) !== mode) {
-            throw new Error('Borg atomic destination is insecure');
-          }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        }
       }
       if (io) await io.rename(tmp, filePath);
       else await rename(tmp, filePath);
-      await root?.verify();
-      if (!io && ownedTemp && root) {
+      if (!io && ownedTemp) {
         const destination = await lstat(filePath);
         if (destination.dev !== ownedTemp.dev || destination.ino !== ownedTemp.ino ||
           !destination.isFile() || (destination.mode & 0o777) !== mode) {
@@ -217,7 +211,6 @@ export async function atomicWriteFile(
         if (io) {
           await io.unlink(tmp);
         } else if (ownedTemp) {
-          await root?.verify();
           const currentTemp = await lstat(tmp);
           if (currentTemp.dev === ownedTemp.dev && currentTemp.ino === ownedTemp.ino) {
             await unlink(tmp);
@@ -228,9 +221,6 @@ export async function atomicWriteFile(
       }
       throw err;
     }
-  } finally {
-    await root?.close();
-  }
 }
 
 function isLaunchFile(data: any): data is LaunchFile {

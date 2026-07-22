@@ -1,4 +1,3 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
@@ -46,8 +45,9 @@ function stateKey(subject: LifecycleLogSubject): string {
 }
 
 async function readState(): Promise<LifecycleStateFile> {
+  const root = await ensurePrivateBorgConfigRoot();
   try {
-    const raw = await readFile(STATE_FILE, 'utf8');
+    const raw = await root.readFile(STATE_FILE);
     const parsed = JSON.parse(raw);
     if (
       parsed &&
@@ -60,6 +60,8 @@ async function readState(): Promise<LifecycleStateFile> {
     }
   } catch (err: any) {
     if (err?.code !== 'ENOENT') throw err;
+  } finally {
+    await root.close();
   }
   return { entries: {} };
 }
@@ -67,10 +69,7 @@ async function readState(): Promise<LifecycleStateFile> {
 async function writeState(state: LifecycleStateFile): Promise<void> {
   const root = await ensurePrivateBorgConfigRoot();
   try {
-    await root.verify();
-    await mkdir(dirname(STATE_FILE), { recursive: true, mode: 0o700 });
-    await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
-    await root.verify();
+    await root.atomicWrite(STATE_FILE, JSON.stringify(state, null, 2) + '\n');
   } finally {
     await root.close();
   }

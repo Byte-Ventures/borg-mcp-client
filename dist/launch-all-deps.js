@@ -5,7 +5,7 @@
 // with vi.fn() stubs. buildDefaultLaunchAllDeps() (added in launch-all-cmd
 // wiring / Phase 4) wires the real-IO production modules.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync, readdirSync, } from 'node:fs';
+import { constants, existsSync, mkdirSync, readFileSync, unlinkSync, statSync, readdirSync, openSync, closeSync, fsyncSync, lstatSync, chmodSync, writeSync, } from 'node:fs';
 import { homedir as osHomedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { readAllProjectIdentities as cubesReadAllProjectIdentities, getProjectCliPreferenceForPath, findProjectRoot, getActiveCube, } from './cubes.js';
@@ -32,6 +32,14 @@ export function buildDefaultLaunchAllDeps() {
         homedir: () => osHomedir(),
         mkdirp: (dir) => {
             mkdirSync(dir, { recursive: true });
+            const metadata = lstatSync(dir);
+            if (metadata.isSymbolicLink() || !metadata.isDirectory())
+                throw new Error('Borg launch lock directory is not a real directory');
+            if (process.getuid && metadata.uid !== process.getuid())
+                throw new Error('Borg launch lock directory has an unexpected owner');
+            if ((metadata.mode & 0o022) !== 0)
+                throw new Error('Borg launch lock directory has insecure permissions');
+            chmodSync(dir, 0o700);
         },
         readFileOpt: (p) => {
             try {
@@ -42,10 +50,28 @@ export function buildDefaultLaunchAllDeps() {
             }
         },
         writeFile: (p, content, mode) => {
-            writeFileSync(p, content, { mode: mode ?? 0o600 });
+            const handle = openSync(p, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, mode ?? 0o600);
+            try {
+                const metadata = lstatSync(p);
+                if (metadata.isSymbolicLink() || !metadata.isFile() ||
+                    (process.getuid && metadata.uid !== process.getuid()) ||
+                    (metadata.mode & 0o777) !== (mode ?? 0o600)) {
+                    throw new Error('Borg launch lock file is not private');
+                }
+                writeSync(handle, content, undefined, 'utf8');
+                fsyncSync(handle);
+            }
+            finally {
+                closeSync(handle);
+            }
         },
         unlinkOpt: (p) => {
             try {
+                const metadata = lstatSync(p);
+                if (metadata.isSymbolicLink() || !metadata.isFile() ||
+                    (process.getuid && metadata.uid !== process.getuid()) ||
+                    (metadata.mode & 0o777) !== 0o600)
+                    return;
                 unlinkSync(p);
             }
             catch {

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, rename, lstat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
@@ -42,8 +42,9 @@ function validCursor(value) {
         new Date(cursor.created_at).toISOString() === cursor.created_at;
 }
 async function readState() {
+    const root = await ensurePrivateBorgConfigRoot();
     try {
-        const parsed = JSON.parse(await readFile(CURSOR_FILE, 'utf8'));
+        const parsed = JSON.parse(await root.readFile(CURSOR_FILE));
         if (parsed.version !== 1 ||
             typeof parsed.cursors !== 'object' ||
             parsed.cursors === null ||
@@ -59,17 +60,14 @@ async function readState() {
         }
         throw new Error('local Borg server cursor state is corrupt');
     }
+    finally {
+        await root.close();
+    }
 }
 async function writeState(state) {
     const root = await ensurePrivateBorgConfigRoot();
     try {
-        await root.verify();
-        await mkdir(dirname(CURSOR_FILE), { recursive: true, mode: 0o700 });
-        const temporary = `${CURSOR_FILE}.${process.pid}.${Date.now()}.tmp`;
-        await writeFile(temporary, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
-        await root.verify();
-        await rename(temporary, CURSOR_FILE);
-        await root.verify();
+        await root.atomicWrite(CURSOR_FILE, JSON.stringify(state, null, 2) + '\n');
     }
     finally {
         await root.close();
@@ -77,60 +75,63 @@ async function writeState(state) {
 }
 async function withLock(operation) {
     const root = await ensurePrivateBorgConfigRoot();
-    await root.verify();
-    await mkdir(dirname(CURSOR_LOCK), { recursive: true, mode: 0o700 });
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-        let handle;
-        try {
-            handle = await open(CURSOR_LOCK, 'wx', 0o600);
-        }
-        catch (error) {
-            if (error.code !== 'EEXIST')
-                throw error;
+    try {
+        await root.ensureDirectory(dirname(CURSOR_LOCK));
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+            let handle;
             try {
-                const metadata = await lstat(CURSOR_LOCK);
-                if (metadata.isSymbolicLink() || !metadata.isFile() ||
-                    (metadata.mode & 0o777) !== 0o600 ||
-                    (currentUid() !== null && metadata.uid !== currentUid())) {
-                    throw new Error('local Borg server cursor lock is insecure');
-                }
-                if (Date.now() - metadata.mtimeMs > 30_000) {
-                    const current = await lstat(CURSOR_LOCK);
-                    if (current.dev !== metadata.dev || current.ino !== metadata.ino ||
-                        current.isSymbolicLink() || !current.isFile() ||
-                        (current.mode & 0o777) !== 0o600) {
-                        throw new Error('local Borg server cursor lock changed before removal');
-                    }
-                    await unlink(CURSOR_LOCK);
-                    continue;
-                }
-            }
-            catch (inspectionError) {
-                if (inspectionError.code === 'ENOENT')
-                    continue;
-                throw inspectionError;
-            }
-            await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
-            continue;
-        }
-        try {
-            await root.verify();
-            return await operation();
-        }
-        finally {
-            await handle.close();
-            try {
-                await unlink(CURSOR_LOCK);
+                handle = await open(CURSOR_LOCK, 'wx', 0o600);
             }
             catch (error) {
-                if (error.code !== 'ENOENT')
+                if (error.code !== 'EEXIST')
                     throw error;
+                try {
+                    const metadata = await lstat(CURSOR_LOCK);
+                    if (metadata.isSymbolicLink() || !metadata.isFile() ||
+                        (metadata.mode & 0o777) !== 0o600 ||
+                        (currentUid() !== null && metadata.uid !== currentUid())) {
+                        throw new Error('local Borg server cursor lock is insecure');
+                    }
+                    if (Date.now() - metadata.mtimeMs > 30_000) {
+                        await root.unlinkIfUnchanged(CURSOR_LOCK, {
+                            dev: metadata.dev,
+                            ino: metadata.ino,
+                            uid: metadata.uid,
+                            mode: metadata.mode & 0o777,
+                        });
+                        continue;
+                    }
+                }
+                catch (inspectionError) {
+                    if (inspectionError.code === 'ENOENT')
+                        continue;
+                    throw inspectionError;
+                }
+                await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+                continue;
             }
-            await root.close();
+            try {
+                return await operation();
+            }
+            finally {
+                const lockIdentity = await handle.stat();
+                await handle.close();
+                await root.unlinkIfUnchanged(CURSOR_LOCK, {
+                    dev: lockIdentity.dev,
+                    ino: lockIdentity.ino,
+                    uid: lockIdentity.uid,
+                    mode: lockIdentity.mode & 0o777,
+                }).catch((error) => {
+                    if (error.code !== 'ENOENT')
+                        throw error;
+                });
+            }
         }
+        throw new Error('local Borg server cursor state is busy');
     }
-    await root.close();
-    throw new Error('local Borg server cursor state is busy');
+    finally {
+        await root.close();
+    }
 }
 export async function getLocalServerCursor(binding) {
     const key = cursorKey(binding);

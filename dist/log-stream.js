@@ -1196,21 +1196,32 @@ export async function trimInboxFileToRecentLines(inboxPath, maxLines, trimThresh
         trimThresholdLines < maxLines) {
         throw new Error('trimThresholdLines must be an integer >= maxLines');
     }
-    const raw = await fs.readFile(inboxPath, 'utf-8');
-    const lines = raw.split(/\r?\n/);
-    if (lines.at(-1) === '')
-        lines.pop();
-    if (lines.length <= trimThresholdLines)
-        return;
-    const kept = lines.slice(-maxLines);
-    const tmpPath = path.join(path.dirname(inboxPath), `.${path.basename(inboxPath)}.${process.pid}.${Date.now()}.tmp`);
+    const root = isBorgConfigPath(inboxPath) ? await ensurePrivateBorgConfigRoot() : null;
     try {
-        await fs.writeFile(tmpPath, kept.join('\n') + '\n', 'utf-8');
-        await fs.rename(tmpPath, inboxPath);
+        const raw = root ? await root.readFile(inboxPath) : await fs.readFile(inboxPath, 'utf-8');
+        const lines = raw.split(/\r?\n/);
+        if (lines.at(-1) === '')
+            lines.pop();
+        if (lines.length <= trimThresholdLines)
+            return;
+        const kept = lines.slice(-maxLines);
+        if (root) {
+            await root.atomicWrite(inboxPath, kept.join('\n') + '\n');
+        }
+        else {
+            const tmpPath = path.join(path.dirname(inboxPath), `.${path.basename(inboxPath)}.${process.pid}.${Date.now()}.tmp`);
+            try {
+                await fs.writeFile(tmpPath, kept.join('\n') + '\n', { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+                await fs.rename(tmpPath, inboxPath);
+            }
+            catch (err) {
+                await fs.rm(tmpPath, { force: true });
+                throw err;
+            }
+        }
     }
-    catch (err) {
-        await fs.rm(tmpPath, { force: true });
-        throw err;
+    finally {
+        await root?.close();
     }
 }
 /**

@@ -1,4 +1,4 @@
-import { mkdirSync, chmodSync, readdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { constants, mkdirSync, chmodSync, readdirSync, rmSync, readFileSync, openSync, closeSync, fsyncSync, writeSync } from 'node:fs';
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -204,7 +204,12 @@ export async function prepareCodexRemoteLaunch(deps) {
     if (deps.runtimeDir === undefined) {
         try {
             const root = await ensurePrivateBorgConfigRoot();
-            await root.close();
+            try {
+                await root.ensureDirectory(runtimeDir);
+            }
+            finally {
+                await root.close();
+            }
         }
         catch (err) {
             return failLoud(`Codex remote-wake disabled: could not prepare Borg private state (${err?.message ?? err}); run borg_regen manually.`);
@@ -236,7 +241,14 @@ export async function prepareCodexRemoteLaunch(deps) {
     }
     if (child.pid != null) {
         try {
-            writeFileSync(pidPath, String(child.pid));
+            const pidFile = openSync(pidPath, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+            try {
+                writeSync(pidFile, String(child.pid), undefined, 'utf8');
+                fsyncSync(pidFile);
+            }
+            finally {
+                closeSync(pidFile);
+            }
         }
         catch {
             // pidfile is only for stale-prune; launch still proceeds.

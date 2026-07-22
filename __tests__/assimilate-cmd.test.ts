@@ -9,6 +9,7 @@ import {
 import { BorgServerError, LegacySessionCredentialCollisionError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 const createHashDigest = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -119,6 +120,18 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
 }
 
 describe('runAssimilate private-root preflight', () => {
+  it('binds the terminal copy to the approved private-root mockup', () => {
+    const artifact = readFileSync(
+      new URL('../docs/design/mockups/private-root-unavailable.html', import.meta.url),
+      'utf8',
+    );
+    expect(artifact).toContain('Borg could not safely prepare its private local state.');
+    expect(artifact).toContain('No Borg server or cube change was made.');
+    expect(artifact).toContain('verify that Borg-owned directories are real, owned by your account');
+    expect(artifact).not.toContain('chmod');
+    expect(artifact).not.toContain('chown');
+  });
+
   it('fails before server discovery or cube creation when private state cannot be prepared', async () => {
     const listCubes = vi.fn(async () => []);
     const createCube = vi.fn();
@@ -132,7 +145,12 @@ describe('runAssimilate private-root preflight', () => {
 
     expect(listCubes).not.toHaveBeenCalled();
     expect(createCube).not.toHaveBeenCalled();
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Borg private state is unavailable'));
+    expect(deps.connectServer).not.toHaveBeenCalled();
+    expect(deps.stderr).toHaveBeenCalledWith(
+      "Borg could not safely prepare its private local state.\n" +
+      'No Borg server or cube change was made.\n' +
+      "Before retrying, verify that Borg-owned directories are real, owned by your account, and not writable by other users. Verify that their parent directories are real, trusted directories owned by your account or the system and not writable by other users. Verify that Borg files are private regular files owned by your account, then run the same command again.\n",
+    );
   });
 
   it('keeps Coordinator first-seat intent when retrying an existing empty cube', async () => {

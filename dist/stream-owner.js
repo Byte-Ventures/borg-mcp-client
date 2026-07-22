@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { ensurePrivateBorgConfigRoot } from './private-root.js';
+import { ensurePrivateBorgConfigRoot, isBorgConfigPath } from './private-root.js';
+import { randomBytes } from 'node:crypto';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STREAM_LOCKS_DIR = path.join(homedir(), '.config', 'borgmcp', 'stream-locks');
 const OWNER_FILE = 'owner.json';
@@ -20,15 +21,18 @@ export function streamLockPath(cubeId, droneId, locksDir = STREAM_LOCKS_DIR) {
     return path.join(locksDir, cubeId, `${droneId}.lock`);
 }
 export async function acquireStreamLease(cubeId, droneId, staleMs = STREAM_OWNER_STALE_MS, deps = {}) {
-    if (deps.locksDir === undefined) {
-        const root = await ensurePrivateBorgConfigRoot();
-        try {
-            await root.verify();
-        }
-        finally {
-            await root.close();
-        }
+    const lockPath = streamLockPath(cubeId, droneId, deps.locksDir);
+    const root = deps.locksDir === undefined ? await ensurePrivateBorgConfigRoot() : null;
+    try {
+        await root?.ensureDirectory(path.dirname(lockPath));
+        await root?.verify();
+        return await acquireStreamLeaseInternal(cubeId, droneId, staleMs, deps);
     }
+    finally {
+        await root?.close();
+    }
+}
+async function acquireStreamLeaseInternal(cubeId, droneId, staleMs = STREAM_OWNER_STALE_MS, deps = {}) {
     const lockPath = streamLockPath(cubeId, droneId, deps.locksDir);
     await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
     if (!(await recoverTakeoverClaim(lockPath, staleMs, deps)))
@@ -181,11 +185,11 @@ async function cleanupFailedInitialization(lockPath, attempted) {
                 throw err;
             // A canonical successor won the race. Keep its lock; the displaced
             // record cannot own the canonical lease and is safe to remove.
-            await fs.rm(cleanupPath, { recursive: true, force: true });
+            await removeLockDirectory(cleanupPath);
         }
         return;
     }
-    await fs.rm(cleanupPath, { recursive: true, force: true });
+    await removeLockDirectory(cleanupPath);
 }
 async function moveStaleLockAside(lockPath, snapshot, staleMs, deps) {
     const claimPath = takeoverPath(lockPath);
@@ -219,23 +223,23 @@ async function moveStaleLockAside(lockPath, snapshot, staleMs, deps) {
         processNonce: deps.processNonce ?? processNonce,
         claimedAt: (deps.now ?? (() => new Date()))().toISOString(),
     };
-    await fs.writeFile(path.join(claimPath, TAKEOVER_FILE), JSON.stringify(claimant, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    await writeTakeoverMarker(path.join(claimPath, TAKEOVER_FILE), claimant);
     await deps.beforeTakeoverVerify?.(claimPath);
     const verified = await readOwnershipRecord(claimPath);
     const verifiedStat = await fs.stat(claimPath).catch(() => null);
     if (!isStillReclaimable(snapshot, verified, verifiedStat, staleMs, deps)) {
-        await fs.unlink(path.join(claimPath, TAKEOVER_FILE)).catch(() => { });
+        await removeTakeoverMarker(path.join(claimPath, TAKEOVER_FILE));
         try {
             await fs.rename(claimPath, lockPath);
         }
         catch (err) {
             if (err?.code !== 'EEXIST')
                 throw err;
-            await fs.rm(claimPath, { recursive: true, force: true });
+            await removeLockDirectory(claimPath);
         }
         return false;
     }
-    await fs.rm(claimPath, { recursive: true, force: true });
+    await removeLockDirectory(claimPath);
     return true;
 }
 function takeoverPath(lockPath) {
@@ -293,10 +297,10 @@ async function recoverTakeoverClaim(lockPath, staleMs, deps) {
         : Number.POSITIVE_INFINITY;
     const ownerReclaimable = !owner || ownerAge > staleMs || !isPidAlive(owner.pid, deps);
     if (ownerReclaimable) {
-        await fs.rm(claimPath, { recursive: true, force: true });
+        await removeLockDirectory(claimPath);
         return true;
     }
-    await fs.unlink(path.join(claimPath, TAKEOVER_FILE)).catch(() => { });
+    await removeTakeoverMarker(path.join(claimPath, TAKEOVER_FILE));
     try {
         await fs.rename(claimPath, lockPath);
     }
@@ -305,7 +309,7 @@ async function recoverTakeoverClaim(lockPath, staleMs, deps) {
             throw error;
         // A canonical successor already owns the name. Preserve it and discard
         // only the displaced, noncanonical claim directory.
-        await fs.rm(claimPath, { recursive: true, force: true });
+        await removeLockDirectory(claimPath);
     }
     return false;
 }
@@ -408,21 +412,21 @@ async function mutateClaimedLease(lockPath, identity, expected, deps, mutation) 
         processNonce: deps.processNonce ?? processNonce,
         claimedAt: (deps.now ?? (() => new Date()))().toISOString(),
     };
-    await fs.writeFile(path.join(claimPath, TAKEOVER_FILE), JSON.stringify(claimant, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    await writeTakeoverMarker(path.join(claimPath, TAKEOVER_FILE), claimant);
     const inspected = await readBoundOwner(claimPath);
     const current = inspected?.raw ? parseOwnershipRecord(inspected.raw) : null;
     if (!inspected || !sameIdentity(identity, inspected.stat) || !current ||
         !sameOwner(expected, current)) {
-        await fs.unlink(path.join(claimPath, TAKEOVER_FILE)).catch(() => { });
+        await removeTakeoverMarker(path.join(claimPath, TAKEOVER_FILE));
         await restoreClaimedLease(claimPath, lockPath);
         return false;
     }
     const disposition = await mutation(claimPath);
     if (disposition === 'remove') {
-        await fs.rm(claimPath, { recursive: true, force: true });
+        await removeLockDirectory(claimPath);
         return true;
     }
-    await fs.unlink(path.join(claimPath, TAKEOVER_FILE)).catch(() => { });
+    await removeTakeoverMarker(path.join(claimPath, TAKEOVER_FILE));
     return restoreClaimedLease(claimPath, lockPath);
 }
 async function restoreClaimedLease(claimPath, lockPath) {
@@ -515,11 +519,78 @@ function sameIdentity(left, right) {
 }
 async function writeRecord(lockPath, record) {
     const ownerPath = path.join(lockPath, OWNER_FILE);
-    const tmpPath = path.join(lockPath, `${OWNER_FILE}.${record.processNonce}.tmp`);
-    await fs.writeFile(tmpPath, JSON.stringify(record, null, 2) + '\n', {
-        mode: 0o600,
-    });
+    if (isBorgConfigPath(lockPath)) {
+        const root = await ensurePrivateBorgConfigRoot();
+        try {
+            await root.atomicWrite(ownerPath, JSON.stringify(record, null, 2) + '\n');
+        }
+        finally {
+            await root.close();
+        }
+        return;
+    }
+    const tmpPath = path.join(lockPath, `${OWNER_FILE}.${randomBytes(16).toString('hex')}.tmp`);
+    const handle = await fs.open(tmpPath, 'wx', 0o600);
+    try {
+        await handle.writeFile(JSON.stringify(record, null, 2) + '\n');
+        await handle.sync();
+    }
+    finally {
+        await handle.close();
+    }
     await fs.rename(tmpPath, ownerPath);
+}
+async function writeTakeoverMarker(filePath, value) {
+    if (isBorgConfigPath(filePath)) {
+        const root = await ensurePrivateBorgConfigRoot();
+        try {
+            await root.atomicWrite(filePath, JSON.stringify(value, null, 2) + '\n');
+        }
+        finally {
+            await root.close();
+        }
+        return;
+    }
+    const handle = await fs.open(filePath, 'wx', 0o600);
+    try {
+        await handle.writeFile(JSON.stringify(value, null, 2) + '\n');
+        await handle.sync();
+    }
+    finally {
+        await handle.close();
+    }
+}
+async function removeTakeoverMarker(filePath) {
+    if (isBorgConfigPath(filePath)) {
+        const root = await ensurePrivateBorgConfigRoot();
+        try {
+            await root.unlinkIfUnchanged(filePath).catch((error) => {
+                if (error.code !== 'ENOENT')
+                    throw error;
+            });
+        }
+        finally {
+            await root.close();
+        }
+        return;
+    }
+    await fs.unlink(filePath).catch((error) => {
+        if (error?.code !== 'ENOENT')
+            throw error;
+    });
+}
+async function removeLockDirectory(directory) {
+    if (isBorgConfigPath(directory)) {
+        const root = await ensurePrivateBorgConfigRoot();
+        try {
+            await root.removeDirectory(directory);
+        }
+        finally {
+            await root.close();
+        }
+        return;
+    }
+    await fs.rm(directory, { recursive: true, force: true });
 }
 function makeRecord(deps) {
     const now = deps.now ?? (() => new Date());

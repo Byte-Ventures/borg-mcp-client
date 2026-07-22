@@ -1,6 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
 const STATE_FILE = join(homedir(), '.config', 'borgmcp', 'lifecycle-log-state.json');
 const ARRIVAL_DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
@@ -18,8 +17,9 @@ function stateKey(subject) {
     return `${subject.cubeId}:${subject.droneId}`;
 }
 async function readState() {
+    const root = await ensurePrivateBorgConfigRoot();
     try {
-        const raw = await readFile(STATE_FILE, 'utf8');
+        const raw = await root.readFile(STATE_FILE);
         const parsed = JSON.parse(raw);
         if (parsed &&
             typeof parsed === 'object' &&
@@ -33,15 +33,15 @@ async function readState() {
         if (err?.code !== 'ENOENT')
             throw err;
     }
+    finally {
+        await root.close();
+    }
     return { entries: {} };
 }
 async function writeState(state) {
     const root = await ensurePrivateBorgConfigRoot();
     try {
-        await root.verify();
-        await mkdir(dirname(STATE_FILE), { recursive: true, mode: 0o700 });
-        await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
-        await root.verify();
+        await root.atomicWrite(STATE_FILE, JSON.stringify(state, null, 2) + '\n');
     }
     finally {
         await root.close();
