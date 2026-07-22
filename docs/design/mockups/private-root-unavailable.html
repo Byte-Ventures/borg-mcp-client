@@ -39,7 +39,7 @@
           <div class="result">
             <p>Borg could not safely prepare its private local state.</p>
             <p>No Borg server or cube change was made.</p>
-            <p>Before retrying, verify that Borg's private-state directory and parent directories are real, owned by your account, and not accessible to other users. Verify the same for its Borg files, then run the same command again.</p>
+            <p>Before retrying, verify that Borg's private-state directory and Borg files are owned by your account and private. Verify that their parent directories are real, trusted directories that are not writable by other users, then run the same command again.</p>
           </div>
         </div>
         <p class="context">The command exits with an error. The recovery action is shown as copyable inline text and is not executed automatically.</p>
@@ -48,7 +48,7 @@
       <section class="rule" aria-labelledby="contract">
         <h2 id="contract">Behavior contract</h2>
         <ul>
-          <li>A missing private root, or a current-user-owned root that is not writable by group or other users, is repaired to private mode without this message.</li>
+          <li>A missing root, or an already validated current-user-owned private-root directory with no group or other-user write access, is repaired to private mode without this message. Hostile ancestors are never repaired.</li>
           <li>Show this state before any local state read, credential persistence, authority discovery, cube creation, attach request, or other remote mutation.</li>
           <li>Do not expose a path, filesystem implementation detail, race condition, stack, credential, token, or state-file contents.</li>
           <li>Do not suggest deleting files, changing permissions recursively, re-assimilating, or trying a different role. The same command is the recovery path after the user corrects the directory.</li>
