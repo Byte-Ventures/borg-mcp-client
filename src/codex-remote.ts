@@ -1,4 +1,5 @@
 import { mkdirSync, chmodSync, readdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { ensurePrivateBorgConfigRoot } from './private-root.js';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -294,6 +295,17 @@ export async function prepareCodexRemoteLaunch(
   const isAlive = deps.isAlive ?? defaultIsAlive;
   const readyTimeoutMs = deps.readyTimeoutMs ?? DEFAULT_CODEX_REMOTE_READY_TIMEOUT_MS;
   const pollIntervalMs = deps.pollIntervalMs ?? 250;
+
+  if (deps.runtimeDir === undefined) {
+    try {
+      const root = await ensurePrivateBorgConfigRoot();
+      await root.close();
+    } catch (err: any) {
+      return failLoud(
+        `Codex remote-wake disabled: could not prepare Borg private state (${err?.message ?? err}); run borg_regen manually.`
+      );
+    }
+  }
 
   // 1. 0700 owned dir + prune crashed prior sockets (concurrent-safe via pid liveness).
   try {

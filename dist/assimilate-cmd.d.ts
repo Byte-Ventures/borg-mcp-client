@@ -74,6 +74,8 @@ export interface AssimilateDeps {
     chdir: (p: string) => void;
     homedir: () => string;
     mkdirp: (dir: string) => void;
+    /** Verify writable Borg state before any local read or remote mutation. */
+    preparePrivateRoot?: () => Promise<void>;
     exec: (cmd: string, args: string[], cwd: string, env?: Record<string, string>) => Promise<number>;
     stderr: (line: string) => void;
     stdout: (line: string) => void;

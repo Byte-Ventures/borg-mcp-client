@@ -34,6 +34,7 @@ import { constants } from 'node:fs';
 import { open, link, lstat, mkdir, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { borgConfigRoot, ensurePrivateBorgConfigRoot } from './private-root.js';
 const LOCK_WAIT_MS = 10;
 const LOCK_ATTEMPTS = 500;
 function expectedUid() {
@@ -160,6 +161,16 @@ async function ensureParentDir(filePath) {
         throw new Error(`Borg store file path ${filePath} is not canonical`);
     }
     const dir = dirname(filePath);
+    if (dir === borgConfigRoot()) {
+        const root = await ensurePrivateBorgConfigRoot();
+        try {
+            await root.verify();
+        }
+        finally {
+            await root.close();
+        }
+        return;
+    }
     let existing = null;
     try {
         existing = await lstat(dir);

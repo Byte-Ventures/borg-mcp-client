@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { ensurePrivateBorgConfigRoot } from './private-root.js';
 
 const STATE_FILE = join(homedir(), '.config', 'borgmcp', 'lifecycle-log-state.json');
 const ARRIVAL_DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
@@ -64,8 +65,15 @@ async function readState(): Promise<LifecycleStateFile> {
 }
 
 async function writeState(state: LifecycleStateFile): Promise<void> {
-  await mkdir(dirname(STATE_FILE), { recursive: true });
-  await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+  const root = await ensurePrivateBorgConfigRoot();
+  try {
+    await root.verify();
+    await mkdir(dirname(STATE_FILE), { recursive: true, mode: 0o700 });
+    await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+    await root.verify();
+  } finally {
+    await root.close();
+  }
 }
 
 export function shouldSuppressLifecycleLogFromState(

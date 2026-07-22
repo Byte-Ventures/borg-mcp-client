@@ -1,11 +1,16 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, lstat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { ensurePrivateBorgConfigRoot } from './private-root.js';
 
 const CURSOR_FILE = join(homedir(), '.config', 'borgmcp', 'local-server-cursors.json');
 const CURSOR_LOCK = `${CURSOR_FILE}.lock`;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function currentUid(): number | null {
+  return typeof process.getuid === 'function' ? process.getuid() : null;
+}
 
 export interface LocalServerCursor {
   id: string;
@@ -91,14 +96,24 @@ async function readState(): Promise<CursorFile> {
 }
 
 async function writeState(state: CursorFile): Promise<void> {
-  await mkdir(dirname(CURSOR_FILE), { recursive: true });
-  const temporary = `${CURSOR_FILE}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
-  await rename(temporary, CURSOR_FILE);
+  const root = await ensurePrivateBorgConfigRoot();
+  try {
+    await root.verify();
+    await mkdir(dirname(CURSOR_FILE), { recursive: true, mode: 0o700 });
+    const temporary = `${CURSOR_FILE}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(temporary, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+    await root.verify();
+    await rename(temporary, CURSOR_FILE);
+    await root.verify();
+  } finally {
+    await root.close();
+  }
 }
 
 async function withLock<T>(operation: () => Promise<T>): Promise<T> {
-  await mkdir(dirname(CURSOR_LOCK), { recursive: true });
+  const root = await ensurePrivateBorgConfigRoot();
+  await root.verify();
+  await mkdir(dirname(CURSOR_LOCK), { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 200; attempt += 1) {
     let handle;
     try {
@@ -106,8 +121,19 @@ async function withLock<T>(operation: () => Promise<T>): Promise<T> {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       try {
-        const metadata = await stat(CURSOR_LOCK);
+        const metadata = await lstat(CURSOR_LOCK);
+        if (metadata.isSymbolicLink() || !metadata.isFile() ||
+          (metadata.mode & 0o777) !== 0o600 ||
+          (currentUid() !== null && metadata.uid !== currentUid())) {
+          throw new Error('local Borg server cursor lock is insecure');
+        }
         if (Date.now() - metadata.mtimeMs > 30_000) {
+          const current = await lstat(CURSOR_LOCK);
+          if (current.dev !== metadata.dev || current.ino !== metadata.ino ||
+            current.isSymbolicLink() || !current.isFile() ||
+            (current.mode & 0o777) !== 0o600) {
+            throw new Error('local Borg server cursor lock changed before removal');
+          }
           await unlink(CURSOR_LOCK);
           continue;
         }
@@ -119,6 +145,7 @@ async function withLock<T>(operation: () => Promise<T>): Promise<T> {
       continue;
     }
     try {
+      await root.verify();
       return await operation();
     } finally {
       await handle.close();
@@ -127,8 +154,10 @@ async function withLock<T>(operation: () => Promise<T>): Promise<T> {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
+      await root.close();
     }
   }
+  await root.close();
   throw new Error('local Borg server cursor state is busy');
 }
 

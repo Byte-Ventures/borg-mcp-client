@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { ensurePrivateBorgConfigRoot } from './private-root.js';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STREAM_LOCKS_DIR = path.join(homedir(), '.config', 'borgmcp', 'stream-locks');
 const OWNER_FILE = 'owner.json';
@@ -19,6 +20,15 @@ export function streamLockPath(cubeId, droneId, locksDir = STREAM_LOCKS_DIR) {
     return path.join(locksDir, cubeId, `${droneId}.lock`);
 }
 export async function acquireStreamLease(cubeId, droneId, staleMs = STREAM_OWNER_STALE_MS, deps = {}) {
+    if (deps.locksDir === undefined) {
+        const root = await ensurePrivateBorgConfigRoot();
+        try {
+            await root.verify();
+        }
+        finally {
+            await root.close();
+        }
+    }
     const lockPath = streamLockPath(cubeId, droneId, deps.locksDir);
     await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
     if (!(await recoverTakeoverClaim(lockPath, staleMs, deps)))

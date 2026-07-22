@@ -200,6 +200,14 @@ export async function runAssimilate(args, deps) {
             return 1;
         }
     }
+    try {
+        await deps.preparePrivateRoot?.();
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        deps.stderr(`Borg private state is unavailable: ${safeStderr(message)}\n`);
+        return 1;
+    }
     // Read local seat state before authority discovery, which may probe the local
     // server. A retired replacement collision must not send either saved bearer or
     // perform any other network request.
@@ -375,7 +383,9 @@ export async function runAssimilate(args, deps) {
         catch (error) {
             return reportServerFailure(deps, authority.apiUrl, error);
         }
-        isFirstDrone = false;
+        // A previous local failure can leave a created-but-empty cube. It still
+        // needs first-seat selection so an identical retry retains Coordinator.
+        isFirstDrone = (cubeDetail.drones?.length ?? 0) === 0;
     }
     else {
         // ----- Step 4a: First-drone bootstrap (template selection) -----

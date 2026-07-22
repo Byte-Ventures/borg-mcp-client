@@ -14,11 +14,13 @@
  * SessionStart hook firing borg-regen) don't need BORG_API_URL in their env
  * to know which worker to talk to.
  */
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { constants, existsSync } from 'node:fs';
+import { mkdir, open, readFile, rename, unlink, lstat } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
+import { ensurePrivateBorgConfigRoot, isBorgConfigPath } from './private-root.js';
 import { getActiveSeatCredential, getActiveSeatForWorktree, getSeatForWorktree, hasSeatForWorktree, observeSeat, readAllActiveSeats, refreshSeatMetadata, resetSeatForWorktree, seatRef, } from './seats.js';
 const CUBES_DIR = join(homedir(), '.config', 'borgmcp');
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
@@ -70,24 +72,95 @@ export function inboxPathForDrone(cubeId, droneId) {
 // write) and the temp is best-effort cleaned. `io` is injectable for tests.
 let atomicTmpCounter = 0;
 export async function atomicWriteFile(filePath, data, opts = {}) {
-    const io = opts.io ?? { writeFile, rename, unlink };
+    const io = opts.io;
     const mode = opts.mode ?? 0o600;
-    await mkdir(dirname(filePath), { recursive: true });
-    // Same-dir temp so rename() stays on one filesystem (atomicity requirement).
-    // pid + counter keeps concurrent same-process writes from colliding.
-    const tmp = `${filePath}.${process.pid}.${atomicTmpCounter++}.tmp`;
+    const root = isBorgConfigPath(filePath) ? await ensurePrivateBorgConfigRoot() : null;
     try {
-        await io.writeFile(tmp, data, { mode });
-        await io.rename(tmp, filePath);
-    }
-    catch (err) {
+        await root?.verify();
+        await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
+        await root?.verify();
+        // Same-dir temp so rename() stays on one filesystem (atomicity requirement).
+        // pid + counter keeps concurrent same-process writes from colliding.
+        const tmp = `${filePath}.${process.pid}.${randomBytes(16).toString('hex')}.${atomicTmpCounter++}.tmp`;
+        let ownedTemp = null;
         try {
-            await io.unlink(tmp);
+            if (io) {
+                await io.writeFile(tmp, data, { mode });
+            }
+            else {
+                const handle = await open(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
+                try {
+                    ownedTemp = await handle.stat();
+                    if (!ownedTemp.isFile() || (ownedTemp.mode & 0o777) !== mode) {
+                        throw new Error('Borg atomic temporary file is insecure');
+                    }
+                    await handle.writeFile(data);
+                    await handle.sync();
+                }
+                finally {
+                    await handle.close();
+                }
+            }
+            await root?.verify();
+            if (!io && ownedTemp && root) {
+                const currentTemp = await lstat(tmp);
+                if (currentTemp.dev !== ownedTemp.dev || currentTemp.ino !== ownedTemp.ino ||
+                    !currentTemp.isFile() || (currentTemp.mode & 0o777) !== mode) {
+                    throw new Error('Borg atomic temporary file changed before commit');
+                }
+                try {
+                    const destination = await lstat(filePath);
+                    if (destination.isSymbolicLink() || !destination.isFile() ||
+                        (destination.mode & 0o777) !== mode) {
+                        throw new Error('Borg atomic destination is insecure');
+                    }
+                }
+                catch (error) {
+                    if (error.code !== 'ENOENT')
+                        throw error;
+                }
+            }
+            if (io)
+                await io.rename(tmp, filePath);
+            else
+                await rename(tmp, filePath);
+            await root?.verify();
+            if (!io && ownedTemp && root) {
+                const destination = await lstat(filePath);
+                if (destination.dev !== ownedTemp.dev || destination.ino !== ownedTemp.ino ||
+                    !destination.isFile() || (destination.mode & 0o777) !== mode) {
+                    throw new Error('Borg atomic destination changed after commit');
+                }
+                const directory = await open(dirname(filePath), constants.O_RDONLY | constants.O_DIRECTORY);
+                try {
+                    await directory.sync();
+                }
+                finally {
+                    await directory.close();
+                }
+            }
         }
-        catch {
-            /* best-effort temp cleanup; never mask the original error */
+        catch (err) {
+            try {
+                if (io) {
+                    await io.unlink(tmp);
+                }
+                else if (ownedTemp) {
+                    await root?.verify();
+                    const currentTemp = await lstat(tmp);
+                    if (currentTemp.dev === ownedTemp.dev && currentTemp.ino === ownedTemp.ino) {
+                        await unlink(tmp);
+                    }
+                }
+            }
+            catch {
+                /* best-effort temp cleanup; never mask the original error */
+            }
+            throw err;
         }
-        throw err;
+    }
+    finally {
+        await root?.close();
     }
 }
 function isLaunchFile(data) {

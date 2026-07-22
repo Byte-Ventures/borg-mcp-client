@@ -24,8 +24,9 @@
  * connection, no second auth — just an in-process state snapshot).
  */
 import { Buffer } from 'node:buffer';
-import { promises as fs } from 'node:fs';
+import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
+import { ensurePrivateBorgConfigRoot, isBorgConfigPath } from './private-root.js';
 import { compareBroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import { decodeProtocolErrorEnvelope, ErrorCode } from 'borgmcp-shared/protocol';
 import { getActiveCube, inboxPathForDrone } from './cubes.js';
@@ -1158,9 +1159,34 @@ async function defaultAppendLine(cubeId, droneId, line) {
     await appendCappedInboxLine(p, line, INBOX_TAIL_LINES_CAP);
 }
 export async function appendCappedInboxLine(inboxPath, line, maxLines = INBOX_TAIL_LINES_CAP, trimThresholdLines = maxLines * 2) {
-    await fs.mkdir(path.dirname(inboxPath), { recursive: true });
-    await fs.appendFile(inboxPath, line + '\n', 'utf-8');
-    await trimInboxFileToRecentLines(inboxPath, maxLines, trimThresholdLines);
+    const root = isBorgConfigPath(inboxPath) ? await ensurePrivateBorgConfigRoot() : null;
+    try {
+        await root?.verify();
+        await fs.mkdir(path.dirname(inboxPath), { recursive: true, mode: 0o700 });
+        if (root) {
+            const handle = await fs.open(inboxPath, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+            try {
+                const metadata = await handle.stat();
+                if (!metadata.isFile() || (metadata.mode & 0o777) !== 0o600) {
+                    throw new Error('Borg inbox file is insecure');
+                }
+                await handle.writeFile(line + '\n', 'utf8');
+                await handle.sync();
+            }
+            finally {
+                await handle.close();
+            }
+        }
+        else {
+            await fs.appendFile(inboxPath, line + '\n', { encoding: 'utf8', mode: 0o600 });
+        }
+        await root?.verify();
+        await trimInboxFileToRecentLines(inboxPath, maxLines, trimThresholdLines);
+        await root?.verify();
+    }
+    finally {
+        await root?.close();
+    }
 }
 export async function trimInboxFileToRecentLines(inboxPath, maxLines, trimThresholdLines = maxLines) {
     if (!Number.isInteger(maxLines) || maxLines < 1) {
