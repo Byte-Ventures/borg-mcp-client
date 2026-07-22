@@ -69,7 +69,8 @@ export type CleanupReason =
   | 'SURVIVES-clobber'
   | 'SURVIVES-unmerged'
   | 'SURVIVES-detached'
-  | 'SURVIVES-rejected'
+  | 'SURVIVES-revoked'
+  | 'SURVIVES-superseded'
   | 'SURVIVES-live'
   | 'SURVIVES-self'
   | 'UNKNOWN-indeterminate'
@@ -345,7 +346,9 @@ async function classifyWorktree(
     case 'evicted':
       return { reason: 'PRUNABLE', detail: '410 DRONE_EVICTED (clean + merged)' };
     case 'rejected':
-      return { reason: 'SURVIVES-rejected', detail: 'pin-matched 401 (revoked/taken over) — recoverable via re-enroll, never delete' };
+      return { reason: 'SURVIVES-superseded', detail: 'session superseded by a newer enrollment — recoverable via re-enroll, never delete' };
+    case 'revoked':
+      return { reason: 'SURVIVES-revoked', detail: 'session revoked — recoverable via re-enroll, never delete' };
     case 'live':
       return { reason: 'SURVIVES-live', detail: 'seat resolves (drone alive)' };
     case 'indeterminate':

@@ -56,6 +56,8 @@ export async function defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity
         if (err instanceof BorgServerTrustError)
             return 'trust-mismatch';
         if (err instanceof BorgServerError) {
+            if (err.code === 'SESSION_REVOKED')
+                return 'revoked';
             if (err.code === 'SESSION_REJECTED')
                 return 'rejected';
             // Every non-SESSION 401 (bare/untyped or a different typed code) is a

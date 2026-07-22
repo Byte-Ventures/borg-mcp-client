@@ -247,101 +247,37 @@ describe('remote-client explicit authority connection', () => {
     )).rejects.toMatchObject({ name: 'DroneEvictedError' });
   });
 
-  it('recovers one exact typed AUTH_EXPIRED request and retries once with the fresh bearer', async () => {
+  it('never renews or retries an unexpected AUTH_EXPIRED response', async () => {
     mockLocalAuthority();
-    const recoverExpiredLocalSession = vi.fn(async (value) => ({
-      ...value,
-      sessionToken: 'fresh-drone-session',
-      localSessionExpiresAt: '2026-07-22T00:00:00.000Z',
-    }));
-    vi.doMock('../src/session-continuity.js', () => ({
-      ensureLocalSessionFresh: vi.fn(async (value) => value),
-      recoverExpiredLocalSession,
-    }));
-    const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-      const authorization = new Headers(init?.headers).get('Authorization');
-      if (authorization === 'Bearer drone-session') {
-        return new Response(JSON.stringify({
-          protocol_version: '2',
-          error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
-        }), { status: 401 });
-      }
-      return new Response(JSON.stringify({
-        protocol_version: '2',
-        request_id: 'append-after-renewal',
-        payload: { entry: {
-          id: '77777777-7777-4777-8777-777777777777',
-          cube_id: CUBE_ID,
-          drone_id: DRONE_ID,
-          message: 'after expiry',
-          visibility: 'broadcast',
-          created_at: '2026-07-21T00:00:00.000Z',
-        } },
-      }), { status: 200 });
-    });
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '2',
+      error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
+    }), { status: 401 }));
     vi.stubGlobal('fetch', fetchSpy);
     const { appendLog } = await import('../src/remote-client.js');
 
-    await expect(appendLog('drone-session', 'https://localhost:8787', 'after expiry', {
+    await expect(appendLog('drone-session', 'https://localhost:8787', 'must fail', {
       visibility: 'broadcast',
       serverTrustIdentity: 'spki-sha256:test-server',
-    })).resolves.toMatchObject({ entry: { message: 'after expiry' } });
-    expect(recoverExpiredLocalSession).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(new Headers(fetchSpy.mock.calls[1][1]?.headers).get('Authorization'))
-      .toBe('Bearer fresh-drone-session');
+    })).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    ['SESSION_REJECTED', JSON.stringify({ protocol_version: '2', error: { code: 'SESSION_REJECTED', message: 'no' } })],
-    ['SESSION_REVOKED', JSON.stringify({ protocol_version: '2', error: { code: 'SESSION_REVOKED', message: 'no' } })],
-    ['ambiguous 401', 'unauthorized'],
-  ])('does not renew a terminal %s', async (_case, body) => {
+    ['SESSION_REJECTED', JSON.stringify({ protocol_version: '2', error: { code: 'SESSION_REJECTED', message: 'no' } }), 'SESSION_REJECTED'],
+    ['SESSION_REVOKED', JSON.stringify({ protocol_version: '2', error: { code: 'SESSION_REVOKED', message: 'no' } }), 'SESSION_REVOKED'],
+    ['ambiguous 401', 'unauthorized', 'CREDENTIAL_REJECTED'],
+  ])('preserves terminal %s without renewal', async (_case, body, code) => {
     mockLocalAuthority();
-    const recoverExpiredLocalSession = vi.fn();
-    vi.doMock('../src/session-continuity.js', () => ({
-      ensureLocalSessionFresh: vi.fn(async (value) => value),
-      recoverExpiredLocalSession,
-    }));
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 401 })));
+    const fetchSpy = vi.fn(async () => new Response(body, { status: 401 }));
+    vi.stubGlobal('fetch', fetchSpy);
     const { appendLog } = await import('../src/remote-client.js');
 
     await expect(appendLog('drone-session', 'https://localhost:8787', 'must fail', {
       visibility: 'broadcast',
       serverTrustIdentity: 'spki-sha256:test-server',
-    })).rejects.toBeInstanceOf(Error);
-    expect(recoverExpiredLocalSession).not.toHaveBeenCalled();
-  });
-
-  it('does not start a second restore when the freshly renewed bearer is rejected', async () => {
-    mockLocalAuthority();
-    vi.doMock('../src/cubes.js', () => ({
-      getActiveCube: vi.fn(async () => ({
-        cubeId: CUBE_ID,
-        droneId: DRONE_ID,
-        sessionToken: 'drone-session',
-        apiUrl: 'https://localhost:8787',
-        serverTrustIdentity: 'spki-sha256:test-server',
-        localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
-        localSessionExpiresAt: '2026-07-21T00:00:00.000Z',
-      })),
-    }));
-    const recoverExpiredLocalSession = vi.fn();
-    vi.doMock('../src/session-continuity.js', () => ({
-      ensureLocalSessionFresh: vi.fn(async (value) => ({ ...value, sessionToken: 'fresh-drone-session' })),
-      recoverExpiredLocalSession,
-    }));
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '2',
-      error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
-    }), { status: 401 })));
-    const { appendLog } = await import('../src/remote-client.js');
-
-    await expect(appendLog('drone-session', 'https://localhost:8787', 'must fail', {
-      visibility: 'broadcast',
-      serverTrustIdentity: 'spki-sha256:test-server',
-    })).rejects.toMatchObject({ code: 'AUTH_EXPIRED' });
-    expect(recoverExpiredLocalSession).not.toHaveBeenCalled();
+    })).rejects.toMatchObject({ code });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it.each([

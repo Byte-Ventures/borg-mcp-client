@@ -175,7 +175,6 @@ export interface ServerAttachResult {
   session: {
     credentialRef: string;
     sessionId: string;
-    expiresAt: string;
   };
   result: 'created' | 'reused';
 }
@@ -202,7 +201,7 @@ export interface PreparedServerAttach {
   cube: ServerAttachResult['cube'];
   role: ServerAttachResult['role'];
   drone: ServerAttachResult['drone'];
-  session: { sessionId: string; expiresAt: string };
+  session: { sessionId: string };
   result: 'created' | 'reused';
   credentialRef: string;
   pendingBearerDigest: string;
@@ -304,12 +303,6 @@ export async function sendBorgServerAttach(
             'Borg server rejected the session: the seat is already bound to another session',
           );
         }
-        if (rejectedCode === ErrorCode.AUTH_EXPIRED) {
-          throw new BorgServerError(
-            'AUTH_EXPIRED',
-            'Borg server session expired',
-          );
-        }
         if (rejectedCode === ErrorCode.SESSION_REVOKED) {
           throw new BorgServerError(
             'SESSION_REVOKED',
@@ -358,7 +351,6 @@ export async function sendBorgServerAttach(
       drone: decoded.drone,
       session: {
         sessionId: decoded.session.id,
-        expiresAt: decoded.session.expires_at,
       },
       result: decoded.result,
       credentialRef,
@@ -374,7 +366,6 @@ export async function sendBorgServerAttach(
           ...seatInput,
           droneId: decoded.drone.id,
           sessionId: decoded.session.id,
-          expiresAt: decoded.session.expires_at,
           expectedPendingDigest: pendingBearerDigest,
           worktree: binding.worktree,
           name: binding.name,

@@ -42,7 +42,7 @@ function processDeps(child: FakeChild) {
 }
 
 describe('parseServerFacadeArgs', () => {
-  it.each(['setup', 'start', 'status', 'update', 'invite'] as const)(
+  it.each(['setup', 'start', 'stop', 'status', 'update', 'invite'] as const)(
     'accepts %s and preserves server-owned arguments verbatim',
     (command) => {
       expect(parseServerFacadeArgs([command, '--lan', '127.0.0.1'])).toEqual({
@@ -137,6 +137,7 @@ describe('runEarlyServerFacade', () => {
         `Commands:\n` +
         `  setup    Prepare local server identity and data; does not start the server.\n` +
         `  start    Start the verified server in the foreground.\n` +
+        `  stop     Stop the managed local server.\n` +
         `  status   Report verified runtime evidence.\n` +
         `  update   Verify and activate a local server artifact.\n` +
         `  invite   Create a single-use invitation in an interactive terminal.\n\n` +
@@ -160,7 +161,7 @@ describe('runEarlyServerFacade', () => {
     expect(output.stdout()).toBe('');
     expect(output.stderr()).toBe(
       `Unknown server command: bad??[31m.\n` +
-      `Available commands: setup, start, status, update, invite.\n` +
+      `Available commands: setup, start, stop, status, update, invite.\n` +
       `Next: run borg server --help.\n`,
     );
     expect(output.stderr()).not.toContain('--secret');
@@ -180,7 +181,7 @@ describe('runEarlyServerFacade', () => {
     )).resolves.toBe(1);
     expect(output.stderr()).toBe(
       `Unknown server command: ${'😀'.repeat(77)}....\n` +
-      `Available commands: setup, start, status, update, invite.\n` +
+      `Available commands: setup, start, stop, status, update, invite.\n` +
       `Next: run borg server --help.\n`,
     );
     const renderedToken = output.stderr().split('\n', 1)[0]
@@ -223,6 +224,27 @@ describe('runEarlyServerFacade', () => {
     );
     child.emit('exit', 0, null);
     await expect(pending).resolves.toBe(0);
+    expect(output.stdout()).toBe('');
+    expect(output.stderr()).toBe('');
+  });
+
+  it('forwards stop and its server-owned arguments without interpreting runtime state', async () => {
+    const child = new FakeChild();
+    const { deps } = processDeps(child);
+    const output = outputDeps();
+    const pending = runEarlyServerFacade(
+      ['node', 'borg', 'server', 'stop', '--future-server-option'],
+      deps,
+      output.output,
+    );
+
+    expect(deps.spawn).toHaveBeenCalledWith(
+      'borg-mcp-server',
+      ['stop', '--future-server-option'],
+      { shell: false, stdio: 'inherit' },
+    );
+    child.emit('exit', 42, null);
+    await expect(pending).resolves.toBe(42);
     expect(output.stdout()).toBe('');
     expect(output.stderr()).toBe('');
   });
@@ -289,7 +311,7 @@ describe('approved server facade copy', () => {
   it('renders the exact bounded unknown-command text', () => {
     expect(unknownServerCommandText('daemonize')).toBe(
       `Unknown server command: daemonize.\n` +
-      `Available commands: setup, start, status, update, invite.\n` +
+      `Available commands: setup, start, stop, status, update, invite.\n` +
       `Next: run borg server --help.\n`,
     );
   });

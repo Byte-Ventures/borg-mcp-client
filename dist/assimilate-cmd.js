@@ -20,7 +20,7 @@ import { installBorgPlugin } from './opencode-plugin.js';
 import { computeOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
-import { BorgServerError } from './server-errors.js';
+import { BorgServerError, LegacySessionCredentialCollisionError } from './server-errors.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
 function affirmative(answer) {
@@ -100,23 +100,23 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
             `${localAssimilateCommand(apiUrl, true)} from the operator’s terminal.\n`);
         return 1;
     }
+    if (error instanceof LegacySessionCredentialCollisionError) {
+        deps.stderr(`Local session credential collision detected.\n` +
+            `No local credentials were changed.\n` +
+            `Next: run borg assimilate --host ${error.origin} --enroll.\n`);
+        return 1;
+    }
     // A pin-matched typed 401: the server verified its own identity but rejected
-    // THIS worktree's session bearer (revoked, or taken over by another session).
+    // THIS worktree's session bearer with an explicit terminal outcome.
     // Distinct from a protocol/version mismatch and from a rejected enrollment:
     // only this worktree's saved local seat is affected, and recovery is scoped to
     // this worktree — no server/trust-anchor/cube/other-worktree reset, no restart
     // or version-alignment advice (#1082).
+    if (error instanceof BorgServerError && error.code === 'SESSION_REVOKED') {
+        return diagnoseSessionTermination(deps, apiUrl, 'revoked');
+    }
     if (error instanceof BorgServerError && error.code === 'SESSION_REJECTED') {
-        // Attach is PURE DIAGNOSIS on a rejection — it mutates nothing. This copy
-        // claims NO mutation of its own; it points at the dedicated OFFLINE
-        // `borg reset-local-seat` command (the only writer that clears a seat).
-        deps.stderr(`This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
-            'revoked or taken over by another session. No Borg state changed. Run ' +
-            `${resetLocalSeatCommand(apiUrl)} to clear ONLY this worktree's saved seat ` +
-            '(offline; add `--yes` when non-interactive), then ask the server operator for a new ' +
-            'invitation — the server can stay running — and re-enroll with ' +
-            `${localAssimilateCommand(apiUrl, true)}.\n`);
-        return 1;
+        return diagnoseSessionTermination(deps, apiUrl, 'superseded');
     }
     if (error instanceof BorgServerError && error.code === 'INVITATION_REJECTED') {
         deps.stderr(`The enrollment invitation for ${apiUrl} was rejected or expired. ` +
@@ -174,28 +174,14 @@ function reportServerFailure(deps, apiUrl, error, enroll = false) {
 function resetLocalSeatCommand(apiUrl) {
     return `\`borg reset-local-seat --host ${apiUrl}\``;
 }
-/**
- * Pin-matched SESSION_REJECTED diagnosis (#1082). PURE DIAGNOSIS — attach makes
- * ZERO local mutation on a rejected seat (ratified client-seat-reset-state-model
- * clause 1). The local server verified its OWN pinned identity (this is reached
- * only after a successful pinned-TLS attach — a pin MISMATCH throws a distinct
- * trust error and never lands here), then rejected THIS worktree's saved session
- * bearer (revoked, or taken over by another session). We stop and recommend the
- * dedicated OFFLINE `borg reset-local-seat` command, which is the ONLY writer
- * that clears a worktree's saved seat. Nothing here contacts the server further,
- * emits unselected egress, or touches local state. The recovery is
- * live-safe: the operator is never told to stop/restart the server.
- */
-function diagnoseSessionRejected(deps, apiUrl) {
-    const worktree = deps.findProjectRoot(deps.cwd());
-    deps.stderr(`This worktree's saved local seat on ${apiUrl} is no longer accepted — it was ` +
-        'revoked or taken over by another session. No Borg state was changed: your pinned ' +
-        'server trust, this and every other worktree, and their cubes are all untouched.\n');
-    deps.stderr(`To clear ONLY this worktree's saved local seat (worktree ${worktree}), run ` +
-        `${resetLocalSeatCommand(apiUrl)} (add \`--yes\` when non-interactive). That command is ` +
-        'offline — it revokes nothing server-side. Then ask the server operator for a new ' +
-        'invitation (the server can stay running) and re-enroll with ' +
-        `${localAssimilateCommand(apiUrl, true)}.\n`);
+// Pin-matched terminal session diagnosis. This is intentionally output-only:
+// only the explicit offline reset command may clear the saved local seat.
+function diagnoseSessionTermination(deps, apiUrl, outcome) {
+    const message = outcome === 'revoked'
+        ? 'Local session was revoked.'
+        : 'Local session was superseded by a newer enrollment.';
+    deps.stderr(`${message}\n` +
+        `Next: run borg reset-local-seat, then borg assimilate --host ${apiUrl} --enroll.\n`);
     return 1;
 }
 export async function runAssimilate(args, deps) {
@@ -214,10 +200,29 @@ export async function runAssimilate(args, deps) {
             return 1;
         }
     }
+    // Read local seat state before authority discovery, which may probe the local
+    // server. A retired replacement collision must not send either saved bearer or
+    // perform any other network request.
+    let existing = null;
+    let hasPersistedIdentity = false;
+    let localSeatReadError;
+    try {
+        existing = await deps.getActiveCube();
+        hasPersistedIdentity = existing !== null || await deps.hasPersistedActiveCube();
+    }
+    catch (error) {
+        if (error instanceof LegacySessionCredentialCollisionError) {
+            return reportServerFailure(deps, error.origin, error);
+        }
+        localSeatReadError = error;
+    }
     // ----- Step 1: Select and authenticate the local server -----
     const authority = await selectAssimilationAuthority(args.flags, deps);
     if (!authority)
         return 1;
+    if (localSeatReadError !== undefined) {
+        return reportServerFailure(deps, authority.apiUrl, localSeatReadError);
+    }
     // ----- Repository + cube-name preflight -----
     // Resolve and, where necessary, confirm local presentation data before an
     // owner invitation can be consumed. A declined/underivable basename must
@@ -403,8 +408,6 @@ export async function runAssimilate(args, deps) {
     // retain its original role so the attach request reuses the exact durable
     // retry binding instead of selecting another unoccupied role and minting a
     // duplicate seat.
-    const existing = await deps.getActiveCube();
-    const hasPersistedIdentity = existing !== null || await deps.hasPersistedActiveCube();
     const wantSibling = args.flags.worktree !== undefined || (existing !== null && !args.flags.here);
     // `let`: the bound-pending resume path (CR#2) OVERRIDES this from the stored
     // operation so a rerun re-derives the EXACT original sibling seat ref.
@@ -562,8 +565,11 @@ export async function runAssimilate(args, deps) {
             // rejection; it points at the offline `borg reset-local-seat` command.
             // Distinct from unreachable/404/5xx/trust-mismatch, which stay
             // indeterminate below.
+            if (status === 'revoked') {
+                return diagnoseSessionTermination(deps, auth.apiUrl, 'revoked');
+            }
             if (status === 'rejected') {
-                return diagnoseSessionRejected(deps, auth.apiUrl);
+                return diagnoseSessionTermination(deps, auth.apiUrl, 'superseded');
             }
             // CR #6: distinct causes get cause-accurate, non-destructive recovery —
             // never the generic "restart the server" advice.
@@ -786,15 +792,18 @@ export async function runAssimilate(args, deps) {
                 `${localAssimilateCommand(authority.apiUrl)}.\n`);
             return 1;
         }
-        // Pin-matched SESSION_REJECTED (revoked / taken-over seat): PURE DIAGNOSIS.
+        // Pin-matched terminal session outcomes are pure diagnosis.
         // Reached only after a successful pinned-TLS attach, so it is pin-matched by
         // construction — a pin mismatch throws a distinct trust error and never
         // enters this branch. Attach mutates NOTHING; it recommends the offline
         // `borg reset-local-seat` command.
-        if (err instanceof BorgServerError &&
-            err.code === 'SESSION_REJECTED' &&
-            reattachPriorId != null) {
-            return diagnoseSessionRejected(deps, authority.apiUrl);
+        if (err instanceof BorgServerError && reattachPriorId != null) {
+            if (err.code === 'SESSION_REVOKED') {
+                return diagnoseSessionTermination(deps, authority.apiUrl, 'revoked');
+            }
+            if (err.code === 'SESSION_REJECTED') {
+                return diagnoseSessionTermination(deps, authority.apiUrl, 'superseded');
+            }
         }
         if (authority.kind === 'server') {
             return reportServerFailure(deps, authority.apiUrl, err);
@@ -953,7 +962,6 @@ export async function runAssimilate(args, deps) {
         apiUrl: auth.apiUrl,
         serverTrustIdentity: auth.serverTrustIdentity,
         localSessionCredentialRef: result.local_session.credential_ref,
-        localSessionExpiresAt: result.local_session.expires_at,
         // gh#899: persist the assimilated role so the connect-time ListTools
         // handler can role-scope the native tool surface.
         roleName: assignedRole.name,

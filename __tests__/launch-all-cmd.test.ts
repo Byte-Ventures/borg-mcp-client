@@ -322,21 +322,26 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     expect(dispatched(deps)).toBe(false);
   });
 
-  it('a REJECTED seat is SKIPPED (not launched, not pruned) with the EXECUTABLE bound recovery (reset → scoped invite → assimilate --enroll)', async () => {
+  it('a superseded seat is skipped with the exact bounded recovery', async () => {
     const { identities } = twoSeats();
     const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'rejected' : 'live'));
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
-    // The live seat still launches; the rejected one is skipped, never launched.
     expect(dispatched(deps)).toBe(true);
-    const err = stderrOf(deps);
-    expect(err).toMatch(/drone-b.*no longer accepted/);
-    // The full executable recovery contract — no inference required from the
-    // aggregate launch surface: reset THIS worktree → operator mints a scoped
-    // invitation while the server stays running → the exact assimilate command.
-    expect(err).toContain('borg reset-local-seat');
-    expect(err).toMatch(/scoped invitation \(the server stays running\)/);
-    expect(err).toMatch(/borg assimilate --host \S+ --enroll/);
-    expect(err).not.toMatch(/drone-b.*evicted/);
+    expect(stderrOf(deps)).toContain(
+      'Local session was superseded by a newer enrollment.\n' +
+        'Next: run borg reset-local-seat, then borg assimilate --host http://api.test --enroll.\n',
+    );
+  });
+
+  it('a revoked seat is skipped with the distinct exact bounded recovery', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'revoked' : 'live'));
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(dispatched(deps)).toBe(true);
+    expect(stderrOf(deps)).toContain(
+      'Local session was revoked.\n' +
+        'Next: run borg reset-local-seat, then borg assimilate --host http://api.test --enroll.\n',
+    );
   });
 
   it('ALL seats rejected → nothing launched, accurate summary (never called "evicted")', async () => {
@@ -346,8 +351,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     expect(dispatched(deps)).toBe(false);
     const out = stdoutOf(deps);
     expect(out).toMatch(/are not launchable .*nothing to launch/);
-    // Accurate cause counts — an all-rejected sweep must NOT claim "evicted".
-    expect(out).toContain('no longer accepted');
+    expect(out).toContain('2 superseded');
     expect(out).not.toMatch(/evicted/);
   });
 

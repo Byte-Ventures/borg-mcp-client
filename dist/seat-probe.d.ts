@@ -3,9 +3,9 @@
  * preserved (CR #6 / CR5 — the probe must NOT collapse them). Each verdict is
  * derived from the actual error TYPE/CODE, never from a mutable error-text regex:
  *   evicted            ← 410 DRONE_EVICTED (terminal; the SOLE delete authority — gh#882 S1)
- *   rejected           ← pin-matched drone-SESSION 401 carrying the EXACT typed
- *                        SESSION_REJECTED code (revoked / taken over; recover via
- *                        the offline `borg reset-local-seat` — never here)
+ *   revoked            ← pin-matched drone-SESSION 401 carrying SESSION_REVOKED
+ *   rejected           ← pin-matched drone-SESSION 401 carrying SESSION_REJECTED
+ *                        (superseded by a newer enrollment)
  *   credential-rejected← any OTHER 401 on the drone session (bare/untyped or a
  *                        non-SESSION typed code): the saved credential is no longer
  *                        accepted, but this is NON-DESTRUCTIVE — re-enroll, NEVER a
@@ -22,7 +22,7 @@
  *   indeterminate      ← any other ambiguous/unknown failure — never authorizes a
  *                        delete or a seat reset
  */
-export type SeatStatus = 'evicted' | 'rejected' | 'live' | 'credential-rejected' | 'trust-mismatch' | 'unreachable' | 'endpoint-mismatch' | 'server-failure' | 'indeterminate';
+export type SeatStatus = 'evicted' | 'revoked' | 'rejected' | 'live' | 'credential-rejected' | 'trust-mismatch' | 'unreachable' | 'endpoint-mismatch' | 'server-failure' | 'indeterminate';
 /**
  * Default seat probe: a lightweight drone-authed `whoami` with the seat's OWN
  * saved token. authedFetch throws TYPED errors on the authoritative outcomes

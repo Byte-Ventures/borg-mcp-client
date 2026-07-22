@@ -147,9 +147,6 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
                 if (rejectedCode === ErrorCode.SESSION_REJECTED) {
                     throw new BorgServerError('SESSION_REJECTED', 'Borg server rejected the session: the seat is already bound to another session');
                 }
-                if (rejectedCode === ErrorCode.AUTH_EXPIRED) {
-                    throw new BorgServerError('AUTH_EXPIRED', 'Borg server session expired');
-                }
                 if (rejectedCode === ErrorCode.SESSION_REVOKED) {
                     throw new BorgServerError('SESSION_REVOKED', 'Borg server session was revoked');
                 }
@@ -194,7 +191,6 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
             drone: decoded.drone,
             session: {
                 sessionId: decoded.session.id,
-                expiresAt: decoded.session.expires_at,
             },
             result: decoded.result,
             credentialRef,
@@ -209,7 +205,6 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
                 ...seatInput,
                 droneId: decoded.drone.id,
                 sessionId: decoded.session.id,
-                expiresAt: decoded.session.expires_at,
                 expectedPendingDigest: pendingBearerDigest,
                 worktree: binding.worktree,
                 name: binding.name,

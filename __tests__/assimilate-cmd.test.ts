@@ -6,7 +6,7 @@ import {
   type AssimilateDeps,
   type AssimilateResult,
 } from '../src/assimilate-cmd';
-import { BorgServerError } from '../src/server-errors';
+import { BorgServerError, LegacySessionCredentialCollisionError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
 import { createHash } from 'node:crypto';
 
@@ -146,6 +146,45 @@ describe('safeStderr (Sprint 4 / gh#147)', () => {
     // No over-strip on the common case — git stderr is mostly punctuation+letters.
     const benign = 'fatal: not a valid object name: HEAD (no commits yet)';
     expect(safeStderr(benign)).toBe(benign);
+  });
+});
+
+describe('runAssimilate: exact legacy session credential collision', () => {
+  it.each([true, false])('renders identical bounded non-mutating copy when TTY=%s', async (isTTY) => {
+    const deps = makeStubDeps({
+      isTTY: () => isTTY,
+      getActiveCube: vi.fn(async () => {
+        throw new LegacySessionCredentialCollisionError('https://server.test');
+      }),
+    });
+
+    await expect(runAssimilate({ role: undefined, flags: {} }, deps)).resolves.toBe(1);
+    expect(vi.mocked(deps.stderr).mock.calls.map(([line]) => line).join('')).toBe(
+      `Local session credential collision detected.\n` +
+        `No local credentials were changed.\n` +
+        `Next: run borg assimilate --host https://server.test --enroll.\n`,
+    );
+    expect(deps.detectLocalServer).not.toHaveBeenCalled();
+    expect(deps.connectServer).not.toHaveBeenCalled();
+    expect(deps.listCubes).not.toHaveBeenCalled();
+    expect(deps.assimilate).not.toHaveBeenCalled();
+  });
+
+  it('keeps pending+replacement in the generic malformed classification without network or special copy', async () => {
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => {
+        throw new Error('Borg seat store is malformed or uses an unsupported version');
+      }),
+    });
+
+    await expect(runAssimilate({ role: undefined, flags: { server: 'server.test' } }, deps)).resolves.toBe(1);
+    const output = vi.mocked(deps.stderr).mock.calls.map(([line]) => line).join('');
+    expect(output).toContain('could not access its local seat store');
+    expect(output).not.toContain('Local session credential collision detected');
+    expect(deps.detectLocalServer).not.toHaveBeenCalled();
+    expect(deps.connectServer).not.toHaveBeenCalled();
+    expect(deps.listCubes).not.toHaveBeenCalled();
+    expect(deps.assimilate).not.toHaveBeenCalled();
   });
 });
 
@@ -645,7 +684,7 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
     expect(deps.setActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   }
 
-  it('the attach-catch rejection diagnoses (recommends `borg reset-local-seat`) and mutates nothing', async () => {
+  it('the attach-catch rejection reports the exact superseded diagnosis and mutates nothing', async () => {
     const stderr = vi.fn();
     const setActiveCube = vi.fn(async () => {});
     const deps = makeStubDeps({
@@ -657,16 +696,14 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
     expect(exit).toBe(1);
-    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toContain('no longer accepted');
-    expect(out).toContain('borg reset-local-seat');
-    expect(out).toContain('No Borg state');
-    expect(out).not.toMatch(/borgmcp\.ai|Cloud/i);
-    expect(out).not.toMatch(/stop the server|restart it/i);
+    expect(stderr).toHaveBeenCalledWith(
+      'Local session was superseded by a newer enrollment.\n' +
+        'Next: run borg reset-local-seat, then borg assimilate --host https://server.test --enroll.\n',
+    );
     assertNoMutation(deps);
   });
 
-  it('CANONICAL PATH: a pin-matched probeSeat → rejected diagnoses BEFORE attach, no "restart" advice, no mutation', async () => {
+  it('CANONICAL PATH: a pin-matched superseded probe diagnoses before attach with exact copy', async () => {
     const stderr = vi.fn();
     const setActiveCube = vi.fn(async () => {});
     const assimilate = vi.fn(async () => { throw new Error('attach must not run after a rejected probe'); });
@@ -679,13 +716,14 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
     const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
     expect(exit).toBe(1);
     expect(assimilate).not.toHaveBeenCalled();
-    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toContain('borg reset-local-seat');
-    expect(out).not.toMatch(/Start or restart the server|borg-mcp-server start/i);
+    expect(stderr).toHaveBeenCalledWith(
+      'Local session was superseded by a newer enrollment.\n' +
+        'Next: run borg reset-local-seat, then borg assimilate --host https://server.test --enroll.\n',
+    );
     assertNoMutation(deps);
   });
 
-  it('the diagnosis is identical whether or not stdin is a TTY (no destructive prompt/flag path anymore)', async () => {
+  it('the superseded diagnosis is identical whether or not stdin is a TTY', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       ...cubeResolves, stderr,
@@ -696,10 +734,27 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
     expect(exit).toBe(1);
-    const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toContain('borg reset-local-seat');
-    // Offline command guidance mentions --yes for non-interactive use.
-    expect(out).toContain('--yes');
+    expect(stderr).toHaveBeenCalledWith(
+      'Local session was superseded by a newer enrollment.\n' +
+        'Next: run borg reset-local-seat, then borg assimilate --host https://server.test --enroll.\n',
+    );
+    assertNoMutation(deps);
+  });
+
+  it('a revoked probe reports the distinct exact diagnosis and does not attach', async () => {
+    const stderr = vi.fn();
+    const assimilate = vi.fn(async () => { throw new Error('attach must not run'); });
+    const deps = makeStubDeps({
+      ...cubeResolves, stderr, assimilate,
+      probeSeat: vi.fn(async () => 'revoked'),
+      getActiveCube: sameCubeSeat(),
+    });
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
+    expect(assimilate).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith(
+      'Local session was revoked.\n' +
+        'Next: run borg reset-local-seat, then borg assimilate --host https://server.test --enroll.\n',
+    );
     assertNoMutation(deps);
   });
 });
@@ -2868,7 +2923,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
-  it('surfaces a pin-matched SESSION_REJECTED takeover distinctly, scoped to this worktree, with no Cloud or restart advice', async () => {
+  it('surfaces a pin-matched SESSION_REJECTED as the exact superseded diagnosis', async () => {
     const stderr = vi.fn();
     const connectServer = vi.fn(async () => {
       throw new BorgServerError('SESSION_REJECTED', 'session bearer no longer accepted');
@@ -2880,22 +2935,10 @@ describe('runAssimilate: #1015 authority selection', () => {
       flags: { server: 'server.example.com' },
     }, deps)).toBe(1);
 
-    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
-    // Distinct copy: names the worktree's local seat, not a version/protocol mismatch.
-    expect(output).toContain("This worktree's saved local seat on https://server.example.com is no longer accepted");
-    expect(output).toContain('revoked or taken over by another session');
-    // Confirms no Borg state changed (attach is pure diagnosis).
-    expect(output).toContain('No Borg state changed');
-    // Points at the dedicated OFFLINE reset command (no attach-path mutation).
-    expect(output).toContain("clear ONLY this worktree's saved seat");
-    expect(output).toContain('borg reset-local-seat');
-    // Live-safe recovery: new invitation, server stays running, re-enroll from this worktree.
-    expect(output).toContain('`borg assimilate --host https://server.example.com --enroll`');
-    expect(output).toContain('server can stay running');
-    // Never advises restart / version alignment / Cloud, and leaks no bearer.
-    expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
-    expect(output).not.toMatch(/versions?\s+are\s+compatible|restart|version alignment/i);
-    expect(output).not.toMatch(/[A-Za-z0-9_-]{43,}/);
+    expect(stderr).toHaveBeenCalledWith(
+      'Local session was superseded by a newer enrollment.\n' +
+        'Next: run borg reset-local-seat, then borg assimilate --host https://server.example.com --enroll.\n',
+    );
   });
 
   it('explains how the operator replaces a rejected enrollment invitation', async () => {
@@ -2929,6 +2972,7 @@ describe('runAssimilate: #1015 authority selection', () => {
   it.each([
     ['no saved enrollment', new BorgServerError('NOT_ENROLLED', 'not enrolled')],
     ['saved credential rejected', new BorgServerError('CREDENTIAL_REJECTED', 'credential rejected')],
+    ['session revoked', new BorgServerError('SESSION_REVOKED', 'session revoked')],
     ['session rejected takeover', new BorgServerError('SESSION_REJECTED', 'session rejected')],
     ['local seat store busy', new Error('Borg seat store is busy')],
     ['local seat store unavailable', new Error('local seat store is not accessible')],
@@ -2949,7 +2993,7 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     const output = stderr.mock.calls.map((call) => String(call[0])).join('');
     expect(output).toContain('https://localhost:8787');
-    expect(output).toMatch(/`borg assimilate --host https:\/\/localhost:8787|`borg-mcp-server start`/);
+    expect(output).toMatch(/borg assimilate --host https:\/\/localhost:8787|borg-mcp-server start/);
     expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
   });
 

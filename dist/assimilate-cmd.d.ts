@@ -40,7 +40,6 @@ export interface AssimilateResult {
     role_id: string;
     local_session?: {
         credential_ref: string;
-        expires_at: string | null;
     };
     result?: 'created' | 'reused';
     finalize?: {
@@ -60,7 +59,6 @@ export interface ActiveCube {
     /** Verified local-server CA identity; absent until a local server is selected. */
     serverTrustIdentity?: string;
     localSessionCredentialRef?: string;
-    localSessionExpiresAt?: string | null;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;

@@ -281,8 +281,9 @@ describe('buildCleanupReport classification', () => {
     const { rows } = await buildCleanupReport({ ...(deps as any) });
     expect(rows.find((r) => r.worktreePath === wt)?.reason).toBe('SURVIVES-detached');
   });
-  it('SURVIVES-rejected on a pin-matched 401 (revoked/taken over) — recoverable, NEVER pruned', async () => {
-    expect(await reasonFor({}, 'rejected')).toBe('SURVIVES-rejected');
+  it('preserves distinct superseded and revoked sessions and never prunes them', async () => {
+    expect(await reasonFor({}, 'rejected')).toBe('SURVIVES-superseded');
+    expect(await reasonFor({}, 'revoked')).toBe('SURVIVES-revoked');
   });
   it('SURVIVES-live when the seat resolves', async () => {
     expect(await reasonFor({}, 'live')).toBe('SURVIVES-live');
@@ -389,8 +390,8 @@ describe('runCleanup prune behavior', () => {
     expect(branchDeletes.some((c) => c.args.includes('wt-dead1'))).toBe(true);
   });
 
-  it('EXECUTING --prune over a REJECTED-only fleet removes ZERO rows (rejected is recoverable, never deleted)', async () => {
-    // Part (E): a pin-matched 401 (revoked/taken over) is SURVIVES-rejected, not
+  it('EXECUTING --prune over a superseded-only fleet removes ZERO rows', async () => {
+    // Part (E): a superseded session is SURVIVES-superseded, not
     // PRUNABLE. Even under --prune, no worktree remove / branch delete fires — the
     // seat is recoverable via `borg reset-local-seat` + re-enroll, never destroyed.
     const rejected1 = `${WT_HOME}/repo/rejected1`;
@@ -403,7 +404,7 @@ describe('runCleanup prune behavior', () => {
     expect(code).toBe(0);
     expect(calls.some((c) => c.args[0] === 'worktree' && c.args[1] === 'remove')).toBe(false);
     expect(calls.some((c) => c.args[0] === 'branch')).toBe(false);
-    expect(out.join('')).toMatch(/SURVIVES-rejected/);
+    expect(out.join('')).toMatch(/SURVIVES-superseded/);
     expect(out.join('')).toMatch(/Nothing to prune/i);
   });
 

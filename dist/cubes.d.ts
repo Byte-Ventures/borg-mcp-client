@@ -30,7 +30,6 @@ export interface ActiveCube {
     serverTrustIdentity?: string;
     /** Opaque local-session keychain reference; never a bearer. */
     localSessionCredentialRef?: string;
-    localSessionExpiresAt?: string | null;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
@@ -131,7 +130,6 @@ export interface PersistedLocalSeat {
     apiUrl: string;
     serverTrustIdentity: string;
     localSessionCredentialRef: string;
-    localSessionExpiresAt?: string | null;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;

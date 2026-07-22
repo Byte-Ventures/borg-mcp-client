@@ -42,7 +42,6 @@ const SEAT = {
 const STAMP = {
   droneId: '22222222-2222-4222-8222-222222222222',
   sessionId: '33333333-3333-4333-8333-333333333333',
-  expiresAt: '2026-07-20T00:00:00.000Z',
 };
 const BIND = { origin: SEAT.origin, trustIdentity: SEAT.trustIdentity, cubeId: SEAT.cubeId };
 const digestOf = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -134,7 +133,6 @@ describe('seats store — exact-seat metadata refresh', () => {
       ...replacement,
       droneId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
       sessionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-      expiresAt: STAMP.expiresAt,
       expectedPendingDigest: digestOf(replacementBearer),
       worktree: '/work/repo',
       name: 'replacement-cube',
@@ -187,142 +185,59 @@ describe('seats store — atomic compare-and-activate fails closed (CR#2)', () =
   });
 });
 
-describe('seats store — atomic session replacement', () => {
-  async function seedActive(seats: typeof import('../src/seats.js'), bearer = 'o'.repeat(43)) {
+describe('seats store — enrolled sessions do not expire', () => {
+  it('hydrates a legacy active record after its old expiry without rewriting it', async () => {
+    const { dir, seats } = await load();
+    const bearer = 'o'.repeat(43);
     await seats.mintPendingSeat({ ...SEAT, credential: bearer });
     await activateOk(seats, bearer);
-    return { ref: seats.seatRef(SEAT), bearer };
-  }
+    const path = storeJson(dir);
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { seats: Record<string, any> };
+    parsed.seats[seats.seatRef(SEAT)].expiresAt = '2000-01-01T00:00:00.000Z';
+    const legacyBytes = `${JSON.stringify(parsed, null, 2)}\n`;
+    writeFileSync(path, legacyBytes, { mode: 0o600 });
 
-  it('keeps the active credential usable while reusing one durable pending replacement', async () => {
-    const { seats } = await load();
-    const { ref, bearer } = await seedActive(seats);
-    const first = await seats.prepareSeatReplacement({
-      ref,
-      binding: BIND,
-      expectedDroneId: STAMP.droneId,
-      expectedActiveDigest: digestOf(bearer),
-      replacementCredential: 'r'.repeat(43),
-    });
-    const retry = await seats.prepareSeatReplacement({
-      ref,
-      binding: BIND,
-      expectedDroneId: STAMP.droneId,
-      expectedActiveDigest: digestOf(bearer),
-      replacementCredential: 'x'.repeat(43),
-    });
-
-    expect(first).toEqual({ ok: true, credential: 'r'.repeat(43), digest: digestOf('r'.repeat(43)) });
-    expect(retry).toEqual(first);
-    expect(await seats.getActiveSeatCredential(ref, BIND)).toBe(bearer);
-    expect(await seats.getActiveSeatForWorktree('/work/repo')).toMatchObject({
-      state: 'active',
-      droneId: STAMP.droneId,
-      worktree: '/work/repo',
-    });
+    await expect(seats.getActiveSeatCredential(seats.seatRef(SEAT), BIND)).resolves.toBe(bearer);
+    expect(readFileSync(path, 'utf8')).toBe(legacyBytes);
   });
 
-  it.each([
-    ['active digest', { expectedActiveDigest: digestOf('wrong'.repeat(43)) }],
-    ['drone identity', { expectedDroneId: '99999999-9999-4999-8999-999999999999' }],
-    ['authority binding', { binding: { ...BIND, trustIdentity: 'sha256:other-server' } }],
-  ])('does not prepare a replacement after the %s changes', async (_case, patch) => {
-    const { seats } = await load();
-    const { ref, bearer } = await seedActive(seats);
-    await expect(seats.prepareSeatReplacement({
-      ref,
-      binding: BIND,
-      expectedDroneId: STAMP.droneId,
-      expectedActiveDigest: digestOf(bearer),
-      replacementCredential: 'r'.repeat(43),
-      ...patch,
-    })).resolves.toEqual({ ok: false, reason: 'expectation-mismatch' });
-    expect(await seats.getActiveSeatCredential(ref, BIND)).toBe(bearer);
+  it('fails closed on an exact legacy replacement collision and preserves both bearer records', async () => {
+    const { dir, seats } = await load();
+    const bearer = 'o'.repeat(43);
+    await seats.mintPendingSeat({ ...SEAT, credential: bearer });
+    await activateOk(seats, bearer);
+    const path = storeJson(dir);
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { seats: Record<string, any> };
+    parsed.seats[seats.seatRef(SEAT)].replacement = { credential: 'r'.repeat(43) };
+    const collisionBytes = `${JSON.stringify(parsed, null, 2)}\n`;
+    writeFileSync(path, collisionBytes, { mode: 0o600 });
+
+    await expect(seats.getActiveSeatCredential(seats.seatRef(SEAT), BIND)).rejects.toMatchObject({
+      name: 'LegacySessionCredentialCollisionError',
+      origin: SEAT.origin,
+    });
+    expect(readFileSync(path, 'utf8')).toBe(collisionBytes);
   });
 
-  it('promotes only the exact replacement and preserves seat identity and binding', async () => {
-    const { seats } = await load();
-    const { ref, bearer } = await seedActive(seats);
-    const replacement = 'r'.repeat(43);
-    await seats.prepareSeatReplacement({
-      ref,
-      binding: BIND,
-      expectedDroneId: STAMP.droneId,
-      expectedActiveDigest: digestOf(bearer),
-      replacementCredential: replacement,
-    });
+  it('treats a hostile pending record with replacement as malformed and preserves its bytes', async () => {
+    const { dir, seats } = await load();
+    await seats.mintPendingSeat({ ...SEAT, credential: 'p'.repeat(43) });
+    const path = storeJson(dir);
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { seats: Record<string, any> };
+    parsed.seats[seats.seatRef(SEAT)].replacement = { credential: 'r'.repeat(43) };
+    const malformedBytes = `${JSON.stringify(parsed, null, 2)}\n`;
+    writeFileSync(path, malformedBytes, { mode: 0o600 });
 
-    await expect(seats.promoteSeatReplacement({
-      ref,
-      binding: BIND,
-      expectedDroneId: STAMP.droneId,
-      expectedActiveDigest: digestOf(bearer),
-      expectedReplacementDigest: digestOf(replacement),
-      sessionId: '55555555-5555-4555-8555-555555555555',
-      expiresAt: '2026-07-22T00:00:00.000Z',
-    })).resolves.toBe('promoted');
-    expect(await seats.getActiveSeatCredential(ref, BIND)).toBe(replacement);
-    expect(await seats.getActiveSeatForWorktree('/work/repo')).toMatchObject({
-      droneId: STAMP.droneId,
-      sessionId: '55555555-5555-4555-8555-555555555555',
-      expiresAt: '2026-07-22T00:00:00.000Z',
-      worktree: '/work/repo',
-      name: 'local-cube',
-    });
-  });
-
-  it('refreshes expiry only for the exact active session identity', async () => {
-    const { seats } = await load();
-    const { ref, bearer } = await seedActive(seats);
-    await expect(seats.refreshActiveSeatSession({
-      ref,
-      binding: BIND,
-      expectedDroneId: STAMP.droneId,
-      expectedActiveDigest: digestOf(bearer),
-      expectedSessionId: STAMP.sessionId,
-      expiresAt: '2026-07-21T00:00:00.000Z',
-    })).resolves.toBe(true);
-    expect(await seats.getActiveSeatForWorktree('/work/repo')).toMatchObject({
-      sessionId: STAMP.sessionId,
-      expiresAt: '2026-07-21T00:00:00.000Z',
-    });
-    await expect(seats.refreshActiveSeatSession({
-      ref,
-      binding: BIND,
-      expectedDroneId: STAMP.droneId,
-      expectedActiveDigest: digestOf(bearer),
-      expectedSessionId: '99999999-9999-4999-8999-999999999999',
-      expiresAt: '2026-07-22T00:00:00.000Z',
-    })).resolves.toBe(false);
-  });
-
-  it('leaves the active credential untouched after a stale promotion or exact scrub', async () => {
-    const { seats } = await load();
-    const { ref, bearer } = await seedActive(seats);
-    const replacement = 'r'.repeat(43);
-    await seats.prepareSeatReplacement({
-      ref,
-      binding: BIND,
-      expectedDroneId: STAMP.droneId,
-      expectedActiveDigest: digestOf(bearer),
-      replacementCredential: replacement,
-    });
-    await expect(seats.promoteSeatReplacement({
-      ref,
-      binding: BIND,
-      expectedDroneId: STAMP.droneId,
-      expectedActiveDigest: digestOf(bearer),
-      expectedReplacementDigest: digestOf('wrong'.repeat(43)),
-      sessionId: '55555555-5555-4555-8555-555555555555',
-      expiresAt: '2026-07-22T00:00:00.000Z',
-    })).resolves.toBe('replaced');
-    await expect(seats.scrubSeatReplacement({
-      ref,
-      binding: BIND,
-      expectedActiveDigest: digestOf(bearer),
-      expectedReplacementDigest: digestOf(replacement),
-    })).resolves.toBe(true);
-    expect(await seats.getActiveSeatCredential(ref, BIND)).toBe(bearer);
+    let failure: unknown;
+    try {
+      await seats.getActiveSeatCredential(seats.seatRef(SEAT), BIND);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ name: 'Error' });
+    expect(failure).not.toMatchObject({ name: 'LegacySessionCredentialCollisionError' });
+    expect(String(failure)).toMatch(/malformed|unsupported version/i);
+    expect(readFileSync(path, 'utf8')).toBe(malformedBytes);
   });
 });
 
@@ -457,7 +372,7 @@ describe('seats store — observation + sole raw-bearer reader (CR#3, SR#5)', ()
     const path = storeJson(dir);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const ref = seats.seatRef(SEAT);
-    // A well-keyed record marked ACTIVE but WITHOUT droneId/sessionId/expiresAt/worktree.
+    // A well-keyed record marked ACTIVE but WITHOUT droneId/sessionId/worktree.
     const inconsistent = JSON.stringify({
       version: 1,
       seats: {
