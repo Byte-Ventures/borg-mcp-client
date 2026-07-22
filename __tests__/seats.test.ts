@@ -218,6 +218,27 @@ describe('seats store — enrolled sessions do not expire', () => {
     });
     expect(readFileSync(path, 'utf8')).toBe(collisionBytes);
   });
+
+  it('treats a hostile pending record with replacement as malformed and preserves its bytes', async () => {
+    const { dir, seats } = await load();
+    await seats.mintPendingSeat({ ...SEAT, credential: 'p'.repeat(43) });
+    const path = storeJson(dir);
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { seats: Record<string, any> };
+    parsed.seats[seats.seatRef(SEAT)].replacement = { credential: 'r'.repeat(43) };
+    const malformedBytes = `${JSON.stringify(parsed, null, 2)}\n`;
+    writeFileSync(path, malformedBytes, { mode: 0o600 });
+
+    let failure: unknown;
+    try {
+      await seats.getActiveSeatCredential(seats.seatRef(SEAT), BIND);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ name: 'Error' });
+    expect(failure).not.toMatchObject({ name: 'LegacySessionCredentialCollisionError' });
+    expect(String(failure)).toMatch(/malformed|unsupported version/i);
+    expect(readFileSync(path, 'utf8')).toBe(malformedBytes);
+  });
 });
 
 describe('seats store — reset deletes credential AND binding together', () => {

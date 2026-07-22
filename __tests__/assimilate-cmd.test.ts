@@ -169,6 +169,23 @@ describe('runAssimilate: exact legacy session credential collision', () => {
     expect(deps.listCubes).not.toHaveBeenCalled();
     expect(deps.assimilate).not.toHaveBeenCalled();
   });
+
+  it('keeps pending+replacement in the generic malformed classification without network or special copy', async () => {
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => {
+        throw new Error('Borg seat store is malformed or uses an unsupported version');
+      }),
+    });
+
+    await expect(runAssimilate({ role: undefined, flags: { server: 'server.test' } }, deps)).resolves.toBe(1);
+    const output = vi.mocked(deps.stderr).mock.calls.map(([line]) => line).join('');
+    expect(output).toContain('could not access its local seat store');
+    expect(output).not.toContain('Local session credential collision detected');
+    expect(deps.detectLocalServer).not.toHaveBeenCalled();
+    expect(deps.connectServer).not.toHaveBeenCalled();
+    expect(deps.listCubes).not.toHaveBeenCalled();
+    expect(deps.assimilate).not.toHaveBeenCalled();
+  });
 });
 
 describe('runAssimilate: scaffolding', () => {

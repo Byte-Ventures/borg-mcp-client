@@ -167,7 +167,10 @@ function parseStore(raw) {
                     catch {
                         canonicalOrigin = false;
                     }
-                    if (exactReplacement && canonicalOrigin && isValidSeatRecord(ref, withoutReplacement)) {
+                    if (withoutReplacement.state === 'active' &&
+                        exactReplacement &&
+                        canonicalOrigin &&
+                        isValidSeatRecord(ref, withoutReplacement)) {
                         throw new LegacySessionCredentialCollisionError(withoutReplacement.origin);
                     }
                     return null;

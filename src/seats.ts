@@ -212,7 +212,12 @@ function parseStore(raw: string): SeatsFile | null {
           } catch {
             canonicalOrigin = false;
           }
-          if (exactReplacement && canonicalOrigin && isValidSeatRecord(ref, withoutReplacement)) {
+          if (
+            withoutReplacement.state === 'active' &&
+            exactReplacement &&
+            canonicalOrigin &&
+            isValidSeatRecord(ref, withoutReplacement)
+          ) {
             throw new LegacySessionCredentialCollisionError(withoutReplacement.origin as string);
           }
           return null;
