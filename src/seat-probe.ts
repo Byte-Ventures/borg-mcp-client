@@ -19,9 +19,9 @@ import {
  * preserved (CR #6 / CR5 — the probe must NOT collapse them). Each verdict is
  * derived from the actual error TYPE/CODE, never from a mutable error-text regex:
  *   evicted            ← 410 DRONE_EVICTED (terminal; the SOLE delete authority — gh#882 S1)
- *   rejected           ← pin-matched drone-SESSION 401 carrying the EXACT typed
- *                        SESSION_REJECTED code (revoked / taken over; recover via
- *                        the offline `borg reset-local-seat` — never here)
+ *   revoked            ← pin-matched drone-SESSION 401 carrying SESSION_REVOKED
+ *   rejected           ← pin-matched drone-SESSION 401 carrying SESSION_REJECTED
+ *                        (superseded by a newer enrollment)
  *   credential-rejected← any OTHER 401 on the drone session (bare/untyped or a
  *                        non-SESSION typed code): the saved credential is no longer
  *                        accepted, but this is NON-DESTRUCTIVE — re-enroll, NEVER a
@@ -40,6 +40,7 @@ import {
  */
 export type SeatStatus =
   | 'evicted'
+  | 'revoked'
   | 'rejected'
   | 'live'
   | 'credential-rejected'
@@ -99,6 +100,7 @@ export async function defaultProbeSeat(
     // the error TYPE, never from message text (the security boundary).
     if (err instanceof BorgServerTrustError) return 'trust-mismatch';
     if (err instanceof BorgServerError) {
+      if (err.code === 'SESSION_REVOKED') return 'revoked';
       if (err.code === 'SESSION_REJECTED') return 'rejected';
       // Every non-SESSION 401 (bare/untyped or a different typed code) is a
       // credential rejection — non-destructive, distinct from a takeover.

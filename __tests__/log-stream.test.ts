@@ -320,13 +320,13 @@ describe('streamOnce', () => {
     expect(networkFetch).not.toHaveBeenCalled();
   });
 
-  it('classifies only an exact bounded 401 AUTH_EXPIRED envelope as recoverable expiry', async () => {
+  it('treats obsolete AUTH_EXPIRED as a terminal credential rejection', async () => {
     const expired = vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',
       error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
     }), { status: 401 }));
     await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(expired as typeof fetch)))
-      .rejects.toMatchObject({ code: 'AUTH_EXPIRED' });
+      .rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
 
     const stale = vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '2',

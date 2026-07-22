@@ -5,8 +5,7 @@ export type BorgServerErrorCode =
   | 'CREATE_CUBE_DENIED'
   | 'ATTACH_CONFLICT'
   | 'SESSION_REJECTED'
-  | 'SESSION_REVOKED'
-  | 'AUTH_EXPIRED';
+  | 'SESSION_REVOKED';
 
 /** Safe, non-secret state code for deterministic authority recovery copy. */
 export class BorgServerError extends Error {
@@ -90,6 +89,14 @@ export class BorgServerUnreachableError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = 'BorgServerUnreachableError';
+  }
+}
+
+/** Exact retired TTL-replacement state: two saved bearers and no safe implicit winner. */
+export class LegacySessionCredentialCollisionError extends Error {
+  constructor(public readonly origin: string) {
+    super('Local session credential collision detected');
+    this.name = 'LegacySessionCredentialCollisionError';
   }
 }
 import type { ErrorCode } from 'borgmcp-shared/protocol';

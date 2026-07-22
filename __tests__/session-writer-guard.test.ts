@@ -75,10 +75,6 @@ describe('seat single-store writer guard (SR#5)', () => {
       'export async function mintPendingSeat',
       'export async function prepareSeat',
        'export async function activateAndBindSeat',
-       'export async function prepareSeatReplacement',
-       'export async function promoteSeatReplacement',
-       'export async function scrubSeatReplacement',
-       'export async function refreshActiveSeatSession',
       'export async function bindPendingSeatToWorktree',
       'export async function resetSeatForWorktree',
       'export async function scrubPendingSeat',
@@ -115,8 +111,9 @@ describe('seat single-store writer guard (SR#5)', () => {
     expect(filesReferencing('getActiveSeatCredential', ['seats.ts', 'cubes.ts'])).toEqual([]);
   });
 
-  it('the continuity-only active-record reader is resolved ONLY by the renewal coordinator', () => {
-    expect(filesReferencing('getActiveSeat(', ['seats.ts', 'session-continuity.ts'])).toEqual([]);
+  it('the retired TTL renewal coordinator and its active-record reader are absent', () => {
+    expect(filesReferencing('getActiveSeat(')).toEqual([]);
+    expect(filesReferencing('session-continuity')).toEqual([]);
   });
 
   it('the cubes.ts hydration adapter never reaches a raw store backend', () => {
@@ -172,10 +169,6 @@ describe('seat single-store writer guard (SR#5)', () => {
       'mintPendingSeat',
       'prepareSeat',
        'activateAndBindSeat',
-       'prepareSeatReplacement',
-       'promoteSeatReplacement',
-       'scrubSeatReplacement',
-       'refreshActiveSeatSession',
       'bindPendingSeatToWorktree',
       'resetSeatForWorktree',
       'scrubPendingSeat',

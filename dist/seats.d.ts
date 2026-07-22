@@ -33,16 +33,12 @@ export interface SeatRecord {
     state: 'pending' | 'active';
     droneId?: string;
     sessionId?: string;
-    expiresAt?: string;
     worktree?: string;
     name?: string;
     droneLabel?: string;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
-    replacement?: {
-        credential: string;
-    };
 }
 /** The deterministic per-seat ref (identical algorithm to the retired keychain account). */
 export declare function seatRef(input: {
@@ -82,12 +78,6 @@ export declare function getActiveSeatCredential(ref: string, binding: {
     trustIdentity: string;
     cubeId: string;
 }): Promise<string | null>;
-/** Exact ACTIVE record for the internal continuity coordinator. */
-export declare function getActiveSeat(ref: string, binding: {
-    origin: string;
-    trustIdentity: string;
-    cubeId: string;
-}): Promise<SeatRecord | null>;
 /**
  * Mint the client bearer for one seat, or return the existing record (pending or
  * active) so a lost-response retry re-sends the identical bearer. The minted
@@ -182,7 +172,6 @@ export declare function activateAndBindSeat(input: {
     operation: SeatOperation;
     droneId: string;
     sessionId: string;
-    expiresAt: string;
     expectedPendingDigest: string;
     worktree: string;
     name: string;
@@ -191,69 +180,6 @@ export declare function activateAndBindSeat(input: {
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
 }): Promise<ActivateSeatOutcome>;
-export type PrepareSeatReplacementOutcome = {
-    ok: true;
-    credential: string;
-    digest: string;
-} | {
-    ok: false;
-    reason: 'expectation-mismatch';
-};
-/**
- * Preserve the exact ACTIVE seat while preparing one durable replacement bearer.
- * A lost response or process restart reuses the stored replacement; a changed
- * authority, drone, or active bearer fails before any mutation.
- */
-export declare function prepareSeatReplacement(input: {
-    ref: string;
-    binding: {
-        origin: string;
-        trustIdentity: string;
-        cubeId: string;
-    };
-    expectedDroneId: string;
-    expectedActiveDigest: string;
-    replacementCredential: string;
-}): Promise<PrepareSeatReplacementOutcome>;
-export type PromoteSeatReplacementOutcome = 'promoted' | 'missing' | 'replaced';
-/** Update only the committed expiry for an exact same-bearer session renewal. */
-export declare function refreshActiveSeatSession(input: {
-    ref: string;
-    binding: {
-        origin: string;
-        trustIdentity: string;
-        cubeId: string;
-    };
-    expectedDroneId: string;
-    expectedActiveDigest: string;
-    expectedSessionId: string;
-    expiresAt: string;
-}): Promise<boolean>;
-/** Atomically promote only the response-bound replacement onto the same ACTIVE seat. */
-export declare function promoteSeatReplacement(input: {
-    ref: string;
-    binding: {
-        origin: string;
-        trustIdentity: string;
-        cubeId: string;
-    };
-    expectedDroneId: string;
-    expectedActiveDigest: string;
-    expectedReplacementDigest: string;
-    sessionId: string;
-    expiresAt: string;
-}): Promise<PromoteSeatReplacementOutcome>;
-/** Remove only the caller's exact pending replacement, never the ACTIVE seat. */
-export declare function scrubSeatReplacement(input: {
-    ref: string;
-    binding: {
-        origin: string;
-        trustIdentity: string;
-        cubeId: string;
-    };
-    expectedActiveDigest: string;
-    expectedReplacementDigest: string;
-}): Promise<boolean>;
 export type BindPendingSeatOutcome = 'bound' | 'missing' | 'replaced';
 /**
  * CR#2: bind an existing PENDING record to a worktree WITHOUT activating it. On a

@@ -62,7 +62,6 @@ export interface ActiveCube {
   serverTrustIdentity?: string;
   /** Opaque local-session keychain reference; never a bearer. */
   localSessionCredentialRef?: string;
-  localSessionExpiresAt?: string | null;
   // gh#899: the assimilated role, persisted so the connect-time ListTools
   // handler can role-scope the NATIVE tool surface (UX/context only — never an
   // auth boundary). Absent on pre-gh#899 cubes.json entries → the filter
@@ -280,7 +279,6 @@ async function hydrateActiveCube(record: SeatRecord): Promise<ActiveCube | null>
     apiUrl: record.origin,
     serverTrustIdentity: record.trustIdentity,
     localSessionCredentialRef: ref,
-    ...(record.expiresAt !== undefined ? { localSessionExpiresAt: record.expiresAt } : {}),
     ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
     ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),
     ...(record.isHumanSeat !== undefined ? { isHumanSeat: record.isHumanSeat } : {}),
@@ -392,7 +390,6 @@ export interface PersistedLocalSeat {
   apiUrl: string;
   serverTrustIdentity: string;
   localSessionCredentialRef: string;
-  localSessionExpiresAt?: string | null;
   roleName?: string;
   roleClass?: 'queen' | 'worker';
   isHumanSeat?: boolean;
@@ -432,7 +429,6 @@ export async function readPersistedLocalSeat(): Promise<PersistedLocalSeat | nul
     localSessionCredentialRef: seatRef(record),
     operation: record.operation,
     state: record.state,
-    ...(record.expiresAt !== undefined ? { localSessionExpiresAt: record.expiresAt } : {}),
     ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
     ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),
     ...(record.isHumanSeat !== undefined ? { isHumanSeat: record.isHumanSeat } : {}),

@@ -27,7 +27,6 @@ import { type BroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import { getActiveCube } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
-import { recoverExpiredLocalSession } from './session-continuity.js';
 import { acquireStreamLease, type StreamOwnershipSnapshot } from './stream-owner.js';
 export declare const LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES: number;
 /**
@@ -153,7 +152,6 @@ export interface RunLoopTestDeps {
     getActiveCube?: typeof getActiveCube;
     acquireStreamLease?: typeof acquireStreamLease;
     streamOnce?: typeof streamOnce;
-    recoverExpiredSession?: typeof recoverExpiredLocalSession;
     sleep?: (ms: number) => Promise<void>;
     maxIterations?: number;
 }

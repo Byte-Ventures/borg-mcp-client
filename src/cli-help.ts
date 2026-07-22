@@ -50,6 +50,7 @@ export function serverHelpText(): string {
     `Commands:\n` +
     `  setup    Prepare local server identity and data; does not start the server.\n` +
     `  start    Start the verified server in the foreground.\n` +
+    `  stop     Stop the managed local server.\n` +
     `  status   Report verified runtime evidence.\n` +
     `  update   Verify and activate a local server artifact.\n` +
     `  invite   Create a single-use invitation in an interactive terminal.\n\n` +
@@ -102,7 +103,7 @@ export function resetLocalSeatHelpText(version: string): string {
     `just this worktree's saved local seat — its credential and cube binding together — from the\n` +
     `local seat store on this machine. Server, trust anchor, cube, and every sibling worktree are\n` +
     `left untouched.\n\n` +
-    `Use it after \`borg assimilate\` reports this worktree's seat was revoked or taken over\n` +
+    `Use it after \`borg assimilate\` reports this worktree's session was revoked or superseded\n` +
     `(a pin-matched rejection), then ask the operator for a new invitation and re-enroll.\n\n` +
     `Usage:\n` +
     `  borg reset-local-seat                 Reset this worktree's saved seat (TTY confirms [y/N])\n` +

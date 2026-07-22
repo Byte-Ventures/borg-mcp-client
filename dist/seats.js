@@ -20,6 +20,7 @@ import os from 'os';
 import path from 'path';
 import { createHash } from 'node:crypto';
 import { readStoreFile, withStore } from './seat-store.js';
+import { LegacySessionCredentialCollisionError } from './server-errors.js';
 export const SEATS_FILE = path.join(os.homedir(), '.config', 'borgmcp', 'seats.json');
 const SEATS_VERSION = 1;
 const REF_RE = /^borg-server-session:[a-f0-9]{64}$/;
@@ -68,8 +69,8 @@ function isValidOperation(value) {
  * checked — the ref is well-formed and self-consistent (the map key equals the
  * record's derived ref), state ∈ {pending,active}, the credential is a non-empty
  * string, the operation is well-shaped, an ACTIVE record carries ALL its required
- * server + binding fields, and a PENDING record carries NO active-only fields
- * (session id / expiry). A single invalid entry ⇒ the whole store is rejected
+ * server + binding fields, and a PENDING record carries NO active-only session
+ * id. A single invalid entry ⇒ the whole store is rejected
  * (fail closed at the caller, bytes preserved) — never a silent cast.
  */
 function isValidSeatRecord(ref, value) {
@@ -106,27 +107,11 @@ function isValidSeatRecord(ref, value) {
         return false;
     if (r.sessionId !== undefined && (typeof r.sessionId !== 'string' || !UUID_RE.test(r.sessionId)))
         return false;
-    if (r.expiresAt !== undefined &&
-        (typeof r.expiresAt !== 'string' || !Number.isFinite(Date.parse(r.expiresAt)))) {
-        return false;
-    }
-    if (r.replacement !== undefined) {
-        if (r.state !== 'active' ||
-            r.replacement === null ||
-            typeof r.replacement !== 'object' ||
-            Array.isArray(r.replacement) ||
-            Object.keys(r.replacement).length !== 1 ||
-            typeof r.replacement.credential !== 'string' ||
-            !/^[A-Za-z0-9_-]{43}$/.test(r.replacement.credential)) {
-            return false;
-        }
-    }
     // State-consistency invariants (no inconsistent active|pending).
     if (r.state === 'active') {
         // An ACTIVE record MUST carry its full server session + worktree binding.
         if (typeof r.droneId !== 'string' ||
             typeof r.sessionId !== 'string' ||
-            typeof r.expiresAt !== 'string' ||
             typeof r.worktree !== 'string' ||
             typeof r.name !== 'string' ||
             typeof r.droneLabel !== 'string') {
@@ -135,7 +120,7 @@ function isValidSeatRecord(ref, value) {
     }
     else {
         // A PENDING record must NOT carry active-only server session fields.
-        if (r.sessionId !== undefined || r.expiresAt !== undefined)
+        if (r.sessionId !== undefined)
             return false;
     }
     // The map key must equal the record's derived ref (no cross-key aliasing).
@@ -163,6 +148,30 @@ function parseStore(raw) {
             !Array.isArray(candidate.seats)) {
             const seats = candidate.seats;
             for (const [ref, record] of Object.entries(seats)) {
+                if (record !== null &&
+                    typeof record === 'object' &&
+                    !Array.isArray(record) &&
+                    Object.prototype.hasOwnProperty.call(record, 'replacement')) {
+                    const { replacement, ...withoutReplacement } = record;
+                    const exactReplacement = replacement !== null &&
+                        typeof replacement === 'object' &&
+                        !Array.isArray(replacement) &&
+                        Object.keys(replacement).length === 1 &&
+                        typeof replacement.credential === 'string' &&
+                        /^[A-Za-z0-9_-]{43}$/.test(replacement.credential);
+                    let canonicalOrigin = false;
+                    try {
+                        const origin = new URL(String(withoutReplacement.origin));
+                        canonicalOrigin = origin.protocol === 'https:' && origin.origin === withoutReplacement.origin;
+                    }
+                    catch {
+                        canonicalOrigin = false;
+                    }
+                    if (exactReplacement && canonicalOrigin && isValidSeatRecord(ref, withoutReplacement)) {
+                        throw new LegacySessionCredentialCollisionError(withoutReplacement.origin);
+                    }
+                    return null;
+                }
                 if (!isValidSeatRecord(ref, record))
                     return null;
             }
@@ -225,14 +234,6 @@ export async function getActiveSeatCredential(ref, binding) {
     if (!recordMatches(record, ref, binding) || record.state !== 'active')
         return null;
     return record.credential;
-}
-/** Exact ACTIVE record for the internal continuity coordinator. */
-export async function getActiveSeat(ref, binding) {
-    if (!REF_RE.test(ref))
-        return null;
-    const store = await readStore();
-    const record = store.seats[ref];
-    return recordMatches(record, ref, binding) && record.state === 'active' ? record : null;
 }
 // ─── PREPARE / mint (no worktree yet) ────────────────────────────────────────
 /**
@@ -336,9 +337,6 @@ export async function activateAndBindSeat(input) {
     if (!UUID_RE.test(input.droneId) || !UUID_RE.test(input.sessionId)) {
         throw new Error('invalid Borg server session identity');
     }
-    if (typeof input.expiresAt !== 'string' || !Number.isFinite(Date.parse(input.expiresAt))) {
-        throw new Error('invalid Borg server session expiry');
-    }
     const ref = seatRef(input);
     const binding = { origin: input.origin, trustIdentity: input.trustIdentity, cubeId: input.cubeId };
     return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
@@ -352,7 +350,6 @@ export async function activateAndBindSeat(input) {
             state: 'active',
             droneId: input.droneId,
             sessionId: input.sessionId,
-            expiresAt: input.expiresAt,
             worktree: input.worktree,
             name: input.name,
             droneLabel: input.droneLabel,
@@ -362,106 +359,6 @@ export async function activateAndBindSeat(input) {
         };
         await txn.commit();
         return 'activated';
-    });
-}
-/**
- * Preserve the exact ACTIVE seat while preparing one durable replacement bearer.
- * A lost response or process restart reuses the stored replacement; a changed
- * authority, drone, or active bearer fails before any mutation.
- */
-export async function prepareSeatReplacement(input) {
-    if (!REF_RE.test(input.ref) || !/^[A-Za-z0-9_-]{43}$/.test(input.replacementCredential)) {
-        return { ok: false, reason: 'expectation-mismatch' };
-    }
-    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
-        const record = txn.data.seats[input.ref];
-        if (!recordMatches(record, input.ref, input.binding) ||
-            record.state !== 'active' ||
-            record.droneId !== input.expectedDroneId ||
-            digestOf(record.credential) !== input.expectedActiveDigest) {
-            return { ok: false, reason: 'expectation-mismatch' };
-        }
-        if (record.replacement) {
-            return {
-                ok: true,
-                credential: record.replacement.credential,
-                digest: digestOf(record.replacement.credential),
-            };
-        }
-        record.replacement = { credential: input.replacementCredential };
-        await txn.commit();
-        return {
-            ok: true,
-            credential: input.replacementCredential,
-            digest: digestOf(input.replacementCredential),
-        };
-    });
-}
-/** Update only the committed expiry for an exact same-bearer session renewal. */
-export async function refreshActiveSeatSession(input) {
-    if (!UUID_RE.test(input.expectedDroneId) || !UUID_RE.test(input.expectedSessionId)) {
-        throw new Error('invalid Borg server session identity');
-    }
-    if (!Number.isFinite(Date.parse(input.expiresAt))) {
-        throw new Error('invalid Borg server session expiry');
-    }
-    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
-        const record = txn.data.seats[input.ref];
-        if (!recordMatches(record, input.ref, input.binding) ||
-            record.state !== 'active' ||
-            record.droneId !== input.expectedDroneId ||
-            record.sessionId !== input.expectedSessionId ||
-            digestOf(record.credential) !== input.expectedActiveDigest) {
-            return false;
-        }
-        record.expiresAt = input.expiresAt;
-        await txn.commit();
-        return true;
-    });
-}
-/** Atomically promote only the response-bound replacement onto the same ACTIVE seat. */
-export async function promoteSeatReplacement(input) {
-    if (!UUID_RE.test(input.expectedDroneId) || !UUID_RE.test(input.sessionId)) {
-        throw new Error('invalid Borg server session identity');
-    }
-    if (!Number.isFinite(Date.parse(input.expiresAt))) {
-        throw new Error('invalid Borg server session expiry');
-    }
-    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
-        const record = txn.data.seats[input.ref];
-        if (!recordMatches(record, input.ref, input.binding) || record.state !== 'active')
-            return 'missing';
-        if (record.droneId !== input.expectedDroneId ||
-            digestOf(record.credential) !== input.expectedActiveDigest ||
-            !record.replacement ||
-            digestOf(record.replacement.credential) !== input.expectedReplacementDigest) {
-            return 'replaced';
-        }
-        const { replacement, ...active } = record;
-        txn.data.seats[input.ref] = {
-            ...active,
-            credential: replacement.credential,
-            sessionId: input.sessionId,
-            expiresAt: input.expiresAt,
-        };
-        await txn.commit();
-        return 'promoted';
-    });
-}
-/** Remove only the caller's exact pending replacement, never the ACTIVE seat. */
-export async function scrubSeatReplacement(input) {
-    return withStore(SEATS_FILE, emptyStore, parseStore, async (txn) => {
-        const record = txn.data.seats[input.ref];
-        if (!recordMatches(record, input.ref, input.binding) ||
-            record.state !== 'active' ||
-            digestOf(record.credential) !== input.expectedActiveDigest ||
-            !record.replacement ||
-            digestOf(record.replacement.credential) !== input.expectedReplacementDigest) {
-            return false;
-        }
-        delete record.replacement;
-        await txn.commit();
-        return true;
     });
 }
 /**

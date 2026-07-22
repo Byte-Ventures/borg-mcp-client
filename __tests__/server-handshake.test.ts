@@ -555,7 +555,7 @@ describe('self-hosted server handshake', () => {
       result: 'created',
       drone: { id: DRONE_ID },
       credentialRef: expectedRef,
-      session: { sessionId: SESSION_ID, expiresAt },
+      session: { sessionId: SESSION_ID },
     });
     // activate(binding) (the FINALIZE merged activate+bind) returns the typed outcome.
     await expect(prepared.activate(BINDING)).resolves.toBe('activated');
@@ -581,7 +581,6 @@ describe('self-hosted server handshake', () => {
       operation: OPERATION,
       droneId: DRONE_ID,
       sessionId: SESSION_ID,
-      expiresAt,
       // CR #2: the EXACT bearer sent is pinned by digest so a same-ref replacement
       // cannot be activated with this response's server metadata.
       expectedPendingDigest: digestOf(bearer),
@@ -688,7 +687,7 @@ describe('self-hosted server handshake', () => {
     await expect(send(rejectedWith('SESSION_REJECTED') as typeof fetch))
       .rejects.toMatchObject({ code: 'SESSION_REJECTED' });
     await expect(send(rejectedWith('AUTH_EXPIRED') as typeof fetch))
-      .rejects.toMatchObject({ code: 'AUTH_EXPIRED' });
+      .rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
     await expect(send(rejectedWith('SESSION_REVOKED') as typeof fetch))
       .rejects.toMatchObject({ code: 'SESSION_REVOKED' });
     await expect(send(rejectedWith('DRONE_EVICTED', 410) as typeof fetch))

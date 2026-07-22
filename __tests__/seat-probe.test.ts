@@ -8,8 +8,8 @@ import { join } from 'node:path';
 
 // Executable production-chain regression (SR-six 02b6f245 / thirty-seven; CR #6):
 // the real defaultProbeSeat → whoami → localAuthorityContext → authedFetch path
-// must PRESERVE the distinct cause — a pin-matched drone-SESSION 401 → `rejected`
-// (→ offline reset), any OTHER 401 → `credential-rejected` (non-destructive
+// must PRESERVE the distinct cause — typed revoked and superseded session errors
+// remain distinct, while any OTHER 401 → `credential-rejected` (non-destructive
 // re-enroll), a trust/identity mismatch → `trust-mismatch` (terminal), a 410
 // DRONE_EVICTED → `evicted`, and only 404/5xx/network as `indeterminate`
 // (genuinely transient). No collapsing to `indeterminate`; no stubbing of the
@@ -61,6 +61,10 @@ const sessionRejected401 = () => vi.fn(async () => new Response(
   errorEnvelope('SESSION_REJECTED', 'the seat is bound to another session'),
   { status: 401 },
 ));
+const sessionRevoked401 = () => vi.fn(async () => new Response(
+  errorEnvelope('SESSION_REVOKED', 'the session was explicitly revoked'),
+  { status: 401 },
+));
 
 afterEach(() => {
   vi.resetModules();
@@ -81,6 +85,10 @@ describe('defaultProbeSeat production chain (real whoami → authedFetch verdict
   // file focuses on the security-critical 401-classifier verdicts.)
   it('rejected: a 401 whose bounded-decoded v2 envelope carries the EXACT SESSION_REJECTED code', async () => {
     await expect(probe(sessionRejected401())).resolves.toBe('rejected');
+  });
+
+  it('revoked: a 401 whose bounded-decoded v2 envelope carries the exact SESSION_REVOKED code', async () => {
+    await expect(probe(sessionRevoked401())).resolves.toBe('revoked');
   });
 
   it('credential-rejected: a BARE 401 with no typed envelope is NOT a session rejection (non-destructive re-enroll)', async () => {
@@ -217,8 +225,14 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
     ).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
   });
 
-  it('drone-SESSION 401 with a non-recoverable typed code → CREDENTIAL_REJECTED (never reset)', async () => {
-    for (const code of ['AUTH_INVALID', 'AUTH_MISSING', 'SESSION_REVOKED', 'ACCESS_DENIED']) {
+  it('drone-SESSION 401 with SESSION_REVOKED → SESSION_REVOKED', async () => {
+    wireMocks({ fetchImpl: sessionRevoked401() });
+    const { whoami } = await import('../src/remote-client.js');
+    await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'SESSION_REVOKED' });
+  });
+
+  it('drone-SESSION 401 with another non-recoverable typed code → CREDENTIAL_REJECTED (never reset)', async () => {
+    for (const code of ['AUTH_INVALID', 'AUTH_MISSING', 'ACCESS_DENIED']) {
       vi.resetModules();
       wireMocks({ fetchImpl: vi.fn(async () => new Response(errorEnvelope(code), { status: 401 })) });
       const { whoami } = await import('../src/remote-client.js');

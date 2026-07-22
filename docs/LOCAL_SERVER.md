@@ -28,6 +28,7 @@ Usage: borg server <command> [arguments]
 Commands:
   setup    Prepare local server identity and data; does not start the server.
   start    Start the verified server in the foreground.
+  stop     Stop the managed local server.
   status   Report verified runtime evidence.
   update   Verify and activate a local server artifact.
   invite   Create a single-use invitation in an interactive terminal.

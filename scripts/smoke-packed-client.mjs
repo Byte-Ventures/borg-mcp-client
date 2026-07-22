@@ -42,10 +42,11 @@ async function runServerFacadeSmoke(generatedBin, timeoutMs) {
   const fakeServer = join(directory, 'borg-mcp-server');
   const expected = 'status\0--json';
   const expectedInvite = 'invite\0--server-owned';
+  const expectedStop = 'stop\0--server-owned';
   await writeFile(fakeServer, `#!/usr/bin/env node
 const args = process.argv.slice(2).join('\\0');
 process.stdout.write(args);
-process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringify(expectedInvite)} ? 41 : 96);
+process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringify(expectedInvite)} ? 41 : args === ${JSON.stringify(expectedStop)} ? 43 : 96);
 `);
   await chmod(fakeServer, 0o755);
 
@@ -99,6 +100,22 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
       );
     }
 
+    const stop = spawnSync(generatedBin, ['server', 'stop', '--server-owned'], {
+      env: {
+        ...process.env,
+        PATH: `${directory}${delimiter}${process.env.PATH ?? ''}`,
+        CI: '1',
+        NO_COLOR: '1',
+      },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    if (stop.error || stop.status !== 43 || stop.stdout !== expectedStop || stop.stderr !== '') {
+      throw new Error(
+        `Packed stop facade failed: status=${stop.status}, stdout=${JSON.stringify(stop.stdout)}, stderr=${JSON.stringify(stop.stderr)}, error=${stop.error?.message ?? ''}`,
+      );
+    }
+
     await chmod(fakeServer, 0o644);
     const unavailable = spawnSync(process.execPath, [generatedBin, 'server', 'update'], {
       env: { ...process.env, PATH: directory, CI: '1', NO_COLOR: '1' },
@@ -133,6 +150,7 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
     return {
       serverFacadeExitCode: code,
       serverFacadeInviteExitCode: invite.status,
+      serverFacadeStopExitCode: stop.status,
       serverFacadeStartupFailureExitCode: unavailable.status,
       serverFacadeMissingExitCode: missing.status,
     };

@@ -37,7 +37,7 @@ import { type ActiveCube } from './cubes.js';
 import { type SeatStatus } from './seat-probe.js';
 export type { SeatStatus };
 /** Per-worktree classification outcome. PRUNABLE is the ONLY delete class. */
-export type CleanupReason = 'PRUNABLE' | 'SURVIVES-dirty' | 'SURVIVES-clobber' | 'SURVIVES-unmerged' | 'SURVIVES-detached' | 'SURVIVES-rejected' | 'SURVIVES-live' | 'SURVIVES-self' | 'UNKNOWN-indeterminate' | 'UNKNOWN-no-seat' | 'LEGACY-manual-review';
+export type CleanupReason = 'PRUNABLE' | 'SURVIVES-dirty' | 'SURVIVES-clobber' | 'SURVIVES-unmerged' | 'SURVIVES-detached' | 'SURVIVES-revoked' | 'SURVIVES-superseded' | 'SURVIVES-live' | 'SURVIVES-self' | 'UNKNOWN-indeterminate' | 'UNKNOWN-no-seat' | 'LEGACY-manual-review';
 export interface CleanupRow {
     worktreePath: string;
     wtBranch: string | null;

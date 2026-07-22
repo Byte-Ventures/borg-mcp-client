@@ -1,4 +1,4 @@
-export type BorgServerErrorCode = 'NOT_ENROLLED' | 'CREDENTIAL_REJECTED' | 'INVITATION_REJECTED' | 'CREATE_CUBE_DENIED' | 'ATTACH_CONFLICT' | 'SESSION_REJECTED' | 'SESSION_REVOKED' | 'AUTH_EXPIRED';
+export type BorgServerErrorCode = 'NOT_ENROLLED' | 'CREDENTIAL_REJECTED' | 'INVITATION_REJECTED' | 'CREATE_CUBE_DENIED' | 'ATTACH_CONFLICT' | 'SESSION_REJECTED' | 'SESSION_REVOKED';
 /** Safe, non-secret state code for deterministic authority recovery copy. */
 export declare class BorgServerError extends Error {
     readonly code: BorgServerErrorCode;
@@ -45,6 +45,11 @@ export declare class BorgServerUnreachableError extends Error {
     constructor(message: string, options?: {
         cause?: unknown;
     });
+}
+/** Exact retired TTL-replacement state: two saved bearers and no safe implicit winner. */
+export declare class LegacySessionCredentialCollisionError extends Error {
+    readonly origin: string;
+    constructor(origin: string);
 }
 import type { ErrorCode } from 'borgmcp-shared/protocol';
 //# sourceMappingURL=server-errors.d.ts.map

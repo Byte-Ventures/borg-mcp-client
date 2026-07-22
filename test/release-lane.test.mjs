@@ -664,6 +664,7 @@ test('exact tarball installs cleanly and completes MCP initialize plus tool disc
     toolCount: 1,
     serverFacadeExitCode: 37,
     serverFacadeInviteExitCode: 41,
+    serverFacadeStopExitCode: 43,
     serverFacadeStartupFailureExitCode: 1,
     serverFacadeMissingExitCode: 127,
   });

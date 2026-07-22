@@ -47,7 +47,6 @@ export interface ServerAttachResult {
     session: {
         credentialRef: string;
         sessionId: string;
-        expiresAt: string;
     };
     result: 'created' | 'reused';
 }
@@ -75,7 +74,6 @@ export interface PreparedServerAttach {
     drone: ServerAttachResult['drone'];
     session: {
         sessionId: string;
-        expiresAt: string;
     };
     result: 'created' | 'reused';
     credentialRef: string;

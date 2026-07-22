@@ -76,4 +76,13 @@ export class BorgServerUnreachableError extends Error {
         this.name = 'BorgServerUnreachableError';
     }
 }
+/** Exact retired TTL-replacement state: two saved bearers and no safe implicit winner. */
+export class LegacySessionCredentialCollisionError extends Error {
+    origin;
+    constructor(origin) {
+        super('Local session credential collision detected');
+        this.origin = origin;
+        this.name = 'LegacySessionCredentialCollisionError';
+    }
+}
 //# sourceMappingURL=server-errors.js.map

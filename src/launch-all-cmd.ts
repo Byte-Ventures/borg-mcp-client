@@ -276,6 +276,7 @@ export async function runLaunchAll(
   //     LOCK-live (seemingly-running) session.
   const launchable: DroneCandidate[] = [];
   let evictedCount = 0;
+  let revokedCount = 0;
   let rejectedCount = 0;
   let trustMismatchCount = 0;
   let credentialRejectedCount = 0;
@@ -294,15 +295,19 @@ export async function runLaunchAll(
       );
       continue;
     }
+    if (status === 'revoked') {
+      revokedCount += 1;
+      deps.stderr(
+        `Local session was revoked.\n` +
+          `Next: run borg reset-local-seat, then borg assimilate --host ${c.apiUrl} --enroll.\n`
+      );
+      continue;
+    }
     if (status === 'rejected') {
       rejectedCount += 1;
       deps.stderr(
-        `skipping ${c.droneLabel} (${c.worktreeDir}): saved seat no longer accepted (revoked or ` +
-          `taken over). Recover from that worktree: ` +
-          `1) \`borg reset-local-seat --host ${c.apiUrl}\` (add --yes non-interactively) to clear ` +
-          `ONLY that worktree's saved seat; ` +
-          `2) ask the server operator to mint a fresh scoped invitation (the server stays running); ` +
-          `3) \`borg assimilate --host ${c.apiUrl} --enroll\`.\n`
+        `Local session was superseded by a newer enrollment.\n` +
+          `Next: run borg reset-local-seat, then borg assimilate --host ${c.apiUrl} --enroll.\n`
       );
       continue;
     }
@@ -355,8 +360,11 @@ export async function runLaunchAll(
     if (evictedCount > 0) {
       causes.push(`${evictedCount} evicted`);
     }
+    if (revokedCount > 0) {
+      causes.push(`${revokedCount} revoked`);
+    }
     if (rejectedCount > 0) {
-      causes.push(`${rejectedCount} with a saved seat no longer accepted (revoked/taken over)`);
+      causes.push(`${rejectedCount} superseded`);
     }
     if (trustMismatchCount > 0) {
       causes.push(`${trustMismatchCount} with a changed (terminal) server identity`);

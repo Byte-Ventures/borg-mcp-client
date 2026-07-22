@@ -352,7 +352,6 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
           result: prepared.result,
           local_session: {
             credential_ref: prepared.credentialRef,
-            expires_at: prepared.session.expiresAt,
           },
           // Handles for the cube-lock-held FINALIZE (assimilate-cmd Step 8).
           finalize: {
