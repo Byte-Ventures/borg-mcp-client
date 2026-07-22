@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Private state unavailable</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        background: #f5f7fa;
+        color: #172033;
+      }
+      body { margin: 0; padding: 2rem 1rem; }
+      main { margin: auto; max-width: 52rem; }
+      h1 { font-family: system-ui, sans-serif; font-size: 1.5rem; margin: 0 0 0.5rem; }
+      h2 { font-family: system-ui, sans-serif; font-size: 1rem; margin-top: 2rem; }
+      .context { color: #4b5568; font-family: system-ui, sans-serif; line-height: 1.5; }
+      .terminal { background: #172033; border-radius: 0.5rem; color: #f8fafc; overflow: auto; padding: 1.25rem; }
+      .result { border-left: 0.25rem solid #c2410c; padding-left: 1rem; }
+      code { font-family: inherit; }
+      li { margin: 0.55rem 0; line-height: 1.45; }
+      .rule { border-top: 1px solid #cbd5e1; margin-top: 2rem; padding-top: 1rem; }
+      @media (prefers-color-scheme: dark) {
+        :root { background: #0f172a; color: #e2e8f0; }
+        .context { color: #cbd5e1; }
+        .rule { border-color: #475569; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Private Borg state unavailable</h1>
+      <p class="context">Terminal CLI result when Borg cannot safely use its private local state.</p>
+
+      <section aria-labelledby="terminal-result">
+        <h2 id="terminal-result">Terminal result</h2>
+        <div class="terminal" role="status" aria-live="polite">
+          <div class="result">
+            <p>Borg could not safely prepare its private local state.</p>
+            <p>No Borg server or cube change was made.</p>
+            <p>Before retrying, verify that Borg-owned directories are real, owned by your account, and not writable by other users. Verify that their parent directories are real, trusted directories owned by your account or the system and not writable by other users. Verify that Borg files are private regular files owned by your account, then run the same command again.</p>
+          </div>
+        </div>
+        <p class="context">The command exits with an error. The recovery action is shown as copyable inline text and is not executed automatically.</p>
+      </section>
+
+      <section class="rule" aria-labelledby="contract">
+        <h2 id="contract">Behavior contract</h2>
+        <ul>
+          <li>A missing root, or an already validated current-user-owned private-root directory with no group or other-user write access, is repaired to private mode without this message. Hostile ancestors are never repaired.</li>
+          <li>Show this state before any local state read, credential persistence, authority discovery, cube creation, attach request, or other remote mutation.</li>
+          <li>Do not expose a path, filesystem implementation detail, race condition, stack, credential, token, or state-file contents.</li>
+          <li>Do not suggest deleting files, changing permissions recursively, re-assimilating, or trying a different role. The same command is the recovery path after the user corrects the directory.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

@@ -9,6 +9,7 @@ import {
 import { BorgServerError, LegacySessionCredentialCollisionError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 const createHashDigest = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -118,6 +119,44 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
 }
 
 describe('runAssimilate private-root preflight', () => {
+  it('keeps the approved artifact and terminal copy byte-exact across TTY and NO_COLOR', async () => {
+    const artifact = readFileSync(
+      new URL('../docs/design/mockups/private-root-unavailable.html', import.meta.url),
+      'utf8',
+    );
+    const copy = [
+      'Borg could not safely prepare its private local state.',
+      'No Borg server or cube change was made.',
+      "Before retrying, verify that Borg-owned directories are real, owned by your account, and not writable by other users. Verify that their parent directories are real, trusted directories owned by your account or the system and not writable by other users. Verify that Borg files are private regular files owned by your account, then run the same command again.",
+    ].join('\n');
+    expect(artifact).toContain(`<p>${copy.split('\n')[0]}</p>`);
+    expect(artifact).toContain(`<p>${copy.split('\n')[1]}</p>`);
+    expect(artifact).toContain(`<p>${copy.split('\n')[2]}</p>`);
+    const generated = readFileSync(new URL('../dist/assimilate-cmd.js', import.meta.url), 'utf8');
+    expect(generated).toContain(copy.split('\n')[0]);
+    expect(generated).toContain(copy.split('\n')[1]);
+    expect(generated).toContain(copy.split('\n')[2]);
+
+    const previousNoColor = process.env.NO_COLOR;
+    try {
+      for (const isTTY of [true, false]) {
+        for (const noColor of [undefined, '1']) {
+          if (noColor === undefined) delete process.env.NO_COLOR;
+          else process.env.NO_COLOR = noColor;
+          const deps = makeStubDeps({
+            isTTY: () => isTTY,
+            preparePrivateRoot: vi.fn(async () => { throw new Error('hostile root'); }),
+          });
+          await expect(runAssimilate({ role: undefined, flags: { server: 'localhost:8787' } }, deps)).resolves.toBe(1);
+          expect(deps.stderr).toHaveBeenCalledWith(`${copy}\n`);
+        }
+      }
+    } finally {
+      if (previousNoColor === undefined) delete process.env.NO_COLOR;
+      else process.env.NO_COLOR = previousNoColor;
+    }
+  });
+
   it('stops before local reads and network access when the root cannot be prepared', async () => {
     const deps = makeStubDeps({
       preparePrivateRoot: vi.fn(async () => { throw new Error('mode 0755'); }),
@@ -131,7 +170,9 @@ describe('runAssimilate private-root preflight', () => {
     expect(deps.listCubes).not.toHaveBeenCalled();
     expect(deps.createCube).not.toHaveBeenCalled();
     expect(deps.stderr).toHaveBeenCalledWith(
-      'Borg could not prepare its private local state directory. No server or cube change was made.\n',
+      'Borg could not safely prepare its private local state.\n' +
+        'No Borg server or cube change was made.\n' +
+        'Before retrying, verify that Borg-owned directories are real, owned by your account, and not writable by other users. Verify that their parent directories are real, trusted directories owned by your account or the system and not writable by other users. Verify that Borg files are private regular files owned by your account, then run the same command again.\n',
     );
   });
 
