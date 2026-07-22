@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bounded unread-log retry exhaustion</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        background: #f5f7fa;
+        color: #172033;
+      }
+      body { margin: 0; padding: 2rem 1rem; }
+      main { margin: auto; max-width: 52rem; }
+      h1 { font-family: system-ui, sans-serif; font-size: 1.5rem; margin: 0 0 0.5rem; }
+      h2 { font-family: system-ui, sans-serif; font-size: 1rem; margin-top: 2rem; }
+      .context { color: #4b5568; font-family: system-ui, sans-serif; line-height: 1.5; }
+      .terminal { background: #172033; border-radius: 0.5rem; color: #f8fafc; overflow: auto; padding: 1.25rem; }
+      .result { border-left: 0.25rem solid #c2410c; padding-left: 1rem; }
+      .error-label { color: #fed7aa; font-weight: 700; }
+      code { font-family: inherit; }
+      li { margin: 0.55rem 0; line-height: 1.45; }
+      .rule { border-top: 1px solid #cbd5e1; margin-top: 2rem; padding-top: 1rem; }
+      @media (prefers-color-scheme: dark) {
+        :root { background: #0f172a; color: #e2e8f0; }
+        .context { color: #cbd5e1; }
+        .rule { border-color: #475569; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Unread activity: bounded retry exhaustion</h1>
+      <p class="context">Terminal MCP result for <code>borg_read-log unread_only=true</code>. This is shown only after the initial request and all bounded eligible retries fail.</p>
+
+      <section aria-labelledby="terminal-result">
+        <h2 id="terminal-result">Terminal result</h2>
+        <div class="terminal" role="status" aria-live="polite">
+          <div class="result">
+            <p class="error-label">Unread activity was not fully read.</p>
+            <p>Could not finish reading unread cube activity.</p>
+            <p>Your unread position is preserved at the last entry already shown.</p>
+            <p>Run <code>borg_read-log unread_only=true</code> again to continue.</p>
+          </div>
+        </div>
+        <p class="context">The MCP result is an error result. The command is presented as copyable inline text, not as an automatically executed action.</p>
+      </section>
+
+      <section class="rule" aria-labelledby="contract">
+        <h2 id="contract">Behavior contract</h2>
+        <ul>
+          <li>Ordinary burst reads and any retry that later succeeds show no retry, waiting, or recovery text.</li>
+          <li>The saved unread position advances only after the complete page is ready to show. Exhaustion leaves the position at the last successfully shown entry, so the next command safely resumes the unread drain.</li>
+          <li>This terminal result contains no transport status, protocol term, socket detail, URL, path, host, credential detail, attempt count, stack, or internal error text.</li>
+          <li>The result names the failed operation, states cursor safety, and gives one immediate recovery action. It does not imply that activity was lost or that the user must re-assimilate.</li>
+        </ul>
+      </section>
+
+      <section class="rule" aria-labelledby="implementation-boundary">
+        <h2 id="implementation-boundary">Implementation boundary</h2>
+        <p class="context">Apply this state only to retry-eligible unread-log failures after the bounded retry policy is exhausted. Validation, authorization, and other non-transient failures retain their own specific recovery states.</p>
+      </section>
+    </main>
+  </body>
+</html>
