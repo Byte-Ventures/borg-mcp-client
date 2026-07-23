@@ -29,6 +29,9 @@ import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
+import { getTemplate, type Template, type TemplateRole } from 'borgmcp-shared/templates';
+import { parseRoleSections } from 'borgmcp-shared/role-section';
+import type { FragmentView, NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
 import { loadBorgServerTrust, type ServerFetch } from './server-trust.js';
 import {
@@ -250,6 +253,11 @@ export interface LocalManageOperation {
   noMutation: string;
 }
 
+export interface LocalManageAuthority {
+  active: ActiveCube;
+  connection: RemoteConnection;
+}
+
 function manageCopyValue(value: string): string {
   return JSON.stringify(value);
 }
@@ -280,6 +288,13 @@ async function localManageConnection(
   return { apiUrl: active.apiUrl, authToken, serverTrustIdentity: trustIdentity };
 }
 
+export async function resolveLocalManageAuthority(
+  active: ActiveCube,
+  operation: LocalManageOperation,
+): Promise<LocalManageAuthority> {
+  return { active, connection: await localManageConnection(active, operation) };
+}
+
 async function localManageRequest<T>(
   active: ActiveCube,
   path: string,
@@ -287,8 +302,9 @@ async function localManageRequest<T>(
   operation: LocalManageOperation,
   payload?: Record<string, unknown>,
   decodePayload?: (value: unknown) => T,
+  connectionOverride?: RemoteConnection,
 ): Promise<T | null> {
-  const connection = await localManageConnection(active, operation);
+  const connection = connectionOverride ?? await localManageConnection(active, operation);
   try {
     return await decodeLocalProtocolResponse<T>((signal) => authedFetch(path, {
       method,
@@ -332,6 +348,24 @@ async function localConnectionRequest<T>(
     serverTrustIdentity: connection.serverTrustIdentity,
     redirect: 'error',
     headers: { Accept: 'application/json' },
+  }), false) as Promise<T>;
+}
+
+async function localConnectionMutation<T>(
+  connection: RemoteConnection,
+  path: string,
+  method: 'POST' | 'PATCH',
+  payload: Record<string, unknown>,
+): Promise<T> {
+  return decodeLocalProtocolResponse<T>((signal) => authedFetch(path, {
+    method,
+    signal,
+    apiUrl: connection.apiUrl,
+    authToken: connection.authToken,
+    serverTrustIdentity: connection.serverTrustIdentity,
+    redirect: 'error',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
   }), false) as Promise<T>;
 }
 
@@ -738,9 +772,32 @@ export async function getRoster(
   serverTrustIdentity?: string,
 ): Promise<{ drones: any[]; roles: any[]; message_taxonomy?: MessageTaxonomy | null; since?: string | null }> {
   const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-  if (since !== undefined) localUnsupported('roster liveness filtering');
+  if (since !== undefined) {
+    const [dronePayload, rolePayload, cubePayload] = await Promise.all([
+      localServerRequest<{ drones: any[]; since?: string | null }>(
+        local,
+        `/api/cubes/${local.cubeId}/drones?since=${encodeURIComponent(since)}`,
+        'GET',
+      ),
+      localServerRequest<{ roles: any[] }>(local, `/api/cubes/${local.cubeId}/roles`, 'GET'),
+      localServerRequest<{ cube: any }>(local, `/api/cubes/${local.cubeId}`, 'GET'),
+    ]);
+    if (!dronePayload || !rolePayload || !cubePayload) {
+      throw new Error('Local Borg server returned an incomplete roster response');
+    }
+    return {
+      drones: dronePayload.drones,
+      roles: rolePayload.roles,
+      message_taxonomy: cubePayload.cube.message_taxonomy ?? null,
+      since: dronePayload.since ?? since,
+    };
+  }
   const composed = await localCubeComposition(local);
-  return { drones: composed.drones, roles: composed.roles, message_taxonomy: null };
+  return {
+    drones: composed.drones,
+    roles: composed.roles,
+    message_taxonomy: composed.cube.message_taxonomy ?? null,
+  };
 }
 
 /**
@@ -1071,11 +1128,25 @@ export async function createCube(
   opts?: { template?: string; message_taxonomy?: MessageTaxonomy | null },
   connection?: RemoteConnection,
 ): Promise<{ id: string; name: string; cube_directive?: string; roles: any[]; drones?: any[]; [k: string]: any }> {
-  void name;
-  void cubeDirective;
-  void opts;
-  void connection;
-  localUnsupported('cube creation');
+  if (!name?.trim()) throw new Error('Local Borg server cube creation requires a cube name');
+  if (opts?.template !== undefined && opts.template !== 'default') {
+    throw new Error('Local Borg server supports only the default cube seed');
+  }
+  const resolved = await localOwnerConnection(connection);
+  const created = await localConnectionMutation<{
+    cube_id: string;
+    human_seat_role_id: string;
+    default_worker_role_id: string;
+  }>(resolved, '/api/cubes', 'POST', {
+    retry_key: randomUUID(),
+    name: name.trim(),
+    template: 'default',
+  });
+  if (!created?.cube_id) throw new Error('Local Borg server returned an invalid cube creation response');
+  const patch: Record<string, unknown> = { cube_directive: cubeDirective };
+  if (opts?.message_taxonomy !== undefined) patch.message_taxonomy = opts.message_taxonomy;
+  await localConnectionMutation(resolved, `/api/cubes/${created.cube_id}`, 'PATCH', patch);
+  return getCube(created.cube_id, resolved);
 }
 
 /**
@@ -1084,10 +1155,12 @@ export async function createCube(
  */
 export async function updateCube(
   cubeId: string,
-  updates: { name?: string; cube_directive?: string; message_taxonomy?: MessageTaxonomy | null }
+  updates: { name?: string; cube_directive?: string; message_taxonomy?: MessageTaxonomy | null },
+  activeOverride?: ActiveCube,
+  connectionOverride?: RemoteConnection,
 ): Promise<{ cube: any }> {
   assertUuidShape(cubeId, 'cube_id');
-  const active = await getActiveCube();
+  const active = activeOverride ?? await getActiveCube();
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
   if (updates.name !== undefined) localUnsupported('cube rename');
   const payload: Record<string, unknown> = {};
@@ -1105,6 +1178,8 @@ export async function updateCube(
       noMutation: 'No cube settings were changed.',
     },
     payload,
+    undefined,
+    connectionOverride,
   );
   if (!result) throw new Error('Local Borg server returned an empty cube response');
   return result;
@@ -1120,11 +1195,13 @@ export async function patchTaxonomyClass(
   cubeId: string,
   op:
     | { action: 'add'; class_def: MessageTaxonomyClass }
-    | { action: 'replace'; class_def: MessageTaxonomyClass }
-    | { action: 'remove'; class: string }
+     | { action: 'replace'; class_def: MessageTaxonomyClass }
+      | { action: 'remove'; class: string },
+  activeOverride?: ActiveCube,
+  connectionOverride?: RemoteConnection,
 ): Promise<{ cube: any }> {
   assertUuidShape(cubeId, 'cube_id');
-  const active = await getActiveCube();
+  const active = activeOverride ?? await getActiveCube();
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
   const className = op.action === 'remove' ? op.class : op.class_def.class;
   const preposition = op.action === 'add' ? 'to' : op.action === 'replace' ? 'in' : 'from';
@@ -1140,6 +1217,8 @@ export async function patchTaxonomyClass(
       noMutation: `No message class was ${pastTense}.`,
     },
     op,
+    undefined,
+    connectionOverride,
   );
   if (!result) throw new Error('Local Borg server returned an empty taxonomy response');
   return result;
@@ -1160,10 +1239,12 @@ export async function deleteCube(cubeId: string): Promise<void> {
  */
 export async function createRole(
   cubeId: string,
-  data: { name: string; short_description: string; detailed_description: string; is_default?: boolean; is_mandatory?: boolean; is_human_seat?: boolean; can_broadcast?: boolean; receives_all_direct?: boolean; default_model?: string; role_class?: 'queen' | 'worker' }
+  data: { name: string; short_description: string; detailed_description: string; is_default?: boolean; is_mandatory?: boolean; is_human_seat?: boolean; can_broadcast?: boolean; receives_all_direct?: boolean; default_model?: string; role_class?: 'queen' | 'worker' },
+  activeOverride?: ActiveCube,
+  connectionOverride?: RemoteConnection,
 ): Promise<{ role: any }> {
   assertUuidShape(cubeId, 'cube_id');
-  const active = await getActiveCube();
+  const active = activeOverride ?? await getActiveCube();
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
   if (data.default_model !== undefined) localUnsupported('per-role default model');
   const result = await localManageRequest<{ role: any }>(
@@ -1176,6 +1257,8 @@ export async function createRole(
       noMutation: 'No role was created.',
     },
     buildLocalRoleFields(data),
+    undefined,
+    connectionOverride,
   );
   if (!result) throw new Error('Local Borg server returned an empty role response');
   return result;
@@ -1186,23 +1269,29 @@ export async function createRole(
  */
 export async function updateRole(
   roleId: string,
-  updates: { name?: string; short_description?: string; detailed_description?: string; is_default?: boolean; is_mandatory?: boolean; is_human_seat?: boolean; can_broadcast?: boolean; receives_all_direct?: boolean; default_model?: string; role_class?: 'queen' | 'worker' }
+  updates: { name?: string; short_description?: string; detailed_description?: string; is_default?: boolean; is_mandatory?: boolean; is_human_seat?: boolean; can_broadcast?: boolean; receives_all_direct?: boolean; default_model?: string; role_class?: 'queen' | 'worker' },
+  targetCubeId?: string,
+  activeOverride?: ActiveCube,
+  connectionOverride?: RemoteConnection,
 ): Promise<{ role: any }> {
   assertUuidShape(roleId, 'role_id');
-  const active = await getActiveCube();
+  const active = activeOverride ?? await getActiveCube();
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
-  assertUuidShape(active.cubeId, 'cube_id');
+  const cubeId = targetCubeId ?? active.cubeId;
+  assertUuidShape(cubeId, 'cube_id');
   if (updates.default_model !== undefined) localUnsupported('per-role default model');
   const result = await localManageRequest<{ role: any }>(
     active,
-    `/api/cubes/${active.cubeId}/roles/${roleId}`,
+    `/api/cubes/${cubeId}/roles/${roleId}`,
     'PATCH',
     {
-      operation: `update role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
-      cubeName: active.name,
+      operation: `update role ${manageCopyValue(roleId)} in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
+      cubeName: cubeId === active.cubeId ? active.name : cubeId,
       noMutation: 'No role was updated.',
     },
     buildLocalRoleFields(updates),
+    undefined,
+    connectionOverride,
   );
   if (!result) throw new Error('Local Borg server returned an empty role response');
   return result;
@@ -1256,22 +1345,28 @@ export async function patchRoleSection(
   op:
     | { action: 'replace'; heading: string; body: string }
     | { action: 'insert'; heading: string; body: string; after?: string | null }
-    | { action: 'delete'; heading: string }
+    | { action: 'delete'; heading: string },
+  targetCubeId?: string,
+  activeOverride?: ActiveCube,
+  connectionOverride?: RemoteConnection,
 ): Promise<{ role: any }> {
   assertUuidShape(roleId, 'role_id');
-  const active = await getActiveCube();
+  const active = activeOverride ?? await getActiveCube();
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
-  assertUuidShape(active.cubeId, 'cube_id');
+  const cubeId = targetCubeId ?? active.cubeId;
+  assertUuidShape(cubeId, 'cube_id');
   const result = await localManageRequest<{ role: any }>(
     active,
-    `/api/cubes/${active.cubeId}/roles/${roleId}/section-patch`,
+    `/api/cubes/${cubeId}/roles/${roleId}/section-patch`,
     'POST',
     {
-      operation: `${op.action} section ${manageCopyValue(op.heading)} ${op.action === 'delete' ? 'from' : 'in'} role ${manageCopyValue(roleId)} in cube ${manageCopyValue(active.name)}`,
-      cubeName: active.name,
+      operation: `${op.action} section ${manageCopyValue(op.heading)} ${op.action === 'delete' ? 'from' : 'in'} role ${manageCopyValue(roleId)} in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
+      cubeName: cubeId === active.cubeId ? active.name : cubeId,
       noMutation: `No role section was ${op.action === 'insert' ? 'inserted' : op.action === 'replace' ? 'replaced' : 'deleted'}.`,
     },
     { ...op },
+    undefined,
+    connectionOverride,
   );
   if (!result) throw new Error('Local Borg server returned an empty role response');
   return result;
@@ -1374,11 +1469,12 @@ export async function getCubeForManagement(
   cubeId: string,
   operation: LocalManageOperation,
   activeOverride?: ActiveCube,
+  connectionOverride?: RemoteConnection,
 ): Promise<{ id: string; name: string; roles: any[]; drones: any[]; [k: string]: any }> {
   assertUuidShape(cubeId, 'cube_id');
   const active = activeOverride ?? await getActiveCube();
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
-  return getCube(cubeId, await localManageConnection(active, operation));
+  return getCube(cubeId, connectionOverride ?? await localManageConnection(active, operation));
 }
 
 /**
@@ -1413,11 +1509,44 @@ export async function getCube(cubeId: string, connection?: RemoteConnection): Pr
  */
 export async function applyTemplate(
   cubeId: string,
-  templateName: string
+  templateName: string,
+  authorityOverride?: LocalManageAuthority,
 ): Promise<{ created: number; updated: number }> {
-  void cubeId;
-  void templateName;
-  localUnsupported('template application');
+  assertUuidShape(cubeId, 'cube_id');
+  const template = getTemplate(templateName);
+  if (!template) throw new Error(`Unknown Borg template ${JSON.stringify(templateName)}`);
+  const active = authorityOverride?.active ?? await getActiveCube();
+  if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
+  const authority = authorityOverride ?? await resolveLocalManageAuthority(active, {
+    operation: `apply template ${manageCopyValue(templateName)}`,
+    cubeName: cubeId === active.cubeId ? active.name : cubeId,
+    noMutation: 'No template fragments were changed.',
+  });
+  const current = await getCubeForManagement(cubeId, {
+    operation: `apply template ${manageCopyValue(templateName)}`,
+    cubeName: cubeId === active.cubeId ? active.name : cubeId,
+    noMutation: 'No template fragments were changed.',
+  }, active, authority.connection);
+  let created = 0;
+  let updated = 0;
+  for (const role of template.roles) {
+    const existing = current.roles.find((candidate) => candidate.name === role.name);
+    if (!existing) {
+      await createRole(cubeId, role, active, authority.connection);
+      created++;
+      continue;
+    }
+    if (await applyMissingRoleFields(existing, role, cubeId, active, authority.connection)) updated++;
+    updated += await applyMissingRoleSections(existing, role, cubeId, active, authority.connection);
+  }
+  for (const classDef of template.message_taxonomy ?? []) {
+    const currentClasses = (current.message_taxonomy ?? []) as MessageTaxonomy;
+    if (!currentClasses.some((candidate) => candidate.class === classDef.class)) {
+      await patchTaxonomyClass(cubeId, { action: 'add', class_def: classDef }, active, authority.connection);
+      updated++;
+    }
+  }
+  return { created, updated };
 }
 
 /**
@@ -1435,11 +1564,166 @@ export async function syncRoles(
   cubeId: string,
   templateName: string = 'software-dev',
   apply: boolean = false,
-  decisions?: Record<string, 'accept' | 'reject'>
-): Promise<any> {
-  void cubeId;
-  void templateName;
-  void apply;
-  void decisions;
-  localUnsupported('role synchronization');
+  decisions?: Record<string, 'accept' | 'reject'>,
+  authorityOverride?: LocalManageAuthority,
+): Promise<NonClobberSyncResult> {
+  assertUuidShape(cubeId, 'cube_id');
+  const template = getTemplate(templateName);
+  if (!template) throw new Error(`Unknown Borg template ${JSON.stringify(templateName)}`);
+  const active = authorityOverride?.active ?? await getActiveCube();
+  if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
+  const authority = authorityOverride ?? await resolveLocalManageAuthority(active, {
+    operation: `sync template ${manageCopyValue(templateName)}`,
+    cubeName: cubeId === active.cubeId ? active.name : cubeId,
+    noMutation: 'No role synchronization changes were applied.',
+  });
+  const current = await getCubeForManagement(cubeId, {
+    operation: `sync template ${manageCopyValue(templateName)}`,
+    cubeName: cubeId === active.cubeId ? active.name : cubeId,
+    noMutation: 'No role synchronization changes were applied.',
+  }, active, authority.connection);
+  const roles: NonClobberSyncResult['roles'] = [];
+  const taxonomy: FragmentView[] = [];
+  const additions: Array<{ key: string; run: () => Promise<void> }> = [];
+  const conflictKeys = new Set<string>();
+  for (const role of template.roles) {
+    const existing = current.roles.find((candidate) => candidate.name === role.name);
+    if (!existing) {
+      const key = `role:${role.name}`;
+      const fragments: FragmentView[] = [{
+        key,
+        kind: 'add',
+        label: 'role',
+        cubeValue: null,
+        templateValue: role.name,
+      }];
+      roles.push({ name: role.name, status: 'new', fragments });
+      additions.push({ key, run: async () => { await createRole(cubeId, role, active, authority.connection); } });
+      continue;
+    }
+    const fragments: FragmentView[] = [];
+    addRoleScalarFragment(fragments, additions, conflictKeys, decisions, existing, role, 'short_description', 'short description', cubeId, active, authority.connection);
+    for (const field of ['is_default', 'is_mandatory', 'is_human_seat', 'can_broadcast', 'receives_all_direct'] as const) {
+      if (role[field] !== undefined) addRoleScalarFragment(fragments, additions, conflictKeys, decisions, existing, role, field, field, cubeId, active, authority.connection);
+    }
+    const currentSections = new Map(parseRoleSections(String(existing.detailed_description ?? '')).map((section) => [section.heading, section]));
+    for (const section of parseRoleSections(role.detailed_description)) {
+      if (!section.heading) continue;
+      const key = `role:${role.name}:section:${section.heading}`;
+      const previous = currentSections.get(section.heading);
+      const kind = !previous ? 'add' : previous.body === section.body ? 'unchanged' : 'conflict';
+      fragments.push({ key, kind, label: `section ${section.heading}`, cubeValue: previous?.body ?? null, templateValue: section.body });
+      if (kind === 'add') additions.push({ key, run: async () => { await patchRoleSection(existing.id, { action: 'insert', heading: section.heading!, body: section.body }, cubeId, active, authority.connection); } });
+      if (kind === 'conflict') conflictKeys.add(key);
+      if (kind === 'conflict' && decisions?.[key] === 'accept') additions.push({ key, run: async () => { await patchRoleSection(existing.id, { action: 'replace', heading: section.heading!, body: section.body }, cubeId, active, authority.connection); } });
+    }
+    roles.push({ name: role.name, status: 'existing', fragments });
+  }
+  for (const existing of current.roles) {
+    if (!template.roles.some((role) => role.name === existing.name)) {
+      roles.push({ name: existing.name, status: 'custom-skipped', fragments: [] });
+    }
+  }
+  for (const classDef of template.message_taxonomy ?? []) {
+    const key = `taxonomy:${classDef.class}`;
+    const currentClass = (current.message_taxonomy ?? []).find((candidate: MessageTaxonomyClass) => candidate.class === classDef.class);
+    const currentValue = currentClass ? stableJson(currentClass) : null;
+    const templateValue = stableJson(classDef);
+    const kind = !currentClass ? 'add' : currentValue === templateValue ? 'unchanged' : 'conflict';
+    taxonomy.push({ key, kind, label: `taxonomy class ${classDef.class}`, cubeValue: currentValue, templateValue });
+    if (kind === 'add') additions.push({ key, run: async () => { await patchTaxonomyClass(cubeId, { action: 'add', class_def: classDef }, active, authority.connection); } });
+    if (kind === 'conflict') conflictKeys.add(key);
+    if (kind === 'conflict' && decisions?.[key] === 'accept') additions.push({ key, run: async () => { await patchTaxonomyClass(cubeId, { action: 'replace', class_def: classDef }, active, authority.connection); } });
+  }
+  const acceptedConflicts = [...conflictKeys].filter((key) => decisions?.[key] === 'accept');
+  const rejectedConflicts = [...conflictKeys].filter((key) => decisions?.[key] !== 'accept');
+  const classifiedKeys = new Set([...conflictKeys]);
+  const unmatchedDecisions = Object.keys(decisions ?? {}).filter((key) => !classifiedKeys.has(key));
+  const addedKeys = additions.filter(({ key }) => !conflictKeys.has(key)).map(({ key }) => key);
+  if (apply) {
+    for (const addition of additions) {
+      if (conflictKeys.has(addition.key) && decisions?.[addition.key] !== 'accept') continue;
+      await addition.run();
+    }
+  }
+  return {
+    dryRun: !apply,
+    roles,
+    taxonomy,
+    applied: {
+      added: apply ? addedKeys : [],
+      acceptedConflicts: apply ? acceptedConflicts : [],
+    },
+    rejectedConflicts,
+    unmatchedDecisions,
+  };
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function addRoleScalarFragment(
+  fragments: FragmentView[],
+  additions: Array<{ key: string; run: () => Promise<void> }>,
+  conflictKeys: Set<string>,
+  decisions: Record<string, 'accept' | 'reject'> | undefined,
+  existing: any,
+  template: TemplateRole,
+  field: 'short_description' | 'is_default' | 'is_mandatory' | 'is_human_seat' | 'can_broadcast' | 'receives_all_direct',
+  label: string,
+  cubeId: string,
+  active: ActiveCube,
+  connection: RemoteConnection,
+): void {
+  const templateValue = template[field];
+  if (templateValue === undefined) return;
+  const key = `role:${template.name}:${field}`;
+  const currentValue = existing[field];
+  const missing = currentValue === undefined || (field === 'short_description' && currentValue === '');
+  const kind = missing ? 'add' : currentValue === templateValue ? 'unchanged' : 'conflict';
+  fragments.push({ key, kind, label, cubeValue: missing ? null : String(currentValue), templateValue: String(templateValue) });
+  if (kind === 'add') additions.push({
+    key,
+    run: async () => { await updateRole(existing.id, { [field]: templateValue } as Parameters<typeof updateRole>[1], cubeId, active, connection); },
+  });
+  if (kind === 'conflict') {
+    conflictKeys.add(key);
+    if (decisions?.[key] === 'accept') additions.push({
+      key,
+      run: async () => { await updateRole(existing.id, { [field]: templateValue } as Parameters<typeof updateRole>[1], cubeId, active, connection); },
+    });
+  }
+}
+
+async function applyMissingRoleFields(existing: any, template: TemplateRole, cubeId: string, active: ActiveCube, connection: RemoteConnection): Promise<boolean> {
+  const updates: Record<string, unknown> = {};
+  if ((existing.short_description === undefined || existing.short_description === '') && template.short_description) {
+    updates.short_description = template.short_description;
+  }
+  for (const field of ['is_default', 'is_mandatory', 'is_human_seat', 'can_broadcast', 'receives_all_direct'] as const) {
+    if (existing[field] === undefined && template[field] !== undefined) updates[field] = template[field];
+  }
+  if (Object.keys(updates).length === 0) return false;
+  await updateRole(existing.id, updates as Parameters<typeof updateRole>[1], cubeId, active, connection);
+  return true;
+}
+
+async function applyMissingRoleSections(existing: any, template: TemplateRole, cubeId: string, active: ActiveCube, connection: RemoteConnection): Promise<number> {
+  const currentSections = new Map(parseRoleSections(String(existing.detailed_description ?? '')).map((section) => [section.heading, section]));
+  let updated = 0;
+  for (const section of parseRoleSections(template.detailed_description)) {
+    if (section.heading && !currentSections.has(section.heading)) {
+      await patchRoleSection(existing.id, { action: 'insert', heading: section.heading, body: section.body }, cubeId, active, connection);
+      updated++;
+    }
+  }
+  return updated;
 }

@@ -79,7 +79,7 @@ describe('#921 de-template — universal layer is template-agnostic (STARTER con
     expect(WAKE_PATH_MONITOR_DISCIPLINE).not.toContain('REVIEW-READY');
     expect(WAKE_PATH_MONITOR_DISCIPLINE).not.toContain('gh#');
     expect(WAKE_PATH_MONITOR_DISCIPLINE).toContain('configured wake mechanism');
-    expect(WAKE_PATH_MONITOR_DISCIPLINE).toContain('authoritatively confirms');
+    expect(WAKE_PATH_MONITOR_DISCIPLINE).toContain('require STARTING or substantive PROGRESS');
     expect(WAKE_PATH_MONITOR_DISCIPLINE).toContain('terminal lifecycle state');
     expect(WAKE_PATH_MONITOR_DISCIPLINE).toContain('reversible suspension');
     expect(WAKE_PATH_MONITOR_DISCIPLINE).toContain('actual heartbeat request');
@@ -387,10 +387,10 @@ describe('formatRegenMarkdown — lite mode (gh#496-B)', () => {
     const lite = formatRegenMarkdown(result, { mode: 'lite' });
 
     expect(lite).toContain('configured wake mechanism');
-    expect(lite).toContain('Pre-push announcement discipline');
-    expect(lite).toContain('The initial `git push` to a feature branch');
-    expect(lite).not.toContain('Merge-announcement discipline');
-    expect(lite).not.toContain('Coordinator runs all merges');
+    expect(lite).toContain('Git safety:');
+    expect(lite).toContain('Push discipline:');
+    expect(lite).toContain('Push only the assigned branch');
+    expect(lite).not.toContain('Verify repository, branch, exact revision, ancestry');
   });
 
   it('does not emit Builder-scoped push discipline for Coordinator lite output', () => {
@@ -409,10 +409,10 @@ describe('formatRegenMarkdown — lite mode (gh#496-B)', () => {
     const lite = formatRegenMarkdown(result, { mode: 'lite' });
 
     expect(lite).toContain('configured wake mechanism');
-    expect(lite).toContain('Merge-announcement discipline');
-    expect(lite).toContain('Coordinator runs all merges');
-    expect(lite).not.toContain('Pre-push announcement discipline');
-    expect(lite).not.toContain('The initial `git push` to a feature branch');
+    expect(lite).toContain('Git integration safety:');
+    expect(lite).toContain('Push discipline:');
+    expect(lite).toContain('Before pushing an integration result');
+    expect(lite).not.toContain('Push only the assigned branch');
   });
 });
 

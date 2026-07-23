@@ -32,6 +32,8 @@ export interface NonClobberSyncResult {
     rejectedConflicts: string[];
     unmatchedDecisions?: string[];
 }
+/** Escape cube-controlled text before it reaches Markdown or a terminal. */
+export declare function escapeSyncDisplay(value: string): string;
 /**
  * Render a `NonClobberSyncResult` as an operator-facing markdown report.
  *

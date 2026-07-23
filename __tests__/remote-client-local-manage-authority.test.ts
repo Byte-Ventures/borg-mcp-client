@@ -274,8 +274,6 @@ describe('local manage-request authority', () => {
     const unsupported = [
       () => remote.deleteCube(CUBE_ID),
       () => remote.deleteRole(ROLE_ID),
-      () => remote.applyTemplate(CUBE_ID, 'software-dev'),
-      () => remote.syncRoles(CUBE_ID, 'software-dev'),
       () => remote.removeDecision(SESSION, ORIGIN, { topic: 'topology' }, TRUST_IDENTITY),
     ];
 
