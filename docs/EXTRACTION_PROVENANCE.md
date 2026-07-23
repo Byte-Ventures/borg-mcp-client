@@ -21,8 +21,9 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
   lightweight release tag failed before packaging. The reviewed `2.0.1`
   recovery, `2.0.2`, `2.0.3`, `2.0.4`, `2.0.5`, and `2.0.6` successors were
   published and registry-verified. The immutable `2.0.7` workflow failed before
-  package creation or npm publication, so the next candidate identity is `2.0.8`.
-  Extraction and versioning do not authorize publication.
+  package creation or npm publication. The `2.0.8` successor was published and
+  registry-verified, so the next candidate identity is `2.0.9`. Extraction and
+  versioning do not authorize publication.
 
 ## Review Holds
 
@@ -39,7 +40,7 @@ contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
 resolves to the audited registry `borgmcp-shared@0.5.1`. The matching
 `borgmcp-server@0.1.8` release is published and registry-verified. Client
-`borgmcp@2.0.6` is published and registry-verified. The immutable `v2.0.7`
+`borgmcp@2.0.8` is published and registry-verified. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next
-candidate remains gated by reviewed `v2.0.8` source, a fresh annotated tag, and
+candidate remains gated by reviewed `v2.0.9` source, a fresh annotated tag, and
 exact registry integrity and signature verification.
