@@ -30,7 +30,7 @@ const TLS_TRUST_ERROR_CODES = new Set([
  * CERT_NOT_YET_VALID, CERT_REVOKED, …); `ERR_TLS_CERT*` covers Node's SAN check.
  */
 function isPinnedTransportTrustFailure(code) {
-    if (!code)
+    if (typeof code !== 'string')
         return false;
     return (code.startsWith('CERT_') ||
         code.startsWith('ERR_TLS_CERT') ||
