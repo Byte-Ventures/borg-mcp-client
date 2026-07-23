@@ -21,7 +21,7 @@ import {
 import { smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const CLIENT_VERSION = '2.0.6';
+const CLIENT_VERSION = '2.0.7';
 const SHARED_VERSION = '0.5.0';
 const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.5.0.tgz';
 const SHARED_INTEGRITY = 'sha512-kOAfMTMPTHRvctB0wpPo/+nNPjiBsk0FddnLgGQged8K8PwQqYWv7zQizPU2mgyExpurjCKKPbi9M+QcfmXNKA==';
@@ -241,7 +241,7 @@ test('release documentation describes the activated minimal publication lane', a
   const extraction = await readFile(join(root, 'docs', 'EXTRACTION_PROVENANCE.md'), 'utf8');
 
   assert.match(readme, /After verified publication/);
-  assert.match(readme, /npm install -g borgmcp@2\.0\.6/);
+  assert.match(readme, /npm install -g borgmcp@2\.0\.7/);
   assert.doesNotMatch(readme, /npm install -g borgmcp(?:\s|$)/);
   assert.match(security, /protected npm environment and Trusted Publishing/);
   for (const boundary of [
@@ -282,11 +282,16 @@ test('release documentation describes the activated minimal publication lane', a
     '29955861508',
     'sha512-pMqovKzUu0Mdru2YJULj3XkHSeiT/PuCAjwCQ2Sg/mmF299tZE80qvca6GCNCLjhYEWWIuXmssuxK7wePKqxdw==',
     'v2.0.6',
+    'b41d312efc9f8d1ed63021812d8165b00011e8d8',
+    '5fd9048e4c22e4478160e3a25654837b5a33d8bb',
+    '29982288768',
+    'sha512-WDX4tmk46I6Tvb/Gz1XlD/9PbIgOe72rRDCjV+/lw6KnAxWW0S25LT1DgifotI9LQv7LLAok8WkjucDDTTQ+pw==',
+    'v2.0.7',
   ]) assert.ok(releasing.includes(evidence), `Missing immutable release evidence: ${evidence}`);
   assert.match(releasing, /failed before package\s+creation or npm publication/);
   assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
   assert.match(extraction, /borgmcp-server@0\.1\.8/);
-  assert.match(extraction, /reviewed `v2\.0\.6` source/);
+  assert.match(extraction, /reviewed `v2\.0\.7` source/);
   assert.doesNotMatch(`${readme}\n${security}\n${releasing}`, /publication is deferred|not yet published/);
 });
 

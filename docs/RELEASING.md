@@ -58,6 +58,15 @@ Never move, replace, reuse, or rerun that tag or workflow. The next candidate
 uses the unused `v2.0.6` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
+The annotated `v2.0.6` tag object
+`b41d312efc9f8d1ed63021812d8165b00011e8d8` peels to protected-main commit
+`5fd9048e4c22e4478160e3a25654837b5a33d8bb`. Workflow run `29982288768`, attempt 1,
+successfully published that exact source as `borgmcp@2.0.6`; the registry records integrity
+`sha512-WDX4tmk46I6Tvb/Gz1XlD/9PbIgOe72rRDCjV+/lw6KnAxWW0S25LT1DgifotI9LQv7LLAok8WkjucDDTTQ+pw==`.
+Never move, replace, reuse, or rerun that tag or workflow. The next candidate
+uses the unused `v2.0.7` identity from a fresh reviewed protected-main commit
+and requires the complete release gate again.
+
 ## Release Prerequisites
 
 The standalone client was extracted from private-monorepo commit
