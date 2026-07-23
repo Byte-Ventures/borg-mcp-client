@@ -341,7 +341,7 @@ export declare function updateRole(roleId: string, updates: {
     receives_all_direct?: boolean;
     default_model?: string;
     role_class?: 'queen' | 'worker';
-}): Promise<{
+}, targetCubeId?: string): Promise<{
     role: any;
 }>;
 /**
@@ -363,7 +363,7 @@ export declare function patchRoleSection(roleId: string, op: {
 } | {
     action: 'delete';
     heading: string;
-}): Promise<{
+}, targetCubeId?: string): Promise<{
     role: any;
 }>;
 /**

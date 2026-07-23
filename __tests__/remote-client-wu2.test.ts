@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getTemplate } from 'borgmcp-shared/templates';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
+const TARGET_CUBE_ID = '99999999-9999-4999-8999-999999999999';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
 const ORIGIN = 'https://127.0.0.1:7091';
@@ -22,6 +23,9 @@ describe('Sprint 10 WU2 local adapter', () => {
     fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(input.toString());
       const method = init?.method ?? 'GET';
+      const cubeMatch = /^\/api\/cubes\/([^/]+)(?:\/(.*))?$/.exec(url.pathname);
+      const requestedCubeId = cubeMatch?.[1];
+      const resource = cubeMatch?.[2];
 
       if (url.pathname === '/api/cubes' && method === 'POST') {
         return new Response(envelope({
@@ -30,25 +34,28 @@ describe('Sprint 10 WU2 local adapter', () => {
           default_worker_role_id: ROLE_ID,
         }), { status: 201 });
       }
-      if (url.pathname === `/api/cubes/${CUBE_ID}` && method === 'GET') {
-        return new Response(envelope({ cube: { id: CUBE_ID, name: 'adopted' } }), { status: 200 });
+      if (requestedCubeId && !resource && method === 'GET') {
+        return new Response(envelope({ cube: { id: requestedCubeId, name: 'adopted' } }), { status: 200 });
       }
-      if (url.pathname === `/api/cubes/${CUBE_ID}` && method === 'PATCH') {
-        return new Response(envelope({ cube: { id: CUBE_ID, name: 'adopted' } }), { status: 200 });
+      if (requestedCubeId && !resource && method === 'PATCH') {
+        return new Response(envelope({ cube: { id: requestedCubeId, name: 'adopted' } }), { status: 200 });
       }
-      if (url.pathname === `/api/cubes/${CUBE_ID}/roles` && method === 'GET') {
+      if (requestedCubeId && resource === 'roles' && method === 'GET') {
         return new Response(envelope({ roles: roleFixtures }), { status: 200 });
       }
-      if (url.pathname === `/api/cubes/${CUBE_ID}/drones` && method === 'GET') {
+      if (requestedCubeId && resource === 'drones' && method === 'GET') {
         return new Response(envelope({ drones: [{ id: DRONE_ID, role_id: ROLE_ID }] }), { status: 200 });
       }
-      if (url.pathname === `/api/cubes/${CUBE_ID}/roles` && method === 'POST') {
+      if (requestedCubeId && resource === 'roles' && method === 'POST') {
         return new Response(envelope({ role: { id: ROLE_ID, name: 'created' } }), { status: 201 });
       }
-      if (url.pathname === `/api/cubes/${CUBE_ID}/taxonomy-patch` && method === 'POST') {
+      if (requestedCubeId && resource?.startsWith('roles/') && method === 'PATCH') {
+        return new Response(envelope({ role: { id: ROLE_ID, name: 'Builder' } }), { status: 200 });
+      }
+      if (requestedCubeId && resource === 'taxonomy-patch' && method === 'POST') {
         return new Response(envelope({ cube: { id: CUBE_ID, message_taxonomy: [] } }), { status: 200 });
       }
-      if (url.pathname === `/api/cubes/${CUBE_ID}/roles/${ROLE_ID}/section-patch` && method === 'POST') {
+      if (requestedCubeId && resource?.endsWith('/section-patch') && method === 'POST') {
         return new Response(envelope({ role: { id: ROLE_ID, name: 'Drone' } }), { status: 200 });
       }
       throw new Error(`unexpected local request ${method} ${url.pathname}${url.search}`);
@@ -143,5 +150,30 @@ describe('Sprint 10 WU2 local adapter', () => {
       'role:Builder:short_description',
       'role:Builder:section:Before changing code',
     ]));
+  });
+
+  it('uses the requested non-active cube for existing-role apply and sync mutations', async () => {
+    roleFixtures = [{
+      id: ROLE_ID,
+      name: 'Builder',
+      short_description: '',
+      detailed_description: '',
+      is_default: true,
+    }];
+    const { applyTemplate, syncRoles } = await import('../src/remote-client.js');
+
+    await applyTemplate(TARGET_CUBE_ID, 'software-dev');
+    await syncRoles(TARGET_CUBE_ID, 'software-dev', true);
+
+    const mutations = fetchSpy.mock.calls.filter(([, request]) => {
+      const method = request?.method ?? 'GET';
+      return method === 'PATCH' || method === 'POST';
+    });
+    expect(mutations.length).toBeGreaterThan(0);
+    for (const [input] of mutations) {
+      const path = new URL(String(input)).pathname;
+      expect(path).toContain(`/api/cubes/${TARGET_CUBE_ID}/`);
+      expect(path).not.toContain(`/api/cubes/${CUBE_ID}/`);
+    }
   });
 });
