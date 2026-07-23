@@ -9,6 +9,7 @@
  *
  * The shape mirrors the worker's `NonClobberSyncResult`.
  */
+const BIDI_CONTROL_RE = /\p{Bidi_Control}/u;
 /** Escape cube-controlled text before it reaches Markdown or a terminal. */
 export function escapeSyncDisplay(value) {
     return [...value].map((char) => {
@@ -17,7 +18,7 @@ export function escapeSyncDisplay(value) {
             return '⏎';
         if (code < 0x20 || (code >= 0x7f && code <= 0x9f))
             return `\\u{${code.toString(16)}}`;
-        if ((code >= 0x200e && code <= 0x200f) || (code >= 0x2028 && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)) {
+        if (BIDI_CONTROL_RE.test(char) || code === 0x2028 || code === 0x2029) {
             return `\\u{${code.toString(16)}}`;
         }
         if (char === '`')

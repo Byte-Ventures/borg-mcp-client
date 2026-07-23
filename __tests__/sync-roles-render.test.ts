@@ -19,12 +19,17 @@ const baseResult = (over: Partial<NonClobberSyncResult> = {}): NonClobberSyncRes
 
 describe('renderSyncRolesResult — conflict surfacing', () => {
   it('escapes terminal controls and Markdown-breaking syntax in cube-controlled values', () => {
-    const hostile = 'safe\u001b[2Jspoof\rnext\u202E`[x](https://evil.example)`';
+    const hostile = 'safe\u0001\u001b[2Jspoof\rnext\u061C\u202E\u2028`[x](https://evil.example)`';
     const escaped = escapeSyncDisplay(hostile);
     expect(escaped).toContain('\\u{1b}');
     expect(escaped).toContain('\\u{d}');
+    expect(escaped).toContain('\\u{61c}');
     expect(escaped).toContain('\\u{202e}');
+    expect(escaped).toContain('\\u{2028}');
     expect(escaped).toContain('\\u{60}');
+    for (const control of ['\u0001', '\u001b', '\r', '\u061c', '\u202e', '\u2028']) {
+      expect(escaped).not.toContain(control);
+    }
 
     const out = renderSyncRolesResult(baseResult({
       roles: [{
@@ -42,7 +47,9 @@ describe('renderSyncRolesResult — conflict surfacing', () => {
     expect(out).not.toContain('\u001b');
     expect(out).not.toContain('\r');
     expect(out).toContain('\\u{1b}');
+    expect(out).toContain('\\u{61c}');
     expect(out).toContain('\\u{202e}');
+    expect(out).toContain('\\u{2028}');
     expect(out).toContain('\\u{60}');
     expect(out).toContain('\\[');
     expect(out).toContain('\\(');

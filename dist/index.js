@@ -58,6 +58,25 @@ import { runEvictDroneTool, runReassignDroneTool, } from './drone-management.js'
 async function applyTemplateToCube(cubeId, template, authority) {
     return await applyTemplate(cubeId, template.name, authority);
 }
+export async function runApplyTemplateTool(cubeId, template, authority, deps = {}) {
+    const apply = deps.applyTemplate ?? applyTemplate;
+    const read = deps.getCubeForManagement ?? getCubeForManagement;
+    const update = deps.updateCube ?? updateCube;
+    const summary = await apply(cubeId, template.name, authority);
+    const cubeForRules = await read(cubeId, {
+        operation: `read template target ${JSON.stringify(template.name)}`,
+        cubeName: cubeId === authority.active.cubeId ? authority.active.name : cubeId,
+        noMutation: 'No template fragments were changed.',
+    }, authority.active, authority.connection);
+    const newCubeDirective = resolveCubeDirectiveForApply(cubeForRules.cube_directive, template);
+    if (newCubeDirective === null)
+        return { summary, cubeDirectiveNote: '' };
+    await update(cubeId, { cube_directive: newCubeDirective }, authority.active, authority.connection);
+    return {
+        summary,
+        cubeDirectiveNote: ' Template cube directive applied (cube directive was empty).',
+    };
+}
 /**
  * Throw a friendly error if the client has not been assimilated to a cube.
  */
@@ -968,21 +987,7 @@ export async function main() {
                         cubeName: cubeId === active.cubeId ? active.name : cubeId,
                         noMutation: 'No template fragments were changed.',
                     });
-                    const summary = await applyTemplateToCube(cubeId, template, authority);
-                    // Sprint 14: optionally write template's cube_directive to the
-                    // cube. No-clobber discipline — only fills empty directives,
-                    // never overwrites operator-customized text.
-                    let cubeDirectiveNote = '';
-                    const cubeForRules = await getCubeForManagement(cubeId, {
-                        operation: `read template target ${JSON.stringify(templateName)}`,
-                        cubeName: cubeId === active.cubeId ? active.name : cubeId,
-                        noMutation: 'No template fragments were changed.',
-                    }, active, authority.connection);
-                    const newCubeDirective = resolveCubeDirectiveForApply(cubeForRules.cube_directive, template);
-                    if (newCubeDirective !== null) {
-                        await updateCube(cubeId, { cube_directive: newCubeDirective }, active, authority.connection);
-                        cubeDirectiveNote = ' Template cube directive applied (cube directive was empty).';
-                    }
+                    const { summary, cubeDirectiveNote } = await runApplyTemplateTool(cubeId, template, authority);
                     return { content: [{ type: 'text', text: `Applied template **${templateName}** to cube ${cubeId} — ${summary.created} role(s) created, ${summary.updated} updated.${cubeDirectiveNote}` }] };
                 }
                 default:

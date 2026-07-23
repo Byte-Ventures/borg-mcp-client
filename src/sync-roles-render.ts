@@ -12,6 +12,8 @@
 
 export type FragmentKind = 'add' | 'unchanged' | 'conflict';
 
+const BIDI_CONTROL_RE = /\p{Bidi_Control}/u;
+
 export interface FragmentView {
   key: string;
   kind: FragmentKind;
@@ -41,7 +43,7 @@ export function escapeSyncDisplay(value: string): string {
     const code = char.codePointAt(0)!;
     if (code === 0x0a) return '⏎';
     if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return `\\u{${code.toString(16)}}`;
-    if ((code >= 0x200e && code <= 0x200f) || (code >= 0x2028 && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)) {
+    if (BIDI_CONTROL_RE.test(char) || code === 0x2028 || code === 0x2029) {
       return `\\u{${code.toString(16)}}`;
     }
     if (char === '`') return '\\u{60}';
