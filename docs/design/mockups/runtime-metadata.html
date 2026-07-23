@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Advisory runtime metadata states</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --page: #eceee8;
+        --ink: #182019;
+        --muted: #59645b;
+        --panel: #f9faf6;
+        --line: #c5cbc2;
+        --terminal: #101713;
+        --terminal-ink: #e7eee8;
+        --terminal-muted: #aebbb1;
+        --known: #17643c;
+        --unknown: #76550b;
+        --unavailable: #8a411e;
+        --rejected: #8b2535;
+        --accent: #215f70;
+        --focus: #1b66b1;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(90deg, transparent 31px, color-mix(in srgb, var(--line), transparent 55%) 32px, transparent 33px),
+          var(--page);
+        background-size: 32px 32px;
+        color: var(--ink);
+        font: 16px/1.55 system-ui, sans-serif;
+      }
+
+      main {
+        width: min(1120px, calc(100% - 32px));
+        margin: 48px auto 80px;
+      }
+
+      h1, h2, h3 { line-height: 1.15; }
+      h1 { max-width: 820px; margin: 0 0 12px; font-size: clamp(2.25rem, 6vw, 4.75rem); letter-spacing: -.04em; }
+      h2 { margin: 0; font-size: 1.35rem; }
+      h3 { margin: 0; font-size: 1.05rem; }
+      p { max-width: 820px; }
+      code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+      .eyebrow, .state {
+        color: var(--muted);
+        font-size: .78rem;
+        font-weight: 760;
+        letter-spacing: .09em;
+        text-transform: uppercase;
+      }
+
+      .lede { color: var(--muted); font-size: 1.12rem; }
+
+      .advisory {
+        margin: 28px 0 0;
+        padding: 18px 20px;
+        border-left: 4px solid var(--accent);
+        background: var(--panel);
+        font-weight: 650;
+      }
+
+      .surfaces, .states {
+        display: grid;
+        gap: 24px;
+        margin-top: 32px;
+      }
+
+      article {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+      }
+
+      article > header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .terminal-wrap { background: var(--terminal); }
+
+      .terminal {
+        width: min(100%, 80ch);
+        min-height: 100%;
+        margin: 0;
+        padding: 20px;
+        border-right: 1px dashed #58625a;
+        color: var(--terminal-ink);
+        font: 14px/1.62 ui-monospace, SFMono-Regular, Consolas, monospace;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+
+      .terminal strong { color: #fff; }
+      .terminal .muted { color: var(--terminal-muted); }
+      .terminal .warning { color: #ffc18b; }
+      .terminal .error { color: #ffacb8; }
+
+      .notes { padding: 16px 20px 18px; }
+      .notes strong { color: var(--accent); }
+      .notes ul { margin: 8px 0 0; padding-left: 20px; }
+      .notes li { margin: 6px 0; }
+
+      .known { color: var(--known); }
+      .unknown { color: var(--unknown); }
+      .unavailable { color: var(--unavailable); }
+      .rejected { color: var(--rejected); }
+
+      .contract {
+        margin-top: 32px;
+        padding: 22px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--panel);
+      }
+
+      .contract h2 { margin-bottom: 10px; }
+
+      table { width: 100%; border-collapse: collapse; }
+      caption { padding: 0 0 12px; text-align: left; color: var(--muted); }
+      th, td { padding: 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+      th { background: color-mix(in srgb, var(--panel), var(--accent) 8%); }
+
+      details {
+        margin-top: 16px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+      }
+
+      summary { cursor: pointer; font-weight: 720; }
+      summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
+      details code { overflow-wrap: anywhere; }
+
+      .fixture-grid {
+        display: grid;
+        gap: 18px;
+        margin-top: 18px;
+      }
+
+      .fixture {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
+
+      .fixture h3 { margin-bottom: 10px; }
+      .fixture .terminal-wrap { max-width: 100%; }
+      .fixture-80 .terminal-wrap { width: 80ch; }
+      .fixture-120 .terminal-wrap { width: 120ch; }
+      .fixture .terminal { width: 100%; }
+
+      .visual-list {
+        max-width: 42rem;
+        margin-top: 18px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--panel), var(--accent) 4%);
+      }
+
+      .visual-list p { margin: 0; }
+      .truncated { display: inline-block; max-width: 23ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; white-space: nowrap; }
+      .hide-label { display: none; }
+      details[open] .show-label { display: none; }
+      details[open] .hide-label { display: inline; }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      @media (min-width: 840px) {
+        .surfaces { grid-template-columns: 1fr 1fr; }
+        .surfaces article:first-child { grid-column: 1 / -1; }
+        .states { grid-template-columns: 1fr 1fr; }
+      }
+
+      @media (max-width: 640px) {
+        main { width: min(100% - 20px, 1120px); margin-top: 28px; }
+        article > header { align-items: flex-start; flex-direction: column; }
+        th, td { padding: 9px; overflow-wrap: anywhere; }
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --page: #121713;
+          --ink: #edf1ed;
+          --muted: #abb5ad;
+          --panel: #1b221d;
+          --line: #3b473e;
+          --terminal: #080d0a;
+          --known: #88d6a7;
+          --unknown: #e4c879;
+          --unavailable: #f0ad82;
+          --rejected: #f1a0ae;
+          --accent: #83c4d2;
+          --focus: #8ac5ff;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Interaction mockup / borg-mcp-client / issue #78</p>
+      <h1>Truthful local seat identity</h1>
+      <p class="lede">Agent CLI, reported model, and working repository help operators verify a seat before dispatch. They are descriptive context, never authority or liveness evidence.</p>
+
+      <p class="advisory">Agent CLI, reported model, and working repository are advisory. They do not determine authority, role, health, activity, wake behavior, or routing.</p>
+
+      <section class="surfaces" aria-label="Approved terminal surface layouts">
+        <article>
+          <header>
+            <h2><code>borg_roster</code></h2>
+            <span class="state">Detailed identity</span>
+          </header>
+          <div class="terminal-wrap">
+            <pre class="terminal"># Drones in cube: borg-mcp
+
+Agent CLI, reported model, and working repository are advisory. They do not determine authority, role, health, activity, wake behavior, or routing.
+
+- <strong>builder-4cf3a767</strong> `id:4cf3a767` - Role: Builder - last seen 18s ago - `awake`
+  Agent CLI: OpenCode
+  Reported model: openai/gpt-5.6-sol
+  Working repo: Byte-Ventures/borg-mcp-client
+  Origin: github.com/Byte-Ventures/borg-mcp-client
+
+- <strong>builder-a076b44a</strong> `id:a076b44a` - Role: Builder - last seen 42s ago - `stale`
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: Byte-Ventures/borg-mcp-shared
+  Origin: github.com/Byte-Ventures/borg-mcp-shared</pre>
+          </div>
+          <div class="notes">
+            <strong>Hierarchy</strong>
+            <ul>
+              <li>Keep seat, role, recency, and liveness on the summary line.</li>
+              <li>Put advisory identity on labeled continuation lines. Never append it after wake-path markers.</li>
+              <li><code>borg_roster</code> is the deliberate detail surface, so it may show the sanitized canonical origin.</li>
+            </ul>
+          </div>
+        </article>
+
+        <article>
+          <header>
+            <h2><code>borg_regen</code></h2>
+            <span class="state">Compact context</span>
+          </header>
+          <div class="terminal-wrap">
+            <pre class="terminal">## Connected drones
+
+<span class="muted">_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._</span>
+
+- <strong>builder-4cf3a767</strong> - Role: Builder - last seen 18s ago
+  Agent CLI: OpenCode
+  Reported model: openai/gpt-5.6-sol
+  Working repo: Byte-Ventures/borg-mcp-client
+
+- <strong>builder-a076b44a</strong> - Role: Builder - last seen 42s ago
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: Byte-Ventures/borg-mcp-shared</pre>
+          </div>
+          <div class="notes">
+            <strong>Compact rule</strong>
+            <ul>
+              <li>Use the same labels and state words as roster.</li>
+              <li>Show canonical <code>owner/repo</code>, not origin, in recurring orientation output.</li>
+              <li>Do not imply that a known repository makes dispatch safe; the note remains explicit.</li>
+            </ul>
+          </div>
+        </article>
+
+        <article>
+          <header>
+            <h2><code>borg_list-drones</code></h2>
+            <span class="state">Owner list</span>
+          </header>
+          <div class="terminal-wrap">
+            <pre class="terminal">Drones in cube 326ea162-1234-4abc-8def-1234567890ab (1):
+
+<span class="muted">_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._</span>
+
+- <strong>builder-4cf3a767</strong> `id:4cf3a767`
+  Role: Builder `role:builder-1234`
+  Last seen: 2026-07-24T00:04:18.000Z
+  Agent CLI: OpenCode
+  Reported model: openai/gpt-5.6-sol
+  Working repo: Byte-Ventures/borg-mcp-client</pre>
+          </div>
+          <div class="notes">
+            <strong>List rule</strong>
+            <ul>
+              <li>Keep stable IDs available without embedding all metadata in one unbounded line.</li>
+              <li>Match the roster and regen label-value order.</li>
+              <li>Show origin only in an explicit detail surface, never as an uncontrolled remote string.</li>
+            </ul>
+          </div>
+        </article>
+      </section>
+
+      <section class="states" aria-label="Runtime metadata display states">
+        <article>
+          <header>
+            <h2>Known</h2>
+            <span class="state known">Accepted value</span>
+          </header>
+          <div class="terminal-wrap">
+            <pre class="terminal">Agent CLI: Codex
+Reported model: openai/gpt-5.6-codex
+Working repo: Byte-Ventures/borg-mcp-client</pre>
+          </div>
+          <div class="notes">Render only a bounded, validated value returned by the pinned local server. The value remains advisory.</div>
+        </article>
+
+        <article>
+          <header>
+            <h2>Unknown and not reported</h2>
+            <span class="state unknown">Distinct absence</span>
+          </header>
+          <div class="terminal-wrap">
+            <pre class="terminal">Agent CLI: OpenCode
+Reported model: unknown
+Working repo: not reported</pre>
+          </div>
+          <div class="notes">
+            <ul>
+              <li><code>unknown</code>: the current client completed detection but cannot truthfully know the value. Never guess.</li>
+              <li><code>not reported</code>: this seat has not supplied a current report, including an older seat awaiting self-heal.</li>
+              <li>Never use <code>null</code>, an empty label, a dash, or <code>N/A</code> as user-facing copy.</li>
+            </ul>
+          </div>
+        </article>
+
+        <article>
+          <header>
+            <h2>Temporarily unavailable</h2>
+            <span class="state unavailable">Caller-local recovery</span>
+          </header>
+          <div class="terminal-wrap">
+            <pre class="terminal"><span class="warning">Runtime metadata warning:</span> Borg could not refresh this seat's working repository.
+The previous safe value remains in use: Byte-Ventures/borg-mcp-client.
+Run `borg_regen` again after the repository becomes available.</pre>
+          </div>
+          <div class="notes">
+            <ul>
+              <li>Show this warning only to the seat whose collection or update failed.</li>
+              <li>Keep the previous accepted value in shared roster, regen, and list views.</li>
+              <li>If no accepted value exists, say <code>Working repo: temporarily unavailable</code> in the caller-local warning; shared views remain <code>not reported</code>. Do not turn a transient failure into <code>unknown</code>.</li>
+            </ul>
+          </div>
+        </article>
+
+        <article>
+          <header>
+            <h2>Rejected safely</h2>
+            <span class="state rejected">No raw echo</span>
+          </header>
+          <div class="terminal-wrap">
+            <pre class="terminal"><span class="error">Could not update working repository:</span> the report was rejected.
+Borg kept the previous safe value: Byte-Ventures/borg-mcp-client.
+The rejected value is not displayed.
+
+Remove credentials, query parameters, fragments, or local paths from the repository remote, then run `borg_regen` again.</pre>
+          </div>
+          <div class="notes">
+            <ul>
+              <li>Never print the rejected origin, parser payload, path, credential, token-like text, or stack.</li>
+              <li>If there is no prior safe value, replace the second line with <code>No repository is shown.</code></li>
+              <li>Rejected input is a caller-local error, not shared seat metadata. Shared views retain the prior safe value or <code>not reported</code>.</li>
+            </ul>
+          </div>
+        </article>
+      </section>
+
+      <section class="contract" aria-labelledby="width-heading">
+        <h2 id="width-heading">Committed 80- and 120-column fixtures</h2>
+        <p>Plain MCP and terminal output has no reliable expansion control. It preserves complete bounded accepted values and wraps them; it never silently truncates. Each surface below has a distinct 80-column and 120-column fixture with two seats. The first seat uses a 160-byte model identifier and a 201-byte canonical repository name, the accepted boundary values from the shared contract.</p>
+
+        <div class="fixture-grid">
+          <section class="fixture fixture-80" aria-labelledby="roster-80-heading">
+            <h3 id="roster-80-heading"><code>borg_roster</code> at 80 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal"># Drones in cube: metadata-fixture
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> `id:11111111` - Role: Builder - last seen 12s ago - `awake`
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+  Origin: github.com/o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> `id:22222222` - Role: Builder - last seen 48s ago - `stale`
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-120" aria-labelledby="roster-120-heading">
+            <h3 id="roster-120-heading"><code>borg_roster</code> at 120 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal"># Drones in cube: metadata-fixture
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> `id:11111111` - Role: Builder - last seen 12s ago - `awake`
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+  Origin: github.com/o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> `id:22222222` - Role: Builder - last seen 48s ago - `stale`
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-80" aria-labelledby="regen-80-heading">
+            <h3 id="regen-80-heading"><code>borg_regen</code> at 80 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal">## Connected drones
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> - Role: Builder - last seen 12s ago
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> - Role: Builder - last seen 48s ago
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-120" aria-labelledby="regen-120-heading">
+            <h3 id="regen-120-heading"><code>borg_regen</code> at 120 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal">## Connected drones
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> - Role: Builder - last seen 12s ago
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> - Role: Builder - last seen 48s ago
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-80" aria-labelledby="list-80-heading">
+            <h3 id="list-80-heading"><code>borg_list-drones</code> at 80 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal">Drones in cube 326ea162-1234-4abc-8def-1234567890ab (2):
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> `id:11111111`
+  Role: Builder `role:builder-1234`
+  Last seen: 2026-07-24T00:04:18.000Z
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> `id:22222222`
+  Role: Builder `role:builder-1234`
+  Last seen: 2026-07-24T00:03:42.000Z
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-120" aria-labelledby="list-120-heading">
+            <h3 id="list-120-heading"><code>borg_list-drones</code> at 120 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal">Drones in cube 326ea162-1234-4abc-8def-1234567890ab (2):
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> `id:11111111`
+  Role: Builder `role:builder-1234`
+  Last seen: 2026-07-24T00:04:18.000Z
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> `id:22222222`
+  Role: Builder `role:builder-1234`
+  Last seen: 2026-07-24T00:03:42.000Z
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+        </div>
+
+        <ul>
+          <li>The fixture widths are fixed independently at <code>80ch</code> and <code>120ch</code>, then collapse to the viewport only when the viewport is narrower.</li>
+          <li>Wrap continuation lines with a stable two-space indent. Do not use horizontal scrolling as the intended reading path.</li>
+          <li>Do not split or hide the words <code>unknown</code>, <code>not reported</code>, or <code>temporarily unavailable</code>.</li>
+          <li>A future visual UI may truncate only with a visible ellipsis and a keyboard-operable disclosure that exposes the full safe value. A tooltip or <code>title</code> attribute alone is insufficient.</li>
+        </ul>
+
+        <section class="visual-list" aria-labelledby="truncation-heading">
+          <h3 id="truncation-heading">Visual list truncation fixture</h3>
+          <p>Reported model:
+            <code class="truncated" aria-hidden="true">m123456789m123456789m123456789m123456789m123456789m123456789</code>
+            <span class="sr-only">Long reported model. The full safe value is available from the disclosure below.</span>
+          </p>
+          <details>
+            <summary>
+              <span class="show-label">Show full value</span>
+              <span class="hide-label">Hide full value</span>
+            </summary>
+            <p><code>m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789</code></p>
+          </details>
+        </section>
+      </section>
+
+      <section class="contract" aria-labelledby="copy-heading">
+        <h2 id="copy-heading">Display-state contract</h2>
+        <table>
+          <caption>One stable vocabulary across roster, regen, and list views.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Source state</th>
+              <th scope="col">Shared display</th>
+              <th scope="col">Caller-only message</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Validated report</th>
+              <td>Exact bounded safe value</td>
+              <td>None</td>
+            </tr>
+            <tr>
+              <th scope="row">Explicitly unknown</th>
+              <td><code>&lt;Label&gt;: unknown</code></td>
+              <td>None</td>
+            </tr>
+            <tr>
+              <th scope="row">No current report</th>
+              <td><code>&lt;Label&gt;: not reported</code></td>
+              <td>None</td>
+            </tr>
+            <tr>
+              <th scope="row">Collection/update unavailable</th>
+              <td>Prior safe value; otherwise <code>not reported</code></td>
+              <td>Named field, prior-value behavior, one bounded retry</td>
+            </tr>
+            <tr>
+              <th scope="row">Report rejected</th>
+              <td>Prior safe value; otherwise <code>not reported</code></td>
+              <td>Named field, no raw echo, safe correction, one bounded retry</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="contract" aria-labelledby="acceptance-heading">
+        <h2 id="acceptance-heading">Implementation acceptance</h2>
+        <ul>
+          <li>Use the exact labels <code>Agent CLI</code>, <code>Reported model</code>, <code>Working repo</code>, and subordinate <code>Origin</code>.</li>
+          <li>Render the advisory note once per identity region, before its seats. Do not repeat it for every seat.</li>
+          <li>Compact surfaces show canonical public <code>owner/repo</code>. Only an explicit detail surface shows sanitized canonical origin.</li>
+          <li>Escape control, ANSI, carriage-return, line-separator, bidi-control, and Markdown-breaking characters before rendering any metadata. Never render raw unknown enum values.</li>
+          <li>Never show a local path, userinfo, credential, query, fragment, token-like text, or raw rejected value. Hostile input must not become a link target.</li>
+          <li>Status is always conveyed in words, not color or icon alone. Label and value remain adjacent in reading order when Markdown and styling are removed.</li>
+          <li>Any visual disclosure uses native semantics or an explicitly named button, is keyboard operable, has visible focus, and retains expanded state. Full values are not tooltip-only.</li>
+          <li>Known metadata never changes role, authority, grants, liveness, wake behavior, activity, <code>last_seen</code>, or routing. Unknown and failure states do not imply degraded health.</li>
+          <li>Tests cover Claude Code, Codex, OpenCode, known and unknown model, unreported older seat, temporary failure with and without a previous value, rejected hostile origin with and without a previous value, maximum lengths, and 80/120-column snapshots for all three surfaces.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>
