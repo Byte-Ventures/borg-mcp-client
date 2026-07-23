@@ -15,6 +15,8 @@ import { createProtocolEnvelope, decodeEvictDroneResult, decodeProtocolEnvelope,
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
+import { getTemplate } from 'borgmcp-shared/templates';
+import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { loadBorgServerTrust } from './server-trust.js';
 import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
@@ -222,6 +224,18 @@ async function localConnectionRequest(connection, path) {
         serverTrustIdentity: connection.serverTrustIdentity,
         redirect: 'error',
         headers: { Accept: 'application/json' },
+    }), false);
+}
+async function localConnectionMutation(connection, path, method, payload) {
+    return decodeLocalProtocolResponse((signal) => authedFetch(path, {
+        method,
+        signal,
+        apiUrl: connection.apiUrl,
+        authToken: connection.authToken,
+        serverTrustIdentity: connection.serverTrustIdentity,
+        redirect: 'error',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
     }), false);
 }
 async function localOwnerConnection(connection) {
@@ -519,10 +533,28 @@ export async function whoami(sessionToken, apiUrl, serverTrustIdentity) {
  */
 export async function getRoster(sessionToken, apiUrl, since, serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    if (since !== undefined)
-        localUnsupported('roster liveness filtering');
+    if (since !== undefined) {
+        const [dronePayload, rolePayload, cubePayload] = await Promise.all([
+            localServerRequest(local, `/api/cubes/${local.cubeId}/drones?since=${encodeURIComponent(since)}`, 'GET'),
+            localServerRequest(local, `/api/cubes/${local.cubeId}/roles`, 'GET'),
+            localServerRequest(local, `/api/cubes/${local.cubeId}`, 'GET'),
+        ]);
+        if (!dronePayload || !rolePayload || !cubePayload) {
+            throw new Error('Local Borg server returned an incomplete roster response');
+        }
+        return {
+            drones: dronePayload.drones,
+            roles: rolePayload.roles,
+            message_taxonomy: cubePayload.cube.message_taxonomy ?? null,
+            since: dronePayload.since ?? since,
+        };
+    }
     const composed = await localCubeComposition(local);
-    return { drones: composed.drones, roles: composed.roles, message_taxonomy: null };
+    return {
+        drones: composed.drones,
+        roles: composed.roles,
+        message_taxonomy: composed.cube.message_taxonomy ?? null,
+    };
 }
 /**
  * Read recent log entries for the cube.
@@ -707,11 +739,24 @@ export async function listCubes(connection) {
  * Existing callers that read `body.cube` keep working (forward-compat).
  */
 export async function createCube(name, cubeDirective, opts, connection) {
-    void name;
-    void cubeDirective;
-    void opts;
-    void connection;
-    localUnsupported('cube creation');
+    if (!name?.trim())
+        throw new Error('Local Borg server cube creation requires a cube name');
+    if (opts?.template !== undefined && opts.template !== 'default') {
+        throw new Error('Local Borg server supports only the default cube seed');
+    }
+    const resolved = await localOwnerConnection(connection);
+    const created = await localConnectionMutation(resolved, '/api/cubes', 'POST', {
+        retry_key: randomUUID(),
+        name: name.trim(),
+        template: 'default',
+    });
+    if (!created?.cube_id)
+        throw new Error('Local Borg server returned an invalid cube creation response');
+    const patch = { cube_directive: cubeDirective };
+    if (opts?.message_taxonomy !== undefined)
+        patch.message_taxonomy = opts.message_taxonomy;
+    await localConnectionMutation(resolved, `/api/cubes/${created.cube_id}`, 'PATCH', patch);
+    return getCube(created.cube_id, resolved);
 }
 /**
  * Update a cube's name and/or cube_directive. Both fields are optional;
@@ -957,9 +1002,39 @@ export async function getCube(cubeId, connection) {
  * conflicting fragments, use `syncRoles` with a `decisions` map instead.
  */
 export async function applyTemplate(cubeId, templateName) {
-    void cubeId;
-    void templateName;
-    localUnsupported('template application');
+    assertUuidShape(cubeId, 'cube_id');
+    const template = getTemplate(templateName);
+    if (!template)
+        throw new Error(`Unknown Borg template ${JSON.stringify(templateName)}`);
+    const active = await getActiveCube();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    const current = await getCubeForManagement(cubeId, {
+        operation: `apply template ${manageCopyValue(templateName)}`,
+        cubeName: cubeId === active.cubeId ? active.name : cubeId,
+        noMutation: 'No template fragments were changed.',
+    }, active);
+    let created = 0;
+    let updated = 0;
+    for (const role of template.roles) {
+        const existing = current.roles.find((candidate) => candidate.name === role.name);
+        if (!existing) {
+            await createRole(cubeId, role);
+            created++;
+            continue;
+        }
+        if (await applyMissingRoleFields(existing, role))
+            updated++;
+        updated += await applyMissingRoleSections(existing, role);
+    }
+    for (const classDef of template.message_taxonomy ?? []) {
+        const currentClasses = (current.message_taxonomy ?? []);
+        if (!currentClasses.some((candidate) => candidate.class === classDef.class)) {
+            await patchTaxonomyClass(cubeId, { action: 'add', class_def: classDef });
+            updated++;
+        }
+    }
+    return { created, updated };
 }
 /**
  * gh#473 PR2 — NON-CLOBBERING sync of a cube's roles + message_taxonomy
@@ -973,10 +1048,160 @@ export async function applyTemplate(cubeId, templateName) {
  * never touched. Returns a NonClobberSyncResult.
  */
 export async function syncRoles(cubeId, templateName = 'software-dev', apply = false, decisions) {
-    void cubeId;
-    void templateName;
-    void apply;
-    void decisions;
-    localUnsupported('role synchronization');
+    assertUuidShape(cubeId, 'cube_id');
+    const template = getTemplate(templateName);
+    if (!template)
+        throw new Error(`Unknown Borg template ${JSON.stringify(templateName)}`);
+    const active = await getActiveCube();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    const current = await getCubeForManagement(cubeId, {
+        operation: `sync template ${manageCopyValue(templateName)}`,
+        cubeName: cubeId === active.cubeId ? active.name : cubeId,
+        noMutation: 'No role synchronization changes were applied.',
+    }, active);
+    const roles = [];
+    const taxonomy = [];
+    const additions = [];
+    const conflictKeys = new Set();
+    for (const role of template.roles) {
+        const existing = current.roles.find((candidate) => candidate.name === role.name);
+        if (!existing) {
+            const key = `role:${role.name}`;
+            const fragments = [{
+                    key,
+                    kind: 'add',
+                    label: 'role',
+                    cubeValue: null,
+                    templateValue: role.name,
+                }];
+            roles.push({ name: role.name, status: 'new', fragments });
+            additions.push({ key, run: async () => { await createRole(cubeId, role); } });
+            continue;
+        }
+        const fragments = [];
+        addRoleScalarFragment(fragments, additions, conflictKeys, decisions, existing, role, 'short_description', 'short description');
+        for (const field of ['is_default', 'is_mandatory', 'is_human_seat', 'can_broadcast', 'receives_all_direct']) {
+            if (role[field] !== undefined)
+                addRoleScalarFragment(fragments, additions, conflictKeys, decisions, existing, role, field, field);
+        }
+        const currentSections = new Map(parseRoleSections(String(existing.detailed_description ?? '')).map((section) => [section.heading, section]));
+        for (const section of parseRoleSections(role.detailed_description)) {
+            if (!section.heading)
+                continue;
+            const key = `role:${role.name}:section:${section.heading}`;
+            const previous = currentSections.get(section.heading);
+            const kind = !previous ? 'add' : previous.body === section.body ? 'unchanged' : 'conflict';
+            fragments.push({ key, kind, label: `section ${section.heading}`, cubeValue: previous?.body ?? null, templateValue: section.body });
+            if (kind === 'add')
+                additions.push({ key, run: async () => { await patchRoleSection(existing.id, { action: 'insert', heading: section.heading, body: section.body }); } });
+            if (kind === 'conflict')
+                conflictKeys.add(key);
+            if (kind === 'conflict' && decisions?.[key] === 'accept')
+                additions.push({ key, run: async () => { await patchRoleSection(existing.id, { action: 'replace', heading: section.heading, body: section.body }); } });
+        }
+        roles.push({ name: role.name, status: 'existing', fragments });
+    }
+    for (const existing of current.roles) {
+        if (!template.roles.some((role) => role.name === existing.name)) {
+            roles.push({ name: existing.name, status: 'custom-skipped', fragments: [] });
+        }
+    }
+    for (const classDef of template.message_taxonomy ?? []) {
+        const key = `taxonomy:${classDef.class}`;
+        const currentClass = (current.message_taxonomy ?? []).find((candidate) => candidate.class === classDef.class);
+        const currentValue = currentClass ? stableJson(currentClass) : null;
+        const templateValue = stableJson(classDef);
+        const kind = !currentClass ? 'add' : currentValue === templateValue ? 'unchanged' : 'conflict';
+        taxonomy.push({ key, kind, label: `taxonomy class ${classDef.class}`, cubeValue: currentValue, templateValue });
+        if (kind === 'add')
+            additions.push({ key, run: async () => { await patchTaxonomyClass(cubeId, { action: 'add', class_def: classDef }); } });
+        if (kind === 'conflict')
+            conflictKeys.add(key);
+        if (kind === 'conflict' && decisions?.[key] === 'accept')
+            additions.push({ key, run: async () => { await patchTaxonomyClass(cubeId, { action: 'replace', class_def: classDef }); } });
+    }
+    const acceptedConflicts = [...conflictKeys].filter((key) => decisions?.[key] === 'accept');
+    const rejectedConflicts = [...conflictKeys].filter((key) => decisions?.[key] !== 'accept');
+    const classifiedKeys = new Set([...conflictKeys]);
+    const unmatchedDecisions = Object.keys(decisions ?? {}).filter((key) => !classifiedKeys.has(key));
+    const addedKeys = additions.filter(({ key }) => !conflictKeys.has(key)).map(({ key }) => key);
+    if (apply) {
+        for (const addition of additions) {
+            if (conflictKeys.has(addition.key) && decisions?.[addition.key] !== 'accept')
+                continue;
+            await addition.run();
+        }
+    }
+    return {
+        dryRun: !apply,
+        roles,
+        taxonomy,
+        applied: {
+            added: apply ? addedKeys : [],
+            acceptedConflicts: apply ? acceptedConflicts : [],
+        },
+        rejectedConflicts,
+        unmatchedDecisions,
+    };
+}
+function stableJson(value) {
+    if (Array.isArray(value))
+        return `[${value.map(stableJson).join(',')}]`;
+    if (value !== null && typeof value === 'object') {
+        return `{${Object.entries(value)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+            .join(',')}}`;
+    }
+    return JSON.stringify(value);
+}
+function addRoleScalarFragment(fragments, additions, conflictKeys, decisions, existing, template, field, label) {
+    const templateValue = template[field];
+    if (templateValue === undefined)
+        return;
+    const key = `role:${template.name}:${field}`;
+    const currentValue = existing[field];
+    const missing = currentValue === undefined || (field === 'short_description' && currentValue === '');
+    const kind = missing ? 'add' : currentValue === templateValue ? 'unchanged' : 'conflict';
+    fragments.push({ key, kind, label, cubeValue: missing ? null : String(currentValue), templateValue: String(templateValue) });
+    if (kind === 'add')
+        additions.push({
+            key,
+            run: async () => { await updateRole(existing.id, { [field]: templateValue }); },
+        });
+    if (kind === 'conflict') {
+        conflictKeys.add(key);
+        if (decisions?.[key] === 'accept')
+            additions.push({
+                key,
+                run: async () => { await updateRole(existing.id, { [field]: templateValue }); },
+            });
+    }
+}
+async function applyMissingRoleFields(existing, template) {
+    const updates = {};
+    if ((existing.short_description === undefined || existing.short_description === '') && template.short_description) {
+        updates.short_description = template.short_description;
+    }
+    for (const field of ['is_default', 'is_mandatory', 'is_human_seat', 'can_broadcast', 'receives_all_direct']) {
+        if (existing[field] === undefined && template[field] !== undefined)
+            updates[field] = template[field];
+    }
+    if (Object.keys(updates).length === 0)
+        return false;
+    await updateRole(existing.id, updates);
+    return true;
+}
+async function applyMissingRoleSections(existing, template) {
+    const currentSections = new Map(parseRoleSections(String(existing.detailed_description ?? '')).map((section) => [section.heading, section]));
+    let updated = 0;
+    for (const section of parseRoleSections(template.detailed_description)) {
+        if (section.heading && !currentSections.has(section.heading)) {
+            await patchRoleSection(existing.id, { action: 'insert', heading: section.heading, body: section.body });
+            updated++;
+        }
+    }
+    return updated;
 }
 //# sourceMappingURL=remote-client.js.map

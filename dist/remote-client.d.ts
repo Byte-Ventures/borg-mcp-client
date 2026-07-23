@@ -11,6 +11,7 @@
  */
 import { type EvictDroneResult, type ReassignDroneResult } from 'borgmcp-shared/protocol';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
+import type { NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
 import { type ActiveCube } from './cubes.js';
 import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
@@ -429,6 +430,6 @@ export declare function applyTemplate(cubeId: string, templateName: string): Pro
  * never silently overwritten. Custom roles (names not in template) are
  * never touched. Returns a NonClobberSyncResult.
  */
-export declare function syncRoles(cubeId: string, templateName?: string, apply?: boolean, decisions?: Record<string, 'accept' | 'reject'>): Promise<any>;
+export declare function syncRoles(cubeId: string, templateName?: string, apply?: boolean, decisions?: Record<string, 'accept' | 'reject'>): Promise<NonClobberSyncResult>;
 export {};
 //# sourceMappingURL=remote-client.d.ts.map

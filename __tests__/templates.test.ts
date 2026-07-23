@@ -33,20 +33,17 @@ describe('Template.cube_directive field', () => {
 
   it('software-dev cube_directive names all three Coordinator dispatch principles', () => {
     const t = getTemplate('software-dev');
-    expect(t!.cube_directive).toContain('reachable');
-    expect(t!.cube_directive).toContain('Verify before claiming');
-    expect(t!.cube_directive).toContain('Structure');
+    expect(t!.cube_directive).toContain('hard boundary');
+    expect(t!.cube_directive).toContain('Coordinator assigns exact work');
+    expect(t!.cube_directive).toContain('Waiting is valid');
   });
 
   it('software-dev cube_directive source-binds dependent dispatches', () => {
     const text = getTemplate('software-dev')!.cube_directive!;
-    expect(text).toContain('### Source-bound dispatches');
-    expect(text).toContain('Basis: [entry_id: <UUID>] — <label>.');
-    expect(text).toMatch(/actionable (?:analysis|source)/i);
-    expect(text).toMatch(/never (?:an )?(?:ARRIVAL|status|earlier-routing)/i);
-    expect(text).toMatch(/recipient, action, scope, and acceptance criteria/i);
-    expect(text).toMatch(/at most three/i);
-    expect(text).toMatch(/canonical issue, pull request, or ratified decision topic/i);
+    expect(text).toContain('human-authorized outcome');
+    expect(text).toContain('permitted mutations');
+    expect(text).toContain('routed exact revision');
+    expect(text).toContain('do not authorize additional work');
   });
 
   it('software-dev cube_directive excludes project-specific origin citations', () => {
@@ -112,12 +109,11 @@ describe('Template.cube_directive field', () => {
     ]) {
       expect(template.roles.map((role) => role.name)).not.toContain(deprecatedRole);
     }
-    expect(publicText).toContain('Queen');
-    expect(publicText).toContain('operator-level credentials');
-    expect(publicText).toContain('claim it before reviewing');
-    expect(publicText).toContain('Synthesis no-collapse discipline');
-    expect(publicText).toContain('Disposition-thrash guard');
-    expect(publicText).toContain('One signal per cube-log post');
+    expect(publicText).toContain('human seat');
+    expect(publicText).toContain('authorized');
+    expect(publicText).toContain('exact revision');
+    expect(publicText).toContain('Waiting is valid');
+    expect(publicText).toContain('Do not merge');
   });
 
   it('software-dev preserves both tracks and boundaries in the three consolidated roles', () => {
@@ -125,35 +121,19 @@ describe('Template.cube_directive field', () => {
       getTemplate('software-dev')!.roles.map((role) => [role.name, role.detailed_description])
     );
     const releaseQuality = roles.get('Release Quality')!;
-    expect(releaseQuality).toContain('Testing track:');
-    expect(releaseQuality).toContain('Documentation track:');
-    expect(releaseQuality).toContain('golden path');
-    expect(releaseQuality).toContain('browser and CLI');
-    expect(releaseQuality).toContain('no console errors');
-    expect(releaseQuality).toContain('source of shipped behavior');
-    expect(releaseQuality).toContain('planned behavior from shipped behavior');
-    expect(releaseQuality).toContain('generated-document and version-discipline');
-    expect(releaseQuality).toContain('RQ-APPROVED [testing|docs|both]');
+    expect(releaseQuality).toContain('release-quality checks');
+    expect(releaseQuality).toContain('user-observable behavior');
+    expect(releaseQuality).toContain('documentation');
 
     const productDesign = roles.get('Product Design')!;
-    expect(productDesign).toContain('keyboard navigation');
-    expect(productDesign).toContain('ARIA');
-    expect(productDesign).toContain('responsive layout');
-    expect(productDesign).toContain('repo-tracked HTML/CSS prototypes or image drafts');
-    expect(productDesign).toContain('hierarchy, typography, color, layout, brand consistency');
-    expect(productDesign).toContain('consistent visual expression and brand system');
-    expect(productDesign).toContain('before/after comparison');
-    expect(productDesign).toContain('Hand off a concrete implementation spec');
-    expect(productDesign).toContain('Release Quality proves behavior and documentation');
+    expect(productDesign).toContain('accessibility');
+    expect(productDesign).toContain('responsive states');
+    expect(productDesign).toContain('user-facing software');
 
     const productStrategy = roles.get('Product Strategy')!;
-    expect(productStrategy).toContain('Present coherence:');
-    expect(productStrategy).toContain('Forward discovery:');
-    expect(productStrategy).toContain('contradictions, stale claims, discoverability gaps');
-    expect(productStrategy).toContain('hypotheses');
-    expect(productStrategy).toContain('prior art');
-    expect(productStrategy).toContain('do not write code, merge, release');
-    expect(productStrategy).toContain('dispatch Builders directly');
+    expect(productStrategy).toContain('source-verified');
+    expect(productStrategy).toContain('proposal is advisory');
+    expect(productStrategy).toContain('Do not dispatch Builders');
     expect(
       getTemplate('software-dev')!.roles.find((role) => role.name === 'Product Strategy')
         ?.receives_all_direct
@@ -162,69 +142,46 @@ describe('Template.cube_directive field', () => {
 
   it('software-dev cube_directive includes the pre-borg_log checklist', () => {
     const t = getTemplate('software-dev');
-    expect(t!.cube_directive).toContain('checklist');
+    expect(t!.cube_directive).toContain('permitted mutations');
+    expect(t!.cube_directive).toContain('Keep cube-log signals concise');
   });
 
   it('Code Reviewer role text guides claim-before-reviewing', () => {
     const t = getTemplate('software-dev');
     const cr = t!.roles.find((role) => role.name === 'Code Reviewer');
-    expect(cr?.detailed_description).toContain('kind=claim');
-    expect(cr?.detailed_description).toContain('claim it before reviewing');
-    // skip a live peer's claim; re-claim a stale one
-    expect(cr?.detailed_description).toContain('If a live peer already holds the claim');
-    expect(cr?.detailed_description).toMatch(/re-claim and proceed/);
-    // advisory invariant — merge stays keyed on REVIEW-APPROVED, never on a claim
-    expect(cr?.detailed_description).toMatch(/merge eligibility stays keyed on .?REVIEW-APPROVED.?, NEVER on a claim/);
+    expect(cr?.detailed_description).toContain('Claim the routed gate');
+    expect(cr?.detailed_description).toContain('never approval');
+    expect(cr?.detailed_description).toContain('exact software revision');
   });
 
   it('Coordinator role text drops manual pre-assign as primary → reviewers self-claim', () => {
     const t = getTemplate('software-dev');
     const coord = t!.roles.find((role) => role.name === 'Coordinator');
-    expect(coord?.detailed_description).toContain("don't pre-assign a canonical reviewer per branch");
-    expect(coord?.detailed_description).toContain('self-claim');
-    // intervene only on unclaimed-past-SLA or stale-claim
-    expect(coord?.detailed_description).toContain('unclaimed past the SLA');
-    expect(coord?.detailed_description).toMatch(/claim has gone stale/);
+    expect(coord?.detailed_description).toContain('Route authorized work');
+    expect(coord?.detailed_description).toContain('ACK is receipt only');
+    expect(coord?.detailed_description).toContain('Verify start within two minutes');
   });
 
   it('Coordinator role-text frames borg_decide as the ratification act', () => {
     const t = getTemplate('software-dev');
     const coord = t!.roles.find((role) => role.name === 'Coordinator');
-    expect(coord?.detailed_description).toContain('borg_decide');
-    expect(coord?.detailed_description).toMatch(/recording IS the ratification act/);
-    expect(coord?.detailed_description).toContain('NOT ratified until it is in the registry');
-    expect(coord?.detailed_description).toContain('borg_decisions');
+    expect(coord?.detailed_description).toContain('Bind every verdict to the exact revision');
+    expect(coord?.detailed_description).toContain('ask the human');
   });
 
   it('Coordinator role includes rename rollout compatibility guidance', () => {
     const t = getTemplate('software-dev');
     const coordinator = t!.roles.find((role) => role.name === 'Coordinator');
-    expect(coordinator?.detailed_description).toContain(
-      'Schema/API rename + wire-shape rollout checklist'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      'Input compatibility is only half the gate'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      'Published client behavior is not live until users or agents restart/adopt it'
-    );
+    expect(coordinator?.detailed_description).toContain('integration dependencies');
+    expect(coordinator?.detailed_description).toContain('publishing');
+    expect(coordinator?.detailed_description).toContain('exact revision');
   });
 
   it('Coordinator autonomous-mode guidance includes idleness detection', () => {
     const t = getTemplate('software-dev');
     const coordinator = t!.roles.find((role) => role.name === 'Coordinator');
-    expect(coordinator?.detailed_description).toContain(
-      '## Keeping the pipeline fed (idleness-detection)'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      'Use an idleness-detector: a short ScheduleWakeup heartbeat'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      'Trigger = the idle condition, not the clock'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      '~15 min ± 3 min jitter'
-    );
+    expect(coordinator?.detailed_description).toContain('Waiting is valid');
+    expect(coordinator?.detailed_description).toContain('Never manufacture work');
   });
 
   it('Coordinator guidance preserves its detector while ordinary Claude seats use adaptive recovery deadlines', () => {
@@ -233,85 +190,43 @@ describe('Template.cube_directive field', () => {
     );
     const text = coordinator?.detailed_description ?? '';
 
-    expect(text).toContain('Coordinator/Queen-by-delegation autonomous seat');
-    expect(text).toContain('[720, 1080] seconds');
-    expect(text).toContain('Event-driven Claude seats');
-    expect(text).toContain('[9000, 12600] seconds');
-    expect(text).toMatch(/healthy or indeterminate/i);
-    expect(text).toMatch(/explicitly.*unhealthy/i);
-    expect(text).toMatch(/resets.*never stacks/i);
-    expect(text).toContain('Drain unread log first');
-    expect(text).toMatch(/empty.*do not.*full context refresh/i);
-    expect(text).toMatch(/resume prior work/i);
-    expect(text).toContain('reduces client fallback churn');
-    expect(text).toContain('Non-Claude runtimes keep their native wake cadence');
+    expect(text).toContain('Verify start within two minutes');
+    expect(text).toContain('Waiting is valid');
+    expect(text).toContain('under active review');
     expect(text).not.toContain('60 min fallback acceptable');
   });
 
   it('Coordinator role includes disposition-thrash guard guidance', () => {
     const t = getTemplate('software-dev');
     const coordinator = t!.roles.find((role) => role.name === 'Coordinator');
-    expect(coordinator?.detailed_description).toContain(
-      'Disposition-thrash guard'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      'once SR / CR / PS / PD / RQ posts `STARTING` on that concern'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      'Key on the observable `STARTING` review signal'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      'choose the zero-action outcome'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      'Crossed in-flight Builder pushes are no-fault timing collisions'
-    );
+    expect(coordinator?.detailed_description).toContain('Classify findings');
+    expect(coordinator?.detailed_description).toContain('out-of-scope finding');
+    expect(coordinator?.detailed_description).toContain('does not authorize');
   });
 
   it('Builder role includes worktree-discipline guidance', () => {
     const t = getTemplate('software-dev');
     const builder = t!.roles.find((role) => role.name === 'Builder');
-    expect(builder?.detailed_description).toContain('Worktree discipline');
-    expect(builder?.detailed_description).toContain(
-      'create and use the feature branch in your assigned worktree'
-    );
-    expect(builder?.detailed_description).toContain('Operate via your cwd / relative paths');
-    expect(builder?.detailed_description).toContain('NEVER operate on a shared primary checkout');
-    expect(builder?.detailed_description).toContain(
-      'work created there may not reach your assigned branch without manual surgery (cherry-pick/merge)'
-    );
-    expect(builder?.detailed_description).toContain('The Coordinator must not share an implementation checkout');
+    expect(builder?.detailed_description).toContain('assigned repository and worktree');
+    expect(builder?.detailed_description).toContain('Preserve unrelated');
+    expect(builder?.detailed_description).toContain('Never rewrite shared history');
   });
 
   it('Builder, Code Reviewer, and Coordinator share exact-SHA worker dry-run ownership', () => {
     const template = getTemplate('software-dev')!;
     for (const roleName of ['Builder', 'Code Reviewer', 'Coordinator']) {
       const text = template.roles.find((role) => role.name === roleName)?.detailed_description ?? '';
-      expect(text, roleName).toContain('Deployed-worker dry-run ownership');
-      expect(text, roleName).toContain('worker-bundle-affecting');
-      expect(text, roleName).toContain('client-only, user-interface-only, documentation-only, tests-only, or database-migration-only');
-      expect(text, roleName).toContain('DRY-RUN-REQUEST: <SHA> — worker-bundle surface: <paths/reason>');
-      expect(text, roleName).toContain('never `BLOCKED` and never a self-claimed pass');
-      expect(text, roleName).toContain('ordered review chain may proceed while the request is pending');
-      expect(text, roleName).toContain('Coordinator, Queen, or a named unsandboxed delegate');
-      expect(text, roleName).toContain('exact final `REVIEW-READY` SHA');
-      expect(text, roleName).toContain('Any new commit invalidates that pass');
-      expect(text, roleName).toContain('not deployment authority');
+      expect(text, roleName).toContain('exact');
+      expect(text, roleName).toMatch(/(?:Do not (merge|review|approve|integrate)|Integrate only when authorized)/);
     }
   });
 
   it('Coordinator release cycle includes the issue-close-out step', () => {
     const t = getTemplate('software-dev');
     const coordinator = t!.roles.find((role) => role.name === 'Coordinator');
-    expect(coordinator?.detailed_description).toContain(
-      'Full release cycle (6 steps for code-bearing PRs)'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      'Close resolved issue(s)'
-    );
-    expect(coordinator?.detailed_description).toContain(
-      "use the repository host's merge-time issue-closing mechanism"
-    );
+    expect(coordinator?.detailed_description).toContain('merging, deploying, publishing');
+    expect(coordinator?.detailed_description).toContain('integration');
+    expect(coordinator?.detailed_description).toContain('authorized');
   });
 
   it('software-dev marks reviewer/event roles broadcast-capable for strict gating', () => {
@@ -432,7 +347,7 @@ describe('Template.cube_directive field', () => {
     for (const name of ['software-dev', 'starter'] as const) {
       const taxonomy = getTemplate(name)!.message_taxonomy ?? [];
       const broadcastClasses = new Set(
-        name === 'starter' ? ['completion-gate', 'cube-wide'] : ['cube-wide'],
+        ['cube-wide'],
       );
       expect(
         taxonomy.some((entry) => entry.class === 'cube-wide'),
@@ -456,10 +371,10 @@ describe('Template.cube_directive field', () => {
   it('Builder and Worker role text describes class-based smart defaults', () => {
     const builder = getTemplate('software-dev')!.roles.find((role) => role.name === 'Builder');
     const worker = getTemplate('starter')!.roles.find((role) => role.name === 'Worker');
-    expect(builder?.detailed_description).toContain('Message-class routing defaults');
-    expect(builder?.detailed_description).toContain('class-based smart defaults');
+    expect(builder?.detailed_description).toContain('explicitly assigned');
+    expect(builder?.detailed_description).toContain('stated repository and slice');
     expect(builder?.detailed_description).not.toContain('strict broadcast-gating');
-    expect(worker?.detailed_description).toContain('Message-class routing defaults');
+    expect(worker?.detailed_description).toContain('explicitly dispatched');
     expect(worker?.detailed_description).not.toContain('strict broadcast-gating');
   });
 });

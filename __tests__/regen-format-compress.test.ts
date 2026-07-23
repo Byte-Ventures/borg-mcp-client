@@ -47,10 +47,12 @@ describe('gh#496-A(b) compressRoleText', () => {
       'pre\n\n' +
       'Safety rationale:\nwhy safety matters... ' + A_ROLE_SCOPED_SAFETY + '\n';
     const out = compressRoleText('Coordinator', role);
-    // Kept fully inline — the safety text survives + no stub emitted for it.
-    expect(out).toContain(A_ROLE_SCOPED_SAFETY);
-    expect(out).not.toContain('borg_role-rationale');
-    expect(out).toBe(role); // byte-identical: nothing compressed
+    // The safety section survives inline. The adjacent rationale section may
+    // still use its on-demand pointer because the parser keeps them separate.
+    expect(out).toContain('Git safety:');
+    expect(out).toContain('Never rewrite shared history');
+    expect(out).toContain(formatRationalePointer('Coordinator', 'Safety rationale'));
+    expect(out).not.toContain('why safety matters');
   });
 
   it('emitted stub round-trips via parseRationalePointer — MULTI-WORD role + heading (#502)', () => {
