@@ -142,6 +142,51 @@
       summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
       details code { overflow-wrap: anywhere; }
 
+      .fixture-grid {
+        display: grid;
+        gap: 18px;
+        margin-top: 18px;
+      }
+
+      .fixture {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
+
+      .fixture h3 { margin-bottom: 10px; }
+      .fixture .terminal-wrap { max-width: 100%; }
+      .fixture-80 .terminal-wrap { width: 80ch; }
+      .fixture-120 .terminal-wrap { width: 120ch; }
+      .fixture .terminal { width: 100%; }
+
+      .visual-list {
+        max-width: 42rem;
+        margin-top: 18px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--panel), var(--accent) 4%);
+      }
+
+      .visual-list p { margin: 0; }
+      .truncated { display: inline-block; max-width: 23ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; white-space: nowrap; }
+      .hide-label { display: none; }
+      details[open] .show-label { display: none; }
+      details[open] .hide-label { display: inline; }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
       @media (min-width: 840px) {
         .surfaces { grid-template-columns: 1fr 1fr; }
         .surfaces article:first-child { grid-column: 1 / -1; }
@@ -346,25 +391,156 @@ Remove credentials, query parameters, fragments, or local paths from the reposit
       </section>
 
       <section class="contract" aria-labelledby="width-heading">
-        <h2 id="width-heading">Width, wrapping, and disclosure</h2>
-        <p>Plain MCP and terminal output has no reliable expansion control. It must preserve the complete bounded accepted value and wrap it; it must not silently truncate.</p>
-        <div class="terminal-wrap">
-          <pre class="terminal">- <strong>release-quality-f9200281</strong> `id:f9200281` - Role: Release Quality - last seen 2m ago
+        <h2 id="width-heading">Committed 80- and 120-column fixtures</h2>
+        <p>Plain MCP and terminal output has no reliable expansion control. It preserves complete bounded accepted values and wraps them; it never silently truncates. Each surface below has a distinct 80-column and 120-column fixture with two seats. The first seat uses a 160-byte model identifier and a 201-byte canonical repository name, the accepted boundary values from the shared contract.</p>
+
+        <div class="fixture-grid">
+          <section class="fixture fixture-80" aria-labelledby="roster-80-heading">
+            <h3 id="roster-80-heading"><code>borg_roster</code> at 80 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal"># Drones in cube: metadata-fixture
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> `id:11111111` - Role: Builder - last seen 12s ago - `awake`
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+  Origin: github.com/o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> `id:22222222` - Role: Builder - last seen 48s ago - `stale`
   Agent CLI: Claude Code
-  Reported model: anthropic/claude-opus-4-very-long-bounded-advisory-identifier
-  Working repo: Byte-Ventures/borg-mcp-client
-  Origin: github.com/Byte-Ventures/borg-mcp-client</pre>
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-120" aria-labelledby="roster-120-heading">
+            <h3 id="roster-120-heading"><code>borg_roster</code> at 120 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal"># Drones in cube: metadata-fixture
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> `id:11111111` - Role: Builder - last seen 12s ago - `awake`
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+  Origin: github.com/o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> `id:22222222` - Role: Builder - last seen 48s ago - `stale`
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-80" aria-labelledby="regen-80-heading">
+            <h3 id="regen-80-heading"><code>borg_regen</code> at 80 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal">## Connected drones
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> - Role: Builder - last seen 12s ago
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> - Role: Builder - last seen 48s ago
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-120" aria-labelledby="regen-120-heading">
+            <h3 id="regen-120-heading"><code>borg_regen</code> at 120 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal">## Connected drones
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> - Role: Builder - last seen 12s ago
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> - Role: Builder - last seen 48s ago
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-80" aria-labelledby="list-80-heading">
+            <h3 id="list-80-heading"><code>borg_list-drones</code> at 80 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal">Drones in cube 326ea162-1234-4abc-8def-1234567890ab (2):
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> `id:11111111`
+  Role: Builder `role:builder-1234`
+  Last seen: 2026-07-24T00:04:18.000Z
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> `id:22222222`
+  Role: Builder `role:builder-1234`
+  Last seen: 2026-07-24T00:03:42.000Z
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
+
+          <section class="fixture fixture-120" aria-labelledby="list-120-heading">
+            <h3 id="list-120-heading"><code>borg_list-drones</code> at 120 columns</h3>
+            <div class="terminal-wrap">
+              <pre class="terminal">Drones in cube 326ea162-1234-4abc-8def-1234567890ab (2):
+
+_Runtime metadata is advisory; it does not determine authority, role, health, activity, wake behavior, or routing._
+
+- <strong>builder-maximum</strong> `id:11111111`
+  Role: Builder `role:builder-1234`
+  Last seen: 2026-07-24T00:04:18.000Z
+  Agent CLI: OpenCode
+  Reported model: m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789
+  Working repo: o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789o123456789/r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789r123456789
+
+- <strong>builder-unknown</strong> `id:22222222`
+  Role: Builder `role:builder-1234`
+  Last seen: 2026-07-24T00:03:42.000Z
+  Agent CLI: Claude Code
+  Reported model: unknown
+  Working repo: not reported</pre>
+            </div>
+          </section>
         </div>
+
         <ul>
-          <li>Acceptance widths: 80 and 120 terminal columns, with multiple seats and maximum-length accepted values.</li>
+          <li>The fixture widths are fixed independently at <code>80ch</code> and <code>120ch</code>, then collapse to the viewport only when the viewport is narrower.</li>
           <li>Wrap continuation lines with a stable two-space indent. Do not use horizontal scrolling as the intended reading path.</li>
           <li>Do not split or hide the words <code>unknown</code>, <code>not reported</code>, or <code>temporarily unavailable</code>.</li>
           <li>A future visual UI may truncate only with a visible ellipsis and a keyboard-operable disclosure that exposes the full safe value. A tooltip or <code>title</code> attribute alone is insufficient.</li>
         </ul>
-        <details>
-          <summary>Show full sanitized origin</summary>
-          <p><code>github.com/Byte-Ventures/borg-mcp-client</code></p>
-        </details>
+
+        <section class="visual-list" aria-labelledby="truncation-heading">
+          <h3 id="truncation-heading">Visual list truncation fixture</h3>
+          <p>Reported model:
+            <code class="truncated" aria-hidden="true">m123456789m123456789m123456789m123456789m123456789m123456789</code>
+            <span class="sr-only">Long reported model. The full safe value is available from the disclosure below.</span>
+          </p>
+          <details>
+            <summary>
+              <span class="show-label">Show full value</span>
+              <span class="hide-label">Hide full value</span>
+            </summary>
+            <p><code>m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789m123456789</code></p>
+          </details>
+        </section>
       </section>
 
       <section class="contract" aria-labelledby="copy-heading">
