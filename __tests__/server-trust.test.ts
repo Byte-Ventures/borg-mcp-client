@@ -165,4 +165,21 @@ describe('CR5 pinned-transport trust verdicts (real wrong cert)', () => {
     const pinned = createPinnedServerFetch(origin, ca.cert);
     await expect(pinned(`${origin}/api/cubes`)).rejects.not.toBeInstanceOf(BorgServerTrustError);
   });
+
+  it('keeps a numeric DOMException code as a transport abort instead of crashing', async () => {
+    const dir = tmp();
+    const serverCert = genSelfSigned(dir, 'srv', '/CN=127.0.0.1', 'IP:127.0.0.1');
+    const server = createHttpsServer({ cert: serverCert.cert, key: serverCert.key });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const controller = new AbortController();
+    const request = createPinnedServerFetch(origin, serverCert.cert)(`${origin}/api/cubes`, {
+      signal: controller.signal,
+    });
+
+    controller.abort(new DOMException('cancelled', 'AbortError'));
+
+    await expect(request).rejects.not.toBeInstanceOf(BorgServerTrustError);
+  });
 });
