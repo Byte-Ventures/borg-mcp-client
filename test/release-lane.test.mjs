@@ -21,7 +21,7 @@ import {
 import { smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const CLIENT_VERSION = '2.0.7';
+const CLIENT_VERSION = '2.0.8';
 const SHARED_VERSION = '0.5.0';
 const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.5.0.tgz';
 const SHARED_INTEGRITY = 'sha512-kOAfMTMPTHRvctB0wpPo/+nNPjiBsk0FddnLgGQged8K8PwQqYWv7zQizPU2mgyExpurjCKKPbi9M+QcfmXNKA==';
@@ -241,7 +241,7 @@ test('release documentation describes the activated minimal publication lane', a
   const extraction = await readFile(join(root, 'docs', 'EXTRACTION_PROVENANCE.md'), 'utf8');
 
   assert.match(readme, /After verified publication/);
-  assert.match(readme, /npm install -g borgmcp@2\.0\.7/);
+  assert.match(readme, /npm install -g borgmcp@2\.0\.8/);
   assert.doesNotMatch(readme, /npm install -g borgmcp(?:\s|$)/);
   assert.match(security, /protected npm environment and Trusted Publishing/);
   for (const boundary of [
@@ -287,11 +287,16 @@ test('release documentation describes the activated minimal publication lane', a
     '29982288768',
     'sha512-WDX4tmk46I6Tvb/Gz1XlD/9PbIgOe72rRDCjV+/lw6KnAxWW0S25LT1DgifotI9LQv7LLAok8WkjucDDTTQ+pw==',
     'v2.0.7',
+    'bf41d5a70d7df11930a3124feda72835ae903522',
+    '85f7c45cffdd449a6de4a52608453b6680492221',
+    '30009042758',
+    '@esbuild/openbsd-arm64@0.28.1',
+    'v2.0.8',
   ]) assert.ok(releasing.includes(evidence), `Missing immutable release evidence: ${evidence}`);
   assert.match(releasing, /failed before package\s+creation or npm publication/);
   assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
   assert.match(extraction, /borgmcp-server@0\.1\.8/);
-  assert.match(extraction, /reviewed `v2\.0\.7` source/);
+  assert.match(extraction, /reviewed `v2\.0\.8` source/);
   assert.doesNotMatch(`${readme}\n${security}\n${releasing}`, /publication is deferred|not yet published/);
 });
 
@@ -579,6 +584,60 @@ test('official registry metadata must match the reviewed lock URL and integrity'
     version: entry.version,
     dist: { tarball: entry.tarball, integrity: `sha512-${Buffer.alloc(64, 1).toString('base64')}` },
   }), /integrity mismatch/);
+});
+
+test('lock metadata verification retries only bounded transient HTTP failures', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'borgmcp-client-lock-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { lock } = await validPackage(directory);
+  const lockPath = join(directory, 'retry-lock.json');
+  await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+  const canonical = lock.packages['node_modules/borgmcp-shared'];
+  const metadata = {
+    name: 'borgmcp-shared',
+    version: SHARED_VERSION,
+    dist: { tarball: canonical.resolved, integrity: canonical.integrity },
+  };
+  const response = (status) => ({
+    ok: status === 200,
+    status,
+    json: async () => metadata,
+  });
+
+  const transientStatuses = [504, 429, 200];
+  const transientSleeps = [];
+  let transientCalls = 0;
+  await verifyLockRegistry(lockPath, {
+    fetchImpl: async () => response(transientStatuses[transientCalls++]),
+    retryDelaysMs: [1, 2],
+    sleep: async (delayMs) => transientSleeps.push(delayMs),
+  });
+  assert.equal(transientCalls, 3);
+  assert.deepEqual(transientSleeps, [1, 2]);
+
+  let terminalCalls = 0;
+  await assert.rejects(() => verifyLockRegistry(lockPath, {
+    fetchImpl: async () => {
+      terminalCalls += 1;
+      return response(404);
+    },
+    retryDelaysMs: [1, 2],
+    sleep: async () => assert.fail('terminal HTTP status must not sleep'),
+  }), /HTTP 404/);
+  assert.equal(terminalCalls, 1);
+
+  const exhaustedSleeps = [];
+  let exhaustedCalls = 0;
+  await assert.rejects(() => verifyLockRegistry(lockPath, {
+    fetchImpl: async () => {
+      exhaustedCalls += 1;
+      return response(503);
+    },
+    retryDelaysMs: [1, 2],
+    sleep: async (delayMs) => exhaustedSleeps.push(delayMs),
+  }), /HTTP 503/);
+  assert.equal(exhaustedCalls, 3);
+  assert.deepEqual(exhaustedSleeps, [1, 2]);
 });
 
 test('official metadata validation checks every duplicate lock entry regardless of order', async (t) => {
