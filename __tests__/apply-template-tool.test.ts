@@ -100,6 +100,8 @@ describe('borg_apply-template orchestration authority', () => {
     expect(mutations.length).toBeGreaterThan(1);
     expect(mutations.every((request) => request.path.startsWith(base))).toBe(true);
     expect(mutations).toContainEqual({ origin: ORIGIN_A, path: `${base}/roles`, method: 'POST' });
+    expect(mutations).toContainEqual({ origin: ORIGIN_A, path: `${base}/roles/${ROLE_ID}`, method: 'PATCH' });
+    expect(mutations).toContainEqual({ origin: ORIGIN_A, path: `${base}/roles/${ROLE_ID}/section-patch`, method: 'POST' });
     expect(mutations).toContainEqual({ origin: ORIGIN_A, path: `${base}/taxonomy-patch`, method: 'POST' });
     expect(mutations.at(-1)).toEqual({ origin: ORIGIN_A, path: base, method: 'PATCH' });
   });
