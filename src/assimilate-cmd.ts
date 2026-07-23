@@ -50,6 +50,12 @@ import type { SeatBinding, BindPendingSeatOutcome } from './seats.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs, type LaunchApprovalDecision } from './cli-tool-approval.js';
 
+const PRIVATE_STATE_UNAVAILABLE_COPY = [
+  'Borg could not safely prepare its private local state.',
+  'No Borg server or cube change was made.',
+  "Before retrying, verify that Borg-owned directories are real, owned by your account, and not writable by other users. Verify that their parent directories are real, trusted directories owned by your account or the system and not writable by other users. Verify that Borg files are private regular files owned by your account, then run the same command again.",
+].join('\n');
+
 export interface AssimilateFlags {
   worktree?: string;
   template?: string;
@@ -521,9 +527,7 @@ export async function runAssimilate(
   try {
     await deps.preparePrivateRoot();
   } catch {
-    deps.stderr(
-      'Borg could not prepare its private local state directory. No server or cube change was made.\n',
-    );
+    deps.stderr(`${PRIVATE_STATE_UNAVAILABLE_COPY}\n`);
     return 1;
   }
 
