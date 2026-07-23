@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderSyncRolesResult, type NonClobberSyncResult } from '../src/sync-roles-render';
+import { escapeSyncDisplay, renderSyncRolesResult, type NonClobberSyncResult } from '../src/sync-roles-render';
 
 /**
  * gh#473 PR2 — the conflict-surfacing output is UX-LOAD-BEARING. The
@@ -18,6 +18,36 @@ const baseResult = (over: Partial<NonClobberSyncResult> = {}): NonClobberSyncRes
 });
 
 describe('renderSyncRolesResult — conflict surfacing', () => {
+  it('escapes terminal controls and Markdown-breaking syntax in cube-controlled values', () => {
+    const hostile = 'safe\u001b[2Jspoof\rnext\u202E`[x](https://evil.example)`';
+    const escaped = escapeSyncDisplay(hostile);
+    expect(escaped).toContain('\\u{1b}');
+    expect(escaped).toContain('\\u{d}');
+    expect(escaped).toContain('\\u{202e}');
+    expect(escaped).toContain('\\u{60}');
+
+    const out = renderSyncRolesResult(baseResult({
+      roles: [{
+        name: hostile,
+        status: 'custom-skipped',
+        fragments: [{
+          key: hostile,
+          kind: 'conflict',
+          label: hostile,
+          cubeValue: hostile,
+          templateValue: hostile,
+        }],
+      }],
+    }), hostile);
+    expect(out).not.toContain('\u001b');
+    expect(out).not.toContain('\r');
+    expect(out).toContain('\\u{1b}');
+    expect(out).toContain('\\u{202e}');
+    expect(out).toContain('\\u{60}');
+    expect(out).toContain('\\[');
+    expect(out).toContain('\\(');
+  });
+
   it('surfaces a role-section CONFLICT with both sides + the accept key', () => {
     const result = baseResult({
       roles: [

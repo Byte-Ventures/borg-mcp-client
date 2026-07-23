@@ -60,6 +60,11 @@ export interface LocalManageOperation {
     cubeName: string;
     noMutation: string;
 }
+export interface LocalManageAuthority {
+    active: ActiveCube;
+    connection: RemoteConnection;
+}
+export declare function resolveLocalManageAuthority(active: ActiveCube, operation: LocalManageOperation): Promise<LocalManageAuthority>;
 interface PendingWakePage {
     entries: Array<{
         drone_id?: unknown;
@@ -283,7 +288,7 @@ export declare function updateCube(cubeId: string, updates: {
     name?: string;
     cube_directive?: string;
     message_taxonomy?: MessageTaxonomy | null;
-}): Promise<{
+}, activeOverride?: ActiveCube, connectionOverride?: RemoteConnection): Promise<{
     cube: any;
 }>;
 /**
@@ -301,7 +306,7 @@ export declare function patchTaxonomyClass(cubeId: string, op: {
 } | {
     action: 'remove';
     class: string;
-}): Promise<{
+}, activeOverride?: ActiveCube, connectionOverride?: RemoteConnection): Promise<{
     cube: any;
 }>;
 /**
@@ -324,7 +329,7 @@ export declare function createRole(cubeId: string, data: {
     receives_all_direct?: boolean;
     default_model?: string;
     role_class?: 'queen' | 'worker';
-}): Promise<{
+}, activeOverride?: ActiveCube, connectionOverride?: RemoteConnection): Promise<{
     role: any;
 }>;
 /**
@@ -341,7 +346,7 @@ export declare function updateRole(roleId: string, updates: {
     receives_all_direct?: boolean;
     default_model?: string;
     role_class?: 'queen' | 'worker';
-}, targetCubeId?: string): Promise<{
+}, targetCubeId?: string, activeOverride?: ActiveCube, connectionOverride?: RemoteConnection): Promise<{
     role: any;
 }>;
 /**
@@ -363,7 +368,7 @@ export declare function patchRoleSection(roleId: string, op: {
 } | {
     action: 'delete';
     heading: string;
-}, targetCubeId?: string): Promise<{
+}, targetCubeId?: string, activeOverride?: ActiveCube, connectionOverride?: RemoteConnection): Promise<{
     role: any;
 }>;
 /**
@@ -387,7 +392,7 @@ export interface EvictDroneOptions {
 }
 export declare function evictDrone(droneId: string, options?: EvictDroneOptions): Promise<EvictDroneResult>;
 export declare function listRoles(cubeId: string): Promise<any[]>;
-export declare function getCubeForManagement(cubeId: string, operation: LocalManageOperation, activeOverride?: ActiveCube): Promise<{
+export declare function getCubeForManagement(cubeId: string, operation: LocalManageOperation, activeOverride?: ActiveCube, connectionOverride?: RemoteConnection): Promise<{
     id: string;
     name: string;
     roles: any[];
@@ -415,7 +420,7 @@ export declare function getCube(cubeId: string, connection?: RemoteConnection): 
  * `{ created, updated }` counts. To selectively take template versions of
  * conflicting fragments, use `syncRoles` with a `decisions` map instead.
  */
-export declare function applyTemplate(cubeId: string, templateName: string): Promise<{
+export declare function applyTemplate(cubeId: string, templateName: string, authorityOverride?: LocalManageAuthority): Promise<{
     created: number;
     updated: number;
 }>;
@@ -430,6 +435,6 @@ export declare function applyTemplate(cubeId: string, templateName: string): Pro
  * never silently overwritten. Custom roles (names not in template) are
  * never touched. Returns a NonClobberSyncResult.
  */
-export declare function syncRoles(cubeId: string, templateName?: string, apply?: boolean, decisions?: Record<string, 'accept' | 'reject'>): Promise<NonClobberSyncResult>;
+export declare function syncRoles(cubeId: string, templateName?: string, apply?: boolean, decisions?: Record<string, 'accept' | 'reject'>, authorityOverride?: LocalManageAuthority): Promise<NonClobberSyncResult>;
 export {};
 //# sourceMappingURL=remote-client.d.ts.map

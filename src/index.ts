@@ -43,11 +43,14 @@ import {
   patchTaxonomyClass,
   deleteRole,
   getCube,
+  getCubeForManagement,
+  resolveLocalManageAuthority,
   listRoles,
   syncRoles,
   applyTemplate,
   whoami,
   roleRationale,
+  type LocalManageAuthority,
 } from './remote-client.js';
 import {
   getTemplate,
@@ -142,9 +145,10 @@ import {
  */
 async function applyTemplateToCube(
   cubeId: string,
-  template: Template
+  template: Template,
+  authority?: LocalManageAuthority,
 ): Promise<{ created: number; updated: number }> {
-  return await applyTemplate(cubeId, template.name);
+  return await applyTemplate(cubeId, template.name, authority);
 }
 
 /**
@@ -1119,16 +1123,26 @@ export async function main() {
           if (!template) {
             throw new Error(`Unknown template "${templateName}". Available: ${listTemplateNames().join(', ')}`);
           }
-          const summary = await applyTemplateToCube(cubeId, template);
+           const active = await requireActiveCube();
+           const authority = await resolveLocalManageAuthority(active, {
+             operation: `apply template ${JSON.stringify(templateName)}`,
+             cubeName: cubeId === active.cubeId ? active.name : cubeId,
+             noMutation: 'No template fragments were changed.',
+           });
+           const summary = await applyTemplateToCube(cubeId, template, authority);
 
           // Sprint 14: optionally write template's cube_directive to the
           // cube. No-clobber discipline — only fills empty directives,
           // never overwrites operator-customized text.
           let cubeDirectiveNote = '';
-          const cubeForRules = await getCube(cubeId);
-          const newCubeDirective = resolveCubeDirectiveForApply(cubeForRules.cube_directive, template);
-          if (newCubeDirective !== null) {
-            await updateCube(cubeId, { cube_directive: newCubeDirective });
+           const cubeForRules = await getCubeForManagement(cubeId, {
+             operation: `read template target ${JSON.stringify(templateName)}`,
+             cubeName: cubeId === active.cubeId ? active.name : cubeId,
+             noMutation: 'No template fragments were changed.',
+           }, active, authority.connection);
+           const newCubeDirective = resolveCubeDirectiveForApply(cubeForRules.cube_directive, template);
+           if (newCubeDirective !== null) {
+             await updateCube(cubeId, { cube_directive: newCubeDirective }, active, authority.connection);
             cubeDirectiveNote = ' Template cube directive applied (cube directive was empty).';
           }
 

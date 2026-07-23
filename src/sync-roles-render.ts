@@ -35,10 +35,25 @@ export interface NonClobberSyncResult {
   unmatchedDecisions?: string[];
 }
 
+/** Escape cube-controlled text before it reaches Markdown or a terminal. */
+export function escapeSyncDisplay(value: string): string {
+  return [...value].map((char) => {
+    const code = char.codePointAt(0)!;
+    if (code === 0x0a) return '⏎';
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return `\\u{${code.toString(16)}}`;
+    if ((code >= 0x200e && code <= 0x200f) || (code >= 0x2028 && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)) {
+      return `\\u{${code.toString(16)}}`;
+    }
+    if (char === '`') return '\\u{60}';
+    if ('\\*_[]()<>&#|~'.includes(char)) return `\\${char}`;
+    return char;
+  }).join('');
+}
+
 /** Truncate long fragment bodies for at-a-glance diffs. */
 function trunc(s: string | null, n = 200): string {
   if (s == null) return '(absent)';
-  const flat = s.replace(/\n/g, '⏎');
+  const flat = escapeSyncDisplay(s);
   return flat.length > n ? flat.slice(0, n) + '…' : flat;
 }
 
@@ -75,7 +90,7 @@ export function renderSyncRolesResult(
   const mode = result.dryRun
     ? '**DRY RUN** (review conflicts below; re-run with `apply: true` + a `decisions` map to commit)'
     : '**APPLIED**';
-  const lines: string[] = [`## borg_sync-roles — ${mode}`, `Template: ${templateName}`, ''];
+  const lines: string[] = [`## borg_sync-roles — ${mode}`, `Template: ${escapeSyncDisplay(templateName)}`, ''];
 
   // Gather all fragments across roles + taxonomy for tallying.
   const allFragments: FragmentView[] = [
@@ -109,7 +124,7 @@ export function renderSyncRolesResult(
         : applied
           ? '✓ accepted — template version applied'
           : '↩ kept your version';
-      lines.push(`- **${f.label}** \`${f.key}\` ${status}`);
+       lines.push(`- **${escapeSyncDisplay(f.label)}** \`${escapeSyncDisplay(f.key)}\` ${status}`);
       lines.push(`  - cube (current): "${trunc(f.cubeValue)}"`);
       lines.push(`  - template (new): "${trunc(f.templateValue)}"`);
     }
@@ -127,7 +142,7 @@ export function renderSyncRolesResult(
         '(typo or stale key) — their intended accept had NO effect. Check the exact keys against the conflicts above:'
     );
     for (const k of unmatched) {
-      lines.push(`- \`${k}\``);
+       lines.push(`- \`${escapeSyncDisplay(k)}\``);
     }
     lines.push('');
   }
@@ -137,11 +152,11 @@ export function renderSyncRolesResult(
     lines.push(`### Additions (safe — auto-applied, zero clobber risk)`);
     for (const r of newRoles) {
       const note = result.dryRun ? '(new role — would be created)' : '✓ created';
-      lines.push(`- new role **${r.name}** ${note}`);
+       lines.push(`- new role **${escapeSyncDisplay(r.name)}** ${note}`);
     }
     for (const f of adds) {
       const note = result.dryRun ? '(would be added)' : '✓ added';
-      lines.push(`- **${f.label}** \`${f.key}\` ${note}`);
+       lines.push(`- **${escapeSyncDisplay(f.label)}** \`${escapeSyncDisplay(f.key)}\` ${note}`);
     }
     lines.push('');
   }
@@ -149,7 +164,7 @@ export function renderSyncRolesResult(
   // ── Custom roles (never touched) ──
   if (customRoles.length > 0) {
     lines.push(
-      `### Custom roles (untouched): ${customRoles.map((r) => r.name).join(', ')}`
+       `### Custom roles (untouched): ${customRoles.map((r) => escapeSyncDisplay(r.name)).join(', ')}`
     );
     lines.push('');
   }

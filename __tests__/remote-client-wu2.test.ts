@@ -6,6 +6,7 @@ const TARGET_CUBE_ID = '99999999-9999-4999-8999-999999999999';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
 const ORIGIN = 'https://127.0.0.1:7091';
+const ORIGIN_C = 'https://127.0.0.1:7093';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
@@ -16,10 +17,19 @@ function envelope(payload: unknown) {
 describe('Sprint 10 WU2 local adapter', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
   let roleFixtures: any[];
+  let activeAuthority: any;
 
   beforeEach(() => {
     vi.resetModules();
     roleFixtures = [{ id: ROLE_ID, name: 'Drone', is_default: true }];
+    activeAuthority = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'active',
+      sessionToken: SESSION,
+      apiUrl: ORIGIN,
+      serverTrustIdentity: TRUST_IDENTITY,
+    };
     fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(input.toString());
       const method = init?.method ?? 'GET';
@@ -68,14 +78,7 @@ describe('Sprint 10 WU2 local adapter', () => {
       getServerCredential: vi.fn(async () => 'p'.repeat(43)),
     }));
     vi.doMock('../src/cubes.js', () => ({
-      getActiveCube: vi.fn(async () => ({
-        cubeId: CUBE_ID,
-        droneId: DRONE_ID,
-        name: 'active',
-        sessionToken: SESSION,
-        apiUrl: ORIGIN,
-        serverTrustIdentity: TRUST_IDENTITY,
-      })),
+      getActiveCube: vi.fn(async () => activeAuthority),
     }));
   });
 
@@ -174,6 +177,32 @@ describe('Sprint 10 WU2 local adapter', () => {
       const path = new URL(String(input)).pathname;
       expect(path).toContain(`/api/cubes/${TARGET_CUBE_ID}/`);
       expect(path).not.toContain(`/api/cubes/${CUBE_ID}/`);
+    }
+  });
+
+  it('keeps every operation request on the original authority after an active-server swap', async () => {
+    roleFixtures = [{ id: ROLE_ID, name: 'Builder', short_description: '', detailed_description: '', is_default: true }];
+    let swapped = false;
+    const originalFetch = fetchSpy;
+    fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input.toString());
+      if (!swapped && (init?.method ?? 'GET') === 'GET' && url.pathname.endsWith('/roles')) {
+        swapped = true;
+        activeAuthority = { ...activeAuthority, apiUrl: ORIGIN_C };
+      }
+      return originalFetch(input, init);
+    });
+    vi.doMock('../src/server-trust.js', () => ({
+      loadBorgServerTrust: vi.fn(async () => ({ identity: TRUST_IDENTITY, fetchImpl: fetchSpy })),
+    }));
+
+    const { syncRoles } = await import('../src/remote-client.js');
+    await syncRoles(TARGET_CUBE_ID, 'software-dev', true);
+
+    expect(swapped).toBe(true);
+    for (const [input] of fetchSpy.mock.calls) {
+      expect(String(input).startsWith(`${ORIGIN}/`)).toBe(true);
+      expect(String(input)).not.toContain(ORIGIN_C);
     }
   });
 });
