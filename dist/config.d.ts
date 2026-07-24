@@ -1,4 +1,4 @@
-import type { ServerCapability } from 'borgmcp-shared/protocol';
+import type { CreateCubeRepository, CubeTemplate, ServerCapability } from 'borgmcp-shared/protocol';
 import { type TokenBackend } from './token-store.js';
 export interface ServerCredentialRecord {
     origin: string;
@@ -29,7 +29,9 @@ export interface PendingServerCubeCreationRecord {
     repositoryBinding: string;
     retryKey: string;
     name: string;
-    template: 'default';
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+    template: CubeTemplate;
 }
 /**
  * S1 clean-slate local drone-session record. The client CSPRNG-generates the
@@ -100,9 +102,10 @@ export declare function getOrCreatePendingServerCubeCreation(input: {
     origin: string;
     trustIdentity: string;
     clientId: string;
-    projectRoot: string;
     name: string;
-    template: 'default';
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+    template: CubeTemplate;
 }): Promise<PendingServerCubeCreationRecord>;
 export declare function clearPendingServerCubeCreation(record: PendingServerCubeCreationRecord): Promise<void>;
 export declare function clearServerCredential(origin: string, trustIdentity: string): Promise<void>;

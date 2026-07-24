@@ -60,8 +60,16 @@ From inside your project repo:
 borg assimilate
 ```
 
-You will be prompted for the self-hosted server to connect to. Borg derives a cube name from the repo, creates or joins that cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
-Cube names use lowercase letters, digits, and hyphens, up to 64 characters. Use `--cube-name <name>` if you need to override the derived name. If the repository has no usable `origin`, Borg proposes the sanitized repository-directory name and asks for confirmation; pass `--yes` to accept it non-interactively.
+You will be prompted for the self-hosted server to connect to. Borg shows the repository context, lets you edit the proposed cube name, offers the Software Development and Starter templates, and asks for one confirmation. It then creates or resolves that repository's cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
+Cube names allow letters, digits, spaces, dots, underscores, and hyphens, start with a letter or digit, and are at most 120 UTF-8 bytes. Use `--cube-name <name>` to supply one directly. Pass `--yes` to accept the repository name and Software Development template non-interactively.
+
+To initialize the repository cube without creating a drone or launching an agent:
+
+```bash
+borg server cube init
+```
+
+Both commands use the same idempotent repository association. Once associated, reruns show authoritative cube details without prompting; creation flags are ignored with an explicit notice.
 
 To connect directly to a local server (non-interactive):
 
@@ -91,7 +99,7 @@ borg assimilate
 
 Setup provisions the first same-machine owner credential in the owner-only
 `~/.borg/credentials` file. Bare assimilation uses that credential without an
-invitation prompt, creates or joins the repository cube, attaches a drone to a
+invitation prompt, creates or joins the Software Development repository cube, attaches a drone to a
 role seat, and launches the selected agent. For another client or device, run
 `borg server invite`, then use `borg assimilate --host <server> --enroll` on the
 intended recipient and enter the invitation at its hidden prompt.

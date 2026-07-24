@@ -32,6 +32,7 @@ Commands:
   status   Report verified runtime evidence.
   update   Verify and activate a local server artifact.
   invite   Create a single-use invitation in an interactive terminal.
+  cube init   Initialize this Git repository's cube; does not create a drone.
 
 Run borg server <command> --help for server command options.
 ```
@@ -73,10 +74,20 @@ exactly; the credential becomes active only after the versioned response is
 decoded and the authenticated protocol handshake succeeds. A new process
 resumes that pending enrollment before displaying another invitation prompt.
 
-`--cube-name <name>` explicitly selects the repository cube name. Without an
-explicit name, Borg uses the `origin` repository name or, when `origin` is
-absent, proposes the sanitized repository-directory basename. Confirm
-interactively or pass `--yes`; bare repositories fail closed.
+`borg assimilate` and `borg server cube init` share one guided repository-cube
+flow. Borg shows the repository and server, proposes an editable name, offers
+the Software Development and Starter templates, and asks for one confirmation.
+`--cube-name <name>` and `--template software-dev|starter` supply those values
+directly; `--yes` accepts the repository default name and Software Development
+template. `borg server cube init` stops after authoritative cube readback and
+never creates a drone. Existing repository associations use zero prompts and
+report that creation flags were unused. Bare repositories fail closed.
+
+For repositories with a canonical public `origin`, that origin is the stable
+repository identity. Repositories without one receive an invisible UUID stored
+in an owner-only local file. Its lookup key is an HMAC of the canonical Git
+common directory, so linked worktrees share one identity and local paths are not
+stored in cleartext. A malformed identity secret or state file fails closed.
 
 The connection is HTTPS-only. Borg validates the server trust material, stores
 parent enrollment credentials in `~/.borg/credentials` and session credentials
@@ -89,7 +100,8 @@ The lifecycle facade invokes the separately installed `borgmcp-server`; it does
 not bundle the server into the client. The server must be running and trusted
 before assimilation. An owner enrollment carrying the persisted `create_cube`
 capability creates one idempotent cube per repository during normal
-assimilation, using the server-owned `default` role template; repeating an
+assimilation or `borg server cube init`, using Software Development or Starter;
+repeating an
 ambiguous request does not duplicate the cube, and distinct repositories can
 create distinct bounded cubes. An ordinary enrolled client is denied before a
 create request is sent. Cloud-only capabilities fail explicitly rather than
@@ -139,7 +151,7 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 
 ## Release status
 
-This self-hosted path consumes the published `borgmcp-shared@0.6.2` v3 registry
+This self-hosted path consumes the published `borgmcp-shared@0.6.3` v4 registry
 release. The matching server owner-enrollment, cube-create, attach, restart, log,
 and SSE implementation must also pass the full process-level local dogfood gate.
 Until that gate opens the self-hosted path remains preview-only, and the client

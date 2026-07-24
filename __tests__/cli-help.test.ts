@@ -64,7 +64,8 @@ describe('borg server help', () => {
       `  stop     Stop the managed local server.\n` +
       `  status   Report verified runtime evidence.\n` +
       `  update   Verify and activate a local server artifact.\n` +
-      `  invite   Create a single-use invitation in an interactive terminal.\n\n` +
+      `  invite   Create a single-use invitation in an interactive terminal.\n` +
+      `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
       `Run borg server <command> --help for server command options.\n`,
     );
   });
@@ -140,7 +141,7 @@ describe('model configuration ownership', () => {
     }
     expect(t).toContain('hidden enrollment invitation');
     expect(t).toContain('operator terminal');
-    expect(t).toContain('Cube to join/create');
+    expect(t).toContain('Repository cube name');
     expect(t).toContain('require an explicit cube grant');
     expect(t).toContain('Preview only');
     expect(t).not.toContain('falls back to Borg Cloud');

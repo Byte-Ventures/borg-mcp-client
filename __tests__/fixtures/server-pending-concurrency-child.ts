@@ -37,7 +37,7 @@ if (mode === 'ambiguous') {
           bodies.push(JSON.parse(String(init.body)));
           throw new Error('response lost');
         }
-        return new Response(JSON.stringify({ protocol_version: '3' }), { status: 200 });
+        return new Response(JSON.stringify({ protocol_version: '4' }), { status: 200 });
       }) as typeof fetch,
     });
   } catch (error) {
@@ -54,7 +54,7 @@ if (mode === 'resume') {
       if (init?.method === 'POST') {
         bodies.push(JSON.parse(String(init.body)));
         return new Response(JSON.stringify({
-          protocol_version: '3',
+          protocol_version: '4',
           request_id: 'resume-enrollment-1',
           payload: {
             purpose: 'owner',
@@ -64,7 +64,7 @@ if (mode === 'resume') {
         }), { status: 201 });
       }
       // Credential-free tag-only preflight: bare exact tag.
-      return new Response(JSON.stringify({ protocol_version: '3' }), { status: 200 });
+      return new Response(JSON.stringify({ protocol_version: '4' }), { status: 200 });
     }) as typeof fetch,
   });
   process.stdout.write(JSON.stringify({ bodies, token: resumed?.token }));
@@ -80,9 +80,10 @@ const result = mode === 'enrollment'
   : await getOrCreatePendingServerCubeCreation({
     ...common,
     clientId: '11111111-1111-4111-8111-111111111111',
-    projectRoot: '/work/cross-process-project',
     name: 'cross-process-project',
-    template: 'default',
+    workingRepoName: 'cross-process-project',
+    repository: { kind: 'local', value: '22222222-2222-4222-8222-222222222222' },
+    template: 'software-dev',
   });
 
 process.stdout.write(JSON.stringify(result));

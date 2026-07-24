@@ -31,6 +31,7 @@ import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote
 import { findLoadedCodexThread } from './codex-app-server.js';
 import { defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
+import { getOrCreateRepositoryIdentity, getRepositoryAssociation, resolveGitRepositoryContext, saveRepositoryAssociation, } from './repository-identity.js';
 export function buildDefaultAssimilateDeps() {
     return {
         runSync: (cmd, args, cwd) => {
@@ -138,6 +139,10 @@ export function buildDefaultAssimilateDeps() {
                 : { committed: false, reason: 'activation-failed' };
         },
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
+        resolveRepositoryContext: resolveGitRepositoryContext,
+        getRepositoryIdentity: getOrCreateRepositoryIdentity,
+        getRepositoryAssociation,
+        saveRepositoryAssociation,
         // gh#673 P2 (WI-1): project-local SessionStart hook for the launch root.
         installProjectSessionHook: (projectRoot) => {
             addProjectSessionStartHook(projectRoot);
@@ -192,25 +197,31 @@ export function buildDefaultAssimilateDeps() {
                 throw new Error('Selected Borg server authority state is missing or unreadable');
             }
             {
-                if (!params.name || !params.projectRoot) {
-                    throw new Error('Local Borg server cube creation requires a repository name and root');
-                }
-                const created = await createLocalBorgServerCube(apiUrl, serverTrustIdentity, token, { projectRoot: params.projectRoot, name: params.name });
+                const created = await createLocalBorgServerCube(apiUrl, serverTrustIdentity, token, {
+                    name: params.name,
+                    workingRepoName: params.workingRepoName,
+                    repository: params.repository,
+                    template: params.template,
+                });
                 const cube = await remoteGetCube(created.cube_id, {
                     apiUrl,
                     authToken: token,
                     serverTrustIdentity,
                 });
                 if (cube.id !== created.cube_id ||
+                    cube.name !== created.name ||
                     !Array.isArray(cube.roles) ||
                     !cube.roles.some((role) => role.id === created.default_worker_role_id)) {
                     throw new Error('Borg server returned cube details outside the creation result');
                 }
                 return {
-                    id: cube.id,
-                    name: cube.name,
-                    roles: cube.roles,
-                    drones: cube.drones ?? [],
+                    response: created,
+                    cube: {
+                        id: cube.id,
+                        name: cube.name,
+                        roles: cube.roles,
+                        drones: cube.drones ?? [],
+                    },
                 };
             }
         },

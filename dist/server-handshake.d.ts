@@ -1,4 +1,4 @@
-import { type CreateCubeResponse, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
+import { type CreateCubeRepository, type CreateCubeResponse, type CubeTemplate, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
 import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, type ActivateSeatOutcome, type BindPendingSeatOutcome, type SeatBinding, type SeatOperation as ServerSessionOperation } from './seats.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
@@ -51,7 +51,7 @@ export interface ServerAttachResult {
     result: 'created' | 'reused';
 }
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v3.
+ * Attach an enrolled client principal to one granted cube/role over protocol v4.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
  * OS keychain (keyed by the stable per-seat identity) BEFORE this request, so an
  * interrupted/lost response is recovered by re-sending the exact same bearer —
@@ -140,8 +140,10 @@ export declare function resumeBorgServerEnrollment(origin: string, trustIdentity
  * before any create request is sent.
  */
 export declare function createBorgServerCube(origin: string, trustIdentity: string, parentCredential: string, input: {
-    projectRoot: string;
     name: string;
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+    template: CubeTemplate;
 }, deps?: {
     fetchImpl?: FetchLike;
     loadCredentialRecord?: typeof getServerCredentialRecord;
@@ -149,8 +151,10 @@ export declare function createBorgServerCube(origin: string, trustIdentity: stri
     clearCubeCreation?: typeof clearPendingServerCubeCreation;
 }): Promise<CreateCubeResponse>;
 export declare function createLocalBorgServerCube(origin: string, trustIdentity: string, parentCredential: string, input: {
-    projectRoot: string;
     name: string;
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+    template: CubeTemplate;
 }, deps?: {
     loadTrust?: typeof loadBorgServerTrust;
 }): Promise<CreateCubeResponse>;

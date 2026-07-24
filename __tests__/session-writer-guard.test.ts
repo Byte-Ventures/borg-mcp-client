@@ -61,12 +61,13 @@ describe('seat single-store writer guard (SR#5)', () => {
     expect(filesReferencing('SEATS_FILE', ['seats.ts'])).toEqual([]);
   });
 
-  it('the low-level store primitives (withStore/atomicWrite0600) are reached ONLY by seats.ts + config.ts', () => {
-    // seat-store.ts is the shared 0600 flock primitive; only seats.ts (seat map)
-    // and config.ts (enrollment/credential group) drive it. No command/handshake
-    // module opens the store directly.
+  it('the low-level store primitives are reached only by approved secure stores', () => {
+    // repository-identity.ts owns a separate locked 0600 repository identity
+    // store; command and handshake modules still cannot open stores directly.
     expect(filesReferencing('withStore<', ['seat-store.ts', 'seats.ts'])).toEqual([]);
-    expect(filesReferencing('atomicWrite0600', ['seat-store.ts', 'token-store.ts'])).toEqual([]);
+    expect(filesReferencing('atomicWrite0600', [
+      'seat-store.ts', 'token-store.ts', 'repository-identity.ts',
+    ])).toEqual([]);
   });
 
   it('every seat WRITE + the pending→ACTIVE+bind transition is DEFINED in seats.ts', () => {

@@ -7,6 +7,7 @@ export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
 
 export type ParsedServerFacadeArgs =
   | { kind: 'help' }
+  | { kind: 'cube-init'; args: string[] }
   | { kind: 'command'; command: ServerLifecycleCommand; args: string[] }
   | { kind: 'error'; reason: 'unknown-command'; command: string };
 
@@ -14,6 +15,9 @@ export function parseServerFacadeArgs(args: readonly string[]): ParsedServerFaca
   const [command, ...rest] = args;
   if (command === undefined || command === '--help' || command === '-h') {
     return { kind: 'help' };
+  }
+  if (command === 'cube' && rest[0] === 'init') {
+    return { kind: 'cube-init', args: rest.slice(1) };
   }
   if (!(SERVER_LIFECYCLE_COMMANDS as readonly string[]).includes(command)) {
     return { kind: 'error', reason: 'unknown-command', command };
@@ -49,6 +53,10 @@ export interface ServerFacadeOutputDeps {
   writeStderr(text: string): void;
 }
 
+export interface ServerFacadeClientDeps {
+  cubeInit(args: readonly string[]): Promise<number>;
+}
+
 export type ServerFacadeProcessResult =
   | { kind: 'exited'; code: number }
   | { kind: 'signaled'; signal: NodeJS.Signals }
@@ -63,6 +71,25 @@ const defaultProcessDeps: ServerFacadeProcessDeps = {
 const defaultOutputDeps: ServerFacadeOutputDeps = {
   writeStdout: (text) => process.stdout.write(text),
   writeStderr: (text) => process.stderr.write(text),
+};
+
+const defaultClientDeps: ServerFacadeClientDeps = {
+  cubeInit: async (args) => {
+    const [{ parseAssimilateArgs }, { buildDefaultAssimilateDeps }, { runAssimilate }] = await Promise.all([
+      import('./parse-assimilate-args.js'),
+      import('./assimilate-deps.js'),
+      import('./assimilate-cmd.js'),
+    ]);
+    const parsed = parseAssimilateArgs([...args]);
+    if (!parsed.ok || parsed.role !== undefined) {
+      process.stderr.write(`${parsed.ok ? 'borg server cube init does not accept a role' : parsed.error}\n`);
+      return 1;
+    }
+    return runAssimilate(
+      { role: undefined, flags: parsed.flags, mode: 'cube-init' },
+      buildDefaultAssimilateDeps(),
+    );
+  },
 };
 
 const MAX_RENDERED_COMMAND_CODE_POINTS = 80;
@@ -86,7 +113,7 @@ function inertCommand(command: string): string {
 export function unknownServerCommandText(command: string): string {
   return (
     `Unknown server command: ${inertCommand(command)}.\n` +
-    `Available commands: setup, start, stop, status, update, invite.\n` +
+    `Available commands: setup, start, stop, status, update, invite, cube init.\n` +
     `Next: run borg server --help.\n`
   );
 }
@@ -168,6 +195,7 @@ export async function runEarlyServerFacade(
   argv: readonly string[],
   deps: ServerFacadeProcessDeps = defaultProcessDeps,
   output: ServerFacadeOutputDeps = defaultOutputDeps,
+  client: ServerFacadeClientDeps = defaultClientDeps,
 ): Promise<number | null> {
   if (argv[2] !== 'server') return null;
   const parsed = parseServerFacadeArgs(argv.slice(3));
@@ -179,6 +207,7 @@ export async function runEarlyServerFacade(
     output.writeStderr(unknownServerCommandText(parsed.command));
     return 1;
   }
+  if (parsed.kind === 'cube-init') return client.cubeInit(parsed.args);
 
   const result = await runServerFacadeProcess(parsed, deps);
   if (result.kind === 'spawn-error') {

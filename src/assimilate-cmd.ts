@@ -7,7 +7,6 @@ import {
   occupiedRoleIdsForAutoRole,
   pickDefaultRole,
 } from './role-resolver.js';
-import { deriveCubeName, parseGitRemote, sanitizeRemoteUrl } from './cube-name.js';
 import { validateName } from './name-validator.js';
 import { renderAssimilationWelcome } from './assimilate-welcome.js';
 import { shellEscape } from './shell-escape.js';
@@ -42,7 +41,12 @@ import { installBorgPlugin } from './opencode-plugin.js';
 import { computeOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
-import { BorgServerError, LegacySessionCredentialCollisionError } from './server-errors.js';
+import {
+  BorgServerError,
+  CubeCreationConfirmationError,
+  CubeCreationOutcomeUnknownError,
+  LegacySessionCredentialCollisionError,
+} from './server-errors.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { ServerSessionOperation } from './config.js';
 import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } from './cubes.js';
@@ -50,6 +54,14 @@ import type { SeatBinding, BindPendingSeatOutcome } from './seats.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs, type LaunchApprovalDecision } from './cli-tool-approval.js';
 import { resolveWorkingRepo, type WorkingRepo } from './working-repo.js';
+import type { CreateCubeRepository, CubeTemplate } from 'borgmcp-shared/protocol';
+import {
+  initializeRepositoryCube,
+  RepositoryAssociationSaveError,
+  validRepositoryCubeName,
+  type RepositoryCubeCreation,
+} from './repository-cube-init.js';
+import type { GitRepositoryContext, RepositoryAssociation } from './repository-identity.js';
 
 const PRIVATE_STATE_UNAVAILABLE_COPY = [
   'Borg could not safely prepare its private local state.',
@@ -73,6 +85,7 @@ export interface AssimilateFlags {
 export interface AssimilateArgs {
   role: string | undefined;
   flags: AssimilateFlags;
+  mode?: 'assimilate' | 'cube-init';
 }
 
 export interface CubeSummary {
@@ -222,6 +235,10 @@ export interface AssimilateDeps {
     scrubPending: () => Promise<unknown>;
   }) => Promise<FinalizeServerSeatOutcome>;
   findProjectRoot: (cwd: string) => string;
+  resolveRepositoryContext: (cwd: string) => Promise<GitRepositoryContext | null>;
+  getRepositoryIdentity: (context: GitRepositoryContext) => Promise<CreateCubeRepository>;
+  getRepositoryAssociation: (trustIdentity: string, repository: CreateCubeRepository) => Promise<RepositoryAssociation | null>;
+  saveRepositoryAssociation: (trustIdentity: string, repository: CreateCubeRepository, association: RepositoryAssociation) => Promise<void>;
 
   // gh#673 P2 (WI-1): write the borg-regen SessionStart hook into the
   // launch root's .claude/settings.local.json (project-local; idempotent).
@@ -254,9 +271,14 @@ export interface AssimilateDeps {
   createCube: (
     apiUrl: string,
     token: string,
-    params: { name?: string; template?: string; projectRoot?: string },
+    params: {
+      name: string;
+      workingRepoName: string;
+      repository: CreateCubeRepository;
+      template: Exclude<CubeTemplate, 'default'>;
+    },
     serverTrustIdentity?: string,
-  ) => Promise<CubeDetail>;
+  ) => Promise<RepositoryCubeCreation>;
   assimilate: (
     apiUrl: string,
     token: string,
@@ -299,11 +321,6 @@ type AssimilationAuthority =
 function affirmative(answer: string): boolean {
   const normalized = answer.trim().toLowerCase();
   return normalized === '' || normalized === 'y' || normalized === 'yes';
-}
-
-function isLocalCubePresentationName(name: string): boolean {
-  return name.length >= 1 && name.length <= 120 &&
-    /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(name);
 }
 
 async function selectAssimilationAuthority(
@@ -509,6 +526,7 @@ export async function runAssimilate(
   args: AssimilateArgs,
   deps: AssimilateDeps
 ): Promise<number> {
+  const mode = args.mode ?? 'assimilate';
   // ----- Input validation (before any subprocess work) -----
   if (args.role !== undefined) {
     const v = validateName(args.role);
@@ -523,6 +541,29 @@ export async function runAssimilate(
       deps.stderr(v.error + '\n');
       return 1;
     }
+  }
+  if (args.flags.cubeName !== undefined && !validRepositoryCubeName(args.flags.cubeName.trim())) {
+    deps.stderr('Invalid cube name. Use 1-120 letters, digits, spaces, dots, underscores, or hyphens, starting with a letter or digit.\n');
+    return 1;
+  }
+
+  let repositoryContext: GitRepositoryContext | null;
+  try {
+    repositoryContext = await deps.resolveRepositoryContext(deps.cwd());
+  } catch (error) {
+    if (error instanceof Error && error.message === 'BARE_REPOSITORY') {
+      deps.stderr('borg assimilate requires a non-bare repository worktree. Clone or check out the repository, then retry.\n');
+      return 1;
+    }
+    repositoryContext = null;
+  }
+  if (!repositoryContext) {
+    deps.stderr(
+      'No Git repository was found for this directory.\n' +
+      'Nothing was changed.\n' +
+      'Run this command inside a Git repository.\n',
+    );
+    return 1;
   }
 
   try {
@@ -555,86 +596,9 @@ export async function runAssimilate(
     return reportServerFailure(deps, authority.apiUrl, localSeatReadError);
   }
 
-  // ----- Repository + cube-name preflight -----
-  // Resolve and, where necessary, confirm local presentation data before an
-  // owner invitation can be consumed. A declined/underivable basename must
-  // not leave a successfully enrolled client behind.
-  const projectRoot = deps.findProjectRoot(deps.cwd());
-  let cubeName: string | null;
-  if (args.flags.cubeName) {
-    cubeName = args.flags.cubeName;
-  } else {
-    const remoteResult = deps.runSync('git', ['remote', 'get-url', 'origin'], projectRoot);
-    const remoteUrl = remoteResult.status === 0 ? remoteResult.stdout : null;
-    const sanitizedRemote = remoteUrl ? sanitizeRemoteUrl(remoteUrl) : null;
-    const parsedRepo = sanitizedRemote ? parseGitRemote(sanitizedRemote) : null;
+  const projectRoot = repositoryContext.root;
 
-    if (!parsedRepo) {
-      const bareResult = deps.runSync('git', ['rev-parse', '--is-bare-repository'], projectRoot);
-      if (bareResult.status === 0 && bareResult.stdout.trim() === 'true') {
-        deps.stderr(
-          'borg assimilate requires a non-bare repository worktree. ' +
-            (authority.kind === 'server'
-              ? `Clone or check out the repository, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`
-              : 'Clone or check out the repository, then retry.\n'),
-        );
-        return 1;
-      }
-    }
-
-    cubeName = deriveCubeName(projectRoot, remoteUrl);
-    if (!cubeName) {
-      deps.stderr(
-        'Could not derive a cube name from this repository. ' +
-          (authority.kind === 'server'
-            ? `Rerun ${localAssimilateCommand(authority.apiUrl)} with \`--cube-name <name>\`.\n`
-            : 'Pass --cube-name <name> and retry.\n'),
-      );
-      return 1;
-    }
-
-    if (!parsedRepo) {
-      if (sanitizedRemote) {
-        deps.stderr(
-          `Could not parse the origin remote; using directory name '${cubeName}' as the cube name.\n`,
-        );
-      }
-      if (!args.flags.yes) {
-        if (!deps.isTTY()) {
-          deps.stderr(
-            `Using directory name '${cubeName}' as the cube name requires confirmation. ` +
-              (authority.kind === 'server'
-                ? `Rerun ${localAssimilateCommand(authority.apiUrl)} with \`--cube-name <name>\` or \`--yes\`.\n`
-                : 'Re-run with --cube-name <name> or --yes.\n'),
-          );
-          return 1;
-        }
-        const confirmed = await deps.prompt(
-          `No usable origin remote was found. Use directory name '${cubeName}' as the cube name? [Y/n]: `,
-        );
-        if (!affirmative(confirmed)) {
-          deps.stderr(
-            authority.kind === 'server'
-              ? `Cube creation for ${authority.apiUrl} was cancelled. Rerun ` +
-                `${localAssimilateCommand(authority.apiUrl)} with \`--cube-name <name>\`.\n`
-              : 'Cube creation cancelled. Re-run with --cube-name <name> to choose a name.\n',
-          );
-          return 1;
-        }
-      }
-    }
-  }
-
-  if (authority.kind === 'server' && !isLocalCubePresentationName(cubeName)) {
-    deps.stderr(
-      `Invalid cube name for ${authority.apiUrl}. Use 1–120 letters, digits, spaces, dots, ` +
-        'underscores, or hyphens, starting with a letter or digit. Rerun ' +
-        `${localAssimilateCommand(authority.apiUrl)} with \`--cube-name <name>\`.\n`,
-    );
-    return 1;
-  }
-
-  let auth: { token: string; apiUrl: string; serverTrustIdentity: string };
+  let auth: { token: string; apiUrl: string; serverTrustIdentity: string; serverCapabilities: readonly string[] };
   {
     try {
       let serverAuth: {
@@ -696,6 +660,7 @@ export async function runAssimilate(
         token: serverAuth.token,
         apiUrl: authority.apiUrl,
         serverTrustIdentity: serverAuth.trustIdentity,
+        serverCapabilities: serverAuth.serverCapabilities ?? [],
       };
     } catch (error) {
       return reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true);
@@ -717,67 +682,146 @@ export async function runAssimilate(
   // (no chdir has happened yet; this is a stable starting point).
   const originalCwd = deps.cwd();
 
-  // ----- Step 3: Cube existence check (with auto-refresh on auth failure) -----
-  // gh#653 B4: announce each network step. These calls take 2–5s and were
-  // previously silent, so a user read the wait as a hang and Ctrl-C'd mid-run.
-  deps.stderr('Checking your cubes…\n');
-  let allCubes: CubeSummary[];
-  try {
-    allCubes = await deps.listCubes(auth.apiUrl, auth.token, auth.serverTrustIdentity);
-  } catch (err) {
-    return reportServerFailure(deps, authority.apiUrl, err);
-  }
-  const existingCube = allCubes.find((c) => c.name === cubeName);
-
-  // ----- Step 4: Fetch detail OR create cube -----
-  let cubeDetail: CubeDetail;
-  let isFirstDrone: boolean;
-  if (existingCube) {
+  if (existing && existing.apiUrl === auth.apiUrl) {
     try {
-      cubeDetail = await deps.getCube(
+      const repository = await deps.getRepositoryIdentity(repositoryContext);
+      const savedCube = await deps.getCube(
         auth.apiUrl,
         auth.token,
-        existingCube.id,
+        existing.cubeId,
         auth.serverTrustIdentity,
       );
+      await deps.saveRepositoryAssociation(auth.serverTrustIdentity, repository, {
+        cubeId: savedCube.id,
+        name: savedCube.name,
+        workingRepoName: repositoryContext.derivedName,
+        template: 'default',
+      });
     } catch (error) {
       return reportServerFailure(deps, authority.apiUrl, error);
     }
-    isFirstDrone = (cubeDetail.drones?.length ?? 0) === 0;
-  } else {
-    // ----- Step 4a: First-drone bootstrap (template selection) -----
-    let chosenTemplate: string | undefined;
-    if (args.flags.noTemplate ||
-        (args.flags.template !== undefined && args.flags.template !== 'default')) {
+  }
+  let initialized;
+  try {
+    if (!auth.serverCapabilities.includes('create_cube') && !existing) {
+      const repository = await deps.getRepositoryIdentity(repositoryContext);
+      const association = await deps.getRepositoryAssociation(auth.serverTrustIdentity, repository);
+      if (association) {
+        initialized = await initializeRepositoryCube({
+          mode, context: repositoryContext, serverOrigin: auth.apiUrl, flags: args.flags,
+        }, {
+          isTTY: deps.isTTY,
+          prompt: deps.prompt,
+          write: deps.stderr,
+          getIdentity: async () => repository,
+          getAssociation: async () => association,
+          saveAssociation: (identity, saved) =>
+            deps.saveRepositoryAssociation(auth.serverTrustIdentity, identity, saved),
+          getCube: (cubeId) => deps.getCube(auth.apiUrl, auth.token, cubeId, auth.serverTrustIdentity),
+          createCube: (params) => deps.createCube(auth.apiUrl, auth.token, params, auth.serverTrustIdentity),
+        });
+      } else {
+        const candidateName = args.flags.cubeName ?? repositoryContext.derivedName;
+        const accessible = await deps.listCubes(auth.apiUrl, auth.token, auth.serverTrustIdentity);
+        const matches = accessible.filter((cube) => cube.name === candidateName);
+        if (matches.length !== 1) {
+          deps.stderr(matches.length === 0
+            ? `This enrolled client cannot create a cube on ${auth.apiUrl}. Ask the server operator to grant access to a cube, then rerun ${localAssimilateCommand(auth.apiUrl)}.\n`
+            : `More than one accessible cube is named '${candidateName}'. Nothing was changed. Ask the server operator for an unambiguous repository cube grant.\n`);
+          return 1;
+        }
+        const cube = await deps.getCube(auth.apiUrl, auth.token, matches[0].id, auth.serverTrustIdentity);
+        const association = {
+          cubeId: cube.id,
+          name: cube.name,
+          workingRepoName: repositoryContext.derivedName,
+          template: 'default' as const,
+        };
+        try {
+          await deps.saveRepositoryAssociation(auth.serverTrustIdentity, repository, association);
+        } catch {
+          throw new RepositoryAssociationSaveError();
+        }
+        const response = {
+          result: 'resolved' as const,
+          cube_id: cube.id,
+          name: cube.name,
+          working_repo_name: repositoryContext.derivedName,
+          repository,
+          template: 'default' as const,
+          human_seat_role_id: cube.roles.find((role) => role.is_human_seat)?.id ?? '',
+          default_worker_role_id: cube.roles.find((role) => role.is_default)?.id ?? '',
+          access: 'manage' as const,
+        };
+        deps.stderr(
+          `Cube already initialized.\n  Name: ${cube.name}\n  Template: Default (legacy)\n` +
+          `  Repository: ${repositoryContext.root}\n  Server: ${auth.apiUrl}\n` +
+          (mode === 'cube-init'
+            ? `No drone was created.\nNext: borg assimilate --host ${shellEscape(auth.apiUrl)}\n`
+            : 'Continuing with role and seat setup...\n'),
+        );
+        initialized = { kind: 'success' as const, creation: { response, cube }, existing: true };
+      }
+    } else {
+    initialized = await initializeRepositoryCube({
+      mode,
+      context: repositoryContext,
+      serverOrigin: auth.apiUrl,
+      flags: args.flags,
+    }, {
+      isTTY: deps.isTTY,
+      prompt: deps.prompt,
+      write: deps.stderr,
+      getIdentity: deps.getRepositoryIdentity,
+      getAssociation: (repository) => deps.getRepositoryAssociation(auth.serverTrustIdentity, repository),
+      saveAssociation: (repository, association) =>
+        deps.saveRepositoryAssociation(auth.serverTrustIdentity, repository, association),
+      getCube: (cubeId) => deps.getCube(auth.apiUrl, auth.token, cubeId, auth.serverTrustIdentity),
+      createCube: (params) => deps.createCube(auth.apiUrl, auth.token, params, auth.serverTrustIdentity),
+    });
+    }
+  } catch (error) {
+    if (error instanceof RepositoryAssociationSaveError) {
       deps.stderr(
-        `Borg server ${authority.apiUrl} supports its default cube template only. ` +
-          `Rerun ${localAssimilateCommand(authority.apiUrl)} without \`--template\` or \`--no-template\`.\n`,
+        'The repository cube was confirmed, but Borg could not save its local repository association.\n' +
+        'The server cube may already exist. Run the same command again; the server will resolve it idempotently.\n',
       );
       return 1;
     }
-    chosenTemplate = 'default';
-
-    // gh#653 B4: progress for the create round-trip (silent-window stall).
-    deps.stderr(cubeName ? `Creating cube '${cubeName}'…\n` : 'Creating your cube…\n');
-    try {
-      const createParams = chosenTemplate
-        ? {
-          name: cubeName ?? undefined,
-          template: chosenTemplate,
-          projectRoot,
-        }
-        : { name: cubeName ?? undefined };
-      cubeDetail = await deps.createCube(
-        auth.apiUrl,
-        auth.token,
-        createParams,
-        auth.serverTrustIdentity,
+    if (error instanceof CubeCreationOutcomeUnknownError) {
+      deps.stderr(
+        'Cube creation outcome is unknown.\n' +
+        'No local repository association was saved.\n' +
+        'Run the same command again; the server will resolve the original request or return a conflict.\n',
       );
-    } catch (error) {
-      return reportServerFailure(deps, authority.apiUrl, error);
+      return 1;
     }
-    isFirstDrone = true;
+    if (error instanceof CubeCreationConfirmationError) {
+      deps.stderr(
+        'Cube creation could not be confirmed.\n' +
+        `${error.message}\n` +
+        'No local repository association was saved.\n' +
+        'Resolve the conflict, then run the same command again.\n',
+      );
+      return 1;
+    }
+    if (error instanceof BorgServerError && error.code === 'CREATE_CUBE_DENIED') {
+      deps.stderr(
+        `This enrolled client cannot create a cube on ${auth.apiUrl}. ` +
+        `Ask the server operator to grant access to a cube, then rerun ${localAssimilateCommand(auth.apiUrl)}.\n`,
+      );
+      return 1;
+    }
+    if (error instanceof BorgServerError) {
+      return reportServerFailure(deps, auth.apiUrl, error);
+    }
+    deps.stderr('Could not create cube.\nThe selected Borg server rejected the request.\nNothing was changed.\n');
+    return 1;
   }
+  if (initialized.kind === 'stop') return initialized.code;
+  const cubeDetail = initialized.creation.cube as CubeDetail;
+  const isFirstDrone = (cubeDetail.drones?.length ?? 0) === 0;
+  if (mode === 'cube-init') return 0;
 
   // Read the worktree identity before role selection. A live local seat must
   // retain its original role so the attach request reuses the exact durable
@@ -1754,7 +1798,7 @@ export async function runAssimilate(
       serverUrl,
       directory: agentCwd,
       droneLabel: result.drone_label,
-      cubeName: cubeName ?? 'borg',
+      cubeName: cubeDetail.name,
     })
       .then(() => injectInitialKickoff(launchKickoff))
       .catch(() => {});

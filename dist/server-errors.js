@@ -76,6 +76,18 @@ export class BorgServerUnreachableError extends Error {
         this.name = 'BorgServerUnreachableError';
     }
 }
+export class CubeCreationOutcomeUnknownError extends Error {
+    constructor() {
+        super('Cube creation outcome is unknown.');
+        this.name = 'CubeCreationOutcomeUnknownError';
+    }
+}
+export class CubeCreationConfirmationError extends Error {
+    constructor(message = 'The Borg server returned conflicting repository cube state.') {
+        super(message);
+        this.name = 'CubeCreationConfirmationError';
+    }
+}
 /** Exact retired TTL-replacement state: two saved bearers and no safe implicit winner. */
 export class LegacySessionCredentialCollisionError extends Error {
     origin;

@@ -4,6 +4,9 @@ export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
 export type ParsedServerFacadeArgs = {
     kind: 'help';
 } | {
+    kind: 'cube-init';
+    args: string[];
+} | {
     kind: 'command';
     command: ServerLifecycleCommand;
     args: string[];
@@ -27,6 +30,9 @@ export interface ServerFacadeOutputDeps {
     writeStdout(text: string): void;
     writeStderr(text: string): void;
 }
+export interface ServerFacadeClientDeps {
+    cubeInit(args: readonly string[]): Promise<number>;
+}
 export type ServerFacadeProcessResult = {
     kind: 'exited';
     code: number;
@@ -45,6 +51,6 @@ export declare function runServerFacadeProcess(input: {
     args: readonly string[];
 }, deps?: ServerFacadeProcessDeps): Promise<ServerFacadeProcessResult>;
 /** Routes every facade outcome before client initialization or network work. */
-export declare function runEarlyServerFacade(argv: readonly string[], deps?: ServerFacadeProcessDeps, output?: ServerFacadeOutputDeps): Promise<number | null>;
+export declare function runEarlyServerFacade(argv: readonly string[], deps?: ServerFacadeProcessDeps, output?: ServerFacadeOutputDeps, client?: ServerFacadeClientDeps): Promise<number | null>;
 export {};
 //# sourceMappingURL=server-facade.d.ts.map

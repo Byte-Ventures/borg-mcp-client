@@ -42,6 +42,13 @@ function processDeps(child: FakeChild) {
 }
 
 describe('parseServerFacadeArgs', () => {
+  it('routes cube init to the client-owned repository creation path', () => {
+    expect(parseServerFacadeArgs(['cube', 'init', '--host', 'localhost:7091'])).toEqual({
+      kind: 'cube-init',
+      args: ['--host', 'localhost:7091'],
+    });
+  });
+
   it.each(['setup', 'start', 'stop', 'status', 'update', 'invite'] as const)(
     'accepts %s and preserves server-owned arguments verbatim',
     (command) => {
@@ -140,7 +147,8 @@ describe('runEarlyServerFacade', () => {
         `  stop     Stop the managed local server.\n` +
         `  status   Report verified runtime evidence.\n` +
         `  update   Verify and activate a local server artifact.\n` +
-        `  invite   Create a single-use invitation in an interactive terminal.\n\n` +
+        `  invite   Create a single-use invitation in an interactive terminal.\n` +
+        `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
         `Run borg server <command> --help for server command options.\n`,
       );
       expect(output.stderr()).toBe('');
@@ -161,7 +169,7 @@ describe('runEarlyServerFacade', () => {
     expect(output.stdout()).toBe('');
     expect(output.stderr()).toBe(
       `Unknown server command: bad??[31m.\n` +
-      `Available commands: setup, start, stop, status, update, invite.\n` +
+      `Available commands: setup, start, stop, status, update, invite, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     expect(output.stderr()).not.toContain('--secret');
@@ -181,7 +189,7 @@ describe('runEarlyServerFacade', () => {
     )).resolves.toBe(1);
     expect(output.stderr()).toBe(
       `Unknown server command: ${'😀'.repeat(77)}....\n` +
-      `Available commands: setup, start, stop, status, update, invite.\n` +
+      `Available commands: setup, start, stop, status, update, invite, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     const renderedToken = output.stderr().split('\n', 1)[0]
@@ -311,7 +319,7 @@ describe('approved server facade copy', () => {
   it('renders the exact bounded unknown-command text', () => {
     expect(unknownServerCommandText('daemonize')).toBe(
       `Unknown server command: daemonize.\n` +
-      `Available commands: setup, start, stop, status, update, invite.\n` +
+      `Available commands: setup, start, stop, status, update, invite, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
   });
