@@ -105,5 +105,6 @@ describe('borg_apply-template orchestration authority', () => {
     expect(mutations).toContainEqual({ origin: ORIGIN_A, path: `${base}/roles/${ROLE_ID}/section-patch`, method: 'POST' });
     expect(mutations).toContainEqual({ origin: ORIGIN_A, path: `${base}/taxonomy-patch`, method: 'POST' });
     expect(mutations.at(-1)).toEqual({ origin: ORIGIN_A, path: base, method: 'PATCH' });
+    expect(mutations.some((request) => /apply-template|sync-roles/.test(request.path))).toBe(false);
   });
 });

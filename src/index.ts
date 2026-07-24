@@ -139,14 +139,15 @@ import {
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
- * gh#473 PR2 — delegates to the NON-CLOBBERING server route. New roles
- * are inserted; existing template-named roles get ADD fragments (template
- * sections/classes the cube lacks) auto-applied, but EVOLVED (conflicting)
- * fragments are surfaced server-side and KEPT — never silently
- * overwritten. The old per-role blanket `updateRole`/whole-taxonomy
- * `updateCube` overwrite path is removed. Operators who want to take the
- * template version of a conflicting fragment use `borg_sync-roles` with a
- * `decisions` map. Returns `{ created, updated }` for the caller's toast.
+ * Client-orchestrated through the server's non-clobbering role and taxonomy
+ * primitives. New roles are inserted; existing template-named roles get ADD
+ * fragments (template sections/classes the cube lacks) auto-applied, but
+ * EVOLVED (conflicting) fragments are kept — never silently overwritten. The
+ * old per-role blanket `updateRole`/whole-taxonomy `updateCube` overwrite path
+ * is removed. Operators who want to take the template version of a conflicting
+ * fragment use `borg_sync-roles` with a `decisions` map. Primitive operations
+ * are sequential, so a later failure can leave earlier changes committed.
+ * Returns `{ created, updated }` for the caller's toast.
  */
 async function applyTemplateToCube(
   cubeId: string,

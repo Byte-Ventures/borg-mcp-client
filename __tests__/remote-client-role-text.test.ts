@@ -29,11 +29,29 @@ function localEnvelope(payload: unknown, requestId = 'local-response-1') {
 
 describe('MCP role-text proxy policy (local path)', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
+  let sectionErrorCode: string | null;
 
   beforeEach(() => {
     vi.resetModules();
+    sectionErrorCode = null;
     fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(input.toString());
+      if (url.pathname === `/api/cubes/${CUBE_ID}/roles/${ROLE_ID}/section-patch` && init?.method === 'POST') {
+        if (sectionErrorCode) {
+          return new Response(JSON.stringify({
+            protocol_version: '3',
+            request_id: 'role-section-error',
+            error: {
+              code: sectionErrorCode,
+              message: 'HOSTILE-SERVER-MESSAGE\u001b[2J',
+              details: 'SECRET-ROLE-TEXT',
+            },
+          }), { status: 409 });
+        }
+        return new Response(JSON.stringify(localEnvelope({
+          role: { id: ROLE_ID, name: 'Builder' },
+        })), { status: 200 });
+      }
       if (url.pathname === `/api/cubes/${CUBE_ID}/roles/${ROLE_ID}` && init?.method === 'PATCH') {
         const payload = JSON.parse(String(init?.body)).payload;
         return new Response(JSON.stringify(localEnvelope({
@@ -97,5 +115,49 @@ describe('MCP role-text proxy policy (local path)', () => {
       const field = name === 'borg_patch-role-section' ? properties.body : properties.detailed_description;
       expect(field.maxLength).toBeUndefined();
     }
+  });
+
+  it('turns only the typed role-section conflict into safe local operation context', async () => {
+    sectionErrorCode = 'ROLE_SECTION_CONFLICT';
+    const { patchRoleSection } = await import('../src/remote-client.js');
+    const { formatLocalManageToolResult } = await import('../src/local-manage-tool-result.js');
+
+    const error = await patchRoleSection(ROLE_ID, {
+      action: 'insert',
+      heading: 'Activation',
+      body: 'New text.',
+      after: 'Workflow',
+    }).then(() => null, (caught) => caught);
+    expect(error).toMatchObject({ name: 'RoleSectionConflictError' });
+    const result = formatLocalManageToolResult(error);
+    const text = result?.content[0].text ?? '';
+
+    expect(result?.isError).toBe(true);
+    expect(text).toContain('[ROLE-SECTION-CONFLICT]');
+    expect(text).toContain('action=insert');
+    expect(text).toContain('heading="Activation"');
+    expect(text).toContain('after="Workflow"');
+    expect(text).toContain('No role text was changed');
+    expect(text).toContain('borg_role');
+    expect(text).toContain('retry');
+    expect(text).not.toContain('HOSTILE-SERVER-MESSAGE');
+    expect(text).not.toContain('SECRET-ROLE-TEXT');
+    expect(text).not.toContain('\u001b');
+  });
+
+  it('leaves other 409 error codes on the existing generic path', async () => {
+    sectionErrorCode = 'INVALID_INPUT';
+    const { patchRoleSection } = await import('../src/remote-client.js');
+
+    await expect(patchRoleSection(ROLE_ID, {
+      action: 'replace',
+      heading: 'Workflow',
+      body: 'New text.',
+    })).rejects.toMatchObject({
+      name: 'BorgServerHttpError',
+      status: 409,
+      code: 'INVALID_INPUT',
+      message: 'Borg server request failed (HTTP 409)',
+    });
   });
 });

@@ -421,11 +421,12 @@ export declare function getCube(cubeId: string, connection?: RemoteConnection): 
     [k: string]: any;
 }>;
 /**
- * gh#473 PR2 — apply a named template to an existing cube via the
- * NON-CLOBBERING server route. New roles are inserted; existing
+ * Apply a named template through client-orchestrated, non-clobbering role and
+ * taxonomy primitives. New roles are inserted; existing
  * template-named roles get ADD fragments auto-applied (template
  * sections/classes the cube lacks) but their EVOLVED (conflicting)
- * fragments are surfaced server-side and KEPT, never overwritten. Returns
+ * fragments are kept, never overwritten. Primitive operations are sequential,
+ * so earlier changes may remain committed if a later operation fails. Returns
  * `{ created, updated }` counts. To selectively take template versions of
  * conflicting fragments, use `syncRoles` with a `decisions` map instead.
  */
@@ -434,7 +435,7 @@ export declare function applyTemplate(cubeId: string, templateName: string, auth
     updated: number;
 }>;
 /**
- * gh#473 PR2 — NON-CLOBBERING sync of a cube's roles + message_taxonomy
+ * Client-orchestrated, non-clobbering sync of a cube's roles and taxonomy
  * against the current built-in template. Dry-run by default classifies
  * each fragment (role-text SECTION / short_description / flags / taxonomy
  * CLASS) as ADD / UNCHANGED / CONFLICT. Pass apply=true to commit:
@@ -442,7 +443,9 @@ export declare function applyTemplate(cubeId: string, templateName: string, auth
  * ONLY when their stable key appears in `decisions` as 'accept'.
  * Unspecified conflicts DEFAULT TO REJECT — the cube's evolved text is
  * never silently overwritten. Custom roles (names not in template) are
- * never touched. Returns a NonClobberSyncResult.
+ * never touched. Applied primitives are sequential rather than atomic, so an
+ * earlier operation may remain committed if a later operation fails. Returns a
+ * NonClobberSyncResult.
  */
 export declare function syncRoles(cubeId: string, templateName?: string, apply?: boolean, decisions?: Record<string, 'accept' | 'reject'>, authorityOverride?: LocalManageAuthority): Promise<NonClobberSyncResult>;
 export {};
