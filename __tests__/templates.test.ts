@@ -154,12 +154,13 @@ describe('Template.cube_directive field', () => {
     expect(cr?.detailed_description).toContain('exact software revision');
   });
 
-  it('Coordinator role text drops manual pre-assign as primary → reviewers self-claim', () => {
+  it('Coordinator role text requires named activation and receipt-only acknowledgements', () => {
     const t = getTemplate('software-dev');
     const coord = t!.roles.find((role) => role.name === 'Coordinator');
-    expect(coord?.detailed_description).toContain('Route authorized work');
-    expect(coord?.detailed_description).toContain('ACK is receipt only');
-    expect(coord?.detailed_description).toContain('Verify start within two minutes');
+    expect(coord?.detailed_description).toContain('Order named drones');
+    expect(coord?.detailed_description).toContain('START NOW');
+    expect(coord?.detailed_description).toContain('ACK and claim are receipt only');
+    expect(coord?.detailed_description).toContain('within 2 minutes');
   });
 
   it('Coordinator role-text frames borg_decide as the ratification act', () => {
@@ -184,13 +185,16 @@ describe('Template.cube_directive field', () => {
     expect(coordinator?.detailed_description).toContain('Never manufacture work');
   });
 
-  it('Coordinator guidance preserves its detector while ordinary Claude seats use adaptive recovery deadlines', () => {
+  it('Coordinator guidance preserves exact activation escalation and waiting detection', () => {
     const coordinator = getTemplate('software-dev')!.roles.find(
       (role) => role.name === 'Coordinator'
     );
     const text = coordinator?.detailed_description ?? '';
 
-    expect(text).toContain('Verify start within two minutes');
+    expect(text).toContain('within 2 minutes');
+    expect(text).toContain('After 5 more minutes');
+    expect(text).toContain('at least every 10 minutes');
+    expect(text).toContain('immediate BLOCKED');
     expect(text).toContain('Waiting is valid');
     expect(text).toContain('under active review');
     expect(text).not.toContain('60 min fallback acceptable');

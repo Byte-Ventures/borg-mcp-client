@@ -8,7 +8,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 
 ## Deliberate Transformations
 
-- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release `borgmcp-shared@0.6.1` and a fresh standalone lockfile.
+- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release `borgmcp-shared@0.6.2` and a fresh standalone lockfile.
 - Replaced local template, role-section, drone-address, and log high-water-mark implementations with `borgmcp-shared` exports.
 - Removed monorepo-only website anti-drift tests and re-anchored remaining filesystem tests to this repository.
 - Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
@@ -21,8 +21,8 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
   lightweight release tag failed before packaging. The reviewed `2.0.1`
   recovery, `2.0.2`, `2.0.3`, `2.0.4`, `2.0.5`, and `2.0.6` successors were
   published and registry-verified. The immutable `2.0.7` workflow failed before
-  package creation or npm publication. The `2.0.8` and `2.0.9` successors were
-  published and registry-verified, so the next candidate identity is `2.0.10`. Extraction and
+  package creation or npm publication. The `2.0.8`, `2.0.9`, and `2.0.10` successors were
+  published, so the next candidate identity is `2.0.11`. Extraction and
   versioning do not authorize publication.
 
 ## Review Holds
@@ -38,9 +38,9 @@ artifact reaches no hosted authority.
 Local enrollment now uses the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
-resolves to the audited registry `borgmcp-shared@0.6.1`. The matching
+resolves to the audited registry `borgmcp-shared@0.6.2`. The matching
 `borgmcp-server@0.1.17` release is published and registry-verified. Client
-`borgmcp@2.0.9` is published and registry-verified. The immutable `v2.0.7`
+`borgmcp@2.0.10` is published. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next
-candidate remains gated by reviewed `v2.0.10` source, a fresh annotated tag, and
-exact registry integrity and signature verification.
+candidate remains gated by reviewed `v2.0.11` source, a fresh annotated tag, and
+the exact-artifact and protected-publication gates.

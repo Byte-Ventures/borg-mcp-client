@@ -90,8 +90,15 @@ The annotated `v2.0.9` tag object
 `18084fc486a041f3438f584a97d218c01a5e0399`. Workflow run `30047299013`, attempt 1,
 successfully published that exact source as `borgmcp@2.0.9`; the registry records integrity
 `sha512-lf0TZ8ZcpHv/Nt3LkY/IGxkUFkg3weavF+rLv6xLImDDhLIaZly1y8jUdo3UuheQVhrLnLcxoz37Myr4mPx9lg==`.
+Never move, replace, reuse, or rerun that tag or workflow.
+
+The annotated `v2.0.10` tag object
+`31ae3c19ac4e04fac33269459a460d5316cce730` peels to protected-main commit
+`3f7003b65eadc74cd949857e831e1181a1aad2ff`. Workflow run `30063538271`, attempt 1,
+successfully published that exact source as `borgmcp@2.0.10`; the registry records integrity
+`sha512-BkFrq75mF7ih0/7Z7RsXsJYo43qNs4ng7tSnvcFCl3k6r+ex1FvTkah0+KQNinDSrv6a+HLWahUe8875so8zew==`.
 Never move, replace, reuse, or rerun that tag or workflow. The next candidate
-uses the unused `v2.0.10` identity from a fresh reviewed protected-main commit
+uses the unused `v2.0.11` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
@@ -103,7 +110,7 @@ Before creating the release tag, independently verify all of these conditions:
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- the exact audited registry dependency `borgmcp-shared@0.6.1` remains locked to
+- the exact audited registry dependency `borgmcp-shared@0.6.2` remains locked to
   its canonical tarball and integrity;
 - the client and matching server pass the complete local dogfood gate;
 - the selected stable client version is unused and the exact release commit is
