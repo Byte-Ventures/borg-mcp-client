@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
@@ -79,7 +80,7 @@ describe('local manage-request authority', () => {
         return new Response(JSON.stringify(envelope({ roles: [{ id: ROLE_ID, name: 'Builder' }] })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/drones` && method === 'GET') {
-        return new Response(JSON.stringify(envelope({ drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID }] })), { status: 200 });
+        return new Response(JSON.stringify(envelope({ drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID, ...UNREPORTED_DRONE_RUNTIME_METADATA }] })), { status: 200 });
       }
       throw new Error(`unexpected local request ${method} ${url.pathname}`);
     });

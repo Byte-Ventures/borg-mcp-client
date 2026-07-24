@@ -9,7 +9,7 @@
  * There is no hosted-authority path: every request must carry verified local
  * server trust or it fails closed before any network or credential use.
  */
-import { type EvictDroneResult, type ReassignDroneResult } from 'borgmcp-shared/protocol';
+import { type AgentKind, type EvictDroneResult, type ReassignDroneResult } from 'borgmcp-shared/protocol';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import type { NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
@@ -116,6 +116,13 @@ export declare function whoami(sessionToken: string, apiUrl: string, serverTrust
     drone_label: string;
     role_id: string;
     role_name: string;
+    runtime_metadata: {
+        agent_kind: AgentKind | null;
+        reported_model: string | null;
+        working_repo_name: string | null;
+        working_repo_origin: string | null;
+    };
+    runtime_metadata_reported: boolean;
 }>;
 /**
  * List all currently-connected drones in this cube.
@@ -201,6 +208,8 @@ export declare function regen(sessionToken: string, apiUrl: string, opts?: {
     since?: string;
     /** Advisory self-report from the running agent; never model-routing config. */
     reportedModel?: string;
+    /** Positively identified running Agent CLI; null means explicitly unknown. */
+    agentKind?: AgentKind | null;
     /** Current cwd-derived identity; refreshed each regen to avoid stale routing data. */
     workingRepo?: WorkingRepo;
     /** Verified self-hosted authority from the caller's first active-state read. */

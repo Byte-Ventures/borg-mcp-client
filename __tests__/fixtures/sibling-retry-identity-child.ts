@@ -18,6 +18,7 @@
 import { randomBytes } from 'node:crypto';
 import { findIncompleteSiblingAttempt, prepareSeat, seatRef } from '../../src/seats.js';
 import { sendBorgServerAttach } from '../../src/server-handshake.js';
+import { UNREPORTED_ATTACH_RUNTIME_METADATA } from './runtime-metadata.js';
 
 const ORIGIN = 'https://server.example.com';
 const TRUST = 'spki-sha256:server-a';
@@ -39,7 +40,7 @@ const fakeFetch = (result: 'created' | 'reused') =>
       result,
       cube: { id: CUBE_ID, name: 'myrepo' },
       role: { id: ROLE_ID, name: 'Drone', role_class: 'worker' },
-      drone: { id: '33333333-3333-4333-8333-333333333333', label: 'one-of-one' },
+      drone: { id: '33333333-3333-4333-8333-333333333333', label: 'one-of-one', ...UNREPORTED_ATTACH_RUNTIME_METADATA },
       session: { id: '99999999-9999-4999-8999-999999999999' },
     },
   }), { status: result === 'created' ? 201 : 200 })) as unknown as typeof fetch;

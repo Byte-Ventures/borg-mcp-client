@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
@@ -89,7 +90,7 @@ describe('remote-client explicit authority connection', () => {
       const payload = path.endsWith('/roles')
         ? { roles: [{ id: ROLE_ID, name: 'Builder' }] }
         : path.endsWith('/drones')
-          ? { drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID }] }
+          ? { drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID, ...UNREPORTED_DRONE_RUNTIME_METADATA }] }
           : { cube: { id: CUBE_ID, name: 'local-cube' } };
       return new Response(JSON.stringify({
         protocol_version: '3',

@@ -8,7 +8,7 @@
 import { ROLE_SCOPED_SAFETY_DISCIPLINES, UNIVERSAL_SAFETY_DISCIPLINES, } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { formatDroneAddressToken } from 'borgmcp-shared/drone-address';
-import { formatRoleAgentLabel } from './roster-render.js';
+import { RUNTIME_METADATA_ADVISORY, renderRuntimeMetadataLines, } from './roster-render.js';
 import { shellEscape } from './shell-escape.js';
 import { resolveInboxMonitorPath } from './self-path.js';
 /**
@@ -420,8 +420,10 @@ export function formatRegenMarkdown(result, opts = {}) {
     const droneOverview = result.drones
         .map((d) => {
         const role = result.roles.find((r) => r.id === d.role_id);
-        const roleLabel = formatRoleAgentLabel(role?.name ?? '?', d.agent_kind);
-        return `- **${d.label}** (${roleLabel}) — last seen ${humanAgo(new Date(d.last_seen))}`;
+        return [
+            `- **${d.label}** (Role: ${role?.name ?? '?'}) — last seen ${humanAgo(new Date(d.last_seen))}`,
+            ...renderRuntimeMetadataLines(d),
+        ].join('\n');
     })
         .join('\n') || '_(no drones connected)_';
     // gh#886: the cube log is NO LONGER inlined as a payload. Render a smart
@@ -518,7 +520,7 @@ export function formatRegenMarkdown(result, opts = {}) {
             '_(role playbook unchanged since your last full/lite regen; omitted in lite mode)_',
             '',
             ...safetyDisciplinesForRole(result.role.detailed_description),
-        ].join('\n'), '', `## Roles in this cube`, roleOverview, '', `## Connected drones`, droneOverview, '', `## Cube log`, cubeLogSection, ...(decisionsSection ? ['', decisionsSection] : []));
+        ].join('\n'), '', `## Roles in this cube`, roleOverview, '', `## Connected drones`, `_${RUNTIME_METADATA_ADVISORY}_`, '', droneOverview, '', `## Cube log`, cubeLogSection, ...(decisionsSection ? ['', decisionsSection] : []));
     if (shouldEmitPlaybook) {
         lines.push('', getDronePlaybook());
         boilerplateEmittedThisSession = true;

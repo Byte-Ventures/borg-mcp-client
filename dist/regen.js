@@ -20,6 +20,7 @@ import { findProjectRoot, getActiveCube, inboxPathForDrone } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import { parseHookSource, formatLeanOrientation, resolveLeanIdentity, } from './regen-format.js';
 import { resolveSessionAgentKind } from './codex-app-wake.js';
+import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { handleVersionFlag } from './version.js';
 import { gateAllowsActivation } from './launch-gate.js';
 import { resolveWorkingRepo } from './working-repo.js';
@@ -77,6 +78,7 @@ async function main() {
     let result = null;
     try {
         result = await regen(active.sessionToken, active.apiUrl, {
+            agentKind: resolveReportableSessionAgentKind(),
             workingRepo: resolveWorkingRepo(),
             serverTrustIdentity: active.serverTrustIdentity,
         });

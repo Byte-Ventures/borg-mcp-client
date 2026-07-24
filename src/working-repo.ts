@@ -7,10 +7,12 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { canonicalizeRepositoryIdentity } from 'borgmcp-shared/runtime-metadata';
 export interface WorkingRepo {
   name: string | null;
-  /** Canonical host/path identity, never a raw Git remote URL. */
+  /** Canonical public HTTPS identity, never a raw Git remote URL. */
   origin: string | null;
+  state?: 'known' | 'unknown' | 'unavailable' | 'rejected';
 }
 
 export interface WorkingRepoDeps {
@@ -30,43 +32,19 @@ function trimmed(value: string | null | undefined): string | null {
   return normalized ? normalized : null;
 }
 
-function nameFromIdentity(identity: string): string | null {
-  const lastPathSegment = identity.replace(/\/$/, '').split('/').pop();
-  const name = lastPathSegment?.replace(/\.git$/i, '').trim();
-  return name || null;
-}
-
 /**
- * Convert a Git remote to a non-secret `host/org/repo` identity.
- *
- * URL userinfo, query strings, fragments, scheme, and SCP-style user prefixes
- * are deliberately discarded. Inputs that cannot identify a host and path are
- * treated as unreportable rather than forwarded verbatim.
+ * Convert a Git remote to the shared canonical public repository identity.
+ * Hostile or credential-bearing inputs are rejected rather than sanitized.
  */
-export function canonicalizeWorkingRepoIdentity(origin: string): string | null {
-  const raw = origin.trim();
-  if (!raw) return null;
-  // Remote clients send this canonical form on subsequent lifecycle calls.
-  const canonical = raw.match(/^([A-Za-z0-9.-]+)\/([^?#\s]+)$/);
-  if (canonical) {
-    const host = canonical[1].toLowerCase();
-    const path = canonical[2].replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
-    return host && path ? `${host}/${path}` : null;
-  }
+export function canonicalizeWorkingRepoIdentity(origin: string): WorkingRepo | null {
   try {
-    const url = new URL(origin);
-    if (!['http:', 'https:', 'ssh:', 'git:'].includes(url.protocol)) return null;
-    const path = url.pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
-    return url.hostname && path ? `${url.hostname.toLowerCase()}/${path}` : null;
+    const canonical = canonicalizeRepositoryIdentity(origin.trim());
+    return {
+      name: canonical.working_repo_name,
+      origin: canonical.working_repo_origin,
+      state: 'known',
+    };
   } catch {
-    // SCP-style SSH remote: discard its optional user prefix and URL-like
-    // query/fragment suffix before accepting only host + repository path.
-    const match = raw.match(/^(?:[^@\s/:]+@)?([A-Za-z0-9.-]+):\/?([^?#\s]+)(?:[?#].*)?$/);
-    if (match) {
-      const host = match[1].toLowerCase();
-      const path = match[2].replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
-      return host && path ? `${host}/${path}` : null;
-    }
     return null;
   }
 }
@@ -83,17 +61,28 @@ export function resolveWorkingRepo(
   deps: WorkingRepoDeps = {}
 ): WorkingRepo {
   const runGit = deps.runGit ?? defaultRunGit;
-  const rootResult = runGit(cwd, ['rev-parse', '--show-toplevel']);
+  let rootResult;
+  try {
+    rootResult = runGit(cwd, ['rev-parse', '--show-toplevel']);
+  } catch {
+    return { name: null, origin: null, state: 'unavailable' };
+  }
   const root = rootResult.status === 0 ? trimmed(rootResult.stdout) : null;
   if (!root) {
-    return { name: null, origin: null };
+    return { name: null, origin: null, state: 'unknown' };
   }
 
-  const originResult = runGit(cwd, ['config', '--get', 'remote.origin.url']);
+  let originResult;
+  try {
+    originResult = runGit(cwd, ['config', '--get', 'remote.origin.url']);
+  } catch {
+    return { name: null, origin: null, state: 'unavailable' };
+  }
   const originRaw = originResult.status === 0 ? trimmed(originResult.stdout) : null;
-  const origin = originRaw ? canonicalizeWorkingRepoIdentity(originRaw) : null;
-  return {
-    name: origin ? nameFromIdentity(origin) : null,
-    origin,
+  if (!originRaw) return { name: null, origin: null, state: 'unknown' };
+  return canonicalizeWorkingRepoIdentity(originRaw) ?? {
+    name: null,
+    origin: null,
+    state: 'rejected',
   };
 }

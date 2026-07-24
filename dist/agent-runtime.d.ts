@@ -17,6 +17,8 @@ export declare const BORG_OPENCODE_ENV = "BORG_OPENCODE";
  * already-installed clients.
  */
 export declare function resolveSessionAgentKind(env?: NodeJS.ProcessEnv): AgentKind;
+/** Resolve only positively identified CLI state for advisory server reporting. */
+export declare function resolveReportableSessionAgentKind(env?: NodeJS.ProcessEnv): AgentKind | null;
 /**
  * Produce a clean agent-launch environment. Clearing stale transport markers
  * is essential for a Codex → Claude relaunch: an inherited marker must not

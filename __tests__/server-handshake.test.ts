@@ -28,6 +28,15 @@ import { join } from 'node:path';
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
+const UNREPORTED_METADATA = {
+  runtime_metadata: {
+    agent_kind: null,
+    reported_model: null,
+    working_repo_name: null,
+    working_repo_origin: null,
+  },
+  runtime_metadata_reported: false,
+};
 const SESSION_ID = '99999999-9999-4999-8999-999999999999';
 
 const OPERATION: ServerSessionOperation = {
@@ -535,7 +544,7 @@ describe('self-hosted server handshake', () => {
         result: 'created',
         cube: { id: CUBE_ID, name: 'local-cube' },
         role: { id: ROLE_ID, name: 'Builder', role_class: 'worker' },
-        drone: { id: DRONE_ID, label: 'builder-1' },
+        drone: { id: DRONE_ID, label: 'builder-1', ...UNREPORTED_METADATA },
         session: { id: SESSION_ID },
       },
     }), { status: 201 }));
@@ -546,7 +555,17 @@ describe('self-hosted server handshake', () => {
       'https://server.example.com',
       'spki-sha256:server-a',
       'p'.repeat(43),
-      { cubeId: CUBE_ID, roleId: ROLE_ID, operation: OPERATION },
+      {
+        cubeId: CUBE_ID,
+        roleId: ROLE_ID,
+        operation: OPERATION,
+        runtimeMetadata: {
+          agent_kind: 'codex',
+          reported_model: 'openai/gpt-5.6-sol',
+          working_repo_name: 'Byte-Ventures/borg-mcp-client',
+          working_repo_origin: 'https://github.com/Byte-Ventures/borg-mcp-client',
+        },
+      },
       bearer,
       { fetchImpl: fetchImpl as typeof fetch, activateAndBind },
     );
@@ -570,7 +589,17 @@ describe('self-hosted server handshake', () => {
     // enrollment credential is only the Authorization bearer.
     expect(JSON.parse(String(init?.body))).toMatchObject({
       protocol_version: '3',
-      payload: { cube_id: CUBE_ID, role_id: ROLE_ID, session_credential: bearer },
+      payload: {
+        cube_id: CUBE_ID,
+        role_id: ROLE_ID,
+        session_credential: bearer,
+        runtime_metadata: {
+          agent_kind: 'codex',
+          reported_model: 'openai/gpt-5.6-sol',
+          working_repo_name: 'Byte-Ventures/borg-mcp-client',
+          working_repo_origin: 'https://github.com/Byte-Ventures/borg-mcp-client',
+        },
+      },
     });
     expect(activateAndBind).toHaveBeenCalledWith(expect.objectContaining({
       origin: 'https://server.example.com',
@@ -598,7 +627,7 @@ describe('self-hosted server handshake', () => {
         result: 'created',
         cube: { id: CUBE_ID, name: 'local-cube' },
         role: { id: ROLE_ID, name: 'Builder', role_class: 'worker' },
-        drone: { id: DRONE_ID, label: 'builder-1' },
+        drone: { id: DRONE_ID, label: 'builder-1', ...UNREPORTED_METADATA },
         session: { id: SESSION_ID, expires_at: '2026-07-14T16:00:00.000Z' },
       },
     }), { status: 201 }));
@@ -621,7 +650,7 @@ describe('self-hosted server handshake', () => {
         result: 'created',
         cube: { id: CUBE_ID, name: 'local-cube' },
         role: { id: ROLE_ID, name: 'Builder' },
-        drone: { id: DRONE_ID, label: 'builder-1' },
+        drone: { id: DRONE_ID, label: 'builder-1', ...UNREPORTED_METADATA },
         session: { id: SESSION_ID },
       },
     }), { status: 201 }));
@@ -647,7 +676,7 @@ describe('self-hosted server handshake', () => {
         result: 'reused',
         cube: { id: CUBE_ID, name: 'local-cube' },
         role: { id: ROLE_ID, name: 'Builder' },
-        drone: { id: DRONE_ID, label: 'builder-1' },
+        drone: { id: DRONE_ID, label: 'builder-1', ...UNREPORTED_METADATA },
         session: { id: SESSION_ID },
       },
     }), { status: 200 }));
@@ -753,7 +782,7 @@ describe('sendBorgServerAttach real activate fails closed with NO expectation di
       result: 'reused',
       cube: { id: CUBE_ID, name: 'local-cube' },
       role: { id: ROLE_ID, name: 'Builder' },
-      drone: { id: DRONE_ID, label: 'builder-1' },
+      drone: { id: DRONE_ID, label: 'builder-1', ...UNREPORTED_METADATA },
       session: { id: SESSION_ID },
     },
   }), { status: 200 }));

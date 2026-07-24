@@ -1,4 +1,4 @@
-import { type CreateCubeResponse, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
+import { type CreateCubeResponse, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
 import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, type ActivateSeatOutcome, type BindPendingSeatOutcome, type SeatBinding, type SeatOperation as ServerSessionOperation } from './seats.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
@@ -103,6 +103,7 @@ export declare function sendBorgServerAttach(origin: string, trustIdentity: stri
     roleId: string;
     operation: ServerSessionOperation;
     priorDroneId?: string;
+    runtimeMetadata?: DroneRuntimeMetadata;
 }, pendingBearer: string, deps?: {
     fetchImpl?: FetchLike;
     activateAndBind?: typeof activateAndBindSeat;

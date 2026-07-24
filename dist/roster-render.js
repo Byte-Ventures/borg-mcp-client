@@ -15,6 +15,8 @@
  *     from the resolved timestamp the server echoed back.
  */
 import { formatDroneAddressToken } from 'borgmcp-shared/drone-address';
+import { escapeSyncDisplay } from './sync-roles-render.js';
+export const RUNTIME_METADATA_ADVISORY = 'Agent CLI, reported model, and working repository are advisory. They do not determine authority, role, health, activity, wake behavior, or routing.';
 /**
  * gh#503 — render-layer display labels for the wake-path wire enum.
  *
@@ -56,6 +58,29 @@ export function formatWorkingRepoLabel(drone) {
         return `Working repo: origin: ${drone.working_repo_origin}`;
     return 'Working repo: not reported';
 }
+function metadataValue(drone, value) {
+    if (drone.runtime_metadata_reported !== true)
+        return 'not reported';
+    return value == null ? 'unknown' : escapeSyncDisplay(value);
+}
+export function renderRuntimeMetadataLines(drone, opts = {}) {
+    const agent = drone.agent_kind === 'claude'
+        ? 'Claude Code'
+        : drone.agent_kind === 'codex'
+            ? 'Codex'
+            : drone.agent_kind === 'opencode'
+                ? 'OpenCode'
+                : null;
+    const lines = [
+        `  - **Agent CLI:** ${metadataValue(drone, agent)}`,
+        `  - **Reported model:** ${metadataValue(drone, drone.reported_model)}`,
+        `  - **Working repo:** ${metadataValue(drone, drone.working_repo_name)}`,
+    ];
+    if (opts.includeOrigin) {
+        lines.push(`  - **Origin:** ${metadataValue(drone, drone.working_repo_origin)}`);
+    }
+    return lines;
+}
 export function renderRoster(inputs) {
     const { cubeName, drones, roles, resolvedSince, humanAgo } = inputs;
     const roleById = new Map();
@@ -63,6 +88,8 @@ export function renderRoster(inputs) {
         roleById.set(r.id, r);
     const lines = [];
     lines.push(`# Drones in cube: ${cubeName}`);
+    lines.push('');
+    lines.push(`_${RUNTIME_METADATA_ADVISORY}_`);
     lines.push('');
     if (resolvedSince) {
         // Surface the liveness-probe context so the reader knows what the
@@ -77,15 +104,9 @@ export function renderRoster(inputs) {
     for (const d of drones) {
         const role = roleById.get(d.role_id);
         const roleName = role?.name ?? 'unknown';
-        const roleLabel = formatRoleAgentLabel(roleName, d.agent_kind);
         // gh#371: stable short-uuid address token beside the (renumber-prone) label.
         const addr = d.id ? ` ${formatDroneAddressToken(d.id)}` : '';
         const lastSeen = humanAgo(d.last_seen);
-        const reportedModelMarker = d.reported_model
-            ? ` · \`Reported model: ${d.reported_model}\``
-            : ' · `Reported model: not reported`';
-        const workingRepo = formatWorkingRepoLabel(d);
-        const workingRepoMarker = ` · \`${workingRepo}\``;
         const wakePathMarker = d.wake_path && d.wake_path !== 'live'
             ? ` · \`wake-path:${WAKE_PATH_DISPLAY[d.wake_path] ?? d.wake_path}\``
             : '';
@@ -110,11 +131,12 @@ export function renderRoster(inputs) {
             // particular drone."
             const isAwake = d.seen_since === true;
             const marker = isAwake ? '`awake`' : '`stale`';
-            lines.push(`- **${d.label}**${addr} (${roleLabel}) — last seen ${lastSeen} · ${marker}${regenCountMarker}${wakePathMarker}${wakePathClassMarker}${reportedModelMarker}${workingRepoMarker}`);
+            lines.push(`- **${d.label}**${addr} (Role: ${roleName}) — last seen ${lastSeen} · ${marker}${regenCountMarker}${wakePathMarker}${wakePathClassMarker}`);
         }
         else {
-            lines.push(`- **${d.label}**${addr} (${roleLabel}) — last seen ${lastSeen}${regenCountMarker}${wakePathMarker}${wakePathClassMarker}${reportedModelMarker}${workingRepoMarker}`);
+            lines.push(`- **${d.label}**${addr} (Role: ${roleName}) — last seen ${lastSeen}${regenCountMarker}${wakePathMarker}${wakePathClassMarker}`);
         }
+        lines.push(...renderRuntimeMetadataLines(d, { includeOrigin: true }));
     }
     return lines.join('\n');
 }

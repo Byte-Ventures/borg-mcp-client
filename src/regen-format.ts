@@ -12,7 +12,10 @@ import {
 } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { formatDroneAddressToken } from 'borgmcp-shared/drone-address';
-import { formatRoleAgentLabel } from './roster-render.js';
+import {
+  RUNTIME_METADATA_ADVISORY,
+  renderRuntimeMetadataLines,
+} from './roster-render.js';
 import { shellEscape } from './shell-escape.js';
 import { resolveInboxMonitorPath } from './self-path.js';
 
@@ -488,10 +491,12 @@ export function formatRegenMarkdown(
 
   const droneOverview =
     result.drones
-      .map((d: any) => {
-        const role = result.roles.find((r: any) => r.id === d.role_id);
-        const roleLabel = formatRoleAgentLabel(role?.name ?? '?', d.agent_kind);
-        return `- **${d.label}** (${roleLabel}) — last seen ${humanAgo(new Date(d.last_seen))}`;
+       .map((d: any) => {
+         const role = result.roles.find((r: any) => r.id === d.role_id);
+        return [
+          `- **${d.label}** (Role: ${role?.name ?? '?'}) — last seen ${humanAgo(new Date(d.last_seen))}`,
+          ...renderRuntimeMetadataLines(d),
+        ].join('\n');
       })
       .join('\n') || '_(no drones connected)_';
 
@@ -611,6 +616,8 @@ export function formatRegenMarkdown(
     roleOverview,
     '',
     `## Connected drones`,
+    `_${RUNTIME_METADATA_ADVISORY}_`,
+    '',
     droneOverview,
     '',
     `## Cube log`,

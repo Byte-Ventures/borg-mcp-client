@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getTemplate } from 'borgmcp-shared/templates';
+import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
 
 const ACTIVE_CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const TARGET_CUBE_ID = '99999999-9999-4999-8999-999999999999';
@@ -46,7 +47,7 @@ describe('borg_apply-template orchestration authority', () => {
         return new Response(envelope({ roles: [{ id: ROLE_ID, name: 'Builder', short_description: '', detailed_description: '' }] }), { status: 200 });
       }
       if (url.pathname === `${base}/drones` && method === 'GET') {
-        return new Response(envelope({ drones: [{ id: DRONE_ID, role_id: ROLE_ID }] }), { status: 200 });
+        return new Response(envelope({ drones: [{ id: DRONE_ID, role_id: ROLE_ID, ...UNREPORTED_DRONE_RUNTIME_METADATA }] }), { status: 200 });
       }
       if (url.pathname === `${base}/roles` && method === 'POST') {
         return new Response(envelope({ role: { id: ROLE_ID, name: 'created' } }), { status: 201 });

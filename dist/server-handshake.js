@@ -123,6 +123,9 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
                     ...(request.priorDroneId === undefined
                         ? {}
                         : { prior_drone_id: request.priorDroneId }),
+                    ...(request.runtimeMetadata === undefined
+                        ? {}
+                        : { runtime_metadata: request.runtimeMetadata }),
                 })),
             });
         }

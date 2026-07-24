@@ -15,6 +15,7 @@ import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
+import { buildRuntimeMetadataReport } from './runtime-metadata.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
 import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
@@ -269,6 +270,11 @@ export function buildDefaultAssimilateDeps() {
                     ...(params.prior_drone_id === undefined
                         ? {}
                         : { priorDroneId: params.prior_drone_id }),
+                    runtimeMetadata: buildRuntimeMetadataReport({
+                        agentKind: params.agent_kind,
+                        reportedModel: params.model,
+                        workingRepo: params.working_repo,
+                    }),
                 }, pending.credential, { fetchImpl: trust.fetchImpl });
                 if (params.prior_drone_id) {
                     // The seat identity did not match the reattach/remint intent. Scrub the
