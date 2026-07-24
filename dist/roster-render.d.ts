@@ -51,6 +51,12 @@ export interface RosterRole {
 }
 export declare function formatRoleAgentLabel(roleName: string, agentKind: RosterDrone['agent_kind']): string;
 export declare function formatWorkingRepoLabel(drone: Pick<RosterDrone, 'working_repo_name' | 'working_repo_origin'>): string;
+/**
+ * Keep accepted advisory metadata readable without letting a Markdown renderer
+ * or link-detecting terminal turn cube-controlled text into a live target.
+ * The visible `[.]` / `[:]` markers preserve the reported value's differences.
+ */
+export declare function escapeRuntimeMetadataDisplay(value: string): string;
 export declare function renderRuntimeMetadataLines(drone: RosterDrone, opts?: {
     includeOrigin?: boolean;
 }): string[];

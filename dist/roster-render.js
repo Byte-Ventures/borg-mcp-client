@@ -61,7 +61,17 @@ export function formatWorkingRepoLabel(drone) {
 function metadataValue(drone, value) {
     if (drone.runtime_metadata_reported !== true)
         return 'not reported';
-    return value == null ? 'unknown' : escapeSyncDisplay(value);
+    return value == null ? 'unknown' : escapeRuntimeMetadataDisplay(value);
+}
+/**
+ * Keep accepted advisory metadata readable without letting a Markdown renderer
+ * or link-detecting terminal turn cube-controlled text into a live target.
+ * The visible `[.]` / `[:]` markers preserve the reported value's differences.
+ */
+export function escapeRuntimeMetadataDisplay(value) {
+    const escaped = escapeSyncDisplay(value);
+    const defangedScheme = escaped.replace(/\b([A-Za-z][A-Za-z0-9+.-]*)\:\/\//g, '$1\\[:]//');
+    return defangedScheme.replace(/\b(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,63}\b/g, (host) => host.replaceAll('.', '\\[.\\]'));
 }
 export function renderRuntimeMetadataLines(drone, opts = {}) {
     const agent = drone.agent_kind === 'claude'
@@ -77,7 +87,8 @@ export function renderRuntimeMetadataLines(drone, opts = {}) {
         `  - **Working repo:** ${metadataValue(drone, drone.working_repo_name)}`,
     ];
     if (opts.includeOrigin) {
-        lines.push(`  - **Origin:** ${metadataValue(drone, drone.working_repo_origin)}`);
+        const origin = drone.working_repo_origin?.replace(/^https:\/\//i, '');
+        lines.push(`  - **Origin:** ${metadataValue(drone, origin)}`);
     }
     return lines;
 }

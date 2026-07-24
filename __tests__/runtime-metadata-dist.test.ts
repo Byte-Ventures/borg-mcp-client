@@ -42,5 +42,16 @@ describe('runtime metadata source/dist parity', () => {
     };
     expect(builtRoster.renderRuntimeMetadataLines(drone, { includeOrigin: true }))
       .toEqual(sourceRoster.renderRuntimeMetadataLines(drone, { includeOrigin: true }));
+    expect(builtRoster.renderRuntimeMetadataLines({
+      ...drone,
+      reported_model: 'https://phish.example/model',
+      working_repo_name: 'owner/repo',
+      working_repo_origin: 'https://phish.example/owner/repo',
+    }, { includeOrigin: true })).toEqual([
+      '  - **Agent CLI:** Codex',
+      '  - **Reported model:** https\\[:]//phish\\[.\\]example/model',
+      '  - **Working repo:** owner/repo',
+      '  - **Origin:** phish\\[.\\]example/owner/repo',
+    ]);
   });
 });

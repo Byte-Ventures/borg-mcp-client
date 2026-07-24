@@ -292,8 +292,30 @@ describe('renderRoster — self-reported metadata', () => {
 
     expect(out).toContain('**Reported model:** gpt-5');
     expect(out).toContain('**Working repo:** borgmcp/borg-mcp');
-    expect(out).toContain('**Origin:** https://github.com/borgmcp/borg-mcp');
+    expect(out).toContain('**Origin:** github\\[.\\]com/borgmcp/borg-mcp');
     expect(out).not.toContain('Configured model:');
+  });
+
+  it('renders accepted URL-shaped metadata as visibly defanged non-link text', () => {
+    const out = renderRoster({
+      cubeName: 'c',
+      drones: [drone({
+        label: 'hostile-link',
+        role_id: 'role-2',
+        runtime_metadata_reported: true,
+        agent_kind: 'codex',
+        reported_model: 'https://phish.example/model',
+        working_repo_name: 'owner/repo',
+        working_repo_origin: 'https://phish.example/owner/repo',
+      })],
+      roles: roleSet(),
+      resolvedSince: null,
+      humanAgo: fakeHumanAgo,
+    });
+    expect(out).toContain('**Reported model:** https\\[:]//phish\\[.\\]example/model');
+    expect(out).toContain('**Origin:** phish\\[.\\]example/owner/repo');
+    expect(out).not.toContain('https://phish.example');
+    expect(out).not.toContain('phish.example');
   });
 
   it('does not disclose a directory when a drone has no repository identity', () => {
