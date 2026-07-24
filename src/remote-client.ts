@@ -54,6 +54,7 @@ import {
 } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { resolveLocalLogRecipients } from './local-log-routing.js';
+import { RoleSectionConflictError } from './local-manage-tool-result.js';
 
 export interface RemoteConnection {
   apiUrl: string;
@@ -71,6 +72,7 @@ export const LOCAL_SERVER_RESPONSE_LIMIT_BYTES = 32 * 1024 * 1024;
 // A typed auth-error envelope is tiny; anything larger is hostile and the
 // bounded read throws → the 401 fails closed to non-destructive CREDENTIAL_REJECTED.
 const AUTH_ERROR_ENVELOPE_LIMIT_BYTES = 64 * 1024;
+const ROLE_SECTION_CONFLICT_CODE = 'ROLE_SECTION_CONFLICT';
 export const LOCAL_SERVER_REQUEST_TIMEOUT_MS = 5_000;
 const LOCAL_SERVER_RESPONSE_LIMIT_MESSAGE =
   'Local Borg server response exceeded the response limit';
@@ -701,7 +703,30 @@ async function authedFetch(
         AUTH_ERROR_ENVELOPE_LIMIT_BYTES,
         'Local Borg server error response exceeded the response limit',
       );
-      code = decodeProtocolErrorEnvelope(JSON.parse(body)).error.code;
+      const parsed = JSON.parse(body);
+      try {
+        code = decodeProtocolErrorEnvelope(parsed).error.code;
+      } catch {
+        if (
+          parsed !== null && typeof parsed === 'object' &&
+          parsed.error !== null && typeof parsed.error === 'object' &&
+          parsed.error.code === ROLE_SECTION_CONFLICT_CODE
+        ) {
+          // Shared 0.6.1 predates this server-local code. Re-validate the whole
+          // envelope through the strict shared decoder with only the recognized
+          // code substituted; no server-provided diagnostic is ever surfaced.
+          decodeProtocolErrorEnvelope({
+            ...parsed,
+            error: {
+              ...parsed.error,
+              code: ErrorCode.INVALID_INPUT,
+              message: 'Role section conflict.',
+              ...(Object.hasOwn(parsed.error, 'details') ? { details: 'Redacted.' } : {}),
+            },
+          });
+          code = ROLE_SECTION_CONFLICT_CODE as ErrorCode;
+        }
+      }
     } catch {
       code = undefined;
     }
@@ -1410,19 +1435,36 @@ export async function patchRoleSection(
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
   const cubeId = targetCubeId ?? active.cubeId;
   assertUuidShape(cubeId, 'cube_id');
-  const result = await localManageRequest<{ role: any }>(
-    active,
-    `/api/cubes/${cubeId}/roles/${roleId}/section-patch`,
-    'POST',
-    {
-      operation: `${op.action} section ${manageCopyValue(op.heading)} ${op.action === 'delete' ? 'from' : 'in'} role ${manageCopyValue(roleId)} in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
-      cubeName: cubeId === active.cubeId ? active.name : cubeId,
-      noMutation: `No role section was ${op.action === 'insert' ? 'inserted' : op.action === 'replace' ? 'replaced' : 'deleted'}.`,
-    },
-    { ...op },
-    undefined,
-    connectionOverride,
-  );
+  let result: { role: any } | null;
+  try {
+    result = await localManageRequest<{ role: any }>(
+      active,
+      `/api/cubes/${cubeId}/roles/${roleId}/section-patch`,
+      'POST',
+      {
+        operation: `${op.action} section ${manageCopyValue(op.heading)} ${op.action === 'delete' ? 'from' : 'in'} role ${manageCopyValue(roleId)} in cube ${manageCopyValue(cubeId === active.cubeId ? active.name : cubeId)}`,
+        cubeName: cubeId === active.cubeId ? active.name : cubeId,
+        noMutation: `No role section was ${op.action === 'insert' ? 'inserted' : op.action === 'replace' ? 'replaced' : 'deleted'}.`,
+      },
+      { ...op },
+      undefined,
+      connectionOverride,
+    );
+  } catch (error) {
+    if (
+      error instanceof BorgServerHttpError &&
+      error.status === 409 &&
+      String(error.code) === ROLE_SECTION_CONFLICT_CODE
+    ) {
+      throw new RoleSectionConflictError({
+        roleId,
+        action: op.action,
+        heading: op.heading,
+        ...(op.action === 'insert' ? { after: op.after } : {}),
+      });
+    }
+    throw error;
+  }
   if (!result) throw new Error('Local Borg server returned an empty role response');
   return result;
 }
@@ -1554,11 +1596,12 @@ export async function getCube(cubeId: string, connection?: RemoteConnection): Pr
 }
 
 /**
- * gh#473 PR2 — apply a named template to an existing cube via the
- * NON-CLOBBERING server route. New roles are inserted; existing
+ * Apply a named template through client-orchestrated, non-clobbering role and
+ * taxonomy primitives. New roles are inserted; existing
  * template-named roles get ADD fragments auto-applied (template
  * sections/classes the cube lacks) but their EVOLVED (conflicting)
- * fragments are surfaced server-side and KEPT, never overwritten. Returns
+ * fragments are kept, never overwritten. Primitive operations are sequential,
+ * so earlier changes may remain committed if a later operation fails. Returns
  * `{ created, updated }` counts. To selectively take template versions of
  * conflicting fragments, use `syncRoles` with a `decisions` map instead.
  */
@@ -1605,7 +1648,7 @@ export async function applyTemplate(
 }
 
 /**
- * gh#473 PR2 — NON-CLOBBERING sync of a cube's roles + message_taxonomy
+ * Client-orchestrated, non-clobbering sync of a cube's roles and taxonomy
  * against the current built-in template. Dry-run by default classifies
  * each fragment (role-text SECTION / short_description / flags / taxonomy
  * CLASS) as ADD / UNCHANGED / CONFLICT. Pass apply=true to commit:
@@ -1613,7 +1656,9 @@ export async function applyTemplate(
  * ONLY when their stable key appears in `decisions` as 'accept'.
  * Unspecified conflicts DEFAULT TO REJECT — the cube's evolved text is
  * never silently overwritten. Custom roles (names not in template) are
- * never touched. Returns a NonClobberSyncResult.
+ * never touched. Applied primitives are sequential rather than atomic, so an
+ * earlier operation may remain committed if a later operation fails. Returns a
+ * NonClobberSyncResult.
  */
 export async function syncRoles(
   cubeId: string,

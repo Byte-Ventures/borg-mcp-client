@@ -495,7 +495,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_apply-template',
-        description: 'Apply a named template to an existing cube, NON-CLOBBERINGLY. Roles are merged by name: new roles are created; existing template-named roles get template sections/classes the cube LACKS auto-applied, but EVOLVED (conflicting) text is preserved, never overwritten. Use this to retrofit an existing cube with a richer role set (e.g. add Coordinator/Reviewer/UX Expert). To review + selectively accept conflicting fragments, use borg_sync-roles (which surfaces each conflict + takes per-fragment accept decisions).',
+        description: 'A client-orchestrated, non-clobbering application of a named template through role and taxonomy primitives. Requires the selected local client\'s live cube-manage grant. Roles are merged by name: new roles are created; existing template-named roles get missing sections/classes applied, while conflicting text is preserved. Operations are sequential, not atomic: if a later primitive fails, earlier operations may already be committed. Use borg_sync-roles to review and selectively accept conflicts.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -507,7 +507,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_sync-roles',
-        description: 'Non-clobbering sync of a cube\'s roles + message_taxonomy against the built-in template. Dry-run (default) classifies each fragment (role-text section, short_description, role flags, taxonomy class) as ADD (cube lacks it — safe auto-apply), UNCHANGED, or CONFLICT (cube has EVOLVED text). On apply, ADDs auto-apply; CONFLICTs apply ONLY via an explicit `decisions` accept (keyed on the dry-run fragment key, e.g. `role:Builder:section:Workflow`); unspecified conflicts default to reject — evolved text is NEVER silently overwritten. Custom roles untouched.',
+        description: 'A client-orchestrated, non-clobbering sync through role and taxonomy primitives. Requires the selected local client\'s live cube-manage grant. Dry-run (default) classifies each fragment as ADD, UNCHANGED, or CONFLICT. On apply, ADDs apply automatically; conflicts apply only through an explicit `decisions` accept, and unspecified conflicts remain unchanged. Operations are sequential, not atomic: if a later primitive fails, earlier operations may already be committed. Custom roles remain untouched.',
         inputSchema: {
             type: 'object',
             properties: {

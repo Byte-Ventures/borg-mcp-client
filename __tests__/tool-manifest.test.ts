@@ -93,6 +93,19 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(`${reassign?.description}\n${evict?.description}`).not.toMatch(/not exposed|unsupported|Cloud/i);
   });
 
+  it('describes apply and sync as non-atomic client orchestration over managed primitives', () => {
+    for (const toolName of ['borg_apply-template', 'borg_sync-roles']) {
+      const description = TOOL_MANIFEST.find((entry) => entry.name === toolName)?.description ?? '';
+      expect(description).toContain('client-orchestrated');
+      expect(description).toContain('primitives');
+      expect(description).toContain('live cube-manage grant');
+      expect(description).toMatch(/non-clobber|conflict/i);
+      expect(description).toContain('not atomic');
+      expect(description).toContain('earlier operations may already be committed');
+      expect(description).not.toMatch(/server route/i);
+    }
+  });
+
   it('empty role updates do not recommend retired model selection (gh#1019)', () => {
     const errorCopy = [...clientEntrySource.matchAll(/Pass at least one of:[^']+/g)]
       .map((match) => match[0])
