@@ -172,24 +172,20 @@ tarball path once with lifecycle scripts disabled and provenance enabled. It
 does not install project dependencies, rebuild, retest, repack, or reverify the
 package.
 
-The dependent, unprivileged `registry-verification` job has no environment or
-OIDC permission. It polls registry visibility with fixed attempt and delay
-bounds, compares `dist.integrity` exactly with the same-run report, installs the
-exact published version with lifecycle scripts disabled, and runs
-`npm audit signatures` to verify registry signatures and the Trusted Publishing
-attestation.
+Successful completion of `npm publish` is the terminal release boundary. There
+is no post-publication registry readback job: registry metadata and install
+visibility propagate asynchronously and cannot invalidate an immutable
+publication after npm accepts it.
 
 No separate checksum file is needed: the tarball verifier records canonical
 SHA-512 SRI in the artifact report. GitHub's same-run artifact transport and the
 report bind the reviewed candidate without repeated SHA512 choreography.
 
-Rely on npm's signature and Trusted Publishing attestation validation. Do not
-reconstruct DSSE, in-toto, SLSA, workflow-ref, or builder statements locally.
+Rely on npm Trusted Publishing and provenance at publication time. Do not add a
+post-publication registry readback, reconstruct DSSE, in-toto, SLSA,
+workflow-ref, or builder statements locally.
 Do not add cross-run tuple variables, cross-run artifact selection, duplicate
 builds, duplicate package verification, checksum bundles, or SBOM ceremony.
-
-A post-publication verification failure is a release incident; it never means
-the immutable npm publication did not happen and never authorizes a rerun.
 
 ## Stop And Recovery Conditions
 
