@@ -14,6 +14,7 @@
  *     timestamp, otherwise a `stale-since-<relative>` marker derived
  *     from the resolved timestamp the server echoed back.
  */
+export declare const RUNTIME_METADATA_ADVISORY = "Agent CLI, reported model, and working repository are advisory. They do not determine authority, role, health, activity, wake behavior, or routing.";
 export interface RosterDrone {
     id?: string;
     label: string;
@@ -37,6 +38,7 @@ export interface RosterDrone {
     /** Current cwd-derived repository identity, refreshed on regen. */
     working_repo_name?: string | null;
     working_repo_origin?: string | null;
+    runtime_metadata_reported?: boolean;
 }
 export interface RosterRole {
     id: string;
@@ -49,6 +51,15 @@ export interface RosterRole {
 }
 export declare function formatRoleAgentLabel(roleName: string, agentKind: RosterDrone['agent_kind']): string;
 export declare function formatWorkingRepoLabel(drone: Pick<RosterDrone, 'working_repo_name' | 'working_repo_origin'>): string;
+/**
+ * Keep accepted advisory metadata readable without letting a Markdown renderer
+ * or link-detecting terminal turn cube-controlled text into a live target.
+ * The visible `[.]` / `[:]` markers preserve the reported value's differences.
+ */
+export declare function escapeRuntimeMetadataDisplay(value: string): string;
+export declare function renderRuntimeMetadataLines(drone: RosterDrone, opts?: {
+    includeOrigin?: boolean;
+}): string[];
 export interface RenderRosterInputs {
     cubeName: string;
     drones: RosterDrone[];

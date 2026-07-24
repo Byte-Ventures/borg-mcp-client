@@ -16,6 +16,7 @@ import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
+import { buildRuntimeMetadataReport } from './runtime-metadata.js';
 
 import type { AssimilateDeps } from './assimilate-cmd.js';
 import {
@@ -322,10 +323,15 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
             cubeId: params.cube_id,
             roleId: params.role_id,
             operation,
-            ...(params.prior_drone_id === undefined
-              ? {}
-              : { priorDroneId: params.prior_drone_id }),
-          },
+             ...(params.prior_drone_id === undefined
+               ? {}
+               : { priorDroneId: params.prior_drone_id }),
+            runtimeMetadata: buildRuntimeMetadataReport({
+              agentKind: params.agent_kind,
+              reportedModel: params.model,
+              workingRepo: params.working_repo,
+            }),
+           },
           pending.credential,
           { fetchImpl: trust.fetchImpl },
         );

@@ -16,11 +16,14 @@ import {
 import { randomUUID } from 'node:crypto';
 import {
   createProtocolEnvelope,
+  decodeDroneRuntimeMetadataState,
   decodeEvictDroneResult,
   decodeProtocolEnvelope,
   decodeProtocolErrorEnvelope,
   decodeReassignDroneResult,
+  decodeUpdateDroneRuntimeMetadataResponse,
   ErrorCode,
+  type AgentKind,
   type EvictDroneResult,
   type ReassignDroneResult,
 } from 'borgmcp-shared/protocol';
@@ -33,6 +36,7 @@ import { getTemplate, type Template, type TemplateRole } from 'borgmcp-shared/te
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import type { FragmentView, NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
+import { buildRuntimeMetadataPatch } from './runtime-metadata.js';
 import { loadBorgServerTrust, type ServerFetch } from './server-trust.js';
 import {
   BorgServerError,
@@ -400,16 +404,40 @@ async function localCubeComposition(active: ActiveCube): Promise<{
   if (!cubePayload || !rolePayload || !dronePayload) {
     throw new Error('Local Borg server returned an incomplete cube response');
   }
-  const drone = dronePayload.drones.find((candidate) => candidate.id === active.droneId);
+  const drones = dronePayload.drones.map(withValidatedRuntimeMetadata);
+  const drone = drones.find((candidate) => candidate.id === active.droneId);
   const role = rolePayload.roles.find((candidate) => candidate.id === drone?.role_id);
   if (!drone || !role) throw new Error('Local Borg server no longer recognizes this drone seat');
   return {
     cube: cubePayload.cube,
     roles: rolePayload.roles,
-    drones: dronePayload.drones,
+    drones,
     role,
     drone,
   };
+}
+
+function withValidatedRuntimeMetadata<T extends Record<string, unknown>>(drone: T): T {
+  const state = decodeDroneRuntimeMetadataState(drone);
+  return {
+    ...drone,
+    ...state.runtime_metadata,
+    runtime_metadata_reported: state.runtime_metadata_reported,
+  };
+}
+
+async function updateOwnRuntimeMetadata(
+  active: ActiveCube,
+  patch: ReturnType<typeof buildRuntimeMetadataPatch>,
+): Promise<void> {
+  const payload = await localServerRequest<Record<string, unknown>>(
+    active,
+    `/api/cubes/${active.cubeId}/drones/self/metadata`,
+    'PATCH',
+    { ...patch },
+  );
+  if (!payload) throw new Error('Local Borg server returned an empty runtime metadata response');
+  decodeUpdateDroneRuntimeMetadataResponse(payload);
 }
 
 function localCursorBinding(active: ActiveCube) {
@@ -740,7 +768,7 @@ export async function whoami(
   sessionToken: string,
   apiUrl: string,
   serverTrustIdentity?: string,
-): Promise<{ cube_id: string; cube_name: string; drone_id: string; drone_label: string; role_id: string; role_name: string }> {
+): Promise<{ cube_id: string; cube_name: string; drone_id: string; drone_label: string; role_id: string; role_name: string; runtime_metadata: { agent_kind: AgentKind | null; reported_model: string | null; working_repo_name: string | null; working_repo_origin: string | null }; runtime_metadata_reported: boolean }> {
   const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   const composed = await localCubeComposition(local);
   return {
@@ -750,6 +778,13 @@ export async function whoami(
     drone_label: composed.drone.label,
     role_id: composed.role.id,
     role_name: composed.role.name,
+    runtime_metadata: {
+      agent_kind: composed.drone.agent_kind,
+      reported_model: composed.drone.reported_model,
+      working_repo_name: composed.drone.working_repo_name,
+      working_repo_origin: composed.drone.working_repo_origin,
+    },
+    runtime_metadata_reported: composed.drone.runtime_metadata_reported,
   };
 }
 
@@ -786,7 +821,7 @@ export async function getRoster(
       throw new Error('Local Borg server returned an incomplete roster response');
     }
     return {
-      drones: dronePayload.drones,
+      drones: dronePayload.drones.map(withValidatedRuntimeMetadata),
       roles: rolePayload.roles,
       message_taxonomy: cubePayload.cube.message_taxonomy ?? null,
       since: dronePayload.since ?? since,
@@ -944,6 +979,8 @@ export async function regen(
     since?: string;
     /** Advisory self-report from the running agent; never model-routing config. */
     reportedModel?: string;
+    /** Positively identified running Agent CLI; null means explicitly unknown. */
+    agentKind?: AgentKind | null;
     /** Current cwd-derived identity; refreshed each regen to avoid stale routing data. */
     workingRepo?: WorkingRepo;
     /** Verified self-hosted authority from the caller's first active-state read. */
@@ -970,6 +1007,24 @@ export async function regen(
     apiUrl,
     opts.serverTrustIdentity,
   );
+  if (
+    opts.agentKind !== undefined ||
+    opts.reportedModel !== undefined ||
+    opts.workingRepo !== undefined
+  ) {
+    const patch = buildRuntimeMetadataPatch({
+      agentKind: opts.agentKind ?? null,
+      reportedModel: opts.reportedModel,
+      workingRepo: opts.workingRepo,
+    });
+    try {
+      await updateOwnRuntimeMetadata(local, patch);
+    } catch {
+      // Metadata is advisory. Preserve the prior server value and continue with
+      // the authenticated identity read; never echo rejected local input.
+      console.warn('Local regen: runtime metadata update unavailable; preserving the prior safe report.');
+    }
+  }
   const composed = await localCubeComposition(local);
   const cursor = opts.since === undefined
     ? await getLocalServerCursor(localCursorBinding(local))
@@ -1494,7 +1549,7 @@ export async function getCube(cubeId: string, connection?: RemoteConnection): Pr
   return {
     ...cubePayload.cube,
     roles: rolePayload.roles,
-    drones: dronePayload.drones,
+    drones: dronePayload.drones.map(withValidatedRuntimeMetadata),
   };
 }
 

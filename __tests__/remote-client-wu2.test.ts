@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getTemplate } from 'borgmcp-shared/templates';
+import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const TARGET_CUBE_ID = '99999999-9999-4999-8999-999999999999';
@@ -54,7 +55,7 @@ describe('Sprint 10 WU2 local adapter', () => {
         return new Response(envelope({ roles: roleFixtures }), { status: 200 });
       }
       if (requestedCubeId && resource === 'drones' && method === 'GET') {
-        return new Response(envelope({ drones: [{ id: DRONE_ID, role_id: ROLE_ID }] }), { status: 200 });
+        return new Response(envelope({ drones: [{ id: DRONE_ID, role_id: ROLE_ID, ...UNREPORTED_DRONE_RUNTIME_METADATA }] }), { status: 200 });
       }
       if (requestedCubeId && resource === 'roles' && method === 'POST') {
         return new Response(envelope({ role: { id: ROLE_ID, name: 'created' } }), { status: 201 });

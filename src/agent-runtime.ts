@@ -24,10 +24,17 @@ function isAgentKind(value: string | undefined): value is AgentKind {
  * already-installed clients.
  */
 export function resolveSessionAgentKind(env: NodeJS.ProcessEnv = process.env): AgentKind {
+  return resolveReportableSessionAgentKind(env) ?? 'claude';
+}
+
+/** Resolve only positively identified CLI state for advisory server reporting. */
+export function resolveReportableSessionAgentKind(
+  env: NodeJS.ProcessEnv = process.env
+): AgentKind | null {
   if (isAgentKind(env[BORG_AGENT_KIND_ENV])) return env[BORG_AGENT_KIND_ENV];
   if (env[BORG_OPENCODE_ENV] === '1') return 'opencode';
   if (env[BORG_CODEX_REMOTE_WAKE_ENV] === '1') return 'codex';
-  return 'claude';
+  return null;
 }
 
 /**

@@ -28,6 +28,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { UNREPORTED_ATTACH_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
 
 const originalHome = process.env.HOME;
 const fixtures: string[] = [];
@@ -86,7 +87,7 @@ function fakeDigestCorrelatingServer() {
         result: created ? 'created' : 'reused',
         cube: { id: CUBE_ID, name: 'myrepo' },
         role: { id: ROLE_ID, name: 'Drone', role_class: 'worker' },
-        drone: { id: seat.droneId, label: 'one-of-one-drone' },
+        drone: { id: seat.droneId, label: 'one-of-one-drone', ...UNREPORTED_ATTACH_RUNTIME_METADATA },
         session: { id: '99999999-9999-4999-8999-999999999999' },
       },
     }), { status: created ? 201 : 200 });

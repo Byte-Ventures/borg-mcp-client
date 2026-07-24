@@ -49,6 +49,7 @@ import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } f
 import type { SeatBinding, BindPendingSeatOutcome } from './seats.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs, type LaunchApprovalDecision } from './cli-tool-approval.js';
+import { resolveWorkingRepo, type WorkingRepo } from './working-repo.js';
 
 const PRIVATE_STATE_UNAVAILABLE_COPY = [
   'Borg could not safely prepare its private local state.',
@@ -259,7 +260,7 @@ export interface AssimilateDeps {
   assimilate: (
     apiUrl: string,
     token: string,
-    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null; session_operation?: ServerSessionOperation; session_expected?: ExpectedBinding; revalidate_at_prepare?: boolean },
+    params: { cube_id: string; role_id: string; hostname?: string | null; prior_drone_id?: string; remint_invalid_prior?: boolean; model?: string | null; agent_kind?: 'claude' | 'codex' | 'opencode' | null; working_repo?: WorkingRepo; session_operation?: ServerSessionOperation; session_expected?: ExpectedBinding; revalidate_at_prepare?: boolean },
     serverTrustIdentity?: string,
   ) => Promise<AssimilateResult>;
 
@@ -1183,6 +1184,7 @@ export async function runAssimilate(
       hostname: deps.getHostname(),
       agent_kind: cli,
       model: effectiveModel,
+      working_repo: resolveWorkingRepo(projectRoot),
       ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
       ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
       session_operation: sessionOperation,

@@ -13,8 +13,9 @@ describe('resolveWorkingRepo', () => {
     });
 
     expect(repo).toEqual({
-      name: 'borg-mcp',
-      origin: 'github.com/borgmcp/borg-mcp',
+      name: 'borgmcp/borg-mcp',
+      origin: 'https://github.com/borgmcp/borg-mcp',
+      state: 'known',
     });
   });
 
@@ -27,8 +28,9 @@ describe('resolveWorkingRepo', () => {
     });
 
     expect(repo).toEqual({
-      name: 'borg-mcp',
-      origin: 'github.com/borgmcp/borg-mcp',
+      name: 'borgmcp/borg-mcp',
+      origin: 'https://github.com/borgmcp/borg-mcp',
+      state: 'known',
     });
   });
 
@@ -40,6 +42,7 @@ describe('resolveWorkingRepo', () => {
     expect(repo).toEqual({
       name: null,
       origin: null,
+      state: 'unknown',
     });
   });
 
@@ -48,7 +51,7 @@ describe('resolveWorkingRepo', () => {
     ['ssh userinfo', 'ssh://git:ssh-secret@github.com/borgmcp/private-repo.git?token=query-secret#fragment-secret'],
     ['git userinfo', 'git://git:git-secret@github.com/borgmcp/private-repo.git?token=query-secret#fragment-secret'],
     ['SCP user prefix', 'git@github.com:borgmcp/private-repo.git?token=query-secret#fragment-secret'],
-  ])('canonicalizes %s without emitting credentials or URL suffixes', (_kind, rawOrigin) => {
+  ])('rejects %s without emitting credentials or URL suffixes', (_kind, rawOrigin) => {
     const repo = resolveWorkingRepo('/src/private-repo', {
       runGit: (_cwd, args) => {
         if (args[0] === 'rev-parse') return { status: 0, stdout: '/src/private-repo\n' };
@@ -57,8 +60,9 @@ describe('resolveWorkingRepo', () => {
     });
 
     expect(repo).toEqual({
-      name: 'private-repo',
-      origin: 'github.com/borgmcp/private-repo',
+      name: null,
+      origin: null,
+      state: 'rejected',
     });
     for (const secret of ['super-secret', 'ssh-secret', 'git-secret', 'query-secret', 'fragment-secret', 'git@', '/src/private-repo']) {
       expect(JSON.stringify(repo)).not.toContain(secret);
@@ -72,6 +76,14 @@ describe('resolveWorkingRepo', () => {
         : { status: 0, stdout: 'not-a-remote\n' },
     });
 
-    expect(repo).toEqual({ name: null, origin: null });
+    expect(repo).toEqual({ name: null, origin: null, state: 'rejected' });
+  });
+
+  it('reports collection unavailable without exposing a thrown local path', () => {
+    const repo = resolveWorkingRepo('/secret/local/path', {
+      runGit: () => { throw new Error('/secret/local/path disappeared'); },
+    });
+    expect(repo).toEqual({ name: null, origin: null, state: 'unavailable' });
+    expect(JSON.stringify(repo)).not.toContain('/secret/local/path');
   });
 });

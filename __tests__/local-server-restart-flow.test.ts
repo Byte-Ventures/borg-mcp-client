@@ -3,6 +3,10 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  UNREPORTED_ATTACH_RUNTIME_METADATA,
+  UNREPORTED_DRONE_RUNTIME_METADATA,
+} from './fixtures/runtime-metadata.js';
 
 const originalHome = process.env.HOME;
 const originalCwd = process.cwd();
@@ -74,7 +78,7 @@ describe('local owner enrollment to restart flow', () => {
           result: 'created',
           cube: { id: cubeId, name: 'local-cube' },
           role: { id: roleId, name: 'Builder', role_class: 'worker', is_human_seat: false },
-          drone: { id: droneId, label: 'builder-1' },
+          drone: { id: droneId, label: 'builder-1', ...UNREPORTED_ATTACH_RUNTIME_METADATA },
           session: { id: sessionId },
         }, 201);
       }
@@ -85,7 +89,7 @@ describe('local owner enrollment to restart flow', () => {
         return response({ roles: [{ id: roleId, name: 'Builder', detailed_description: 'Build.' }] });
       }
       if (path === `/api/cubes/${cubeId}/drones`) {
-        return response({ drones: [{ id: droneId, label: 'builder-1', role_id: roleId }] });
+        return response({ drones: [{ id: droneId, label: 'builder-1', role_id: roleId, ...UNREPORTED_DRONE_RUNTIME_METADATA }] });
       }
       if (path === `/api/cubes/${cubeId}/logs` && method === 'PUT') {
         return response({ entries: [], cursor: null, behind_by: 0, has_more: false, claims: [] });

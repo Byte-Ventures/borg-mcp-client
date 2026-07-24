@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
@@ -60,12 +61,14 @@ describe('local server route adapter', () => {
           {
             id: DRONE_ID,
             label: 'builder-1',
-            role_id: ROLE_ID,
+             role_id: ROLE_ID,
+            ...UNREPORTED_DRONE_RUNTIME_METADATA,
           },
           {
             id: COORDINATOR_DRONE_ID,
             label: 'coordinator-1',
-            role_id: COORDINATOR_ROLE_ID,
+             role_id: COORDINATOR_ROLE_ID,
+            ...UNREPORTED_DRONE_RUNTIME_METADATA,
           },
         ] })), { status: 200 });
       }
@@ -165,6 +168,13 @@ describe('local server route adapter', () => {
       drone_label: 'builder-1',
       role_id: ROLE_ID,
       role_name: 'Builder',
+      runtime_metadata: {
+        agent_kind: null,
+        reported_model: null,
+        working_repo_name: null,
+        working_repo_origin: null,
+      },
+      runtime_metadata_reported: false,
     });
     await expect(remote.regen(SESSION, ORIGIN)).resolves.toMatchObject({
       cube: { id: CUBE_ID },

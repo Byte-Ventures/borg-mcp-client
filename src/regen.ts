@@ -26,6 +26,7 @@ import {
   type AgentKind,
 } from './regen-format.js';
 import { resolveSessionAgentKind } from './codex-app-wake.js';
+import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { handleVersionFlag } from './version.js';
 import { gateAllowsActivation } from './launch-gate.js';
 import { resolveWorkingRepo } from './working-repo.js';
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
   let result: Awaited<ReturnType<typeof regen>> | null = null;
   try {
     result = await regen(active.sessionToken, active.apiUrl, {
+      agentKind: resolveReportableSessionAgentKind(),
       workingRepo: resolveWorkingRepo(),
       serverTrustIdentity: active.serverTrustIdentity,
     });

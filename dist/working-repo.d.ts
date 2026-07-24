@@ -7,8 +7,9 @@
  */
 export interface WorkingRepo {
     name: string | null;
-    /** Canonical host/path identity, never a raw Git remote URL. */
+    /** Canonical public HTTPS identity, never a raw Git remote URL. */
     origin: string | null;
+    state?: 'known' | 'unknown' | 'unavailable' | 'rejected';
 }
 export interface WorkingRepoDeps {
     runGit?: (cwd: string, args: string[]) => {
@@ -17,13 +18,10 @@ export interface WorkingRepoDeps {
     };
 }
 /**
- * Convert a Git remote to a non-secret `host/org/repo` identity.
- *
- * URL userinfo, query strings, fragments, scheme, and SCP-style user prefixes
- * are deliberately discarded. Inputs that cannot identify a host and path are
- * treated as unreportable rather than forwarded verbatim.
+ * Convert a Git remote to the shared canonical public repository identity.
+ * Hostile or credential-bearing inputs are rejected rather than sanitized.
  */
-export declare function canonicalizeWorkingRepoIdentity(origin: string): string | null;
+export declare function canonicalizeWorkingRepoIdentity(origin: string): WorkingRepo | null;
 /**
  * Return a reportable identity for the caller's current directory.
  *

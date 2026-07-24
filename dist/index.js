@@ -28,7 +28,7 @@ import { renderRoleList } from './list-roles-render.js';
 import { filterToolsForRole } from './tool-scope.js';
 import { getPackageVersion, getOnDiskVersion, handleVersionFlag } from './version.js';
 import { renderStreamStatus, checkInboxMonitorHealthy, formatWakePathPrefix, shouldShowWakePathWarning, } from './stream-status.js';
-import { formatRoleAgentLabel, formatWorkingRepoLabel, renderRoster } from './roster-render.js';
+import { RUNTIME_METADATA_ADVISORY, renderRoster, renderRuntimeMetadataLines, } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
 import { DroneEvictedError, formatEvictedToolResult, } from './drone-lifecycle.js';
 import { classifyInSessionAssimilate, reattachOnlyRefusal, reattachFailureMessage, } from './assimilate-guard.js';
@@ -36,6 +36,7 @@ import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
 import { renderSyncRolesResult } from './sync-roles-render.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { resolveSessionAgentKind, } from './codex-app-wake.js';
+import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { connectOpenCodeDrone, injectOpenCodeEntry, computeOpenCodePort, } from './opencode-drone.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
@@ -249,6 +250,7 @@ export async function main() {
                     const result = await regen(active.sessionToken, active.apiUrl, {
                         since,
                         reportedModel,
+                        agentKind: resolveReportableSessionAgentKind(),
                         workingRepo: resolveWorkingRepo(),
                         serverTrustIdentity: active.serverTrustIdentity,
                     });
@@ -323,6 +325,7 @@ export async function main() {
                     // — an evicted/revoked seat FAILS server-side and is surfaced).
                     try {
                         const result = await regen(active.sessionToken, active.apiUrl, {
+                            agentKind: resolveReportableSessionAgentKind(),
                             workingRepo: resolveWorkingRepo(),
                             serverTrustIdentity: active.serverTrustIdentity,
                         });
@@ -918,18 +921,15 @@ export async function main() {
                     const rolesById = new Map(roles.map((r) => [r.id, r]));
                     const lines = drones.map((d) => {
                         const r = rolesById.get(d.role_id);
-                        const roleLabel = formatRoleAgentLabel(r?.name ?? '?', d.agent_kind);
                         const wakeClass = d.wake_path_alert_class && d.wake_path_alert_class !== 'independent'
                             ? ` — wake-path-class: ${d.wake_path_alert_class}`
                             : '';
-                        const reportedModel = d.reported_model
-                            ? ` — Reported model: ${d.reported_model}`
-                            : ' — Reported model: not reported';
-                        const workingRepo = formatWorkingRepoLabel(d);
-                        const workingRepoText = workingRepo ? ` — ${workingRepo}` : '';
-                        return `- **${d.label}** (id: ${d.id}) — role: ${roleLabel} (${d.role_id}) — last seen ${d.last_seen}${wakeClass}${reportedModel}${workingRepoText}`;
+                        return [
+                            `- **${d.label}** (id: ${d.id}) — Role: ${r?.name ?? '?'} (${d.role_id}) — last seen ${d.last_seen}${wakeClass}`,
+                            ...renderRuntimeMetadataLines(d),
+                        ].join('\n');
                     });
-                    return { content: [{ type: 'text', text: `Drones in cube ${cubeId} (${drones.length}):\n\n${lines.join('\n')}` }] };
+                    return { content: [{ type: 'text', text: `Drones in cube ${cubeId} (${drones.length}):\n\n_${RUNTIME_METADATA_ADVISORY}_\n\n${lines.join('\n')}` }] };
                 }
                 case 'borg_list-roles': {
                     // Sprint 6 / gh#153: surface role IDs to Coordinator-class drones

@@ -6,6 +6,7 @@ import type { ServerSessionOperation } from './config.js';
 import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } from './cubes.js';
 import type { SeatBinding } from './seats.js';
 import { type LaunchApprovalDecision } from './cli-tool-approval.js';
+import { type WorkingRepo } from './working-repo.js';
 export interface AssimilateFlags {
     worktree?: string;
     template?: string;
@@ -161,6 +162,7 @@ export interface AssimilateDeps {
         remint_invalid_prior?: boolean;
         model?: string | null;
         agent_kind?: 'claude' | 'codex' | 'opencode' | null;
+        working_repo?: WorkingRepo;
         session_operation?: ServerSessionOperation;
         session_expected?: ExpectedBinding;
         revalidate_at_prepare?: boolean;

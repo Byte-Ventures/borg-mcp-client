@@ -34,6 +34,11 @@ function drone(overrides: Partial<RosterDrone> & { label: string }): RosterDrone
     id: 'drone-uuid',
     role_id: 'role-2',
     last_seen: '2026-05-11T18:00:00.000Z',
+    agent_kind: null,
+    reported_model: null,
+    working_repo_name: null,
+    working_repo_origin: null,
+    runtime_metadata_reported: false,
     ...overrides,
   };
 }
@@ -51,8 +56,9 @@ describe('renderRoster — classic mode (no since)', () => {
       humanAgo: fakeHumanAgo,
     });
     expect(out).toContain('# Drones in cube: my-cube');
-    expect(out).toMatch(/- \*\*drone-1\*\* `id:[^`]+` \(Role: Coordinator · Agent CLI: not reported\) — last seen \d+s ago · `Reported model: not reported` · `Working repo: not reported`$/m);
-    expect(out).toMatch(/- \*\*drone-2\*\* `id:[^`]+` \(Role: Builder · Agent CLI: not reported\) — last seen \d+s ago · `Reported model: not reported` · `Working repo: not reported`$/m);
+    expect(out).toMatch(/- \*\*drone-1\*\* `id:[^`]+` \(Role: Coordinator\) — last seen \d+s ago$/m);
+    expect(out).toMatch(/- \*\*drone-2\*\* `id:[^`]+` \(Role: Builder\) — last seen \d+s ago$/m);
+    expect(out.match(/\*\*Agent CLI:\*\* not reported/g)).toHaveLength(2);
     expect(out).not.toContain('awake');
     expect(out).not.toContain('stale-since');
     expect(out).not.toContain('Liveness probe');
@@ -89,7 +95,7 @@ describe('renderRoster — classic mode (no since)', () => {
       resolvedSince: null,
       humanAgo: fakeHumanAgo,
     });
-    expect(out).toMatch(/\*\*drone-x\*\* `id:[^`]+` \(Role: unknown · Agent CLI: not reported\)/);
+    expect(out).toMatch(/\*\*drone-x\*\* `id:[^`]+` \(Role: unknown\)/);
   });
 });
 
@@ -196,23 +202,34 @@ describe('renderRoster — distinct agent CLI and model fields', () => {
   it('labels Claude Code as the agent CLI when agent_kind=claude', () => {
     const out = renderRoster({
       cubeName: 'c',
-      drones: [drone({ label: 'd1', role_id: 'role-2', agent_kind: 'claude' })],
+      drones: [drone({ label: 'd1', role_id: 'role-2', agent_kind: 'claude', runtime_metadata_reported: true })],
       roles: roleSet(),
       resolvedSince: null,
       humanAgo: fakeHumanAgo,
     });
-    expect(out).toMatch(/- \*\*d1\*\* `id:[^`]+` \(Role: Builder · Agent CLI: Claude Code\) — last seen/);
+    expect(out).toContain('**Agent CLI:** Claude Code');
   });
 
   it('labels Codex as the agent CLI when agent_kind=codex', () => {
     const out = renderRoster({
       cubeName: 'c',
-      drones: [drone({ label: 'd2', role_id: 'role-2', agent_kind: 'codex' })],
+      drones: [drone({ label: 'd2', role_id: 'role-2', agent_kind: 'codex', runtime_metadata_reported: true })],
       roles: roleSet(),
       resolvedSince: null,
       humanAgo: fakeHumanAgo,
     });
-    expect(out).toMatch(/- \*\*d2\*\* `id:[^`]+` \(Role: Builder · Agent CLI: Codex\) — last seen/);
+    expect(out).toContain('**Agent CLI:** Codex');
+  });
+
+  it('labels OpenCode as the agent CLI when agent_kind=opencode', () => {
+    const out = renderRoster({
+      cubeName: 'c',
+      drones: [drone({ label: 'd-open', agent_kind: 'opencode', runtime_metadata_reported: true })],
+      roles: roleSet(),
+      resolvedSince: null,
+      humanAgo: fakeHumanAgo,
+    });
+    expect(out).toContain('**Agent CLI:** OpenCode');
   });
 
   it('reports an unreported agent CLI when agent_kind is null (legacy drone)', () => {
@@ -223,7 +240,7 @@ describe('renderRoster — distinct agent CLI and model fields', () => {
       resolvedSince: null,
       humanAgo: fakeHumanAgo,
     });
-    expect(out).toMatch(/- \*\*d3\*\* `id:[^`]+` \(Role: Builder · Agent CLI: not reported\) — last seen/);
+    expect(out).toContain('**Agent CLI:** not reported');
   });
 
   it('reports an unreported agent CLI when agent_kind is absent from the wire shape', () => {
@@ -234,22 +251,24 @@ describe('renderRoster — distinct agent CLI and model fields', () => {
       resolvedSince: null,
       humanAgo: fakeHumanAgo,
     });
-    expect(out).toMatch(/- \*\*d4\*\* `id:[^`]+` \(Role: Builder · Agent CLI: not reported\) — last seen/);
+    expect(out).toContain('**Agent CLI:** not reported');
   });
 
   it('combines with the liveness-probe `awake`/`stale` column when both are present', () => {
     const out = renderRoster({
       cubeName: 'c',
       drones: [
-        drone({ label: 'd5', role_id: 'role-2', agent_kind: 'claude', seen_since: true }),
-        drone({ label: 'd6', role_id: 'role-2', agent_kind: 'codex', seen_since: false }),
+        drone({ label: 'd5', role_id: 'role-2', agent_kind: 'claude', runtime_metadata_reported: true, seen_since: true }),
+        drone({ label: 'd6', role_id: 'role-2', agent_kind: 'codex', runtime_metadata_reported: true, seen_since: false }),
       ],
       roles: roleSet(),
       resolvedSince: '2026-05-11T18:00:00.000Z',
       humanAgo: fakeHumanAgo,
     });
-    expect(out).toMatch(/- \*\*d5\*\* `id:[^`]+` \(Role: Builder · Agent CLI: Claude Code\) .* `awake`/);
-    expect(out).toMatch(/- \*\*d6\*\* `id:[^`]+` \(Role: Builder · Agent CLI: Codex\) .* `stale`/);
+    expect(out).toMatch(/- \*\*d5\*\* `id:[^`]+` \(Role: Builder\) .* `awake`/);
+    expect(out).toMatch(/- \*\*d6\*\* `id:[^`]+` \(Role: Builder\) .* `stale`/);
+    expect(out).toContain('**Agent CLI:** Claude Code');
+    expect(out).toContain('**Agent CLI:** Codex');
   });
 
 });
@@ -262,17 +281,41 @@ describe('renderRoster — self-reported metadata', () => {
         label: 'd-self-report',
         model: 'claude:claude-opus-4-8',
         reported_model: 'gpt-5',
-        working_repo_name: 'borg-mcp',
-        working_repo_origin: 'github.com/borgmcp/borg-mcp',
+        working_repo_name: 'borgmcp/borg-mcp',
+        working_repo_origin: 'https://github.com/borgmcp/borg-mcp',
+        runtime_metadata_reported: true,
       })],
       roles: roleSet(),
       resolvedSince: null,
       humanAgo: fakeHumanAgo,
     });
 
-    expect(out).toContain('`Reported model: gpt-5`');
-    expect(out).toContain('`Working repo: borg-mcp · origin: github.com/borgmcp/borg-mcp`');
+    expect(out).toContain('**Reported model:** gpt-5');
+    expect(out).toContain('**Working repo:** borgmcp/borg-mcp');
+    expect(out).toContain('**Origin:** github\\[.\\]com/borgmcp/borg-mcp');
     expect(out).not.toContain('Configured model:');
+  });
+
+  it('renders accepted URL-shaped metadata as visibly defanged non-link text', () => {
+    const out = renderRoster({
+      cubeName: 'c',
+      drones: [drone({
+        label: 'hostile-link',
+        role_id: 'role-2',
+        runtime_metadata_reported: true,
+        agent_kind: 'codex',
+        reported_model: 'https://phish.example/model',
+        working_repo_name: 'owner/repo',
+        working_repo_origin: 'https://phish.example/owner/repo',
+      })],
+      roles: roleSet(),
+      resolvedSince: null,
+      humanAgo: fakeHumanAgo,
+    });
+    expect(out).toContain('**Reported model:** https\\[:]//phish\\[.\\]example/model');
+    expect(out).toContain('**Origin:** phish\\[.\\]example/owner/repo');
+    expect(out).not.toContain('https://phish.example');
+    expect(out).not.toContain('phish.example');
   });
 
   it('does not disclose a directory when a drone has no repository identity', () => {
@@ -284,8 +327,49 @@ describe('renderRoster — self-reported metadata', () => {
       humanAgo: fakeHumanAgo,
     });
 
-    expect(out).toContain('`Working repo: not reported`');
+    expect(out).toContain('**Working repo:** not reported');
     expect(out).not.toContain('/tmp/scratch-project');
+  });
+
+  it('renders explicit unknown distinctly from an unreported older seat', () => {
+    const out = renderRoster({
+      cubeName: 'c',
+      drones: [
+        drone({ label: 'known-unknown', runtime_metadata_reported: true }),
+        drone({ label: 'not-reported' }),
+      ],
+      roles: roleSet(),
+      resolvedSince: null,
+      humanAgo: fakeHumanAgo,
+    });
+    expect(out.match(/\*\*Agent CLI:\*\* unknown/g)).toHaveLength(1);
+    expect(out.match(/\*\*Agent CLI:\*\* not reported/g)).toHaveLength(1);
+  });
+
+  it('preserves maximum accepted values without truncation and escapes hostile controls defensively', () => {
+    const model = `m${'x'.repeat(159)}`;
+    const repo = `${'o'.repeat(100)}/${'r'.repeat(100)}`;
+    const out = renderRoster({
+      cubeName: 'c',
+      drones: [drone({
+        label: 'boundary',
+        runtime_metadata_reported: true,
+        agent_kind: 'claude',
+        reported_model: model,
+        working_repo_name: repo,
+        working_repo_origin: 'safe\u001b[2J\u061c',
+      })],
+      roles: roleSet(),
+      resolvedSince: null,
+      humanAgo: fakeHumanAgo,
+    });
+    expect(out).toContain(model);
+    expect(out).toContain(repo);
+    expect(out).not.toContain('…');
+    expect(out).toContain('\\u{1b}');
+    expect(out).toContain('\\u{61c}');
+    expect(out).not.toContain('\u001b');
+    expect(out).not.toContain('\u061c');
   });
 });
 
@@ -362,7 +446,7 @@ describe('renderRoster — legacy configured model suppression', () => {
       resolvedSince: null,
       humanAgo: fakeHumanAgo,
     });
-    expect(out).toContain('`Reported model: not reported`');
+    expect(out).toContain('**Reported model:** not reported');
     expect(out).not.toContain('Configured model:');
   });
 });

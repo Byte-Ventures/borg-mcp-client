@@ -5,6 +5,7 @@ import {
   BORG_OPENCODE_ENV,
   codexAgentKindConfigArgs,
   codexRemoteWakeConfigArgs,
+  resolveReportableSessionAgentKind,
   resolveSessionAgentKind,
   withAgentRuntimeEnv,
 } from '../src/agent-runtime';
@@ -25,6 +26,14 @@ describe('agent runtime identity', () => {
     expect(resolveSessionAgentKind({ [BORG_CODEX_REMOTE_WAKE_ENV]: '1' } as NodeJS.ProcessEnv)).toBe('codex');
     expect(resolveSessionAgentKind({ [BORG_OPENCODE_ENV]: '1' } as NodeJS.ProcessEnv)).toBe('opencode');
     expect(resolveSessionAgentKind({} as NodeJS.ProcessEnv)).toBe('claude');
+  });
+
+  it('does not report the legacy default-Claude guess as known runtime identity', () => {
+    expect(resolveReportableSessionAgentKind({} as NodeJS.ProcessEnv)).toBeNull();
+    expect(resolveReportableSessionAgentKind({ [BORG_AGENT_KIND_ENV]: 'invalid' } as NodeJS.ProcessEnv)).toBeNull();
+    expect(resolveReportableSessionAgentKind({ [BORG_AGENT_KIND_ENV]: 'claude' } as NodeJS.ProcessEnv)).toBe('claude');
+    expect(resolveReportableSessionAgentKind({ [BORG_CODEX_REMOTE_WAKE_ENV]: '1' } as NodeJS.ProcessEnv)).toBe('codex');
+    expect(resolveReportableSessionAgentKind({ [BORG_OPENCODE_ENV]: '1' } as NodeJS.ProcessEnv)).toBe('opencode');
   });
 
   it('clears stale Codex and OpenCode markers before a relaunch', () => {

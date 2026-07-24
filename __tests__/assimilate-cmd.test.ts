@@ -3672,7 +3672,11 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ model: 'claude:claude-opus-4-8', agent_kind: 'claude' }),
+      expect.objectContaining({
+        model: 'claude:claude-opus-4-8',
+        agent_kind: 'claude',
+        working_repo: expect.any(Object),
+      }),
       expect.any(String),
     );
     const [, , , envArg] = exec.mock.calls[0] as [string, string[], string, Record<string, string>];

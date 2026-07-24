@@ -15,6 +15,7 @@ import {
   decodeProtocolTagPreflight,
   ErrorCode,
   type CreateCubeResponse,
+  type DroneRuntimeMetadata,
   type ProtocolTagPreflight,
   type ServerCapability,
 } from 'borgmcp-shared/protocol';
@@ -235,6 +236,7 @@ export async function sendBorgServerAttach(
     roleId: string;
     operation: ServerSessionOperation;
     priorDroneId?: string;
+    runtimeMetadata?: DroneRuntimeMetadata;
   },
   pendingBearer: string,
   deps: {
@@ -274,9 +276,12 @@ export async function sendBorgServerAttach(
           cube_id: request.cubeId,
           role_id: request.roleId,
           session_credential: pending.credential,
-          ...(request.priorDroneId === undefined
+           ...(request.priorDroneId === undefined
+             ? {}
+             : { prior_drone_id: request.priorDroneId }),
+          ...(request.runtimeMetadata === undefined
             ? {}
-            : { prior_drone_id: request.priorDroneId }),
+            : { runtime_metadata: request.runtimeMetadata }),
         })),
       });
     } catch (error) {

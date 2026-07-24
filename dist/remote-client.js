@@ -11,12 +11,13 @@
  */
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, ErrorCode, } from 'borgmcp-shared/protocol';
+import { createProtocolEnvelope, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, } from 'borgmcp-shared/protocol';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { getTemplate } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
+import { buildRuntimeMetadataPatch } from './runtime-metadata.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
@@ -267,17 +268,32 @@ async function localCubeComposition(active) {
     if (!cubePayload || !rolePayload || !dronePayload) {
         throw new Error('Local Borg server returned an incomplete cube response');
     }
-    const drone = dronePayload.drones.find((candidate) => candidate.id === active.droneId);
+    const drones = dronePayload.drones.map(withValidatedRuntimeMetadata);
+    const drone = drones.find((candidate) => candidate.id === active.droneId);
     const role = rolePayload.roles.find((candidate) => candidate.id === drone?.role_id);
     if (!drone || !role)
         throw new Error('Local Borg server no longer recognizes this drone seat');
     return {
         cube: cubePayload.cube,
         roles: rolePayload.roles,
-        drones: dronePayload.drones,
+        drones,
         role,
         drone,
     };
+}
+function withValidatedRuntimeMetadata(drone) {
+    const state = decodeDroneRuntimeMetadataState(drone);
+    return {
+        ...drone,
+        ...state.runtime_metadata,
+        runtime_metadata_reported: state.runtime_metadata_reported,
+    };
+}
+async function updateOwnRuntimeMetadata(active, patch) {
+    const payload = await localServerRequest(active, `/api/cubes/${active.cubeId}/drones/self/metadata`, 'PATCH', { ...patch });
+    if (!payload)
+        throw new Error('Local Borg server returned an empty runtime metadata response');
+    decodeUpdateDroneRuntimeMetadataResponse(payload);
 }
 function localCursorBinding(active) {
     return {
@@ -520,6 +536,13 @@ export async function whoami(sessionToken, apiUrl, serverTrustIdentity) {
         drone_label: composed.drone.label,
         role_id: composed.role.id,
         role_name: composed.role.name,
+        runtime_metadata: {
+            agent_kind: composed.drone.agent_kind,
+            reported_model: composed.drone.reported_model,
+            working_repo_name: composed.drone.working_repo_name,
+            working_repo_origin: composed.drone.working_repo_origin,
+        },
+        runtime_metadata_reported: composed.drone.runtime_metadata_reported,
     };
 }
 /**
@@ -546,7 +569,7 @@ export async function getRoster(sessionToken, apiUrl, since, serverTrustIdentity
             throw new Error('Local Borg server returned an incomplete roster response');
         }
         return {
-            drones: dronePayload.drones,
+            drones: dronePayload.drones.map(withValidatedRuntimeMetadata),
             roles: rolePayload.roles,
             message_taxonomy: cubePayload.cube.message_taxonomy ?? null,
             since: dronePayload.since ?? since,
@@ -647,6 +670,23 @@ export async function removeDecision(sessionToken, apiUrl, selector, serverTrust
  */
 export async function regen(sessionToken, apiUrl, opts = {}) {
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
+    if (opts.agentKind !== undefined ||
+        opts.reportedModel !== undefined ||
+        opts.workingRepo !== undefined) {
+        const patch = buildRuntimeMetadataPatch({
+            agentKind: opts.agentKind ?? null,
+            reportedModel: opts.reportedModel,
+            workingRepo: opts.workingRepo,
+        });
+        try {
+            await updateOwnRuntimeMetadata(local, patch);
+        }
+        catch {
+            // Metadata is advisory. Preserve the prior server value and continue with
+            // the authenticated identity read; never echo rejected local input.
+            console.warn('Local regen: runtime metadata update unavailable; preserving the prior safe report.');
+        }
+    }
     const composed = await localCubeComposition(local);
     const cursor = opts.since === undefined
         ? await getLocalServerCursor(localCursorBinding(local))
@@ -994,7 +1034,7 @@ export async function getCube(cubeId, connection) {
     return {
         ...cubePayload.cube,
         roles: rolePayload.roles,
-        drones: dronePayload.drones,
+        drones: dronePayload.drones.map(withValidatedRuntimeMetadata),
     };
 }
 /**

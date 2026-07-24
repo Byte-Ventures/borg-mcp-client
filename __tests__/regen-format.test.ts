@@ -223,23 +223,36 @@ describe('formatRegenMarkdown — taxonomy tip (gh#479)', () => {
       {
         id: 'd1',
         label: 'claude-builder',
-        role_id: 'r1',
-        agent_kind: 'claude',
-        last_seen: '2026-05-30T12:00:00.000Z',
+         role_id: 'r1',
+         agent_kind: 'claude',
+        reported_model: 'anthropic/claude-sonnet-4',
+        working_repo_name: 'Byte-Ventures/borg-mcp-client',
+        working_repo_origin: 'https://github.com/Byte-Ventures/borg-mcp-client',
+        runtime_metadata_reported: true,
+         last_seen: '2026-05-30T12:00:00.000Z',
       },
       {
         id: 'd2',
         label: 'legacy-builder',
         role_id: 'r1',
-        agent_kind: null,
+         agent_kind: null,
+        reported_model: null,
+        working_repo_name: null,
+        working_repo_origin: null,
+        runtime_metadata_reported: false,
         last_seen: '2026-05-30T12:00:00.000Z',
       },
     ];
 
     const out = formatRegenMarkdown(result);
 
-    expect(out).toContain('**claude-builder** (Role: Builder · Agent CLI: Claude Code)');
-    expect(out).toContain('**legacy-builder** (Role: Builder · Agent CLI: not reported) — last seen');
+    expect(out).toContain('**claude-builder** (Role: Builder)');
+    expect(out).toContain('**Agent CLI:** Claude Code');
+    expect(out).toContain('**Reported model:** anthropic/claude-sonnet-4');
+    expect(out).toContain('**Working repo:** Byte-Ventures/borg-mcp-client');
+    expect(out).not.toContain('https://github.com/Byte-Ventures/borg-mcp-client');
+    expect(out).toContain('**legacy-builder** (Role: Builder) — last seen');
+    expect(out).toContain('**Agent CLI:** not reported');
     expect(out).not.toContain('Agent CLI: null');
   });
 });

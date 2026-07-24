@@ -23,6 +23,7 @@ import { normalizeServerEndpoint } from './server-endpoint.js';
 import { BorgServerError, LegacySessionCredentialCollisionError } from './server-errors.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
+import { resolveWorkingRepo } from './working-repo.js';
 const PRIVATE_STATE_UNAVAILABLE_COPY = [
     'Borg could not safely prepare its private local state.',
     'No Borg server or cube change was made.',
@@ -784,6 +785,7 @@ export async function runAssimilate(args, deps) {
             hostname: deps.getHostname(),
             agent_kind: cli,
             model: effectiveModel,
+            working_repo: resolveWorkingRepo(projectRoot),
             ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
             ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
             session_operation: sessionOperation,
