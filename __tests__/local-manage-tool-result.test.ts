@@ -30,16 +30,16 @@ describe('local manage MCP tool result', () => {
     const result = formatLocalManageToolResult(new RoleSectionConflictError({
       roleId: '44444444-4444-4444-8444-444444444444',
       action: 'insert',
-      heading: 'Work\u001b[2J\u202eflow',
-      after: 'Scope\r\nNext',
+      heading: 'Work\u001b[2J\u202eflow\\path',
+      after: 'Scope\r\n"Next"',
     }));
     const text = result?.content[0].text ?? '';
 
     expect(result?.isError).toBe(true);
     expect(text).toContain('action=insert');
-    expect(text).toContain('Work\\u{1b}\\[2J\\u{202e}flow');
-    expect(text).toContain('Scope\\u{d}\\u{a}Next');
-    for (const unsafe of ['\u001b', '\u202e', '\r', '\nNext']) {
+    expect(text).toContain('Work\\u{1b}\\u{5b}2J\\u{202e}flow\\u{5c}path');
+    expect(text).toContain('Scope\\u{d}\\u{a}\\u{22}Next\\u{22}');
+    for (const unsafe of ['\u001b', '\u202e', '\r', '\nNext', '\\path', '"Next"']) {
       expect(text).not.toContain(unsafe);
     }
   });

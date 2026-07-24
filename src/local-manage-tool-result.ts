@@ -14,15 +14,14 @@ export class RoleSectionConflictError extends Error {
   }
 }
 
-const UNSAFE_DISPLAY_CHARACTER = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu;
+const UNSAFE_OPERATION_CHARACTER =
+  /["\\`*_[\]()<>#!|~\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u;
 
 function safeOperationValue(value: string): string {
-  const escaped = value
-    .replaceAll('\\', '\\\\')
-    .replaceAll('"', '\\"')
-    .replace(/([`*_[\]()<>#!|~])/gu, '\\$1')
-    .replace(UNSAFE_DISPLAY_CHARACTER, (character) =>
-      `\\u{${character.codePointAt(0)!.toString(16)}}`);
+  const escaped = Array.from(value, (character) =>
+    UNSAFE_OPERATION_CHARACTER.test(character)
+      ? `\\u{${character.codePointAt(0)!.toString(16)}}`
+      : character).join('');
   return `"${escaped}"`;
 }
 
