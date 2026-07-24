@@ -164,10 +164,10 @@ async function installFixtureConsumer(directory, tarball) {
   };
 }
 
-test('release workflow uses one package authority, one protected publish, and one read-only registry readback', async () => {
+test('release workflow uses one package authority and one protected publish with no post-publish readback', async () => {
   const workflow = await readFile(join(root, '.github', 'workflows', 'publish.yml'), 'utf8');
   const [verification = '', afterVerify = ''] = workflow.split('\n  publish:\n');
-  const [publication = '', registryVerification = ''] = afterVerify.split('\n  registry-verification:\n');
+  const publication = afterVerify;
 
   assert.doesNotMatch(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(verification, /environment:/);
@@ -175,9 +175,7 @@ test('release workflow uses one package authority, one protected publish, and on
   assert.match(publication, /needs: verify/);
   assert.match(publication, /environment:\n\s+name: npm-publish/);
   assert.match(publication, /id-token: write/);
-  assert.match(registryVerification, /needs: \[verify, publish\]/);
-  assert.doesNotMatch(registryVerification, /environment:/);
-  assert.doesNotMatch(registryVerification, /id-token: write/);
+  assert.doesNotMatch(workflow, /\n  registry-verification:\n/);
   assert.equal((workflow.match(/id-token: write/g) ?? []).length, 1);
   assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN|NPM_TOKEN_PRESENT/);
   assert.equal((workflow.match(/npm publish "\.\/release\//g) ?? []).length, 1);
@@ -192,10 +190,10 @@ test('release workflow uses one package authority, one protected publish, and on
   const configGuards = [...workflow.matchAll(/run: test ! -e \.npmrc/g)].map((match) => match.index);
   const setupNodes = [...workflow.matchAll(/uses: actions\/setup-node@/g)].map((match) => match.index);
   const bootstraps = [...workflow.matchAll(/npm install --prefix "\$\{npm_prefix\}"/g)].map((match) => match.index);
-  assert.equal(checkouts.length, 3);
+  assert.equal(checkouts.length, 2);
   assert.equal(attemptGuards.length, 1);
   assert.equal(configGuards.length, 1);
-  assert.equal(setupNodes.length, 3);
+  assert.equal(setupNodes.length, 2);
   assert.equal(bootstraps.length, 2);
   assert.ok(checkouts[0] < attemptGuards[0]);
   assert.ok(attemptGuards[0] < configGuards[0]);
@@ -222,10 +220,8 @@ test('release workflow uses one package authority, one protected publish, and on
   assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_URL:-\}"/);
   assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_TOKEN:-\}"/);
   assert.match(publication, /test -z "\$\{NODE_AUTH_TOKEN:-\}"/);
-  assert.match(registryVerification, /verify-registry-release\.mjs postpublish release\/artifact-report\.json/);
-  assert.match(registryVerification, /"borgmcp@\$\{\{ needs\.verify\.outputs\.version \}\}"/);
-  assert.match(registryVerification, /npm audit signatures --prefix registry-verification/);
-  assert.doesNotMatch(registryVerification, /npm publish|--provenance/);
+  assert.doesNotMatch(workflow, /verify-registry-release\.mjs postpublish/);
+  assert.doesNotMatch(workflow, /npm audit signatures/);
   assert.doesNotMatch(workflow, /CLIENT_NPM_PUBLICATION|Confirm publication remains deferred/);
 
   const ci = await readFile(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
@@ -249,8 +245,7 @@ test('release documentation describes the activated minimal publication lane', a
     'NPM_EXPECTED_OWNER',
     'id-token: write',
     'NODE_AUTH_TOKEN',
-    'npm audit signatures',
-    'fixed attempt and delay',
+    'no post-publication registry readback',
   ]) assert.ok(releasing.includes(boundary), `Missing release boundary: ${boundary}`);
   for (const evidence of [
     'v2.0.0',
