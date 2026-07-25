@@ -135,6 +135,9 @@ describe('real-adapter SIGINT integration through borg server cube init entry po
     const createCube = vi.fn();
     const getAssociation = vi.fn(async () => null);
     const saveAssociation = vi.fn();
+    const assimilateFn = vi.fn();
+    const finalizeServerSeatFn = vi.fn();
+    const setActiveCubeFn = vi.fn();
 
     const { runEarlyServerFacade } = await import('../src/server-facade.js');
     const { runAssimilate } = await import('../src/assimilate-cmd.js');
@@ -180,19 +183,19 @@ describe('real-adapter SIGINT integration through borg server cube init entry po
           listCubes: vi.fn(async () => []),
           getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [], drones: [] })),
           createCube: createCube,
-          assimilate: vi.fn(),
+          assimilate: assimilateFn,
           getInboxPath: vi.fn(() => '/tmp/inbox'),
           probeMcpReady: vi.fn(async () => true),
           resolveCli: vi.fn(async () => 'claude' as any),
           prepareCodexRemoteLaunch: vi.fn(async () => ({ args: [], warning: null, env: {} })),
           setCodexWakeTarget: vi.fn(),
           findLoadedCodexThread: vi.fn(async () => null),
-          finalizeServerSeat: vi.fn(async () => ({ committed: true })),
+          finalizeServerSeat: finalizeServerSeatFn,
           readPersistedLocalSeat: vi.fn(async () => null),
           peekServerSessionRecord: vi.fn(async () => false),
           findIncompleteSiblingAttempt: vi.fn(async () => null),
           probeSeat: vi.fn(async () => 'live' as any),
-          setActiveCube: vi.fn(),
+          setActiveCube: setActiveCubeFn,
           resolveCliApprovals: vi.fn(async () => ({ codexArgs: [] })),
         } as unknown as ReturnType<typeof import('../src/assimilate-deps.js').buildDefaultAssimilateDeps>;
 
@@ -229,6 +232,9 @@ describe('real-adapter SIGINT integration through borg server cube init entry po
     expect(stderr).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
     expect(createCube).not.toHaveBeenCalled();
     expect(saveAssociation).not.toHaveBeenCalled();
+    expect(assimilateFn).not.toHaveBeenCalled();
+    expect(finalizeServerSeatFn).not.toHaveBeenCalled();
+    expect(setActiveCubeFn).not.toHaveBeenCalled();
   });
 
   it('maps EOF to exit 1 with exact EOF copy (borg server cube init)', async () => {
@@ -239,6 +245,9 @@ describe('real-adapter SIGINT integration through borg server cube init entry po
     const createCube = vi.fn();
     const getAssociation = vi.fn(async () => null);
     const saveAssociation = vi.fn();
+    const assimilateFn = vi.fn();
+    const finalizeServerSeatFn = vi.fn();
+    const setActiveCubeFn = vi.fn();
 
     const { runEarlyServerFacade } = await import('../src/server-facade.js');
     const { runAssimilate } = await import('../src/assimilate-cmd.js');
@@ -284,19 +293,19 @@ describe('real-adapter SIGINT integration through borg server cube init entry po
           listCubes: vi.fn(async () => []),
           getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [], drones: [] })),
           createCube: createCube,
-          assimilate: vi.fn(),
+          assimilate: assimilateFn,
           getInboxPath: vi.fn(() => '/tmp/inbox'),
           probeMcpReady: vi.fn(async () => true),
           resolveCli: vi.fn(async () => 'claude' as any),
           prepareCodexRemoteLaunch: vi.fn(async () => ({ args: [], warning: null, env: {} })),
           setCodexWakeTarget: vi.fn(),
           findLoadedCodexThread: vi.fn(async () => null),
-          finalizeServerSeat: vi.fn(async () => ({ committed: true })),
+          finalizeServerSeat: finalizeServerSeatFn,
           readPersistedLocalSeat: vi.fn(async () => null),
           peekServerSessionRecord: vi.fn(async () => false),
           findIncompleteSiblingAttempt: vi.fn(async () => null),
           probeSeat: vi.fn(async () => 'live' as any),
-          setActiveCube: vi.fn(),
+          setActiveCube: setActiveCubeFn,
           resolveCliApprovals: vi.fn(async () => ({ codexArgs: [] })),
         } as unknown as ReturnType<typeof import('../src/assimilate-deps.js').buildDefaultAssimilateDeps>;
 
@@ -333,5 +342,8 @@ describe('real-adapter SIGINT integration through borg server cube init entry po
     expect(stderr).toHaveBeenCalledWith('Input ended before cube creation. Nothing was changed.\n');
     expect(createCube).not.toHaveBeenCalled();
     expect(saveAssociation).not.toHaveBeenCalled();
+    expect(assimilateFn).not.toHaveBeenCalled();
+    expect(finalizeServerSeatFn).not.toHaveBeenCalled();
+    expect(setActiveCubeFn).not.toHaveBeenCalled();
   });
 });
