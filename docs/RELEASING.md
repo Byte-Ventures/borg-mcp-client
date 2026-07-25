@@ -97,8 +97,15 @@ The annotated `v2.0.10` tag object
 `3f7003b65eadc74cd949857e831e1181a1aad2ff`. Workflow run `30063538271`, attempt 1,
 successfully published that exact source as `borgmcp@2.0.10`; the registry records integrity
 `sha512-BkFrq75mF7ih0/7Z7RsXsJYo43qNs4ng7tSnvcFCl3k6r+ex1FvTkah0+KQNinDSrv6a+HLWahUe8875so8zew==`.
+Never move, replace, reuse, or rerun that tag or workflow.
+
+The annotated `v2.0.11` tag object
+`fb95f4278137d1d7871d945c467eb33984abe1c4` peels to protected-main commit
+`0676d93d3e8a64ba583e95f164d122b39687b53a`. Workflow run `30073844074`, attempt 1,
+successfully published that exact source as `borgmcp@2.0.11`; the registry records integrity
+`sha512-429njJ7HVmWhpm8E71RoLzG57Qehy3RSxEzs6fQofVoOIiZXnK4QQDwbQe9MPfhKifbvVN5lGcDKtKAjuC76ww==`.
 Never move, replace, reuse, or rerun that tag or workflow. The next candidate
-uses the unused `v2.0.11` identity from a fresh reviewed protected-main commit
+uses the unused `v2.1.0` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
@@ -112,7 +119,8 @@ Before creating the release tag, independently verify all of these conditions:
   entered the public package;
 - the exact audited registry dependency `borgmcp-shared@0.6.3` remains locked to
   its canonical tarball and integrity;
-- the client and matching server pass the complete local dogfood gate;
+- the client and matching published `borgmcp-server@0.1.20`, which pins
+  `borgmcp-shared@0.6.3`, pass the complete local dogfood gate;
 - the selected stable client version is unused and the exact release commit is
   on protected `main`;
 - the repository and protected npm environment settings pass an operator audit;
