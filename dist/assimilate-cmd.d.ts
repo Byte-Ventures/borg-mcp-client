@@ -7,6 +7,9 @@ import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } f
 import type { SeatBinding } from './seats.js';
 import { type LaunchApprovalDecision } from './cli-tool-approval.js';
 import { type WorkingRepo } from './working-repo.js';
+import type { CreateCubeRepository, CubeTemplate } from 'borgmcp-shared/protocol';
+import { type RepositoryCubeCreation } from './repository-cube-init.js';
+import type { GitRepositoryContext, RepositoryAssociation } from './repository-identity.js';
 export interface AssimilateFlags {
     worktree?: string;
     template?: string;
@@ -22,6 +25,7 @@ export interface AssimilateFlags {
 export interface AssimilateArgs {
     role: string | undefined;
     flags: AssimilateFlags;
+    mode?: 'assimilate' | 'cube-init';
 }
 export interface CubeSummary {
     id: string;
@@ -130,6 +134,10 @@ export interface AssimilateDeps {
         scrubPending: () => Promise<unknown>;
     }) => Promise<FinalizeServerSeatOutcome>;
     findProjectRoot: (cwd: string) => string;
+    resolveRepositoryContext: (cwd: string) => Promise<GitRepositoryContext | null>;
+    getRepositoryIdentity: (context: GitRepositoryContext) => Promise<CreateCubeRepository>;
+    getRepositoryAssociation: (trustIdentity: string, repository: CreateCubeRepository) => Promise<RepositoryAssociation | null>;
+    saveRepositoryAssociation: (trustIdentity: string, repository: CreateCubeRepository, association: RepositoryAssociation) => Promise<void>;
     installProjectSessionHook: (projectRoot: string) => void;
     /** gh#27: optional test seam — when set, selectAssimilationAuthority uses
      *  this instead of prompting/failing. Not wired in production. */
@@ -150,10 +158,11 @@ export interface AssimilateDeps {
     listCubes: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<CubeSummary[]>;
     getCube: (apiUrl: string, token: string, cubeId: string, serverTrustIdentity?: string) => Promise<CubeDetail>;
     createCube: (apiUrl: string, token: string, params: {
-        name?: string;
-        template?: string;
-        projectRoot?: string;
-    }, serverTrustIdentity?: string) => Promise<CubeDetail>;
+        name: string;
+        workingRepoName: string;
+        repository: CreateCubeRepository;
+        template: Exclude<CubeTemplate, 'default'>;
+    }, serverTrustIdentity?: string) => Promise<RepositoryCubeCreation>;
     assimilate: (apiUrl: string, token: string, params: {
         cube_id: string;
         role_id: string;

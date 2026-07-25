@@ -64,7 +64,7 @@ const BINDING: SeatBinding = {
 
 // The credential-free protocol preflight returns ONLY the exact tag.
 const tagPreflightBody = () =>
-  new Response(JSON.stringify({ protocol_version: '3' }), { status: 200 });
+  new Response(JSON.stringify({ protocol_version: '4' }), { status: 200 });
 
 describe('self-hosted server handshake', () => {
   it('tracks the server-owned loopback default from the Part 2 service contract', () => {
@@ -90,7 +90,7 @@ describe('self-hosted server handshake', () => {
     await expect(preflightBorgServerTag(
       'https://server.example.com',
       fetchImpl as typeof fetch,
-    )).resolves.toEqual({ protocol_version: '3' });
+    )).resolves.toEqual({ protocol_version: '4' });
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://server.example.com/api/protocol');
     expect(init).toMatchObject({ method: 'GET', redirect: 'error' });
@@ -104,7 +104,7 @@ describe('self-hosted server handshake', () => {
       .rejects.toThrow(/Unsupported protocol version\.?/);
 
     const extraField = vi.fn(async () => new Response(
-      JSON.stringify({ protocol_version: '3', package: { name: 'borgmcp-shared' } }),
+      JSON.stringify({ protocol_version: '4', package: { name: 'borgmcp-shared' } }),
       { status: 200 },
     ));
     await expect(preflightBorgServerTag('https://server.example.com', extraField as typeof fetch))
@@ -158,7 +158,7 @@ describe('self-hosted server handshake', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(tagPreflightBody())
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '3',
+        protocol_version: '4',
         request_id: 'enroll-request-1',
         payload: {
           purpose: 'owner',
@@ -203,7 +203,7 @@ describe('self-hosted server handshake', () => {
     expect(enrollmentInit).toMatchObject({ method: 'POST', redirect: 'error' });
     const body = JSON.parse(String(enrollmentInit?.body));
     expect(body).toMatchObject({
-      protocol_version: '3',
+      protocol_version: '4',
       payload: {
         invitation,
         retry_key: retryKey,
@@ -368,7 +368,7 @@ describe('self-hosted server handshake', () => {
       .mockResolvedValueOnce(tagPreflightBody())
       .mockRejectedValueOnce(new Error('response lost'))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '3',
+        protocol_version: '4',
         request_id: 'enroll-retry-1',
         payload: {
           purpose: 'owner',
@@ -416,7 +416,7 @@ describe('self-hosted server handshake', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(tagPreflightBody())
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '3',
+        protocol_version: '4',
         request_id: 'enroll-resume-1',
         payload: {
           purpose: 'owner',
@@ -464,7 +464,9 @@ describe('self-hosted server handshake', () => {
       repositoryBinding: 'a'.repeat(64),
       retryKey: '77777777-7777-4777-8777-777777777777',
       name: 'project-one',
-      template: 'default' as const,
+      workingRepoName: 'project-one',
+      repository: { kind: 'origin' as const, value: 'https://github.com/org/project-one' },
+      template: 'software-dev' as const,
     };
     const active = {
       origin: cubeRetry.origin,
@@ -476,10 +478,15 @@ describe('self-hosted server handshake', () => {
     const fetchImpl = vi.fn()
       .mockRejectedValueOnce(new Error('response lost'))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '3',
+        protocol_version: '4',
         request_id: 'cube-retry-1',
         payload: {
+          result: 'created',
           cube_id: CUBE_ID,
+          name: cubeRetry.name,
+          working_repo_name: cubeRetry.workingRepoName,
+          repository: cubeRetry.repository,
+          template: cubeRetry.template,
           human_seat_role_id: '88888888-8888-4888-8888-888888888888',
           default_worker_role_id: ROLE_ID,
           access: 'manage',
@@ -491,7 +498,12 @@ describe('self-hosted server handshake', () => {
       cubeRetry.origin,
       cubeRetry.trustIdentity,
       active.credential,
-      { projectRoot: '/work/project-one', name: cubeRetry.name },
+      {
+        name: cubeRetry.name,
+        workingRepoName: cubeRetry.workingRepoName,
+        repository: cubeRetry.repository,
+        template: cubeRetry.template,
+      },
       {
         fetchImpl: fetchImpl as typeof fetch,
         loadCredentialRecord: vi.fn(async () => ({
@@ -508,7 +520,9 @@ describe('self-hosted server handshake', () => {
     expect(retry.payload).toEqual({
       retry_key: cubeRetry.retryKey,
       name: cubeRetry.name,
-      template: 'default',
+      working_repo_name: cubeRetry.workingRepoName,
+      repository: cubeRetry.repository,
+      template: 'software-dev',
     });
     expect(clearCubeCreation).toHaveBeenCalledWith(cubeRetry);
 
@@ -517,7 +531,12 @@ describe('self-hosted server handshake', () => {
       cubeRetry.origin,
       cubeRetry.trustIdentity,
       active.credential,
-      { projectRoot: '/work/ordinary', name: 'ordinary' },
+      {
+        name: 'ordinary',
+        workingRepoName: 'ordinary',
+        repository: { kind: 'local', value: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+        template: 'starter',
+      },
       {
         fetchImpl: deniedFetch as typeof fetch,
         loadCredentialRecord: vi.fn(async () => ({
@@ -538,7 +557,7 @@ describe('self-hosted server handshake', () => {
   it('sends the ALREADY-MINTED pending bearer and its activate() flips it in place', async () => {
     const bearer = 's'.repeat(43);
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '3',
+      protocol_version: '4',
       request_id: 'attach-response-1',
       payload: {
         result: 'created',
@@ -588,7 +607,7 @@ describe('self-hosted server handshake', () => {
     // The passed-in pending bearer is the session credential; the parent
     // enrollment credential is only the Authorization bearer.
     expect(JSON.parse(String(init?.body))).toMatchObject({
-      protocol_version: '3',
+      protocol_version: '4',
       payload: {
         cube_id: CUBE_ID,
         role_id: ROLE_ID,
@@ -621,7 +640,7 @@ describe('self-hosted server handshake', () => {
 
   it('rejects the retired attach-session expires_at field', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '3',
+      protocol_version: '4',
       request_id: 'attach-response-with-expiry',
       payload: {
         result: 'created',
@@ -644,7 +663,7 @@ describe('self-hosted server handshake', () => {
 
   it('CR #2: activate(binding) never binds server metadata onto a same-ref replacement — returns typed `replaced`/`missing`', async () => {
     const fetchImpl = () => vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '3',
+      protocol_version: '4',
       request_id: 'attach-r',
       payload: {
         result: 'created',
@@ -670,7 +689,7 @@ describe('self-hosted server handshake', () => {
 
   it('activate(binding) surfaces a store failure (the FINALIZE leaves the PENDING record)', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '3',
+      protocol_version: '4',
       request_id: 'attach-response-2',
       payload: {
         result: 'reused',
@@ -726,7 +745,7 @@ describe('self-hosted server handshake', () => {
 
   it('classifies typed attach lifecycle failures without trusting server messages', async () => {
     const rejectedWith = (code: string, status = 401) => vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '3',
+      protocol_version: '4',
       error: { code, message: 'rejected' },
     }), { status }));
     const send = (fetchImpl: typeof fetch) => sendBorgServerAttach(
@@ -777,7 +796,7 @@ describe('sendBorgServerAttach real activate fails closed with NO expectation di
   });
 
   const attachOk = () => vi.fn(async () => new Response(JSON.stringify({
-    protocol_version: '3', request_id: 'attach-resp',
+    protocol_version: '4', request_id: 'attach-resp',
     payload: {
       result: 'reused',
       cube: { id: CUBE_ID, name: 'local-cube' },

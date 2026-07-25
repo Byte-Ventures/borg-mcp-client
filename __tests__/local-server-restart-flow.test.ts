@@ -47,7 +47,7 @@ describe('local owner enrollment to restart flow', () => {
       delete: async (account: string) => { keychain.delete(account); },
     };
     const response = (payload: unknown, status = 200) => new Response(JSON.stringify({
-      protocol_version: '3',
+      protocol_version: '4',
       request_id: 'restart-response-1',
       payload,
     }), { status });
@@ -63,11 +63,16 @@ describe('local owner enrollment to restart flow', () => {
       }
       if (path === '/api/protocol') {
         // Credential-free tag-only preflight: bare exact tag, not enveloped.
-        return new Response(JSON.stringify({ protocol_version: '3' }), { status: 200 });
+        return new Response(JSON.stringify({ protocol_version: '4' }), { status: 200 });
       }
       if (path === '/api/cubes' && method === 'POST') {
         return response({
+          result: 'created',
           cube_id: cubeId,
+          name: 'local-cube',
+          working_repo_name: 'local-cube',
+          repository: { kind: 'local', value: '99999999-9999-4999-8999-999999999998' },
+          template: 'software-dev',
           human_seat_role_id: humanRoleId,
           default_worker_role_id: roleId,
           access: 'manage',
@@ -149,7 +154,12 @@ describe('local owner enrollment to restart flow', () => {
         origin,
         trustIdentity,
         enrolled.token,
-        { projectRoot: project, name: 'local-cube' },
+        {
+          name: 'local-cube',
+          workingRepoName: 'local-cube',
+          repository: { kind: 'local', value: '99999999-9999-4999-8999-999999999998' },
+          template: 'software-dev',
+        },
         { fetchImpl: fetchImpl as typeof fetch },
       );
       expect(created).toMatchObject({ cube_id: cubeId, default_worker_role_id: roleId });

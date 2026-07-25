@@ -4,6 +4,18 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+export const CUBE_INIT_HELP_TEXT =
+  `borg server cube init — initialize this Git repository's cube without creating a drone\n\n` +
+  `Usage:\n` +
+  `  borg server cube init [options]\n\n` +
+  `Options:\n` +
+  `  --host <host>                    Borg server host or URL (bare hosts default to HTTPS)\n` +
+  `  --enroll                         Prompt for a hidden enrollment invitation\n` +
+  `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
+  `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
+  `  --yes, -y                        Skip confirmation prompts\n` +
+  `  --help, -h                       Show this help\n`;
+
 async function runImportSmoke(packageRoot, exportTarget, timeoutMs) {
   const entryUrl = pathToFileURL(resolve(packageRoot, exportTarget)).href;
   const child = spawn(process.execPath, [
@@ -81,6 +93,22 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
     if (code !== 37 || stdout !== expected || stderr !== '') {
       throw new Error(
         `Packed server facade failed: code=${code}, stdout=${JSON.stringify(stdout)}, stderr=${stderr.slice(0, 1000)}`,
+      );
+    }
+
+    const cubeInitHelp = spawnSync(generatedBin, ['server', 'cube', 'init', '--help'], {
+      env: { ...process.env, CI: '1', NO_COLOR: '1' },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    if (
+      cubeInitHelp.error ||
+      cubeInitHelp.status !== 0 ||
+      cubeInitHelp.stdout !== CUBE_INIT_HELP_TEXT ||
+      cubeInitHelp.stderr !== ''
+    ) {
+      throw new Error(
+        `Packed cube-init help failed: status=${cubeInitHelp.status}, stdout=${JSON.stringify(cubeInitHelp.stdout)}, stderr=${JSON.stringify(cubeInitHelp.stderr)}, error=${cubeInitHelp.error?.message ?? ''}`,
       );
     }
 

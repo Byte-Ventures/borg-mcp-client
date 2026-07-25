@@ -8,5 +8,11 @@
  * (see `client/__tests__/assimilate-cmd.test.ts:makeStubDeps`).
  */
 import type { AssimilateDeps } from './assimilate-cmd.js';
-export declare function buildDefaultAssimilateDeps(): AssimilateDeps;
+/**
+ * Wraps the readline question operation with the production interruption
+ * mapping. Tests inject the question operation; production uses readline.
+ */
+export type PromptQuestion = (message: string) => Promise<string>;
+export declare function createPromptAdapter(question?: PromptQuestion): (message: string) => Promise<string>;
+export declare function buildDefaultAssimilateDeps(question?: PromptQuestion): AssimilateDeps;
 //# sourceMappingURL=assimilate-deps.d.ts.map

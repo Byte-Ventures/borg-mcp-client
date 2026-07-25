@@ -81,7 +81,7 @@ function fakeDigestCorrelatingServer() {
       bySeatDigest.set(d, seat);
     }
     return new Response(JSON.stringify({
-      protocol_version: '3',
+      protocol_version: '4',
       request_id: 'attach-r',
       payload: {
         result: created ? 'created' : 'reused',

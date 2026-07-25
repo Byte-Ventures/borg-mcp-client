@@ -30,6 +30,7 @@ export function topLevelHelpText(version: string): string {
     `  borg assimilate [role]   Join or create a cube\n` +
     `  borg assimilate --host <host>   Join or create on an explicit server\n` +
     `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
+    `  borg server cube init   Initialize this repository's cube without creating a drone\n` +
     `  borg reset-local-seat    Clear ONLY this worktree's saved local seat (offline; after a rejection)\n` +
     `  borg sync [--prune]      Sync this worktree's branch to origin/main\n` +
     `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
@@ -53,8 +54,25 @@ export function serverHelpText(): string {
     `  stop     Stop the managed local server.\n` +
     `  status   Report verified runtime evidence.\n` +
     `  update   Verify and activate a local server artifact.\n` +
-    `  invite   Create a single-use invitation in an interactive terminal.\n\n` +
+    `  invite   Create a single-use invitation in an interactive terminal.\n` +
+    `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
     `Run borg server <command> --help for server command options.\n`
+  );
+}
+
+/** Client-owned help for repository cube initialization without a drone. */
+export function cubeInitHelpText(): string {
+  return (
+    `borg server cube init — initialize this Git repository's cube without creating a drone\n\n` +
+    `Usage:\n` +
+    `  borg server cube init [options]\n\n` +
+    `Options:\n` +
+    `  --host <host>                    Borg server host or URL (bare hosts default to HTTPS)\n` +
+    `  --enroll                         Prompt for a hidden enrollment invitation\n` +
+    `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
+    `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
+    `  --yes, -y                        Skip confirmation prompts\n` +
+    `  --help, -h                       Show this help\n`
   );
 }
 
@@ -76,15 +94,17 @@ export function assimilateHelpText(version: string): string {
     `Flags:\n` +
     `  --worktree <name>          Create + launch the drone in a sibling git worktree\n` +
     `  --here                     Stay in the current worktree (no sibling spawn)\n` +
-    `  --cube-name <name>         Cube to join/create (otherwise confirm repo basename)\n` +
+    `  --cube-name <name>         Repository cube name (otherwise edit the proposed name)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
     `  --enroll                   Prompt for a hidden enrollment invitation in the operator terminal\n` +
-    `  --template <name>          Bootstrap a new cube from a bundled role template\n` +
-    `  --no-template              Create the cube with no template roles\n` +
+    `  --template software-dev|starter   New-cube template (default: software-dev)\n` +
+    `  --no-template              Unsupported for repository cube creation\n` +
     `  --cli claude|codex|opencode         Agent CLI to launch (default: claude)\n` +
     `  --model claude:<model>   Legacy Claude model override (configure models in the agent CLI)\n` +
     `  --yes, -y                  Skip confirmation prompts\n\n` +
-    `An enrolled owner client may create an idempotent repository cube; ordinary clients\n` +
+    `Creation shows repository context, name, template, and one confirmation. An existing\n` +
+    `repository association skips all prompts. An enrolled owner client may create an\n` +
+    `idempotent repository cube; ordinary clients\n` +
     `require an explicit cube grant. Agent seats begin only after enrollment. Preview only.\n` +
     `See docs/LOCAL_SERVER.md for self-hosted setup and current status.\n\n` +
     `For local or provider-specific models, configure the selected agent CLI directly.\n` +

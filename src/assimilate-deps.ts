@@ -61,8 +61,47 @@ import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote
 import { findLoadedCodexThread } from './codex-app-server.js';
 import { defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
+import {
+  getOrCreateRepositoryIdentity,
+  getRepositoryAssociation,
+  resolveGitRepositoryContext,
+  saveRepositoryAssociation,
+} from './repository-identity.js';
+import { PromptInterruptedError } from './repository-cube-init.js';
 
-export function buildDefaultAssimilateDeps(): AssimilateDeps {
+/**
+ * Wraps the readline question operation with the production interruption
+ * mapping. Tests inject the question operation; production uses readline.
+ */
+export type PromptQuestion = (message: string) => Promise<string>;
+
+async function defaultPromptQuestion(message: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(message);
+  } finally {
+    rl.close();
+  }
+}
+
+export function createPromptAdapter(
+  question: PromptQuestion = defaultPromptQuestion,
+): (message: string) => Promise<string> {
+  return async (message: string): Promise<string> => {
+    try {
+      return await question(message);
+    } catch (err) {
+      if (err instanceof Error && (err.message === 'SIGINT' || err.message === 'Interrupted by signal.')) {
+        throw new PromptInterruptedError();
+      }
+      throw err;
+    }
+  };
+}
+
+export function buildDefaultAssimilateDeps(
+  question: PromptQuestion = defaultPromptQuestion,
+): AssimilateDeps {
   return {
     runSync: (cmd, args, cwd) => {
       const r = spawnSync(cmd, args, { cwd, encoding: 'utf-8' });
@@ -97,14 +136,7 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
 
     stderr: (line) => process.stderr.write(line),
     stdout: (line) => process.stdout.write(line),
-    prompt: async (message: string): Promise<string> => {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      try {
-        return await rl.question(message);
-      } finally {
-        rl.close();
-      }
-    },
+    prompt: createPromptAdapter(question),
     promptSecret: async (message: string): Promise<string> => {
       const result = await prompts({
         type: 'password',
@@ -178,6 +210,10 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
         : { committed: false, reason: 'activation-failed' };
     },
     findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
+    resolveRepositoryContext: resolveGitRepositoryContext,
+    getRepositoryIdentity: getOrCreateRepositoryIdentity,
+    getRepositoryAssociation,
+    saveRepositoryAssociation,
 
     // gh#673 P2 (WI-1): project-local SessionStart hook for the launch root.
     installProjectSessionHook: (projectRoot) => {
@@ -237,14 +273,16 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
         throw new Error('Selected Borg server authority state is missing or unreadable');
       }
       {
-        if (!params.name || !params.projectRoot) {
-          throw new Error('Local Borg server cube creation requires a repository name and root');
-        }
         const created = await createLocalBorgServerCube(
           apiUrl,
           serverTrustIdentity,
           token,
-          { projectRoot: params.projectRoot, name: params.name },
+          {
+            name: params.name,
+            workingRepoName: params.workingRepoName,
+            repository: params.repository,
+            template: params.template,
+          },
         );
         const cube = await remoteGetCube(created.cube_id, {
           apiUrl,
@@ -253,16 +291,20 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
         });
         if (
           cube.id !== created.cube_id ||
+          cube.name !== created.name ||
           !Array.isArray(cube.roles) ||
           !cube.roles.some((role: { id?: string }) => role.id === created.default_worker_role_id)
         ) {
           throw new Error('Borg server returned cube details outside the creation result');
         }
         return {
-          id: cube.id,
-          name: cube.name,
-          roles: cube.roles,
-          drones: cube.drones ?? [],
+          response: created,
+          cube: {
+            id: cube.id,
+            name: cube.name,
+            roles: cube.roles,
+            drones: cube.drones ?? [],
+          },
         };
       }
     },

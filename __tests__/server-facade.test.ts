@@ -9,7 +9,11 @@ import {
   unknownServerCommandText,
   type ServerFacadeOutputDeps,
   type ServerFacadeProcessDeps,
+  type ServerFacadeClientDeps,
 } from '../src/server-facade.js';
+import { createPromptAdapter } from '../src/assimilate-deps.js';
+import { PromptInterruptedError } from '../src/repository-cube-init.js';
+import { cubeInitHelpText } from '../src/cli-help.js';
 
 class FakeChild extends EventEmitter {
   kill = vi.fn(() => true);
@@ -42,6 +46,23 @@ function processDeps(child: FakeChild) {
 }
 
 describe('parseServerFacadeArgs', () => {
+  it('routes cube init to the client-owned repository creation path', () => {
+    expect(parseServerFacadeArgs(['cube', 'init', '--host', 'localhost:7091'])).toEqual({
+      kind: 'cube-init',
+      args: ['--host', 'localhost:7091'],
+    });
+  });
+
+  it.each([
+    ['--help'],
+    ['-h'],
+    ['--host', 'localhost:7091', '--help'],
+  ])('routes cube init help before assimilate parsing for %j', (...args) => {
+    expect(parseServerFacadeArgs(['cube', 'init', ...args])).toEqual({
+      kind: 'cube-init-help',
+    });
+  });
+
   it.each(['setup', 'start', 'stop', 'status', 'update', 'invite'] as const)(
     'accepts %s and preserves server-owned arguments verbatim',
     (command) => {
@@ -123,6 +144,25 @@ describe('runEarlyServerFacade', () => {
     expect(deps.spawn).not.toHaveBeenCalled();
   });
 
+  it.each(['--help', '-h'])('renders cube init %s without client or server work', async (helpFlag) => {
+    const child = new FakeChild();
+    const { deps } = processDeps(child);
+    const output = outputDeps();
+    const client = { cubeInit: vi.fn() };
+
+    await expect(runEarlyServerFacade(
+      ['node', 'borg', 'server', 'cube', 'init', helpFlag],
+      deps,
+      output.output,
+      client,
+    )).resolves.toBe(0);
+
+    expect(output.stdout()).toBe(cubeInitHelpText());
+    expect(output.stderr()).toBe('');
+    expect(client.cubeInit).not.toHaveBeenCalled();
+    expect(deps.spawn).not.toHaveBeenCalled();
+  });
+
   it.each([[[]], [['--help']], [['-h']]] as const)(
     'renders approved plain-text help for %j without starting the server',
     async (args) => {
@@ -140,7 +180,8 @@ describe('runEarlyServerFacade', () => {
         `  stop     Stop the managed local server.\n` +
         `  status   Report verified runtime evidence.\n` +
         `  update   Verify and activate a local server artifact.\n` +
-        `  invite   Create a single-use invitation in an interactive terminal.\n\n` +
+        `  invite   Create a single-use invitation in an interactive terminal.\n` +
+        `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
         `Run borg server <command> --help for server command options.\n`,
       );
       expect(output.stderr()).toBe('');
@@ -161,7 +202,7 @@ describe('runEarlyServerFacade', () => {
     expect(output.stdout()).toBe('');
     expect(output.stderr()).toBe(
       `Unknown server command: bad??[31m.\n` +
-      `Available commands: setup, start, stop, status, update, invite.\n` +
+      `Available commands: setup, start, stop, status, update, invite, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     expect(output.stderr()).not.toContain('--secret');
@@ -181,7 +222,7 @@ describe('runEarlyServerFacade', () => {
     )).resolves.toBe(1);
     expect(output.stderr()).toBe(
       `Unknown server command: ${'😀'.repeat(77)}....\n` +
-      `Available commands: setup, start, stop, status, update, invite.\n` +
+      `Available commands: setup, start, stop, status, update, invite, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     const renderedToken = output.stderr().split('\n', 1)[0]
@@ -311,7 +352,7 @@ describe('approved server facade copy', () => {
   it('renders the exact bounded unknown-command text', () => {
     expect(unknownServerCommandText('daemonize')).toBe(
       `Unknown server command: daemonize.\n` +
-      `Available commands: setup, start, stop, status, update, invite.\n` +
+      `Available commands: setup, start, stop, status, update, invite, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
   });
@@ -330,5 +371,101 @@ describe('approved server facade copy', () => {
       `Next: check local permissions and system resources, then rerun borg server start.\n` +
       `No server command was started.\n`,
     );
+  });
+});
+
+describe('real-adapter SIGINT integration for borg server cube init', () => {
+  it('cube init: real prompt adapter maps SIGINT to exit 130 with exact cancel copy', async () => {
+    const stderr = vi.fn();
+    const promptAdapter = createPromptAdapter(async () => {
+      throw new Error('SIGINT');
+    });
+    const createCube = vi.fn();
+    const getIdentity = vi.fn();
+    const getAssociation = vi.fn();
+    const saveAssociation = vi.fn();
+    const getCube = vi.fn();
+
+    const client: ServerFacadeClientDeps = {
+      cubeInit: async () => {
+        const { runAssimilate } = await import('../src/assimilate-cmd.js');
+
+        const deps = {
+          runSync: vi.fn(),
+          pathExists: vi.fn(),
+          cwd: () => '/repo',
+          chdir: vi.fn(),
+          homedir: () => '/home',
+          mkdirp: vi.fn(),
+          preparePrivateRoot: vi.fn(async () => {}),
+          exec: vi.fn(async () => 0),
+          stderr,
+          stdout: vi.fn(),
+          prompt: promptAdapter,
+          promptSecret: vi.fn(async () => ''),
+          isTTY: () => true,
+          getHostname: () => 'test-host',
+          setTerminalTitle: vi.fn(),
+          getActiveCube: vi.fn(async () => null),
+          hasPersistedActiveCube: vi.fn(async () => false),
+          findProjectRoot: vi.fn(() => '/repo'),
+          resolveRepositoryContext: vi.fn(async () => ({
+            root: '/repo',
+            commonDir: '/repo/.git',
+            derivedName: 'myrepo',
+            publicRepository: { kind: 'origin' as const, value: 'https://github.com/org/repo' },
+            publicRepositoryName: 'org/repo',
+          })),
+          getRepositoryIdentity: getIdentity,
+          getRepositoryAssociation: getAssociation,
+          saveRepositoryAssociation: saveAssociation,
+          detectLocalServer: vi.fn(async () => 'http://localhost:7091'),
+          connectServer: vi.fn(async () => ({
+            token: 'test-token',
+            trustIdentity: 'spki-sha256:test',
+            serverCapabilities: ['create_cube'],
+          })),
+          resumeServerEnrollment: vi.fn(async () => null),
+          listCubes: vi.fn(async () => []),
+          getCube: getCube,
+          createCube: createCube,
+          assimilate: vi.fn(),
+          getInboxPath: vi.fn(() => '/tmp/inbox'),
+          probeMcpReady: vi.fn(async () => true),
+          resolveCli: vi.fn(async () => 'claude' as any),
+          prepareCodexRemoteLaunch: vi.fn(async () => ({ args: [], warning: null, env: {} })),
+          setCodexWakeTarget: vi.fn(),
+          findLoadedCodexThread: vi.fn(async () => null),
+          finalizeServerSeat: vi.fn(async () => ({ committed: true })),
+          readPersistedLocalSeat: vi.fn(async () => null),
+          peekServerSessionRecord: vi.fn(async () => false),
+          findIncompleteSiblingAttempt: vi.fn(async () => null),
+          probeSeat: vi.fn(async () => 'live' as any),
+          setActiveCube: vi.fn(),
+          resolveCliApprovals: vi.fn(async () => ({ codexArgs: [] })),
+        };
+
+        return runAssimilate(
+          { role: undefined, flags: { server: 'localhost:8787' }, mode: 'cube-init' },
+          deps,
+        );
+      },
+    };
+
+    const output = outputDeps();
+    const child = new FakeChild();
+    const { deps: facadeProcessDeps } = processDeps(child);
+
+    const exitCode = await runEarlyServerFacade(
+      ['node', 'borg', 'server', 'cube', 'init'],
+      facadeProcessDeps,
+      output.output,
+      client,
+    );
+
+    expect(exitCode).toBe(130);
+    expect(stderr).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(createCube).not.toHaveBeenCalled();
+    expect(saveAssociation).not.toHaveBeenCalled();
   });
 });

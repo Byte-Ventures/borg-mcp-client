@@ -14,7 +14,9 @@ import {
   decodeProtocolErrorEnvelope,
   decodeProtocolTagPreflight,
   ErrorCode,
+  type CreateCubeRepository,
   type CreateCubeResponse,
+  type CubeTemplate,
   type DroneRuntimeMetadata,
   type ProtocolTagPreflight,
   type ServerCapability,
@@ -45,6 +47,8 @@ import {
   BorgServerError,
   BorgServerTrustError,
   BorgServerUnreachableError,
+  CubeCreationConfirmationError,
+  CubeCreationOutcomeUnknownError,
 } from './server-errors.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
@@ -181,7 +185,7 @@ export interface ServerAttachResult {
 }
 
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v3.
+ * Attach an enrolled client principal to one granted cube/role over protocol v4.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
  * OS keychain (keyed by the stable per-seat identity) BEFORE this request, so an
  * interrupted/lost response is recovered by re-sending the exact same bearer —
@@ -564,7 +568,12 @@ export async function createBorgServerCube(
   origin: string,
   trustIdentity: string,
   parentCredential: string,
-  input: { projectRoot: string; name: string },
+  input: {
+    name: string;
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+    template: CubeTemplate;
+  },
   deps: {
     fetchImpl?: FetchLike;
     loadCredentialRecord?: typeof getServerCredentialRecord;
@@ -589,13 +598,16 @@ export async function createBorgServerCube(
     origin,
     trustIdentity,
     clientId: active.clientId,
-    projectRoot: input.projectRoot,
     name: input.name,
-    template: 'default',
+    workingRepoName: input.workingRepoName,
+    repository: input.repository,
+    template: input.template,
   });
   const request = decodeCreateCubeRequest({
     retry_key: pending.retryKey,
     name: pending.name,
+    working_repo_name: pending.workingRepoName,
+    repository: pending.repository,
     template: pending.template,
   });
 
@@ -623,7 +635,10 @@ export async function createBorgServerCube(
       clearTimeout(timeout);
     }
   }
-  if (!response) throw lastTransportError;
+  if (!response) {
+    void lastTransportError;
+    throw new CubeCreationOutcomeUnknownError();
+  }
   if (response.status === 401 || response.status === 403) {
     throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
   }
@@ -634,7 +649,7 @@ export async function createBorgServerCube(
     );
   }
   if (response.status === 409) {
-    throw new Error('Borg server cube creation retry state conflicted');
+    throw new CubeCreationConfirmationError('The Borg server rejected the repository cube operation identity.');
   }
   if (response.status !== 201) {
     throw new Error(`Borg server cube creation failed (HTTP ${response.status})`);
@@ -648,6 +663,12 @@ export async function createBorgServerCube(
     if (error instanceof Error && error.message.includes('response limit')) throw error;
     throw new Error('Borg server returned an invalid cube creation envelope');
   }
+  if (
+    decoded.payload.repository.kind !== pending.repository.kind ||
+    decoded.payload.repository.value !== pending.repository.value
+  ) {
+    throw new CubeCreationConfirmationError();
+  }
   await (deps.clearCubeCreation ?? clearPendingServerCubeCreation)(
     pending as PendingServerCubeCreationRecord,
   );
@@ -658,7 +679,12 @@ export async function createLocalBorgServerCube(
   origin: string,
   trustIdentity: string,
   parentCredential: string,
-  input: { projectRoot: string; name: string },
+  input: {
+    name: string;
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+    template: CubeTemplate;
+  },
   deps: { loadTrust?: typeof loadBorgServerTrust } = {},
 ): Promise<CreateCubeResponse> {
   const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);

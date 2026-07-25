@@ -46,6 +46,12 @@ export declare class BorgServerUnreachableError extends Error {
         cause?: unknown;
     });
 }
+export declare class CubeCreationOutcomeUnknownError extends Error {
+    constructor();
+}
+export declare class CubeCreationConfirmationError extends Error {
+    constructor(message?: string);
+}
 /** Exact retired TTL-replacement state: two saved bearers and no safe implicit winner. */
 export declare class LegacySessionCredentialCollisionError extends Error {
     readonly origin: string;

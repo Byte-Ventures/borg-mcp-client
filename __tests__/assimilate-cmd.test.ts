@@ -36,6 +36,7 @@ beforeEach(() => {
 });
 
 function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
+  let repositoryAssociation: any = null;
   const deps: AssimilateDeps = {
     runSync: vi.fn((_cmd: string, args: string[]) =>
       args[0] === 'remote'
@@ -46,7 +47,8 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     cwd: vi.fn(() => '/work/myrepo'),
     stderr: vi.fn(),
     stdout: vi.fn(),
-    prompt: vi.fn(async () => '1'),
+    prompt: vi.fn(async (message: string) =>
+      message.startsWith('Cube name') ? '' : message.startsWith('Create cube?') ? 'y' : '1'),
     promptSecret: vi.fn(async () => 'i'.repeat(43)),
     isTTY: () => true,
     chdir: vi.fn(),
@@ -63,19 +65,47 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     probeSeat: vi.fn(async () => 'live'),
     setActiveCube: vi.fn(async () => {}),
     findProjectRoot: vi.fn(() => '/work/myrepo'),
+    resolveRepositoryContext: vi.fn(async () => ({
+      root: '/work/myrepo',
+      commonDir: '/work/myrepo/.git',
+      derivedName: 'myrepo',
+      publicRepository: { kind: 'origin', value: 'https://github.com/org/myrepo' },
+      publicRepositoryName: 'org/myrepo',
+    })),
+    getRepositoryIdentity: vi.fn(async (context) => context.publicRepository ?? {
+      kind: 'local', value: '11111111-1111-4111-8111-111111111111',
+    }),
+    getRepositoryAssociation: vi.fn(async () => repositoryAssociation),
+    saveRepositoryAssociation: vi.fn(async (_trust, _repository, association) => {
+      repositoryAssociation = association;
+    }),
     installProjectSessionHook: vi.fn(),
     defaultAuthority: { kind: 'server', apiUrl: 'https://server.test' },
     detectLocalServer: vi.fn(async () => null),
     connectServer: vi.fn(async () => ({
       token: 'server-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
+      serverCapabilities: ['create_cube'],
     })),
     resumeServerEnrollment: vi.fn(async () => null),
     listCubes: vi.fn(async () => []),
     getCube: vi.fn(async () => { throw new Error('not called in this scenario'); }),
-    createCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [
-      { id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false },
-    ]})),
+    createCube: vi.fn(async (_apiUrl, _token, params) => ({
+      response: {
+        result: 'created',
+        cube_id: 'cube-1',
+        name: params.name,
+        working_repo_name: params.workingRepoName,
+        repository: params.repository,
+        template: params.template,
+        human_seat_role_id: 'role-human',
+        default_worker_role_id: 'role-default',
+        access: 'manage',
+      },
+      cube: { id: 'cube-1', name: params.name, roles: [
+        { id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false },
+      ]},
+    })),
     assimilate: vi.fn(async () => ({
       cube_id: 'cube-1',
       drone_id: 'drone-x',
@@ -115,6 +145,43 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       },
     };
   }) as AssimilateDeps['assimilate'];
+  const connectServer = deps.connectServer;
+  deps.connectServer = vi.fn(async (...args: Parameters<AssimilateDeps['connectServer']>) => {
+    const connected = await connectServer(...args);
+    return {
+      ...connected,
+      serverCapabilities: connected.serverCapabilities ?? ['create_cube'],
+    };
+  });
+  const createCube = deps.createCube;
+  deps.createCube = vi.fn(async (...args: Parameters<AssimilateDeps['createCube']>) => {
+    const params = args[2];
+    let created: any;
+    if (!overrides.createCube && overrides.listCubes) {
+      const listed = await deps.listCubes(args[0], args[1], args[3]);
+      const existing = listed.find((cube) => cube.name === params.name);
+      created = existing && overrides.getCube
+        ? await deps.getCube(args[0], args[1], existing.id, args[3])
+        : await createCube(...args);
+    } else {
+      created = await createCube(...args) as any;
+    }
+    if (created?.response && created?.cube) return created;
+    return {
+      response: {
+        result: 'created',
+        cube_id: created.id,
+        name: created.name,
+        working_repo_name: params.workingRepoName,
+        repository: params.repository,
+        template: params.template,
+        human_seat_role_id: created.roles.find((role: any) => role.is_human_seat)?.id ?? 'role-human',
+        default_worker_role_id: created.roles.find((role: any) => role.is_default)?.id ?? created.roles[0]?.id,
+        access: 'manage',
+      },
+      cube: created,
+    };
+  }) as AssimilateDeps['createCube'];
   return deps;
 }
 
@@ -278,27 +345,25 @@ describe('runAssimilate: scaffolding', () => {
   });
 });
 
-// gh#653 B4: the listCubes/createCube/assimilate round-trips take 2–5s and
+// gh#653 B4: the createCube/assimilate round-trips take 2–5s and
 // were silent, so a user read the wait as a hang and Ctrl-C'd mid-run. Each
 // step now announces itself. (The dup-creation guard B4 originally proposed
 // was redundant — cubes have UNIQUE(owner_id,name) + a client pre-create
 // existence check — so B4 is progress-output only.)
 describe('runAssimilate: progress output (gh#653 B4)', () => {
-  it('first-drone path announces checking + creating + joining', async () => {
+  it('first-drone path announces guided creation + joining', async () => {
     const stderr = vi.fn();
     // default stub: listCubes [] → createCube path; cubeName derives to 'myrepo'
     const deps = makeStubDeps({ stderr });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(0);
     const text = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(text).toContain('Checking your cubes');
-    // create message has two forms: named ("Creating cube '<n>'…") when the
-    // cube name is derivable, else the bare fallback ("Creating your cube…")
-    expect(text).toMatch(/Creating (cube '|your cube)/);
+    expect(text).toContain('Create a cube for this repository');
+    expect(text).toContain('Creating cube...');
     expect(text).toContain('Joining cube');
   });
 
-  it('existing-cube path announces checking + joining but NOT creating', async () => {
+  it('existing-association path announces readback + joining but NOT creating', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
@@ -310,6 +375,9 @@ describe('runAssimilate: progress output (gh#653 B4)', () => {
           : { status: 0, stdout: '', stderr: '' }
       ),
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+      getRepositoryAssociation: vi.fn(async () => ({
+        cubeId: 'c', name: 'myrepo', workingRepoName: 'myrepo', template: 'software-dev',
+      })),
       getCube: vi.fn(async () => ({
         id: 'c', name: 'myrepo',
         roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }],
@@ -318,7 +386,7 @@ describe('runAssimilate: progress output (gh#653 B4)', () => {
     const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(0);
     const text = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(text).toContain('Checking your cubes');
+    expect(text).toContain('Cube already initialized.');
     expect(text).toContain('Joining cube');
     expect(text).not.toContain('Creating'); // existing cube → no create round-trip
   });
@@ -503,6 +571,11 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     );
     const deps = makeStubDeps({
       exec, stdout, runSync,
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/writers-room', commonDir: '/work/writers-room/.git', derivedName: 'writers-room',
+        publicRepository: { kind: 'origin', value: 'https://github.com/org/writers-room' },
+        publicRepositoryName: 'org/writers-room',
+      })),
       listCubes: vi.fn(async () => [{ id: 'c', name: 'writers-room' }]),
       getCube: vi.fn(async () => ({ id: 'c', name: 'writers-room', roles: [{ id: 'r', name: 'fact-checker', is_default: true, is_human_seat: false }] })),
     });
@@ -1859,10 +1932,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
 });
 
 describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
-  // A local (self-hosted) server supports its DEFAULT cube template only. The
-  // former cloud template-selection paths (arbitrary --template, --no-template,
-  // interactive template prompt) are not part of local server bootstrap.
-  it('creates the cube with the default template on the server bootstrap path', async () => {
+  it('creates the cube with the software-development template on the guided bootstrap path', async () => {
     const createCube = vi.fn(async () => ({
       id: 'c-new',
       name: 'myrepo',
@@ -1879,12 +1949,17 @@ describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
     expect(createCube).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ name: 'myrepo', template: 'default' }),
+      expect.objectContaining({
+        name: 'myrepo',
+        workingRepoName: 'myrepo',
+        repository: { kind: 'origin', value: 'https://github.com/org/myrepo' },
+        template: 'software-dev',
+      }),
       expect.any(String),
     );
   });
 
-  it('rejects a non-default template on the server bootstrap path', async () => {
+  it('rejects a template outside the guided creation contract', async () => {
     const stderr = vi.fn();
     const createCube = vi.fn();
     const runSync = vi.fn((cmd: string, args: string[]) =>
@@ -1893,27 +1968,26 @@ describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
     const deps = makeStubDeps({ stderr, createCube: createCube as any, runSync, listCubes: vi.fn(async () => []) });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true, template: 'research' } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('supports its default cube template only'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Unknown template 'research'"));
     expect(createCube).not.toHaveBeenCalled();
   });
 });
 
 describe('runAssimilate: step 4 (cube existence + detail)', () => {
-  it('skips create when cube exists and fetches detail', async () => {
+  it('uses the idempotent creation response instead of listing cubes by name', async () => {
     const listCubes = vi.fn(async () => [{ id: 'cube-existing', name: 'myrepo' }]);
-    const getCube = vi.fn(async () => ({
+    const createCube = vi.fn(async () => ({
       id: 'cube-existing',
       name: 'myrepo',
       roles: [{ id: 'r-default', name: 'Drone', is_default: true, is_human_seat: false }],
     }));
-    const createCube = vi.fn();
     const runSync = vi.fn((cmd: string, args: string[]) =>
       args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
     );
-    const deps = makeStubDeps({ listCubes, getCube, createCube: createCube as any, runSync, getActiveCube: vi.fn(async () => null) });
+    const deps = makeStubDeps({ listCubes, createCube, runSync, getActiveCube: vi.fn(async () => null) });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(getCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'cube-existing', expect.any(String));
-    expect(createCube).not.toHaveBeenCalled();
+    expect(createCube).toHaveBeenCalledOnce();
+    expect(listCubes).not.toHaveBeenCalled();
   });
 });
 
@@ -2313,7 +2387,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     const prompt = vi.fn();
     const createCube = vi.fn(async () => ({ id: 'c', name: 'override', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
     const deps = makeStubDeps({ prompt, createCube });
-    await runAssimilate({ role: undefined, flags: { server: 'localhost:8787', cubeName: 'override' } }, deps);
+    await runAssimilate({ role: undefined, flags: { server: 'localhost:8787', cubeName: 'override', yes: true } }, deps);
     expect(createCube).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
@@ -2330,7 +2404,7 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
       role: undefined,
       flags: { server: 'localhost:8787', enroll: true, cubeName: '../escape' },
     }, deps)).resolves.toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Invalid cube name for https://localhost:8787'));
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Invalid cube name.'));
     expect(connectServer).not.toHaveBeenCalled();
     expect(deps.promptSecret).not.toHaveBeenCalled();
   });
@@ -2343,7 +2417,14 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
       return { status: 0, stdout: '', stderr: '' };
     });
     const createCube = vi.fn(async () => ({ id: 'c', name: 'cool-repo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
-    const deps = makeStubDeps({ runSync, createCube });
+    const deps = makeStubDeps({
+      runSync, createCube,
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/cool-repo', commonDir: '/work/cool-repo/.git', derivedName: 'cool-repo',
+        publicRepository: { kind: 'origin', value: 'https://github.com/Org/cool-repo' },
+        publicRepositoryName: 'Org/cool-repo',
+      })),
+    });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'cool-repo' }), expect.any(String));
   });
@@ -2352,26 +2433,38 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     const runSync = vi.fn(() => ({ status: 1, stdout: '', stderr: 'fatal: No such remote' }));
     const prompt = vi.fn();
     const createCube = vi.fn(async () => ({ id: 'c', name: 'my-repo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
-    const deps = makeStubDeps({ runSync, prompt, createCube, cwd: () => '/work/My_Repo', findProjectRoot: () => '/work/My_Repo' });
+    const deps = makeStubDeps({
+      runSync, prompt, createCube, cwd: () => '/work/My_Repo', findProjectRoot: () => '/work/My_Repo',
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/My_Repo', commonDir: '/work/My_Repo/.git', derivedName: 'my-repo',
+        publicRepository: null, publicRepositoryName: null,
+      })),
+    });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'my-repo' }), expect.any(String));
     expect(prompt).not.toHaveBeenCalled();
   });
 
-  it('confirms the repository basename interactively when no origin exists', async () => {
+  it('uses the editable guided name for a no-origin repository', async () => {
     const runSync = vi.fn(() => ({ status: 1, stdout: '', stderr: 'fatal: No such remote' }));
-    const prompt = vi.fn(async () => 'yes');
+    const prompt = vi.fn()
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('y');
     const connectServer = vi.fn(async () => ({
       token: 'server-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
     }));
     const createCube = vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
-    const deps = makeStubDeps({ runSync, prompt, connectServer, createCube });
+    const deps = makeStubDeps({
+      runSync, prompt, connectServer, createCube,
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/myrepo', commonDir: '/work/myrepo/.git', derivedName: 'myrepo',
+        publicRepository: null, publicRepositoryName: null,
+      })),
+    });
     await expect(runAssimilate({ role: undefined, flags: { server: 'localhost:8787' } }, deps)).resolves.toBe(0);
-    expect(prompt).toHaveBeenCalledWith(
-      "No usable origin remote was found. Use directory name 'myrepo' as the cube name? [Y/n]: ",
-    );
-    expect(prompt).toHaveBeenCalledBefore(connectServer);
+    expect(prompt).toHaveBeenCalledWith('Cube name [myrepo]: ');
     expect(createCube).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
@@ -2380,15 +2473,26 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
     );
   });
 
-  it('does not enroll when the user declines a no-origin basename', async () => {
+  it('does not create when the user declines the guided confirmation', async () => {
     const runSync = vi.fn(() => ({ status: 1, stdout: '', stderr: 'fatal: No such remote' }));
-    const prompt = vi.fn(async () => 'no');
-    const connectServer = vi.fn();
-    const deps = makeStubDeps({ runSync, prompt, connectServer });
-    await expect(runAssimilate({ role: undefined, flags: { server: 'localhost:8787', enroll: true } }, deps)).resolves.toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Cube creation for https://localhost:8787 was cancelled'));
-    expect(connectServer).not.toHaveBeenCalled();
-    expect(deps.promptSecret).not.toHaveBeenCalled();
+    const prompt = vi.fn()
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('n');
+    const connectServer = vi.fn(async () => ({
+      token: 'server-token', trustIdentity: SERVER_TRUST_IDENTITY, serverCapabilities: ['create_cube'],
+    }));
+    const createCube = vi.fn();
+    const deps = makeStubDeps({
+      runSync, prompt, connectServer, createCube,
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/myrepo', commonDir: '/work/myrepo/.git', derivedName: 'myrepo',
+        publicRepository: null, publicRepositoryName: null,
+      })),
+    });
+    await expect(runAssimilate({ role: undefined, flags: { server: 'localhost:8787', enroll: true } }, deps)).resolves.toBe(0);
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Cube creation cancelled.'));
+    expect(createCube).not.toHaveBeenCalled();
   });
 
   it('requires --cube-name or --yes for a non-interactive no-origin repository', async () => {
@@ -2408,7 +2512,10 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
       return { status: 1, stdout: '', stderr: 'fatal: No such remote' };
     });
     const createCube = vi.fn();
-    const deps = makeStubDeps({ runSync, createCube, cwd: () => '/work/repo.git', findProjectRoot: () => '/work/repo.git' });
+    const deps = makeStubDeps({
+      runSync, createCube, cwd: () => '/work/repo.git', findProjectRoot: () => '/work/repo.git',
+      resolveRepositoryContext: vi.fn(async () => { throw new Error('BARE_REPOSITORY'); }),
+    });
     await expect(runAssimilate({ role: undefined, flags: { yes: true } }, deps)).resolves.toBe(1);
     expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('requires a non-bare repository worktree'));
     expect(createCube).not.toHaveBeenCalled();
@@ -2438,7 +2545,7 @@ describe('runAssimilate: BUG-1 — UX-F4 stderr false positive', () => {
     expect(stderrCalls).not.toContain("couldn't parse git remote");
   });
 
-  it('emits a basename-fallback nudge when the origin remote is unparseable', async () => {
+  it('uses the local repository identity when the origin remote is unparseable', async () => {
     const stderr = vi.fn();
     const runSync = vi.fn((cmd: string, args: string[]) =>
       args[0] === 'remote' ? { status: 0, stdout: 'not-a-url', stderr: '' } : { status: 0, stdout: '', stderr: '' }
@@ -2448,10 +2555,14 @@ describe('runAssimilate: BUG-1 — UX-F4 stderr false positive', () => {
       stderr, runSync, createCube,
       cwd: () => '/work/somerepo',
       findProjectRoot: () => '/work/somerepo',
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/somerepo', commonDir: '/work/somerepo/.git', derivedName: 'somerepo',
+        publicRepository: null, publicRepositoryName: null,
+      })),
     });
     await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     const stderrCalls = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(stderrCalls).toContain("Could not parse the origin remote; using directory name 'somerepo'");
+    expect(stderrCalls).not.toContain('not-a-url');
     expect(createCube).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ name: 'somerepo' }), expect.any(String));
   });
 });
@@ -2738,6 +2849,7 @@ describe('runAssimilate: #1015 authority selection', () => {
       return {
         token: 'resumed-server-token',
         trustIdentity: SERVER_TRUST_IDENTITY,
+        serverCapabilities: ['create_cube'],
       };
     });
     const deps = makeStubDeps({
@@ -2760,9 +2872,10 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(deps.stderr).toHaveBeenCalledWith(
       'Resuming the pending enrollment for `https://localhost:8787`; do not enter another invitation.\n',
     );
-    expect(deps.listCubes).toHaveBeenCalledWith(
+    expect(deps.createCube).toHaveBeenCalledWith(
       'https://localhost:8787',
       'resumed-server-token',
+      expect.objectContaining({ name: 'myrepo', template: 'software-dev' }),
       SERVER_TRUST_IDENTITY,
     );
   });
@@ -2943,6 +3056,116 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(output).not.toMatch(/invitation|connectivity|borgmcp\.ai/i);
   });
 
+  it('uses an ordinary client repository association without listing by name or prompting', async () => {
+    const prompt = vi.fn();
+    const listCubes = vi.fn();
+    const deps = makeStubDeps({
+      prompt,
+      listCubes,
+      connectServer: vi.fn(async () => ({
+        token: 'ordinary-token', trustIdentity: SERVER_TRUST_IDENTITY, serverCapabilities: [],
+      })),
+      getRepositoryAssociation: vi.fn(async () => ({
+        cubeId: 'cube-associated', name: 'associated', workingRepoName: 'myrepo', template: 'starter',
+      })),
+      getCube: vi.fn(async () => ({
+        id: 'cube-associated', name: 'associated',
+        roles: [{ id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false }],
+      })),
+    });
+
+    await expect(runAssimilate({ role: undefined, flags: { server: 'localhost:8787' } }, deps)).resolves.toBe(0);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(listCubes).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: 'borg assimilate', mode: undefined },
+    { label: 'borg server cube init', mode: 'cube-init' as const },
+  ])('does not associate unassociated repo B with active repo A through $label', async ({ mode }) => {
+    const repositoryB = { kind: 'origin' as const, value: 'https://github.com/org/repo-b' };
+    const getRepositoryAssociation = vi.fn(async () => null);
+    const saveRepositoryAssociation = vi.fn();
+    const getCube = vi.fn();
+    const createCube = vi.fn(async () => {
+      throw new BorgServerError('CREATE_CUBE_DENIED', 'stop after repository resolution');
+    });
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({
+        cubeId: 'cube-a',
+        droneId: 'drone-a',
+        name: 'repo-a',
+        droneLabel: 'builder-a',
+        apiUrl: 'https://localhost:8787',
+        serverTrustIdentity: SERVER_TRUST_IDENTITY,
+        localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+        roleName: 'Drone',
+      })),
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/repo-b',
+        commonDir: '/work/repo-b/.git',
+        derivedName: 'repo-b',
+        publicRepository: repositoryB,
+        publicRepositoryName: 'org/repo-b',
+      })),
+      getRepositoryIdentity: vi.fn(async () => repositoryB),
+      getRepositoryAssociation,
+      saveRepositoryAssociation,
+      getCube,
+      createCube,
+    });
+
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true },
+      ...(mode ? { mode } : {}),
+    }, deps)).resolves.toBe(1);
+
+    expect(getRepositoryAssociation).toHaveBeenCalledWith(SERVER_TRUST_IDENTITY, repositoryB);
+    expect(createCube).toHaveBeenCalledWith(
+      'https://localhost:8787',
+      'server-token',
+      expect.objectContaining({ repository: repositoryB, name: 'repo-b' }),
+      SERVER_TRUST_IDENTITY,
+    );
+    expect(getCube).not.toHaveBeenCalled();
+    expect(saveRepositoryAssociation).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when an ordinary client has ambiguous same-name grants', async () => {
+    const assimilate = vi.fn();
+    const deps = makeStubDeps({
+      assimilate: assimilate as any,
+      connectServer: vi.fn(async () => ({
+        token: 'ordinary-token', trustIdentity: SERVER_TRUST_IDENTITY, serverCapabilities: [],
+      })),
+      listCubes: vi.fn(async () => [
+        { id: 'cube-a', name: 'myrepo' },
+        { id: 'cube-b', name: 'myrepo' },
+      ]),
+    });
+
+    await expect(runAssimilate({ role: undefined, flags: { server: 'localhost:8787', yes: true } }, deps)).resolves.toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('More than one accessible cube'));
+    expect(assimilate).not.toHaveBeenCalled();
+  });
+
+  it('does not claim nothing changed or ambiguous when association persistence fails after creation', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      saveRepositoryAssociation: vi.fn(async () => { throw new Error('disk full'); }),
+    });
+
+    await expect(runAssimilate({ role: undefined, flags: { yes: true } }, deps)).resolves.toBe(1);
+    const output = stderr.mock.calls.map(([text]) => String(text)).join('');
+    expect(output).toContain('The repository cube was confirmed');
+    expect(output).toContain('No drone was created');
+    expect(output).not.toContain('may already exist');
+    expect(output).not.toContain('Nothing was changed');
+    expect(deps.assimilate).not.toHaveBeenCalled();
+  });
+
   it('redacts token-shaped and terminal-control data from generic server failures', async () => {
     const stderr = vi.fn();
     const secret = 's'.repeat(43);
@@ -3092,14 +3315,18 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(0);
 
-    expect(prompt).toHaveBeenCalledTimes(1); // authority; local server owns its fixed template
+    expect(prompt).toHaveBeenCalledTimes(4); // authority, name, template, confirmation
     expect(String(prompt.mock.calls[0][0])).toContain('Local Borg server detected');
     expect(connectServer).toHaveBeenCalledWith('https://localhost:8787');
     expect(deps.promptSecret).not.toHaveBeenCalled();
     expect(deps.createCube).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
-      expect.objectContaining({ template: 'default', projectRoot: '/work/myrepo' }),
+      expect.objectContaining({
+        template: 'software-dev',
+        workingRepoName: 'myrepo',
+        repository: { kind: 'origin', value: 'https://github.com/org/myrepo' },
+      }),
       SERVER_TRUST_IDENTITY,
     );
   });
@@ -3145,7 +3372,9 @@ describe('runAssimilate: #1015 authority selection', () => {
         token: 'local-token',
         trustIdentity: SERVER_TRUST_IDENTITY,
       })),
-      listCubes: vi.fn(async () => { throw new Error('HTTP 401: invalid server credential'); }),
+      createCube: vi.fn(async () => {
+        throw new BorgServerError('CREDENTIAL_REJECTED', 'invalid server credential');
+      }),
     });
 
     expect(await runAssimilate({ role: undefined, flags: { server: 'localhost:8787' } }, deps)).toBe(1);
@@ -3182,13 +3411,17 @@ describe('runAssimilate: #1015 authority selection', () => {
       token: 'local-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
     }));
-    const listCubes = vi.fn(async () => []);
+    const createCube = vi.fn(async () => ({
+      id: 'cube-1', name: 'myrepo',
+      roles: [{ id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false }],
+    }));
     const detectLocalServer = vi.fn(async () => 'https://localhost:8787');
-    const prompt = vi.fn(async () => 'Y');
+    const answers = ['Y', '', '', ''];
+    const prompt = vi.fn(async () => answers.shift() ?? '');
     const stderr = vi.fn();
     const deps = makeStubDeps({
       connectServer,
-      listCubes,
+      createCube,
       detectLocalServer,
       prompt,
       stderr,
@@ -3203,7 +3436,7 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(detectLocalServer).toHaveBeenCalled();
     expect(connectServer).toHaveBeenCalled();
-    expect(listCubes).toHaveBeenCalled();
+    expect(createCube).toHaveBeenCalled();
   });
 });
 

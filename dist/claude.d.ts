@@ -16,5 +16,7 @@
  *                         lifecycle states (see sync.ts, gh#33)
  *   borg server <cmd>   → Forward a lifecycle command to borg-mcp-server
  */
-export {};
+import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
+export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
+export declare function runAssimilateEntry(args: readonly string[], buildDeps?: AssimilateDepsBuilder): Promise<number>;
 //# sourceMappingURL=claude.d.ts.map

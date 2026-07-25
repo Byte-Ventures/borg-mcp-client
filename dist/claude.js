@@ -18,8 +18,10 @@
  */
 import { spawn } from 'child_process';
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
 import { findProjectRoot, getActiveCube, inboxPathForDrone, setCodexWakeTarget, pruneDeadCodexWakeTargets } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
@@ -54,6 +56,15 @@ import { installBorgPlugin } from './opencode-plugin.js';
 import { connectOpenCodeDrone, computeOpenCodePort, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { runEarlyServerFacade } from './server-facade.js';
+export async function runAssimilateEntry(args, buildDeps = buildDefaultAssimilateDeps) {
+    const parsed = parseAssimilateArgs([...args]);
+    if (!parsed.ok) {
+        process.stderr.write(chalk.red(`${consolePrefix()}◼ borg assimilate: ${parsed.error}\n`));
+        process.stderr.write(`Run \`borg --help\` for usage.\n`);
+        return 1;
+    }
+    return runAssimilate({ role: parsed.role, flags: parsed.flags }, buildDeps());
+}
 async function main() {
     const serverExitCode = await runEarlyServerFacade(process.argv);
     if (serverExitCode !== null)
@@ -96,14 +107,7 @@ async function main() {
             process.stdout.write(assimilateHelpText(getPackageVersion()));
             process.exit(0);
         }
-        const parsed = parseAssimilateArgs(process.argv.slice(3));
-        if (!parsed.ok) {
-            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg assimilate: ${parsed.error}\n`));
-            process.stderr.write(`Run \`borg --help\` for usage.\n`);
-            process.exit(1);
-        }
-        const deps = buildDefaultAssimilateDeps();
-        const code = await runAssimilate({ role: parsed.role, flags: parsed.flags }, deps);
+        const code = await runAssimilateEntry(process.argv.slice(3));
         process.exit(code);
     }
     if (process.argv[2] === 'reset-local-seat') {
@@ -485,8 +489,18 @@ function ensureDetectedCliConfigured() {
         }
     }
 }
-main().catch((error) => {
-    console.error(`${consolePrefix()}${chalk.red(`\n◼ Error: ${error.message}\n`)}`);
-    process.exit(1);
-});
+function isEntryInvocation() {
+    try {
+        return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+    }
+    catch {
+        return false;
+    }
+}
+if (isEntryInvocation()) {
+    main().catch((error) => {
+        console.error(`${consolePrefix()}${chalk.red(`\n◼ Error: ${error.message}\n`)}`);
+        process.exit(1);
+    });
+}
 //# sourceMappingURL=claude.js.map

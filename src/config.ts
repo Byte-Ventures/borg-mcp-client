@@ -7,7 +7,7 @@
  * read-compare-write shared by client enrollment and same-machine server setup.
  */
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import type { ServerCapability } from 'borgmcp-shared/protocol';
+import type { CreateCubeRepository, CubeTemplate, ServerCapability } from 'borgmcp-shared/protocol';
 import { withStoreLock } from './seat-store.js';
 import {
   makeFileBackend,
@@ -17,7 +17,7 @@ import { BORG_USER_ROOT, SERVER_CREDENTIALS_FILE } from './credential-paths.js';
 
 const SERVER_CREDENTIAL_RECORD_VERSION = 2 as const;
 const SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 1 as const;
-const SERVER_CUBE_RETRY_RECORD_VERSION = 1 as const;
+const SERVER_CUBE_RETRY_RECORD_VERSION = 2 as const;
 // The 0600 credential store (Queen rescope: replaces the OS keychain). A single
 // file holds every parent credential/enrollment record; a single flock
 // serializes every mutator + observer that must (SR-seven #4).
@@ -57,7 +57,9 @@ export interface PendingServerCubeCreationRecord {
   repositoryBinding: string;
   retryKey: string;
   name: string;
-  template: 'default';
+  workingRepoName: string;
+  repository: CreateCubeRepository;
+  template: CubeTemplate;
 }
 
 /**
@@ -510,21 +512,29 @@ export async function getOrCreatePendingServerCubeCreation(
     origin: string;
     trustIdentity: string;
     clientId: string;
-    projectRoot: string;
     name: string;
-    template: 'default';
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+    template: CubeTemplate;
   },
 ): Promise<PendingServerCubeCreationRecord> {
   validateServerCredentialBinding(input.origin, input.trustIdentity);
   validateUuid(input.clientId, 'client identity');
-  if (input.projectRoot.length < 1 || input.projectRoot.length > 4096 || /[\u0000-\u001f\u007f]/.test(input.projectRoot)) {
+  if (
+    (input.repository.kind !== 'origin' && input.repository.kind !== 'local') ||
+    typeof input.repository.value !== 'string' || input.repository.value.length < 1
+  ) {
     throw new Error('invalid Borg server repository binding');
   }
   if (Buffer.byteLength(input.name, 'utf8') < 1 || Buffer.byteLength(input.name, 'utf8') > 120 ||
       !/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(input.name)) {
     throw new Error('invalid Borg server cube name');
   }
-  const repositoryBinding = createHash('sha256').update(input.projectRoot).digest('hex');
+  const repositoryBinding = createHash('sha256')
+    .update(input.repository.kind)
+    .update('\0')
+    .update(input.repository.value)
+    .digest('hex');
   const backend = await getServerCredentialBackend();
   const account = serverCubeRetryAccount(
     input.origin,
@@ -548,6 +558,7 @@ export async function getOrCreatePendingServerCubeCreation(
           record.clientId !== input.clientId ||
           record.repositoryBinding !== repositoryBinding ||
           record.name !== input.name ||
+          record.workingRepoName !== input.workingRepoName ||
           record.template !== input.template ||
           typeof record.retryKey !== 'string' || !UUID_RE.test(record.retryKey)
         ) {
@@ -560,6 +571,8 @@ export async function getOrCreatePendingServerCubeCreation(
           repositoryBinding,
           retryKey: record.retryKey,
           name: input.name,
+          workingRepoName: input.workingRepoName,
+          repository: input.repository,
           template: input.template,
         };
       } catch {
@@ -573,12 +586,21 @@ export async function getOrCreatePendingServerCubeCreation(
       repositoryBinding,
       retryKey: randomUUID(),
       name: input.name,
+      workingRepoName: input.workingRepoName,
+      repository: input.repository,
       template: input.template,
     };
     await backend.set(account, JSON.stringify({
       version: SERVER_CUBE_RETRY_RECORD_VERSION,
       state: 'pending',
-      ...record,
+      origin: record.origin,
+      trustIdentity: record.trustIdentity,
+      clientId: record.clientId,
+      repositoryBinding: record.repositoryBinding,
+      retryKey: record.retryKey,
+      name: record.name,
+      workingRepoName: record.workingRepoName,
+      template: record.template,
     }));
     return record;
   });

@@ -181,9 +181,10 @@ describe('self-hosted server credential storage', () => {
       origin,
       trustIdentity,
       clientId: '11111111-1111-4111-8111-111111111111',
-      projectRoot: '/work/project-concurrent',
       name: 'project-concurrent',
-      template: 'default' as const,
+      workingRepoName: 'project-concurrent',
+      repository: { kind: 'local' as const, value: '22222222-2222-4222-8222-222222222222' },
+      template: 'software-dev' as const,
     };
     const creations = await Promise.all(Array.from({ length: 16 }, () =>
       getOrCreatePendingServerCubeCreation(cubeInput)));
@@ -200,31 +201,30 @@ describe('self-hosted server credential storage', () => {
       trustIdentity,
       clientId: '11111111-1111-4111-8111-111111111111',
       name: 'project-one',
-      template: 'default' as const,
+      workingRepoName: 'project-one',
+      repository: { kind: 'local' as const, value: '22222222-2222-4222-8222-222222222222' },
+      template: 'software-dev' as const,
     };
     const first = await getOrCreatePendingServerCubeCreation({
       ...binding,
-      projectRoot: '/work/project-one',
     });
     await expect(getOrCreatePendingServerCubeCreation({
       ...binding,
-      projectRoot: '/work/project-one',
     })).resolves.toEqual(first);
     const second = await getOrCreatePendingServerCubeCreation({
       ...binding,
-      projectRoot: '/work/project-two',
       name: 'project-two',
+      workingRepoName: 'project-two',
+      repository: { kind: 'local', value: '33333333-3333-4333-8333-333333333333' },
     });
     expect(second.retryKey).not.toBe(first.retryKey);
     await expect(getOrCreatePendingServerCubeCreation({
       ...binding,
-      projectRoot: '/work/project-one',
       name: 'changed-name',
     })).rejects.toThrow(/does not match/i);
     await clearPendingServerCubeCreation(first);
     const replacement = await getOrCreatePendingServerCubeCreation({
       ...binding,
-      projectRoot: '/work/project-one',
     });
     expect(replacement.retryKey).not.toBe(first.retryKey);
   });

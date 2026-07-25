@@ -18,13 +18,13 @@ import {
   verifyManifest,
   verifyReleaseReadiness,
 } from '../scripts/verify-release-readiness.mjs';
-import { smokePackedClient } from '../scripts/smoke-packed-client.mjs';
+import { CUBE_INIT_HELP_TEXT, smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const CLIENT_VERSION = '2.0.11';
-const SHARED_VERSION = '0.6.2';
-const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.6.2.tgz';
-const SHARED_INTEGRITY = 'sha512-mgZwg+5xVdJCxZ5j/YB8KEI8Fm2WCKYiQIKwE4OASH4/tbNO+8Pdt/w7VCU2HQ/ahA/nzF5CrFAQHHpyblS6xg==';
+const SHARED_VERSION = '0.6.3';
+const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.6.3.tgz';
+const SHARED_INTEGRITY = 'sha512-9osP68zH3a2IbyZr4BHiiz9SF+F4kqqxkwUQiun0GXUzu8Vw/+JorCG8OnyRFm8KpXNZ2Yh3KQxqcRD583l1NA==';
 
 async function validPackage(directory) {
   const packageRoot = join(directory, 'package');
@@ -100,6 +100,10 @@ lines.on('line', (line) => {
 `
       : `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
+if (process.argv.slice(2).join('\\0') === 'server\\0cube\\0init\\0--help') {
+  process.stdout.write(${JSON.stringify(CUBE_INIT_HELP_TEXT)});
+  process.exit(0);
+}
 const [command, ...args] = process.argv.slice(3);
 const child = spawn('borg-mcp-server', [command, ...args], { shell: false, stdio: 'inherit' });
 child.on('error', (error) => {
