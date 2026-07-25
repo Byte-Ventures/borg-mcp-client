@@ -28,21 +28,24 @@ const defaultOutputDeps = {
     writeStdout: (text) => process.stdout.write(text),
     writeStderr: (text) => process.stderr.write(text),
 };
-const defaultClientDeps = {
-    cubeInit: async (args) => {
-        const [{ parseAssimilateArgs }, { buildDefaultAssimilateDeps }, { runAssimilate }] = await Promise.all([
-            import('./parse-assimilate-args.js'),
-            import('./assimilate-deps.js'),
-            import('./assimilate-cmd.js'),
-        ]);
-        const parsed = parseAssimilateArgs([...args]);
-        if (!parsed.ok || parsed.role !== undefined) {
-            process.stderr.write(`${parsed.ok ? 'borg server cube init does not accept a role' : parsed.error}\n`);
-            return 1;
-        }
-        return runAssimilate({ role: undefined, flags: parsed.flags, mode: 'cube-init' }, buildDefaultAssimilateDeps());
-    },
-};
+export function buildDefaultServerFacadeClientDeps(buildDeps) {
+    return {
+        cubeInit: async (args) => {
+            const [{ parseAssimilateArgs }, { buildDefaultAssimilateDeps }, { runAssimilate }] = await Promise.all([
+                import('./parse-assimilate-args.js'),
+                import('./assimilate-deps.js'),
+                import('./assimilate-cmd.js'),
+            ]);
+            const parsed = parseAssimilateArgs([...args]);
+            if (!parsed.ok || parsed.role !== undefined) {
+                process.stderr.write(`${parsed.ok ? 'borg server cube init does not accept a role' : parsed.error}\n`);
+                return 1;
+            }
+            return runAssimilate({ role: undefined, flags: parsed.flags, mode: 'cube-init' }, (buildDeps ?? buildDefaultAssimilateDeps)());
+        },
+    };
+}
+const defaultClientDeps = buildDefaultServerFacadeClientDeps();
 const MAX_RENDERED_COMMAND_CODE_POINTS = 80;
 function inertCommand(command) {
     const rendered = [];

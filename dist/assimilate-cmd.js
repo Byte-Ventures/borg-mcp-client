@@ -325,21 +325,6 @@ export async function runAssimilate(args, deps) {
     // Sprint 18: capture pre-chdir cwd for the post-exit shell-cd hint
     // (no chdir has happened yet; this is a stable starting point).
     const originalCwd = deps.cwd();
-    if (existing && existing.apiUrl === auth.apiUrl) {
-        try {
-            const repository = await deps.getRepositoryIdentity(repositoryContext);
-            const savedCube = await deps.getCube(auth.apiUrl, auth.token, existing.cubeId, auth.serverTrustIdentity);
-            await deps.saveRepositoryAssociation(auth.serverTrustIdentity, repository, {
-                cubeId: savedCube.id,
-                name: savedCube.name,
-                workingRepoName: repositoryContext.derivedName,
-                template: 'default',
-            });
-        }
-        catch (error) {
-            return reportServerFailure(deps, authority.apiUrl, error);
-        }
-    }
     let initialized;
     try {
         if (!auth.serverCapabilities.includes('create_cube') && !existing) {

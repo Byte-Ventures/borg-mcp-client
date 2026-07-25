@@ -57,6 +57,8 @@ export interface ServerFacadeClientDeps {
   cubeInit(args: readonly string[]): Promise<number>;
 }
 
+export type AssimilateDepsBuilder = typeof import('./assimilate-deps.js').buildDefaultAssimilateDeps;
+
 export type ServerFacadeProcessResult =
   | { kind: 'exited'; code: number }
   | { kind: 'signaled'; signal: NodeJS.Signals }
@@ -73,24 +75,30 @@ const defaultOutputDeps: ServerFacadeOutputDeps = {
   writeStderr: (text) => process.stderr.write(text),
 };
 
-const defaultClientDeps: ServerFacadeClientDeps = {
-  cubeInit: async (args) => {
-    const [{ parseAssimilateArgs }, { buildDefaultAssimilateDeps }, { runAssimilate }] = await Promise.all([
-      import('./parse-assimilate-args.js'),
-      import('./assimilate-deps.js'),
-      import('./assimilate-cmd.js'),
-    ]);
-    const parsed = parseAssimilateArgs([...args]);
-    if (!parsed.ok || parsed.role !== undefined) {
-      process.stderr.write(`${parsed.ok ? 'borg server cube init does not accept a role' : parsed.error}\n`);
-      return 1;
-    }
-    return runAssimilate(
-      { role: undefined, flags: parsed.flags, mode: 'cube-init' },
-      buildDefaultAssimilateDeps(),
-    );
-  },
-};
+export function buildDefaultServerFacadeClientDeps(
+  buildDeps?: AssimilateDepsBuilder,
+): ServerFacadeClientDeps {
+  return {
+    cubeInit: async (args) => {
+      const [{ parseAssimilateArgs }, { buildDefaultAssimilateDeps }, { runAssimilate }] = await Promise.all([
+        import('./parse-assimilate-args.js'),
+        import('./assimilate-deps.js'),
+        import('./assimilate-cmd.js'),
+      ]);
+      const parsed = parseAssimilateArgs([...args]);
+      if (!parsed.ok || parsed.role !== undefined) {
+        process.stderr.write(`${parsed.ok ? 'borg server cube init does not accept a role' : parsed.error}\n`);
+        return 1;
+      }
+      return runAssimilate(
+        { role: undefined, flags: parsed.flags, mode: 'cube-init' },
+        (buildDeps ?? buildDefaultAssimilateDeps)(),
+      );
+    },
+  };
+}
+
+const defaultClientDeps = buildDefaultServerFacadeClientDeps();
 
 const MAX_RENDERED_COMMAND_CODE_POINTS = 80;
 

@@ -9,15 +9,10 @@
  */
 import type { AssimilateDeps } from './assimilate-cmd.js';
 /**
- * Creates a prompt adapter that wraps the real readline interface but
- * exposes a controllable error-injection seam for integration tests.
- * When `onQuestion` is provided, it is called with the question message
- * before the readline interface is created. The test can then inject
- * an error by returning a non-null value or rejecting the returned
- * promise, which is thrown instead of reading from readline. This
- * proves the real adapter's error mapping (SIGINT → PromptInterruptedError)
- * without needing to send actual signals to the test process.
+ * Wraps the readline question operation with the production interruption
+ * mapping. Tests inject the question operation; production uses readline.
  */
-export declare function createTestablePromptAdapter(onQuestion?: (message: string) => unknown | Promise<unknown>): (message: string) => Promise<string>;
-export declare function buildDefaultAssimilateDeps(): AssimilateDeps;
+export type PromptQuestion = (message: string) => Promise<string>;
+export declare function createPromptAdapter(question?: PromptQuestion): (message: string) => Promise<string>;
+export declare function buildDefaultAssimilateDeps(question?: PromptQuestion): AssimilateDeps;
 //# sourceMappingURL=assimilate-deps.d.ts.map

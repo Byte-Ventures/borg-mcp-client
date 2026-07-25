@@ -3079,6 +3079,59 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(listCubes).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: 'borg assimilate', mode: undefined },
+    { label: 'borg server cube init', mode: 'cube-init' as const },
+  ])('does not associate unassociated repo B with active repo A through $label', async ({ mode }) => {
+    const repositoryB = { kind: 'origin' as const, value: 'https://github.com/org/repo-b' };
+    const getRepositoryAssociation = vi.fn(async () => null);
+    const saveRepositoryAssociation = vi.fn();
+    const getCube = vi.fn();
+    const createCube = vi.fn(async () => {
+      throw new BorgServerError('CREATE_CUBE_DENIED', 'stop after repository resolution');
+    });
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({
+        cubeId: 'cube-a',
+        droneId: 'drone-a',
+        name: 'repo-a',
+        droneLabel: 'builder-a',
+        apiUrl: 'https://localhost:8787',
+        serverTrustIdentity: SERVER_TRUST_IDENTITY,
+        localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+        roleName: 'Drone',
+      })),
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/repo-b',
+        commonDir: '/work/repo-b/.git',
+        derivedName: 'repo-b',
+        publicRepository: repositoryB,
+        publicRepositoryName: 'org/repo-b',
+      })),
+      getRepositoryIdentity: vi.fn(async () => repositoryB),
+      getRepositoryAssociation,
+      saveRepositoryAssociation,
+      getCube,
+      createCube,
+    });
+
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true },
+      ...(mode ? { mode } : {}),
+    }, deps)).resolves.toBe(1);
+
+    expect(getRepositoryAssociation).toHaveBeenCalledWith(SERVER_TRUST_IDENTITY, repositoryB);
+    expect(createCube).toHaveBeenCalledWith(
+      'https://localhost:8787',
+      'server-token',
+      expect.objectContaining({ repository: repositoryB, name: 'repo-b' }),
+      SERVER_TRUST_IDENTITY,
+    );
+    expect(getCube).not.toHaveBeenCalled();
+    expect(saveRepositoryAssociation).not.toHaveBeenCalled();
+  });
+
   it('fails closed when an ordinary client has ambiguous same-name grants', async () => {
     const assimilate = vi.fn();
     const deps = makeStubDeps({

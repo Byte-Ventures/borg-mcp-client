@@ -33,6 +33,7 @@ export interface ServerFacadeOutputDeps {
 export interface ServerFacadeClientDeps {
     cubeInit(args: readonly string[]): Promise<number>;
 }
+export type AssimilateDepsBuilder = typeof import('./assimilate-deps.js').buildDefaultAssimilateDeps;
 export type ServerFacadeProcessResult = {
     kind: 'exited';
     code: number;
@@ -43,6 +44,7 @@ export type ServerFacadeProcessResult = {
     kind: 'spawn-error';
     error: Error;
 };
+export declare function buildDefaultServerFacadeClientDeps(buildDeps?: AssimilateDepsBuilder): ServerFacadeClientDeps;
 export declare function unknownServerCommandText(command: string): string;
 export declare function missingServerExecutableText(command: ServerLifecycleCommand): string;
 export declare function serverCommandStartupFailureText(command: ServerLifecycleCommand): string;

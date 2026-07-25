@@ -1,12 +1,31 @@
-import { describe, it, expect, vi } from 'vitest';
-import { runAssimilate } from '../src/assimilate-cmd';
-import { createTestablePromptAdapter } from '../src/assimilate-deps';
-import type { AssimilateDeps } from '../src/assimilate-cmd';
+import { describe, expect, it, vi } from 'vitest';
+import type { AssimilateDeps } from '../src/assimilate-cmd.js';
+import { buildDefaultAssimilateDeps, type PromptQuestion } from '../src/assimilate-deps.js';
+import { runAssimilateEntry } from '../src/claude.js';
+import { BorgServerError } from '../src/server-errors.js';
+import {
+  buildDefaultServerFacadeClientDeps,
+  runEarlyServerFacade,
+  type ServerFacadeProcessDeps,
+} from '../src/server-facade.js';
 
 const SERVER_TRUST_IDENTITY = 'spki-sha256:test-server';
 
-function makeAssimilateDeps(stderr: ReturnType<typeof vi.fn>, prompt: AssimilateDeps['prompt']) {
-  return {
+function makeEntryDeps(question: PromptQuestion) {
+  const stderr = vi.fn();
+  const createCube = vi.fn();
+  const saveRepositoryAssociation = vi.fn();
+  const assimilate = vi.fn();
+  const finalizeServerSeat = vi.fn();
+  const setActiveCube = vi.fn();
+  const getRepositoryIdentity = vi.fn(async () => ({
+    kind: 'origin' as const,
+    value: 'https://github.com/org/repo',
+  }));
+  const getRepositoryAssociation = vi.fn(async () => null);
+  const productionPrompt = buildDefaultAssimilateDeps(question).prompt;
+
+  const deps = {
     runSync: vi.fn(),
     pathExists: vi.fn(),
     cwd: () => '/repo',
@@ -17,7 +36,7 @@ function makeAssimilateDeps(stderr: ReturnType<typeof vi.fn>, prompt: Assimilate
     exec: vi.fn(async () => 0),
     stderr,
     stdout: vi.fn(),
-    prompt,
+    prompt: productionPrompt,
     promptSecret: vi.fn(async () => ''),
     isTTY: () => true,
     getHostname: () => 'test-host',
@@ -28,14 +47,14 @@ function makeAssimilateDeps(stderr: ReturnType<typeof vi.fn>, prompt: Assimilate
     resolveRepositoryContext: vi.fn(async () => ({
       root: '/repo',
       commonDir: '/repo/.git',
-      derivedName: 'myrepo',
+      derivedName: 'repo',
       publicRepository: { kind: 'origin' as const, value: 'https://github.com/org/repo' },
       publicRepositoryName: 'org/repo',
     })),
-    getRepositoryIdentity: vi.fn(async () => ({ kind: 'origin' as const, value: 'https://github.com/org/repo' })),
-    getRepositoryAssociation: vi.fn(async () => null),
-    saveRepositoryAssociation: vi.fn(async () => {}),
-    detectLocalServer: vi.fn(async () => 'http://localhost:7091'),
+    getRepositoryIdentity,
+    getRepositoryAssociation,
+    saveRepositoryAssociation,
+    detectLocalServer: vi.fn(async () => 'https://localhost:7091'),
     connectServer: vi.fn(async () => ({
       token: 'test-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
@@ -43,307 +62,131 @@ function makeAssimilateDeps(stderr: ReturnType<typeof vi.fn>, prompt: Assimilate
     })),
     resumeServerEnrollment: vi.fn(async () => null),
     listCubes: vi.fn(async () => []),
-    getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [], drones: [] })),
-    createCube: vi.fn(async (params) => ({
-      response: {
-        result: 'created' as const,
-        cube_id: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826',
-        name: params.name,
-        working_repo_name: params.workingRepoName,
-        repository: params.repository,
-        template: params.template,
-        human_seat_role_id: 'role-1',
-        default_worker_role_id: 'role-2',
-        access: 'manage' as const,
-      },
-      cube: { id: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826', name: params.name, roles: [], drones: [] },
-    })),
-    assimilate: vi.fn(),
+    getCube: vi.fn(),
+    createCube,
+    assimilate,
     getInboxPath: vi.fn(() => '/tmp/inbox'),
     probeMcpReady: vi.fn(async () => true),
-    resolveCli: vi.fn(async () => 'claude' as any),
+    resolveCli: vi.fn(async () => 'claude' as const),
     prepareCodexRemoteLaunch: vi.fn(async () => ({ args: [], warning: null, env: {} })),
     setCodexWakeTarget: vi.fn(),
     findLoadedCodexThread: vi.fn(async () => null),
-    finalizeServerSeat: vi.fn(async () => ({ committed: true })),
+    finalizeServerSeat,
     readPersistedLocalSeat: vi.fn(async () => null),
     peekServerSessionRecord: vi.fn(async () => false),
     findIncompleteSiblingAttempt: vi.fn(async () => null),
-    probeSeat: vi.fn(async () => 'live' as any),
-    setActiveCube: vi.fn(),
+    probeSeat: vi.fn(async () => 'live' as const),
+    setActiveCube,
     resolveCliApprovals: vi.fn(async () => ({ codexArgs: [] })),
   } as unknown as AssimilateDeps;
+
+  return {
+    deps,
+    stderr,
+    createCube,
+    saveRepositoryAssociation,
+    assimilate,
+    finalizeServerSeat,
+    setActiveCube,
+    getRepositoryIdentity,
+    getRepositoryAssociation,
+  };
 }
 
-describe('real-adapter SIGINT integration through borg assimilate entry point', () => {
-  it('maps SIGINT to exit 130 with exact cancel copy (borg assimilate)', async () => {
-    const stderr = vi.fn();
-    const promptAdapter = createTestablePromptAdapter(async () => {
-      throw new Error('SIGINT');
-    });
-    const deps = makeAssimilateDeps(stderr, promptAdapter);
+const noServerProcess: ServerFacadeProcessDeps = {
+  spawn: vi.fn(() => { throw new Error('server process must not start'); }),
+  addSignalListener: vi.fn(),
+  removeSignalListener: vi.fn(),
+};
 
-    const exitCode = await runAssimilate({ role: undefined, flags: { server: 'localhost:8787' } }, deps);
+const entrypoints = [
+  {
+    entry: 'borg assimilate',
+    run: (deps: AssimilateDeps) => runAssimilateEntry(
+      ['--host', 'localhost:8787'],
+      () => deps,
+    ),
+  },
+  {
+    entry: 'borg server cube init',
+    run: (deps: AssimilateDeps) => runEarlyServerFacade(
+      ['node', 'borg', 'server', 'cube', 'init', '--host', 'localhost:8787'],
+      noServerProcess,
+      { writeStdout: vi.fn(), writeStderr: vi.fn() },
+      buildDefaultServerFacadeClientDeps(() => deps),
+    ),
+  },
+] as const;
 
-    expect(exitCode).toBe(130);
-    expect(stderr).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
-    expect(deps.createCube).not.toHaveBeenCalled();
-    expect(deps.assimilate).not.toHaveBeenCalled();
-    expect(deps.finalizeServerSeat).not.toHaveBeenCalled();
-    expect(deps.setActiveCube).not.toHaveBeenCalled();
-  });
+describe.each(entrypoints)('production prompt interruption through $entry', ({ run }) => {
+  it.each([
+    {
+      name: 'SIGINT',
+      error: new Error('SIGINT'),
+      code: 130,
+      copy: '\nCube creation cancelled. Nothing was changed.\n',
+    },
+    {
+      name: 'EOF',
+      error: new Error('EOF'),
+      code: 1,
+      copy: 'Input ended before cube creation. Nothing was changed.\n',
+    },
+  ])('$name returns $code and stops all continuation', async ({ error, code, copy }) => {
+    const state = makeEntryDeps(async () => { throw error; });
 
-  it('maps SIGINT during name prompt to exit 130 (borg assimilate)', async () => {
-    const stderr = vi.fn();
-    const promptAdapter = createTestablePromptAdapter(async () => {
-      throw new Error('SIGINT');
-    });
-    const deps = makeAssimilateDeps(stderr, promptAdapter);
+    await expect(run(state.deps)).resolves.toBe(code);
+    expect(state.stderr).toHaveBeenCalledWith(copy);
 
-    const exitCode = await runAssimilate({ role: undefined, flags: { server: 'localhost:8787' } }, deps);
-
-    expect(exitCode).toBe(130);
-    expect(stderr).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
-    expect(deps.createCube).not.toHaveBeenCalled();
-    expect(deps.assimilate).not.toHaveBeenCalled();
-  });
-
-  it('maps EOF to exit 1 with exact EOF copy (borg assimilate)', async () => {
-    const stderr = vi.fn();
-    const prompt = vi.fn(async () => {
-      throw new Error('EOF');
-    });
-    const deps = makeAssimilateDeps(stderr, prompt);
-
-    const exitCode = await runAssimilate({ role: undefined, flags: { server: 'localhost:8787' } }, deps);
-
-    expect(exitCode).toBe(1);
-    expect(stderr).toHaveBeenCalledWith('Input ended before cube creation. Nothing was changed.\n');
-    expect(deps.createCube).not.toHaveBeenCalled();
-    expect(deps.assimilate).not.toHaveBeenCalled();
-    expect(deps.finalizeServerSeat).not.toHaveBeenCalled();
-    expect(deps.setActiveCube).not.toHaveBeenCalled();
+    expect(state.getRepositoryIdentity).toHaveBeenCalledOnce();
+    expect(state.getRepositoryAssociation).toHaveBeenCalledOnce();
+    expect(state.createCube).not.toHaveBeenCalled();
+    expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
+    expect(state.assimilate).not.toHaveBeenCalled();
+    expect(state.finalizeServerSeat).not.toHaveBeenCalled();
+    expect(state.setActiveCube).not.toHaveBeenCalled();
   });
 });
 
-describe('real-adapter SIGINT integration through borg server cube init entry point', () => {
-  it('maps SIGINT to exit 130 with exact cancel copy (borg server cube init)', async () => {
-    const stderr = vi.fn();
-    const promptAdapter = createTestablePromptAdapter(async () => {
-      throw new Error('SIGINT');
-    });
-    const createCube = vi.fn();
-    const getAssociation = vi.fn(async () => null);
-    const saveAssociation = vi.fn();
-    const assimilateFn = vi.fn();
-    const finalizeServerSeatFn = vi.fn();
-    const setActiveCubeFn = vi.fn();
-
-    const { runEarlyServerFacade } = await import('../src/server-facade.js');
-    const { runAssimilate } = await import('../src/assimilate-cmd.js');
-
-    const client = {
-      cubeInit: async () => {
-        const deps = {
-          runSync: vi.fn(),
-          pathExists: vi.fn(),
-          cwd: () => '/repo',
-          chdir: vi.fn(),
-          homedir: () => '/home',
-          mkdirp: vi.fn(),
-          preparePrivateRoot: vi.fn(async () => {}),
-          exec: vi.fn(async () => 0),
-          stderr,
-          stdout: vi.fn(),
-          prompt: promptAdapter,
-          promptSecret: vi.fn(async () => ''),
-          isTTY: () => true,
-          getHostname: () => 'test-host',
-          setTerminalTitle: vi.fn(),
-          getActiveCube: vi.fn(async () => null),
-          hasPersistedActiveCube: vi.fn(async () => false),
-          findProjectRoot: vi.fn(() => '/repo'),
-          resolveRepositoryContext: vi.fn(async () => ({
-            root: '/repo',
-            commonDir: '/repo/.git',
-            derivedName: 'myrepo',
-            publicRepository: { kind: 'origin' as const, value: 'https://github.com/org/repo' },
-            publicRepositoryName: 'org/repo',
-          })),
-          getRepositoryIdentity: vi.fn(async () => ({ kind: 'origin' as const, value: 'https://github.com/org/repo' })),
-          getRepositoryAssociation: getAssociation,
-          saveRepositoryAssociation: saveAssociation,
-          detectLocalServer: vi.fn(async () => 'http://localhost:7091'),
-          connectServer: vi.fn(async () => ({
-            token: 'test-token',
-            trustIdentity: 'spki-sha256:test',
-            serverCapabilities: ['create_cube'],
-          })),
-          resumeServerEnrollment: vi.fn(async () => null),
-          listCubes: vi.fn(async () => []),
-          getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [], drones: [] })),
-          createCube: createCube,
-          assimilate: assimilateFn,
-          getInboxPath: vi.fn(() => '/tmp/inbox'),
-          probeMcpReady: vi.fn(async () => true),
-          resolveCli: vi.fn(async () => 'claude' as any),
-          prepareCodexRemoteLaunch: vi.fn(async () => ({ args: [], warning: null, env: {} })),
-          setCodexWakeTarget: vi.fn(),
-          findLoadedCodexThread: vi.fn(async () => null),
-          finalizeServerSeat: finalizeServerSeatFn,
-          readPersistedLocalSeat: vi.fn(async () => null),
-          peekServerSessionRecord: vi.fn(async () => false),
-          findIncompleteSiblingAttempt: vi.fn(async () => null),
-          probeSeat: vi.fn(async () => 'live' as any),
-          setActiveCube: setActiveCubeFn,
-          resolveCliApprovals: vi.fn(async () => ({ codexArgs: [] })),
-        } as unknown as ReturnType<typeof import('../src/assimilate-deps.js').buildDefaultAssimilateDeps>;
-
-        return runAssimilate(
-          { role: undefined, flags: { server: 'localhost:8787' }, mode: 'cube-init' },
-          deps,
-        );
-      },
-    };
-
-    const output = {
-      writeStdout: vi.fn(),
-      writeStderr: (text: string) => stderr(text),
-    };
-    const child = {
-      once: vi.fn(),
-      kill: vi.fn(() => true),
-    } as unknown as ReturnType<typeof import('../src/server-facade.js').runServerFacadeProcess> extends (...args: any[]) => Promise<infer R> ? any : never;
-
-    const processDeps = {
-      spawn: vi.fn(() => child),
-      addSignalListener: vi.fn(),
-      removeSignalListener: vi.fn(),
-    };
-
-    const exitCode = await runEarlyServerFacade(
-      ['node', 'borg', 'server', 'cube', 'init'],
-      processDeps,
-      output,
-      client,
+describe.each(entrypoints)('repository association through $entry', ({ run }) => {
+  it('does not associate unassociated repo B with active repo A', async () => {
+    const repositoryB = { kind: 'origin' as const, value: 'https://github.com/org/repo-b' };
+    const state = makeEntryDeps(async (message) =>
+      message.startsWith('Cube name') ? '' : message.startsWith('Create cube?') ? 'y' : '1');
+    state.deps.getActiveCube = vi.fn(async () => ({
+      cubeId: 'cube-a',
+      droneId: 'drone-a',
+      name: 'repo-a',
+      droneLabel: 'builder-a',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+      roleName: 'Drone',
+    }));
+    state.deps.resolveRepositoryContext = vi.fn(async () => ({
+      root: '/repo-b',
+      commonDir: '/repo-b/.git',
+      derivedName: 'repo-b',
+      publicRepository: repositoryB,
+      publicRepositoryName: 'org/repo-b',
+    }));
+    state.getRepositoryIdentity.mockResolvedValue(repositoryB);
+    state.createCube.mockRejectedValue(
+      new BorgServerError('CREATE_CUBE_DENIED', 'stop after repository resolution'),
     );
 
-    expect(exitCode).toBe(130);
-    expect(stderr).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
-    expect(createCube).not.toHaveBeenCalled();
-    expect(saveAssociation).not.toHaveBeenCalled();
-    expect(assimilateFn).not.toHaveBeenCalled();
-    expect(finalizeServerSeatFn).not.toHaveBeenCalled();
-    expect(setActiveCubeFn).not.toHaveBeenCalled();
-  });
+    await expect(run(state.deps)).resolves.toBe(1);
 
-  it('maps EOF to exit 1 with exact EOF copy (borg server cube init)', async () => {
-    const stderr = vi.fn();
-    const prompt = vi.fn(async () => {
-      throw new Error('EOF');
-    });
-    const createCube = vi.fn();
-    const getAssociation = vi.fn(async () => null);
-    const saveAssociation = vi.fn();
-    const assimilateFn = vi.fn();
-    const finalizeServerSeatFn = vi.fn();
-    const setActiveCubeFn = vi.fn();
-
-    const { runEarlyServerFacade } = await import('../src/server-facade.js');
-    const { runAssimilate } = await import('../src/assimilate-cmd.js');
-
-    const client = {
-      cubeInit: async () => {
-        const deps = {
-          runSync: vi.fn(),
-          pathExists: vi.fn(),
-          cwd: () => '/repo',
-          chdir: vi.fn(),
-          homedir: () => '/home',
-          mkdirp: vi.fn(),
-          preparePrivateRoot: vi.fn(async () => {}),
-          exec: vi.fn(async () => 0),
-          stderr,
-          stdout: vi.fn(),
-          prompt,
-          promptSecret: vi.fn(async () => ''),
-          isTTY: () => true,
-          getHostname: () => 'test-host',
-          setTerminalTitle: vi.fn(),
-          getActiveCube: vi.fn(async () => null),
-          hasPersistedActiveCube: vi.fn(async () => false),
-          findProjectRoot: vi.fn(() => '/repo'),
-          resolveRepositoryContext: vi.fn(async () => ({
-            root: '/repo',
-            commonDir: '/repo/.git',
-            derivedName: 'myrepo',
-            publicRepository: { kind: 'origin' as const, value: 'https://github.com/org/repo' },
-            publicRepositoryName: 'org/repo',
-          })),
-          getRepositoryIdentity: vi.fn(async () => ({ kind: 'origin' as const, value: 'https://github.com/org/repo' })),
-          getRepositoryAssociation: getAssociation,
-          saveRepositoryAssociation: saveAssociation,
-          detectLocalServer: vi.fn(async () => 'http://localhost:7091'),
-          connectServer: vi.fn(async () => ({
-            token: 'test-token',
-            trustIdentity: 'spki-sha256:test',
-            serverCapabilities: ['create_cube'],
-          })),
-          resumeServerEnrollment: vi.fn(async () => null),
-          listCubes: vi.fn(async () => []),
-          getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [], drones: [] })),
-          createCube: createCube,
-          assimilate: assimilateFn,
-          getInboxPath: vi.fn(() => '/tmp/inbox'),
-          probeMcpReady: vi.fn(async () => true),
-          resolveCli: vi.fn(async () => 'claude' as any),
-          prepareCodexRemoteLaunch: vi.fn(async () => ({ args: [], warning: null, env: {} })),
-          setCodexWakeTarget: vi.fn(),
-          findLoadedCodexThread: vi.fn(async () => null),
-          finalizeServerSeat: finalizeServerSeatFn,
-          readPersistedLocalSeat: vi.fn(async () => null),
-          peekServerSessionRecord: vi.fn(async () => false),
-          findIncompleteSiblingAttempt: vi.fn(async () => null),
-          probeSeat: vi.fn(async () => 'live' as any),
-          setActiveCube: setActiveCubeFn,
-          resolveCliApprovals: vi.fn(async () => ({ codexArgs: [] })),
-        } as unknown as ReturnType<typeof import('../src/assimilate-deps.js').buildDefaultAssimilateDeps>;
-
-        return runAssimilate(
-          { role: undefined, flags: { server: 'localhost:8787' }, mode: 'cube-init' },
-          deps,
-        );
-      },
-    };
-
-    const output = {
-      writeStdout: vi.fn(),
-      writeStderr: (text: string) => stderr(text),
-    };
-    const child = {
-      once: vi.fn(),
-      kill: vi.fn(() => true),
-    } as unknown as ReturnType<typeof import('../src/server-facade.js').runServerFacadeProcess> extends (...args: any[]) => Promise<infer R> ? any : never;
-
-    const processDeps = {
-      spawn: vi.fn(() => child),
-      addSignalListener: vi.fn(),
-      removeSignalListener: vi.fn(),
-    };
-
-    const exitCode = await runEarlyServerFacade(
-      ['node', 'borg', 'server', 'cube', 'init'],
-      processDeps,
-      output,
-      client,
+    expect(state.getRepositoryAssociation).toHaveBeenCalledWith(
+      SERVER_TRUST_IDENTITY,
+      repositoryB,
     );
-
-    expect(exitCode).toBe(1);
-    expect(stderr).toHaveBeenCalledWith('Input ended before cube creation. Nothing was changed.\n');
-    expect(createCube).not.toHaveBeenCalled();
-    expect(saveAssociation).not.toHaveBeenCalled();
-    expect(assimilateFn).not.toHaveBeenCalled();
-    expect(finalizeServerSeatFn).not.toHaveBeenCalled();
-    expect(setActiveCubeFn).not.toHaveBeenCalled();
+    expect(state.createCube).toHaveBeenCalledWith(
+      'https://localhost:8787',
+      'test-token',
+      expect.objectContaining({ repository: repositoryB, name: 'repo-b' }),
+      SERVER_TRUST_IDENTITY,
+    );
+    expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
   });
 });

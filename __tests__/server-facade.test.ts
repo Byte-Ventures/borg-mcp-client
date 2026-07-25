@@ -11,7 +11,7 @@ import {
   type ServerFacadeProcessDeps,
   type ServerFacadeClientDeps,
 } from '../src/server-facade.js';
-import { createTestablePromptAdapter } from '../src/assimilate-deps.js';
+import { createPromptAdapter } from '../src/assimilate-deps.js';
 import { PromptInterruptedError } from '../src/repository-cube-init.js';
 
 class FakeChild extends EventEmitter {
@@ -347,7 +347,7 @@ describe('approved server facade copy', () => {
 describe('real-adapter SIGINT integration for borg server cube init', () => {
   it('cube init: real prompt adapter maps SIGINT to exit 130 with exact cancel copy', async () => {
     const stderr = vi.fn();
-    const promptAdapter = createTestablePromptAdapter(async () => {
+    const promptAdapter = createPromptAdapter(async () => {
       throw new Error('SIGINT');
     });
     const createCube = vi.fn();
