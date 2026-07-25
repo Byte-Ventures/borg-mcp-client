@@ -4,6 +4,8 @@ import { buildDefaultAssimilateDeps, type PromptQuestion } from '../src/assimila
 import { runAssimilateEntry } from '../src/claude.js';
 import {
   BorgServerError,
+  CubeCreationConfirmationError,
+  CubeCreationOutcomeUnknownError,
   RepositoryAssociationOperationError,
   RepositoryAssociationOutcomeUnknownError,
   RepositoryAssociationResolutionError,
@@ -168,13 +170,13 @@ describe.each(entrypoints)('production prompt interruption through $entry', ({ r
       name: 'SIGINT',
       error: new Error('SIGINT'),
       code: 130,
-      copy: '\nCube creation cancelled. Nothing was changed.\n',
+      copy: '\nCube creation cancelled. No cube, repository binding, or drone was created.\n',
     },
     {
       name: 'EOF',
       error: new Error('EOF'),
       code: 1,
-      copy: 'Input ended before cube creation. Nothing was changed.\n',
+      copy: 'Input ended before cube creation. No cube, repository binding, or drone was created.\n',
     },
   ])('$name returns $code and stops all continuation', async ({ error, code, copy }) => {
     const state = makeEntryDeps(async () => { throw error; });
@@ -212,7 +214,7 @@ describe.each(entrypoints)('production prompt interruption through $entry', ({ r
     expect(state.stderr).toHaveBeenCalledWith(
       'Repository cube association could not be completed.\n' +
       `${recovery}\n` +
-      'Nothing was created or changed.\n',
+      'No cube, repository binding, or drone was created.\n',
     );
     const output = state.stderr.mock.calls.flat().join('');
     expect(output).not.toContain('server-secret-cube-id');
@@ -233,7 +235,7 @@ describe.each(entrypoints)('production prompt interruption through $entry', ({ r
     expect(state.stderr).toHaveBeenCalledWith(
       'Repository cube association could not be resolved.\n' +
       'Verify that the server is reachable and the client and server versions match, then run the same command again.\n' +
-      'Nothing was created or changed.\n',
+      'No cube, repository binding, or drone was created.\n',
     );
     expect(state.deps.listCubes).not.toHaveBeenCalled();
     expect(state.associateRepositoryCube).not.toHaveBeenCalled();
@@ -330,6 +332,140 @@ describe.each(entrypoints)('repository association through $entry', ({ run }) =>
   });
 });
 
+describe.each(entrypoints)('post-dispatch cube creation recovery through $entry', ({ run }) => {
+  it.each(['response loss', 'malformed 201 response'])('%s is unconfirmed and never persists local state', async () => {
+    const state = makeEntryDeps(async () => { throw new Error('prompt must not run with --yes'); });
+    state.createCube.mockRejectedValue(new CubeCreationOutcomeUnknownError());
+
+    await expect(run(state.deps, ['--yes'])).resolves.toBe(1);
+
+    const expected =
+      'Cube creation outcome is unconfirmed.\n' +
+      'The server may have created the cube and repository binding; no local repository association was saved and no drone was created.\n' +
+      'Run the same command again; Borg will resolve authoritative server state before creating a cube.\n';
+    expect(state.stderr).toHaveBeenCalledWith(expected);
+    expect(expected).not.toContain('Nothing was changed.');
+    expect(expected).not.toContain('Nothing was created or changed.');
+    expect(state.createCube).toHaveBeenCalledOnce();
+    expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
+    expect(state.assimilate).not.toHaveBeenCalled();
+    expect(state.finalizeServerSeat).not.toHaveBeenCalled();
+    expect(state.setActiveCube).not.toHaveBeenCalled();
+  });
+
+  it('post-create cube readback failure is unconfirmed and never persists local state', async () => {
+    const state = makeEntryDeps(async () => { throw new Error('prompt must not run with --yes'); });
+    state.createCube.mockRejectedValue(
+      new CubeCreationConfirmationError('server response body must not be rendered'),
+    );
+
+    await expect(run(state.deps, ['--yes'])).resolves.toBe(1);
+
+    const expected =
+      'Cube creation could not be confirmed.\n' +
+      'The server may have created the cube and repository binding; no local repository association was saved and no drone was created.\n' +
+      'Run the same command again; Borg will resolve authoritative server state before creating a cube.\n';
+    expect(state.stderr).toHaveBeenCalledWith(expected);
+    expect(expected).not.toContain('server response body');
+    expect(expected).not.toContain('Nothing was changed.');
+    expect(state.createCube).toHaveBeenCalledOnce();
+    expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
+    expect(state.assimilate).not.toHaveBeenCalled();
+    expect(state.finalizeServerSeat).not.toHaveBeenCalled();
+    expect(state.setActiveCube).not.toHaveBeenCalled();
+  });
+
+  it('post-create authoritative repository readback failure is unconfirmed and never persists local state', async () => {
+    const state = makeEntryDeps(async () => { throw new Error('prompt must not run with --yes'); });
+    state.createCube.mockResolvedValue({
+      response: {
+        result: 'created',
+        cube_id: 'cube-created',
+        name: 'repo',
+        working_repo_name: 'repo',
+        repository: { kind: 'origin', value: 'https://github.com/org/repo' },
+        template: 'software-dev',
+        human_seat_role_id: 'role-human',
+        default_worker_role_id: 'role-default',
+        access: 'manage',
+      },
+      cube: {
+        id: 'cube-created',
+        name: 'repo',
+        roles: [
+          { id: 'role-human', is_human_seat: true },
+          { id: 'role-default', is_default: true },
+        ],
+        drones: [],
+      },
+    });
+    state.resolveRepositoryCube
+      .mockResolvedValueOnce({ result: 'none' })
+      .mockRejectedValueOnce(new RepositoryAssociationResolutionError());
+
+    await expect(run(state.deps, ['--yes'])).resolves.toBe(1);
+
+    expect(state.stderr).toHaveBeenCalledWith(
+      'Cube creation could not be confirmed.\n' +
+      'The server may have created the cube and repository binding; no local repository association was saved and no drone was created.\n' +
+      'Run the same command again; Borg will resolve authoritative server state before creating a cube.\n',
+    );
+    expect(state.resolveRepositoryCube).toHaveBeenCalledTimes(2);
+    expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
+    expect(state.assimilate).not.toHaveBeenCalled();
+    expect(state.finalizeServerSeat).not.toHaveBeenCalled();
+    expect(state.setActiveCube).not.toHaveBeenCalled();
+  });
+
+  it('rejects authoritative role IDs absent from cube readback before local persistence', async () => {
+    const state = makeEntryDeps(async () => { throw new Error('prompt must not run with --yes'); });
+    state.createCube.mockResolvedValue({
+      response: {
+        result: 'created',
+        cube_id: 'cube-created',
+        name: 'repo',
+        working_repo_name: 'repo',
+        repository: { kind: 'origin', value: 'https://github.com/org/repo' },
+        template: 'software-dev',
+        human_seat_role_id: 'missing-human-role',
+        default_worker_role_id: 'role-default',
+        access: 'manage',
+      },
+      cube: {
+        id: 'cube-created',
+        name: 'repo',
+        roles: [{ id: 'role-default', is_default: true }],
+        drones: [],
+      },
+    });
+    state.resolveRepositoryCube
+      .mockResolvedValueOnce({ result: 'none' })
+      .mockResolvedValueOnce({
+        result: 'resolved',
+        cube_id: 'cube-created',
+        name: 'repo',
+        working_repo_name: 'repo',
+        repository: { kind: 'origin', value: 'https://github.com/org/repo' },
+        template: 'software-dev',
+        human_seat_role_id: 'missing-human-role',
+        default_worker_role_id: 'role-default',
+        access: 'manage',
+      });
+
+    await expect(run(state.deps, ['--yes'])).resolves.toBe(1);
+
+    expect(state.stderr).toHaveBeenCalledWith(
+      'Cube creation could not be confirmed.\n' +
+      'The server may have created the cube and repository binding; no local repository association was saved and no drone was created.\n' +
+      'Run the same command again; Borg will resolve authoritative server state before creating a cube.\n',
+    );
+    expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
+    expect(state.assimilate).not.toHaveBeenCalled();
+    expect(state.finalizeServerSeat).not.toHaveBeenCalled();
+    expect(state.setActiveCube).not.toHaveBeenCalled();
+  });
+});
+
 describe.each(entrypoints)('legacy repository cube adoption through $entry', ({ entry, run }) => {
   it('restores an authoritative server association without prompting or name discovery', async () => {
     const state = makeEntryDeps(async () => { throw new Error('prompt must not run'); });
@@ -414,8 +550,28 @@ describe.each(entrypoints)('legacy repository cube adoption through $entry', ({ 
     expect(state.assimilate).not.toHaveBeenCalled();
     expect(state.stderr).toHaveBeenCalledWith(
       'Adopting an existing cube requires interactive confirmation; --yes is not accepted here.\n' +
-      'Rerun without --yes in an interactive terminal. Nothing was created or changed.\n',
+      'Rerun without --yes in an interactive terminal. No cube, repository binding, or drone was created.\n',
     );
+  });
+
+  it('scopes the --yes refusal after local repository identity persistence', async () => {
+    const state = makeEntryDeps(async () => { throw new Error('prompt must not run'); });
+    let identityPersisted = false;
+    state.getRepositoryIdentity.mockImplementation(async () => {
+      identityPersisted = true;
+      return { kind: 'local', value: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' };
+    });
+    state.deps.listCubes = vi.fn(async () => [{ id: 'cube-existing', name: 'repo' }]);
+
+    await expect(run(state.deps, ['--yes'])).resolves.toBe(1);
+
+    expect(identityPersisted).toBe(true);
+    const output = state.stderr.mock.calls.flat().join('');
+    expect(output).toContain('No cube, repository binding, or drone was created.');
+    expect(output).not.toContain('Nothing was changed.');
+    expect(output).not.toContain('Nothing was created or changed.');
+    expect(state.associateRepositoryCube).not.toHaveBeenCalled();
+    expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -426,21 +582,21 @@ describe.each(entrypoints)('legacy repository cube adoption through $entry', ({ 
         throw new Error(`unexpected prompt: ${message}`);
       },
       code: 0,
-      copy: 'No changes made.\n',
+      copy: 'No cube, repository binding, or drone was created.\n',
     },
     {
       name: 'SIGINT',
       answer: async () => { throw new Error('SIGINT'); },
       code: 130,
-      copy: '\nCube adoption cancelled. Nothing was changed.\n',
+      copy: '\nCube adoption cancelled. No cube, repository binding, or drone was created.\n',
     },
     {
       name: 'EOF',
       answer: async () => { throw new Error('EOF'); },
       code: 1,
-      copy: 'Input ended before cube adoption. Nothing was changed.\n',
+      copy: 'Input ended before cube adoption. No cube, repository binding, or drone was created.\n',
     },
-  ])('$name leaves both server and local state untouched', async ({ answer, code, copy }) => {
+  ])('$name creates no cube, repository binding, drone, or local association', async ({ answer, code, copy }) => {
     const state = makeEntryDeps(answer);
     state.deps.listCubes = vi.fn(async () => [{ id: 'cube-existing', name: 'repo' }]);
 

@@ -748,7 +748,7 @@ export async function runAssimilate(
       deps.stderr(
         'Repository cube association could not be resolved.\n' +
         'Verify that the server is reachable and the client and server versions match, then run the same command again.\n' +
-        'Nothing was created or changed.\n',
+        'No cube, repository binding, or drone was created.\n',
       );
       return 1;
     }
@@ -763,7 +763,7 @@ export async function runAssimilate(
       deps.stderr(
         'Repository cube association could not be completed.\n' +
         `${recovery}\n` +
-        'Nothing was created or changed.\n',
+        'No cube, repository binding, or drone was created.\n',
       );
       return 1;
     }
@@ -785,18 +785,17 @@ export async function runAssimilate(
     }
     if (error instanceof CubeCreationOutcomeUnknownError) {
       deps.stderr(
-        'Cube creation outcome is unknown.\n' +
-        'No local repository association was saved.\n' +
-        'Run the same command again; the server will resolve the original request or return a conflict.\n',
+        'Cube creation outcome is unconfirmed.\n' +
+        'The server may have created the cube and repository binding; no local repository association was saved and no drone was created.\n' +
+        'Run the same command again; Borg will resolve authoritative server state before creating a cube.\n',
       );
       return 1;
     }
     if (error instanceof CubeCreationConfirmationError) {
       deps.stderr(
         'Cube creation could not be confirmed.\n' +
-        `${error.message}\n` +
-        'No local repository association was saved.\n' +
-        'Resolve the conflict, then run the same command again.\n',
+        'The server may have created the cube and repository binding; no local repository association was saved and no drone was created.\n' +
+        'Run the same command again; Borg will resolve authoritative server state before creating a cube.\n',
       );
       return 1;
     }
@@ -810,7 +809,11 @@ export async function runAssimilate(
     if (error instanceof BorgServerError) {
       return reportServerFailure(deps, auth.apiUrl, error);
     }
-    deps.stderr('Could not create cube.\nThe selected Borg server rejected the request.\nNothing was changed.\n');
+    deps.stderr(
+      'Repository cube initialization failed.\n' +
+      'The server may have created or associated a cube; local repository state may be incomplete and no drone was created.\n' +
+      'Run the same command again; Borg will resolve authoritative server state before creating or associating a cube.\n',
+    );
     return 1;
   }
   if (initialized.kind === 'stop') return initialized.code;

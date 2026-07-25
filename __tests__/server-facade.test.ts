@@ -471,7 +471,7 @@ describe('real-adapter SIGINT integration for borg server cube init', () => {
     );
 
     expect(exitCode).toBe(130);
-    expect(stderr).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(stderr).toHaveBeenCalledWith('\nCube creation cancelled. No cube, repository binding, or drone was created.\n');
     expect(createCube).not.toHaveBeenCalled();
     expect(associateRepositoryCube).not.toHaveBeenCalled();
     expect(saveAssociation).not.toHaveBeenCalled();

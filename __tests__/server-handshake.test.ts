@@ -553,6 +553,104 @@ describe('self-hosted server handshake', () => {
     expect(deniedFetch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['transport loss', vi.fn(async () => { throw new Error('response lost'); })],
+    ['malformed 201 response', vi.fn(async () => new Response('{"protocol_version":"5"}', { status: 201 }))],
+    ['unexpected response status', vi.fn(async () => new Response('', { status: 500 }))],
+  ])('classifies post-dispatch cube creation %s as outcome unknown', async (_name, fetchImpl) => {
+    const pending = {
+      origin: 'https://server.example.com',
+      trustIdentity: 'sha256:server-a',
+      clientId: '66666666-6666-4666-8666-666666666666',
+      repositoryBinding: 'a'.repeat(64),
+      retryKey: '77777777-7777-4777-8777-777777777777',
+      name: 'project-one',
+      workingRepoName: 'project-one',
+      repository: { kind: 'origin' as const, value: 'https://github.com/org/project-one' },
+      template: 'software-dev' as const,
+    };
+    const credential = 'c'.repeat(43);
+
+    await expect(createBorgServerCube(
+      pending.origin,
+      pending.trustIdentity,
+      credential,
+      {
+        name: pending.name,
+        workingRepoName: pending.workingRepoName,
+        repository: pending.repository,
+        template: pending.template,
+      },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: pending.origin,
+          trustIdentity: pending.trustIdentity,
+          credential,
+          clientId: pending.clientId,
+          serverCapabilities: ['create_cube'],
+        })),
+        prepareCubeCreation: vi.fn(async () => pending),
+        clearCubeCreation: vi.fn(async () => {}),
+      },
+    )).rejects.toMatchObject({ name: 'CubeCreationOutcomeUnknownError' });
+    expect(fetchImpl).toHaveBeenCalled();
+  });
+
+  it('classifies post-success retry-state finalization failure as unconfirmed', async () => {
+    const pending = {
+      origin: 'https://server.example.com',
+      trustIdentity: 'sha256:server-a',
+      clientId: '66666666-6666-4666-8666-666666666666',
+      repositoryBinding: 'a'.repeat(64),
+      retryKey: '77777777-7777-4777-8777-777777777777',
+      name: 'project-one',
+      workingRepoName: 'project-one',
+      repository: { kind: 'origin' as const, value: 'https://github.com/org/project-one' },
+      template: 'software-dev' as const,
+    };
+    const credential = 'c'.repeat(43);
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '5',
+      request_id: 'cube-created-finalize-failed',
+      payload: {
+        result: 'created',
+        cube_id: CUBE_ID,
+        name: pending.name,
+        working_repo_name: pending.workingRepoName,
+        repository: pending.repository,
+        template: pending.template,
+        human_seat_role_id: '88888888-8888-4888-8888-888888888888',
+        default_worker_role_id: ROLE_ID,
+        access: 'manage',
+      },
+    }), { status: 201 }));
+
+    await expect(createBorgServerCube(
+      pending.origin,
+      pending.trustIdentity,
+      credential,
+      {
+        name: pending.name,
+        workingRepoName: pending.workingRepoName,
+        repository: pending.repository,
+        template: pending.template,
+      },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: pending.origin,
+          trustIdentity: pending.trustIdentity,
+          credential,
+          clientId: pending.clientId,
+          serverCapabilities: ['create_cube'],
+        })),
+        prepareCubeCreation: vi.fn(async () => pending),
+        clearCubeCreation: vi.fn(async () => { throw new Error('disk full'); }),
+      },
+    )).rejects.toMatchObject({ name: 'CubeCreationConfirmationError' });
+  });
+
   it('resolves a client-scoped repository association without mutation', async () => {
     const credential = 'c'.repeat(43);
     const repository = { kind: 'origin' as const, value: 'https://github.com/org/project-one' };

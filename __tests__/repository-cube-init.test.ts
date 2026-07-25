@@ -30,7 +30,14 @@ function deps(overrides: Partial<RepositoryCubeInitDeps> = {}): RepositoryCubeIn
       default_worker_role_id: 'b567bf44-f28c-44d2-8927-c67746603029',
       access: 'manage',
     },
-    cube: { id: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826', name: input.name, roles: [] },
+    cube: {
+      id: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826',
+      name: input.name,
+      roles: [
+        { id: '8c02328a-59f0-472e-b071-f7417405528f', is_human_seat: true },
+        { id: 'b567bf44-f28c-44d2-8927-c67746603029', is_default: true },
+      ],
+    },
   });
   const createImpl = overrides.createCube ?? defaultCreate;
   const associateImpl = overrides.associateCube ?? (async (input) => ({
@@ -135,7 +142,7 @@ describe('guided repository cube initialization', () => {
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining('No drone was created.'));
   });
 
-  it('uses the authoritative cube name and refreshes a stale association', async () => {
+  it('uses the authoritative cube name without rewriting a trusted local association from partial readback', async () => {
     const saveAssociation = vi.fn(async () => {});
     const inputDeps = deps({
       saveAssociation,
@@ -151,9 +158,7 @@ describe('guided repository cube initialization', () => {
     }, inputDeps);
 
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining('Name: renamed-cube'));
-    expect(saveAssociation).toHaveBeenCalledWith(context.publicRepository, expect.objectContaining({
-      name: 'renamed-cube',
-    }));
+    expect(saveAssociation).not.toHaveBeenCalled();
   });
 
   it('reports a typed failure when server creation succeeds but association persistence fails', async () => {
@@ -166,6 +171,21 @@ describe('guided repository cube initialization', () => {
       mode: 'cube-init', context, serverOrigin: 'https://borg.test',
       flags: { yes: true },
     }, inputDeps)).rejects.toMatchObject({ name: 'RepositoryAssociationSaveError' });
+  });
+
+  it('classifies an uncategorized create dependency failure as post-dispatch uncertainty', async () => {
+    const saveAssociation = vi.fn();
+    const inputDeps = deps({
+      isTTY: () => false,
+      createCube: vi.fn(async () => { throw new Error('malformed post-dispatch response'); }),
+      saveAssociation,
+    });
+
+    await expect(initializeRepositoryCube({
+      mode: 'cube-init', context, serverOrigin: 'https://borg.test',
+      flags: { yes: true }, canCreate: true,
+    }, inputDeps)).rejects.toMatchObject({ name: 'CubeCreationOutcomeUnknownError' });
+    expect(saveAssociation).not.toHaveBeenCalled();
   });
 
   it('fails closed when more than one accessible cube has the proposed name', async () => {
@@ -401,7 +421,7 @@ describe('guided repository cube initialization', () => {
     }, inputDeps);
 
     expect(result).toEqual({ kind: 'stop', code: 130 });
-    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. No cube, repository binding, or drone was created.\n');
     expect(createCube).not.toHaveBeenCalled();
   });
 
@@ -417,7 +437,7 @@ describe('guided repository cube initialization', () => {
     }, inputDeps);
 
     expect(result).toEqual({ kind: 'stop', code: 130 });
-    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. No cube, repository binding, or drone was created.\n');
     expect(createCube).not.toHaveBeenCalled();
   });
 
@@ -434,7 +454,7 @@ describe('guided repository cube initialization', () => {
     }, inputDeps);
 
     expect(result).toEqual({ kind: 'stop', code: 130 });
-    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. No cube, repository binding, or drone was created.\n');
     expect(createCube).not.toHaveBeenCalled();
   });
 
@@ -452,7 +472,7 @@ describe('guided repository cube initialization', () => {
     }, inputDeps);
 
     expect(result).toEqual({ kind: 'stop', code: 130 });
-    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. No cube, repository binding, or drone was created.\n');
     expect(createCube).not.toHaveBeenCalled();
   });
 });

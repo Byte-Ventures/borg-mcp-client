@@ -867,16 +867,15 @@ export async function createBorgServerCube(
     throw new CubeCreationConfirmationError('The Borg server rejected the repository cube operation identity.');
   }
   if (response.status !== 201) {
-    throw new Error(`Borg server cube creation failed (HTTP ${response.status})`);
+    throw new CubeCreationOutcomeUnknownError();
   }
   let decoded: ReturnType<typeof decodeCreateCubeResponseEnvelope>;
   try {
     decoded = decodeCreateCubeResponseEnvelope(
       JSON.parse(await readHandshakeBodyWithTimeout(response)),
     );
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('response limit')) throw error;
-    throw new Error('Borg server returned an invalid cube creation envelope');
+  } catch {
+    throw new CubeCreationOutcomeUnknownError();
   }
   if (
     decoded.payload.repository.kind !== pending.repository.kind ||
@@ -884,9 +883,13 @@ export async function createBorgServerCube(
   ) {
     throw new CubeCreationConfirmationError();
   }
-  await (deps.clearCubeCreation ?? clearPendingServerCubeCreation)(
-    pending as PendingServerCubeCreationRecord,
-  );
+  try {
+    await (deps.clearCubeCreation ?? clearPendingServerCubeCreation)(
+      pending as PendingServerCubeCreationRecord,
+    );
+  } catch {
+    throw new CubeCreationConfirmationError('The server confirmed the cube, but local retry state could not be finalized.');
+  }
   return decoded.payload;
 }
 

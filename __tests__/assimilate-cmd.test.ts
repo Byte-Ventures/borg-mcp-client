@@ -2033,7 +2033,7 @@ describe('runAssimilate: step 4 (cube existence + detail)', () => {
     expect(createCube).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(
       'Adopting an existing cube requires interactive confirmation; --yes is not accepted here.\n' +
-      'Rerun without --yes in an interactive terminal. Nothing was created or changed.\n',
+      'Rerun without --yes in an interactive terminal. No cube, repository binding, or drone was created.\n',
     );
   });
 });

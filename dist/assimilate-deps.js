@@ -22,7 +22,7 @@ import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from
 import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
-import { BorgServerError } from './server-errors.js';
+import { BorgServerError, CubeCreationConfirmationError } from './server-errors.js';
 import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
 import { addProjectSessionStartHook } from './config-utils.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
@@ -230,16 +230,22 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                     repository: params.repository,
                     template: params.template,
                 });
-                const cube = await remoteGetCube(created.cube_id, {
-                    apiUrl,
-                    authToken: token,
-                    serverTrustIdentity,
-                });
+                let cube;
+                try {
+                    cube = await remoteGetCube(created.cube_id, {
+                        apiUrl,
+                        authToken: token,
+                        serverTrustIdentity,
+                    });
+                }
+                catch {
+                    throw new CubeCreationConfirmationError('The server returned a cube result that could not be read back.');
+                }
                 if (cube.id !== created.cube_id ||
                     cube.name !== created.name ||
                     !Array.isArray(cube.roles) ||
                     !cube.roles.some((role) => role.id === created.default_worker_role_id)) {
-                    throw new Error('Borg server returned cube details outside the creation result');
+                    throw new CubeCreationConfirmationError('The server returned cube details outside the creation result.');
                 }
                 return {
                     response: created,

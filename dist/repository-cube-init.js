@@ -1,6 +1,6 @@
 import { NEW_CUBE_TEMPLATE_PRESENTATIONS, LEGACY_DEFAULT_TEMPLATE_LABEL, } from 'borgmcp-shared/templates';
 import { shellEscape } from './shell-escape.js';
-import { CubeCreationConfirmationError } from './server-errors.js';
+import { BorgServerError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, } from './server-errors.js';
 export class RepositoryAssociationSaveError extends Error {
     constructor() {
         super('repository association could not be saved');
@@ -35,10 +35,10 @@ async function ask(deps, message, operation = 'creation') {
     }
     catch (error) {
         if (error instanceof PromptInterruptedError) {
-            deps.write(`\nCube ${operation} cancelled. Nothing was changed.\n`);
+            deps.write(`\nCube ${operation} cancelled. No cube, repository binding, or drone was created.\n`);
             return { stop: 130 };
         }
-        deps.write(`Input ended before cube ${operation}. Nothing was changed.\n`);
+        deps.write(`Input ended before cube ${operation}. No cube, repository binding, or drone was created.\n`);
         return { stop: 1 };
     }
 }
@@ -69,15 +69,6 @@ export async function initializeRepositoryCube(input, deps) {
     const creationOptionsUnused = association !== null && creationOptionsRequested;
     if (association) {
         const cube = await deps.getCube(association.cubeId);
-        const authoritativeAssociation = { ...association, name: cube.name };
-        if (cube.name !== association.name) {
-            try {
-                await deps.saveAssociation(repository, authoritativeAssociation);
-            }
-            catch {
-                throw new RepositoryAssociationSaveError();
-            }
-        }
         const response = {
             result: 'resolved',
             cube_id: association.cubeId,
@@ -152,12 +143,12 @@ export async function initializeRepositoryCube(input, deps) {
         if (matches.length === 0)
             return null;
         if (matches.length > 1) {
-            deps.write(`More than one accessible cube is named '${name}'. Nothing was changed. Ask the server operator for an unambiguous repository cube grant.\n`);
+            deps.write(`More than one accessible cube is named '${name}'. No cube, repository binding, or drone was created. Ask the server operator for an unambiguous repository cube grant.\n`);
             return { kind: 'stop', code: 1 };
         }
         if (!deps.isTTY() || input.flags.yes) {
             deps.write('Adopting an existing cube requires interactive confirmation; --yes is not accepted here.\n' +
-                'Rerun without --yes in an interactive terminal. Nothing was created or changed.\n');
+                'Rerun without --yes in an interactive terminal. No cube, repository binding, or drone was created.\n');
             return { kind: 'stop', code: 1 };
         }
         deps.write(`Found an existing cube matching this repository:\n` +
@@ -172,7 +163,7 @@ export async function initializeRepositoryCube(input, deps) {
             if (confirmation === 'y' || confirmation === 'yes')
                 break;
             if (confirmation === '' || confirmation === 'n' || confirmation === 'no') {
-                deps.write('No changes made.\n');
+                deps.write('No cube, repository binding, or drone was created.\n');
                 return { kind: 'stop', code: 0 };
             }
             deps.write('Enter y or n.\n');
@@ -283,7 +274,7 @@ export async function initializeRepositoryCube(input, deps) {
                 break;
             }
             if (confirmation === 'n' || confirmation === 'no') {
-                deps.write('Cube creation cancelled. Nothing was changed.\n');
+                deps.write('Cube creation cancelled. No cube, repository binding, or drone was created.\n');
                 return { kind: 'stop', code: 0 };
             }
             deps.write('Enter y or n.\n');
@@ -291,7 +282,18 @@ export async function initializeRepositoryCube(input, deps) {
     }
     deps.write('Creating cube...\n');
     const workingRepoName = input.context.derivedName;
-    const creation = await deps.createCube({ name, workingRepoName, repository, template });
+    let creation;
+    try {
+        creation = await deps.createCube({ name, workingRepoName, repository, template });
+    }
+    catch (error) {
+        if (error instanceof BorgServerError ||
+            error instanceof CubeCreationConfirmationError ||
+            error instanceof CubeCreationOutcomeUnknownError) {
+            throw error;
+        }
+        throw new CubeCreationOutcomeUnknownError();
+    }
     let confirmed;
     try {
         confirmed = await deps.resolveAssociation(repository, workingRepoName);
@@ -300,9 +302,16 @@ export async function initializeRepositoryCube(input, deps) {
         throw new CubeCreationConfirmationError('The server did not return authoritative repository association state.');
     }
     if (confirmed.result !== 'resolved' ||
+        confirmed.repository.kind !== repository.kind ||
+        confirmed.repository.value !== repository.value ||
+        confirmed.working_repo_name !== workingRepoName ||
         confirmed.cube_id !== creation.response.cube_id ||
-        confirmed.name !== creation.response.name) {
-        throw new RepositoryAssociationConfirmationError();
+        confirmed.name !== creation.response.name ||
+        creation.cube.id !== confirmed.cube_id ||
+        creation.cube.name !== confirmed.name ||
+        !creation.cube.roles.some((role) => role.id === confirmed.human_seat_role_id) ||
+        !creation.cube.roles.some((role) => role.id === confirmed.default_worker_role_id)) {
+        throw new CubeCreationConfirmationError('The server did not confirm the created cube through authoritative repository resolution.');
     }
     try {
         await deps.saveAssociation(repository, {
