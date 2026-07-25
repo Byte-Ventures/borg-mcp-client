@@ -8,7 +8,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 
 ## Deliberate Transformations
 
-- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release `borgmcp-shared@0.6.3` and a fresh standalone lockfile.
+- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release `borgmcp-shared@0.6.4` and a fresh standalone lockfile.
 - Replaced local template, role-section, drone-address, and log high-water-mark implementations with `borgmcp-shared` exports.
 - Removed monorepo-only website anti-drift tests and re-anchored remaining filesystem tests to this repository.
 - Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
@@ -21,8 +21,8 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
   lightweight release tag failed before packaging. The reviewed `2.0.1`
   recovery, `2.0.2`, `2.0.3`, `2.0.4`, `2.0.5`, and `2.0.6` successors were
   published and registry-verified. The immutable `2.0.7` workflow failed before
-  package creation or npm publication. The `2.0.8`, `2.0.9`, `2.0.10`, and `2.0.11`
-  successors were published, so the next candidate identity is `2.1.0`. Extraction and
+  package creation or npm publication. The `2.0.8`, `2.0.9`, `2.0.10`, `2.0.11`, and
+  `2.1.0` successors were published, so the next candidate identity is `2.1.1`. Extraction and
   versioning do not authorize publication.
 
 ## Review Holds
@@ -38,9 +38,11 @@ artifact reaches no hosted authority.
 Local enrollment now uses the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
-resolves to the audited registry `borgmcp-shared@0.6.3`. The matching
-`borgmcp-server@0.1.20` release is published and registry-verified and pins the
-same `borgmcp-shared@0.6.3` contract. Client `borgmcp@2.0.11` is published. The immutable `v2.0.7`
+resolves to the audited registry `borgmcp-shared@0.6.4` with integrity
+`sha512-Wm4b0uoOAw9JCz5OTHD0Q2uXKkeWYdkVksdeZvRG8l62XGMY+G8GkNEsZT9L533LbVbQ29GhgF0htjDenQThDg==`.
+The matching `borgmcp-server@0.1.21` release is published with integrity
+`sha512-g0QH4cKcsKuDyZs1MvBmvCoCLaZ4wVI04yHCGSvcAeWghWxSBH0IIF8Q5OFi1pLB7TZXOVP6D3QAabUQ2eJTFg==`
+and pins the same `borgmcp-shared@0.6.4` contract. Client `borgmcp@2.1.0` is published. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next
-candidate remains gated by reviewed `v2.1.0` source, a fresh annotated tag, and
+candidate remains gated by reviewed `v2.1.1` source, a fresh annotated tag, and
 the exact-artifact and protected-publication gates.

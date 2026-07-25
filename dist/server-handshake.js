@@ -1,8 +1,8 @@
-import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, createAttachRequestEnvelope, createProtocolEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, ErrorCode, } from 'borgmcp-shared/protocol';
+import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, REPOSITORY_CUBE_ASSOCIATION_PATH, REPOSITORY_CUBE_RESOLVE_PATH, createAttachRequestEnvelope, createProtocolEnvelope, decodeAssociateRepositoryCubeRequest, decodeAssociateRepositoryCubeResponseEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, decodeResolveRepositoryCubeRequest, decodeResolveRepositoryCubeResponseEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
 import { createHash, randomUUID } from 'node:crypto';
 import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, } from './seats.js';
-import { BorgServerError, BorgServerTrustError, BorgServerUnreachableError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, } from './server-errors.js';
+import { BorgServerError, BorgServerTrustError, BorgServerUnreachableError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { loadBorgServerTrust, } from './server-trust.js';
@@ -353,6 +353,156 @@ export async function resumeBorgServerEnrollment(origin, trustIdentity, deps = {
             ? {}
             : { clearPendingEnrollment: deps.clearPendingEnrollment }),
         ...(pending.clientName === undefined ? {} : { clientName: pending.clientName }),
+    });
+}
+async function requireMatchingServerCredential(origin, trustIdentity, parentCredential, loadCredentialRecord) {
+    const active = await loadCredentialRecord(origin, trustIdentity);
+    if (!active || active.credential !== parentCredential || !active.clientId) {
+        throw new BorgServerError('CREDENTIAL_REJECTED', 'stored Borg server credential was rejected');
+    }
+}
+async function protocolErrorCode(response) {
+    try {
+        return decodeProtocolErrorEnvelope(JSON.parse(await readHandshakeBodyWithTimeout(response))).error.code;
+    }
+    catch {
+        return undefined;
+    }
+}
+/** Resolve one client-scoped repository association without mutation. */
+export async function resolveBorgServerRepositoryCube(origin, trustIdentity, parentCredential, input, deps = {}) {
+    await requireMatchingServerCredential(origin, trustIdentity, parentCredential, deps.loadCredentialRecord ?? getServerCredentialRecord);
+    const request = decodeResolveRepositoryCubeRequest({
+        working_repo_name: input.workingRepoName,
+        repository: input.repository,
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
+    let response;
+    try {
+        response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, REPOSITORY_CUBE_RESOLVE_PATH), {
+            method: 'POST',
+            redirect: 'error',
+            signal: controller.signal,
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${parentCredential}`,
+            },
+            body: JSON.stringify(createProtocolEnvelope(randomUUID(), request)),
+        });
+    }
+    catch (error) {
+        throw new RepositoryAssociationResolutionError();
+    }
+    finally {
+        clearTimeout(timeout);
+    }
+    if (response.status === 401 || response.status === 403) {
+        throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
+    }
+    if (response.status !== 200) {
+        throw new RepositoryAssociationResolutionError();
+    }
+    try {
+        const decoded = decodeResolveRepositoryCubeResponseEnvelope(JSON.parse(await readHandshakeBodyWithTimeout(response))).payload;
+        if (decoded.result === 'resolved' &&
+            (decoded.repository.kind !== request.repository.kind ||
+                decoded.repository.value !== request.repository.value ||
+                decoded.working_repo_name !== request.working_repo_name)) {
+            throw new Error('association mismatch');
+        }
+        return decoded;
+    }
+    catch {
+        throw new RepositoryAssociationResolutionError();
+    }
+}
+export async function resolveLocalBorgServerRepositoryCube(origin, trustIdentity, parentCredential, input, deps = {}) {
+    const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+    if (trust.identity !== trustIdentity) {
+        throw new BorgServerTrustError('Borg server trust identity changed; refusing repository resolution');
+    }
+    return resolveBorgServerRepositoryCube(origin, trustIdentity, parentCredential, input, {
+        fetchImpl: trust.fetchImpl,
+    });
+}
+/** Atomically associate an explicit accessible cube after local confirmation. */
+export async function associateBorgServerRepositoryCube(origin, trustIdentity, parentCredential, input, deps = {}) {
+    await requireMatchingServerCredential(origin, trustIdentity, parentCredential, deps.loadCredentialRecord ?? getServerCredentialRecord);
+    const request = decodeAssociateRepositoryCubeRequest({
+        cube_id: input.cubeId,
+        working_repo_name: input.workingRepoName,
+        repository: input.repository,
+    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
+    let response;
+    try {
+        response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, REPOSITORY_CUBE_ASSOCIATION_PATH), {
+            method: 'PUT',
+            redirect: 'error',
+            signal: controller.signal,
+            headers: {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${parentCredential}`,
+            },
+            body: JSON.stringify(createProtocolEnvelope(randomUUID(), request)),
+        });
+    }
+    catch {
+        throw new RepositoryAssociationOutcomeUnknownError();
+    }
+    finally {
+        clearTimeout(timeout);
+    }
+    if (response.status === 401) {
+        throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
+    }
+    if (response.status === 403) {
+        if (await protocolErrorCode(response) !== ErrorCode.ACCESS_DENIED) {
+            throw new RepositoryAssociationOutcomeUnknownError();
+        }
+        throw new RepositoryAssociationOperationError('access-denied');
+    }
+    if (response.status === 409) {
+        const code = await protocolErrorCode(response);
+        if (code === ErrorCode.REPOSITORY_ALREADY_ASSOCIATED) {
+            throw new RepositoryAssociationOperationError('repository-already-associated');
+        }
+        if (code === ErrorCode.CUBE_ALREADY_ASSOCIATED) {
+            throw new RepositoryAssociationOperationError('cube-already-associated');
+        }
+        if (code === ErrorCode.INVALID_INPUT) {
+            throw new RepositoryAssociationOperationError('invalid-cube');
+        }
+        throw new RepositoryAssociationOutcomeUnknownError();
+    }
+    if (response.status !== 200) {
+        throw new RepositoryAssociationOutcomeUnknownError();
+    }
+    try {
+        const decoded = decodeAssociateRepositoryCubeResponseEnvelope(JSON.parse(await readHandshakeBodyWithTimeout(response))).payload;
+        if (decoded.cube_id !== request.cube_id ||
+            decoded.repository.kind !== request.repository.kind ||
+            decoded.repository.value !== request.repository.value ||
+            decoded.working_repo_name !== request.working_repo_name) {
+            throw new Error('association mismatch');
+        }
+        return decoded;
+    }
+    catch (error) {
+        throw new RepositoryAssociationOutcomeUnknownError();
+    }
+}
+export async function associateLocalBorgServerRepositoryCube(origin, trustIdentity, parentCredential, input, deps = {}) {
+    const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+    if (trust.identity !== trustIdentity) {
+        throw new BorgServerTrustError('Borg server trust identity changed; refusing repository association');
+    }
+    return associateBorgServerRepositoryCube(origin, trustIdentity, parentCredential, input, {
+        fetchImpl: trust.fetchImpl,
     });
 }
 /**

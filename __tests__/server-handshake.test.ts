@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
   DEFAULT_LOCAL_SERVER_ORIGIN,
+  associateBorgServerRepositoryCube,
   sendBorgServerAttach,
   connectEnrolledBorgServer,
   createBorgServerCube,
   enrollBorgServer,
   probeBorgServer,
   preflightBorgServerTag,
+  resolveBorgServerRepositoryCube,
   resumeBorgServerEnrollment,
 } from '../src/server-handshake.js';
 import {
@@ -64,7 +66,7 @@ const BINDING: SeatBinding = {
 
 // The credential-free protocol preflight returns ONLY the exact tag.
 const tagPreflightBody = () =>
-  new Response(JSON.stringify({ protocol_version: '4' }), { status: 200 });
+  new Response(JSON.stringify({ protocol_version: '5' }), { status: 200 });
 
 describe('self-hosted server handshake', () => {
   it('tracks the server-owned loopback default from the Part 2 service contract', () => {
@@ -90,7 +92,7 @@ describe('self-hosted server handshake', () => {
     await expect(preflightBorgServerTag(
       'https://server.example.com',
       fetchImpl as typeof fetch,
-    )).resolves.toEqual({ protocol_version: '4' });
+    )).resolves.toEqual({ protocol_version: '5' });
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://server.example.com/api/protocol');
     expect(init).toMatchObject({ method: 'GET', redirect: 'error' });
@@ -99,12 +101,12 @@ describe('self-hosted server handshake', () => {
   });
 
   it('fails closed on a mismatched tag or any extra field before attach', async () => {
-    const wrongTag = vi.fn(async () => new Response(JSON.stringify({ protocol_version: '1' }), { status: 200 }));
+    const wrongTag = vi.fn(async () => new Response(JSON.stringify({ protocol_version: '4' }), { status: 200 }));
     await expect(preflightBorgServerTag('https://server.example.com', wrongTag as typeof fetch))
       .rejects.toThrow(/Unsupported protocol version\.?/);
 
     const extraField = vi.fn(async () => new Response(
-      JSON.stringify({ protocol_version: '4', package: { name: 'borgmcp-shared' } }),
+      JSON.stringify({ protocol_version: '5', package: { name: 'borgmcp-shared' } }),
       { status: 200 },
     ));
     await expect(preflightBorgServerTag('https://server.example.com', extraField as typeof fetch))
@@ -158,7 +160,7 @@ describe('self-hosted server handshake', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(tagPreflightBody())
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '4',
+        protocol_version: '5',
         request_id: 'enroll-request-1',
         payload: {
           purpose: 'owner',
@@ -203,7 +205,7 @@ describe('self-hosted server handshake', () => {
     expect(enrollmentInit).toMatchObject({ method: 'POST', redirect: 'error' });
     const body = JSON.parse(String(enrollmentInit?.body));
     expect(body).toMatchObject({
-      protocol_version: '4',
+      protocol_version: '5',
       payload: {
         invitation,
         retry_key: retryKey,
@@ -368,7 +370,7 @@ describe('self-hosted server handshake', () => {
       .mockResolvedValueOnce(tagPreflightBody())
       .mockRejectedValueOnce(new Error('response lost'))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '4',
+        protocol_version: '5',
         request_id: 'enroll-retry-1',
         payload: {
           purpose: 'owner',
@@ -416,7 +418,7 @@ describe('self-hosted server handshake', () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(tagPreflightBody())
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '4',
+        protocol_version: '5',
         request_id: 'enroll-resume-1',
         payload: {
           purpose: 'owner',
@@ -478,7 +480,7 @@ describe('self-hosted server handshake', () => {
     const fetchImpl = vi.fn()
       .mockRejectedValueOnce(new Error('response lost'))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        protocol_version: '4',
+        protocol_version: '5',
         request_id: 'cube-retry-1',
         payload: {
           result: 'created',
@@ -551,13 +553,215 @@ describe('self-hosted server handshake', () => {
     expect(deniedFetch).not.toHaveBeenCalled();
   });
 
+  it('resolves a client-scoped repository association without mutation', async () => {
+    const credential = 'c'.repeat(43);
+    const repository = { kind: 'origin' as const, value: 'https://github.com/org/project-one' };
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '5',
+      request_id: 'repository-resolve-1',
+      payload: { result: 'none' },
+    }), { status: 200 }));
+
+    await expect(resolveBorgServerRepositoryCube(
+      'https://server.example.com',
+      'spki-sha256:server-a',
+      credential,
+      { workingRepoName: 'project-one', repository },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: 'https://server.example.com',
+          trustIdentity: 'spki-sha256:server-a',
+          credential,
+          clientId: '66666666-6666-4666-8666-666666666666',
+          serverCapabilities: [],
+        })),
+      },
+    )).resolves.toEqual({ result: 'none' });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://server.example.com/api/repository-cubes/resolve',
+      expect.objectContaining({ method: 'POST', redirect: 'error' }),
+    );
+    const request = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+    expect(request).toMatchObject({
+      protocol_version: '5',
+      payload: { working_repo_name: 'project-one', repository },
+    });
+    expect(request.payload).not.toHaveProperty('cube_id');
+  });
+
+  it('rejects incomplete enrollment state before repository network access', async () => {
+    const fetchImpl = vi.fn();
+    await expect(resolveBorgServerRepositoryCube(
+      'https://server.example.com',
+      'spki-sha256:server-a',
+      'c'.repeat(43),
+      {
+        workingRepoName: 'project-one',
+        repository: { kind: 'origin', value: 'https://github.com/org/project-one' },
+      },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: 'https://server.example.com',
+          trustIdentity: 'spki-sha256:server-a',
+          credential: 'c'.repeat(43),
+          serverCapabilities: [],
+        })),
+      },
+    )).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('associates only the explicitly confirmed cube and verifies the strict response', async () => {
+    const credential = 'c'.repeat(43);
+    const repository = { kind: 'origin' as const, value: 'https://github.com/org/project-one' };
+    const responsePayload = {
+      result: 'resolved',
+      cube_id: CUBE_ID,
+      name: 'project-one',
+      working_repo_name: 'project-one',
+      repository,
+      template: 'default',
+      human_seat_role_id: '88888888-8888-4888-8888-888888888888',
+      default_worker_role_id: ROLE_ID,
+      access: 'manage',
+    };
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '5',
+      request_id: 'repository-associate-1',
+      payload: responsePayload,
+    }), { status: 200 }));
+
+    await expect(associateBorgServerRepositoryCube(
+      'https://server.example.com',
+      'spki-sha256:server-a',
+      credential,
+      { cubeId: CUBE_ID, workingRepoName: 'project-one', repository },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: 'https://server.example.com',
+          trustIdentity: 'spki-sha256:server-a',
+          credential,
+          clientId: '66666666-6666-4666-8666-666666666666',
+          serverCapabilities: [],
+        })),
+      },
+    )).resolves.toEqual(responsePayload);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://server.example.com/api/repository-cubes/association',
+      expect.objectContaining({ method: 'PUT', redirect: 'error' }),
+    );
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1]?.body)).payload).toEqual({
+      cube_id: CUBE_ID,
+      working_repo_name: 'project-one',
+      repository,
+    });
+  });
+
+  it.each([
+    [409, 'REPOSITORY_ALREADY_ASSOCIATED', 'repository-already-associated'],
+    [409, 'CUBE_ALREADY_ASSOCIATED', 'cube-already-associated'],
+    [409, 'INVALID_INPUT', 'invalid-cube'],
+    [403, 'ACCESS_DENIED', 'access-denied'],
+  ] as const)('maps HTTP %i %s without parsing server prose', async (status, code, failure) => {
+    const credential = 'c'.repeat(43);
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '5',
+      request_id: 'repository-error-1',
+      error: { code, message: 'static server diagnostic' },
+    }), { status }));
+
+    await expect(associateBorgServerRepositoryCube(
+      'https://server.example.com',
+      'spki-sha256:server-a',
+      credential,
+      {
+        cubeId: CUBE_ID,
+        workingRepoName: 'project-one',
+        repository: { kind: 'origin', value: 'https://github.com/org/project-one' },
+      },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: 'https://server.example.com',
+          trustIdentity: 'spki-sha256:server-a',
+          credential,
+          clientId: '66666666-6666-4666-8666-666666666666',
+          serverCapabilities: [],
+        })),
+      },
+    )).rejects.toMatchObject({ failure });
+  });
+
+  it('treats an association transport loss as unknown and never retries the mutation', async () => {
+    const credential = 'c'.repeat(43);
+    const fetchImpl = vi.fn(async () => { throw new Error('response lost'); });
+
+    await expect(associateBorgServerRepositoryCube(
+      'https://server.example.com',
+      'spki-sha256:server-a',
+      credential,
+      {
+        cubeId: CUBE_ID,
+        workingRepoName: 'project-one',
+        repository: { kind: 'origin', value: 'https://github.com/org/project-one' },
+      },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: 'https://server.example.com',
+          trustIdentity: 'spki-sha256:server-a',
+          credential,
+          clientId: '66666666-6666-4666-8666-666666666666',
+          serverCapabilities: [],
+        })),
+      },
+    )).rejects.toMatchObject({ name: 'RepositoryAssociationOutcomeUnknownError' });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('treats an unreadable association success as unknown because the binding may exist', async () => {
+    const credential = 'c'.repeat(43);
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '5',
+      request_id: 'repository-associate-malformed',
+      payload: { result: 'resolved', cube_id: CUBE_ID },
+    }), { status: 200 }));
+
+    await expect(associateBorgServerRepositoryCube(
+      'https://server.example.com',
+      'spki-sha256:server-a',
+      credential,
+      {
+        cubeId: CUBE_ID,
+        workingRepoName: 'project-one',
+        repository: { kind: 'origin', value: 'https://github.com/org/project-one' },
+      },
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: 'https://server.example.com',
+          trustIdentity: 'spki-sha256:server-a',
+          credential,
+          clientId: '66666666-6666-4666-8666-666666666666',
+          serverCapabilities: [],
+        })),
+      },
+    )).rejects.toMatchObject({ name: 'RepositoryAssociationOutcomeUnknownError' });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   // SR-seven (c): the pre-composite attach wrappers are DELETED. These tests
   // exercise the ONLY surviving session-credential send path, sendBorgServerAttach
   // (network-only; the bearer is minted by the cube-lock composite and passed in).
   it('sends the ALREADY-MINTED pending bearer and its activate() flips it in place', async () => {
     const bearer = 's'.repeat(43);
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '4',
+      protocol_version: '5',
       request_id: 'attach-response-1',
       payload: {
         result: 'created',
@@ -607,7 +811,7 @@ describe('self-hosted server handshake', () => {
     // The passed-in pending bearer is the session credential; the parent
     // enrollment credential is only the Authorization bearer.
     expect(JSON.parse(String(init?.body))).toMatchObject({
-      protocol_version: '4',
+      protocol_version: '5',
       payload: {
         cube_id: CUBE_ID,
         role_id: ROLE_ID,
@@ -640,7 +844,7 @@ describe('self-hosted server handshake', () => {
 
   it('rejects the retired attach-session expires_at field', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '4',
+      protocol_version: '5',
       request_id: 'attach-response-with-expiry',
       payload: {
         result: 'created',
@@ -663,7 +867,7 @@ describe('self-hosted server handshake', () => {
 
   it('CR #2: activate(binding) never binds server metadata onto a same-ref replacement — returns typed `replaced`/`missing`', async () => {
     const fetchImpl = () => vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '4',
+      protocol_version: '5',
       request_id: 'attach-r',
       payload: {
         result: 'created',
@@ -689,7 +893,7 @@ describe('self-hosted server handshake', () => {
 
   it('activate(binding) surfaces a store failure (the FINALIZE leaves the PENDING record)', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '4',
+      protocol_version: '5',
       request_id: 'attach-response-2',
       payload: {
         result: 'reused',
@@ -745,7 +949,7 @@ describe('self-hosted server handshake', () => {
 
   it('classifies typed attach lifecycle failures without trusting server messages', async () => {
     const rejectedWith = (code: string, status = 401) => vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '4',
+      protocol_version: '5',
       error: { code, message: 'rejected' },
     }), { status }));
     const send = (fetchImpl: typeof fetch) => sendBorgServerAttach(
@@ -796,7 +1000,7 @@ describe('sendBorgServerAttach real activate fails closed with NO expectation di
   });
 
   const attachOk = () => vi.fn(async () => new Response(JSON.stringify({
-    protocol_version: '4', request_id: 'attach-resp',
+    protocol_version: '5', request_id: 'attach-resp',
     payload: {
       result: 'reused',
       cube: { id: CUBE_ID, name: 'local-cube' },

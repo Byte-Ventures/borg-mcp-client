@@ -50,7 +50,7 @@ Options:
   --enroll                         Prompt for a hidden enrollment invitation
   --cube-name <name>               Repository cube name (otherwise edit the proposed name)
   --template software-dev|starter  New-cube template (default: software-dev)
-  --yes, -y                        Skip confirmation prompts
+  --yes, -y                        Accept new-cube defaults; never adopt by name
   --help, -h                       Show this help
 ```
 
@@ -91,14 +91,19 @@ exactly; the credential becomes active only after the versioned response is
 decoded and the authenticated protocol handshake succeeds. A new process
 resumes that pending enrollment before displaying another invitation prompt.
 
-`borg assimilate` and `borg server cube init` share one guided repository-cube
-flow. Borg shows the repository and server, proposes an editable name, offers
-the Software Development and Starter templates, and asks for one confirmation.
-`--cube-name <name>` and `--template software-dev|starter` supply those values
-directly; `--yes` accepts the repository default name and Software Development
-template. `borg server cube init` stops after authoritative cube readback and
-never creates a drone. Existing repository associations use zero prompts and
-report that creation flags were unused. Bare repositories fail closed.
+`borg assimilate` and `borg server cube init` share one repository-cube flow.
+An existing local or server repository association is resolved without prompts.
+Otherwise Borg checks accessible cubes against the exact proposed name. One
+match displays the cube, repository, and server and requires explicit interactive
+confirmation before the server atomically associates it; multiple matches fail
+closed. `--yes` never adopts a cube by name. With no match, an authorized owner
+continues to the creation guide, which shows the repository and server, proposes
+an editable name, offers the Software Development and Starter templates, and
+asks for one confirmation. `--cube-name <name>` and `--template
+software-dev|starter` supply those creation values directly; `--yes` accepts the
+repository default name and Software Development template. `borg server cube
+init` stops after authoritative cube readback and never creates a drone. Bare
+repositories fail closed.
 
 For repositories with a canonical public `origin`, that origin is the stable
 repository identity. Repositories without one receive an invisible UUID stored
@@ -168,8 +173,9 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 
 ## Release status
 
-This self-hosted path consumes the published `borgmcp-shared@0.6.3` v4 registry
-release. The matching server owner-enrollment, cube-create, attach, restart, log,
-and SSE implementation must also pass the full process-level local dogfood gate.
-Until that gate opens the self-hosted path remains preview-only, and the client
+This self-hosted path pins published `borgmcp-shared@0.6.4` and requires the
+matching published `borgmcp-server@0.1.21` for protocol v5 repository resolve
+and association. The server owner-enrollment, repository resolve/association,
+cube-create, attach, restart, log, and SSE implementation must also pass the full
+process-level local dogfood gate. Until that gate opens the self-hosted path remains preview-only, and the client
 publish is deferred accordingly.

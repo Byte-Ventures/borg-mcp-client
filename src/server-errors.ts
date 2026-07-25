@@ -106,6 +106,33 @@ export class CubeCreationConfirmationError extends Error {
   }
 }
 
+export type RepositoryAssociationFailure =
+  | 'repository-already-associated'
+  | 'cube-already-associated'
+  | 'access-denied'
+  | 'invalid-cube';
+
+export class RepositoryAssociationOperationError extends Error {
+  constructor(public readonly failure: RepositoryAssociationFailure) {
+    super('Borg server rejected the repository cube association');
+    this.name = 'RepositoryAssociationOperationError';
+  }
+}
+
+export class RepositoryAssociationOutcomeUnknownError extends Error {
+  constructor() {
+    super('Repository cube association outcome is unknown.');
+    this.name = 'RepositoryAssociationOutcomeUnknownError';
+  }
+}
+
+export class RepositoryAssociationResolutionError extends Error {
+  constructor() {
+    super('Repository cube association could not be resolved.');
+    this.name = 'RepositoryAssociationResolutionError';
+  }
+}
+
 /** Exact retired TTL-replacement state: two saved bearers and no safe implicit winner. */
 export class LegacySessionCredentialCollisionError extends Error {
   constructor(public readonly origin: string) {

@@ -17,7 +17,7 @@ import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
 import { buildRuntimeMetadataReport } from './runtime-metadata.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, } from './remote-client.js';
-import { DEFAULT_LOCAL_SERVER_ORIGIN, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
+import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
 import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
 import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
@@ -177,6 +177,18 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         resumeServerEnrollment: async (apiUrl, onPending) => resumeLocalBorgServerEnrollment(apiUrl, {
             ...(onPending === undefined ? {} : { onPending }),
         }),
+        resolveRepositoryCube: async (apiUrl, token, input, serverTrustIdentity) => {
+            if (serverTrustIdentity === undefined) {
+                throw new Error('Selected Borg server authority state is missing or unreadable');
+            }
+            return resolveLocalBorgServerRepositoryCube(apiUrl, serverTrustIdentity, token, input);
+        },
+        associateRepositoryCube: async (apiUrl, token, input, serverTrustIdentity) => {
+            if (serverTrustIdentity === undefined) {
+                throw new Error('Selected Borg server authority state is missing or unreadable');
+            }
+            return associateLocalBorgServerRepositoryCube(apiUrl, serverTrustIdentity, token, input);
+        },
         listCubes: async (apiUrl, token, serverTrustIdentity) => {
             if (serverTrustIdentity === undefined) {
                 throw new Error('Selected Borg server authority state is missing or unreadable');

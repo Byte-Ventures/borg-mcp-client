@@ -17,30 +17,74 @@ const context: GitRepositoryContext = {
 
 function deps(overrides: Partial<RepositoryCubeInitDeps> = {}): RepositoryCubeInitDeps {
   const repository = context.publicRepository!;
-  return {
+  let resolved: Awaited<ReturnType<RepositoryCubeInitDeps['resolveAssociation']>> = { result: 'none' };
+  const defaultCreate: RepositoryCubeInitDeps['createCube'] = async (input) => ({
+    response: {
+      result: 'created',
+      cube_id: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826',
+      name: input.name,
+      working_repo_name: input.workingRepoName,
+      repository: input.repository,
+      template: input.template,
+      human_seat_role_id: '8c02328a-59f0-472e-b071-f7417405528f',
+      default_worker_role_id: 'b567bf44-f28c-44d2-8927-c67746603029',
+      access: 'manage',
+    },
+    cube: { id: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826', name: input.name, roles: [] },
+  });
+  const createImpl = overrides.createCube ?? defaultCreate;
+  const associateImpl = overrides.associateCube ?? (async (input) => ({
+    result: 'resolved' as const,
+    cube_id: input.cubeId,
+    name: context.derivedName,
+    working_repo_name: input.workingRepoName,
+    repository: input.repository,
+    template: 'default' as const,
+    human_seat_role_id: '8c02328a-59f0-472e-b071-f7417405528f',
+    default_worker_role_id: 'b567bf44-f28c-44d2-8927-c67746603029',
+    access: 'manage' as const,
+  }));
+  const result: RepositoryCubeInitDeps = {
     isTTY: () => true,
     prompt: vi.fn(async () => ''),
     write: vi.fn(),
     getIdentity: vi.fn(async () => repository),
     getAssociation: vi.fn(async () => null),
     saveAssociation: vi.fn(async () => {}),
-    getCube: vi.fn(async (id) => ({ id, name: 'repo', roles: [] })),
-    createCube: vi.fn(async (input) => ({
-      response: {
-        result: 'created',
-        cube_id: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826',
-        name: input.name,
-        working_repo_name: input.workingRepoName,
-        repository: input.repository,
-        template: input.template,
-        human_seat_role_id: '8c02328a-59f0-472e-b071-f7417405528f',
-        default_worker_role_id: 'b567bf44-f28c-44d2-8927-c67746603029',
-        access: 'manage',
-      },
-      cube: { id: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826', name: input.name, roles: [] },
+    resolveAssociation: overrides.resolveAssociation ?? vi.fn(async () => resolved),
+    listCubes: vi.fn(async () => []),
+    associateCube: vi.fn(async (input) => {
+      const response = await associateImpl(input);
+      resolved = response;
+      return response;
+    }),
+    getCube: vi.fn(async (id) => ({
+      id,
+      name: 'repo',
+      roles: [
+        { id: '8c02328a-59f0-472e-b071-f7417405528f', is_human_seat: true },
+        { id: 'b567bf44-f28c-44d2-8927-c67746603029', is_default: true },
+      ],
     })),
+    createCube: vi.fn(async (input) => {
+      const creation = await createImpl(input);
+      resolved = { ...creation.response, result: 'resolved' };
+      return creation;
+    }),
     ...overrides,
   };
+  if (overrides.resolveAssociation === undefined) result.resolveAssociation = vi.fn(async () => resolved);
+  result.associateCube = vi.fn(async (input) => {
+    const response = await associateImpl(input);
+    resolved = response;
+    return response;
+  });
+  result.createCube = vi.fn(async (input) => {
+    const creation = await createImpl(input);
+    resolved = { ...creation.response, result: 'resolved' };
+    return creation;
+  });
+  return result;
 }
 
 describe('guided repository cube initialization', () => {
@@ -85,6 +129,8 @@ describe('guided repository cube initialization', () => {
     expect(result).toMatchObject({ kind: 'success', existing: true });
     expect(prompt).not.toHaveBeenCalled();
     expect(createCube).not.toHaveBeenCalled();
+    expect(inputDeps.resolveAssociation).not.toHaveBeenCalled();
+    expect(inputDeps.listCubes).not.toHaveBeenCalled();
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining('Creation options were not used'));
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining('No drone was created.'));
   });
@@ -120,6 +166,132 @@ describe('guided repository cube initialization', () => {
       mode: 'cube-init', context, serverOrigin: 'https://borg.test',
       flags: { yes: true },
     }, inputDeps)).rejects.toMatchObject({ name: 'RepositoryAssociationSaveError' });
+  });
+
+  it('fails closed when more than one accessible cube has the proposed name', async () => {
+    const associateCube = vi.fn();
+    const createCube = vi.fn();
+    const inputDeps = deps({
+      listCubes: vi.fn(async () => [
+        { id: 'cube-a', name: 'repo' },
+        { id: 'cube-b', name: 'repo' },
+      ]),
+      associateCube,
+      createCube,
+    });
+
+    await expect(initializeRepositoryCube({
+      mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+    }, inputDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
+
+    expect(associateCube).not.toHaveBeenCalled();
+    expect(createCube).not.toHaveBeenCalled();
+    expect(inputDeps.saveAssociation).not.toHaveBeenCalled();
+    expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining('More than one accessible cube'));
+  });
+
+  it('does not save local state when the confirmed association operation fails', async () => {
+    const associateCube = vi.fn(async () => { throw new Error('association denied'); });
+    const createCube = vi.fn();
+    const inputDeps = deps({
+      prompt: vi.fn(async () => 'yes'),
+      listCubes: vi.fn(async () => [{ id: 'cube-existing', name: 'repo' }]),
+      associateCube,
+      createCube,
+    });
+
+    await expect(initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+    }, inputDeps)).rejects.toThrow('association denied');
+
+    expect(createCube).not.toHaveBeenCalled();
+    expect(inputDeps.saveAssociation).not.toHaveBeenCalled();
+  });
+
+  it('rejects a resolved association whose authoritative role IDs are absent from cube readback', async () => {
+    const inputDeps = deps({
+      resolveAssociation: vi.fn(async () => ({
+        result: 'resolved',
+        cube_id: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826',
+        name: 'repo',
+        working_repo_name: 'repo',
+        repository: context.publicRepository!,
+        template: 'default',
+        human_seat_role_id: '8c02328a-59f0-472e-b071-f7417405528f',
+        default_worker_role_id: '99999999-9999-4999-8999-999999999999',
+        access: 'manage',
+      })),
+    });
+
+    await expect(initializeRepositoryCube({
+      mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+    }, inputDeps)).rejects.toMatchObject({ name: 'RepositoryAssociationConfirmationError' });
+
+    expect(inputDeps.saveAssociation).not.toHaveBeenCalled();
+    expect(inputDeps.listCubes).not.toHaveBeenCalled();
+  });
+
+  it('rechecks an edited guided name before template selection or creation', async () => {
+    const prompt = vi.fn()
+      .mockResolvedValueOnce('Product API')
+      .mockResolvedValueOnce('yes');
+    const associateCube = vi.fn(async (input) => ({
+      result: 'resolved' as const,
+      cube_id: input.cubeId,
+      name: 'Product API',
+      working_repo_name: input.workingRepoName,
+      repository: input.repository,
+      template: 'default' as const,
+      human_seat_role_id: 'role-human',
+      default_worker_role_id: 'role-default',
+      access: 'manage' as const,
+    }));
+    const createCube = vi.fn();
+    const inputDeps = deps({
+      prompt,
+      listCubes: vi.fn(async () => [{ id: 'cube-existing', name: 'Product API' }]),
+      associateCube,
+      getCube: vi.fn(async () => ({
+        id: 'cube-existing',
+        name: 'Product API',
+        roles: [
+          { id: 'role-human', is_human_seat: true },
+          { id: 'role-default', is_default: true },
+        ],
+      })),
+      createCube,
+    });
+
+    await expect(initializeRepositoryCube({
+      mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+    }, inputDeps)).resolves.toMatchObject({ kind: 'success', existing: true });
+
+    expect(prompt.mock.calls.map(([message]) => message)).toEqual([
+      'Cube name [repo]: ',
+      'Link this repository to that cube? [y/N]: ',
+    ]);
+    expect(inputDeps.write).toHaveBeenCalledWith(
+      'Found an existing cube matching this repository:\n' +
+      '  cube:       Product API\n' +
+      '  repository: /repo\n' +
+      '  server:     https://borg.test\n',
+    );
+    expect(associateCube).toHaveBeenCalledWith(expect.objectContaining({ cubeId: 'cube-existing' }));
+    expect(createCube).not.toHaveBeenCalled();
+  });
+
+  it('does not enter the creation guide for an ordinary client with no matching cube', async () => {
+    const prompt = vi.fn();
+    const createCube = vi.fn();
+    const inputDeps = deps({ prompt, createCube });
+
+    await expect(initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: false,
+    }, inputDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(createCube).not.toHaveBeenCalled();
+    expect(inputDeps.saveAssociation).not.toHaveBeenCalled();
   });
 
   it('requires explicit creation inputs in non-interactive mode', async () => {

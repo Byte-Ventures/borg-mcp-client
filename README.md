@@ -60,8 +60,8 @@ From inside your project repo:
 borg assimilate
 ```
 
-You will be prompted for the self-hosted server to connect to. Borg shows the repository context, lets you edit the proposed cube name, offers the Software Development and Starter templates, and asks for one confirmation. It then creates or resolves that repository's cube, registers the current session as a drone, and launches the selected agent CLI with cube context.
-Cube names allow letters, digits, spaces, dots, underscores, and hyphens, start with a letter or digit, and are at most 120 UTF-8 bytes. Use `--cube-name <name>` to supply one directly. Pass `--yes` to accept the repository name and Software Development template non-interactively.
+You will be prompted for the self-hosted server to connect to. Borg first resolves an existing repository association. Without one, an exact-name accessible cube requires explicit interactive confirmation before Borg associates it with this repository; otherwise Borg shows the repository context, lets you edit the proposed cube name, offers the Software Development and Starter templates, and asks for creation confirmation. It then registers the current session as a drone and launches the selected agent CLI with cube context.
+Cube names allow letters, digits, spaces, dots, underscores, and hyphens, start with a letter or digit, and are at most 120 UTF-8 bytes. Use `--cube-name <name>` to supply one directly. Pass `--yes` to accept the repository name and Software Development template non-interactively only when creating a new cube; it never adopts an existing cube by name.
 
 To initialize the repository cube without creating a drone or launching an agent:
 

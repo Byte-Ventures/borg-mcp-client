@@ -21,10 +21,10 @@ import {
 import { CUBE_INIT_HELP_TEXT, smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const CLIENT_VERSION = '2.1.0';
-const SHARED_VERSION = '0.6.3';
-const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.6.3.tgz';
-const SHARED_INTEGRITY = 'sha512-9osP68zH3a2IbyZr4BHiiz9SF+F4kqqxkwUQiun0GXUzu8Vw/+JorCG8OnyRFm8KpXNZ2Yh3KQxqcRD583l1NA==';
+const CLIENT_VERSION = '2.1.1';
+const SHARED_VERSION = '0.6.4';
+const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.6.4.tgz';
+const SHARED_INTEGRITY = 'sha512-Wm4b0uoOAw9JCz5OTHD0Q2uXKkeWYdkVksdeZvRG8l62XGMY+G8GkNEsZT9L533LbVbQ29GhgF0htjDenQThDg==';
 
 async function validPackage(directory) {
   const packageRoot = join(directory, 'package');
@@ -243,6 +243,8 @@ test('release documentation describes the activated minimal publication lane', a
   assert.match(readme, /After verified publication/);
   assert.match(readme, /npm install -g borgmcp@2\.0\.10/);
   assert.doesNotMatch(readme, /npm install -g borgmcp(?:\s|$)/);
+  assert.match(readme, /exact-name accessible cube requires explicit interactive confirmation/);
+  assert.match(readme, /never adopts an existing cube by name/);
   assert.match(security, /protected npm environment and Trusted Publishing/);
   for (const boundary of [
     'same-run artifact',
@@ -311,11 +313,17 @@ test('release documentation describes the activated minimal publication lane', a
     '30073844074',
     'sha512-429njJ7HVmWhpm8E71RoLzG57Qehy3RSxEzs6fQofVoOIiZXnK4QQDwbQe9MPfhKifbvVN5lGcDKtKAjuC76ww==',
     'v2.1.0',
+    'e0b189bb0dd1f1b12369ab81870113925e1afc41',
+    '10f18e4010c9c518c0ea2184d42ed5388642a53f',
+    '30166498938',
+    'sha512-Gm9n69y3C0feNDYRPEOnShLCscQJ/BoylcRMH+sDDQJmdcbjY8+U6dDTcFv3w+uH5P/IVwJydB8TGRHPXL0FQA==',
+    'v2.1.1',
   ]) assert.ok(releasing.includes(evidence), `Missing immutable release evidence: ${evidence}`);
   assert.match(releasing, /failed before package\s+creation or npm publication/);
   assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
-  assert.match(extraction, /borgmcp-server@0\.1\.20/);
-  assert.match(extraction, /reviewed `v2\.1\.0` source/);
+  assert.match(extraction, /borgmcp-server@0\.1\.21/);
+  assert.match(extraction, /sha512-g0QH4cKcsKuDyZs1MvBmvCoCLaZ4wVI04yHCGSvcAeWghWxSBH0IIF8Q5OFi1pLB7TZXOVP6D3QAabUQ2eJTFg==/);
+  assert.match(extraction, /reviewed `v2\.1\.1` source/);
   assert.doesNotMatch(`${readme}\n${security}\n${releasing}`, /publication is deferred|not yet published/);
 });
 

@@ -25,10 +25,12 @@ import {
 } from './remote-client.js';
 import {
   DEFAULT_LOCAL_SERVER_ORIGIN,
+  associateLocalBorgServerRepositoryCube,
   connectLocalBorgServer,
   createLocalBorgServerCube,
   enrollLocalBorgServer,
   probeLocalBorgServer,
+  resolveLocalBorgServerRepositoryCube,
   resumeLocalBorgServerEnrollment,
   sendBorgServerAttach,
 } from './server-handshake.js';
@@ -237,6 +239,29 @@ export function buildDefaultAssimilateDeps(
       resumeLocalBorgServerEnrollment(apiUrl, {
         ...(onPending === undefined ? {} : { onPending }),
       }),
+
+    resolveRepositoryCube: async (apiUrl, token, input, serverTrustIdentity) => {
+      if (serverTrustIdentity === undefined) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+      }
+      return resolveLocalBorgServerRepositoryCube(
+        apiUrl,
+        serverTrustIdentity,
+        token,
+        input,
+      );
+    },
+    associateRepositoryCube: async (apiUrl, token, input, serverTrustIdentity) => {
+      if (serverTrustIdentity === undefined) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+      }
+      return associateLocalBorgServerRepositoryCube(
+        apiUrl,
+        serverTrustIdentity,
+        token,
+        input,
+      );
+    },
 
     listCubes: async (apiUrl, token, serverTrustIdentity) => {
       if (serverTrustIdentity === undefined) {
