@@ -18,7 +18,7 @@ import {
   verifyManifest,
   verifyReleaseReadiness,
 } from '../scripts/verify-release-readiness.mjs';
-import { smokePackedClient } from '../scripts/smoke-packed-client.mjs';
+import { CUBE_INIT_HELP_TEXT, smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const CLIENT_VERSION = '2.0.11';
@@ -100,6 +100,10 @@ lines.on('line', (line) => {
 `
       : `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
+if (process.argv.slice(2).join('\\0') === 'server\\0cube\\0init\\0--help') {
+  process.stdout.write(${JSON.stringify(CUBE_INIT_HELP_TEXT)});
+  process.exit(0);
+}
 const [command, ...args] = process.argv.slice(3);
 const child = spawn('borg-mcp-server', [command, ...args], { shell: false, stdio: 'inherit' });
 child.on('error', (error) => {

@@ -52,6 +52,19 @@ export function serverHelpText() {
         `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
         `Run borg server <command> --help for server command options.\n`);
 }
+/** Client-owned help for repository cube initialization without a drone. */
+export function cubeInitHelpText() {
+    return (`borg server cube init — initialize this Git repository's cube without creating a drone\n\n` +
+        `Usage:\n` +
+        `  borg server cube init [options]\n\n` +
+        `Options:\n` +
+        `  --host <host>                    Borg server host or URL (bare hosts default to HTTPS)\n` +
+        `  --enroll                         Prompt for a hidden enrollment invitation\n` +
+        `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
+        `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
+        `  --yes, -y                        Skip confirmation prompts\n` +
+        `  --help, -h                       Show this help\n`);
+}
 /**
  * Help text for `borg assimilate --help` — the home for the full assimilate flag
  * set. Model/provider configuration belongs to the selected agent CLI.

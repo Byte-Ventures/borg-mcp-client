@@ -1,12 +1,13 @@
 import { spawn as spawnChild, type SpawnOptions } from 'node:child_process';
 import { constants } from 'node:os';
-import { serverHelpText } from './cli-help.js';
+import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
 
 export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite'] as const;
 export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
 
 export type ParsedServerFacadeArgs =
   | { kind: 'help' }
+  | { kind: 'cube-init-help' }
   | { kind: 'cube-init'; args: string[] }
   | { kind: 'command'; command: ServerLifecycleCommand; args: string[] }
   | { kind: 'error'; reason: 'unknown-command'; command: string };
@@ -17,7 +18,10 @@ export function parseServerFacadeArgs(args: readonly string[]): ParsedServerFaca
     return { kind: 'help' };
   }
   if (command === 'cube' && rest[0] === 'init') {
-    return { kind: 'cube-init', args: rest.slice(1) };
+    const args = rest.slice(1);
+    return args.some(isHelpFlag)
+      ? { kind: 'cube-init-help' }
+      : { kind: 'cube-init', args };
   }
   if (!(SERVER_LIFECYCLE_COMMANDS as readonly string[]).includes(command)) {
     return { kind: 'error', reason: 'unknown-command', command };
@@ -209,6 +213,10 @@ export async function runEarlyServerFacade(
   const parsed = parseServerFacadeArgs(argv.slice(3));
   if (parsed.kind === 'help') {
     output.writeStdout(serverHelpText());
+    return 0;
+  }
+  if (parsed.kind === 'cube-init-help') {
+    output.writeStdout(cubeInitHelpText());
     return 0;
   }
   if (parsed.kind === 'error') {

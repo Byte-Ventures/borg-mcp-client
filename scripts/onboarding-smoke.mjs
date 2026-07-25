@@ -11,7 +11,15 @@ const assimilateHelp = execFileSync(process.execPath, [cli, 'assimilate', '--hel
   encoding: 'utf8',
   timeout: 10_000,
 });
+const cubeInitHelp = execFileSync(process.execPath, [cli, 'server', 'cube', 'init', '--help'], {
+  encoding: 'utf8',
+  timeout: 10_000,
+});
+const { cubeInitHelpText } = await import(new URL('../dist/cli-help.js', import.meta.url));
 if (!version.includes(manifest.version)) throw new Error('borg --version did not report the package version.');
 if (!help.includes('assimilate') || !assimilateHelp.includes('--host')) {
   throw new Error('borg --help is missing standalone onboarding guidance.');
+}
+if (cubeInitHelp !== cubeInitHelpText()) {
+  throw new Error('borg server cube init --help did not match the built help contract.');
 }

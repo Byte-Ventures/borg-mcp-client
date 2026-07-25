@@ -4,6 +4,8 @@ export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
 export type ParsedServerFacadeArgs = {
     kind: 'help';
 } | {
+    kind: 'cube-init-help';
+} | {
     kind: 'cube-init';
     args: string[];
 } | {

@@ -16,6 +16,8 @@ export declare function isHelpFlag(arg: string | undefined): boolean;
 export declare function topLevelHelpText(version: string): string;
 /** Product Design-approved client-owned copy for `borg server --help`. */
 export declare function serverHelpText(): string;
+/** Client-owned help for repository cube initialization without a drone. */
+export declare function cubeInitHelpText(): string;
 /**
  * Help text for `borg assimilate --help` — the home for the full assimilate flag
  * set. Model/provider configuration belongs to the selected agent CLI.

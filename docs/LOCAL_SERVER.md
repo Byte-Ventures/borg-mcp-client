@@ -37,6 +37,23 @@ Commands:
 Run borg server <command> --help for server command options.
 ```
 
+`borg server cube init --help` prints:
+
+```text
+borg server cube init — initialize this Git repository's cube without creating a drone
+
+Usage:
+  borg server cube init [options]
+
+Options:
+  --host <host>                    Borg server host or URL (bare hosts default to HTTPS)
+  --enroll                         Prompt for a hidden enrollment invitation
+  --cube-name <name>               Repository cube name (otherwise edit the proposed name)
+  --template software-dev|starter  New-cube template (default: software-dev)
+  --yes, -y                        Skip confirmation prompts
+  --help, -h                       Show this help
+```
+
 Local server client credentials are stored in the owner-controlled
 `~/.borg/credentials` file with mode 0600. Fresh same-machine setup provisions
 the first owner record there, so bare `borg assimilate` can use it without an

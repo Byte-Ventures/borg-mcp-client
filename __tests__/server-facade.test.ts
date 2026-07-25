@@ -13,6 +13,7 @@ import {
 } from '../src/server-facade.js';
 import { createPromptAdapter } from '../src/assimilate-deps.js';
 import { PromptInterruptedError } from '../src/repository-cube-init.js';
+import { cubeInitHelpText } from '../src/cli-help.js';
 
 class FakeChild extends EventEmitter {
   kill = vi.fn(() => true);
@@ -49,6 +50,16 @@ describe('parseServerFacadeArgs', () => {
     expect(parseServerFacadeArgs(['cube', 'init', '--host', 'localhost:7091'])).toEqual({
       kind: 'cube-init',
       args: ['--host', 'localhost:7091'],
+    });
+  });
+
+  it.each([
+    ['--help'],
+    ['-h'],
+    ['--host', 'localhost:7091', '--help'],
+  ])('routes cube init help before assimilate parsing for %j', (...args) => {
+    expect(parseServerFacadeArgs(['cube', 'init', ...args])).toEqual({
+      kind: 'cube-init-help',
     });
   });
 
@@ -130,6 +141,25 @@ describe('runEarlyServerFacade', () => {
 
     await expect(runEarlyServerFacade(['node', 'borg', 'assimilate'], deps))
       .resolves.toBeNull();
+    expect(deps.spawn).not.toHaveBeenCalled();
+  });
+
+  it.each(['--help', '-h'])('renders cube init %s without client or server work', async (helpFlag) => {
+    const child = new FakeChild();
+    const { deps } = processDeps(child);
+    const output = outputDeps();
+    const client = { cubeInit: vi.fn() };
+
+    await expect(runEarlyServerFacade(
+      ['node', 'borg', 'server', 'cube', 'init', helpFlag],
+      deps,
+      output.output,
+      client,
+    )).resolves.toBe(0);
+
+    expect(output.stdout()).toBe(cubeInitHelpText());
+    expect(output.stderr()).toBe('');
+    expect(client.cubeInit).not.toHaveBeenCalled();
     expect(deps.spawn).not.toHaveBeenCalled();
   });
 
