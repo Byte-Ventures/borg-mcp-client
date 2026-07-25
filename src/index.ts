@@ -76,6 +76,7 @@ import {
   formatRegenMarkdown,
   getDronePlaybook,
   getDronePlaybookChapter,
+  markArrivalAnnouncedThisProcess,
   nullTaxonomyTip,
   regenWakePathDroneLabel,
 } from './regen-format.js';
@@ -728,10 +729,12 @@ export async function main() {
           if (!message || typeof message !== 'string') throw new Error('message is required');
           const active = await getActiveCube();
           if (!active) throw new Error('Not assimilated to a cube. Use borg_assimilate <cube-name> first.');
-          if (lifecycleSignalForMessage(message)) {
+          const lifecycleSignal = lifecycleSignalForMessage(message);
+          if (lifecycleSignal) {
             const decision = await shouldSuppressLifecycleLog(active, message);
             if (decision.suppress) {
               await recordLifecycleLog(active, message);
+              if (lifecycleSignal === 'arrival') markArrivalAnnouncedThisProcess();
               return {
                 content: [
                   {
@@ -760,6 +763,7 @@ export async function main() {
           };
           const result = await appendLog(active.sessionToken, active.apiUrl, message, appendOpts);
           await recordLifecycleLog(active, message);
+          if (lifecycleSignal === 'arrival') markArrivalAnnouncedThisProcess();
           const echo = result.routing?.message ? `\n${result.routing.message}` : '';
           // gh#534: surface to the SENDER which directed recipients are
           // currently unreachable via the wake path. The message is delivered

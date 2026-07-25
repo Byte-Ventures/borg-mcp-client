@@ -4,6 +4,7 @@ import {
   formatLogEntryMarkdown,
   getDronePlaybook,
   getDronePlaybookChapter,
+  markArrivalAnnouncedThisProcess,
   nullTaxonomyTip,
   formatRegenMarkdown,
   regenWakePathDroneLabel,
@@ -579,6 +580,59 @@ describe('DRONE_PLAYBOOK core/chapter split (gh#912)', () => {
     // operating-loop / idle / routing rule-spine stays ONLY in the core
     expect(chapter).not.toContain('READY:');
     expect(chapter).not.toContain('multi-seat DELIVERABLE');
+  });
+});
+
+describe('ARRIVAL instruction process state (gh#136)', () => {
+  it('suppresses the canonical instruction only after a successful ARRIVAL is recorded', () => {
+    __resetRegenSessionState();
+    const initial = getDronePlaybook();
+    expect(initial).toContain('ARRIVAL:');
+    expect(initial).toContain('an explicit `/mcp` reconnect may show it again');
+    expect(initial).not.toContain('skip if already posted this session');
+
+    markArrivalAnnouncedThisProcess();
+
+    expect(getDronePlaybook()).not.toContain('ARRIVAL:');
+    __resetRegenSessionState();
+  });
+
+  it('survives compact orientation and suppresses the next full regen in the same process', () => {
+    const result = {
+      cube: { name: 'borg-mcp', cube_directive: '', message_taxonomy: [] },
+      role: { name: 'Builder', detailed_description: 'Workflow:\nBuild things.' },
+      drone: { label: 'builder-1' },
+      roles: [{ id: 'role-1', name: 'Builder', short_description: 'builds', is_default: true }],
+      drones: [{ id: 'drone-1', label: 'builder-1', role_id: 'role-1', last_seen: '2026-07-25T00:00:00.000Z' }],
+      behind_by: 0,
+    };
+    __resetRegenSessionState();
+    markArrivalAnnouncedThisProcess();
+
+    const orientation = formatLeanOrientation({
+      cubeName: 'borg-mcp',
+      droneLabel: 'builder-1',
+      roleName: 'Builder',
+      inboxPath: '/tmp/inbox',
+      agentKind: 'opencode',
+      source: 'compact',
+    });
+    const regen = formatRegenMarkdown(result, { mode: 'full' });
+
+    expect(orientation).toContain('borg_regen mode="full"');
+    expect(regen).toContain('## How to operate as a Drone');
+    expect(regen).not.toContain('ARRIVAL:');
+    __resetRegenSessionState();
+  });
+
+  it('shows the instruction again after process state resets', () => {
+    __resetRegenSessionState();
+    markArrivalAnnouncedThisProcess();
+    expect(getDronePlaybook()).not.toContain('ARRIVAL:');
+
+    __resetRegenSessionState();
+
+    expect(getDronePlaybook()).toContain('ARRIVAL:');
   });
 });
 
