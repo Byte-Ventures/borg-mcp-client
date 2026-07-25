@@ -16,6 +16,8 @@ import {
   type ServerFacadeProcessDeps,
 } from '../src/server-facade.js';
 
+vi.mock('../src/ensure-mcp-config.js', () => ({ ensureCliMcpConfigured: vi.fn() }));
+
 const SERVER_TRUST_IDENTITY = 'spki-sha256:test-server';
 
 function makeEntryDeps(question: PromptQuestion) {
