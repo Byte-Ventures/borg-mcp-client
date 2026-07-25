@@ -81,7 +81,7 @@ describe('borg server help', () => {
       `  --enroll                         Prompt for a hidden enrollment invitation\n` +
       `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
       `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
-      `  --yes, -y                        Skip confirmation prompts\n` +
+      `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
       `  --help, -h                       Show this help\n`,
     );
     expect(cubeInitHelpText()).not.toMatch(/--worktree|--here|--cli|--model/);

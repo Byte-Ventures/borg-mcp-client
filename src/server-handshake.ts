@@ -4,8 +4,12 @@ import {
   ENROLLMENT_EXCHANGE_PATH,
   HEALTH_PATH,
   PROTOCOL_INFO_PATH,
+  REPOSITORY_CUBE_ASSOCIATION_PATH,
+  REPOSITORY_CUBE_RESOLVE_PATH,
   createAttachRequestEnvelope,
   createProtocolEnvelope,
+  decodeAssociateRepositoryCubeRequest,
+  decodeAssociateRepositoryCubeResponseEnvelope,
   decodeAttachResponseEnvelope,
   decodeCreateCubeRequest,
   decodeCreateCubeResponseEnvelope,
@@ -13,12 +17,16 @@ import {
   decodeEnrollmentExchangeResponseEnvelope,
   decodeProtocolErrorEnvelope,
   decodeProtocolTagPreflight,
+  decodeResolveRepositoryCubeRequest,
+  decodeResolveRepositoryCubeResponseEnvelope,
   ErrorCode,
+  type AssociateRepositoryCubeResponse,
   type CreateCubeRepository,
   type CreateCubeResponse,
   type CubeTemplate,
   type DroneRuntimeMetadata,
   type ProtocolTagPreflight,
+  type ResolveRepositoryCubeResponse,
   type ServerCapability,
 } from 'borgmcp-shared/protocol';
 import { createHash, randomUUID } from 'node:crypto';
@@ -49,6 +57,9 @@ import {
   BorgServerUnreachableError,
   CubeCreationConfirmationError,
   CubeCreationOutcomeUnknownError,
+  RepositoryAssociationOperationError,
+  RepositoryAssociationOutcomeUnknownError,
+  RepositoryAssociationResolutionError,
 } from './server-errors.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
@@ -185,7 +196,7 @@ export interface ServerAttachResult {
 }
 
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v4.
+ * Attach an enrolled client principal to one granted cube/role over protocol v5.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
  * OS keychain (keyed by the stable per-seat identity) BEFORE this request, so an
  * interrupted/lost response is recovered by re-sending the exact same bearer —
@@ -558,6 +569,210 @@ export async function resumeBorgServerEnrollment(
   });
 }
 
+async function requireMatchingServerCredential(
+  origin: string,
+  trustIdentity: string,
+  parentCredential: string,
+  loadCredentialRecord: typeof getServerCredentialRecord,
+): Promise<void> {
+  const active = await loadCredentialRecord(origin, trustIdentity);
+  if (!active || active.credential !== parentCredential || !active.clientId) {
+    throw new BorgServerError('CREDENTIAL_REJECTED', 'stored Borg server credential was rejected');
+  }
+}
+
+async function protocolErrorCode(response: Response): Promise<ErrorCode | undefined> {
+  try {
+    return decodeProtocolErrorEnvelope(
+      JSON.parse(await readHandshakeBodyWithTimeout(response)),
+    ).error.code;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Resolve one client-scoped repository association without mutation. */
+export async function resolveBorgServerRepositoryCube(
+  origin: string,
+  trustIdentity: string,
+  parentCredential: string,
+  input: { workingRepoName: string; repository: CreateCubeRepository },
+  deps: {
+    fetchImpl?: FetchLike;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+  } = {},
+): Promise<ResolveRepositoryCubeResponse> {
+  await requireMatchingServerCredential(
+    origin,
+    trustIdentity,
+    parentCredential,
+    deps.loadCredentialRecord ?? getServerCredentialRecord,
+  );
+  const request = decodeResolveRepositoryCubeRequest({
+    working_repo_name: input.workingRepoName,
+    repository: input.repository,
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, REPOSITORY_CUBE_RESOLVE_PATH), {
+      method: 'POST',
+      redirect: 'error',
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${parentCredential}`,
+      },
+      body: JSON.stringify(createProtocolEnvelope(randomUUID(), request)),
+    });
+  } catch (error) {
+    throw new RepositoryAssociationResolutionError();
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
+  }
+  if (response.status !== 200) {
+    throw new RepositoryAssociationResolutionError();
+  }
+  try {
+    const decoded = decodeResolveRepositoryCubeResponseEnvelope(
+      JSON.parse(await readHandshakeBodyWithTimeout(response)),
+    ).payload;
+    if (
+      decoded.result === 'resolved' &&
+      (decoded.repository.kind !== request.repository.kind ||
+        decoded.repository.value !== request.repository.value ||
+        decoded.working_repo_name !== request.working_repo_name)
+    ) {
+      throw new Error('association mismatch');
+    }
+    return decoded;
+  } catch {
+    throw new RepositoryAssociationResolutionError();
+  }
+}
+
+export async function resolveLocalBorgServerRepositoryCube(
+  origin: string,
+  trustIdentity: string,
+  parentCredential: string,
+  input: { workingRepoName: string; repository: CreateCubeRepository },
+  deps: { loadTrust?: typeof loadBorgServerTrust } = {},
+): Promise<ResolveRepositoryCubeResponse> {
+  const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+  if (trust.identity !== trustIdentity) {
+    throw new BorgServerTrustError('Borg server trust identity changed; refusing repository resolution');
+  }
+  return resolveBorgServerRepositoryCube(origin, trustIdentity, parentCredential, input, {
+    fetchImpl: trust.fetchImpl,
+  });
+}
+
+/** Atomically associate an explicit accessible cube after local confirmation. */
+export async function associateBorgServerRepositoryCube(
+  origin: string,
+  trustIdentity: string,
+  parentCredential: string,
+  input: { cubeId: string; workingRepoName: string; repository: CreateCubeRepository },
+  deps: {
+    fetchImpl?: FetchLike;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+  } = {},
+): Promise<AssociateRepositoryCubeResponse> {
+  await requireMatchingServerCredential(
+    origin,
+    trustIdentity,
+    parentCredential,
+    deps.loadCredentialRecord ?? getServerCredentialRecord,
+  );
+  const request = decodeAssociateRepositoryCubeRequest({
+    cube_id: input.cubeId,
+    working_repo_name: input.workingRepoName,
+    repository: input.repository,
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await (deps.fetchImpl ?? fetch)(handshakeUrl(origin, REPOSITORY_CUBE_ASSOCIATION_PATH), {
+      method: 'PUT',
+      redirect: 'error',
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${parentCredential}`,
+      },
+      body: JSON.stringify(createProtocolEnvelope(randomUUID(), request)),
+    });
+  } catch {
+    throw new RepositoryAssociationOutcomeUnknownError();
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (response.status === 401) {
+    throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server enrollment was rejected');
+  }
+  if (response.status === 403) {
+    if (await protocolErrorCode(response) !== ErrorCode.ACCESS_DENIED) {
+      throw new RepositoryAssociationOutcomeUnknownError();
+    }
+    throw new RepositoryAssociationOperationError('access-denied');
+  }
+  if (response.status === 409) {
+    const code = await protocolErrorCode(response);
+    if (code === ErrorCode.REPOSITORY_ALREADY_ASSOCIATED) {
+      throw new RepositoryAssociationOperationError('repository-already-associated');
+    }
+    if (code === ErrorCode.CUBE_ALREADY_ASSOCIATED) {
+      throw new RepositoryAssociationOperationError('cube-already-associated');
+    }
+    if (code === ErrorCode.INVALID_INPUT) {
+      throw new RepositoryAssociationOperationError('invalid-cube');
+    }
+    throw new RepositoryAssociationOutcomeUnknownError();
+  }
+  if (response.status !== 200) {
+    throw new RepositoryAssociationOutcomeUnknownError();
+  }
+  try {
+    const decoded = decodeAssociateRepositoryCubeResponseEnvelope(
+      JSON.parse(await readHandshakeBodyWithTimeout(response)),
+    ).payload;
+    if (
+      decoded.cube_id !== request.cube_id ||
+      decoded.repository.kind !== request.repository.kind ||
+      decoded.repository.value !== request.repository.value ||
+      decoded.working_repo_name !== request.working_repo_name
+    ) {
+      throw new Error('association mismatch');
+    }
+    return decoded;
+  } catch (error) {
+    throw new RepositoryAssociationOutcomeUnknownError();
+  }
+}
+
+export async function associateLocalBorgServerRepositoryCube(
+  origin: string,
+  trustIdentity: string,
+  parentCredential: string,
+  input: { cubeId: string; workingRepoName: string; repository: CreateCubeRepository },
+  deps: { loadTrust?: typeof loadBorgServerTrust } = {},
+): Promise<AssociateRepositoryCubeResponse> {
+  const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+  if (trust.identity !== trustIdentity) {
+    throw new BorgServerTrustError('Borg server trust identity changed; refusing repository association');
+  }
+  return associateBorgServerRepositoryCube(origin, trustIdentity, parentCredential, input, {
+    fetchImpl: trust.fetchImpl,
+  });
+}
+
 /**
  * Create one repository cube through the narrow owner capability. The retry
  * key is persisted in the OS keychain before network I/O and reused exactly
@@ -652,16 +867,15 @@ export async function createBorgServerCube(
     throw new CubeCreationConfirmationError('The Borg server rejected the repository cube operation identity.');
   }
   if (response.status !== 201) {
-    throw new Error(`Borg server cube creation failed (HTTP ${response.status})`);
+    throw new CubeCreationOutcomeUnknownError();
   }
   let decoded: ReturnType<typeof decodeCreateCubeResponseEnvelope>;
   try {
     decoded = decodeCreateCubeResponseEnvelope(
       JSON.parse(await readHandshakeBodyWithTimeout(response)),
     );
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('response limit')) throw error;
-    throw new Error('Borg server returned an invalid cube creation envelope');
+  } catch {
+    throw new CubeCreationOutcomeUnknownError();
   }
   if (
     decoded.payload.repository.kind !== pending.repository.kind ||
@@ -669,9 +883,13 @@ export async function createBorgServerCube(
   ) {
     throw new CubeCreationConfirmationError();
   }
-  await (deps.clearCubeCreation ?? clearPendingServerCubeCreation)(
-    pending as PendingServerCubeCreationRecord,
-  );
+  try {
+    await (deps.clearCubeCreation ?? clearPendingServerCubeCreation)(
+      pending as PendingServerCubeCreationRecord,
+    );
+  } catch {
+    throw new CubeCreationConfirmationError('The server confirmed the cube, but local retry state could not be finalized.');
+  }
   return decoded.payload;
 }
 

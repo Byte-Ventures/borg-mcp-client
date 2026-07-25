@@ -381,8 +381,13 @@ describe('real-adapter SIGINT integration for borg server cube init', () => {
       throw new Error('SIGINT');
     });
     const createCube = vi.fn();
-    const getIdentity = vi.fn();
-    const getAssociation = vi.fn();
+    const getIdentity = vi.fn(async () => ({
+      kind: 'origin' as const,
+      value: 'https://github.com/org/repo',
+    }));
+    const getAssociation = vi.fn(async () => null);
+    const resolveRepositoryCube = vi.fn(async () => ({ result: 'none' as const }));
+    const associateRepositoryCube = vi.fn();
     const saveAssociation = vi.fn();
     const getCube = vi.fn();
 
@@ -426,6 +431,8 @@ describe('real-adapter SIGINT integration for borg server cube init', () => {
             serverCapabilities: ['create_cube'],
           })),
           resumeServerEnrollment: vi.fn(async () => null),
+          resolveRepositoryCube,
+          associateRepositoryCube,
           listCubes: vi.fn(async () => []),
           getCube: getCube,
           createCube: createCube,
@@ -464,8 +471,9 @@ describe('real-adapter SIGINT integration for borg server cube init', () => {
     );
 
     expect(exitCode).toBe(130);
-    expect(stderr).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(stderr).toHaveBeenCalledWith('\nCube creation cancelled. No cube, repository binding, or drone was created.\n');
     expect(createCube).not.toHaveBeenCalled();
+    expect(associateRepositoryCube).not.toHaveBeenCalled();
     expect(saveAssociation).not.toHaveBeenCalled();
   });
 });

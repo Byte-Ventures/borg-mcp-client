@@ -7,8 +7,8 @@ import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } f
 import type { SeatBinding } from './seats.js';
 import { type LaunchApprovalDecision } from './cli-tool-approval.js';
 import { type WorkingRepo } from './working-repo.js';
-import type { CreateCubeRepository, CubeTemplate } from 'borgmcp-shared/protocol';
-import { type RepositoryCubeCreation } from './repository-cube-init.js';
+import type { AssociateRepositoryCubeResponse, CreateCubeRepository, CubeTemplate } from 'borgmcp-shared/protocol';
+import { type RepositoryCubeCreation, type RepositoryCubeResolution } from './repository-cube-init.js';
 import type { GitRepositoryContext, RepositoryAssociation } from './repository-identity.js';
 export interface AssimilateFlags {
     worktree?: string;
@@ -155,6 +155,15 @@ export interface AssimilateDeps {
         trustIdentity: string;
         serverCapabilities?: readonly string[];
     } | null>;
+    resolveRepositoryCube: (apiUrl: string, token: string, input: {
+        workingRepoName: string;
+        repository: CreateCubeRepository;
+    }, serverTrustIdentity?: string) => Promise<RepositoryCubeResolution>;
+    associateRepositoryCube: (apiUrl: string, token: string, input: {
+        cubeId: string;
+        workingRepoName: string;
+        repository: CreateCubeRepository;
+    }, serverTrustIdentity?: string) => Promise<AssociateRepositoryCubeResponse>;
     listCubes: (apiUrl: string, token: string, serverTrustIdentity?: string) => Promise<CubeSummary[]>;
     getCube: (apiUrl: string, token: string, cubeId: string, serverTrustIdentity?: string) => Promise<CubeDetail>;
     createCube: (apiUrl: string, token: string, params: {

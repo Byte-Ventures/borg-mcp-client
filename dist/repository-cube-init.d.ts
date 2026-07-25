@@ -1,4 +1,4 @@
-import type { CreateCubeRepository, CreateCubeResponse, CubeTemplate } from 'borgmcp-shared/protocol';
+import type { AssociateRepositoryCubeResponse, CreateCubeRepository, CreateCubeResponse, CubeTemplate, ResolveRepositoryCubeResponse } from 'borgmcp-shared/protocol';
 import type { GitRepositoryContext, RepositoryAssociation } from './repository-identity.js';
 export interface RepositoryCubeDetail {
     id: string;
@@ -12,6 +12,7 @@ export interface RepositoryCubeCreation {
     response: CreateCubeResponse;
     cube: RepositoryCubeDetail;
 }
+export type RepositoryCubeResolution = ResolveRepositoryCubeResponse;
 export interface RepositoryCubeInitFlags {
     cubeName?: string;
     template?: string;
@@ -25,6 +26,16 @@ export interface RepositoryCubeInitDeps {
     getIdentity(context: GitRepositoryContext): Promise<CreateCubeRepository>;
     getAssociation(repository: CreateCubeRepository): Promise<RepositoryAssociation | null>;
     saveAssociation(repository: CreateCubeRepository, association: RepositoryAssociation): Promise<void>;
+    resolveAssociation(repository: CreateCubeRepository, workingRepoName: string): Promise<RepositoryCubeResolution>;
+    listCubes(): Promise<Array<{
+        id: string;
+        name: string;
+    }>>;
+    associateCube(input: {
+        cubeId: string;
+        workingRepoName: string;
+        repository: CreateCubeRepository;
+    }): Promise<AssociateRepositoryCubeResponse>;
     getCube(cubeId: string): Promise<RepositoryCubeDetail>;
     createCube(input: {
         name: string;
@@ -44,6 +55,9 @@ export type RepositoryCubeInitResult = {
 export declare class RepositoryAssociationSaveError extends Error {
     constructor();
 }
+export declare class RepositoryAssociationConfirmationError extends Error {
+    constructor();
+}
 export declare class PromptInterruptedError extends Error {
     constructor();
 }
@@ -53,5 +67,6 @@ export declare function initializeRepositoryCube(input: {
     context: GitRepositoryContext;
     serverOrigin: string;
     flags: RepositoryCubeInitFlags;
+    canCreate?: boolean;
 }, deps: RepositoryCubeInitDeps): Promise<RepositoryCubeInitResult>;
 //# sourceMappingURL=repository-cube-init.d.ts.map

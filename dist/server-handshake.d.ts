@@ -1,4 +1,4 @@
-import { type CreateCubeRepository, type CreateCubeResponse, type CubeTemplate, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ServerCapability } from 'borgmcp-shared/protocol';
+import { type AssociateRepositoryCubeResponse, type CreateCubeRepository, type CreateCubeResponse, type CubeTemplate, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ResolveRepositoryCubeResponse, type ServerCapability } from 'borgmcp-shared/protocol';
 import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, type ActivateSeatOutcome, type BindPendingSeatOutcome, type SeatBinding, type SeatOperation as ServerSessionOperation } from './seats.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
@@ -51,7 +51,7 @@ export interface ServerAttachResult {
     result: 'created' | 'reused';
 }
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v4.
+ * Attach an enrolled client principal to one granted cube/role over protocol v5.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
  * OS keychain (keyed by the stable per-seat identity) BEFORE this request, so an
  * interrupted/lost response is recovered by re-sending the exact same bearer —
@@ -133,6 +133,36 @@ export declare function resumeBorgServerEnrollment(origin: string, trustIdentity
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     onPending?: () => void;
 }): Promise<NewServerEnrollment | null>;
+/** Resolve one client-scoped repository association without mutation. */
+export declare function resolveBorgServerRepositoryCube(origin: string, trustIdentity: string, parentCredential: string, input: {
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+}, deps?: {
+    fetchImpl?: FetchLike;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+}): Promise<ResolveRepositoryCubeResponse>;
+export declare function resolveLocalBorgServerRepositoryCube(origin: string, trustIdentity: string, parentCredential: string, input: {
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+}, deps?: {
+    loadTrust?: typeof loadBorgServerTrust;
+}): Promise<ResolveRepositoryCubeResponse>;
+/** Atomically associate an explicit accessible cube after local confirmation. */
+export declare function associateBorgServerRepositoryCube(origin: string, trustIdentity: string, parentCredential: string, input: {
+    cubeId: string;
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+}, deps?: {
+    fetchImpl?: FetchLike;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+}): Promise<AssociateRepositoryCubeResponse>;
+export declare function associateLocalBorgServerRepositoryCube(origin: string, trustIdentity: string, parentCredential: string, input: {
+    cubeId: string;
+    workingRepoName: string;
+    repository: CreateCubeRepository;
+}, deps?: {
+    loadTrust?: typeof loadBorgServerTrust;
+}): Promise<AssociateRepositoryCubeResponse>;
 /**
  * Create one repository cube through the narrow owner capability. The retry
  * key is persisted in the OS keychain before network I/O and reused exactly

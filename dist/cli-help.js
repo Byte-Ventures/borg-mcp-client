@@ -62,7 +62,7 @@ export function cubeInitHelpText() {
         `  --enroll                         Prompt for a hidden enrollment invitation\n` +
         `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
         `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
-        `  --yes, -y                        Skip confirmation prompts\n` +
+        `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
         `  --help, -h                       Show this help\n`);
 }
 /**
@@ -89,11 +89,12 @@ export function assimilateHelpText(version) {
         `  --no-template              Unsupported for repository cube creation\n` +
         `  --cli claude|codex|opencode         Agent CLI to launch (default: claude)\n` +
         `  --model claude:<model>   Legacy Claude model override (configure models in the agent CLI)\n` +
-        `  --yes, -y                  Skip confirmation prompts\n\n` +
+        `  --yes, -y                  Accept new-cube defaults; never adopt by name\n\n` +
         `Creation shows repository context, name, template, and one confirmation. An existing\n` +
-        `repository association skips all prompts. An enrolled owner client may create an\n` +
-        `idempotent repository cube; ordinary clients\n` +
-        `require an explicit cube grant. Agent seats begin only after enrollment. Preview only.\n` +
+        `repository association skips all prompts. One accessible exact-name legacy cube requires\n` +
+        `explicit interactive adoption; ambiguous matches fail closed. An enrolled owner client may\n` +
+        `create an idempotent repository cube; ordinary clients require an explicit cube grant.\n` +
+        `Agent seats begin only after enrollment. Preview only.\n` +
         `See docs/LOCAL_SERVER.md for self-hosted setup and current status.\n\n` +
         `For local or provider-specific models, configure the selected agent CLI directly.\n` +
         `OpenCode supports Ollama and other providers through its own model configuration.\n`);

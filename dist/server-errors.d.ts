@@ -52,6 +52,17 @@ export declare class CubeCreationOutcomeUnknownError extends Error {
 export declare class CubeCreationConfirmationError extends Error {
     constructor(message?: string);
 }
+export type RepositoryAssociationFailure = 'repository-already-associated' | 'cube-already-associated' | 'access-denied' | 'invalid-cube';
+export declare class RepositoryAssociationOperationError extends Error {
+    readonly failure: RepositoryAssociationFailure;
+    constructor(failure: RepositoryAssociationFailure);
+}
+export declare class RepositoryAssociationOutcomeUnknownError extends Error {
+    constructor();
+}
+export declare class RepositoryAssociationResolutionError extends Error {
+    constructor();
+}
 /** Exact retired TTL-replacement state: two saved bearers and no safe implicit winner. */
 export declare class LegacySessionCredentialCollisionError extends Error {
     readonly origin: string;

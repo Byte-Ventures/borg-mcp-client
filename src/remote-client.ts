@@ -712,7 +712,7 @@ async function authedFetch(
           parsed.error !== null && typeof parsed.error === 'object' &&
           parsed.error.code === ROLE_SECTION_CONFLICT_CODE
         ) {
-          // Shared 0.6.3 intentionally omits this server-local code. Re-validate the whole
+          // The shared protocol intentionally omits this server-local code. Re-validate the whole
           // envelope through the strict shared decoder with only the recognized
           // code substituted; no server-provided diagnostic is ever surfaced.
           decodeProtocolErrorEnvelope({

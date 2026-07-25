@@ -37,6 +37,7 @@ beforeEach(() => {
 
 function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
   let repositoryAssociation: any = null;
+  let serverRepositoryResolution: any = { result: 'none' };
   const deps: AssimilateDeps = {
     runSync: vi.fn((_cmd: string, args: string[]) =>
       args[0] === 'remote'
@@ -88,6 +89,21 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       serverCapabilities: ['create_cube'],
     })),
     resumeServerEnrollment: vi.fn(async () => null),
+    resolveRepositoryCube: vi.fn(async () => serverRepositoryResolution),
+    associateRepositoryCube: vi.fn(async (_apiUrl, _token, input) => {
+      serverRepositoryResolution = {
+        result: 'resolved',
+        cube_id: input.cubeId,
+        name: 'myrepo',
+        working_repo_name: input.workingRepoName,
+        repository: input.repository,
+        template: 'default',
+        human_seat_role_id: 'role-human',
+        default_worker_role_id: 'role-default',
+        access: 'manage',
+      };
+      return serverRepositoryResolution;
+    }),
     listCubes: vi.fn(async () => []),
     getCube: vi.fn(async () => { throw new Error('not called in this scenario'); }),
     createCube: vi.fn(async (_apiUrl, _token, params) => ({
@@ -153,6 +169,30 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       serverCapabilities: connected.serverCapabilities ?? ['create_cube'],
     };
   });
+  if (!overrides.resolveRepositoryCube) {
+    deps.resolveRepositoryCube = vi.fn(async (...args: Parameters<AssimilateDeps['resolveRepositoryCube']>) => {
+      if (serverRepositoryResolution.result === 'resolved') return serverRepositoryResolution;
+      if (overrides.listCubes && overrides.getCube) {
+        const listed = await deps.listCubes(args[0], args[1], args[3]);
+        const match = listed.filter((cube) => cube.name === args[2].workingRepoName);
+        if (match.length === 1) {
+          const cube = await deps.getCube(args[0], args[1], match[0].id, args[3]);
+          return {
+            result: 'resolved',
+            cube_id: cube.id,
+            name: cube.name,
+            working_repo_name: args[2].workingRepoName,
+            repository: args[2].repository,
+            template: 'default',
+            human_seat_role_id: cube.roles.find((role) => role.is_human_seat)?.id ?? cube.roles[0]?.id,
+            default_worker_role_id: cube.roles.find((role) => role.is_default)?.id ?? cube.roles[0]?.id,
+            access: 'manage',
+          };
+        }
+      }
+      return { result: 'none' };
+    });
+  }
   const createCube = deps.createCube;
   deps.createCube = vi.fn(async (...args: Parameters<AssimilateDeps['createCube']>) => {
     const params = args[2];
@@ -166,8 +206,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     } else {
       created = await createCube(...args) as any;
     }
-    if (created?.response && created?.cube) return created;
-    return {
+    const creation = created?.response && created?.cube ? created : {
       response: {
         result: 'created',
         cube_id: created.id,
@@ -181,6 +220,13 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       },
       cube: created,
     };
+    serverRepositoryResolution = {
+      ...creation.response,
+      result: 'resolved',
+      human_seat_role_id: creation.cube.roles.find((role: any) => role.is_human_seat)?.id ?? creation.cube.roles[0]?.id,
+      default_worker_role_id: creation.cube.roles.find((role: any) => role.is_default)?.id ?? creation.cube.roles[0]?.id,
+    };
+    return creation;
   }) as AssimilateDeps['createCube'];
   return deps;
 }
@@ -1974,20 +2020,21 @@ describe('runAssimilate: step 5 (first-drone bootstrap)', () => {
 });
 
 describe('runAssimilate: step 4 (cube existence + detail)', () => {
-  it('uses the idempotent creation response instead of listing cubes by name', async () => {
+  it('discovers an exact-name legacy cube and refuses to auto-adopt it with --yes', async () => {
     const listCubes = vi.fn(async () => [{ id: 'cube-existing', name: 'myrepo' }]);
-    const createCube = vi.fn(async () => ({
-      id: 'cube-existing',
-      name: 'myrepo',
-      roles: [{ id: 'r-default', name: 'Drone', is_default: true, is_human_seat: false }],
-    }));
+    const createCube = vi.fn();
+    const stderr = vi.fn();
     const runSync = vi.fn((cmd: string, args: string[]) =>
       args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
     );
-    const deps = makeStubDeps({ listCubes, createCube, runSync, getActiveCube: vi.fn(async () => null) });
-    await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(createCube).toHaveBeenCalledOnce();
-    expect(listCubes).not.toHaveBeenCalled();
+    const deps = makeStubDeps({ stderr, listCubes, createCube, runSync, getActiveCube: vi.fn(async () => null) });
+    await expect(runAssimilate({ role: undefined, flags: { yes: true } }, deps)).resolves.toBe(1);
+    expect(listCubes).toHaveBeenCalledOnce();
+    expect(createCube).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith(
+      'Adopting an existing cube requires interactive confirmation; --yes is not accepted here.\n' +
+      'Rerun without --yes in an interactive terminal. No cube, repository binding, or drone was created.\n',
+    );
   });
 });
 
@@ -2688,6 +2735,12 @@ describe('runAssimilate: #1015 authority selection', () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
+      getRepositoryAssociation: vi.fn(async () => ({
+        cubeId: 'cube-1',
+        name: 'myrepo',
+        workingRepoName: 'myrepo',
+        template: 'default',
+      })),
       listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
       getCube: vi.fn(async () => ({
         id: 'cube-1',

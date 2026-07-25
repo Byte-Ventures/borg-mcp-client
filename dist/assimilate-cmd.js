@@ -19,11 +19,11 @@ import { installBorgPlugin } from './opencode-plugin.js';
 import { computeOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
-import { BorgServerError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, LegacySessionCredentialCollisionError, } from './server-errors.js';
+import { BorgServerError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, LegacySessionCredentialCollisionError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
 import { resolveWorkingRepo } from './working-repo.js';
-import { initializeRepositoryCube, RepositoryAssociationSaveError, validRepositoryCubeName, } from './repository-cube-init.js';
+import { initializeRepositoryCube, RepositoryAssociationConfirmationError, RepositoryAssociationSaveError, validRepositoryCubeName, } from './repository-cube-init.js';
 const PRIVATE_STATE_UNAVAILABLE_COPY = [
     'Borg could not safely prepare its private local state.',
     'No Borg server or cube change was made.',
@@ -327,84 +327,58 @@ export async function runAssimilate(args, deps) {
     const originalCwd = deps.cwd();
     let initialized;
     try {
-        if (!auth.serverCapabilities.includes('create_cube') && !existing) {
-            const repository = await deps.getRepositoryIdentity(repositoryContext);
-            const association = await deps.getRepositoryAssociation(auth.serverTrustIdentity, repository);
-            if (association) {
-                initialized = await initializeRepositoryCube({
-                    mode, context: repositoryContext, serverOrigin: auth.apiUrl, flags: args.flags,
-                }, {
-                    isTTY: deps.isTTY,
-                    prompt: deps.prompt,
-                    write: deps.stderr,
-                    getIdentity: async () => repository,
-                    getAssociation: async () => association,
-                    saveAssociation: (identity, saved) => deps.saveRepositoryAssociation(auth.serverTrustIdentity, identity, saved),
-                    getCube: (cubeId) => deps.getCube(auth.apiUrl, auth.token, cubeId, auth.serverTrustIdentity),
-                    createCube: (params) => deps.createCube(auth.apiUrl, auth.token, params, auth.serverTrustIdentity),
-                });
-            }
-            else {
-                const candidateName = args.flags.cubeName ?? repositoryContext.derivedName;
-                const accessible = await deps.listCubes(auth.apiUrl, auth.token, auth.serverTrustIdentity);
-                const matches = accessible.filter((cube) => cube.name === candidateName);
-                if (matches.length !== 1) {
-                    deps.stderr(matches.length === 0
-                        ? `This enrolled client cannot create a cube on ${auth.apiUrl}. Ask the server operator to grant access to a cube, then rerun ${localAssimilateCommand(auth.apiUrl)}.\n`
-                        : `More than one accessible cube is named '${candidateName}'. Nothing was changed. Ask the server operator for an unambiguous repository cube grant.\n`);
-                    return 1;
-                }
-                const cube = await deps.getCube(auth.apiUrl, auth.token, matches[0].id, auth.serverTrustIdentity);
-                const association = {
-                    cubeId: cube.id,
-                    name: cube.name,
-                    workingRepoName: repositoryContext.derivedName,
-                    template: 'default',
-                };
-                try {
-                    await deps.saveRepositoryAssociation(auth.serverTrustIdentity, repository, association);
-                }
-                catch {
-                    throw new RepositoryAssociationSaveError();
-                }
-                const response = {
-                    result: 'resolved',
-                    cube_id: cube.id,
-                    name: cube.name,
-                    working_repo_name: repositoryContext.derivedName,
-                    repository,
-                    template: 'default',
-                    human_seat_role_id: cube.roles.find((role) => role.is_human_seat)?.id ?? '',
-                    default_worker_role_id: cube.roles.find((role) => role.is_default)?.id ?? '',
-                    access: 'manage',
-                };
-                deps.stderr(`Cube already initialized.\n  Name: ${cube.name}\n  Template: Default (legacy)\n` +
-                    `  Repository: ${repositoryContext.root}\n  Server: ${auth.apiUrl}\n` +
-                    (mode === 'cube-init'
-                        ? `No drone was created.\nNext: borg assimilate --host ${shellEscape(auth.apiUrl)}\n`
-                        : 'Continuing with role and seat setup...\n'));
-                initialized = { kind: 'success', creation: { response, cube }, existing: true };
-            }
-        }
-        else {
-            initialized = await initializeRepositoryCube({
-                mode,
-                context: repositoryContext,
-                serverOrigin: auth.apiUrl,
-                flags: args.flags,
-            }, {
-                isTTY: deps.isTTY,
-                prompt: deps.prompt,
-                write: deps.stderr,
-                getIdentity: deps.getRepositoryIdentity,
-                getAssociation: (repository) => deps.getRepositoryAssociation(auth.serverTrustIdentity, repository),
-                saveAssociation: (repository, association) => deps.saveRepositoryAssociation(auth.serverTrustIdentity, repository, association),
-                getCube: (cubeId) => deps.getCube(auth.apiUrl, auth.token, cubeId, auth.serverTrustIdentity),
-                createCube: (params) => deps.createCube(auth.apiUrl, auth.token, params, auth.serverTrustIdentity),
-            });
-        }
+        initialized = await initializeRepositoryCube({
+            mode,
+            context: repositoryContext,
+            serverOrigin: auth.apiUrl,
+            flags: args.flags,
+            canCreate: auth.serverCapabilities.includes('create_cube'),
+        }, {
+            isTTY: deps.isTTY,
+            prompt: deps.prompt,
+            write: deps.stderr,
+            getIdentity: deps.getRepositoryIdentity,
+            getAssociation: (repository) => deps.getRepositoryAssociation(auth.serverTrustIdentity, repository),
+            saveAssociation: (repository, association) => deps.saveRepositoryAssociation(auth.serverTrustIdentity, repository, association),
+            resolveAssociation: (repository, workingRepoName) => deps.resolveRepositoryCube(auth.apiUrl, auth.token, { repository, workingRepoName }, auth.serverTrustIdentity),
+            listCubes: () => deps.listCubes(auth.apiUrl, auth.token, auth.serverTrustIdentity),
+            associateCube: (params) => deps.associateRepositoryCube(auth.apiUrl, auth.token, params, auth.serverTrustIdentity),
+            getCube: (cubeId) => deps.getCube(auth.apiUrl, auth.token, cubeId, auth.serverTrustIdentity),
+            createCube: (params) => deps.createCube(auth.apiUrl, auth.token, params, auth.serverTrustIdentity),
+        });
     }
     catch (error) {
+        if (error instanceof RepositoryAssociationOutcomeUnknownError) {
+            deps.stderr('Repository cube association outcome is unknown.\n' +
+                'The server may have created the repository binding; no local repository association was saved and no drone was created.\n' +
+                'Run the same command again; Borg will first resolve the authoritative server association without creating a cube.\n');
+            return 1;
+        }
+        if (error instanceof RepositoryAssociationResolutionError) {
+            deps.stderr('Repository cube association could not be resolved.\n' +
+                'Verify that the server is reachable and the client and server versions match, then run the same command again.\n' +
+                'No cube, repository binding, or drone was created.\n');
+            return 1;
+        }
+        if (error instanceof RepositoryAssociationOperationError) {
+            const recovery = error.failure === 'repository-already-associated'
+                ? 'This repository is already associated with another cube. Run the same command again to use the existing managed association, or ask the server operator to correct the repository binding.'
+                : error.failure === 'cube-already-associated'
+                    ? 'The selected cube is already associated with another repository. Choose a different cube, or run the command from the repository already linked to that cube.'
+                    : error.failure === 'access-denied'
+                        ? 'This enrolled client does not have permission to manage the selected cube. Ask the server operator to grant this client management access, then run the same command again.'
+                        : 'The selected cube does not have valid authoritative roles. Ask the server operator to repair its role configuration, or choose another cube.';
+            deps.stderr('Repository cube association could not be completed.\n' +
+                `${recovery}\n` +
+                'No cube, repository binding, or drone was created.\n');
+            return 1;
+        }
+        if (error instanceof RepositoryAssociationConfirmationError) {
+            deps.stderr('Repository cube association could not be confirmed.\n' +
+                'The server may have created the repository binding; no local repository association was saved and no drone was created.\n' +
+                'Run the same command again; Borg will resolve authoritative server state before creating or associating a cube.\n');
+            return 1;
+        }
         if (error instanceof RepositoryAssociationSaveError) {
             deps.stderr('The repository cube was confirmed, but Borg could not save its local repository association.\n' +
                 'No drone was created.\n' +
@@ -412,16 +386,15 @@ export async function runAssimilate(args, deps) {
             return 1;
         }
         if (error instanceof CubeCreationOutcomeUnknownError) {
-            deps.stderr('Cube creation outcome is unknown.\n' +
-                'No local repository association was saved.\n' +
-                'Run the same command again; the server will resolve the original request or return a conflict.\n');
+            deps.stderr('Cube creation outcome is unconfirmed.\n' +
+                'The server may have created the cube and repository binding; no local repository association was saved and no drone was created.\n' +
+                'Run the same command again; Borg will resolve authoritative server state before creating a cube.\n');
             return 1;
         }
         if (error instanceof CubeCreationConfirmationError) {
             deps.stderr('Cube creation could not be confirmed.\n' +
-                `${error.message}\n` +
-                'No local repository association was saved.\n' +
-                'Resolve the conflict, then run the same command again.\n');
+                'The server may have created the cube and repository binding; no local repository association was saved and no drone was created.\n' +
+                'Run the same command again; Borg will resolve authoritative server state before creating a cube.\n');
             return 1;
         }
         if (error instanceof BorgServerError && error.code === 'CREATE_CUBE_DENIED') {
@@ -432,7 +405,9 @@ export async function runAssimilate(args, deps) {
         if (error instanceof BorgServerError) {
             return reportServerFailure(deps, auth.apiUrl, error);
         }
-        deps.stderr('Could not create cube.\nThe selected Borg server rejected the request.\nNothing was changed.\n');
+        deps.stderr('Repository cube initialization failed.\n' +
+            'The server may have created or associated a cube; local repository state may be incomplete and no drone was created.\n' +
+            'Run the same command again; Borg will resolve authoritative server state before creating or associating a cube.\n');
         return 1;
     }
     if (initialized.kind === 'stop')
