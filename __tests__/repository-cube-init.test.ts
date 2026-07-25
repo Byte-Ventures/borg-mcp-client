@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { initializeRepositoryCube, type RepositoryCubeInitDeps } from '../src/repository-cube-init.js';
+import {
+  initializeRepositoryCube,
+  PromptInterruptedError,
+  type RepositoryCubeInitDeps,
+} from '../src/repository-cube-init.js';
+import { NEW_CUBE_TEMPLATE_PRESENTATIONS } from 'borgmcp-shared/templates';
 import type { GitRepositoryContext } from '../src/repository-identity.js';
 
 const context: GitRepositoryContext = {
@@ -124,6 +129,158 @@ describe('guided repository cube initialization', () => {
     await expect(initializeRepositoryCube({
       mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {},
     }, inputDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
+    expect(createCube).not.toHaveBeenCalled();
+  });
+
+  it('renders template menu labels from shared NEW_CUBE_TEMPLATE_PRESENTATIONS', async () => {
+    const prompt = vi.fn()
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('1')
+      .mockResolvedValueOnce('y');
+    const write = vi.fn();
+    const createCube = vi.fn(deps().createCube);
+    const inputDeps = deps({ prompt, write, createCube });
+
+    const result = await initializeRepositoryCube({
+      mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {},
+    }, inputDeps);
+
+    expect(result.kind).toBe('success');
+    const menuLines = write.mock.calls
+      .filter(([text]) => text.includes('Choose a template:'))
+      .map(([text]) => text);
+    expect(menuLines.length).toBeGreaterThan(0);
+    const fullMenu = menuLines.join('');
+    for (const presentation of NEW_CUBE_TEMPLATE_PRESENTATIONS) {
+      expect(fullMenu).toContain(presentation.label);
+      expect(fullMenu).toContain(presentation.short_description);
+    }
+    expect(fullMenu).toContain('(recommended)');
+  });
+
+  it('re-prompts on invalid name without false EOF', async () => {
+    const prompt = vi.fn()
+      .mockResolvedValueOnce('!!!')
+      .mockResolvedValueOnce('!!!')
+      .mockResolvedValueOnce('Valid Name')
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('y');
+    const createCube = vi.fn(deps().createCube);
+    const inputDeps = deps({ prompt, createCube });
+
+    const result = await initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {},
+    }, inputDeps);
+
+    expect(result.kind).toBe('success');
+    expect(prompt).toHaveBeenCalledWith(expect.stringContaining('Cube name'));
+    expect(prompt).toHaveBeenCalledWith(expect.stringContaining('Template'));
+    expect(prompt).toHaveBeenCalledWith(expect.stringContaining('Create cube'));
+  });
+
+  it('re-prompts on invalid template without false EOF', async () => {
+    const prompt = vi.fn()
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('bad')
+      .mockResolvedValueOnce('99')
+      .mockResolvedValueOnce('1')
+      .mockResolvedValueOnce('y');
+    const write = vi.fn();
+    const createCube = vi.fn(deps().createCube);
+    const inputDeps = deps({ prompt, write, createCube });
+
+    const result = await initializeRepositoryCube({
+      mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {},
+    }, inputDeps);
+
+    expect(result.kind).toBe('success');
+    expect(write).toHaveBeenCalledWith('Choose 1 or 2.\n');
+    expect(write).not.toContain('Input ended before cube creation');
+  });
+
+  it('re-prompts on invalid confirmation without false EOF', async () => {
+    const prompt = vi.fn()
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('1')
+      .mockResolvedValueOnce('maybe')
+      .mockResolvedValueOnce('yes');
+    const write = vi.fn();
+    const createCube = vi.fn(deps().createCube);
+    const inputDeps = deps({ prompt, write, createCube });
+
+    const result = await initializeRepositoryCube({
+      mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {},
+    }, inputDeps);
+
+    expect(result.kind).toBe('success');
+    expect(write).toHaveBeenCalledWith('Enter y or n.\n');
+    expect(write).not.toContain('Input ended before cube creation');
+  });
+
+  it('maps SIGINT to typed interruption with exact copy and exit 130', async () => {
+    const prompt = vi.fn()
+      .mockRejectedValue(new PromptInterruptedError());
+    const write = vi.fn();
+    const createCube = vi.fn();
+    const inputDeps = deps({ prompt, write, createCube });
+
+    const result = await initializeRepositoryCube({
+      mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {},
+    }, inputDeps);
+
+    expect(result).toEqual({ kind: 'stop', code: 130 });
+    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(createCube).not.toHaveBeenCalled();
+  });
+
+  it('maps SIGINT during name prompt to typed interruption with exit 130', async () => {
+    const prompt = vi.fn()
+      .mockRejectedValue(new PromptInterruptedError());
+    const write = vi.fn();
+    const createCube = vi.fn();
+    const inputDeps = deps({ prompt, write, createCube });
+
+    const result = await initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {},
+    }, inputDeps);
+
+    expect(result).toEqual({ kind: 'stop', code: 130 });
+    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(createCube).not.toHaveBeenCalled();
+  });
+
+  it('maps SIGINT during template prompt to typed interruption with exit 130', async () => {
+    const prompt = vi.fn()
+      .mockResolvedValueOnce('Product API')
+      .mockRejectedValue(new PromptInterruptedError());
+    const write = vi.fn();
+    const createCube = vi.fn();
+    const inputDeps = deps({ prompt, write, createCube });
+
+    const result = await initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {},
+    }, inputDeps);
+
+    expect(result).toEqual({ kind: 'stop', code: 130 });
+    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
+    expect(createCube).not.toHaveBeenCalled();
+  });
+
+  it('maps SIGINT during confirmation prompt to typed interruption with exit 130', async () => {
+    const prompt = vi.fn()
+      .mockResolvedValueOnce('Product API')
+      .mockResolvedValueOnce('2')
+      .mockRejectedValue(new PromptInterruptedError());
+    const write = vi.fn();
+    const createCube = vi.fn();
+    const inputDeps = deps({ prompt, write, createCube });
+
+    const result = await initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {},
+    }, inputDeps);
+
+    expect(result).toEqual({ kind: 'stop', code: 130 });
+    expect(write).toHaveBeenCalledWith('\nCube creation cancelled. Nothing was changed.\n');
     expect(createCube).not.toHaveBeenCalled();
   });
 });

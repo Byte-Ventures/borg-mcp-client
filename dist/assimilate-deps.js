@@ -32,6 +32,7 @@ import { findLoadedCodexThread } from './codex-app-server.js';
 import { defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
 import { getOrCreateRepositoryIdentity, getRepositoryAssociation, resolveGitRepositoryContext, saveRepositoryAssociation, } from './repository-identity.js';
+import { PromptInterruptedError } from './repository-cube-init.js';
 export function buildDefaultAssimilateDeps() {
     return {
         runSync: (cmd, args, cwd) => {
@@ -69,6 +70,12 @@ export function buildDefaultAssimilateDeps() {
             const rl = createInterface({ input: process.stdin, output: process.stdout });
             try {
                 return await rl.question(message);
+            }
+            catch (err) {
+                if (err instanceof Error && (err.message === 'SIGINT' || err.message === 'Interrupted by signal.')) {
+                    throw new PromptInterruptedError();
+                }
+                throw err;
             }
             finally {
                 rl.close();

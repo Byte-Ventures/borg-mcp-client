@@ -59,6 +59,13 @@ export class RepositoryAssociationSaveError extends Error {
   }
 }
 
+export class PromptInterruptedError extends Error {
+  constructor() {
+    super('prompt interrupted');
+    this.name = 'PromptInterruptedError';
+  }
+}
+
 const NAME_ERROR = 'Use 1-120 letters, digits, spaces, dots, underscores, or hyphens, starting with a letter or digit.';
 
 export function validRepositoryCubeName(value: string): boolean {
@@ -76,7 +83,7 @@ async function ask(deps: RepositoryCubeInitDeps, message: string): Promise<{ val
   try {
     return { value: await deps.prompt(message) };
   } catch (error) {
-    if (error instanceof Error && error.name === 'PromptInterruptedError') {
+    if (error instanceof PromptInterruptedError) {
       deps.write('\nCube creation cancelled. Nothing was changed.\n');
       return { stop: 130 };
     }
@@ -182,7 +189,7 @@ export async function initializeRepositoryCube(input: {
 
   let name = input.flags.cubeName?.trim() ?? input.context.derivedName;
   if (!input.flags.cubeName && deps.isTTY() && !input.flags.yes) {
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+    while (true) {
       const answer = await ask(deps, `Cube name [${input.context.derivedName}]: `);
       if ('stop' in answer) return { kind: 'stop', code: answer.stop };
       name = answer.value.trim() || input.context.derivedName;
@@ -197,24 +204,21 @@ export async function initializeRepositoryCube(input: {
 
   let template = input.flags.template as 'software-dev' | 'starter' | undefined;
   if (!template && deps.isTTY() && !input.flags.yes) {
-    deps.write(
-      `Choose a template:\n` +
-      `  1. Software Development (recommended)\n` +
-      `     Recommended for code repositories.\n` +
-      `  2. Starter\n` +
-      `     Minimal roles for general projects.\n`,
-    );
-    for (let attempt = 0; attempt < 10 && !template; attempt += 1) {
+    let menu = 'Choose a template:\n';
+    for (let i = 0; i < NEW_CUBE_TEMPLATE_PRESENTATIONS.length; i += 1) {
+      const p = NEW_CUBE_TEMPLATE_PRESENTATIONS[i];
+      const suffix = i === 0 ? ' (recommended)' : '';
+      menu += `  ${i + 1}. ${p.label}${suffix}\n`;
+      menu += `     ${p.short_description}\n`;
+    }
+    deps.write(menu);
+    while (!template) {
       const answer = await ask(deps, 'Template [1]: ');
       if ('stop' in answer) return { kind: 'stop', code: answer.stop };
       const selected = answer.value.trim();
       if (selected === '' || selected === '1') template = 'software-dev';
       else if (selected === '2') template = 'starter';
       else deps.write('Choose 1 or 2.\n');
-    }
-    if (!template) {
-      deps.write('Input ended before cube creation. Nothing was changed.\n');
-      return { kind: 'stop', code: 1 };
     }
   }
   template ??= 'software-dev';
@@ -228,7 +232,7 @@ export async function initializeRepositoryCube(input: {
       `  Server: ${input.serverOrigin}\n`,
     );
     let confirmed = false;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+    while (!confirmed) {
       const answer = await ask(deps, 'Create cube? [Y/n]: ');
       if ('stop' in answer) return { kind: 'stop', code: answer.stop };
       const confirmation = answer.value.trim().toLowerCase();
@@ -241,10 +245,6 @@ export async function initializeRepositoryCube(input: {
         return { kind: 'stop', code: 0 };
       }
       deps.write('Enter y or n.\n');
-    }
-    if (!confirmed) {
-      deps.write('Input ended before cube creation. Nothing was changed.\n');
-      return { kind: 'stop', code: 1 };
     }
   }
 

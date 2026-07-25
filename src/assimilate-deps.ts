@@ -67,6 +67,7 @@ import {
   resolveGitRepositoryContext,
   saveRepositoryAssociation,
 } from './repository-identity.js';
+import { PromptInterruptedError } from './repository-cube-init.js';
 
 export function buildDefaultAssimilateDeps(): AssimilateDeps {
   return {
@@ -107,6 +108,11 @@ export function buildDefaultAssimilateDeps(): AssimilateDeps {
       const rl = createInterface({ input: process.stdin, output: process.stdout });
       try {
         return await rl.question(message);
+      } catch (err) {
+        if (err instanceof Error && (err.message === 'SIGINT' || err.message === 'Interrupted by signal.')) {
+          throw new PromptInterruptedError();
+        }
+        throw err;
       } finally {
         rl.close();
       }

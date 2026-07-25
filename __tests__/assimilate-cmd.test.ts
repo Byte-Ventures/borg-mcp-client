@@ -3097,7 +3097,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(assimilate).not.toHaveBeenCalled();
   });
 
-  it('does not claim nothing changed when association persistence fails after creation', async () => {
+  it('does not claim nothing changed or ambiguous when association persistence fails after creation', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
@@ -3106,7 +3106,9 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     await expect(runAssimilate({ role: undefined, flags: { yes: true } }, deps)).resolves.toBe(1);
     const output = stderr.mock.calls.map(([text]) => String(text)).join('');
-    expect(output).toContain('server cube may already exist');
+    expect(output).toContain('The repository cube was confirmed');
+    expect(output).toContain('No drone was created');
+    expect(output).not.toContain('may already exist');
     expect(output).not.toContain('Nothing was changed');
     expect(deps.assimilate).not.toHaveBeenCalled();
   });

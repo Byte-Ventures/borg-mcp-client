@@ -44,6 +44,9 @@ export type RepositoryCubeInitResult = {
 export declare class RepositoryAssociationSaveError extends Error {
     constructor();
 }
+export declare class PromptInterruptedError extends Error {
+    constructor();
+}
 export declare function validRepositoryCubeName(value: string): boolean;
 export declare function initializeRepositoryCube(input: {
     mode: 'assimilate' | 'cube-init';

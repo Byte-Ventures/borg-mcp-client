@@ -422,7 +422,8 @@ export async function runAssimilate(args, deps) {
     catch (error) {
         if (error instanceof RepositoryAssociationSaveError) {
             deps.stderr('The repository cube was confirmed, but Borg could not save its local repository association.\n' +
-                'The server cube may already exist. Run the same command again; the server will resolve it idempotently.\n');
+                'No drone was created.\n' +
+                'Run the same command again; the server will resolve the existing cube and restore the local association.\n');
             return 1;
         }
         if (error instanceof CubeCreationOutcomeUnknownError) {
