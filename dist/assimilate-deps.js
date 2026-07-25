@@ -33,6 +33,51 @@ import { defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approv
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
 import { getOrCreateRepositoryIdentity, getRepositoryAssociation, resolveGitRepositoryContext, saveRepositoryAssociation, } from './repository-identity.js';
 import { PromptInterruptedError } from './repository-cube-init.js';
+/**
+ * Creates a prompt adapter that wraps the real readline interface but
+ * exposes a controllable error-injection seam for integration tests.
+ * When `onQuestion` is provided, it is called with the question message
+ * before the readline interface is created. The test can then inject
+ * an error by returning a non-null value or rejecting the returned
+ * promise, which is thrown instead of reading from readline. This
+ * proves the real adapter's error mapping (SIGINT → PromptInterruptedError)
+ * without needing to send actual signals to the test process.
+ */
+export function createTestablePromptAdapter(onQuestion) {
+    return async (message) => {
+        try {
+            const injected = await onQuestion?.(message);
+            if (injected !== undefined && injected !== null) {
+                if (injected instanceof PromptInterruptedError) {
+                    throw injected;
+                }
+                if (injected instanceof Error && (injected.message === 'SIGINT' || injected.message === 'Interrupted by signal.')) {
+                    throw new PromptInterruptedError();
+                }
+                throw injected;
+            }
+        }
+        catch (err) {
+            if (err instanceof Error && (err.message === 'SIGINT' || err.message === 'Interrupted by signal.')) {
+                throw new PromptInterruptedError();
+            }
+            throw err;
+        }
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        try {
+            return await rl.question(message);
+        }
+        catch (err) {
+            if (err instanceof Error && (err.message === 'SIGINT' || err.message === 'Interrupted by signal.')) {
+                throw new PromptInterruptedError();
+            }
+            throw err;
+        }
+        finally {
+            rl.close();
+        }
+    };
+}
 export function buildDefaultAssimilateDeps() {
     return {
         runSync: (cmd, args, cwd) => {
