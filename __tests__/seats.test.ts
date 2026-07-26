@@ -367,6 +367,61 @@ describe('seats store — reset deletes credential AND binding together', () => 
 });
 
 describe('seats store — observation + sole raw-bearer reader (CR#3, SR#5)', () => {
+  it('accepts a persisted seat bearer in the exact 43-character base64url format', async () => {
+    const { dir, seats } = await load();
+    const path = storeJson(dir);
+    const ref = seats.seatRef(SEAT);
+    const credential = `${'aB0_-'.repeat(8)}abc`;
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      seats: {
+        [ref]: {
+          ...SEAT,
+          credential,
+          state: 'pending',
+        },
+      },
+    }));
+    chmodSync(path, 0o600);
+
+    await expect(seats.observeSeat(ref, BIND)).resolves.toEqual({
+      state: 'pending',
+      digest: digestOf(credential),
+    });
+  });
+
+  it.each([
+    ['wrong length', 'x'.repeat(42)],
+    ['invalid base64url character', `${'x'.repeat(42)}=`],
+  ])('rejects a persisted seat bearer with %s before any read or mutation and preserves the bytes', async (
+    _case,
+    credential,
+  ) => {
+    const { dir, seats } = await load();
+    const path = storeJson(dir);
+    const ref = seats.seatRef(SEAT);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const malformed = JSON.stringify({
+      version: 1,
+      seats: {
+        [ref]: {
+          ...SEAT,
+          credential,
+          state: 'pending',
+        },
+      },
+    });
+    writeFileSync(path, malformed);
+    chmodSync(path, 0o600);
+
+    await expect(seats.observeSeat(ref, BIND)).rejects.toThrow(/malformed|unsupported version/i);
+    await expect(seats.mintPendingSeat({ ...SEAT, credential: 'k'.repeat(43) })).rejects.toThrow(
+      /malformed|unsupported version/i,
+    );
+    expect(readFileSync(path, 'utf8')).toBe(malformed);
+  });
+
   it('observeSeat is typed active|pending|absent and NEVER returns the raw bearer', async () => {
     const { seats } = await load();
     const ref = seats.seatRef(SEAT);

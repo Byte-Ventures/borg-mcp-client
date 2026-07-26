@@ -52,6 +52,7 @@ function emptyStore() {
 }
 const ROLE_CLASSES = new Set(['queen', 'worker']);
 const OPERATION_KINDS = new Set(['seat', 'sibling']);
+const SEAT_BEARER_RE = /^[A-Za-z0-9_-]{43}$/;
 const rejectedSeatRefs = new Set();
 function isNonEmptyString(value) {
     return typeof value === 'string' && value.length > 0;
@@ -68,10 +69,10 @@ function isValidOperation(value) {
 /**
  * CR#2: FULL per-entry validation. Every key/value/invariant of a seat record is
  * checked — the ref is well-formed and self-consistent (the map key equals the
- * record's derived ref), state ∈ {pending,active}, the credential is a non-empty
- * string, the operation is well-shaped, an ACTIVE record carries ALL its required
- * server + binding fields, and a PENDING record carries NO active-only session
- * id. A single invalid entry ⇒ the whole store is rejected
+ * record's derived ref), state ∈ {pending,active}, the credential is an exact
+ * 32-byte base64url bearer, the operation is well-shaped, an ACTIVE record carries
+ * ALL its required server + binding fields, and a PENDING record carries NO
+ * active-only session id. A single invalid entry ⇒ the whole store is rejected
  * (fail closed at the caller, bytes preserved) — never a silent cast.
  */
 function isValidSeatRecord(ref, value) {
@@ -86,7 +87,8 @@ function isValidSeatRecord(ref, value) {
         !isNonEmptyString(r.cubeId) ||
         !isNonEmptyString(r.roleId) ||
         !isValidOperation(r.operation) ||
-        !isNonEmptyString(r.credential)) {
+        typeof r.credential !== 'string' ||
+        !SEAT_BEARER_RE.test(r.credential)) {
         return false;
     }
     if (r.state !== 'pending' && r.state !== 'active')
@@ -159,7 +161,7 @@ function parseStore(raw) {
                         !Array.isArray(replacement) &&
                         Object.keys(replacement).length === 1 &&
                         typeof replacement.credential === 'string' &&
-                        /^[A-Za-z0-9_-]{43}$/.test(replacement.credential);
+                        SEAT_BEARER_RE.test(replacement.credential);
                     let canonicalOrigin = false;
                     try {
                         const origin = new URL(String(withoutReplacement.origin));
