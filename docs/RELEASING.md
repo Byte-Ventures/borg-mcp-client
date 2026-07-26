@@ -331,26 +331,26 @@ tarball path once with lifecycle scripts disabled and provenance enabled. It
 does not install project dependencies, rebuild, retest, repack, or reverify the
 package.
 
-After publication becomes visible, perform exactly one post-publication check:
+Successful completion of `npm publish` is the terminal release boundary. There
+is no post-publication registry readback job: registry metadata and install
+visibility propagate asynchronously and cannot invalidate an immutable
+publication after npm accepts it.
 
-1. Install the release from the canonical registry into an isolated prefix and
-   exercise the real user update path end to end.
-2. Confirm that the registry's `latest` dist-tag moved to the release.
-3. Confirm that npm attached provenance to the published package.
-
-This is the only post-publication gate. Do not repeat byte comparisons,
-integrity/SRI checks, packed-version checks, or source-tree verification that
-the exact-artifact `verify` job already completed. Registry metadata and install
-visibility may propagate asynchronously, so wait for visibility rather than
-rebuilding, retagging, or rerunning the immutable release.
+Separately, once the release is installable from the canonical registry, install
+it into an isolated prefix and exercise the real user update path end to end.
+This is product verification, not publication validation: failure routes a new
+reviewed fix and never invalidates, rebuilds, retags, or reruns the immutable
+release. Do not repeat byte comparisons, integrity/SRI checks, packed-version
+checks, source-tree verification, dist-tag readback, or provenance readback that
+the exact-artifact `verify` and publish jobs already completed.
 
 No separate checksum file is needed: the tarball verifier records canonical
 SHA-512 SRI in the artifact report. GitHub's same-run artifact transport and the
 report bind the reviewed candidate without repeated SHA512 choreography.
 
-Rely on npm Trusted Publishing and confirm its attached provenance in the
-single post-publication check. Do not reconstruct DSSE, in-toto, SLSA,
-workflow-ref, or builder statements locally.
+Rely on npm Trusted Publishing. Do not perform post-publication provenance
+readback or reconstruct DSSE, in-toto, SLSA, workflow-ref, or builder statements
+locally.
 Do not add cross-run tuple variables, cross-run artifact selection, duplicate
 builds, duplicate package verification, checksum bundles, or SBOM ceremony.
 
