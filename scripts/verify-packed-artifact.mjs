@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { access, lstat, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -11,6 +12,15 @@ const MAX_UNPACKED_BYTES = 30 * 1024 * 1024;
 const MAX_FILES = 2048;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const REQUIRED_FILES = ['CONTRIBUTING.md', 'LICENSE', 'NOTICE', 'README.md', 'SECURITY.md', 'package.json'];
+const LOCAL_DASHBOARD_OCCURRENCES = JSON.parse(
+  readFileSync(new URL('./local-dashboard-occurrences.json', import.meta.url), 'utf8'),
+);
+const dashboardOccurrenceKey = ({ file, lineNumber, line }) => JSON.stringify([file, lineNumber, line]);
+const LOCAL_DASHBOARD_OCCURRENCE_KEYS = new Set(LOCAL_DASHBOARD_OCCURRENCES.map(dashboardOccurrenceKey));
+
+if (LOCAL_DASHBOARD_OCCURRENCE_KEYS.size !== LOCAL_DASHBOARD_OCCURRENCES.length) {
+  throw new Error('Local dashboard occurrence allowlist contains duplicate entries.');
+}
 const ALLOWED_ROOTS = new Set([
   'CONTRIBUTING.md',
   'LICENSE',
@@ -126,6 +136,16 @@ function isInside(root, candidate) {
 
 function normalizedPath(root, file) {
   return relative(root, file).split(sep).join('/');
+}
+
+function verifyLocalDashboardOccurrences(content, path) {
+  for (const [index, rawLine] of content.split(/\r?\n/).entries()) {
+    if (!rawLine.includes('dashboard')) continue;
+    const key = dashboardOccurrenceKey({ file: path, lineNumber: index + 1, line: rawLine.trim() });
+    if (!LOCAL_DASHBOARD_OCCURRENCE_KEYS.has(key)) {
+      throw new Error(`Packed artifact contains an unapproved dashboard occurrence: ${path}:${index + 1}`);
+    }
+  }
 }
 
 function validateSourceMap(sourceMap, path, mapPath, root, relativeFiles) {
@@ -259,6 +279,7 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
       // Reachable-cloud runtime symbols may only be absent from SHIPPED CODE.
       // (.md docs describe the removal and are intentionally exempt here.)
       if (/\.(?:js|ts)$/.test(path) || path.endsWith('.d.ts')) {
+        verifyLocalDashboardOccurrences(content, path);
         for (const symbol of CLOUD_RUNTIME_SYMBOLS) {
           if (content.includes(symbol)) {
             throw new Error(`Packed artifact ships a reachable-cloud runtime symbol '${symbol}': ${path}`);
