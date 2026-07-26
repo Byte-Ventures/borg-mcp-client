@@ -396,6 +396,7 @@ describe('seats store — observation + sole raw-bearer reader (CR#3, SR#5)', ()
 
   it.each([
     ['wrong length', 'x'.repeat(42)],
+    ['above the contract maximum', 'x'.repeat(1025)],
     ['invalid base64url character', `${'x'.repeat(42)}=`],
   ])('rejects a persisted seat bearer with %s before any read or mutation and preserves the bytes', async (
     _case,
