@@ -32,6 +32,7 @@
     "test:release": "node --test test/release-lane.test.mjs test/release-identity.test.mjs",
     "onboarding:smoke": "node scripts/onboarding-smoke.mjs",
     "release:prepare": "node scripts/release-identity.mjs prepare",
+    "release:exercise": "npm run build && node scripts/release-exercise.mjs",
     "release:check": "npm run verify:public-source && npm run verify:release && npm run verify:lock && npm run check && npm test && npm run build && npm run onboarding:smoke && npm run verify:package",
     "verify:artifact": "node scripts/verify-packed-artifact.mjs",
     "verify:public-source": "node scripts/verify-public-source.mjs",
