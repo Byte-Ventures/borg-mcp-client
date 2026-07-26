@@ -4,6 +4,7 @@ import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.j
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
+const SEAT_REF = `borg-server-session:${'a'.repeat(64)}`;
 
 describe('remote-client explicit authority connection', () => {
   beforeEach(() => {
@@ -17,6 +18,7 @@ describe('remote-client explicit authority connection', () => {
 
   function mockLocalAuthority() {
     const getServerCredential = vi.fn(async () => 'persisted-local-token');
+    const markSeatRejected = vi.fn();
     vi.doMock('../src/config.js', () => ({
       getServerCredential,
       storeServerCredential: vi.fn(async () => {}),
@@ -35,9 +37,11 @@ describe('remote-client explicit authority connection', () => {
         sessionToken: 'drone-session',
         apiUrl: 'https://localhost:8787',
         serverTrustIdentity: 'spki-sha256:test-server',
+        localSessionCredentialRef: SEAT_REF,
       })),
     }));
-    return { getServerCredential };
+    vi.doMock('../src/seats.js', () => ({ markSeatRejected }));
+    return { getServerCredential, markSeatRejected };
   }
 
   it('uses only the selected local endpoint and credential', async () => {
@@ -233,7 +237,7 @@ describe('remote-client explicit authority connection', () => {
   });
 
   it('maps an exact trusted drone-session 410 DRONE_EVICTED envelope to the terminal error', async () => {
-    mockLocalAuthority();
+    const auth = mockLocalAuthority();
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '5',
       request_id: 'evicted-1',
@@ -246,6 +250,7 @@ describe('remote-client explicit authority connection', () => {
       'https://localhost:8787',
       'spki-sha256:test-server',
     )).rejects.toMatchObject({ name: 'DroneEvictedError' });
+    expect(auth.markSeatRejected).toHaveBeenCalledWith(SEAT_REF);
   });
 
   it('never renews or retries an unexpected AUTH_EXPIRED response', async () => {
@@ -269,7 +274,7 @@ describe('remote-client explicit authority connection', () => {
     ['SESSION_REVOKED', JSON.stringify({ protocol_version: '5', error: { code: 'SESSION_REVOKED', message: 'no' } }), 'SESSION_REVOKED'],
     ['ambiguous 401', 'unauthorized', 'CREDENTIAL_REJECTED'],
   ])('preserves terminal %s without renewal', async (_case, body, code) => {
-    mockLocalAuthority();
+    const auth = mockLocalAuthority();
     const fetchSpy = vi.fn(async () => new Response(body, { status: 401 }));
     vi.stubGlobal('fetch', fetchSpy);
     const { appendLog } = await import('../src/remote-client.js');
@@ -279,6 +284,7 @@ describe('remote-client explicit authority connection', () => {
       serverTrustIdentity: 'spki-sha256:test-server',
     })).rejects.toMatchObject({ code });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(auth.markSeatRejected).toHaveBeenCalledWith(SEAT_REF);
   });
 
   it.each([

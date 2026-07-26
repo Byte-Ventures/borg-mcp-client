@@ -72,6 +72,53 @@ describe('local ActiveCube session persistence (single store)', () => {
     });
   });
 
+  it('resolves hook, kickoff, MCP, and stream ownership to the same live duplicate-worktree seat', async () => {
+    const { fixture, project, seats, cubes } = await setup();
+    await seedActiveSeat(seats, project);
+    const liveBearer = 'replacement-live-'.padEnd(43, 'r');
+    const liveDroneId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const sibling = {
+      origin: ORIGIN,
+      trustIdentity: TRUST,
+      cubeId: CUBE_ID,
+      roleId: ROLE_ID,
+      operation: {
+        projectRoot: project,
+        kind: 'sibling' as const,
+        operationKey: 'implicit-sibling:replacement',
+      },
+    };
+    await seats.mintPendingSeat({ ...sibling, credential: liveBearer });
+    await seats.activateAndBindSeat({
+      ...sibling,
+      droneId: liveDroneId,
+      sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      expectedPendingDigest: digestOf(liveBearer),
+      worktree: project,
+      name: 'local-cube',
+      droneLabel: 'builder-live',
+      roleName: 'Builder',
+    });
+    const liveRef = seats.seatRef(sibling);
+
+    const launcher = await cubes.getActiveCube();
+    const hook = await cubes.getActiveCube();
+    const mcp = await cubes.getActiveCube();
+    const stream = await cubes.getActiveCube();
+    expect([launcher, hook, mcp, stream].map((active) => active?.localSessionCredentialRef))
+      .toEqual([liveRef, liveRef, liveRef, liveRef]);
+
+    const { resolveLeanIdentity } = await import('../src/regen-format.js');
+    const { buildKickoffWakePathClause } = await import('../src/codex-launch.js');
+    const { streamLockPath } = await import('../src/stream-owner.js');
+    expect(resolveLeanIdentity(hook!, null).droneLabel).toBe('builder-live');
+    const inboxPath = cubes.inboxPathForDrone(launcher!.cubeId, launcher!.droneId);
+    expect(buildKickoffWakePathClause('claude', inboxPath)).toContain(liveDroneId);
+    expect(mcp?.sessionToken).toBe(liveBearer);
+    expect(streamLockPath(stream!.cubeId, stream!.droneId, join(fixture, 'locks')))
+      .toContain(liveDroneId);
+  });
+
   it('a pending (non-activated) seat is never surfaced as a live ActiveCube', async () => {
     const { seats, cubes } = await setup();
     await seats.mintPendingSeat({

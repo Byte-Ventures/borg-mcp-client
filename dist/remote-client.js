@@ -21,6 +21,7 @@ import { buildRuntimeMetadataPatch } from './runtime-metadata.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
+import { markSeatRejected } from './seats.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { resolveLocalLogRecipients } from './local-log-routing.js';
@@ -161,6 +162,7 @@ async function localServerRequest(active, path, method, payload) {
         method,
         signal,
         droneSession: active.sessionToken,
+        localSessionCredentialRef: active.localSessionCredentialRef,
         apiUrl: active.apiUrl,
         serverTrustIdentity: active.serverTrustIdentity,
         redirect: 'error',
@@ -399,7 +401,7 @@ function sleep(ms) {
  * what BORG_API_URL was set to when this process started.
  */
 async function authedFetch(path, init = {}) {
-    const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, headers, ...rest } = init;
+    const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, localSessionCredentialRef, headers, ...rest } = init;
     if (apiUrl === undefined) {
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
@@ -471,6 +473,9 @@ async function authedFetch(path, init = {}) {
         catch {
             rejectedCode = undefined;
         }
+        if (droneSession !== undefined && localSessionCredentialRef !== undefined) {
+            markSeatRejected(localSessionCredentialRef);
+        }
         if (droneSession !== undefined && rejectedCode === ErrorCode.SESSION_REJECTED) {
             throw new BorgServerError('SESSION_REJECTED', 'the selected Borg server superseded this worktree session with a newer enrollment');
         }
@@ -516,6 +521,8 @@ async function authedFetch(path, init = {}) {
         }
         debugLog(`✗ ${response.status} ${method} ${path}`);
         if (droneSession !== undefined && response.status === 410 && code === DRONE_EVICTED_CODE) {
+            if (localSessionCredentialRef !== undefined)
+                markSeatRejected(localSessionCredentialRef);
             throw new DroneEvictedError();
         }
         throw new BorgServerHttpError(response.status, `Borg server request failed (HTTP ${response.status})`, code);

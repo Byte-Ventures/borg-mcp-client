@@ -47,6 +47,7 @@ import {
   LocalManageRequiredError,
 } from './server-errors.js';
 import { getActiveCube, type ActiveCube } from './cubes.js';
+import { markSeatRejected } from './seats.js';
 import {
   advanceLocalServerCursor,
   getLocalServerCursor,
@@ -241,6 +242,7 @@ async function localServerRequest<T>(
       method,
       signal,
       droneSession: active.sessionToken,
+      localSessionCredentialRef: active.localSessionCredentialRef,
       apiUrl: active.apiUrl,
       serverTrustIdentity: active.serverTrustIdentity,
       redirect: 'error',
@@ -587,6 +589,7 @@ async function authedFetch(
     apiUrl?: string;
     authToken?: string;
     serverTrustIdentity?: string;
+    localSessionCredentialRef?: string;
   } = {}
 ): Promise<Response> {
   const {
@@ -594,6 +597,7 @@ async function authedFetch(
     apiUrl,
     authToken,
     serverTrustIdentity: suppliedTrustIdentity,
+    localSessionCredentialRef,
     headers,
     ...rest
   } = init;
@@ -673,6 +677,9 @@ async function authedFetch(
     } catch {
       rejectedCode = undefined;
     }
+    if (droneSession !== undefined && localSessionCredentialRef !== undefined) {
+      markSeatRejected(localSessionCredentialRef);
+    }
     if (droneSession !== undefined && rejectedCode === ErrorCode.SESSION_REJECTED) {
       throw new BorgServerError(
         'SESSION_REJECTED',
@@ -732,6 +739,7 @@ async function authedFetch(
     }
     debugLog(`✗ ${response.status} ${method} ${path}`);
     if (droneSession !== undefined && response.status === 410 && code === DRONE_EVICTED_CODE) {
+      if (localSessionCredentialRef !== undefined) markSeatRejected(localSessionCredentialRef);
       throw new DroneEvictedError();
     }
     throw new BorgServerHttpError(

@@ -209,9 +209,13 @@ export declare function bindPendingSeatToWorktree(input: {
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
 }): Promise<BindPendingSeatOutcome>;
-/** The exact ACTIVE seat bound to `worktree`, or null. A pending record (no
- *  worktree, or non-active) is NEVER surfaced as a live binding. */
+/** The preferred ACTIVE seat bound to `worktree`, or null. A pending record (no
+ *  worktree, or non-active) is NEVER surfaced as a live binding. Candidates use
+ *  one total order across every process: unrejected before rejected, a sibling
+ *  finalized into this worktree before an older in-place binding, then seat ref. */
 export declare function getActiveSeatForWorktree(worktree: string): Promise<SeatRecord | null>;
+/** Deprioritize an exact seat after a definitive server auth or eviction verdict. */
+export declare function markSeatRejected(ref: string): void;
 /**
  * CR#2: the seat bound to `worktree` regardless of state — an ACTIVE seat OR a
  * bound-PENDING record (a sibling whose activation failed, bound to its preserved

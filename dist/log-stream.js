@@ -36,6 +36,7 @@ import { DroneEvictedError, DRONE_EVICTED_CODE, EVICTED_RESULT_MARKER, errorCode
 import { CODEX_HEARTBEAT_CADENCE_MS, fireCodexHeartbeatTick, formatCodexWakePrompt, startCodexHeartbeat, wakeCodexViaAppServer, } from './codex-app-wake.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { BorgServerError } from './server-errors.js';
+import { markSeatRejected } from './seats.js';
 import { acquireStreamLease, readOwnershipSnapshot, STREAM_OWNER_STALE_MS, } from './stream-owner.js';
 // ------------------------------------------------------------------
 // Tuning constants
@@ -309,7 +310,7 @@ async function runLoop(testDeps = {}) {
     let _iterations = 0;
     let attempt = 0;
     let lastEventId = null;
-    let currentCubeId = null;
+    let currentStreamKey = null;
     let lease = null;
     let leaseKey = null;
     try {
@@ -334,10 +335,11 @@ async function runLoop(testDeps = {}) {
             // running. Idempotent (no-op when already armed); re-arms after a prior
             // teardown (cube-cleared / dead app-server socket).
             ensureCodexHeartbeatStarted();
-            // Reset resume cursor on cube switch — entries from a prior cube
-            // mean nothing for the new cube's stream.
-            if (active.cubeId !== currentCubeId) {
-                currentCubeId = active.cubeId;
+            // Reset resume cursor on cube/drone switch — entries from a prior seat
+            // mean nothing for the newly selected stream.
+            const activeStreamKey = `${active.cubeId}:${active.droneId}`;
+            if (activeStreamKey !== currentStreamKey) {
+                currentStreamKey = activeStreamKey;
                 lastEventId = null;
             }
             const nextLeaseKey = `${active.cubeId}:${active.droneId}`;
@@ -410,18 +412,34 @@ async function runLoop(testDeps = {}) {
                 // loop quiesces cleanly. The agent's graceful shutdown (TaskStop Monitor,
                 // no /loop reschedule) is driven separately by the EVICTED tool-result it
                 // already received on the authed call that produced this verdict.
-                if (err instanceof DroneEvictedError) {
-                    if (lease)
-                        await lease.release().catch(() => { });
-                    lease = null;
-                    leaseKey = null;
-                    streamState.connected = false;
-                    streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
-                    process.stderr.write(`[borg-mcp log stream] drone evicted — stream terminated (no reconnect).\n`);
+                if (err instanceof DroneEvictedError || err instanceof BorgServerError) {
+                    if (active.localSessionCredentialRef) {
+                        markSeatRejected(active.localSessionCredentialRef);
+                    }
+                    const replacement = await _getActiveCube().catch(() => null);
+                    const replacementChanged = replacement !== null && (replacement.localSessionCredentialRef !== active.localSessionCredentialRef ||
+                        replacement.cubeId !== active.cubeId ||
+                        replacement.droneId !== active.droneId);
+                    if (replacementChanged) {
+                        if (lease)
+                            await lease.release().catch(() => { });
+                        lease = null;
+                        leaseKey = null;
+                        streamState.connected = false;
+                        streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
+                        continue;
+                    }
+                    if (err instanceof DroneEvictedError) {
+                        if (lease)
+                            await lease.release().catch(() => { });
+                        lease = null;
+                        leaseKey = null;
+                        streamState.connected = false;
+                        streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
+                        process.stderr.write(`[borg-mcp log stream] drone evicted — stream terminated (no reconnect).\n`);
+                    }
                     throw new TerminalStreamError();
                 }
-                if (err instanceof BorgServerError)
-                    throw new TerminalStreamError();
                 streamState.connected = false;
                 const delay = Math.min(RECONNECT_MIN_MS * 2 ** attempt, RECONNECT_MAX_MS) +
                     Math.random() * 500;
@@ -685,17 +703,25 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                 code = undefined;
             }
             if (code === ErrorCode.SESSION_REJECTED) {
+                if (active.localSessionCredentialRef)
+                    markSeatRejected(active.localSessionCredentialRef);
                 throw new BorgServerError('SESSION_REJECTED', 'Borg server session was rejected');
             }
             if (code === ErrorCode.SESSION_REVOKED) {
+                if (active.localSessionCredentialRef)
+                    markSeatRejected(active.localSessionCredentialRef);
                 throw new BorgServerError('SESSION_REVOKED', 'Borg server session was revoked');
             }
+            if (active.localSessionCredentialRef)
+                markSeatRejected(active.localSessionCredentialRef);
             throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server rejected the stream credential');
         }
         if (response.status === 410) {
             const body = await readBoundedResponseBody(response, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES, 'Local Borg server SSE response exceeded the response limit', ac.signal).catch(() => '');
             const code = errorCodeFromBody(body);
             if (code === DRONE_EVICTED_CODE) {
+                if (active.localSessionCredentialRef)
+                    markSeatRejected(active.localSessionCredentialRef);
                 throw new DroneEvictedError();
             }
             // client#42: an expired resume cursor is RECOVERABLE, not terminal. The
