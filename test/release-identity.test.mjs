@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { prepareRelease, verifyReleaseIdentity } from '../scripts/release-identity.mjs';
+import {
+  classifyReleasePullRequest,
+  prepareRelease,
+  verifyReleaseIdentity,
+} from '../scripts/release-identity.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const oldVersion = '2.2.0';
@@ -15,16 +19,25 @@ const allowlistPath = 'scripts/release-identity-allowlist.json';
 const stablePath = 'scripts/local-dashboard-occurrences.json';
 const releaseTestPath = 'test/release-lane.test.mjs';
 
-test('release branches run the classifier in protected CI', async () => {
-  const workflow = await readFile(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+test('the classifier loads protected-base bytes and never executes candidate code', async () => {
+  const workflow = await readFile(join(root, '.github', 'workflows', 'release-identity.yml'), 'utf8');
+  const ordinaryCi = await readFile(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const releasing = await readFile(join(root, 'docs', 'RELEASING.md'), 'utf8');
-  assert.match(workflow, /actions: read/);
+  assert.match(workflow, /pull_request_target:/);
+  assert.match(workflow, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+  assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
   assert.match(workflow, /fetch-depth: 0/);
-  assert.match(workflow, /startsWith\(github\.ref, 'refs\/heads\/release\/'\)/);
-  assert.match(workflow, /startsWith\(github\.head_ref, 'release\/'\)/);
-  assert.match(workflow, /verify:release-identity -- --base origin\/main/);
-  assert.doesNotMatch(workflow, /continue-on-error/);
+  assert.match(workflow, /fetch-tags: true/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /git fetch --no-tags origin "\$CANDIDATE_SHA"/);
+  assert.match(workflow, /node scripts\/release-identity\.mjs classify/);
+  assert.match(workflow, /--base "\$BASE_SHA"/);
+  assert.match(workflow, /--candidate "\$CANDIDATE_SHA"/);
+  assert.doesNotMatch(workflow, /\bnpm (?:ci|install|run)\b/u);
+  assert.equal(workflow.match(/uses: actions\/checkout/gu)?.length, 1);
+  assert.doesNotMatch(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.doesNotMatch(ordinaryCi, /verify:release-identity/);
   assert.equal(manifest.scripts['release:prepare'], 'node scripts/release-identity.mjs prepare');
   assert.equal(manifest.scripts['verify:release-identity'], 'node scripts/release-identity.mjs verify');
   assert.match(releasing, /Candidate tree is the deterministic release transform|exact tree\s+equality/);
@@ -49,11 +62,45 @@ test('prepare generates exactly the client identity surfaces and verifies their 
     'package.json',
     releaseTestPath,
   ]);
-  commitAll(fixture.root, 'prepare release');
-  const verified = verifyReleaseIdentity(fixture.root, fixture.base, fixture.authorities);
+  const candidate = commitAll(fixture.root, 'prepare release');
+  const verified = verifyReleaseIdentity(fixture.root, fixture.base, candidate, fixture.authorities);
   assert.equal(verified.oldVersion, oldVersion);
   assert.equal(verified.newVersion, newVersion);
+  assert.equal(verified.candidate, candidate);
   assert.equal(verified.tree, git(fixture.root, ['rev-parse', 'HEAD^{tree}']));
+});
+
+test('trusted-base classification is green on the transform and red on a self-bypassing candidate', async (t) => {
+  const fixture = await preparedFixture(t);
+  git(fixture.root, ['checkout', '--detach', '-q', fixture.base]);
+  assert.doesNotThrow(() => classifyReleasePullRequest(
+    fixture.root,
+    classificationInput(fixture, fixture.candidate),
+    fixture.authorities,
+  ));
+
+  git(fixture.root, ['checkout', '--detach', '-q', fixture.candidate]);
+  const manifestPath = join(fixture.root, 'package.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.scripts['verify:release-identity'] = 'node -e "process.exit(0)" --';
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFixture(
+    fixture.root,
+    '.github/workflows/release-identity.yml',
+    "name: bypass\njobs: { classify: { steps: [{ run: 'true' }] } }\n",
+  );
+  await writeFixture(fixture.root, 'scripts/release-identity.mjs', 'process.exit(0);\n');
+  await writeFixture(fixture.root, 'src/unreviewed-payload.ts', 'export const unreviewed = true;\n');
+  const attack = commitAll(fixture.root, 'replace classifier and add payload');
+
+  git(fixture.root, ['checkout', '--detach', '-q', fixture.base]);
+  assert.equal(git(fixture.root, ['status', '--porcelain']), '');
+  assert.equal(git(fixture.root, ['rev-parse', 'HEAD']), fixture.base);
+  assert.throws(() => classifyReleasePullRequest(
+    fixture.root,
+    classificationInput(fixture, attack),
+    fixture.authorities,
+  ), /Release identity shape mismatch: package\.json/);
 });
 
 for (const [name, mutate] of [
@@ -72,8 +119,13 @@ for (const [name, mutate] of [
       releaseParagraph(fixture.record),
       releaseParagraph(record),
     ));
-    commitAll(fixture.root, `mutate ${name}`);
-    assert.throws(() => verifyReleaseIdentity(fixture.root, fixture.base, fixture.authorities));
+    const candidate = commitAll(fixture.root, `mutate ${name}`);
+    assert.throws(() => verifyReleaseIdentity(
+      fixture.root,
+      fixture.base,
+      candidate,
+      fixture.authorities,
+    ));
   });
 }
 
@@ -112,17 +164,27 @@ for (const [name, mutate] of [
   test(`release identity rejects ${name}`, async (t) => {
     const fixture = await preparedFixture(t);
     await mutate(fixture);
-    commitAll(fixture.root, `mutate ${name}`);
-    assert.throws(() => verifyReleaseIdentity(fixture.root, fixture.base, fixture.authorities));
+    const candidate = commitAll(fixture.root, `mutate ${name}`);
+    assert.throws(() => verifyReleaseIdentity(
+      fixture.root,
+      fixture.base,
+      candidate,
+      fixture.authorities,
+    ));
   });
 }
 
 async function preparedFixture(t) {
   const fixture = await createFixture(t);
   const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
-  commitAll(fixture.root, 'prepare release');
-  assert.doesNotThrow(() => verifyReleaseIdentity(fixture.root, fixture.base, fixture.authorities));
-  return { ...fixture, record: prepared.record };
+  const candidate = commitAll(fixture.root, 'prepare release');
+  assert.doesNotThrow(() => verifyReleaseIdentity(
+    fixture.root,
+    fixture.base,
+    candidate,
+    fixture.authorities,
+  ));
+  return { ...fixture, candidate, record: prepared.record };
 }
 
 async function createFixture(t) {
@@ -137,6 +199,7 @@ async function createFixture(t) {
     name: 'borgmcp',
     version: oldVersion,
     private: false,
+    scripts: { 'verify:release-identity': 'node scripts/release-identity.mjs verify' },
   }, null, 2)}\n`);
   await writeFixture(directory, 'package-lock.json', `${JSON.stringify({
     name: 'borgmcp',
@@ -160,6 +223,8 @@ async function createFixture(t) {
   await writeFixture(directory, releaseTestPath,
     `const CLIENT_VERSION = '${oldVersion}';\n` +
     `for (const evidence of [\n    'v${oldVersion}',\n  ]) assert.ok(evidence);\n`);
+  await writeFixture(directory, '.github/workflows/release-identity.yml', '# trusted fixture workflow\n');
+  await writeFixture(directory, 'scripts/release-identity.mjs', '// trusted fixture verifier\n');
   git(directory, ['init', '-q']);
   git(directory, ['config', 'user.name', 'Release Test']);
   git(directory, ['config', 'user.email', 'release-test@example.invalid']);
@@ -183,6 +248,16 @@ async function createFixture(t) {
   return { root: directory, base, evidence, authorities };
 }
 
+function classificationInput(fixture, candidate) {
+  return {
+    base: fixture.base,
+    candidate,
+    repository: 'Byte-Ventures/borg-mcp-client',
+    headRepository: 'Byte-Ventures/borg-mcp-client',
+    headRef: 'release/2.3.0',
+  };
+}
+
 function releaseParagraph(record) {
   return (
     `The annotated \`${record.tag}\` tag object\n` +
@@ -202,6 +277,7 @@ async function writeFixture(directory, path, value) {
 function commitAll(directory, message) {
   git(directory, ['add', '.']);
   git(directory, ['commit', '-q', '-m', message]);
+  return git(directory, ['rev-parse', 'HEAD']);
 }
 
 function git(directory, args) {

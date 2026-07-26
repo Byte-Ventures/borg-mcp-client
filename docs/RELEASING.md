@@ -168,11 +168,25 @@ anything. It then deterministically updates only the manifest version, the two
 root lockfile version fields, the extraction ledger, this document's immutable
 release record, and the release-lane current-version/evidence assertions.
 
-After committing the generated result on a `release/**` branch, classify it
-against its protected-main base:
+Release branches use the `release/` prefix and enter protected `main` through a
+pull request. A direct push only updates the staging branch; it does
+not produce a release-identity verdict and grants no review skip, merge
+authority, or release authority.
+
+For a pull request from a same-repository `release/` branch, the dedicated
+release-identity workflow is loaded from the exact protected base commit. It
+checks out that base, fetches the exact candidate commit into the Git object
+database without checking it out, and invokes the base commit's verifier with
+explicit base and candidate SHAs. It does not install or execute candidate
+dependencies, package scripts, workflow code, actions, or verifier code. The
+candidate is treated only as Git tree and blob data.
+
+To reproduce the classification locally, resolve and pass exact commit SHAs:
 
 ```sh
-npm run verify:release-identity -- --base origin/main
+base_sha=$(git rev-parse origin/main)
+candidate_sha=$(git rev-parse HEAD)
+npm run verify:release-identity -- --base "$base_sha" --candidate "$candidate_sha"
 ```
 
 The verifier rechecks the recorded provenance against GitHub, npm, and Git. It
@@ -180,9 +194,9 @@ reconstructs the expected tree in a temporary Git index and requires exact tree
 equality, exact changed paths, and exact per-file shapes. The release-identity
 allowlist must remain byte-identical. The generated no-cloud occurrence allowlist
 must also remain byte-identical; any source-line renumbering makes the commit a
-code change rather than a release-identity change. CI runs this classifier on
-every `release/**` branch. A commit the classifier rejects follows the full code
-review chain and must never be manually declared identity-only.
+code change rather than a release-identity change. A commit the classifier
+rejects follows the full code review chain and must never be manually declared
+identity-only.
 
 ## Repository Controls
 

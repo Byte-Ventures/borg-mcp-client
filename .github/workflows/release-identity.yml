@@ -1,0 +1,63 @@
+name: Release identity classifier
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-identity-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: classify
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the exact protected base
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up exact Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.22.2
+
+      - name: Fetch candidate as Git data
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$HEAD_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
+          [[ "$HEAD_REF" == release/* ]]
+          [[ "$(git rev-parse HEAD^{commit})" == "$BASE_SHA" ]]
+          git fetch --no-tags origin "$CANDIDATE_SHA"
+          [[ "$(git rev-parse FETCH_HEAD^{commit})" == "$CANDIDATE_SHA" ]]
+          [[ "$(git rev-parse HEAD^{commit})" == "$BASE_SHA" ]]
+
+      - name: Classify exact candidate with protected-base verifier
+        run: >-
+          node scripts/release-identity.mjs classify
+          --base "$BASE_SHA"
+          --candidate "$CANDIDATE_SHA"
+          --repository "$GITHUB_REPOSITORY"
+          --head-repository "$HEAD_REPOSITORY"
+          --head-ref "$HEAD_REF"

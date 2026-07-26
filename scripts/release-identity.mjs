@@ -17,6 +17,7 @@ const RELEASE_TEST_PATH = 'test/release-lane.test.mjs';
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const shaPattern = /^[0-9a-f]{40}$/u;
 const sriPattern = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+const releaseHeadPattern = /^release\/[A-Za-z0-9._/-]+$/u;
 
 function fail(message) {
   throw new Error(message);
@@ -43,6 +44,13 @@ function gitRaw(root, args) {
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024,
   });
+}
+
+function resolveExactCommit(root, input, description) {
+  if (!shaPattern.test(input)) fail(`${description} must be an exact 40-character commit SHA.`);
+  const commit = git(root, ['rev-parse', '--verify', '--end-of-options', `${input}^{commit}`]);
+  if (commit !== input) fail(`${description} did not resolve to the exact requested commit.`);
+  return commit;
 }
 
 function canonicalJson(value) {
@@ -429,17 +437,16 @@ function expectedTree(root, base, transformed) {
   }
 }
 
-export function verifyReleaseIdentity(root, baseInput, authorities = systemAuthorities) {
-  const base = git(root, ['rev-parse', '--verify', '--end-of-options', `${baseInput}^{commit}`]);
-  const head = git(root, ['rev-parse', '--verify', 'HEAD^{commit}']);
-  if (git(root, ['status', '--porcelain']) !== '') fail('verify:release-identity requires a clean working tree.');
+export function verifyReleaseIdentity(root, baseInput, candidateInput, authorities = systemAuthorities) {
+  const base = resolveExactCommit(root, baseInput, 'Release identity base');
+  const candidate = resolveExactCommit(root, candidateInput, 'Release identity candidate');
   try {
-    git(root, ['merge-base', '--is-ancestor', base, head]);
+    git(root, ['merge-base', '--is-ancestor', base, candidate]);
   } catch {
-    fail('Release identity base must be an ancestor of HEAD.');
+    fail('Release identity base must be an ancestor of the candidate.');
   }
   const baseFiles = readRefFiles(root, base);
-  const candidateFiles = readRefFiles(root, head);
+  const candidateFiles = readRefFiles(root, candidate);
   const oldVersion = readVersion(baseFiles);
   const newVersion = readVersion(candidateFiles);
   const record = verifyReleaseProvenance(
@@ -454,22 +461,41 @@ export function verifyReleaseIdentity(root, baseInput, authorities = systemAutho
   }
   verifyIndependentShapes(baseFiles, candidateFiles, oldVersion, newVersion, record);
   const transformed = buildReleaseTransform(baseFiles, oldVersion, newVersion, record);
-  const changed = git(root, ['diff', '--name-only', base, head]).split('\n').filter(Boolean).sort();
+  const changed = git(root, ['diff', '--name-only', base, candidate]).split('\n').filter(Boolean).sort();
   const expectedPaths = [...transformed.keys()].sort();
   if (JSON.stringify(changed) !== JSON.stringify(expectedPaths)) {
     fail('Release identity changed files outside the generated transform.');
   }
   const generatedTree = expectedTree(root, base, transformed);
-  const candidateTree = git(root, ['rev-parse', `${head}^{tree}`]);
+  const candidateTree = git(root, ['rev-parse', `${candidate}^{tree}`]);
   if (candidateTree !== generatedTree) fail('Candidate tree is not the deterministic release transform.');
   return Object.freeze({
     base,
-    head,
+    candidate,
     tree: candidateTree,
     oldVersion,
     newVersion,
     paths: Object.freeze(expectedPaths),
   });
+}
+
+export function classifyReleasePullRequest(root, input, authorities = systemAuthorities) {
+  if (input.repository !== REPOSITORY ||
+      input.headRepository !== REPOSITORY ||
+      typeof input.headRef !== 'string' ||
+      !releaseHeadPattern.test(input.headRef)) {
+    fail('Release identity classification requires a same-repository release/* pull request.');
+  }
+  const base = resolveExactCommit(root, input.base, 'Pull request base');
+  const candidate = resolveExactCommit(root, input.candidate, 'Pull request candidate');
+  const trustedHead = git(root, ['rev-parse', '--verify', 'HEAD^{commit}']);
+  if (trustedHead !== base) {
+    fail('Trusted classifier checkout does not match the exact pull request base.');
+  }
+  if (git(root, ['status', '--porcelain']) !== '') {
+    fail('Trusted classifier checkout must be clean.');
+  }
+  return verifyReleaseIdentity(root, base, candidate, authorities);
 }
 
 function parsePrepareArguments(args, environment) {
@@ -500,11 +526,40 @@ function parsePrepareArguments(args, environment) {
   return { version, evidence: { workflowRunId, workflowRunAttempt, artifactIntegrity } };
 }
 
-function parseVerifyArguments(args) {
-  if (args.length !== 2 || args[0] !== '--base' || args[1] === undefined) {
-    fail('Usage: verify:release-identity --base <sha>');
+function parseNamedArguments(args, acceptedFlags, usage) {
+  if (args.length !== acceptedFlags.size * 2) fail(usage);
+  const values = new Map();
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if (!acceptedFlags.has(flag) || value === undefined || values.has(flag)) fail(usage);
+    values.set(flag, value);
   }
-  return args[1];
+  return values;
+}
+
+function parseVerifyArguments(args) {
+  const usage = 'Usage: verify:release-identity --base <sha> --candidate <sha>';
+  const values = parseNamedArguments(args, new Set(['--base', '--candidate']), usage);
+  return { base: values.get('--base'), candidate: values.get('--candidate') };
+}
+
+function parseClassifyArguments(args) {
+  const usage = 'Usage: release-identity.mjs classify --base <sha> --candidate <sha> --repository <owner/repo> --head-repository <owner/repo> --head-ref <release/name>';
+  const values = parseNamedArguments(args, new Set([
+    '--base',
+    '--candidate',
+    '--repository',
+    '--head-repository',
+    '--head-ref',
+  ]), usage);
+  return {
+    base: values.get('--base'),
+    candidate: values.get('--candidate'),
+    repository: values.get('--repository'),
+    headRepository: values.get('--head-repository'),
+    headRef: values.get('--head-ref'),
+  };
 }
 
 async function main() {
@@ -516,10 +571,18 @@ async function main() {
     return;
   }
   if (operation === 'verify') {
-    console.log(JSON.stringify(verifyReleaseIdentity(root, parseVerifyArguments(args)), null, 2));
+    const parsed = parseVerifyArguments(args);
+    console.log(JSON.stringify(verifyReleaseIdentity(root, parsed.base, parsed.candidate), null, 2));
     return;
   }
-  fail('Usage: release-identity.mjs <prepare|verify> ...');
+  if (operation === 'classify') {
+    console.log(JSON.stringify(classifyReleasePullRequest(
+      root,
+      parseClassifyArguments(args),
+    ), null, 2));
+    return;
+  }
+  fail('Usage: release-identity.mjs <prepare|verify|classify> ...');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
