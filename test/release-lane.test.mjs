@@ -18,6 +18,7 @@ import {
   assertServerProcessArgv,
   parseReleaseExerciseArgs,
   ptyCommand,
+  resolvePackageEntry,
 } from '../scripts/release-exercise.mjs';
 import {
   lockRegistryEntries,
@@ -105,6 +106,41 @@ test('release exercise rejects substituted server processes', () => {
       expected,
     ),
     /resolved artifact integrity/,
+  );
+});
+
+test('release exercise rejects a package bin that escapes its SRI-covered root', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'borgmcp-escaping-bin-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = join(directory, 'source');
+  const consumer = join(directory, 'consumer');
+  const published = join(directory, 'published');
+  await mkdir(join(source, 'dist'), { recursive: true });
+  await mkdir(consumer);
+  await mkdir(published);
+  await writeFile(join(source, 'package.json'), `${JSON.stringify({
+    name: 'borgmcp-server',
+    version: '9.9.9',
+    bin: { 'borg-mcp-server': '../../../published/main.js' },
+  }, null, 2)}\n`);
+  await writeFile(join(source, 'dist', 'main.js'), 'export const packaged = true;\n');
+  await writeFile(join(published, 'main.js'), 'export const escaped = true;\n');
+  const [packed] = JSON.parse(execFileSync('npm', [
+    'pack', '--ignore-scripts', '--json', '--pack-destination', directory,
+  ], { cwd: source, encoding: 'utf8' }));
+  await writeFile(join(consumer, 'package.json'), '{"name":"escaping-bin-consumer","private":true}\n');
+  execFileSync('npm', [
+    'install', '--ignore-scripts', '--package-lock=true', '--save-exact',
+    join(directory, packed.filename),
+  ], { cwd: consumer, stdio: 'pipe' });
+
+  const serverRoot = await realpath(join(consumer, 'node_modules', 'borgmcp-server'));
+  const manifest = JSON.parse(await readFile(join(serverRoot, 'package.json'), 'utf8'));
+  const lock = JSON.parse(await readFile(join(consumer, 'package-lock.json'), 'utf8'));
+  assert.match(lock.packages['node_modules/borgmcp-server'].integrity, /^sha512-/);
+  await assert.rejects(
+    resolvePackageEntry(serverRoot, manifest.bin['borg-mcp-server'], 'server'),
+    /outside its installed package root/,
   );
 });
 
@@ -357,6 +393,8 @@ test('release documentation describes the activated minimal publication lane', a
     'no post-publication registry readback',
     'Pre-tag composed exercise',
     '--server-integrity',
+    'inside the installed package root',
+    'not a containment sandbox',
   ]) assert.ok(releasing.includes(boundary), `Missing release boundary: ${boundary}`);
   assert.match(releasing, /PATH ordering\s+alone is never accepted as identity evidence/);
   for (const evidence of [

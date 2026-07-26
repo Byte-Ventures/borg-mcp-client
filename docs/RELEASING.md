@@ -189,6 +189,12 @@ being released together, run it again with the co-releasing server candidate.
 The default path builds and packs the current client; `--client-tarball` exists
 only for reproducing a reviewed packed client or running a negative control.
 
+This harness exercises reviewed release candidates and their published
+counterparts. It is not a containment sandbox for hostile or otherwise untrusted
+packages and must not be used as one. The temporary install and data directories
+isolate the reviewed exercise from normal product state; they are not an
+operating-system security boundary.
+
 The harness requires Node.js 22, npm 11.18.0, Python 3, and macOS or Linux. It
 installs both tarballs into a private temporary project, bootstraps isolated
 server data, and starts the installed server directly. It never uses
@@ -206,10 +212,11 @@ Both composed terminal journeys run under a real PTY:
 The client facade resolves `borg-mcp-server` by bare name. The harness therefore
 uses a controlled shim only to arrange resolution, then verifies the outcome:
 before trusting a frame, it reads the live process command and requires the
-absolute installed server entry. Its JSON report records the absolute path,
-version, and independently supplied integrity for the client, dashboard
-listener, dashboard viewer, and foreground listener/viewer roles. PATH ordering
-alone is never accepted as identity evidence.
+absolute installed server entry. Every client or server executable must resolve
+inside the installed package root covered by the SRI cited for that role. Its
+JSON report records the absolute path, version, and independently supplied
+integrity for the client, dashboard listener, dashboard viewer, and foreground
+listener/viewer roles. PATH ordering alone is never accepted as identity evidence.
 
 The harness is a fail-closed release gate. A missing frame, non-PTY execution,
 wrong journey footer, substituted artifact, nonzero exit, absent terminal

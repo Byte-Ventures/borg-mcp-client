@@ -5,7 +5,7 @@ import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:f
 import { request as httpsRequest } from 'node:https';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('../', import.meta.url)));
@@ -158,6 +158,20 @@ export function assertArtifactIdentity(actual, expected) {
   assert.equal(actual.integrity, expected.integrity, 'resolved artifact integrity does not match its declared role');
 }
 
+export async function resolvePackageEntry(packageRoot, target, role) {
+  const canonicalRoot = await realpath(packageRoot);
+  const entry = await realpath(resolve(canonicalRoot, target));
+  const relativeEntry = relative(canonicalRoot, entry);
+  assert.ok(
+    relativeEntry !== '' &&
+      relativeEntry !== '..' &&
+      !relativeEntry.startsWith(`..${sep}`) &&
+      !isAbsolute(relativeEntry),
+    `${role} executable resolves outside its installed package root: ${entry}`,
+  );
+  return entry;
+}
+
 async function readTrace(tracePath, command) {
   const text = await readFile(tracePath, 'utf8').catch(() => '');
   for (const line of text.trim().split('\n').reverse()) {
@@ -214,8 +228,10 @@ async function installCandidates(temporary, clientTarball, serverSpec, expectedS
   assert.ok(serverBinTarget, 'installed server artifact does not expose the borg-mcp-server binary');
 
   const clientBin = await realpath(join(consumer, 'node_modules', '.bin', 'borg'));
-  const serverEntry = await realpath(join(serverRoot, serverBinTarget));
-  assert.equal(clientBin, await realpath(join(clientRoot, clientBinTarget)));
+  const clientEntry = await resolvePackageEntry(clientRoot, clientBinTarget, 'client');
+  const serverEntry = await resolvePackageEntry(serverRoot, serverBinTarget, 'server');
+  const bootstrapPath = await resolvePackageEntry(serverRoot, 'dist/bootstrap.js', 'server bootstrap');
+  assert.equal(clientBin, clientEntry);
   const lock = JSON.parse(await readFile(join(consumer, 'package-lock.json'), 'utf8'));
   const packedClientIntegrity = await sha512(clientTarball);
   const clientIntegrity = lock.packages?.['node_modules/borgmcp']?.integrity ?? packedClientIntegrity;
@@ -239,6 +255,7 @@ async function installCandidates(temporary, clientTarball, serverSpec, expectedS
     clientBin,
     clientIntegrity,
     clientVersion: clientManifest.version,
+    bootstrapPath,
     serverEntry,
     serverIntegrity,
     serverRoot,
@@ -246,8 +263,7 @@ async function installCandidates(temporary, clientTarball, serverSpec, expectedS
   };
 }
 
-async function bootstrapServerData(serverRoot, dataDirectory) {
-  const bootstrapPath = join(serverRoot, 'dist', 'bootstrap.js');
+async function bootstrapServerData(bootstrapPath, dataDirectory) {
   const { bootstrapServer } = await import(pathToFileURL(bootstrapPath).href);
   assert.equal(typeof bootstrapServer, 'function', 'installed server does not expose bootstrapServer');
   await bootstrapServer(dataDirectory);
@@ -448,7 +464,7 @@ export async function exerciseRelease(options) {
 
     const dashboardData = join(temporary, 'dashboard-data');
     await mkdir(dashboardData, { mode: 0o700 });
-    await bootstrapServerData(installed.serverRoot, dashboardData);
+    await bootstrapServerData(installed.bootstrapPath, dashboardData);
     const dashboardPort = await freePort();
     directServer = spawn(process.execPath, [installed.serverEntry, 'start', '--port', String(dashboardPort)], {
       env: { ...process.env, BORG_SERVER_DATA_DIR: dashboardData, NO_COLOR: '1' },
@@ -489,7 +505,7 @@ export async function exerciseRelease(options) {
 
     const startData = join(temporary, 'start-data');
     await mkdir(startData, { mode: 0o700 });
-    await bootstrapServerData(installed.serverRoot, startData);
+    await bootstrapServerData(installed.bootstrapPath, startData);
     const startPort = await freePort();
     const start = await runPtyJourney({
       args: ['server', 'start', '--port', String(startPort)],
