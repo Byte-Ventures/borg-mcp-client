@@ -641,6 +641,28 @@ describe('CR#3: findIncompleteSiblingAttempt — recover a crash-orphaned unboun
     expect(seats.seatRef(found!)).toBe(seats.seatRef({ ...SEAT, operation: siblingOp }));
   });
 
+  it('adopts only an implicit sibling attempt and never a named pending sibling', async () => {
+    const { seats } = await load();
+    const namedOp = {
+      projectRoot: SRC,
+      kind: 'sibling' as const,
+      operationKey: 'named-sibling:review',
+    };
+    await seats.mintPendingSeat({
+      ...SEAT,
+      operation: namedOp,
+      credential: 'n'.repeat(43),
+    });
+    expect(await seats.findIncompleteSiblingAttempt(KEY)).toBeNull();
+
+    await seats.mintPendingSeat({
+      ...SEAT,
+      operation: siblingOp,
+      credential: 'i'.repeat(43),
+    });
+    expect((await seats.findIncompleteSiblingAttempt(KEY))?.operation).toEqual(siblingOp);
+  });
+
   it('is null when NONE exists (a first sibling mints fresh)', async () => {
     const { seats } = await load();
     expect(await seats.findIncompleteSiblingAttempt(KEY)).toBeNull();

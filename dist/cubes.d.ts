@@ -30,6 +30,8 @@ export interface ActiveCube {
     serverTrustIdentity?: string;
     /** Opaque local-session keychain reference; never a bearer. */
     localSessionCredentialRef?: string;
+    /** Durable seat operation that produced this exact local binding. */
+    operation?: SeatOperation;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
@@ -71,6 +73,15 @@ export declare function getActiveCube(): Promise<ActiveCube | null>;
  * an active bound seat always hydrates.
  */
 export declare function hasPersistedActiveCube(): Promise<boolean>;
+/**
+ * Token-free lookup used after an offline reset. A surviving seat is only
+ * described as saved local state; the caller must still revalidate it with the
+ * server before launch.
+ */
+export declare function findRemainingActiveSeatForWorktree(worktree: string): Promise<{
+    apiUrl: string;
+    operation: SeatOperation;
+} | null>;
 /**
  * Legacy binding-only writer. In the collapsed single-store model an ACTIVE seat is
  * created ONLY by the atomic mint→activate+bind path in seats.ts (driven by the

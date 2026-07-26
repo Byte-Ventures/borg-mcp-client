@@ -25,6 +25,7 @@ import { createInterface } from 'node:readline/promises';
 import {
   snapshotLocalSeat as cubesSnapshotLocalSeat,
   resetLocalSeatBinding as cubesResetLocalSeatBinding,
+  findRemainingActiveSeatForWorktree as cubesFindRemainingActiveSeatForWorktree,
   findProjectRoot as cubesFindProjectRoot,
   type LocalSeatSnapshot,
   type ResetLocalSeatOutcome,
@@ -39,6 +40,10 @@ export interface ResetLocalSeatFlags {
 export interface ResetLocalSeatDeps {
   snapshotLocalSeat: () => Promise<LocalSeatSnapshot | null>;
   resetLocalSeatBinding: (expected: LocalSeatSnapshot) => Promise<ResetLocalSeatOutcome>;
+  findRemainingActiveSeat: (worktree: string) => Promise<{
+    apiUrl: string;
+    operation: { projectRoot: string; kind: 'seat' | 'sibling'; operationKey: string };
+  } | null>;
   findProjectRoot: (cwd: string) => string;
   normalizeHost: (host: string) => string;
   cwd: () => string;
@@ -50,6 +55,10 @@ export interface ResetLocalSeatDeps {
 
 function reenrollCommand(apiUrl: string): string {
   return `\`borg assimilate --host ${apiUrl} --enroll\``;
+}
+
+function reattachCommand(apiUrl: string): string {
+  return `\`borg assimilate --host ${apiUrl} --here\``;
 }
 
 /**
@@ -149,7 +158,22 @@ export async function runResetLocalSeat(
       `audit: this worktree's saved local seat for ${snapshot.apiUrl} (worktree ${worktree}) ` +
         'was cleared; server, trust anchor, cube, and sibling worktrees unchanged.\n',
     );
-    deps.stdout(recoveryGuidance(snapshot.apiUrl));
+    let remaining: Awaited<ReturnType<ResetLocalSeatDeps['findRemainingActiveSeat']>> = null;
+    try {
+      remaining = await deps.findRemainingActiveSeat(worktree);
+    } catch {
+      // The reset already committed. A follow-up read must not turn that success
+      // into a false failure; fall back to the universally valid enrollment path.
+    }
+    if (remaining?.apiUrl === snapshot.apiUrl) {
+      deps.stdout(
+        `Another saved active seat remains for this worktree on ${snapshot.apiUrl}. ` +
+          `Re-attach with ${reattachCommand(snapshot.apiUrl)}; Borg will revalidate that ` +
+          'seat with the server before launch.\n',
+      );
+    } else {
+      deps.stdout(recoveryGuidance(snapshot.apiUrl));
+    }
     return 0;
   }
 
@@ -175,6 +199,7 @@ export function buildDefaultResetLocalSeatDeps(): ResetLocalSeatDeps {
   return {
     snapshotLocalSeat: () => cubesSnapshotLocalSeat(),
     resetLocalSeatBinding: (expected) => cubesResetLocalSeatBinding(expected),
+    findRemainingActiveSeat: (worktree) => cubesFindRemainingActiveSeatForWorktree(worktree),
     findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
     normalizeHost: (host) => normalizeServerEndpoint(host),
     cwd: () => process.cwd(),

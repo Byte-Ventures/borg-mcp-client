@@ -160,6 +160,8 @@ export interface ActiveCube {
   /** Verified local-server CA identity; absent until a local server is selected. */
   serverTrustIdentity?: string;
   localSessionCredentialRef?: string;
+  /** Durable operation that produced this exact seat binding. */
+  operation?: ServerSessionOperation;
   // gh#899: assimilated role, persisted for connect-time tool-surface scoping
   // (mirrors cubes.ts ActiveCube; optional → backward-compatible).
   roleName?: string;
@@ -859,6 +861,12 @@ export async function runAssimilate(
         : `named-sibling:${args.flags.worktree}`)
       : 'current-worktree',
   };
+  // A selected sibling can be the surviving live seat for this worktree (#63).
+  // `--here` must re-send that seat's durable operation, not reconstruct the
+  // in-place operation and then fail PREPARE forever on the wrong ref.
+  if (existing && args.flags.here && existing.operation) {
+    sessionOperation = existing.operation;
+  }
   let reattachPriorId: string | undefined;
   let remintInvalidPrior = false;
   let savedLocalRole: Role | undefined;
@@ -1566,14 +1574,23 @@ export async function runAssimilate(
           return 1;
         }
         // missing / replaced / threw / unavailable: the worktree owns NO durable
-        // locator, so make NO convergence claim. Roll back the just-spawned worktree
-        // (preserve ONLY when it owns a durable locator) and point at the offline reset.
+        // locator. The server may already have accepted the seat, while the client
+        // has no protocol operation id or cleanup endpoint with which to prove reuse
+        // or remove it. State the exact local outcome and do not prescribe a retry
+        // that can silently create a duplicate server seat (#35).
+        const bindFailure =
+          bindOutcome === 'missing'
+            ? 'the exact pending seat record went missing locally before it could be bound'
+            : bindOutcome === 'replaced'
+              ? 'the exact pending seat record was replaced locally before it could be bound; the replacement was left untouched'
+              : bindOutcome === 'threw'
+                ? 'the local seat store could not be read or written while preserving the pending seat'
+                : 'this client did not receive a pending-seat preservation handle';
         deps.stderr(
-          `This worktree's secure session on ${auth.apiUrl} did not finish activating, and its ` +
-            'seat state could NOT be preserved to this worktree (it was concurrently reset or ' +
-            'replaced, or the local seat store could not be written). No usable seat remains here. ' +
-            `Run ${resetLocalSeatCommand(auth.apiUrl)} to clear any saved seat, then re-run ` +
-            `${localAssimilateCommand(auth.apiUrl)} to attach against the current state.\n`,
+          `This worktree's secure session on ${auth.apiUrl} did not finish activating: ` +
+            `${bindFailure}. The spawned worktree will be removed. No client-only command can ` +
+            'prove reuse or safely clear the possibly accepted server-side seat; ask the server ' +
+            'operator to inspect that seat before retrying.\n',
         );
         rollbackWorktree();
         return 1;
