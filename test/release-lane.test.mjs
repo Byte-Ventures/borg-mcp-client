@@ -29,7 +29,7 @@ import {
 import { CUBE_INIT_HELP_TEXT, smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const CLIENT_VERSION = '2.2.0';
+const CLIENT_VERSION = '2.3.0';
 const SHARED_VERSION = '0.6.4';
 const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.6.4.tgz';
 const SHARED_INTEGRITY = 'sha512-Wm4b0uoOAw9JCz5OTHD0Q2uXKkeWYdkVksdeZvRG8l62XGMY+G8GkNEsZT9L533LbVbQ29GhgF0htjDenQThDg==';
@@ -476,6 +476,11 @@ test('release documentation describes the activated minimal publication lane', a
     '30174878044',
     'sha512-nZJ3i6LBIj/4743mqVRJTUH3YGmC8HfC/NuQb7eOv+/K/dyBogDnwZ3opiZiZSe4LE5CXuG72Sip7cPRoCoZrA==',
     'v2.2.0',
+    'edf12fcd4c56eb0ad59917269aaeee223b36bd53',
+    'db4f374e88c24dadee47d5400537890cad1e5f40',
+    '30195666955',
+    'sha512-Pi3rpQH6f+V67OPoRIwyKjOFrCJ5y/39knCayExBmnMC5Urb8m+m9UQVNV7cWMuhd3S3WMM6JOkgcIYOVhWnxg==',
+    'v2.3.0',
   ]) assert.ok(releasing.includes(evidence), `Missing immutable release evidence: ${evidence}`);
   assert.match(releasing, /failed before package\s+creation or npm publication/);
   assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
