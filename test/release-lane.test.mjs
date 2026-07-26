@@ -13,6 +13,14 @@ import {
 } from '../scripts/verify-registry-release.mjs';
 import { verifyReleaseTrigger } from '../scripts/verify-release-trigger.mjs';
 import {
+  assertArtifactIdentity,
+  assertJourneyTranscript,
+  assertServerProcessArgv,
+  parseReleaseExerciseArgs,
+  ptyCommand,
+  resolvePackageEntry,
+} from '../scripts/release-exercise.mjs';
+import {
   lockRegistryEntries,
   registryCompatible,
   verifyManifest,
@@ -25,6 +33,134 @@ const CLIENT_VERSION = '2.2.0';
 const SHARED_VERSION = '0.6.4';
 const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.6.4.tgz';
 const SHARED_INTEGRITY = 'sha512-Wm4b0uoOAw9JCz5OTHD0Q2uXKkeWYdkVksdeZvRG8l62XGMY+G8GkNEsZT9L533LbVbQ29GhgF0htjDenQThDg==';
+
+test('release exercise requires an explicit server artifact identity', () => {
+  assert.throws(() => parseReleaseExerciseArgs([]), /--server/);
+  assert.deepEqual(
+    parseReleaseExerciseArgs([
+      '--server', './server.tgz',
+      '--server-integrity', 'sha512-Y2FuZGlkYXRl',
+      '--client-tarball', './client.tgz',
+    ]),
+    {
+      server: './server.tgz',
+      serverIntegrity: 'sha512-Y2FuZGlkYXRl',
+      clientTarball: './client.tgz',
+    },
+  );
+  assert.throws(
+    () => parseReleaseExerciseArgs(['--server', './server.tgz', '--server-integrity', 'wrong']),
+    /SHA-512 SRI/,
+  );
+  assert.throws(
+    () => parseReleaseExerciseArgs([
+      '--server', './server.tgz', '--server-integrity', 'sha512-Y2FuZGlkYXRl', '--unknown',
+    ]),
+    /Unknown argument/,
+  );
+});
+
+test('release exercise constructs a real PTY bridge on supported platforms', () => {
+  const darwin = ptyCommand('darwin', ['/node path', '--eval', 'source']);
+  assert.equal(darwin.command, 'python3');
+  assert.deepEqual(darwin.args.slice(-3), ['/node path', '--eval', 'source']);
+  const linux = ptyCommand('linux', ['/node path', '--eval', "it's source"]);
+  assert.equal(linux.command, 'python3');
+  assert.deepEqual(linux.args.slice(-3), ['/node path', '--eval', "it's source"]);
+  assert.throws(() => ptyCommand('win32', ['node']), /unsupported platform/);
+});
+
+test('release exercise rejects substituted server processes', () => {
+  assert.doesNotThrow(() => assertServerProcessArgv(
+    ['/node/exact', '/isolated/node_modules/borgmcp-server/dist/main.js', 'start'],
+    '/node/exact',
+    '/isolated/node_modules/borgmcp-server/dist/main.js',
+  ));
+  assert.throws(() => assertServerProcessArgv(
+    ['/usr/bin/node', '/global/node_modules/borgmcp-server/dist/main.js', 'start'],
+    '/node/exact',
+    '/isolated/node_modules/borgmcp-server/dist/main.js',
+  ), /declared Node path/);
+  assert.throws(() => assertServerProcessArgv(
+    ['/node/exact-wrapper', '/isolated/node_modules/borgmcp-server/dist/main.js', 'start'],
+    '/node/exact',
+    '/isolated/node_modules/borgmcp-server/dist/main.js',
+  ), /declared Node path/);
+  assert.throws(() => assertServerProcessArgv(
+    ['/node/exact', '/isolated/node_modules/borgmcp-server/dist/main.js.evil', 'start'],
+    '/node/exact',
+    '/isolated/node_modules/borgmcp-server/dist/main.js',
+  ), /declared server entry/);
+  const expected = { path: '/isolated/server/dist/main.js', integrity: 'sha512-candidate' };
+  assert.doesNotThrow(() => assertArtifactIdentity(expected, expected));
+  assert.throws(
+    () => assertArtifactIdentity(
+      { path: '/global/server/dist/main.js', integrity: 'sha512-published' },
+      expected,
+    ),
+    /resolved artifact path/,
+  );
+  assert.throws(
+    () => assertArtifactIdentity(
+      { path: expected.path, integrity: 'sha512-published' },
+      expected,
+    ),
+    /resolved artifact integrity/,
+  );
+});
+
+test('release exercise rejects a package bin that escapes its SRI-covered root', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'borgmcp-escaping-bin-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const source = join(directory, 'source');
+  const consumer = join(directory, 'consumer');
+  const published = join(directory, 'published');
+  await mkdir(join(source, 'dist'), { recursive: true });
+  await mkdir(consumer);
+  await mkdir(published);
+  await writeFile(join(source, 'package.json'), `${JSON.stringify({
+    name: 'borgmcp-server',
+    version: '9.9.9',
+    bin: { 'borg-mcp-server': '../../../published/main.js' },
+  }, null, 2)}\n`);
+  await writeFile(join(source, 'dist', 'main.js'), 'export const packaged = true;\n');
+  await writeFile(join(published, 'main.js'), 'export const escaped = true;\n');
+  const [packed] = JSON.parse(execFileSync('npm', [
+    'pack', '--ignore-scripts', '--json', '--pack-destination', directory,
+  ], { cwd: source, encoding: 'utf8' }));
+  await writeFile(join(consumer, 'package.json'), '{"name":"escaping-bin-consumer","private":true}\n');
+  execFileSync('npm', [
+    'install', '--ignore-scripts', '--package-lock=true', '--save-exact',
+    join(directory, packed.filename),
+  ], { cwd: consumer, stdio: 'pipe' });
+
+  const serverRoot = await realpath(join(consumer, 'node_modules', 'borgmcp-server'));
+  const manifest = JSON.parse(await readFile(join(serverRoot, 'package.json'), 'utf8'));
+  const lock = JSON.parse(await readFile(join(consumer, 'package-lock.json'), 'utf8'));
+  assert.match(lock.packages['node_modules/borgmcp-server'].integrity, /^sha512-/);
+  await assert.rejects(
+    resolvePackageEntry(serverRoot, manifest.bin['borg-mcp-server'], 'server'),
+    /outside its installed package root/,
+  );
+});
+
+test('release exercise requires observable frame, exit, and terminal restoration outcomes', () => {
+  const good = `\u001b[?1049hFRAME ^C close viewer\u001b[?25h\u001b[?1049l`;
+  const report = { stdinTTY: true, stdoutTTY: true, code: 0, signal: null };
+  assert.doesNotThrow(() => assertJourneyTranscript(good, '^C close viewer', report));
+  assert.throws(
+    () => assertJourneyTranscript('\u001b[?1049hFRAME ^C close viewer', '^C close viewer', report),
+    /restore the cursor/,
+  );
+  assert.throws(
+    () => assertJourneyTranscript(good, '^C close viewer', { ...report, code: 130 }),
+    /code 130/,
+  );
+  assert.throws(
+    () => assertJourneyTranscript(good, '^C stop server', report),
+    /did not match/,
+  );
+});
 
 async function validPackage(directory) {
   const packageRoot = join(directory, 'package');
@@ -235,10 +371,13 @@ test('release workflow uses one package authority and one protected publish with
 });
 
 test('release documentation describes the activated minimal publication lane', async () => {
+  const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   const readme = await readFile(join(root, 'README.md'), 'utf8');
   const security = await readFile(join(root, 'SECURITY.md'), 'utf8');
   const releasing = await readFile(join(root, 'docs', 'RELEASING.md'), 'utf8');
   const extraction = await readFile(join(root, 'docs', 'EXTRACTION_PROVENANCE.md'), 'utf8');
+
+  assert.equal(manifest.scripts['release:exercise'], 'npm run build && node scripts/release-exercise.mjs');
 
   assert.match(readme, /After verified publication/);
   assert.match(readme, /npm install -g borgmcp@2\.0\.10/);
@@ -252,7 +391,12 @@ test('release documentation describes the activated minimal publication lane', a
     'id-token: write',
     'NODE_AUTH_TOKEN',
     'no post-publication registry readback',
+    'Pre-tag composed exercise',
+    '--server-integrity',
+    'inside the installed package root',
+    'not a containment sandbox',
   ]) assert.ok(releasing.includes(boundary), `Missing release boundary: ${boundary}`);
+  assert.match(releasing, /PATH ordering\s+alone is never accepted as identity evidence/);
   for (const evidence of [
     'v2.0.0',
     '90a078264f4d61c0140ad0a30357a4df42c34ab0',

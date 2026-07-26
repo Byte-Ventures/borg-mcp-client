@@ -172,6 +172,74 @@ Before preparing a candidate, independently verify:
 
 ## Release Workflow
 
+### Pre-tag composed exercise
+
+Before creating a release tag, exercise the packed client against the selected
+server artifact:
+
+```sh
+npm run release:exercise -- \
+  --server /absolute/path/to/borgmcp-server.tgz \
+  --server-integrity 'sha512-...'
+```
+
+The server integrity must come from the reviewed producer of that artifact. Run
+the command once with the published counterpart. When the client and server are
+being released together, run it again with the co-releasing server candidate.
+The default path builds and packs the current client; `--client-tarball` exists
+only for reproducing a reviewed packed client or running a negative control.
+
+This harness exercises reviewed release candidates and their published
+counterparts. It is not a containment sandbox for hostile or otherwise untrusted
+packages and must not be used as one. The temporary install and data directories
+isolate the reviewed exercise from normal product state; they are not an
+operating-system security boundary.
+
+The harness requires Node.js 22, npm 11.18.0, Python 3, and macOS or Linux. It
+installs both tarballs into a private temporary project, bootstraps isolated
+server data, and starts the installed server directly. It never uses
+`borg server setup`, because registry-backed activation would select the
+previously published server instead of a candidate.
+
+Both composed terminal journeys run under a real PTY:
+
+- `borg server dashboard` must render the attached-viewer footer, exit cleanly
+  on Ctrl-C, restore the cursor and alternate screen, and leave the server's
+  pinned-TLS process healthy at `GET /healthz` (204, empty body).
+- `borg server start` must render the foreground-server footer, exit cleanly on
+  Ctrl-C, restore the terminal, stop the server, and release its health endpoint.
+
+The client facade resolves `borg-mcp-server` by bare name. The harness therefore
+uses a controlled shim only to arrange resolution, then verifies the outcome:
+before trusting a frame, it reads the live process command and requires the
+absolute installed server entry. Every client or server executable must resolve
+inside the installed package root covered by the SRI cited for that role. Its
+JSON report records the absolute path, version, and independently supplied
+integrity for the client, dashboard listener, dashboard viewer, and foreground
+listener/viewer roles. PATH ordering alone is never accepted as identity evidence.
+
+The harness is a fail-closed release gate. A missing frame, non-PTY execution,
+wrong journey footer, substituted artifact, nonzero exit, absent terminal
+restore sequence, failed post-exit health assertion, timeout, or oversized
+transcript fails the command. Its controls must remain demonstrably bidirectional:
+the current client/server pairing passes; and a deliberately wrong server
+integrity fails before either journey starts.
+
+The terminal-restore negative control is specifically the packed pre-#146 client
+from commit `81da7b970ffb4e76a35c7bc551c419fec702a3b6` composed with published
+`borgmcp-server@0.2.0`, registry integrity
+`sha512-squb0+vdy0q7l/4FeV7OTvSm7OiFWGsAjGhcVEXYrQc9K/8jJYduqPS90VBwaJRT6z221Gxf3xQ5SeZe/Qoncw==`.
+That composition must fail on the missing cursor-restore sequence. A newer server
+candidate can mask the old client's defect and is not a valid counterpart for
+this negative control.
+
+```sh
+npm run release:exercise -- \
+  --server borgmcp-server@0.2.0 \
+  --server-integrity 'sha512-squb0+vdy0q7l/4FeV7OTvSm7OiFWGsAjGhcVEXYrQc9K/8jJYduqPS90VBwaJRT6z221Gxf3xQ5SeZe/Qoncw==' \
+  --client-tarball /absolute/path/to/pre-146-borgmcp-2.1.1.tgz
+```
+
 The only trigger is a protected annotated `v<package version>` tag. Manual
 dispatch is intentionally absent so a second run cannot rebuild or publish an
 existing tag. The workflow rejects reruns, root `.npmrc`
