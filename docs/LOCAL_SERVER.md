@@ -129,6 +129,43 @@ create distinct bounded cubes. An ordinary enrolled client is denied before a
 create request is sent. Cloud-only capabilities fail explicitly rather than
 being redirected.
 
+## Updating Borg
+
+For an npm-global installation, use the whole-product command:
+
+```bash
+borg update
+```
+
+The command performs a zero-mutation registry preflight for the exact proposed
+`borgmcp` and `borgmcp-server` versions, their SHA-512 integrity values, and an
+identical exact `borgmcp-shared` dependency pin. It also requires unambiguous npm
+ownership of the running client and any installed server controller. A registry
+failure, malformed manifest, mismatched or ranged shared pin, unsupported
+package manager, or ambiguous binary fails before confirmation and mutation.
+
+The client is installed first. Borg then verifies and re-enters through the new
+client binary before any server mutation. If that install, verification, or
+re-entry fails, the server controller and runtime are untouched. When a server
+was already installed, the new client installs the target controller before
+invoking `borg-mcp-server update --json`; this ensures the runtime phase uses the
+current structured contract rather than the stale controller being replaced.
+The client strictly decodes server update and status JSON and never executes a
+rendered `next_action` string.
+
+Final verification requires the installed client and server manifests, their
+installed shared packages, controller identity, prepared artifact and integrity,
+and any running artifact and pinned-TLS protocol identity to agree. A previously
+stopped server remains stopped; matching controller and prepared runtime are
+reported as `prepared; still stopped` without inventing a live protocol check.
+An absent server is skipped rather than installed. Partial completion prints the
+safe retry command `borg update --yes`. Borg never starts a stopped server,
+daemonizes, or restarts agent processes.
+
+`borg server update` remains the server-runtime-only command. It verifies and
+activates the server artifact but deliberately does not rewrite the global
+controller executable that is running it.
+
 After the first attach, the launched agent should run `borg_whoami` and
 `borg_roster` to verify its seat and begin coordinating. To create a second seat,
 the operator runs the explicit local assimilation command from the intended

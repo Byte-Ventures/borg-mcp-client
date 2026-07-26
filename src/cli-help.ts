@@ -27,6 +27,7 @@ export function topLevelHelpText(version: string): string {
     `Usage:\n` +
     `  borg                     Launch your agent CLI; in a TTY, bare borg may show the launch menu\n` +
     `  borg setup               Set up borg MCP server + agent CLI integration\n` +
+    `  borg update              Update the client and installed local server together\n` +
     `  borg assimilate [role]   Join or create a cube\n` +
     `  borg assimilate --host <host>   Join or create on an explicit server\n` +
     `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
@@ -41,6 +42,24 @@ export function topLevelHelpText(version: string): string {
     `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
     `  borg --version           Show installed version\n\n` +
     `All other arguments are passed through to the selected agent CLI.\n`
+  );
+}
+
+/** Help for the whole-product, npm-owned update journey. */
+export function updateHelpText(version: string): string {
+  return (
+    `borg update${version ? ` (borgmcp ${version})` : ''} — update Borg's client and local server together\n\n` +
+    `Usage:\n` +
+    `  borg update             Confirm interactively, then update\n` +
+    `  borg update --yes       Update without prompting (required outside a TTY)\n` +
+    `  borg update --help      Show this help\n\n` +
+    `Before changing anything, Borg reads the exact published client and server manifests,\n` +
+    `requires matching exact borgmcp-shared pins, and verifies npm ownership. The client is\n` +
+    `installed first and the update continues under that new client before the server controller\n` +
+    `and runtime are updated. Unsupported or ambiguous package-manager provenance fails closed.\n\n` +
+    `If no local server is installed, the server phase is skipped. A failure after the client\n` +
+    `succeeds is reported as partial completion with the safe retry command. Borg never starts a\n` +
+    `stopped server and never restarts agent processes; restart active agent sessions yourself.\n`
   );
 }
 

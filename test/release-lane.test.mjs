@@ -241,6 +241,10 @@ lines.on('line', (line) => {
 `
       : `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
+if (process.argv.slice(2).join('\\0') === 'update\\0--help') {
+  process.stdout.write('borg update\\nmatching exact borgmcp-shared pins\\n');
+  process.exit(0);
+}
 if (process.argv.slice(2).join('\\0') === 'server\\0cube\\0init\\0--help') {
   process.stdout.write(${JSON.stringify(CUBE_INIT_HELP_TEXT)});
   process.exit(0);
@@ -927,6 +931,7 @@ test('exact tarball installs cleanly and completes MCP initialize plus tool disc
     serverFacadeStopExitCode: 43,
     serverFacadeStartupFailureExitCode: 1,
     serverFacadeMissingExitCode: 127,
+    updateHelpExitCode: 0,
   });
 });
 

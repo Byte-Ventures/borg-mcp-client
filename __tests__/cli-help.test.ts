@@ -14,6 +14,7 @@ import {
   serverHelpText,
   setupHelpText,
   topLevelHelpText,
+  updateHelpText,
 } from '../src/cli-help';
 
 describe('gh#520 — borg setup --help', () => {
@@ -86,6 +87,23 @@ describe('borg server help', () => {
       `  --help, -h                       Show this help\n`,
     );
     expect(cubeInitHelpText()).not.toMatch(/--worktree|--here|--cli|--model/);
+  });
+});
+
+describe('borg update help', () => {
+  it('advertises the whole-product journey at top level', () => {
+    expect(topLevelHelpText('9.9.9')).toContain('borg update');
+  });
+
+  it('documents preflight, ordering, skip, partial completion, and restart semantics', () => {
+    const text = updateHelpText('9.9.9');
+    expect(text).toContain('borg update');
+    expect(text).toContain('--yes');
+    expect(text).toMatch(/published.*borgmcp-shared/is);
+    expect(text).toMatch(/client.*first/is);
+    expect(text).toMatch(/server.*skipped/i);
+    expect(text).toMatch(/partial/i);
+    expect(text).toMatch(/restart.*agent/i);
   });
 });
 
