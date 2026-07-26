@@ -21,10 +21,13 @@
  *       CREDENTIAL FIRST and remove the binding.
  */
 import { createInterface } from 'node:readline/promises';
-import { snapshotLocalSeat as cubesSnapshotLocalSeat, resetLocalSeatBinding as cubesResetLocalSeatBinding, findProjectRoot as cubesFindProjectRoot, } from './cubes.js';
+import { snapshotLocalSeat as cubesSnapshotLocalSeat, resetLocalSeatBinding as cubesResetLocalSeatBinding, findRemainingActiveSeatForWorktree as cubesFindRemainingActiveSeatForWorktree, findProjectRoot as cubesFindProjectRoot, } from './cubes.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 function reenrollCommand(apiUrl) {
     return `\`borg assimilate --host ${apiUrl} --enroll\``;
+}
+function reattachCommand(apiUrl) {
+    return `\`borg assimilate --host ${apiUrl} --here\``;
 }
 /**
  * Recovery guidance shared by the success + honest-no-op copy. Makes NO
@@ -98,7 +101,22 @@ export async function runResetLocalSeat(flags, deps) {
     if (outcome.outcome === 'reset') {
         deps.stderr(`audit: this worktree's saved local seat for ${snapshot.apiUrl} (worktree ${worktree}) ` +
             'was cleared; server, trust anchor, cube, and sibling worktrees unchanged.\n');
-        deps.stdout(recoveryGuidance(snapshot.apiUrl));
+        let remaining = null;
+        try {
+            remaining = await deps.findRemainingActiveSeat(worktree);
+        }
+        catch {
+            // The reset already committed. A follow-up read must not turn that success
+            // into a false failure; fall back to the universally valid enrollment path.
+        }
+        if (remaining?.apiUrl === snapshot.apiUrl) {
+            deps.stdout(`Another saved active seat remains for this worktree on ${snapshot.apiUrl}. ` +
+                `Re-attach with ${reattachCommand(snapshot.apiUrl)}; Borg will revalidate that ` +
+                'seat with the server before launch.\n');
+        }
+        else {
+            deps.stdout(recoveryGuidance(snapshot.apiUrl));
+        }
         return 0;
     }
     if (outcome.outcome === 'no-binding') {
@@ -117,6 +135,7 @@ export function buildDefaultResetLocalSeatDeps() {
     return {
         snapshotLocalSeat: () => cubesSnapshotLocalSeat(),
         resetLocalSeatBinding: (expected) => cubesResetLocalSeatBinding(expected),
+        findRemainingActiveSeat: (worktree) => cubesFindRemainingActiveSeatForWorktree(worktree),
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
         normalizeHost: (host) => normalizeServerEndpoint(host),
         cwd: () => process.cwd(),

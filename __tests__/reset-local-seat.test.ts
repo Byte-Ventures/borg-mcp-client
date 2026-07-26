@@ -32,6 +32,7 @@ function makeDeps(overrides: Partial<ResetLocalSeatDeps> = {}): ResetLocalSeatDe
   return {
     snapshotLocalSeat: vi.fn(async () => SNAPSHOT_PRESENT),
     resetLocalSeatBinding: vi.fn(async () => ({ outcome: 'reset', credentialRef: SNAPSHOT_PRESENT.credentialRef }) as ResetLocalSeatOutcome),
+    findRemainingActiveSeat: vi.fn(async (_worktree: string) => null),
     findProjectRoot: () => '/work/repo',
     normalizeHost: (h) => (h.startsWith('http') ? h : `https://${h}`),
     cwd: () => '/work/repo',
@@ -58,6 +59,25 @@ describe('runResetLocalSeat', () => {
     expect(audit).toContain('server, trust anchor, cube, and sibling worktrees unchanged');
     expect(audit).not.toMatch(/revoked server-side|server revoked/i);
     expect(out(stdout)).toContain('`borg assimilate --host https://server.test --enroll`');
+  });
+
+  it('after reset, points at the remaining saved sibling instead of prescribing enrollment', async () => {
+    const stdout = vi.fn();
+    const findRemainingActiveSeat = vi.fn(async () => ({
+      apiUrl: SNAPSHOT_PRESENT.apiUrl,
+      operation: {
+        projectRoot: '/work/repo',
+        kind: 'sibling' as const,
+        operationKey: 'implicit-sibling:survivor',
+      },
+    }));
+    const deps = makeDeps({ stdout, findRemainingActiveSeat });
+
+    expect(await runResetLocalSeat({}, deps)).toBe(0);
+    expect(findRemainingActiveSeat).toHaveBeenCalledWith('/work/repo');
+    expect(out(stdout)).toContain('`borg assimilate --host https://server.test --here`');
+    expect(out(stdout)).toMatch(/revalidate/i);
+    expect(out(stdout)).not.toMatch(/new enrollment invitation|--enroll/);
   });
 
   it('TTY decline (empty → default No) makes NO changes and never touches the binding', async () => {
@@ -229,6 +249,32 @@ describe('cubes.snapshotLocalSeat (real single store)', () => {
   it('returns null when this worktree has no active seat', async () => {
     const { cubes } = await setup();
     expect(await cubes.snapshotLocalSeat()).toBeNull();
+  });
+
+  it('hydrates the exact durable operation selected for re-attach', async () => {
+    const { project, seats, cubes } = await setup();
+    const operation = {
+      projectRoot: '/work/source',
+      kind: 'sibling' as const,
+      operationKey: 'implicit-sibling:survivor',
+    };
+    const seat = { ...seatFor(project), operation };
+    await seats.mintPendingSeat({ ...seat, credential: 's'.repeat(43) });
+    await seats.activateAndBindSeat({
+      ...seat,
+      ...STAMP,
+      expectedPendingDigest: digestOf('s'.repeat(43)),
+      worktree: project,
+      name: 'local-cube',
+      droneLabel: 'builder-2',
+      roleName: 'Drone',
+    });
+
+    expect((await cubes.getActiveCube())?.operation).toEqual(operation);
+    expect(await cubes.findRemainingActiveSeatForWorktree(project)).toEqual({
+      apiUrl: seat.origin,
+      operation,
+    });
   });
 });
 

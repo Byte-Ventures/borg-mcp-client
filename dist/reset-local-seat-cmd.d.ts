@@ -28,6 +28,14 @@ export interface ResetLocalSeatFlags {
 export interface ResetLocalSeatDeps {
     snapshotLocalSeat: () => Promise<LocalSeatSnapshot | null>;
     resetLocalSeatBinding: (expected: LocalSeatSnapshot) => Promise<ResetLocalSeatOutcome>;
+    findRemainingActiveSeat: (worktree: string) => Promise<{
+        apiUrl: string;
+        operation: {
+            projectRoot: string;
+            kind: 'seat' | 'sibling';
+            operationKey: string;
+        };
+    } | null>;
     findProjectRoot: (cwd: string) => string;
     normalizeHost: (host: string) => string;
     cwd: () => string;

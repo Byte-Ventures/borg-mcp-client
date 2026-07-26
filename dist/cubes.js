@@ -201,10 +201,20 @@ async function hydrateActiveCube(record) {
         apiUrl: record.origin,
         serverTrustIdentity: record.trustIdentity,
         localSessionCredentialRef: ref,
+        operation: record.operation,
         ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
         ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),
         ...(record.isHumanSeat !== undefined ? { isHumanSeat: record.isHumanSeat } : {}),
     };
+}
+/**
+ * Token-free lookup used after an offline reset. A surviving seat is only
+ * described as saved local state; the caller must still revalidate it with the
+ * server before launch.
+ */
+export async function findRemainingActiveSeatForWorktree(worktree) {
+    const record = await getActiveSeatForWorktree(worktree);
+    return record ? { apiUrl: record.origin, operation: record.operation } : null;
 }
 /**
  * Legacy binding-only writer. In the collapsed single-store model an ACTIVE seat is

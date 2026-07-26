@@ -66,6 +66,8 @@ export interface ActiveCube {
     /** Verified local-server CA identity; absent until a local server is selected. */
     serverTrustIdentity?: string;
     localSessionCredentialRef?: string;
+    /** Durable operation that produced this exact seat binding. */
+    operation?: ServerSessionOperation;
     roleName?: string;
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;

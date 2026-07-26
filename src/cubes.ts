@@ -62,6 +62,8 @@ export interface ActiveCube {
   serverTrustIdentity?: string;
   /** Opaque local-session keychain reference; never a bearer. */
   localSessionCredentialRef?: string;
+  /** Durable seat operation that produced this exact local binding. */
+  operation?: SeatOperation;
   // gh#899: the assimilated role, persisted so the connect-time ListTools
   // handler can role-scope the NATIVE tool surface (UX/context only — never an
   // auth boundary). Absent on pre-gh#899 cubes.json entries → the filter
@@ -279,10 +281,24 @@ async function hydrateActiveCube(record: SeatRecord): Promise<ActiveCube | null>
     apiUrl: record.origin,
     serverTrustIdentity: record.trustIdentity,
     localSessionCredentialRef: ref,
+    operation: record.operation,
     ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
     ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),
     ...(record.isHumanSeat !== undefined ? { isHumanSeat: record.isHumanSeat } : {}),
   };
+}
+
+/**
+ * Token-free lookup used after an offline reset. A surviving seat is only
+ * described as saved local state; the caller must still revalidate it with the
+ * server before launch.
+ */
+export async function findRemainingActiveSeatForWorktree(worktree: string): Promise<{
+  apiUrl: string;
+  operation: SeatOperation;
+} | null> {
+  const record = await getActiveSeatForWorktree(worktree);
+  return record ? { apiUrl: record.origin, operation: record.operation } : null;
 }
 
 /**

@@ -642,6 +642,8 @@ export async function findIncompleteSiblingAttempt(binding: {
       record.state === 'pending' &&
       record.worktree === undefined &&
       record.operation.kind === 'sibling' &&
+      record.operation.operationKey.startsWith('implicit-sibling:') &&
+      record.operation.operationKey.length > 'implicit-sibling:'.length &&
       record.origin === binding.origin &&
       record.trustIdentity === binding.trustIdentity &&
       record.cubeId === binding.cubeId &&

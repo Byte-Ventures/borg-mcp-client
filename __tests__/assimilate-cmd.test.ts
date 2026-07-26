@@ -1485,6 +1485,42 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     });
   });
 
+  it('a --here reattach reuses the selected seat stored operation instead of reconstructing current-worktree', async () => {
+    const siblingOperation = {
+      projectRoot: '/work/source',
+      kind: 'sibling' as const,
+      operationKey: 'implicit-sibling:survivor',
+    };
+    const assimilate = localResultWithFinalize(
+      vi.fn(async () => {}),
+      vi.fn(async () => {}),
+    );
+    const deps = makeStubDeps({
+      assimilate,
+      getCube: getCube(),
+      finalizeServerSeat: vi.fn(async () => ({ committed: true as const })),
+      getActiveCube: vi.fn(async () => ({
+        cubeId: 'c',
+        droneId: 'd-prior',
+        name: 'myrepo',
+        droneLabel: 'l',
+        apiUrl: 'https://server.test',
+        serverTrustIdentity: SERVER_TRUST_IDENTITY,
+        localSessionCredentialRef: REF,
+        sessionToken: 'prior-bearer',
+        roleName: 'Drone',
+        operation: siblingOperation,
+      })),
+      probeSeat: vi.fn(async () => 'live'),
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+      cwd: () => '/work/sibling',
+      findProjectRoot: () => '/work/sibling',
+    });
+
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(0);
+    expect(assimilate.mock.calls[0][2].session_operation).toEqual(siblingOperation);
+  });
+
   it('an expectation-mismatch abort fails closed (exit 1), rolls back nothing to overwrite, and never audits success', async () => {
     const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'expectation-mismatch' as const }));
     const stderr = vi.fn();
@@ -1569,9 +1605,12 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
       // No durable locator → the spawned worktree is rolled back.
       expect(removedWorktree(calls), `${outcome} should roll back`).toBe(true);
       const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+      const recovery = out.slice(out.lastIndexOf("This worktree's secure session"));
       // Truthful FAILURE — never the false-success "converge / identical seat reused" claim.
-      expect(out).toMatch(/could NOT be preserved/i);
-      expect(out).not.toMatch(/converge|identical seat is reused/i);
+      expect(recovery).toMatch(new RegExp(outcome, 'i'));
+      expect(recovery).toMatch(/no client-only command/i);
+      expect(recovery).not.toMatch(/reset-local-seat|re-run `borg assimilate/i);
+      expect(recovery).not.toMatch(/converge|identical seat is reused/i);
     }
   });
 
@@ -1587,7 +1626,8 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
     expect(removedWorktree(calls)).toBe(true);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toMatch(/could NOT be preserved/i);
+    expect(out).toMatch(/local seat store could not be read or written/i);
+    expect(out).toMatch(/no client-only command/i);
     expect(out).not.toMatch(/converge|identical seat is reused/i);
   });
 

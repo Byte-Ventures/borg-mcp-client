@@ -56,6 +56,17 @@ sibling worktree was already created when activation failed, Borg binds the
 still-pending record to that worktree without making it live; rerunning from
 there resends the same bearer.
 
+Only an `implicit-sibling:<id>` pending operation is eligible for automatic
+implicit retry adoption. A `named-sibling:<name>` operation remains distinct
+and is never silently adopted by an unnamed sibling launch.
+
+If activation fails and the exact pending record is successfully bound to the
+spawned worktree, Borg preserves that worktree and the printed retry reuses the
+same seat. If the record is missing, replaced, or unavailable, Borg removes the
+spawned worktree and does not print a client retry command: the server may
+already have accepted the seat, and the current protocol has no client-side
+operation identifier or cleanup endpoint that can prove reuse or remove it.
+
 ## Re-attaching from a terminal
 
 `borg assimilate --here` first resolves this worktree's saved active seat and
@@ -196,8 +207,11 @@ Usage:
 The command snapshots the exact binding and token-safe bearer observation,
 prompts outside the store lock, then revalidates the same seat before deleting
 it. If another process replaced or reset the seat, the command is an honest
-no-op rather than deleting the successor. A successful reset prints an audit
-line and guidance to obtain a fresh invitation and rerun:
+no-op rather than deleting the successor. After a successful reset, Borg reads
+the same worktree again without hydrating any bearer. If another saved active
+seat remains on the same server, the command points to
+`borg assimilate --host <server> --here` and states that the server will
+revalidate it before launch. Otherwise it gives the fresh-enrollment path:
 
 ```text
 borg assimilate --host <server> --enroll
