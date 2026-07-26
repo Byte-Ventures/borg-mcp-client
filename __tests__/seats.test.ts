@@ -89,6 +89,80 @@ describe('seats store — one atomic unit (ACTIVE-without-binding unreachable)',
   });
 });
 
+describe('seats store — deterministic duplicate-worktree resolution', () => {
+  it('prefers a live sibling seat and falls back after its exact ref is rejected', async () => {
+    const { dir, seats } = await load();
+    const worktree = '/work/repo';
+    const staleBearer = 'stale-seat-'.padEnd(43, 's');
+    const liveBearer = 'live-sibling-'.padEnd(43, 'l');
+    const sibling = {
+      ...SEAT,
+      operation: {
+        projectRoot: '/work/source',
+        kind: 'sibling' as const,
+        operationKey: 'implicit-sibling:replacement',
+      },
+    };
+
+    await seats.mintPendingSeat({ ...SEAT, credential: staleBearer });
+    await seats.activateAndBindSeat({
+      ...SEAT,
+      ...STAMP,
+      expectedPendingDigest: digestOf(staleBearer),
+      worktree,
+      name: 'stale-cube',
+      droneLabel: 'builder-stale',
+    });
+    await seats.mintPendingSeat({ ...sibling, credential: liveBearer });
+    await seats.activateAndBindSeat({
+      ...sibling,
+      droneId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      expectedPendingDigest: digestOf(liveBearer),
+      worktree,
+      name: 'live-cube',
+      droneLabel: 'builder-live',
+    });
+
+    expect(await seats.getActiveSeatForWorktree(worktree)).toMatchObject({
+      droneLabel: 'builder-live',
+      operation: { kind: 'sibling' },
+    });
+
+    const stored = JSON.parse(readOrEmpty(storeJson(dir))) as { version: number; seats: Record<string, unknown> };
+    stored.seats = Object.fromEntries(Object.entries(stored.seats).reverse());
+    writeFileSync(storeJson(dir), JSON.stringify(stored, null, 2) + '\n', { mode: 0o600 });
+    expect(await seats.getActiveSeatForWorktree(worktree)).toMatchObject({
+      droneLabel: 'builder-live',
+      operation: { kind: 'sibling' },
+    });
+
+    const siblingRef = seats.seatRef(sibling);
+    seats.markSeatRejected(siblingRef);
+    expect(await seats.getActiveSeatForWorktree(worktree)).toMatchObject({
+      droneLabel: 'builder-stale',
+      operation: { kind: 'seat' },
+    });
+
+    await seats.clearSeat(siblingRef);
+    const replacementBearer = 'reminted-live-'.padEnd(43, 'r');
+    await seats.mintPendingSeat({ ...sibling, credential: replacementBearer });
+    await seats.activateAndBindSeat({
+      ...sibling,
+      droneId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      expectedPendingDigest: digestOf(replacementBearer),
+      worktree,
+      name: 'live-cube',
+      droneLabel: 'builder-reminted',
+    });
+    expect(await seats.getActiveSeatForWorktree(worktree)).toMatchObject({
+      droneLabel: 'builder-reminted',
+      operation: { kind: 'sibling' },
+    });
+  });
+});
+
 describe('seats store — exact-seat metadata refresh', () => {
   it('updates only the expected credential-ref/cube/drone tuple', async () => {
     const { seats } = await load();

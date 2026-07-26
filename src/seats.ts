@@ -98,6 +98,7 @@ function emptyStore(): SeatsFile {
 
 const ROLE_CLASSES = new Set(['queen', 'worker']);
 const OPERATION_KINDS = new Set(['seat', 'sibling']);
+const rejectedSeatRefs = new Set<string>();
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
@@ -338,6 +339,7 @@ export async function mintPendingSeat(input: {
     };
     txn.data.seats[ref] = record;
     await txn.commit();
+    rejectedSeatRefs.delete(ref);
     return record;
   });
 }
@@ -430,6 +432,7 @@ export async function prepareSeat(input: {
     };
     txn.data.seats[ref] = record;
     await txn.commit();
+    rejectedSeatRefs.delete(ref);
     return { ok: true as const, record };
   });
 }
@@ -498,6 +501,7 @@ export async function activateAndBindSeat(input: {
       ...(input.isHumanSeat !== undefined ? { isHumanSeat: input.isHumanSeat } : {}),
     };
     await txn.commit();
+    rejectedSeatRefs.delete(ref);
     return 'activated';
   });
 }
@@ -567,16 +571,28 @@ export async function bindPendingSeatToWorktree(input: {
 
 // ─── Hydration / enumeration (scan by worktree) ──────────────────────────────
 
-/** The exact ACTIVE seat bound to `worktree`, or null. A pending record (no
- *  worktree, or non-active) is NEVER surfaced as a live binding. */
+/** The preferred ACTIVE seat bound to `worktree`, or null. A pending record (no
+ *  worktree, or non-active) is NEVER surfaced as a live binding. Candidates use
+ *  one total order across every process: unrejected before rejected, a sibling
+ *  finalized into this worktree before an older in-place binding, then seat ref. */
 export async function getActiveSeatForWorktree(worktree: string): Promise<SeatRecord | null> {
   const store = await readStore();
-  for (const [ref, record] of Object.entries(store.seats)) {
-    if (record.state === 'active' && record.worktree === worktree && seatRef(record) === ref) {
-      return record;
-    }
-  }
-  return null;
+  const candidates = Object.entries(store.seats)
+    .filter(([ref, record]) =>
+      record.state === 'active' && record.worktree === worktree && seatRef(record) === ref)
+    .sort(([leftRef, left], [rightRef, right]) => {
+      const rejectionOrder = Number(rejectedSeatRefs.has(leftRef)) - Number(rejectedSeatRefs.has(rightRef));
+      if (rejectionOrder !== 0) return rejectionOrder;
+      const operationOrder = Number(left.operation.kind === 'seat') - Number(right.operation.kind === 'seat');
+      if (operationOrder !== 0) return operationOrder;
+      return leftRef < rightRef ? -1 : leftRef > rightRef ? 1 : 0;
+    });
+  return candidates[0]?.[1] ?? null;
+}
+
+/** Deprioritize an exact seat after a definitive server auth or eviction verdict. */
+export function markSeatRejected(ref: string): void {
+  if (REF_RE.test(ref)) rejectedSeatRefs.add(ref);
 }
 
 /**
@@ -696,6 +712,7 @@ export async function resetSeatForWorktree(expected: {
     }
     delete txn.data.seats[expected.ref];
     await txn.commit();
+    rejectedSeatRefs.delete(expected.ref);
     return { outcome: 'reset' as const, ref: expected.ref };
   });
 }
@@ -726,6 +743,7 @@ export async function clearSeat(ref: string): Promise<void> {
     if (txn.data.seats[ref] !== undefined) {
       delete txn.data.seats[ref];
       await txn.commit();
+      rejectedSeatRefs.delete(ref);
     }
   });
 }

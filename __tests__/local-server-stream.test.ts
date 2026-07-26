@@ -8,6 +8,7 @@ const OTHER_RECIPIENT_ID = '55555555-5555-4555-8555-555555555555';
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.doUnmock('../src/stream-owner.js');
+  vi.doUnmock('../src/seats.js');
   vi.resetModules();
 });
 
@@ -274,5 +275,58 @@ describe('local server SSE adapter', () => {
     })).rejects.toMatchObject({ name: 'TerminalStreamError' });
     expect(streamOnce).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('releases the rejected seat lease and resolves the next live seat in-process', async () => {
+    const oldRef = `borg-server-session:${'a'.repeat(64)}`;
+    const liveRef = `borg-server-session:${'b'.repeat(64)}`;
+    const old = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      sessionToken: 'rejected-session',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+      localSessionCredentialRef: oldRef,
+    };
+    const live = {
+      ...old,
+      droneId: OTHER_RECIPIENT_ID,
+      sessionToken: 'live-session',
+      localSessionCredentialRef: liveRef,
+    };
+    let rejected = false;
+    vi.doMock('../src/seats.js', () => ({
+      markSeatRejected: vi.fn((ref: string) => {
+        if (ref === oldRef) rejected = true;
+      }),
+    }));
+    vi.doMock('../src/stream-owner.js', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../src/stream-owner.js')>(),
+      readOwnershipSnapshot: vi.fn(async () => ({ state: 'owned', ownerPid: 1 })),
+    }));
+    const { BorgServerError } = await import('../src/server-errors.js');
+    const firstLease = { refresh: vi.fn(async () => true), release: vi.fn(async () => {}) };
+    const secondLease = { refresh: vi.fn(async () => true), release: vi.fn(async () => {}) };
+    const acquireStreamLease = vi.fn(async (_cubeId: string, droneId: string) =>
+      (droneId === DRONE_ID ? firstLease : secondLease) as any);
+    const streamOnce = vi.fn(async (active: typeof old) => {
+      if (active.localSessionCredentialRef === oldRef) {
+        throw new BorgServerError('SESSION_REJECTED', 'terminal session state');
+      }
+    });
+    const { __runLoopForTest } = await import('../src/log-stream.js');
+
+    await expect(__runLoopForTest({
+      getActiveCube: vi.fn(async () => rejected ? live : old),
+      acquireStreamLease,
+      streamOnce,
+      sleep: vi.fn(async () => {}),
+      maxIterations: 2,
+    })).resolves.toBeUndefined();
+    expect(streamOnce.mock.calls.map(([active]) => active.localSessionCredentialRef))
+      .toEqual([oldRef, liveRef]);
+    expect(firstLease.release).toHaveBeenCalled();
+    expect(acquireStreamLease.mock.calls.map(([, droneId]) => droneId))
+      .toEqual([DRONE_ID, OTHER_RECIPIENT_ID]);
   });
 });
