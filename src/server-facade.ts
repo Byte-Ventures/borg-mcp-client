@@ -48,6 +48,7 @@ export interface ServerFacadeProcessDeps {
     args: readonly string[],
     options: Pick<SpawnOptions, 'shell' | 'stdio'>,
   ): ServerFacadeChild;
+  isInteractiveTerminal(): boolean;
   addSignalListener(signal: NodeJS.Signals, listener: () => void): void;
   removeSignalListener(signal: NodeJS.Signals, listener: () => void): void;
 }
@@ -70,6 +71,7 @@ export type ServerFacadeProcessResult =
 
 const defaultProcessDeps: ServerFacadeProcessDeps = {
   spawn: (command, args, options) => spawnChild(command, [...args], options),
+  isInteractiveTerminal: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
   addSignalListener: (signal, listener) => process.on(signal, listener),
   removeSignalListener: (signal, listener) => process.off(signal, listener),
 };
@@ -159,7 +161,6 @@ export function runServerFacadeProcess(
     [input.command, ...input.args],
     { shell: false, stdio: 'inherit' },
   );
-  const signals = ['SIGINT', 'SIGTERM'] as const;
 
   return new Promise((resolve) => {
     let settled = false;
@@ -177,13 +178,18 @@ export function runServerFacadeProcess(
       resolve(result);
     };
 
-    for (const signal of signals) {
-      const listener = () => {
-        child.kill(signal);
-      };
-      forwarders.set(signal, listener);
-      deps.addSignalListener(signal, listener);
-    }
+    const forwardSigint = () => {
+      // An interactive terminal has already sent SIGINT to this foreground
+      // group, including the server. Forwarding again kills its cleanup path.
+      // Node exposes no signal origin, so parent-only SIGINT while attached to
+      // a TTY is intentionally treated as terminal delivery and is not forwarded.
+      if (!deps.isInteractiveTerminal()) child.kill('SIGINT');
+    };
+    const forwardSigterm = () => child.kill('SIGTERM');
+    forwarders.set('SIGINT', forwardSigint);
+    forwarders.set('SIGTERM', forwardSigterm);
+    deps.addSignalListener('SIGINT', forwardSigint);
+    deps.addSignalListener('SIGTERM', forwardSigterm);
 
     child.once('error', (error) => settle({ kind: 'spawn-error', error }));
     child.once('exit', (code, signal) => {

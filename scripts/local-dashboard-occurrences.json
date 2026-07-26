@@ -11,7 +11,7 @@
   },
   {
     "file": "src/server-facade.ts",
-    "lineNumber": 128,
+    "lineNumber": 130,
     "line": "`Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\\n` +"
   },
   {
@@ -31,7 +31,7 @@
   },
   {
     "file": "dist/server-facade.js",
-    "lineNumber": 70,
+    "lineNumber": 71,
     "line": "`Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\\n` +"
   }
 ]

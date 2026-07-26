@@ -25,6 +25,7 @@ interface ServerFacadeChild {
 }
 export interface ServerFacadeProcessDeps {
     spawn(command: string, args: readonly string[], options: Pick<SpawnOptions, 'shell' | 'stdio'>): ServerFacadeChild;
+    isInteractiveTerminal(): boolean;
     addSignalListener(signal: NodeJS.Signals, listener: () => void): void;
     removeSignalListener(signal: NodeJS.Signals, listener: () => void): void;
 }

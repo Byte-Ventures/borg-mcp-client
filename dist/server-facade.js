@@ -24,6 +24,7 @@ export function parseServerFacadeArgs(args) {
 }
 const defaultProcessDeps = {
     spawn: (command, args, options) => spawnChild(command, [...args], options),
+    isInteractiveTerminal: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
     addSignalListener: (signal, listener) => process.on(signal, listener),
     removeSignalListener: (signal, listener) => process.off(signal, listener),
 };
@@ -85,7 +86,6 @@ function isMissingServerExecutable(error) {
 }
 export function runServerFacadeProcess(input, deps = defaultProcessDeps) {
     const child = deps.spawn('borg-mcp-server', [input.command, ...input.args], { shell: false, stdio: 'inherit' });
-    const signals = ['SIGINT', 'SIGTERM'];
     return new Promise((resolve) => {
         let settled = false;
         const forwarders = new Map();
@@ -102,13 +102,19 @@ export function runServerFacadeProcess(input, deps = defaultProcessDeps) {
             cleanup();
             resolve(result);
         };
-        for (const signal of signals) {
-            const listener = () => {
-                child.kill(signal);
-            };
-            forwarders.set(signal, listener);
-            deps.addSignalListener(signal, listener);
-        }
+        const forwardSigint = () => {
+            // An interactive terminal has already sent SIGINT to this foreground
+            // group, including the server. Forwarding again kills its cleanup path.
+            // Node exposes no signal origin, so parent-only SIGINT while attached to
+            // a TTY is intentionally treated as terminal delivery and is not forwarded.
+            if (!deps.isInteractiveTerminal())
+                child.kill('SIGINT');
+        };
+        const forwardSigterm = () => child.kill('SIGTERM');
+        forwarders.set('SIGINT', forwardSigint);
+        forwarders.set('SIGTERM', forwardSigterm);
+        deps.addSignalListener('SIGINT', forwardSigint);
+        deps.addSignalListener('SIGTERM', forwardSigterm);
         child.once('error', (error) => settle({ kind: 'spawn-error', error }));
         child.once('exit', (code, signal) => {
             if (signal) {
