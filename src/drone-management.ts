@@ -1,7 +1,7 @@
 import type { EvictDroneResult, ReassignDroneResult } from 'borgmcp-shared/protocol';
 import {
-  activeCubeWithFreshRegenIdentity,
   getActiveCube,
+  observeActiveCubeServerIdentity,
   refreshActiveCubeMetadata,
   type ActiveCube,
 } from './cubes.js';
@@ -96,7 +96,7 @@ export async function runReassignDroneTool(
   let warning = '';
   if (drone.id === active.droneId) {
     try {
-      const refreshed = await deps.refreshActiveCubeMetadata(activeCubeWithFreshRegenIdentity(active, {
+      const refreshed = await deps.refreshActiveCubeMetadata(observeActiveCubeServerIdentity(active, {
         cube,
         drone,
         role,

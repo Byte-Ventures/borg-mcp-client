@@ -28,6 +28,7 @@ vi.mock('../src/launch-gate.js', async (importOriginal) => ({
 vi.mock('../src/console-prefix.js', () => ({
   consolePrefix: () => '',
   initConsolePrefix: vi.fn(async () => {}),
+  refreshConsolePrefixIdentity: vi.fn(),
 }));
 vi.mock('../src/cubes.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/cubes.js')>()),

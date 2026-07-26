@@ -567,6 +567,8 @@ export async function whoami(sessionToken, apiUrl, serverTrustIdentity) {
         drone_label: composed.drone.label,
         role_id: composed.role.id,
         role_name: composed.role.name,
+        role_class: composed.role.role_class ?? null,
+        is_human_seat: composed.role.is_human_seat ?? null,
         runtime_metadata: {
             agent_kind: composed.drone.agent_kind,
             reported_model: composed.drone.reported_model,

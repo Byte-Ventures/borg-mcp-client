@@ -72,6 +72,42 @@ describe('local ActiveCube session persistence (single store)', () => {
     });
   });
 
+  it('persists server display identity without changing the seat binding or bearer', async () => {
+    const { project, seats, cubes } = await setup();
+    const ref = await seedActiveSeat(seats, project);
+    const active = await cubes.getActiveCube();
+    const fresh = cubes.observeActiveCubeServerIdentity(active!, {
+      cube: { name: 'renamed-cube' },
+      drone: { label: 'coordinator-live' },
+      role: { name: 'Coordinator', role_class: 'queen', is_human_seat: true },
+    });
+
+    expect(await cubes.refreshActiveCubeMetadata(fresh)).toBe(true);
+    expect(await seats.getActiveSeatForWorktree(project)).toMatchObject({
+      credential: BEARER,
+      cubeId: CUBE_ID,
+      roleId: ROLE_ID,
+      droneId: DRONE_ID,
+      sessionId: '33333333-3333-4333-8333-333333333333',
+      worktree: project,
+      operation: { projectRoot: project, kind: 'seat', operationKey: 'current-worktree' },
+    });
+    vi.resetModules();
+    const reloadedCubes = await import('../src/cubes.js');
+    const reloaded = await reloadedCubes.getActiveCube();
+    expect(reloaded).toMatchObject({
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'renamed-cube',
+      droneLabel: 'coordinator-live',
+      roleName: 'Coordinator',
+      roleClass: 'queen',
+      isHumanSeat: true,
+      sessionToken: BEARER,
+      localSessionCredentialRef: ref,
+    });
+  });
+
   it('resolves hook, kickoff, MCP, and stream ownership to the same live duplicate-worktree seat', async () => {
     const { fixture, project, seats, cubes } = await setup();
     await seedActiveSeat(seats, project);

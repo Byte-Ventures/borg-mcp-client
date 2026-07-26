@@ -17,7 +17,13 @@
  */
 
 import { regen, listCubes } from './remote-client.js';
-import { findProjectRoot, getActiveCube, inboxPathForDrone } from './cubes.js';
+import {
+  findProjectRoot,
+  getActiveCube,
+  inboxPathForDrone,
+  observeActiveCubeServerIdentity,
+  refreshActiveCubeMetadata,
+} from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import {
   parseHookSource,
@@ -84,16 +90,21 @@ async function main(): Promise<void> {
   // drone unoriented — a weak drone that hits a SessionStart blip still gets
   // its wake-path arming, and the borg_regen tool re-surfaces the real error.
   let result: Awaited<ReturnType<typeof regen>> | null = null;
+  let freshActive = active;
   try {
     result = await regen(active.sessionToken, active.apiUrl, {
       agentKind: resolveReportableSessionAgentKind(),
       workingRepo: resolveWorkingRepo(),
       serverTrustIdentity: active.serverTrustIdentity,
     });
+    freshActive = observeActiveCubeServerIdentity(active, result);
+    if (freshActive !== active) {
+      await refreshActiveCubeMetadata(freshActive).catch(() => false);
+    }
   } catch {
     result = null;
   }
-  const identity = resolveLeanIdentity(active, result);
+  const identity = resolveLeanIdentity(freshActive, result);
   process.stdout.write(
     formatLeanOrientation({ ...identity, inboxPath, monitorStateRoot, agentKind, source }) + '\n'
   );

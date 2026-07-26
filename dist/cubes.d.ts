@@ -91,6 +91,26 @@ export declare function activeCubeWithFreshRegenIdentity(active: ActiveCube, res
         is_human_seat?: boolean | null;
     };
 }): ActiveCube;
+/** Overlay the freshest server-observed display fields onto this exact seat. */
+export declare function activeCubeWithObservedIdentity(active: ActiveCube): ActiveCube;
+/** Remember display identity returned by the server for this exact active seat. */
+export declare function observeActiveCubeServerIdentity(active: ActiveCube, result: {
+    cube?: {
+        id?: string | null;
+        name?: string | null;
+    };
+    drone?: {
+        id?: string | null;
+        label?: string | null;
+    };
+    role?: {
+        name?: string | null;
+        role_class?: 'queen' | 'worker' | null;
+        is_human_seat?: boolean | null;
+    };
+}): ActiveCube;
+/** @internal Test-only reset for the process-local observed display identity. */
+export declare function __resetObservedIdentityForTests(): void;
 export interface LocalSeatSnapshot {
     apiUrl: string;
     serverTrustIdentity: string;

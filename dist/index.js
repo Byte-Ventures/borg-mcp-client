@@ -15,7 +15,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema
 import { assertRoleMatches } from './role-match.js';
 import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
-import { activeCubeWithFreshRegenIdentity, getActiveCube, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, } from './cubes.js';
+import { getActiveCube, observeActiveCubeServerIdentity, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
 import { addSessionStartHook, addUserPromptSubmitHook } from './config-utils.js';
 import { humanAgo, formatLogEntryMarkdown, formatRegenMarkdown, getDronePlaybook, getDronePlaybookChapter, markArrivalAnnouncedThisProcess, nullTaxonomyTip, regenWakePathDroneLabel, } from './regen-format.js';
@@ -34,7 +34,7 @@ import { DroneEvictedError, formatEvictedToolResult, } from './drone-lifecycle.j
 import { classifyInSessionAssimilate, reattachOnlyRefusal, reattachFailureMessage, } from './assimilate-guard.js';
 import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
 import { renderSyncRolesResult } from './sync-roles-render.js';
-import { initConsolePrefix, consolePrefix } from './console-prefix.js';
+import { initConsolePrefix, consolePrefix, refreshConsolePrefixIdentity } from './console-prefix.js';
 import { resolveSessionAgentKind, } from './codex-app-wake.js';
 import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { connectOpenCodeDrone, injectOpenCodeEntry, computeOpenCodePort, } from './opencode-drone.js';
@@ -88,6 +88,24 @@ async function requireActiveCube() {
         throw new Error('Not assimilated to a cube. Use borg_assimilate <cube-name> first.');
     }
     return active;
+}
+async function observeAndPersistServerIdentity(active, result) {
+    const fresh = observeActiveCubeServerIdentity(active, result);
+    refreshConsolePrefixIdentity(fresh);
+    try {
+        await refreshActiveCubeMetadata(fresh);
+    }
+    catch {
+        // Server truth remains usable in this process even if display-only persistence fails.
+    }
+    return fresh;
+}
+async function observeRosterServerIdentity(active, drones, roles) {
+    const drone = drones.find((candidate) => candidate.id === active.droneId);
+    const role = drone ? roles.find((candidate) => candidate.id === drone.role_id) : undefined;
+    if (!drone || !role)
+        return active;
+    return observeAndPersistServerIdentity(active, { drone, role });
 }
 /**
  * Main entry point - MCP stdio server
@@ -255,10 +273,7 @@ export async function main() {
                         workingRepo: resolveWorkingRepo(),
                         serverTrustIdentity: active.serverTrustIdentity,
                     });
-                    const freshActive = activeCubeWithFreshRegenIdentity(active, result);
-                    if (freshActive !== active) {
-                        await refreshActiveCubeMetadata(freshActive);
-                    }
+                    const freshActive = await observeAndPersistServerIdentity(active, result);
                     // Wake-path self-heal (gh#43): SSE delivery to the inbox file
                     // is independent from Claude Code waking on file writes. The
                     // latter requires a `tail -F` Monitor against the inbox path;
@@ -330,10 +345,7 @@ export async function main() {
                             workingRepo: resolveWorkingRepo(),
                             serverTrustIdentity: active.serverTrustIdentity,
                         });
-                        const freshActive = activeCubeWithFreshRegenIdentity(active, result);
-                        if (freshActive !== active) {
-                            await refreshActiveCubeMetadata(freshActive);
-                        }
+                        const freshActive = await observeAndPersistServerIdentity(active, result);
                         const header = [
                             `# Re-attached to cube: ${freshActive.name}`,
                             ``,
@@ -377,25 +389,35 @@ export async function main() {
                 case 'borg_whoami': {
                     const active = await requireActiveCube();
                     const result = await whoami(active.sessionToken, active.apiUrl, active.serverTrustIdentity);
+                    await observeAndPersistServerIdentity(active, {
+                        cube: { id: result.cube_id, name: result.cube_name },
+                        drone: { id: result.drone_id, label: result.drone_label },
+                        role: {
+                            name: result.role_name,
+                            role_class: result.role_class,
+                            is_human_seat: result.is_human_seat,
+                        },
+                    });
                     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
                 }
                 case 'borg_cube': {
                     // No-cache invariant (T1.2 — 0.7.0): both `getCubeInfo` and
-                    // `getRoleInfo` MUST fetch fresh per invocation. Never
-                    // memoize / cache the cube or role payload in process memory
-                    // or in `cubes.json` — `borg_reassign-drone` changes the
-                    // calling drone's role in the DB, and subsequent
-                    // `borg_cube` reads MUST reflect the new role within one
-                    // round-trip. Locked in by the regression probe at
+                    // `getRoleInfo` MUST fetch their complete payload fresh per invocation.
+                    // The current seat's display-only identity is refreshed from that
+                    // response, but it never substitutes for the next server read —
+                    // `borg_reassign-drone` changes the calling drone's role in the DB, and
+                    // subsequent `borg_cube` reads MUST reflect it within one round-trip.
+                    // Locked in by the regression probe at
                     // `client/__tests__/integration/01-role-cache-freshness.integration.ts`;
                     // a future refactor that introduces caching here will fail
                     // that probe. See drone-8's 19:38:56 observation + drone-6's
                     // 06:00:31 finding for the original incident trace.
                     const active = await requireActiveCube();
-                    const [{ cube, roles }] = await Promise.all([
+                    const [{ cube, roles }, { role }] = await Promise.all([
                         getCubeInfo(active.sessionToken, active.apiUrl, active.serverTrustIdentity),
                         getRoleInfo(active.sessionToken, active.apiUrl, active.serverTrustIdentity),
                     ]);
+                    await observeAndPersistServerIdentity(active, { cube, role });
                     const lines = [];
                     lines.push(`# Cube: ${cube.name}`);
                     lines.push('');
@@ -448,6 +470,7 @@ export async function main() {
                         return { content: [{ type: 'text', text }] };
                     }
                     const { role } = await getRoleInfo(active.sessionToken, active.apiUrl, active.serverTrustIdentity);
+                    await observeAndPersistServerIdentity(active, { role });
                     const text = [
                         `# Your role: ${role.name}`,
                         ``,
@@ -471,8 +494,9 @@ export async function main() {
                     const active = await requireActiveCube();
                     const since = typeof args?.since === 'string' ? args.since : undefined;
                     const { drones, roles, since: resolvedSince } = await getRoster(active.sessionToken, active.apiUrl, since, active.serverTrustIdentity);
+                    const freshActive = await observeRosterServerIdentity(active, drones, roles);
                     const text = renderRoster({
-                        cubeName: active.name,
+                        cubeName: freshActive.name,
                         drones,
                         roles,
                         resolvedSince: resolvedSince ?? null,
@@ -530,6 +554,7 @@ export async function main() {
                         unreadOnly,
                         serverTrustIdentity: active.serverTrustIdentity,
                     });
+                    const freshActive = await observeRosterServerIdentity(active, drones, roles);
                     const droneById = new Map();
                     for (const d of drones)
                         droneById.set(d.id, d);
@@ -537,7 +562,7 @@ export async function main() {
                     for (const r of roles)
                         roleById.set(r.id, r);
                     const lines = [];
-                    lines.push(`# Activity log: ${active.name}`);
+                    lines.push(`# Activity log: ${freshActive.name}`);
                     lines.push('');
                     if (!entries.length) {
                         lines.push('_(no entries)_');

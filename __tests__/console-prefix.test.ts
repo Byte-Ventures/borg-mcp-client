@@ -77,6 +77,19 @@ describe('initConsolePrefix — cube-cache-miss', () => {
     expect(prefix).not.toContain('unassimilated');
   });
 
+  it('refreshes an initialized prefix from server-authoritative display identity', async () => {
+    (getActiveCube as any).mockResolvedValue({
+      droneLabel: 'builder-old',
+      name: 'cube-old',
+    });
+    const { initConsolePrefix, refreshConsolePrefixIdentity, droneIdPrefix } = await import('../src/console-prefix.js');
+    await initConsolePrefix();
+
+    refreshConsolePrefixIdentity({ droneLabel: 'coordinator-live', name: 'cube-renamed' });
+
+    expect(droneIdPrefix()).toBe('[coordinator-live · cube-renamed]');
+  });
+
   it('falls back when cached entry lacks droneLabel', async () => {
     (getActiveCube as any).mockResolvedValue({
       cubeId: '00000000-0000-0000-0000-000000000001',

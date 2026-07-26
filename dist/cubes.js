@@ -24,6 +24,7 @@ const CUBES_DIR = join(homedir(), '.config', 'borgmcp');
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
 const CODEX_WAKE_TARGETS_FILE = join(CUBES_DIR, 'codex-wake-targets.json');
 const INBOX_DIR = join(CUBES_DIR, 'inboxes');
+let observedActiveIdentity = null;
 /**
  * Walk up from cwd looking for a .git directory. If found, return that
  * directory. If not found by filesystem root, return the original cwd.
@@ -165,9 +166,16 @@ async function writeCodexWakeTargetsFile(data) {
  */
 export async function getActiveCube() {
     const record = await getActiveSeatForWorktree(findProjectRoot());
-    if (!record || !record.cubeId || !record.droneId)
+    if (!record || !record.cubeId || !record.droneId) {
+        observedActiveIdentity = null;
         return null;
-    return hydrateActiveCube(record);
+    }
+    const active = await hydrateActiveCube(record);
+    if (!active) {
+        observedActiveIdentity = null;
+        return null;
+    }
+    return activeCubeWithObservedIdentity(active);
 }
 /**
  * True iff this worktree has an ACTIVE bound seat in seats.json. In the collapsed
@@ -226,6 +234,48 @@ export function activeCubeWithFreshRegenIdentity(active, result) {
         isHumanSeat === active.isHumanSeat)
         return active;
     return { ...active, name, droneLabel, roleName, roleClass, isHumanSeat };
+}
+function sameActiveSeat(left, right) {
+    return left.localSessionCredentialRef !== undefined &&
+        left.localSessionCredentialRef === right.localSessionCredentialRef &&
+        left.sessionToken === right.sessionToken &&
+        left.cubeId === right.cubeId &&
+        left.droneId === right.droneId &&
+        left.apiUrl === right.apiUrl &&
+        left.serverTrustIdentity === right.serverTrustIdentity;
+}
+/** Overlay the freshest server-observed display fields onto this exact seat. */
+export function activeCubeWithObservedIdentity(active) {
+    if (!observedActiveIdentity)
+        return active;
+    if (!sameActiveSeat(active, observedActiveIdentity)) {
+        observedActiveIdentity = null;
+        return active;
+    }
+    return activeCubeWithFreshRegenIdentity(active, {
+        cube: { name: observedActiveIdentity.name },
+        drone: { label: observedActiveIdentity.droneLabel },
+        role: {
+            name: observedActiveIdentity.roleName,
+            role_class: observedActiveIdentity.roleClass,
+            is_human_seat: observedActiveIdentity.isHumanSeat,
+        },
+    });
+}
+/** Remember display identity returned by the server for this exact active seat. */
+export function observeActiveCubeServerIdentity(active, result) {
+    if ((result.cube?.id != null && result.cube.id !== active.cubeId) ||
+        (result.drone?.id != null && result.drone.id !== active.droneId)) {
+        return active;
+    }
+    const fresh = activeCubeWithFreshRegenIdentity(active, result);
+    if (fresh.localSessionCredentialRef !== undefined)
+        observedActiveIdentity = fresh;
+    return fresh;
+}
+/** @internal Test-only reset for the process-local observed display identity. */
+export function __resetObservedIdentityForTests() {
+    observedActiveIdentity = null;
 }
 /**
  * Snapshot this worktree's exact FULL local-seat binding (incl drone id) plus a

@@ -801,7 +801,7 @@ export async function whoami(
   sessionToken: string,
   apiUrl: string,
   serverTrustIdentity?: string,
-): Promise<{ cube_id: string; cube_name: string; drone_id: string; drone_label: string; role_id: string; role_name: string; runtime_metadata: { agent_kind: AgentKind | null; reported_model: string | null; working_repo_name: string | null; working_repo_origin: string | null }; runtime_metadata_reported: boolean }> {
+): Promise<{ cube_id: string; cube_name: string; drone_id: string; drone_label: string; role_id: string; role_name: string; role_class: 'queen' | 'worker' | null; is_human_seat: boolean | null; runtime_metadata: { agent_kind: AgentKind | null; reported_model: string | null; working_repo_name: string | null; working_repo_origin: string | null }; runtime_metadata_reported: boolean }> {
   const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
   const composed = await localCubeComposition(local);
   return {
@@ -811,6 +811,8 @@ export async function whoami(
     drone_label: composed.drone.label,
     role_id: composed.role.id,
     role_name: composed.role.name,
+    role_class: composed.role.role_class ?? null,
+    is_human_seat: composed.role.is_human_seat ?? null,
     runtime_metadata: {
       agent_kind: composed.drone.agent_kind,
       reported_model: composed.drone.reported_model,

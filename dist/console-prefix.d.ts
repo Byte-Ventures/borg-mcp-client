@@ -31,6 +31,11 @@
  * blocked.
  */
 export declare function initConsolePrefix(): Promise<string>;
+/** Refresh the process-local display prefix after a server-authoritative identity read. */
+export declare function refreshConsolePrefixIdentity(active: {
+    droneLabel: string;
+    name: string;
+}): void;
 /**
  * Synchronous prefix getter. Returns the cached value if initialized,
  * otherwise the unassimilated fallback — safe to call before

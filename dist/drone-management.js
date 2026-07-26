@@ -1,4 +1,4 @@
-import { activeCubeWithFreshRegenIdentity, getActiveCube, refreshActiveCubeMetadata, } from './cubes.js';
+import { getActiveCube, observeActiveCubeServerIdentity, refreshActiveCubeMetadata, } from './cubes.js';
 import { assertUuidShape, formatEvictDroneSuccess, formatReassignDroneSuccess, resolveDroneIdByLabel, } from './evict-drone.js';
 import { evictDrone, getCubeForManagement, reassignDrone, } from './remote-client.js';
 const defaultDeps = {
@@ -46,7 +46,7 @@ export async function runReassignDroneTool(input, deps = defaultDeps) {
     let warning = '';
     if (drone.id === active.droneId) {
         try {
-            const refreshed = await deps.refreshActiveCubeMetadata(activeCubeWithFreshRegenIdentity(active, {
+            const refreshed = await deps.refreshActiveCubeMetadata(observeActiveCubeServerIdentity(active, {
                 cube,
                 drone,
                 role,

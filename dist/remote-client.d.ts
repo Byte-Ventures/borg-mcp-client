@@ -116,6 +116,8 @@ export declare function whoami(sessionToken: string, apiUrl: string, serverTrust
     drone_label: string;
     role_id: string;
     role_name: string;
+    role_class: 'queen' | 'worker' | null;
+    is_human_seat: boolean | null;
     runtime_metadata: {
         agent_kind: AgentKind | null;
         reported_model: string | null;

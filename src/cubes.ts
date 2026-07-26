@@ -72,6 +72,8 @@ export interface ActiveCube {
   isHumanSeat?: boolean;
 }
 
+let observedActiveIdentity: ActiveCube | null = null;
+
 export type ActiveCubeInput = Omit<ActiveCube, 'sessionToken'> & {
   sessionToken?: string;
 };
@@ -243,8 +245,16 @@ async function writeCodexWakeTargetsFile(data: CodexWakeTargetsFile): Promise<vo
  */
 export async function getActiveCube(): Promise<ActiveCube | null> {
   const record = await getActiveSeatForWorktree(findProjectRoot());
-  if (!record || !record.cubeId || !record.droneId) return null;
-  return hydrateActiveCube(record);
+  if (!record || !record.cubeId || !record.droneId) {
+    observedActiveIdentity = null;
+    return null;
+  }
+  const active = await hydrateActiveCube(record);
+  if (!active) {
+    observedActiveIdentity = null;
+    return null;
+  }
+  return activeCubeWithObservedIdentity(active);
 }
 
 /**
@@ -316,6 +326,61 @@ export function activeCubeWithFreshRegenIdentity(
       roleName === active.roleName && roleClass === active.roleClass &&
       isHumanSeat === active.isHumanSeat) return active;
   return { ...active, name, droneLabel, roleName, roleClass, isHumanSeat };
+}
+
+function sameActiveSeat(left: ActiveCube, right: ActiveCube): boolean {
+  return left.localSessionCredentialRef !== undefined &&
+    left.localSessionCredentialRef === right.localSessionCredentialRef &&
+    left.sessionToken === right.sessionToken &&
+    left.cubeId === right.cubeId &&
+    left.droneId === right.droneId &&
+    left.apiUrl === right.apiUrl &&
+    left.serverTrustIdentity === right.serverTrustIdentity;
+}
+
+/** Overlay the freshest server-observed display fields onto this exact seat. */
+export function activeCubeWithObservedIdentity(active: ActiveCube): ActiveCube {
+  if (!observedActiveIdentity) return active;
+  if (!sameActiveSeat(active, observedActiveIdentity)) {
+    observedActiveIdentity = null;
+    return active;
+  }
+  return activeCubeWithFreshRegenIdentity(active, {
+    cube: { name: observedActiveIdentity.name },
+    drone: { label: observedActiveIdentity.droneLabel },
+    role: {
+      name: observedActiveIdentity.roleName,
+      role_class: observedActiveIdentity.roleClass,
+      is_human_seat: observedActiveIdentity.isHumanSeat,
+    },
+  });
+}
+
+/** Remember display identity returned by the server for this exact active seat. */
+export function observeActiveCubeServerIdentity(
+  active: ActiveCube,
+  result: {
+    cube?: { id?: string | null; name?: string | null };
+    drone?: { id?: string | null; label?: string | null };
+    role?: {
+      name?: string | null;
+      role_class?: 'queen' | 'worker' | null;
+      is_human_seat?: boolean | null;
+    };
+  },
+): ActiveCube {
+  if ((result.cube?.id != null && result.cube.id !== active.cubeId) ||
+      (result.drone?.id != null && result.drone.id !== active.droneId)) {
+    return active;
+  }
+  const fresh = activeCubeWithFreshRegenIdentity(active, result);
+  if (fresh.localSessionCredentialRef !== undefined) observedActiveIdentity = fresh;
+  return fresh;
+}
+
+/** @internal Test-only reset for the process-local observed display identity. */
+export function __resetObservedIdentityForTests(): void {
+  observedActiveIdentity = null;
 }
 
 // The ONLY sanctioned seat-clear is resetLocalSeatBinding → seats.ts

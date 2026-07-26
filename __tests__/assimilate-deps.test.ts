@@ -164,6 +164,37 @@ describe('cubes.json fs persistence round-trip', () => {
     expect(out).not.toContain('stale-cache-label');
   });
 
+  it('does not carry an observed display identity onto a replacement credential', async () => {
+    const {
+      activeCubeWithObservedIdentity,
+      observeActiveCubeServerIdentity,
+    } = await import('../src/cubes.js');
+    const active = {
+      cubeId: '11111111-1111-4111-8111-111111111111',
+      droneId: '22222222-2222-4222-8222-222222222222',
+      name: 'old-cube',
+      sessionToken: 'old-session',
+      droneLabel: 'old-label',
+      apiUrl: 'https://api.example.invalid',
+      serverTrustIdentity: 'spki-sha256:test',
+      localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+      roleName: 'Builder',
+    };
+    observeActiveCubeServerIdentity(active, {
+      cube: { id: active.cubeId, name: 'fresh-cube' },
+      drone: { id: active.droneId, label: 'fresh-label' },
+      role: { name: 'Coordinator' },
+    });
+
+    const replacement = { ...active, sessionToken: 'replacement-session' };
+    expect(activeCubeWithObservedIdentity(replacement)).toMatchObject({
+      name: 'old-cube',
+      droneLabel: 'old-label',
+      roleName: 'Builder',
+      sessionToken: 'replacement-session',
+    });
+  });
+
 
   it('getActiveCube returns null when cubes.json contains malformed JSON', async () => {
     // Seed a malformed file at the expected location and verify graceful

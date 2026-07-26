@@ -57,6 +57,13 @@ export async function initConsolePrefix(): Promise<string> {
   return cachedPrefix;
 }
 
+/** Refresh the process-local display prefix after a server-authoritative identity read. */
+export function refreshConsolePrefixIdentity(active: { droneLabel: string; name: string }): void {
+  if (active.droneLabel && active.name) {
+    cachedPrefix = `[${active.droneLabel} · ${active.name}]`;
+  }
+}
+
 /**
  * Synchronous prefix getter. Returns the cached value if initialized,
  * otherwise the unassimilated fallback — safe to call before

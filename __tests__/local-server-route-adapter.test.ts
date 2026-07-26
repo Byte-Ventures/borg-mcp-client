@@ -168,6 +168,8 @@ describe('local server route adapter', () => {
       drone_label: 'builder-1',
       role_id: ROLE_ID,
       role_name: 'Builder',
+      role_class: 'worker',
+      is_human_seat: false,
       runtime_metadata: {
         agent_kind: null,
         reported_model: null,
