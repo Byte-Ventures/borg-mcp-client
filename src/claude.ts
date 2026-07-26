@@ -82,6 +82,7 @@ import { installBorgPlugin } from './opencode-plugin.js';
 import { connectOpenCodeDrone, computeOpenCodePort, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { runEarlyServerFacade } from './server-facade.js';
+import { runEarlyUpdate } from './update-cmd.js';
 
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
 
@@ -101,6 +102,9 @@ export async function runAssimilateEntry(
 }
 
 async function main() {
+  const updateExitCode = await runEarlyUpdate(process.argv);
+  if (updateExitCode !== null) process.exit(updateExitCode);
+
   const serverExitCode = await runEarlyServerFacade(process.argv);
   if (serverExitCode !== null) process.exit(serverExitCode);
 

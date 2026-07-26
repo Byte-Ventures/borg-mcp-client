@@ -63,6 +63,23 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
   await chmod(fakeServer, 0o755);
 
   try {
+    const updateHelp = spawnSync(generatedBin, ['update', '--help'], {
+      env: { ...process.env, CI: '1', NO_COLOR: '1' },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    if (
+      updateHelp.error ||
+      updateHelp.status !== 0 ||
+      !updateHelp.stdout.includes('borg update') ||
+      !updateHelp.stdout.includes('matching exact borgmcp-shared pins') ||
+      updateHelp.stderr !== ''
+    ) {
+      throw new Error(
+        `Packed update help failed: status=${updateHelp.status}, stdout=${JSON.stringify(updateHelp.stdout)}, stderr=${JSON.stringify(updateHelp.stderr)}, error=${updateHelp.error?.message ?? ''}`,
+      );
+    }
+
     const child = spawn(generatedBin, ['server', 'status', '--json'], {
       env: {
         ...process.env,
@@ -181,6 +198,7 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
       serverFacadeStopExitCode: stop.status,
       serverFacadeStartupFailureExitCode: unavailable.status,
       serverFacadeMissingExitCode: missing.status,
+      updateHelpExitCode: updateHelp.status,
     };
   } finally {
     await rm(directory, { recursive: true, force: true });

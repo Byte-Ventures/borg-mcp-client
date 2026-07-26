@@ -31,6 +31,35 @@ borg --version
 borg --help
 ```
 
+## Update
+
+Use the whole-product update command for an existing npm-global installation:
+
+```bash
+borg update
+```
+
+Before changing either package, Borg reads the exact published `borgmcp` and
+`borgmcp-server` manifests and requires the same exact `borgmcp-shared` pin. It
+then verifies that the running client and any installed server controller belong
+to one stable npm executable, global prefix, and global root. Registry lookup and
+installation are bound to `https://registry.npmjs.org/`. An alternate configured
+registry, changed npm context, or unsupported or ambiguous package-manager
+provenance fails without changing either package; use that package manager's
+manual update flow instead.
+
+After confirmation, Borg installs the client first and continues under the
+verified new client. If a local server was already installed, it installs the
+matching server controller, delegates runtime verification and activation to
+the server updater, and verifies the final installed, prepared, running, and
+protocol identities. A server that was stopped remains stopped and is reported
+as `prepared; still stopped`. If no local server was installed, that phase is
+explicitly skipped. Use `borg update --yes` for a non-interactive invocation.
+
+Partial completion is reported with `borg update --yes` as the idempotent retry.
+Borg does not install an absent server, start a stopped server, or restart agent
+processes. Restart active agent sessions yourself after the client changes.
+
 ## First-time setup
 
 Run the setup wizard:
@@ -90,6 +119,10 @@ borg server start
 must never imply that a daemon, LaunchAgent, or systemd service was installed.
 Managed persistence is a separate explicit handoff. See the lifecycle commands
 and recovery flow in [`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md).
+
+`borg update` is the normal client-and-server update journey. `borg server
+update` remains the server-runtime-only escape hatch and may report a separate
+controller install action rather than changing the global controller itself.
 
 Open a second operator terminal in the project checkout and run:
 

@@ -104,8 +104,8 @@ const CLOUD_SYMBOL_NEEDLES = [
   'submitReport',
   'fetchReports',
   // Hosted dashboard identifiers are covered above without banning the local
-  // operator dashboard command. Automatic npm-registry runtime egress remains forbidden.
-  'registry.npmjs.org',
+  // operator dashboard command. Explicit npm-registry egress is checked
+  // separately and is allowed only in the operator-selected update command.
   'fetchLatestBorgmcpVersion',
 ];
 
@@ -118,6 +118,17 @@ function scan(entries: { file: string; text: string }[], needles: string[]): str
     for (const needle of needles) {
       if (text.includes(needle)) offenders.push(`${file}: ${needle}`);
     }
+  }
+  return offenders;
+}
+
+function scanExplicitNpmRegistry(entries: { file: string; text: string }[]): string[] {
+  const allowed = new Set(['update-cmd.ts', 'update-cmd.js']);
+  const offenders: string[] = [];
+  for (const { file, text } of entries) {
+    const count = text.split('registry.npmjs.org').length - 1;
+    if (count === 0) continue;
+    if (!allowed.has(file) || count !== 1) offenders.push(`${file}: ${count}`);
   }
   return offenders;
 }
@@ -148,6 +159,13 @@ describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
 
   it('no OAuth / subscription / dashboard / report identifier appears in shipped src (raw, comments included)', () => {
     expect(scan(readAll(SRC_FILES, SRC_DIR), CLOUD_SYMBOL_NEEDLES)).toEqual([]);
+  });
+
+  it('allows canonical npm egress only in the explicit update command', () => {
+    const entries = readAll(SRC_FILES, SRC_DIR);
+    expect(scanExplicitNpmRegistry(entries)).toEqual([]);
+    expect(entries.find(({ file }) => file === 'update-cmd.ts')?.text)
+      .toContain('https://registry.npmjs.org/');
   });
 
   it('permits only the exact local dashboard source occurrences', () => {
@@ -248,6 +266,13 @@ describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
   it.runIf(distJs.length > 0)('built dist carries no hosted URL, OAuth, subscription, dashboard, or report residue', () => {
     const entries = readAll(distJs, DIST_DIR);
     expect(scan(entries, [...HOSTED_URL_NEEDLES, ...CLOUD_SYMBOL_NEEDLES])).toEqual([]);
+  });
+
+  it.runIf(distJs.length > 0)('built dist limits canonical npm egress to the explicit update command', () => {
+    const entries = readAll(distJs, DIST_DIR);
+    expect(scanExplicitNpmRegistry(entries)).toEqual([]);
+    expect(entries.find(({ file }) => file === 'update-cmd.js')?.text)
+      .toContain('https://registry.npmjs.org/');
   });
 
   it.runIf(distJs.length > 0)('built dist permits only the exact local dashboard occurrences', () => {

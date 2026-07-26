@@ -13,6 +13,7 @@
 /** The subcommands the claude.ts router dispatches on (lines 107-176). */
 export const KNOWN_SUBCOMMANDS = [
     'setup',
+    'update',
     'assimilate',
     'reset-local-seat',
     'spawn',

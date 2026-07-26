@@ -241,6 +241,10 @@ lines.on('line', (line) => {
 `
       : `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
+if (process.argv.slice(2).join('\\0') === 'update\\0--help') {
+  process.stdout.write('borg update\\nmatching exact borgmcp-shared pins\\n');
+  process.exit(0);
+}
 if (process.argv.slice(2).join('\\0') === 'server\\0cube\\0init\\0--help') {
   process.stdout.write(${JSON.stringify(CUBE_INIT_HELP_TEXT)});
   process.exit(0);
@@ -927,6 +931,7 @@ test('exact tarball installs cleanly and completes MCP initialize plus tool disc
     serverFacadeStopExitCode: 43,
     serverFacadeStartupFailureExitCode: 1,
     serverFacadeMissingExitCode: 127,
+    updateHelpExitCode: 0,
   });
 });
 
@@ -979,6 +984,20 @@ test('packed artifact verifier rejects a hosted dashboard subdomain', async (t) 
   await assert.rejects(
     () => verifyPackedArtifact(tarball, { repositoryRoot: directory }),
     /unapproved dashboard occurrence/,
+  );
+});
+
+test('packed artifact verifier rejects npm-registry egress outside the explicit update command', async (t) => {
+  const { directory, tarball } = await packedFixture(async ({ packageRoot }) => {
+    await writeFile(
+      join(packageRoot, 'src', 'background-update.ts'),
+      'export const registry = "https://registry.npmjs.org/";\n',
+    );
+  });
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await assert.rejects(
+    () => verifyPackedArtifact(tarball, { repositoryRoot: directory }),
+    /unapproved npm-registry egress/,
   );
 });
 
