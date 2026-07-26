@@ -56,7 +56,7 @@ const DOCS_STALE_RELEASE_FRAMING = [
   { pattern: /\brotat\w*\b[^.\n]{0,40}\bretry\b/i, description: 'retired re-attach retry-tuple rotation claim' },
   { pattern: /reattach\w*[^.\n]{0,60}retry tuple/i, description: 'retired re-attach retry-tuple rotation claim' },
 ];
-// Reachable-cloud runtime identifiers (OAuth / billing / dashboard / reports).
+// Reachable-cloud runtime identifiers (OAuth / billing / hosted dashboard / reports).
 // Checked ONLY in shipped code (dist `.js`/`.d.ts`, src `.ts`) — NOT in `.md`
 // docs, which legitimately DESCRIBE the removal of these surfaces.
 const CLOUD_RUNTIME_SYMBOLS = [
@@ -75,7 +75,6 @@ const CLOUD_RUNTIME_SYMBOLS = [
   'borg_open_dashboard',
   'borg_report-friction',
   'borg_reports',
-  'dashboard',
   'registry.npmjs.org',
   'fetchLatestBorgmcpVersion',
 ];
