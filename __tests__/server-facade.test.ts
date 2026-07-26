@@ -37,6 +37,7 @@ function processDeps(child: FakeChild) {
   const listeners = new Map<NodeJS.Signals, () => void>();
   const deps: ServerFacadeProcessDeps = {
     spawn: vi.fn(() => child),
+    isInteractiveTerminal: vi.fn(() => false),
     addSignalListener: vi.fn((signal, listener) => listeners.set(signal, listener)),
     removeSignalListener: vi.fn((signal, listener) => {
       if (listeners.get(signal) === listener) listeners.delete(signal);
@@ -107,7 +108,7 @@ describe('runServerFacadeProcess', () => {
   });
 
   it.each(['SIGINT', 'SIGTERM'] as const)(
-    'forwards %s to the foreground child and removes signal listeners after exit',
+    'forwards parent-received non-TTY %s to the child and removes signal listeners after exit',
     async (signal) => {
       const child = new FakeChild();
       const { deps, listeners } = processDeps(child);
@@ -121,6 +122,25 @@ describe('runServerFacadeProcess', () => {
       expect(listeners.size).toBe(0);
     },
   );
+
+  it('suppresses duplicate interactive SIGINT but still forwards SIGTERM', async () => {
+    const child = new FakeChild();
+    const { deps, listeners } = processDeps(child);
+    deps.isInteractiveTerminal = vi.fn(() => true);
+    const pending = runServerFacadeProcess({ command: 'start', args: [] }, deps);
+
+    expect(deps.spawn).toHaveBeenCalledWith(
+      'borg-mcp-server',
+      ['start'],
+      { shell: false, stdio: 'inherit' },
+    );
+    listeners.get('SIGINT')?.();
+    expect(child.kill).not.toHaveBeenCalled();
+    listeners.get('SIGTERM')?.();
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    child.emit('exit', 0, null);
+    await expect(pending).resolves.toEqual({ kind: 'exited', code: 0 });
+  });
 
   it('returns a typed spawn failure without interpreting it as server status', async () => {
     const child = new FakeChild();
