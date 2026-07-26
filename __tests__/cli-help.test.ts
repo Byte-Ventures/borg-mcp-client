@@ -171,6 +171,7 @@ describe('model configuration ownership', () => {
       '--host',
       '--enroll',
       '--here',
+      '--force',
       '--yes',
       '--cli',
       '--model',

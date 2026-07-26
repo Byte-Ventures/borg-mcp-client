@@ -109,12 +109,14 @@ export function assimilateHelpText(version: string): string {
     `  borg assimilate [role] --worktree <name>   Spawn the drone in an isolated git worktree\n` +
     `                                       (~/.borg/worktrees/<repo>/<name>)\n` +
     `  borg assimilate --here               Assimilate in the current worktree (no sibling spawn)\n` +
+    `  borg assimilate --here --force       Reattach despite a still-live inbox monitor\n` +
     `  borg assimilate --host <host>        Join an authorized self-hosted cube\n` +
     `  borg assimilate --host <host> --enroll   Operator-terminal enrollment, then create/join (preview)\n` +
     `  borg assimilate --help               Show this help\n\n` +
     `Flags:\n` +
     `  --worktree <name>          Create + launch the drone in a sibling git worktree\n` +
     `  --here                     Stay in the current worktree (no sibling spawn)\n` +
+    `  --force                    Override a live-seat guard for a wedged monitor\n` +
     `  --cube-name <name>         Repository cube name (otherwise edit the proposed name)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
     `  --enroll                   Prompt for a hidden enrollment invitation in the operator terminal\n` +

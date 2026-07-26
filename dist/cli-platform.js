@@ -80,6 +80,7 @@ const VALID_CLIS = ['claude', 'codex', 'opencode'];
 export function parseCliFlag(args) {
     const rest = [];
     let cli;
+    let force = false;
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === '--cli') {
@@ -97,10 +98,13 @@ export function parseCliFlag(args) {
             }
             cli = value;
         }
+        else if (arg === '--force') {
+            force = true;
+        }
         else {
             rest.push(arg);
         }
     }
-    return { cli, rest };
+    return { ...(cli ? { cli } : {}), ...(force ? { force: true } : {}), rest };
 }
 //# sourceMappingURL=cli-platform.js.map

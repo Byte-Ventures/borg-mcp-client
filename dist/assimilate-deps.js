@@ -16,6 +16,7 @@ import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
 import { buildRuntimeMetadataReport } from './runtime-metadata.js';
+import { inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
 import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
@@ -112,6 +113,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
             setTitle({ label, cubeName }, cubeName);
         },
         getActiveCube: () => cubesGetActive(),
+        inspectLiveInboxMonitor,
         hasPersistedActiveCube: () => cubesHasPersistedActive(),
         readPersistedLocalSeat: () => readPersistedLocalSeat(),
         peekServerSessionRecord: async (credentialRef, binding) => (await observeSeat(credentialRef, binding)).state !== 'absent',

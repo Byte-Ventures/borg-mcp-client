@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
 import { findProjectRoot, getActiveCube, inboxPathForDrone, setCodexWakeTarget, pruneDeadCodexWakeTargets } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
+import { formatSeatReattachRefusal, inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 import { handleVersionFlag, getPackageVersion } from './version.js';
 import { isHelpFlag, setupHelpText, topLevelHelpText, assimilateHelpText, resetLocalSeatHelpText } from './cli-help.js';
 import { runSpawn } from './spawn.js';
@@ -308,6 +309,16 @@ async function main() {
     // (we deliberately do NOT call setProjectCliPreference — the saved
     // preference is changed only via `borg --cli <agent>`).
     cli = action.cli;
+  }
+
+  if (active && !parsedCli.force) {
+    const inboxPath = inboxPathForDrone(active.cubeId, active.droneId);
+    const stateRoot = monitorStateRootForWorktree(findProjectRoot(process.cwd()));
+    const holder = inspectLiveInboxMonitor(inboxPath, stateRoot);
+    if (holder !== null) {
+      process.stderr.write(formatSeatReattachRefusal(holder, 'borg --force'));
+      process.exit(1);
+    }
   }
 
   // client#20: inspect only the SELECTED harness after the one-shot launch

@@ -1,6 +1,7 @@
 import type { Role, RoleOccupant } from './role-resolver.js';
 import { type CodexRemoteLaunch } from './codex-remote.js';
 import type { BorgCli } from './cubes.js';
+import { type LiveInboxMonitor } from './seat-reattach-guard.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { ServerSessionOperation } from './config.js';
 import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } from './cubes.js';
@@ -21,6 +22,7 @@ export interface AssimilateFlags {
     model?: string;
     server?: string;
     enroll?: boolean;
+    force?: boolean;
 }
 export interface AssimilateArgs {
     role: string | undefined;
@@ -91,6 +93,8 @@ export interface AssimilateDeps {
     getHostname: () => string;
     setTerminalTitle: (label: string, cubeName: string) => void;
     getActiveCube: () => Promise<ActiveCube | null>;
+    /** Read-only relaunch guard for the saved seat's inbox monitor. */
+    inspectLiveInboxMonitor?: (inboxPath: string, monitorStateRoot: string) => LiveInboxMonitor | null;
     hasPersistedActiveCube: () => Promise<boolean>;
     /** Read the RAW persisted local seat for this worktree WITHOUT hydrating its
      *  keychain credential — used to recover a crash-in-gap PENDING seat when

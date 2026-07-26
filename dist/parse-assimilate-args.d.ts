@@ -10,7 +10,7 @@ export type ParseResult = ParseAssimilateResult | {
 };
 /**
  * Parse argv for `borg assimilate [role] [--worktree <n>] [--template <n>]
- * [--no-template] [--cube-name <n>] [--host <host>] [--enroll] [--here] [--yes]`. The `assimilate`
+ * [--no-template] [--cube-name <n>] [--host <host>] [--enroll] [--here] [--force] [--yes]`. The `assimilate`
  * subcommand token must already be stripped by the caller.
  */
 export declare function parseAssimilateArgs(rawArgs: string[]): ParseResult;
