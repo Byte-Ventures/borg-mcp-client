@@ -136,21 +136,21 @@ async function waitFor(predicate, description, timeoutMs = DEFAULT_TIMEOUT_MS) {
   throw new Error(`Timed out waiting for ${description}${lastError ? `: ${lastError.message}` : ''}`);
 }
 
-async function processCommand(pid) {
+async function processArgv(pid) {
   if (process.platform === 'linux') {
-    return (await readFile(`/proc/${pid}/cmdline`, 'utf8')).replaceAll('\0', ' ').trim();
+    return (await readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0').filter(Boolean);
   }
-  return await new Promise((resolveCommand, rejectCommand) => {
+  return await new Promise((resolveArgv, rejectArgv) => {
     execFile('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }, (error, stdout) => {
-      if (error) rejectCommand(error);
-      else resolveCommand(stdout.trim());
+      if (error) rejectArgv(error);
+      else resolveArgv(stdout.trim().split(/\s+/u));
     });
   });
 }
 
-export function assertServerProcessCommand(command, nodePath, serverEntry) {
-  assert.ok(command.includes(nodePath), `server process does not use the declared Node path: ${command}`);
-  assert.ok(command.includes(serverEntry), `server process does not use the declared server entry: ${command}`);
+export function assertServerProcessArgv(argv, nodePath, serverEntry) {
+  assert.equal(argv[0], nodePath, `server process does not use the declared Node path: ${argv.join(' ')}`);
+  assert.equal(argv[1], serverEntry, `server process does not use the declared server entry: ${argv.join(' ')}`);
 }
 
 export function assertArtifactIdentity(actual, expected) {
@@ -256,7 +256,7 @@ async function bootstrapServerData(serverRoot, dataDirectory) {
 async function assertRuntimeListener(dataDirectory, nodePath, serverEntry) {
   const lock = JSON.parse(await readFile(join(dataDirectory, 'runtime.lock'), 'utf8'));
   assert.ok(Number.isSafeInteger(lock.pid) && lock.pid > 0, 'runtime.lock does not identify a listening process');
-  assertServerProcessCommand(await processCommand(lock.pid), nodePath, serverEntry);
+  assertServerProcessArgv(await processArgv(lock.pid), nodePath, serverEntry);
   return lock.pid;
 }
 
@@ -371,8 +371,8 @@ async function runPtyJourney({
     }, `${expectedServerCommand} declared server process and rendered frame`);
     if ('error' in ready) throw ready.error;
     const trace = ready;
-    const command = await processCommand(trace.pid);
-    assertServerProcessCommand(command, process.execPath, serverEntry);
+    const argv = await processArgv(trace.pid);
+    assertServerProcessArgv(argv, process.execPath, serverEntry);
     await beforeInterrupt?.(trace);
     interrupted = true;
     child.stdin.write('\u0003');
@@ -464,7 +464,7 @@ export async function exerciseRelease(options) {
         `${error.message}; server stdout: ${directStdout.slice(0, 1000)}; stderr: ${directStderr.slice(0, 2000)}`,
       );
     });
-    assertServerProcessCommand(await processCommand(directServer.pid), process.execPath, installed.serverEntry);
+    assertServerProcessArgv(await processArgv(directServer.pid), process.execPath, installed.serverEntry);
     assert.equal(
       await assertRuntimeListener(dashboardData, process.execPath, installed.serverEntry),
       directServer.pid,

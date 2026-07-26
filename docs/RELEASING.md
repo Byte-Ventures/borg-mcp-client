@@ -215,9 +215,23 @@ The harness is a fail-closed release gate. A missing frame, non-PTY execution,
 wrong journey footer, substituted artifact, nonzero exit, absent terminal
 restore sequence, failed post-exit health assertion, timeout, or oversized
 transcript fails the command. Its controls must remain demonstrably bidirectional:
-the current client/server pairing passes; a pre-#146 client fails on the missing
-terminal-restore sequence; and a deliberately wrong server integrity fails
-before either journey starts.
+the current client/server pairing passes; and a deliberately wrong server
+integrity fails before either journey starts.
+
+The terminal-restore negative control is specifically the packed pre-#146 client
+from commit `81da7b970ffb4e76a35c7bc551c419fec702a3b6` composed with published
+`borgmcp-server@0.2.0`, registry integrity
+`sha512-squb0+vdy0q7l/4FeV7OTvSm7OiFWGsAjGhcVEXYrQc9K/8jJYduqPS90VBwaJRT6z221Gxf3xQ5SeZe/Qoncw==`.
+That composition must fail on the missing cursor-restore sequence. A newer server
+candidate can mask the old client's defect and is not a valid counterpart for
+this negative control.
+
+```sh
+npm run release:exercise -- \
+  --server borgmcp-server@0.2.0 \
+  --server-integrity 'sha512-squb0+vdy0q7l/4FeV7OTvSm7OiFWGsAjGhcVEXYrQc9K/8jJYduqPS90VBwaJRT6z221Gxf3xQ5SeZe/Qoncw==' \
+  --client-tarball /absolute/path/to/pre-146-borgmcp-2.1.1.tgz
+```
 
 The only trigger is a protected annotated `v<package version>` tag. Manual
 dispatch is intentionally absent so a second run cannot rebuild or publish an

@@ -15,7 +15,7 @@ import { verifyReleaseTrigger } from '../scripts/verify-release-trigger.mjs';
 import {
   assertArtifactIdentity,
   assertJourneyTranscript,
-  assertServerProcessCommand,
+  assertServerProcessArgv,
   parseReleaseExerciseArgs,
   ptyCommand,
 } from '../scripts/release-exercise.mjs';
@@ -70,16 +70,26 @@ test('release exercise constructs a real PTY bridge on supported platforms', () 
 });
 
 test('release exercise rejects substituted server processes', () => {
-  assert.doesNotThrow(() => assertServerProcessCommand(
-    '/node/exact /isolated/node_modules/borgmcp-server/dist/main.js start',
+  assert.doesNotThrow(() => assertServerProcessArgv(
+    ['/node/exact', '/isolated/node_modules/borgmcp-server/dist/main.js', 'start'],
     '/node/exact',
     '/isolated/node_modules/borgmcp-server/dist/main.js',
   ));
-  assert.throws(() => assertServerProcessCommand(
-    '/usr/bin/node /global/node_modules/borgmcp-server/dist/main.js start',
+  assert.throws(() => assertServerProcessArgv(
+    ['/usr/bin/node', '/global/node_modules/borgmcp-server/dist/main.js', 'start'],
     '/node/exact',
     '/isolated/node_modules/borgmcp-server/dist/main.js',
   ), /declared Node path/);
+  assert.throws(() => assertServerProcessArgv(
+    ['/node/exact-wrapper', '/isolated/node_modules/borgmcp-server/dist/main.js', 'start'],
+    '/node/exact',
+    '/isolated/node_modules/borgmcp-server/dist/main.js',
+  ), /declared Node path/);
+  assert.throws(() => assertServerProcessArgv(
+    ['/node/exact', '/isolated/node_modules/borgmcp-server/dist/main.js.evil', 'start'],
+    '/node/exact',
+    '/isolated/node_modules/borgmcp-server/dist/main.js',
+  ), /declared server entry/);
   const expected = { path: '/isolated/server/dist/main.js', integrity: 'sha512-candidate' };
   assert.doesNotThrow(() => assertArtifactIdentity(expected, expected));
   assert.throws(
