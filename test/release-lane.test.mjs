@@ -987,6 +987,20 @@ test('packed artifact verifier rejects a hosted dashboard subdomain', async (t) 
   );
 });
 
+test('packed artifact verifier rejects npm-registry egress outside the explicit update command', async (t) => {
+  const { directory, tarball } = await packedFixture(async ({ packageRoot }) => {
+    await writeFile(
+      join(packageRoot, 'src', 'background-update.ts'),
+      'export const registry = "https://registry.npmjs.org/";\n',
+    );
+  });
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await assert.rejects(
+    () => verifyPackedArtifact(tarball, { repositoryRoot: directory }),
+    /unapproved npm-registry egress/,
+  );
+});
+
 test('packed artifact verifier rejects links before extraction', async (t) => {
   const { directory, tarball } = await packedFixture(async ({ packageRoot }) => {
     await symlink('../README.md', join(packageRoot, 'src', 'linked.ts'));

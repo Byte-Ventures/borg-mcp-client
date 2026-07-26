@@ -249,7 +249,17 @@ describe('runUpdate', () => {
     expect(d.installGlobal).toHaveBeenCalledWith('borgmcp', '2.3.0');
     expect(d.reenter).toHaveBeenCalledOnce();
     expect(d.serverJson).not.toHaveBeenCalled();
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('No server mutation was attempted'));
+    expect(d.stderr).toHaveBeenCalledOnce();
+    expect(d.stderr).toHaveBeenCalledWith(
+      `Client update or re-entry failed: spawn failed.\n` +
+      `Observed update state:\n` +
+      `  client: borgmcp@2.3.0 installed and verified\n` +
+      `  server controller before client update: borgmcp-server@0.3.0\n` +
+      `  prepared runtime: not inspected\n` +
+      `  running runtime: not inspected\n` +
+      `Server mutation was not attempted.\n` +
+      `Retry with: borg update --yes\n`,
+    );
   });
 
   it('installs the controller before runtime update and verifies the running pair', async () => {
@@ -382,6 +392,34 @@ describe('runUpdate', () => {
     expect(d.serverJson).not.toHaveBeenCalled();
   });
 
+  it('reports the installed client when a previously present server disappears during re-entry', async () => {
+    const d = deps({
+      currentClient: vi.fn(async () => ({
+        name: 'borgmcp', version: '2.3.0', sharedVersion: '0.6.5',
+        packageRoot: '/npm/lib/node_modules/borgmcp',
+        binPath: '/npm/lib/node_modules/borgmcp/dist/claude.js',
+      })),
+      currentServer: vi.fn(async () => null),
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
+    }, d)).resolves.toBe(1);
+    expect(d.installGlobal).not.toHaveBeenCalled();
+    expect(d.serverJson).not.toHaveBeenCalled();
+    expect(d.stderr).toHaveBeenCalledWith(
+      `The previously installed server is no longer available.\n` +
+      `Observed update state:\n` +
+      `  client: borgmcp@2.3.0 (borgmcp-shared@0.6.5)\n` +
+      `  server controller: unavailable\n` +
+      `  prepared runtime: not inspected\n` +
+      `  running runtime: not inspected\n` +
+      `Server mutation was not attempted.\n` +
+      `Retry with: borg update --yes\n`,
+    );
+  });
+
   it('reports partial completion and skips runtime mutation when controller install fails', async () => {
     const installGlobal = vi.fn(async (name: string) => {
       if (name === 'borgmcp-server') throw new Error('controller install failed');
@@ -400,10 +438,22 @@ describe('runUpdate', () => {
       target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
     }, d)).resolves.toBe(1);
     expect(d.serverJson).not.toHaveBeenCalled();
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('borg update --yes'));
+    expect(d.stderr).toHaveBeenCalledOnce();
+    expect(d.stderr).toHaveBeenCalledWith(
+      `Client updated, but server controller update failed: controller install failed.\n` +
+      `Observed update state:\n` +
+      `  client: borgmcp@2.3.0 (borgmcp-shared@0.6.5)\n` +
+      `  server controller: unavailable after controller failure\n` +
+      `  prepared runtime: not inspected\n` +
+      `  running runtime: not inspected\n` +
+      `Server runtime mutation was not attempted.\n` +
+      `Retry with: borg update --yes\n`,
+    );
   });
 
   it('rejects final server identity mismatch even after both installs succeed', async () => {
+    const oldIntegrity = `sha512-${Buffer.alloc(64, 3).toString('base64')}`;
+    let statusCalls = 0;
     const d = deps({
       currentClient: vi.fn(async () => ({
         name: 'borgmcp', version: '2.3.0', sharedVersion: '0.6.5',
@@ -415,11 +465,24 @@ describe('runUpdate', () => {
         packageRoot: '/npm/lib/node_modules/borgmcp-server',
         binPath: '/npm/lib/node_modules/borgmcp-server/dist/cli.js',
       })),
-      serverJson: vi.fn(async () => ({
-        ...runningStatus,
-        running_runtime: 'borgmcp-server@0.3.0',
-        next_action: 'borg-mcp-server update',
-      })),
+      serverJson: vi.fn(async (_bin, command) => {
+        if (command === 'update') return updatedResult;
+        statusCalls += 1;
+        return statusCalls === 1
+          ? {
+            ...runningStatus,
+            prepared_runtime: 'borgmcp-server@0.3.0',
+            prepared_integrity: oldIntegrity,
+            running_runtime: 'borgmcp-server@0.3.0',
+            running_integrity: oldIntegrity,
+            next_action: 'borg-mcp-server update',
+          }
+          : {
+            ...runningStatus,
+            running_runtime: 'borgmcp-server@0.3.0',
+            running_integrity: oldIntegrity,
+          };
+      }),
     });
 
     await expect(runUpdate({
@@ -427,7 +490,19 @@ describe('runUpdate', () => {
       target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
     }, d)).resolves.toBe(1);
     expect(d.verifyRunningProtocol).not.toHaveBeenCalled();
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringMatching(/verification failed/i));
+    expect(d.stderr).toHaveBeenCalledOnce();
+    expect(d.stderr).toHaveBeenCalledWith(
+      `Server update or final verification failed: final server verification failed: running runtime mismatched.\n` +
+      `Observed update state:\n` +
+      `  client (last verified): borgmcp@2.3.0 (borgmcp-shared@0.6.5)\n` +
+      `  server controller (last verified): borgmcp-server@0.4.0 (borgmcp-shared@0.6.5)\n` +
+      `  prepared runtime: borgmcp-server@0.4.0\n` +
+      `  prepared integrity: ${SERVER_TARGET.integrity}\n` +
+      `  running runtime: borgmcp-server@0.3.0\n` +
+      `  running integrity: ${oldIntegrity}\n` +
+      `  server update: updated borgmcp-server@0.4.0 (${SERVER_TARGET.integrity})\n` +
+      `Retry with: borg update --yes\n`,
+    );
   });
 
   it('strictly rejects unknown update JSON fields without running status or actions', async () => {
@@ -495,8 +570,19 @@ describe('runUpdate', () => {
       yes: true,
       target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
     }, d)).resolves.toBe(1);
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('ACTIVATION_FAILED (restored)'));
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('borg update --yes'));
+    expect(d.stderr).toHaveBeenCalledOnce();
+    expect(d.stderr).toHaveBeenCalledWith(
+      `Server update or final verification failed: server update failed: ACTIVATION_FAILED (restored).\n` +
+      `Observed update state:\n` +
+      `  client (last verified): borgmcp@2.3.0 (borgmcp-shared@0.6.5)\n` +
+      `  server controller (last verified): borgmcp-server@0.4.0 (borgmcp-shared@0.6.5)\n` +
+      `  prepared runtime: unavailable\n` +
+      `  prepared integrity: unavailable\n` +
+      `  running runtime: unavailable\n` +
+      `  running integrity: unavailable\n` +
+      `  server update: failed ACTIVATION_FAILED (restored)\n` +
+      `Retry with: borg update --yes\n`,
+    );
   });
 
   it('rejects a changed exact target during re-entry before server mutation', async () => {
@@ -517,6 +603,17 @@ describe('runUpdate', () => {
     }, d)).resolves.toBe(1);
     expect(d.installGlobal).not.toHaveBeenCalled();
     expect(d.serverJson).not.toHaveBeenCalled();
+    expect(d.stderr).toHaveBeenCalledOnce();
+    expect(d.stderr).toHaveBeenCalledWith(
+      `published update targets changed during client re-entry\n` +
+      `Observed update state:\n` +
+      `  client: borgmcp@2.3.0 installed and verified before re-entry\n` +
+      `  server controller: not changed by this continuation\n` +
+      `  prepared runtime: not inspected\n` +
+      `  running runtime: not inspected\n` +
+      `Server mutation was not attempted.\n` +
+      `Retry with: borg update --yes\n`,
+    );
   });
 });
 

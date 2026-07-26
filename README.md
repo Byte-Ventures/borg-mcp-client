@@ -42,8 +42,11 @@ borg update
 Before changing either package, Borg reads the exact published `borgmcp` and
 `borgmcp-server` manifests and requires the same exact `borgmcp-shared` pin. It
 then verifies that the running client and any installed server controller belong
-to the active npm global root. Unsupported or ambiguous package-manager
-provenance fails without changing either package.
+to one stable npm executable, global prefix, and global root. Registry lookup and
+installation are bound to `https://registry.npmjs.org/`. An alternate configured
+registry, changed npm context, or unsupported or ambiguous package-manager
+provenance fails without changing either package; use that package manager's
+manual update flow instead.
 
 After confirmation, Borg installs the client first and continues under the
 verified new client. If a local server was already installed, it installs the

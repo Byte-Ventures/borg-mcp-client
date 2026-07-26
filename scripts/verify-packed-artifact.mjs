@@ -85,9 +85,9 @@ const CLOUD_RUNTIME_SYMBOLS = [
   'borg_open_dashboard',
   'borg_report-friction',
   'borg_reports',
-  'registry.npmjs.org',
   'fetchLatestBorgmcpVersion',
 ];
+const EXPLICIT_NPM_REGISTRY_PATHS = new Set(['src/update-cmd.ts', 'dist/update-cmd.js']);
 const LEGACY_AUTHORITY_ROUTE = /\/api\/(?:drone(?:\/|[?'"`])|drones\/|roles\/|templates(?:\/|[?'"`])|assimilate(?:[?'"`]))/;
 const LEGACY_AUTHORIZATION_COPY = /\bowner-scoped\b|\bcube ownership\b|\bRLS\b|\bcubes? owned by\b|USER\/OWNER|NON-OWNER|OWNER's|caller owns|owner level/i;
 const AUTHORIZATION_COPY_PATHS = new Set([
@@ -280,6 +280,13 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
       // (.md docs describe the removal and are intentionally exempt here.)
       if (/\.(?:js|ts)$/.test(path) || path.endsWith('.d.ts')) {
         verifyLocalDashboardOccurrences(content, path);
+        const registryOccurrences = content.split('registry.npmjs.org').length - 1;
+        if (
+          registryOccurrences > 0 &&
+          (!EXPLICIT_NPM_REGISTRY_PATHS.has(path) || registryOccurrences !== 1)
+        ) {
+          throw new Error(`Packed artifact ships unapproved npm-registry egress: ${path}`);
+        }
         for (const symbol of CLOUD_RUNTIME_SYMBOLS) {
           if (content.includes(symbol)) {
             throw new Error(`Packed artifact ships a reachable-cloud runtime symbol '${symbol}': ${path}`);

@@ -11,6 +11,7 @@ import { loadBorgServerTrust } from './server-trust.js';
 const CLIENT_PACKAGE = 'borgmcp';
 const SERVER_PACKAGE = 'borgmcp-server';
 const SHARED_PACKAGE = 'borgmcp-shared';
+const CANONICAL_NPM_REGISTRY = 'https://registry.npmjs.org/';
 const REENTRY_ENV = 'BORG_UPDATE_REENTRY';
 const MAX_CAPTURE_BYTES = 1024 * 1024;
 const EXACT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -90,10 +91,63 @@ interface ServerUpdateSuccess {
   nextAction: string | null;
 }
 
-function signalExitCode(error: unknown, deps: UpdateDeps): number | null {
-  if (!(error instanceof CommandSignalError)) return null;
-  deps.stderr(`Update interrupted: ${error.message}.\n`);
-  return error.exitCode;
+interface ServerUpdateFailure {
+  status: 'failed';
+  errorCode: 'ARTIFACT_VERIFICATION_FAILED' | 'ACTIVATION_FAILED';
+  recovery: 'verification_failed' | 'restored' | 'stopped' | 'recovery_failed';
+}
+
+type ServerUpdateResult = ServerUpdateSuccess | ServerUpdateFailure;
+
+interface NpmContext {
+  commandPath: string;
+  commandIdentity: string;
+  prefix: string;
+  root: string;
+}
+
+function signalExitCode(error: unknown): number | null {
+  return error instanceof CommandSignalError ? error.exitCode : null;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function renderReentryPreflightFailure(error: unknown, target: UpdateTarget): string {
+  return (
+    `${errorMessage(error, 'Update preflight failed')}\n` +
+    `Observed update state:\n` +
+    `  client: ${CLIENT_PACKAGE}@${target.clientVersion} installed and verified before re-entry\n` +
+    `  server controller: not changed by this continuation\n` +
+    `  prepared runtime: not inspected\n` +
+    `  running runtime: not inspected\n` +
+    `Server mutation was not attempted.\n` +
+    `Retry with: borg update --yes\n`
+  );
+}
+
+function renderServerState(
+  client: InstalledPackage,
+  server: InstalledPackage,
+  status: ServerStatus | null,
+  update: ServerUpdateResult | null,
+): string {
+  const updateLine = update === null
+    ? 'unavailable'
+    : update.status === 'failed'
+      ? `failed ${update.errorCode} (${update.recovery})`
+      : `${update.status} ${update.artifact} (${update.artifactIntegrity})`;
+  return (
+    `Observed update state:\n` +
+    `  client (last verified): ${client.name}@${client.version} (${SHARED_PACKAGE}@${client.sharedVersion})\n` +
+    `  server controller (last verified): ${server.name}@${server.version} (${SHARED_PACKAGE}@${server.sharedVersion})\n` +
+    `  prepared runtime: ${status?.preparedRuntime ?? 'unavailable'}\n` +
+    `  prepared integrity: ${status?.preparedIntegrity ?? 'unavailable'}\n` +
+    `  running runtime: ${status?.runningRuntime ?? 'unavailable'}\n` +
+    `  running integrity: ${status?.runningIntegrity ?? 'unavailable'}\n` +
+    `  server update: ${updateLine}\n`
+  );
 }
 
 function isExactSemver(value: string): boolean {
@@ -322,7 +376,7 @@ function decodeServerStatus(value: unknown): ServerStatus {
   };
 }
 
-function decodeServerUpdate(value: unknown): ServerUpdateSuccess {
+function decodeServerUpdate(value: unknown): ServerUpdateResult {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('server returned invalid JSON update result');
   }
@@ -340,7 +394,11 @@ function decodeServerUpdate(value: unknown): ServerUpdateSuccess {
     ) {
       throw new Error('server returned invalid JSON update failure');
     }
-    throw new Error(`server update failed: ${record.error_code} (${record.recovery})`);
+    return {
+      status: 'failed',
+      errorCode: record.error_code,
+      recovery: record.recovery as ServerUpdateFailure['recovery'],
+    };
   }
   const allowed = new Set([
     'status',
@@ -441,15 +499,33 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       deps.currentServer(),
     ]);
   } catch (error) {
-    const interrupted = signalExitCode(error, deps);
-    if (interrupted !== null) return interrupted;
-    deps.stderr(`${error instanceof Error ? error.message : 'Update preflight failed'}\nNo update was performed.\n`);
-    return 1;
+    const interrupted = signalExitCode(error);
+    deps.stderr(options.target
+      ? renderReentryPreflightFailure(error, options.target)
+      : (
+        `${errorMessage(error, 'Update preflight failed')}\n` +
+        `Observed update state:\n` +
+        `  client: unavailable (preflight incomplete)\n` +
+        `  server controller: unavailable (preflight incomplete)\n` +
+        `  prepared runtime: not inspected\n` +
+        `  running runtime: not inspected\n` +
+        `No mutation was attempted.\n`
+      ));
+    return interrupted ?? 1;
   }
 
   const serverWasPresent = options.target?.serverPresent ?? discoveredServer !== null;
   if (options.target?.serverPresent === true && discoveredServer === null) {
-    deps.stderr('The previously installed server is no longer available. No server update was performed.\n');
+    deps.stderr(
+      `The previously installed server is no longer available.\n` +
+      `Observed update state:\n` +
+      `  client: ${client.name}@${client.version} (${SHARED_PACKAGE}@${client.sharedVersion})\n` +
+      `  server controller: unavailable\n` +
+      `  prepared runtime: not inspected\n` +
+      `  running runtime: not inspected\n` +
+      `Server mutation was not attempted.\n` +
+      `Retry with: borg update --yes\n`,
+    );
     return 1;
   }
 
@@ -488,9 +564,10 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
   }
 
   if (client.version !== pair.client.version || client.sharedVersion !== pair.client.sharedVersion) {
+    let installedClient: InstalledPackage | null = null;
     try {
       await deps.installGlobal(CLIENT_PACKAGE, pair.client.version);
-      const installedClient = await deps.currentClient();
+      installedClient = await deps.currentClient();
       assertInstalled(installedClient, pair.client);
       const args = [
         'update',
@@ -501,23 +578,41 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       ];
       return await deps.reenter(installedClient.binPath, args);
     } catch (error) {
-      const interrupted = signalExitCode(error, deps);
-      if (interrupted !== null) return interrupted;
+      const interrupted = signalExitCode(error);
       deps.stderr(
-        `Client update or re-entry failed: ${error instanceof Error ? error.message : 'unknown failure'}.\n` +
-        `No server mutation was attempted. Retry with: borg update --yes\n`,
+        `Client update or re-entry failed: ${errorMessage(error, 'unknown failure')}.\n` +
+        `Observed update state:\n` +
+        `  client: ${installedClient
+          ? `${installedClient.name}@${installedClient.version} installed and verified`
+          : 'unavailable after client update failure'}\n` +
+        `  server controller before client update: ${discoveredServer
+          ? `${discoveredServer.name}@${discoveredServer.version}`
+          : 'not installed'}\n` +
+        `  prepared runtime: not inspected\n` +
+        `  running runtime: not inspected\n` +
+        `Server mutation was not attempted.\n` +
+        `Retry with: borg update --yes\n`,
       );
-      return 1;
+      return interrupted ?? 1;
     }
   }
 
   try {
     assertInstalled(client, pair.client);
   } catch (error) {
-    const interrupted = signalExitCode(error, deps);
-    if (interrupted !== null) return interrupted;
-    deps.stderr(`${error instanceof Error ? error.message : 'Client verification failed'}\nNo server mutation was attempted.\n`);
-    return 1;
+    const interrupted = signalExitCode(error);
+    deps.stderr(
+      `${errorMessage(error, 'Client verification failed')}\n` +
+      `Observed update state:\n` +
+      `  client: verification failed\n` +
+      `  server controller: ${discoveredServer
+        ? `${discoveredServer.name}@${discoveredServer.version}`
+        : 'not installed'}\n` +
+      `  prepared runtime: not inspected\n` +
+      `  running runtime: not inspected\n` +
+      `Server mutation was not attempted.\n`,
+    );
+    return interrupted ?? 1;
   }
 
   if (!serverWasPresent) {
@@ -542,25 +637,37 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
     assertInstalled(verified, pair.server);
     server = verified;
   } catch (error) {
-    const interrupted = signalExitCode(error, deps);
-    if (interrupted !== null) return interrupted;
+    const interrupted = signalExitCode(error);
     deps.stderr(
-      `Client updated, but server controller update failed: ${error instanceof Error ? error.message : 'unknown failure'}.\n` +
-      `Partial completion: ${CLIENT_PACKAGE}@${pair.client.version} is installed; server runtime was not changed.\n` +
+      `Client updated, but server controller update failed: ${errorMessage(error, 'unknown failure')}.\n` +
+      `Observed update state:\n` +
+      `  client: ${client.name}@${client.version} (${SHARED_PACKAGE}@${client.sharedVersion})\n` +
+      `  server controller: unavailable after controller failure\n` +
+      `  prepared runtime: not inspected\n` +
+      `  running runtime: not inspected\n` +
+      `Server runtime mutation was not attempted.\n` +
       `Retry with: borg update --yes\n`,
     );
-    return 1;
+    return interrupted ?? 1;
   }
 
+  let observedStatus: ServerStatus | null = null;
+  let observedUpdate: ServerUpdateResult | null = null;
   try {
     let status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+    observedStatus = status;
     if (status.installedController !== exactServerIdentity(pair.server.version)) {
       throw new Error('server status contradicted the verified controller identity');
     }
     try {
       verifyServerStatus(status, pair.server);
     } catch {
+      observedStatus = null;
       const update = decodeServerUpdate(await deps.serverJson(server.binPath, 'update'));
+      observedUpdate = update;
+      if (update.status === 'failed') {
+        throw new Error(`server update failed: ${update.errorCode} (${update.recovery})`);
+      }
       const serverIdentity = exactServerIdentity(pair.server.version);
       if (
         update.installedController !== serverIdentity ||
@@ -572,6 +679,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
         throw new Error('server update result did not reach the target artifact');
       }
       status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+      observedStatus = status;
     }
     const state = verifyServerStatus(status, pair.server);
     const [finalClient, finalServer] = await Promise.all([
@@ -590,13 +698,13 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
     deps.stdout('Restart active agent sessions to load the updated client.\n');
     return 0;
   } catch (error) {
-    const interrupted = signalExitCode(error, deps);
-    if (interrupted !== null) return interrupted;
+    const interrupted = signalExitCode(error);
     deps.stderr(
-      `Server update or final verification failed: ${error instanceof Error ? error.message : 'unknown failure'}.\n` +
-      `Partial completion: client and server controller are current. Retry with: borg update --yes\n`,
+      `Server update or final verification failed: ${errorMessage(error, 'unknown failure')}.\n` +
+      renderServerState(client, server, observedStatus, observedUpdate) +
+      `Retry with: borg update --yes\n`,
     );
-    return 1;
+    return interrupted ?? 1;
   }
 }
 
@@ -666,6 +774,68 @@ async function readJson(path: string): Promise<Record<string, unknown>> {
   return parsed as Record<string, unknown>;
 }
 
+function singleLine(text: string, label: string): string {
+  const value = text.trim();
+  if (value === '' || value.includes('\n') || value.includes('\r')) {
+    throw new Error(`npm returned an invalid ${label}`);
+  }
+  return value;
+}
+
+async function npmText(commandPath: string, args: readonly string[], label: string): Promise<string> {
+  const result = await runCommand(commandPath, args);
+  if (result.code !== 0) throw new Error(`npm ${label} lookup failed`);
+  return singleLine(result.stdout, label);
+}
+
+function requireCanonicalRegistry(value: string): void {
+  let normalized: string;
+  try {
+    normalized = new URL(value).href;
+  } catch {
+    throw new Error('npm registry configuration is invalid');
+  }
+  if (normalized !== CANONICAL_NPM_REGISTRY) {
+    throw new Error(
+      `borg update requires the canonical npm registry ${CANONICAL_NPM_REGISTRY}; ` +
+      `the configured registry is unsupported. Use your package manager manually for this installation.`,
+    );
+  }
+}
+
+async function resolveNpmContext(): Promise<NpmContext> {
+  const commandPath = which.sync('npm');
+  const commandIdentity = await realpath(commandPath);
+  const registry = await npmText(commandPath, ['config', 'get', 'registry'], 'registry');
+  requireCanonicalRegistry(registry);
+  const prefixText = await npmText(commandPath, ['prefix', '--global'], 'global prefix');
+  const rootText = await npmText(commandPath, ['root', '--global'], 'global root');
+  if (!isAbsolute(prefixText) || !isAbsolute(rootText)) {
+    throw new Error('npm returned a non-absolute global context');
+  }
+  const prefix = await realpath(prefixText);
+  const root = await realpath(rootText);
+  const relativeRoot = relative(prefix, root);
+  if (relativeRoot === '' || relativeRoot.startsWith('..') || isAbsolute(relativeRoot)) {
+    throw new Error('npm global root is outside its global prefix');
+  }
+  return { commandPath, commandIdentity, prefix, root };
+}
+
+async function assertNpmContext(context: NpmContext): Promise<NpmContext> {
+  const activeCommand = which.sync('npm');
+  if (await realpath(activeCommand) !== context.commandIdentity) {
+    throw new Error('active npm executable changed during update');
+  }
+  const registry = await npmText(context.commandPath, ['config', 'get', 'registry'], 'registry');
+  requireCanonicalRegistry(registry);
+  const prefix = await realpath(await npmText(context.commandPath, ['prefix', '--global'], 'global prefix'));
+  if (prefix !== context.prefix) throw new Error('npm global prefix changed during update');
+  const root = await realpath(await npmText(context.commandPath, ['root', '--global'], 'global root'));
+  if (root !== context.root) throw new Error('npm global root changed during update');
+  return context;
+}
+
 function packageBin(manifest: Record<string, unknown>, binName: string): string {
   const bin = manifest.bin;
   if (typeof bin === 'string') return bin;
@@ -728,6 +898,7 @@ async function inspectNpmPackage(
   name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
   binName: 'borg' | 'borg-mcp-server',
   required: boolean,
+  context: NpmContext,
 ): Promise<InstalledPackage | null> {
   let commandPath: string;
   try {
@@ -736,15 +907,10 @@ async function inspectNpmPackage(
     if (!required) return null;
     throw new Error(`${binName} is not available on PATH`);
   }
-  const npm = which.sync('npm');
-  const rootResult = await runCommand(npm, ['root', '--global']);
-  if (rootResult.code !== 0) throw new Error('npm global root lookup failed');
-  const rootText = rootResult.stdout.trim();
-  if (!isAbsolute(rootText) || rootText.includes('\n')) throw new Error('npm returned an invalid global root');
   return inspectNpmPackageAt({
     name,
     binName,
-    npmRoot: rootText,
+    npmRoot: context.root,
     commandPath,
     ...(name === CLIENT_PACKAGE ? { invokedPath: process.argv[1] } : {}),
   });
@@ -753,16 +919,17 @@ async function inspectNpmPackage(
 async function defaultPublishedPackage(
   name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
   version: string,
+  context: NpmContext,
 ): Promise<PublishedPackage> {
   if (version !== 'latest' && !isExactSemver(version)) throw new Error('invalid registry target version');
-  const npm = which.sync('npm');
-  const result = await runCommand(npm, [
+  const result = await runCommand(context.commandPath, [
     'view',
     `${name}@${version}`,
     'name',
     'version',
     'dist.integrity',
     `dependencies.${SHARED_PACKAGE}`,
+    `--registry=${CANONICAL_NPM_REGISTRY}`,
     '--json',
   ]);
   if (result.code !== 0) throw new Error(`registry lookup failed for ${name}@${version}`);
@@ -795,17 +962,33 @@ async function defaultConfirm(message: string): Promise<'yes' | 'no' | 'eof' | '
 }
 
 export function buildDefaultUpdateDeps(): UpdateDeps {
+  let contextPromise: Promise<NpmContext> | undefined;
+  const context = async (): Promise<NpmContext> => {
+    contextPromise ??= resolveNpmContext();
+    return assertNpmContext(await contextPromise);
+  };
   return {
     currentClient: async () => {
-      const value = await inspectNpmPackage(CLIENT_PACKAGE, 'borg', true);
+      const value = await inspectNpmPackage(CLIENT_PACKAGE, 'borg', true, await context());
       if (!value) throw new Error('borgmcp is not installed');
       return value;
     },
-    currentServer: () => inspectNpmPackage(SERVER_PACKAGE, 'borg-mcp-server', false),
-    publishedPackage: defaultPublishedPackage,
+    currentServer: async () => inspectNpmPackage(
+      SERVER_PACKAGE,
+      'borg-mcp-server',
+      false,
+      await context(),
+    ),
+    publishedPackage: async (name, version) => defaultPublishedPackage(name, version, await context()),
     installGlobal: async (name, version) => {
-      const npm = which.sync('npm');
-      const result = await runCommand(npm, ['install', '--global', `${name}@${version}`], { inherit: true });
+      const npm = await context();
+      const result = await runCommand(npm.commandPath, [
+        'install',
+        '--global',
+        `--prefix=${npm.prefix}`,
+        `--registry=${CANONICAL_NPM_REGISTRY}`,
+        `${name}@${version}`,
+      ], { inherit: true });
       if (result.code !== 0) throw new Error(`${name} installation exited ${result.code}`);
     },
     reenter: async (binPath, args) => {

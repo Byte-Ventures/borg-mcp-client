@@ -100,6 +100,8 @@ describe('borg update help', () => {
     expect(text).toContain('borg update');
     expect(text).toContain('--yes');
     expect(text).toMatch(/published.*borgmcp-shared/is);
+    expect(text).toMatch(/canonical npm/i);
+    expect(text).toMatch(/alternate registries/i);
     expect(text).toMatch(/client.*first/is);
     expect(text).toMatch(/server.*skipped/i);
     expect(text).toMatch(/partial/i);
