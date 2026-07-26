@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { cubeInitHelpText } from '../src/cli-help.js';
+import { reattachFailureMessage, reattachOnlyRefusal } from '../src/assimilate-guard.js';
 import { DOCS_SECTIONS, matchDocsSections, formatDocsIndex } from '../src/docs-sections';
+import { formatSeatReattachRefusal } from '../src/seat-reattach-guard.js';
 import { TOOL_MANIFEST } from '../src/tool-manifest';
 
 describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
@@ -57,6 +59,28 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(matchDocsSections('enroll invitation')[0]?.slug).toBe('enroll');
     expect(matchDocsSections('assimilate host enroll').map((s) => s.slug)).toContain('enroll');
     expect(matchDocsSections('listen port 7091').map((s) => s.slug)).toContain('run-server');
+  });
+
+  it('routes saved-seat lifecycle and recovery topics to the dedicated guide', () => {
+    expect(matchDocsSections('seat reattach recovery')[0]?.slug).toBe('seat-lifecycle');
+    expect(matchDocsSections('reset-local-seat').map((s) => s.slug)).toContain('seat-lifecycle');
+    expect(matchDocsSections('duplicate inbox monitor').map((s) => s.slug)).toContain('seat-lifecycle');
+    expect(matchDocsSections('evicted seat').map((s) => s.slug)).toContain('seat-lifecycle');
+  });
+
+  it('keeps the seat-lifecycle recovery copy aligned with the shipped formatters', () => {
+    const docs = readFileSync(new URL('../docs/SEAT_LIFECYCLE.md', import.meta.url), 'utf8');
+    const monitorRefusal = formatSeatReattachRefusal(
+      { pid: 123, heartbeat: 'fresh' },
+      'borg assimilate --here --force',
+    ).replace('123', '<pid>').trim();
+    expect(docs).toContain(monitorRefusal);
+    expect(docs).toContain(reattachOnlyRefusal({ kind: 'no-identity' }, '<cube>'));
+    expect(docs).toContain(reattachOnlyRefusal(
+      { kind: 'different-cube', activeCubeName: '<active-cube>' },
+      '<requested-cube>',
+    ));
+    expect(docs).toContain(reattachFailureMessage({ message: '<server-error>' }));
   });
 
   it('server keywords do not hijack established topics (CR 8b474dc2 reciprocal-substring pins)', () => {

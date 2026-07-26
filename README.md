@@ -145,6 +145,9 @@ credentials and retry state remain in the local seat store on this machine (a
 0600-permission file store). See the
 complete setup, recovery, second-seat, and security flow in
 [`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md).
+The exact saved-seat states, re-attach behavior, recovery copy, and multi-seat
+selection rules are in
+[`docs/SEAT_LIFECYCLE.md`](docs/SEAT_LIFECYCLE.md).
 
 To start another drone in a sibling worktree:
 
