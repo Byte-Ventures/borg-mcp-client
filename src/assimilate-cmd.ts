@@ -28,6 +28,11 @@ import {
 import type { BorgCli } from './cubes.js';
 import { inboxPathForDrone } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
+import {
+  formatSeatReattachRefusal,
+  inspectLiveInboxMonitor,
+  type LiveInboxMonitor,
+} from './seat-reattach-guard.js';
 import { resolveLaunchEnv } from './model-presets.js';
 import { unlinkSync } from 'node:fs';
 import {
@@ -89,6 +94,7 @@ export interface AssimilateFlags {
   model?: string;
   server?: string;
   enroll?: boolean;
+  force?: boolean;
 }
 
 export interface AssimilateArgs {
@@ -202,6 +208,11 @@ export interface AssimilateDeps {
   // The scaffold previously declared them sync; that would silently
   // mis-await in Phase F wiring. Promise<...> matches the real shape.
   getActiveCube: () => Promise<ActiveCube | null>;
+  /** Read-only relaunch guard for the saved seat's inbox monitor. */
+  inspectLiveInboxMonitor?: (
+    inboxPath: string,
+    monitorStateRoot: string,
+  ) => LiveInboxMonitor | null;
   hasPersistedActiveCube: () => Promise<boolean>;
   /** Read the RAW persisted local seat for this worktree WITHOUT hydrating its
    *  keychain credential — used to recover a crash-in-gap PENDING seat when
@@ -1081,6 +1092,16 @@ export async function runAssimilate(
       return 1;
     }
     reattachPriorId = existing.droneId;
+  }
+
+  if (existing && reattachPriorId !== undefined && !args.flags.force) {
+    const inboxPath = deps.getInboxPath(existing.cubeId, existing.droneId);
+    const stateRoot = monitorStateRootForWorktree(projectRoot);
+    const holder = (deps.inspectLiveInboxMonitor ?? inspectLiveInboxMonitor)(inboxPath, stateRoot);
+    if (holder !== null) {
+      deps.stderr(formatSeatReattachRefusal(holder, 'borg assimilate --here --force'));
+      return 1;
+    }
   }
 
   // ----- Step 5: Role resolution -----

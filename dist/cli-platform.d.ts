@@ -17,6 +17,7 @@ export declare function resolveCliChoice(explicit: BorgCli | undefined, deps: Cl
 export declare function defaultCliChoiceDeps(prompt: (message: string) => Promise<string>, isTTY: () => boolean): CliChoiceDeps;
 export declare function parseCliFlag(args: string[]): {
     cli?: BorgCli;
+    force?: boolean;
     rest: string[];
     error?: string;
 };
