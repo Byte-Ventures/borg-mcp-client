@@ -1,0 +1,8 @@
+{
+  "stablePaths": [
+    "scripts/local-dashboard-occurrences.json"
+  ],
+  "versionPins": [
+    "test/release-lane.test.mjs"
+  ]
+}

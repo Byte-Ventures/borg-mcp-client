@@ -49,6 +49,7 @@ jobs:
         run: |
           test "$(npm --version)" = "11.18.0"
           node --test test/release-lane.test.mjs
+          node --test test/release-identity.test.mjs
 
   client:
     name: client source (22)
