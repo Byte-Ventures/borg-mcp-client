@@ -12,6 +12,7 @@ import { codexBorgSessionConfigArgs } from './launch-gate.js';
 import { codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
 import { inboxPathForDrone } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
+import { formatSeatReattachRefusal, inspectLiveInboxMonitor, } from './seat-reattach-guard.js';
 import { resolveLaunchEnv } from './model-presets.js';
 import { unlinkSync } from 'node:fs';
 import { gcOrphanInboxesForCube, defaultListInboxLogs, defaultInboxLivenessDeps, isInboxLive, ORPHAN_INBOX_STALE_MS, } from './gc-orphan-inboxes.js';
@@ -645,6 +646,15 @@ export async function runAssimilate(args, deps) {
             return 1;
         }
         reattachPriorId = existing.droneId;
+    }
+    if (existing && reattachPriorId !== undefined && !args.flags.force) {
+        const inboxPath = deps.getInboxPath(existing.cubeId, existing.droneId);
+        const stateRoot = monitorStateRootForWorktree(projectRoot);
+        const holder = (deps.inspectLiveInboxMonitor ?? inspectLiveInboxMonitor)(inboxPath, stateRoot);
+        if (holder !== null) {
+            deps.stderr(formatSeatReattachRefusal(holder, 'borg assimilate --here --force'));
+            return 1;
+        }
     }
     // ----- Step 5: Role resolution -----
     let resolvedRole;

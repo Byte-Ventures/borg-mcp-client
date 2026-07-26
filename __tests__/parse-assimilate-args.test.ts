@@ -27,6 +27,7 @@ describe('parseAssimilateArgs', () => {
       '--host', 'localhost:8787',
       '--enroll',
       '--here',
+      '--force',
       '--yes',
     ]);
     expect(r.ok).toBe(true);
@@ -40,6 +41,7 @@ describe('parseAssimilateArgs', () => {
         server: 'localhost:8787',
         enroll: true,
         here: true,
+        force: true,
         yes: true,
       });
     }

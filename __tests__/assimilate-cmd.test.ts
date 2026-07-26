@@ -60,6 +60,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     getHostname: vi.fn(() => 'test-host.local'),
     setTerminalTitle: vi.fn(),
     getActiveCube: vi.fn(async () => null),
+    inspectLiveInboxMonitor: vi.fn(() => null),
     hasPersistedActiveCube: vi.fn(async () => false),
     readPersistedLocalSeat: vi.fn(async () => null),
     peekServerSessionRecord: vi.fn(async () => false),
@@ -2404,6 +2405,77 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     const stderrText = (stderr.mock.calls as unknown as string[][]).map((c) => c[0]).join('');
     expect(stderrText).toMatch(/re-?attached/i);
     expect(stderrText).not.toContain("didn't grant");
+  });
+
+  it('refuses --here reattach before mutation when the saved seat monitor is already live (#56)', async () => {
+    const assimilateSpy = vi.fn();
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      assimilate: assimilateSpy as any,
+      inspectLiveInboxMonitor: vi.fn(() => ({ pid: 4242, heartbeat: 'fresh' })),
+      getActiveCube: vi.fn(async () => ({
+        cubeId: 'cube-1',
+        droneId: 'drone-prior',
+        name: 'myrepo',
+        droneLabel: 'one-of-one-builder',
+        apiUrl: 'https://server.test',
+        serverTrustIdentity: SERVER_TRUST_IDENTITY,
+        localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64),
+        roleName: 'Builder',
+      })),
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [{ id: 'role-builder', name: 'Builder', is_default: false, is_human_seat: false }],
+      })),
+    });
+
+    await expect(runAssimilate({
+      role: 'builder',
+      flags: { yes: true, here: true },
+    }, deps)).resolves.toBe(1);
+    expect(assimilateSpy).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('pid 4242'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('--force'));
+  });
+
+  it('--force explicitly permits --here reattach to a seat whose monitor PID is live (#56)', async () => {
+    const assimilateSpy = vi.fn(async () => ({
+      cube_id: 'cube-1',
+      drone_id: 'drone-prior',
+      drone_label: 'one-of-one-builder',
+      role_id: 'role-builder',
+      result: 'reused' as const,
+      local_session: { credential_ref: 'borg-server-session:' + 'b'.repeat(64) },
+    }));
+    const deps = makeStubDeps({
+      assimilate: assimilateSpy as any,
+      inspectLiveInboxMonitor: vi.fn(() => ({ pid: 4242, heartbeat: 'fresh' })),
+      getActiveCube: vi.fn(async () => ({
+        cubeId: 'cube-1',
+        droneId: 'drone-prior',
+        name: 'myrepo',
+        droneLabel: 'one-of-one-builder',
+        apiUrl: 'https://server.test',
+        serverTrustIdentity: SERVER_TRUST_IDENTITY,
+        localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64),
+        roleName: 'Builder',
+      })),
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({
+        id: 'cube-1',
+        name: 'myrepo',
+        roles: [{ id: 'role-builder', name: 'Builder', is_default: false, is_human_seat: false }],
+      })),
+    });
+
+    await expect(runAssimilate({
+      role: 'builder',
+      flags: { yes: true, here: true, force: true },
+    }, deps)).resolves.toBe(0);
+    expect(assimilateSpy).toHaveBeenCalledOnce();
   });
 
   it('a normal mint does NOT send prior_drone_id (fresh worktree, no saved identity)', async () => {

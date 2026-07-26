@@ -17,6 +17,7 @@ import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
 import { buildRuntimeMetadataReport } from './runtime-metadata.js';
+import { inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 
 import type { AssimilateDeps } from './assimilate-cmd.js';
 import {
@@ -170,6 +171,7 @@ export function buildDefaultAssimilateDeps(
     },
 
     getActiveCube: () => cubesGetActive(),
+    inspectLiveInboxMonitor,
     hasPersistedActiveCube: () => cubesHasPersistedActive(),
     readPersistedLocalSeat: () => readPersistedLocalSeat(),
     peekServerSessionRecord: async (credentialRef, binding) =>

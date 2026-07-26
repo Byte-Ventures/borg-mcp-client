@@ -12,7 +12,7 @@ export type ParseResult =
 
 /**
  * Parse argv for `borg assimilate [role] [--worktree <n>] [--template <n>]
- * [--no-template] [--cube-name <n>] [--host <host>] [--enroll] [--here] [--yes]`. The `assimilate`
+ * [--no-template] [--cube-name <n>] [--host <host>] [--enroll] [--here] [--force] [--yes]`. The `assimilate`
  * subcommand token must already be stripped by the caller.
  */
 export function parseAssimilateArgs(rawArgs: string[]): ParseResult {
@@ -46,6 +46,8 @@ export function parseAssimilateArgs(rawArgs: string[]): ParseResult {
       i += 1;
     } else if (arg === '--here') {
       flags.here = true;
+    } else if (arg === '--force') {
+      flags.force = true;
     } else if (arg === '--host') {
       const next = rawArgs[i + 1];
       if (typeof next !== 'string' || next.length === 0 || next.startsWith('-')) {
@@ -99,7 +101,7 @@ export function parseAssimilateArgs(rawArgs: string[]): ParseResult {
     } else if (arg.startsWith('--')) {
       return {
         ok: false,
-        error: `unknown flag: ${arg}. Supported: --worktree, --template, --no-template, --cube-name, --host, --enroll, --here, --yes, --cli, --model`,
+        error: `unknown flag: ${arg}. Supported: --worktree, --template, --no-template, --cube-name, --host, --enroll, --here, --force, --yes, --cli, --model`,
       };
     } else {
       if (role !== undefined) {

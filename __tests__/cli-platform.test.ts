@@ -26,6 +26,13 @@ describe('parseCliFlag', () => {
   it('rejects invalid values', () => {
     expect(parseCliFlag(['--cli=vim']).error).toContain('--cli requires');
   });
+
+  it('consumes --force as the bare-seat relaunch override instead of forwarding it', () => {
+    expect(parseCliFlag(['--force', '--resume', 'abc'])).toEqual({
+      force: true,
+      rest: ['--resume', 'abc'],
+    });
+  });
 });
 
 describe('resolveCliChoice', () => {
