@@ -1,7 +1,7 @@
 import { spawn as spawnChild } from 'node:child_process';
 import { constants } from 'node:os';
 import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
-export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite'];
+export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'];
 export function parseServerFacadeArgs(args) {
     const [command, ...rest] = args;
     if (command === undefined || command === '--help' || command === '-h') {
@@ -67,7 +67,7 @@ function inertCommand(command) {
 }
 export function unknownServerCommandText(command) {
     return (`Unknown server command: ${inertCommand(command)}.\n` +
-        `Available commands: setup, start, stop, status, update, invite, cube init.\n` +
+        `Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\n` +
         `Next: run borg server --help.\n`);
 }
 export function missingServerExecutableText(command) {

@@ -1,0 +1,37 @@
+[
+  {
+    "file": "src/cli-help.ts",
+    "lineNumber": 58,
+    "line": "`  dashboard   View the running local server dashboard.\\n` +"
+  },
+  {
+    "file": "src/server-facade.ts",
+    "lineNumber": 5,
+    "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'] as const;"
+  },
+  {
+    "file": "src/server-facade.ts",
+    "lineNumber": 128,
+    "line": "`Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\\n` +"
+  },
+  {
+    "file": "dist/cli-help.js",
+    "lineNumber": 52,
+    "line": "`  dashboard   View the running local server dashboard.\\n` +"
+  },
+  {
+    "file": "dist/server-facade.d.ts",
+    "lineNumber": 2,
+    "line": "export declare const SERVER_LIFECYCLE_COMMANDS: readonly [\"setup\", \"start\", \"stop\", \"status\", \"update\", \"invite\", \"dashboard\"];"
+  },
+  {
+    "file": "dist/server-facade.js",
+    "lineNumber": 4,
+    "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'];"
+  },
+  {
+    "file": "dist/server-facade.js",
+    "lineNumber": 70,
+    "line": "`Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\\n` +"
+  }
+]

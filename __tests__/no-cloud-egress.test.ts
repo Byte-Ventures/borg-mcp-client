@@ -23,6 +23,19 @@ const SRC_DIR = path.join(ROOT, 'src');
 const DOCS_DIR = path.join(ROOT, 'docs');
 const DIST_DIR = path.join(ROOT, 'dist');
 
+type DashboardOccurrence = { file: string; lineNumber: number; line: string };
+
+const DASHBOARD_ALLOWLIST = JSON.parse(
+  readFileSync(path.join(ROOT, 'scripts', 'local-dashboard-occurrences.json'), 'utf8'),
+) as DashboardOccurrence[];
+const dashboardOccurrenceKey = ({ file, lineNumber, line }: DashboardOccurrence) =>
+  JSON.stringify([file, lineNumber, line]);
+const DASHBOARD_ALLOWLIST_KEYS = new Set(DASHBOARD_ALLOWLIST.map(dashboardOccurrenceKey));
+
+if (DASHBOARD_ALLOWLIST_KEYS.size !== DASHBOARD_ALLOWLIST.length) {
+  throw new Error('Local dashboard occurrence allowlist contains duplicate entries.');
+}
+
 function listFiles(dir: string, exts: string[]): string[] {
   const out: string[] = [];
   if (!existsSync(dir)) return out;
@@ -90,8 +103,8 @@ const CLOUD_SYMBOL_NEEDLES = [
   'borg_reports',
   'submitReport',
   'fetchReports',
-  // No hosted dashboard, and no automatic npm-registry runtime egress.
-  'dashboard',
+  // Hosted dashboard identifiers are covered above without banning the local
+  // operator dashboard command. Automatic npm-registry runtime egress remains forbidden.
   'registry.npmjs.org',
   'fetchLatestBorgmcpVersion',
 ];
@@ -109,6 +122,21 @@ function scan(entries: { file: string; text: string }[], needles: string[]): str
   return offenders;
 }
 
+function scanDashboardOccurrences(entries: { file: string; text: string }[]) {
+  const offenders: string[] = [];
+  const approved = new Set<string>();
+  for (const { file, text } of entries) {
+    for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
+      if (!rawLine.includes('dashboard')) continue;
+      const occurrence = { file, lineNumber: index + 1, line: rawLine.trim() };
+      const key = dashboardOccurrenceKey(occurrence);
+      if (DASHBOARD_ALLOWLIST_KEYS.has(key)) approved.add(key);
+      else offenders.push(`${file}:${index + 1}: dashboard`);
+    }
+  }
+  return { approved, offenders };
+}
+
 describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
   it('has source files to scan', () => {
     expect(SRC_FILES.length).toBeGreaterThan(20);
@@ -120,6 +148,23 @@ describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
 
   it('no OAuth / subscription / dashboard / report identifier appears in shipped src (raw, comments included)', () => {
     expect(scan(readAll(SRC_FILES, SRC_DIR), CLOUD_SYMBOL_NEEDLES)).toEqual([]);
+  });
+
+  it('permits only the exact local dashboard source occurrences', () => {
+    const result = scanDashboardOccurrences(readAll(SRC_FILES, ROOT));
+    const expected = DASHBOARD_ALLOWLIST
+      .filter(({ file }) => file.startsWith('src/'))
+      .map(dashboardOccurrenceKey);
+    expect(result.offenders).toEqual([]);
+    expect([...result.approved].sort()).toEqual(expected.sort());
+  });
+
+  it('rejects a hosted dashboard subdomain through the bare-token guard', () => {
+    const result = scanDashboardOccurrences([{
+      file: 'src/review-control.ts',
+      text: '// review-control: https://dashboard.borgmcp.ai\n',
+    }]);
+    expect(result.offenders).toEqual(['src/review-control.ts:1: dashboard']);
   });
 
   it('no legacy authority route family appears in shipped src', () => {
@@ -203,6 +248,15 @@ describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
   it.runIf(distJs.length > 0)('built dist carries no hosted URL, OAuth, subscription, dashboard, or report residue', () => {
     const entries = readAll(distJs, DIST_DIR);
     expect(scan(entries, [...HOSTED_URL_NEEDLES, ...CLOUD_SYMBOL_NEEDLES])).toEqual([]);
+  });
+
+  it.runIf(distJs.length > 0)('built dist permits only the exact local dashboard occurrences', () => {
+    const result = scanDashboardOccurrences(readAll(distJs, ROOT));
+    const expected = DASHBOARD_ALLOWLIST
+      .filter(({ file }) => file.startsWith('dist/'))
+      .map(dashboardOccurrenceKey);
+    expect(result.offenders).toEqual([]);
+    expect([...result.approved].sort()).toEqual(expected.sort());
   });
 
   it.runIf(distJs.length > 0)('built dist carries no legacy authority route family', () => {
