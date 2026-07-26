@@ -2,7 +2,7 @@ import { spawn as spawnChild, type SpawnOptions } from 'node:child_process';
 import { constants } from 'node:os';
 import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
 
-export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite'] as const;
+export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'] as const;
 export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
 
 export type ParsedServerFacadeArgs =
@@ -125,7 +125,7 @@ function inertCommand(command: string): string {
 export function unknownServerCommandText(command: string): string {
   return (
     `Unknown server command: ${inertCommand(command)}.\n` +
-    `Available commands: setup, start, stop, status, update, invite, cube init.\n` +
+    `Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\n` +
     `Next: run borg server --help.\n`
   );
 }

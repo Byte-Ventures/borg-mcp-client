@@ -66,6 +66,7 @@ describe('borg server help', () => {
       `  status   Report verified runtime evidence.\n` +
       `  update   Verify and activate a local server artifact.\n` +
       `  invite   Create a single-use invitation in an interactive terminal.\n` +
+      `  dashboard   View the running local server dashboard.\n` +
       `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
       `Run borg server <command> --help for server command options.\n`,
     );
