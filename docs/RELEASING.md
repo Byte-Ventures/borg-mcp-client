@@ -149,6 +149,41 @@ Before creating the release tag, independently verify all of these conditions:
 machine-checkable. A release tag created before they are resolved fails before
 dependency installation or publication.
 
+### Release identity preparation
+
+Prepare the next stable identity only from a clean protected-main checkout. The
+command requires evidence for the version being superseded because a workflow
+run and artifact integrity cannot be derived from the repository tree:
+
+```sh
+npm run release:prepare -- 2.3.0 \
+  --workflow-run-id 30195666955 \
+  --workflow-run-attempt 1 \
+  --artifact-integrity 'sha512-...'
+```
+
+The command independently verifies the annotated tag, its peeled commit, the
+exact successful tag-workflow attempt, and npm artifact integrity before writing
+anything. It then deterministically updates only the manifest version, the two
+root lockfile version fields, the extraction ledger, this document's immutable
+release record, and the release-lane current-version/evidence assertions.
+
+After committing the generated result on a `release/**` branch, classify it
+against its protected-main base:
+
+```sh
+npm run verify:release-identity -- --base origin/main
+```
+
+The verifier rechecks the recorded provenance against GitHub, npm, and Git. It
+reconstructs the expected tree in a temporary Git index and requires exact tree
+equality, exact changed paths, and exact per-file shapes. The release-identity
+allowlist must remain byte-identical. The generated no-cloud occurrence allowlist
+must also remain byte-identical; any source-line renumbering makes the commit a
+code change rather than a release-identity change. CI runs this classifier on
+every `release/**` branch. A commit the classifier rejects follows the full code
+review chain and must never be manually declared identity-only.
+
 ## Repository Controls
 
 Repository settings are operator-owned and are not changed by this workflow.

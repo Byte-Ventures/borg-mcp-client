@@ -26,6 +26,11 @@ const SHARED_VERSION = '0.6.4';
 const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.6.4.tgz';
 const SHARED_INTEGRITY = 'sha512-Wm4b0uoOAw9JCz5OTHD0Q2uXKkeWYdkVksdeZvRG8l62XGMY+G8GkNEsZT9L533LbVbQ29GhgF0htjDenQThDg==';
 
+test('release-lane current version matches the package manifest', async () => {
+  const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  assert.equal(CLIENT_VERSION, manifest.version);
+});
+
 async function validPackage(directory) {
   const packageRoot = join(directory, 'package');
   await mkdir(join(packageRoot, 'src'), { recursive: true });
