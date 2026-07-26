@@ -505,10 +505,85 @@ describe('runUpdate', () => {
     );
   });
 
-  it('strictly rejects unknown update JSON fields without running status or actions', async () => {
+  it('accepts additive status and update fields while validating the known contract', async () => {
+    let statusCalls = 0;
+    const additiveFields = {
+      service_state: 'running',
+      service_recovery: null,
+      runtime_lock: { state: 'owned' },
+      future_server_field: ['ignored'],
+    };
+    const serverJson = vi.fn(async (_bin: string, command: 'update' | 'status') => {
+      if (command === 'update') return { ...updatedResult, ...additiveFields };
+      statusCalls += 1;
+      return statusCalls === 1
+        ? {
+          ...runningStatus,
+          ...additiveFields,
+          prepared_runtime: 'borgmcp-server@0.3.0',
+          prepared_integrity: `sha512-${Buffer.alloc(64, 3).toString('base64')}`,
+          running_runtime: 'borgmcp-server@0.3.0',
+          running_integrity: `sha512-${Buffer.alloc(64, 3).toString('base64')}`,
+          next_action: 'borg-mcp-server update',
+        }
+        : { ...runningStatus, ...additiveFields };
+    });
+    const d = deps({
+      currentClient: vi.fn(async () => ({
+        name: 'borgmcp', version: '2.3.0', sharedVersion: '0.6.5',
+        packageRoot: '/npm/lib/node_modules/borgmcp',
+        binPath: '/npm/lib/node_modules/borgmcp/dist/claude.js',
+      })),
+      currentServer: vi.fn(async () => ({
+        name: 'borgmcp-server', version: '0.4.0', sharedVersion: '0.6.5',
+        packageRoot: '/npm/lib/node_modules/borgmcp-server',
+        binPath: '/npm/lib/node_modules/borgmcp-server/dist/cli.js',
+      })),
+      serverJson,
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
+    }, d)).resolves.toBe(0);
+    expect(serverJson).toHaveBeenCalledTimes(3);
+    expect(d.verifyRunningProtocol).toHaveBeenCalledOnce();
+    expect(d.stderr).not.toHaveBeenCalled();
+  });
+
+  it('rejects a wrong-typed known status field even with additive fields', async () => {
+    const serverJson = vi.fn(async () => ({
+      ...runningStatus,
+      service_adapter: 42,
+      future_server_field: 'ignored',
+    }));
+    const d = deps({
+      currentClient: vi.fn(async () => ({
+        name: 'borgmcp', version: '2.3.0', sharedVersion: '0.6.5',
+        packageRoot: '/npm/lib/node_modules/borgmcp',
+        binPath: '/npm/lib/node_modules/borgmcp/dist/claude.js',
+      })),
+      currentServer: vi.fn(async () => ({
+        name: 'borgmcp-server', version: '0.4.0', sharedVersion: '0.6.5',
+        packageRoot: '/npm/lib/node_modules/borgmcp-server',
+        binPath: '/npm/lib/node_modules/borgmcp-server/dist/cli.js',
+      })),
+      serverJson,
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
+    }, d)).resolves.toBe(1);
+    expect(serverJson).toHaveBeenCalledOnce();
+    expect(d.verifyRunningProtocol).not.toHaveBeenCalled();
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('server returned invalid JSON status'));
+  });
+
+  it('rejects a wrong-typed known update field even with additive fields', async () => {
     const serverJson = vi.fn(async (_bin: string, command: 'update' | 'status') =>
       command === 'update'
-        ? { ...updatedResult, command: 'do not execute me' }
+        ? { ...updatedResult, artifact: 42, future_server_field: 'ignored' }
         : {
           ...runningStatus,
           prepared_runtime: 'borgmcp-server@0.3.0',
@@ -535,6 +610,7 @@ describe('runUpdate', () => {
     }, d)).resolves.toBe(1);
     expect(serverJson).toHaveBeenCalledTimes(2);
     expect(d.verifyRunningProtocol).not.toHaveBeenCalled();
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('server returned invalid JSON update result'));
   });
 
   it('strictly decodes the server failure envelope and reports partial completion', async () => {
@@ -545,6 +621,7 @@ describe('runUpdate', () => {
           error_code: 'ACTIVATION_FAILED',
           recovery: 'restored',
           data_identity: 'preserved',
+          future_server_field: 'ignored',
         }
         : {
           ...runningStatus,

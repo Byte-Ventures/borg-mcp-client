@@ -179,24 +179,6 @@ function decodeServerStatus(value) {
         throw new Error('server returned invalid JSON status');
     }
     const record = value;
-    const allowed = new Set([
-        'status',
-        'installed_controller',
-        'prepared_runtime',
-        'prepared_integrity',
-        'running_runtime',
-        'running_integrity',
-        'build_identity',
-        'endpoint',
-        'mode',
-        'service_adapter',
-        'data_identity',
-        'next_action',
-    ]);
-    for (const key of Object.keys(record)) {
-        if (!allowed.has(key))
-            throw new Error(`server status contains unknown field ${key}`);
-    }
     if ((record.status !== 'running' && record.status !== 'stopped') ||
         typeof record.installed_controller !== 'string' ||
         (record.prepared_runtime !== null && typeof record.prepared_runtime !== 'string') ||
@@ -245,10 +227,7 @@ function decodeServerUpdate(value) {
     }
     const record = value;
     if (record.status === 'failed') {
-        const failureKeys = Object.keys(record);
-        if (failureKeys.length !== 4 ||
-            !failureKeys.every((key) => ['status', 'error_code', 'recovery', 'data_identity'].includes(key)) ||
-            (record.error_code !== 'ARTIFACT_VERIFICATION_FAILED' && record.error_code !== 'ACTIVATION_FAILED') ||
+        if ((record.error_code !== 'ARTIFACT_VERIFICATION_FAILED' && record.error_code !== 'ACTIVATION_FAILED') ||
             !['verification_failed', 'restored', 'stopped', 'recovery_failed'].includes(record.recovery) ||
             record.data_identity !== 'preserved' ||
             (record.error_code === 'ARTIFACT_VERIFICATION_FAILED' && record.recovery !== 'verification_failed') ||
@@ -260,21 +239,6 @@ function decodeServerUpdate(value) {
             errorCode: record.error_code,
             recovery: record.recovery,
         };
-    }
-    const allowed = new Set([
-        'status',
-        'installed_controller',
-        'artifact',
-        'artifact_integrity',
-        'running_runtime',
-        'build_identity',
-        'mode',
-        'data_identity',
-        'next_action',
-    ]);
-    for (const key of Object.keys(record)) {
-        if (!allowed.has(key))
-            throw new Error(`server update contains unknown field ${key}`);
     }
     if ((record.status !== 'prepared' && record.status !== 'updated') ||
         typeof record.installed_controller !== 'string' ||
