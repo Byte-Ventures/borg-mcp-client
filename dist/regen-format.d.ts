@@ -102,6 +102,7 @@ export declare function formatLeanOrientation(args: {
     agentKind: AgentKind;
     source?: string | null;
 }): string;
+export declare function markArrivalAnnouncedThisProcess(): void;
 /**
  * Build the universal drone playbook.
  *
@@ -117,12 +118,6 @@ export declare function formatLeanOrientation(args: {
  * here.
  */
 export declare function getDronePlaybook(): string;
-/**
- * Eager export of the playbook text. Cheap to compute (string concat);
- * exporting as a constant lets callers splice it directly without a
- * function call site.
- */
-export declare const DRONE_PLAYBOOK: string;
 /**
  * gh#912: the verbose operating-discipline DETAIL externalized out of the
  * bootstrap regen into an on-demand chapter (fetched via the borg_playbook

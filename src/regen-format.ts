@@ -191,6 +191,12 @@ export function formatLeanOrientation(args: {
 // formatLeanOrientation({ ..., source: 'clear' }), so the per-surface
 // /clear block is gone (one place, not three).
 
+let arrivalAnnouncedThisProcess = false;
+
+export function markArrivalAnnouncedThisProcess(): void {
+  arrivalAnnouncedThisProcess = true;
+}
+
 /**
  * Build the universal drone playbook.
  *
@@ -215,6 +221,9 @@ export function formatLeanOrientation(args: {
 //   about how Borg MCP works; this marker pins the param so the #490/#529 guard
 //   verifies borg_docs exposes `topic`.
 export function getDronePlaybook(): string {
+  const arrivalInstruction = arrivalAnnouncedThisProcess
+    ? ''
+    : '\n**When this MCP session first starts:** post one `ARRIVAL: <your-label> (<your-role>) online on <hostname> at <project-path>` (run `hostname`; use cwd for the path). After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit `/mcp` reconnect may show it again.\n';
   return `## How to operate as a Drone
 
 You're a Drone in a Cube. Coordinate with other drones through the activity log.
@@ -242,8 +251,7 @@ You're a Drone in a Cube. Coordinate with other drones through the activity log.
 5. Nothing actionable + no prompt → done; wait for next wake.
 
 **On a \`<task-notification>\` wake:** the payload is a truncatable preview; the full entry is in the DB. Drain: \`borg_read-log unread_only=true limit=20\`, repeat until \`behind_by=0\`. Do NOT triage with \`since=<notification timestamp>\` (strict-after — skips the boundary entry) or a bare window (skips older-unread during bursts).
-
-**On first wake this session:** post one \`ARRIVAL: <your-label> (<your-role>) online on <hostname> at <project-path>\` (run \`hostname\`; use cwd for the path). One-time per session — don't repeat on later wakes; skip if already posted this session (e.g. after a \`/mcp\` reconnect).
+${arrivalInstruction}
 
 **When a log entry routes work to you** (a routing/assignment-class entry per your cube's conventions that names your label + asks for action, or a direct \`<your-label>:\` mention): call \`borg_ack entry_id=<id>\` within ~60s. Use the \`borg_ack\` TOOL, not an in-band \`ACK:\` post (it records a queryable flag + wakes the author's Monitor + keeps the log clean). Ack = receipt, not completion (\`STARTING\` / \`DONE\` still apply). Ack only routing-class signals — not every mention.
 
@@ -268,13 +276,6 @@ You're a Drone in a Cube. Coordinate with other drones through the activity log.
 
 Any drone that commits code: run \`git diff --staged --stat\` before \`git commit\` to verify file count + LOC direction + paths match your intent. Catches deleted files / anomalous -LOC / wrong paths pre-push. Your role may layer more git rules (code-implementing + coordinating roles typically carry the full set).`;
 }
-
-/**
- * Eager export of the playbook text. Cheap to compute (string concat);
- * exporting as a constant lets callers splice it directly without a
- * function call site.
- */
-export const DRONE_PLAYBOOK = getDronePlaybook();
 
 /**
  * gh#912: the verbose operating-discipline DETAIL externalized out of the
@@ -387,6 +388,7 @@ let cachedRoleTextHash: string | null = null;
 export function __resetRegenSessionState(): void {
   boilerplateEmittedThisSession = false;
   cachedRoleTextHash = null;
+  arrivalAnnouncedThisProcess = false;
 }
 
 function safetyDisciplinesForRole(detailedDescription: string | null | undefined): string[] {
