@@ -308,23 +308,6 @@ function decodeServerStatus(value: unknown): ServerStatus {
     throw new Error('server returned invalid JSON status');
   }
   const record = value as Record<string, unknown>;
-  const allowed = new Set([
-    'status',
-    'installed_controller',
-    'prepared_runtime',
-    'prepared_integrity',
-    'running_runtime',
-    'running_integrity',
-    'build_identity',
-    'endpoint',
-    'mode',
-    'service_adapter',
-    'data_identity',
-    'next_action',
-  ]);
-  for (const key of Object.keys(record)) {
-    if (!allowed.has(key)) throw new Error(`server status contains unknown field ${key}`);
-  }
   if (
     (record.status !== 'running' && record.status !== 'stopped') ||
     typeof record.installed_controller !== 'string' ||
@@ -382,10 +365,7 @@ function decodeServerUpdate(value: unknown): ServerUpdateResult {
   }
   const record = value as Record<string, unknown>;
   if (record.status === 'failed') {
-    const failureKeys = Object.keys(record);
     if (
-      failureKeys.length !== 4 ||
-      !failureKeys.every((key) => ['status', 'error_code', 'recovery', 'data_identity'].includes(key)) ||
       (record.error_code !== 'ARTIFACT_VERIFICATION_FAILED' && record.error_code !== 'ACTIVATION_FAILED') ||
       !['verification_failed', 'restored', 'stopped', 'recovery_failed'].includes(record.recovery as string) ||
       record.data_identity !== 'preserved' ||
@@ -399,20 +379,6 @@ function decodeServerUpdate(value: unknown): ServerUpdateResult {
       errorCode: record.error_code,
       recovery: record.recovery as ServerUpdateFailure['recovery'],
     };
-  }
-  const allowed = new Set([
-    'status',
-    'installed_controller',
-    'artifact',
-    'artifact_integrity',
-    'running_runtime',
-    'build_identity',
-    'mode',
-    'data_identity',
-    'next_action',
-  ]);
-  for (const key of Object.keys(record)) {
-    if (!allowed.has(key)) throw new Error(`server update contains unknown field ${key}`);
   }
   if (
     (record.status !== 'prepared' && record.status !== 'updated') ||
