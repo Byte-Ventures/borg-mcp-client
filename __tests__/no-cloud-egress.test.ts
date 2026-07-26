@@ -90,8 +90,8 @@ const CLOUD_SYMBOL_NEEDLES = [
   'borg_reports',
   'submitReport',
   'fetchReports',
-  // No hosted dashboard, and no automatic npm-registry runtime egress.
-  'dashboard',
+  // Hosted dashboard identifiers are covered above without banning the local
+  // operator dashboard command. Automatic npm-registry runtime egress remains forbidden.
   'registry.npmjs.org',
   'fetchLatestBorgmcpVersion',
 ];
