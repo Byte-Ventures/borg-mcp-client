@@ -12,8 +12,8 @@ import {
 } from '../scripts/release-identity.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const oldVersion = '2.2.0';
-const newVersion = '2.3.0';
+const oldVersion = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
+const newVersion = `${Number(oldVersion.split('.')[0]) + 1}.0.0`;
 const integrity = `sha512-${'A'.repeat(86)}==`;
 const allowlistPath = 'scripts/release-identity-allowlist.json';
 const stablePath = 'scripts/local-dashboard-occurrences.json';
@@ -49,7 +49,9 @@ test('the client release allowlist is explicit, sorted, and live', async () => {
   assert.deepEqual(allowlist.stablePaths, [...allowlist.stablePaths].sort());
   assert.deepEqual(allowlist.versionPins, [releaseTestPath]);
   assert.deepEqual(allowlist.stablePaths, [stablePath]);
-  assert.match(await readFile(join(root, releaseTestPath), 'utf8'), /const CLIENT_VERSION = '2\.2\.0';/);
+  assert.ok((await readFile(join(root, releaseTestPath), 'utf8')).includes(
+    `const CLIENT_VERSION = '${oldVersion}';`,
+  ));
 });
 
 test('prepare generates exactly the client identity surfaces and verifies their Git tree', async (t) => {
@@ -254,7 +256,7 @@ function classificationInput(fixture, candidate) {
     candidate,
     repository: 'Byte-Ventures/borg-mcp-client',
     headRepository: 'Byte-Ventures/borg-mcp-client',
-    headRef: 'release/2.3.0',
+    headRef: `release/${newVersion}`,
   };
 }
 
