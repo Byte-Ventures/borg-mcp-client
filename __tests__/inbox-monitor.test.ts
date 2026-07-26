@@ -866,6 +866,64 @@ distDescribe('borg-inbox-monitor — end-to-end symlink spawn (gh#114)', () => {
     }
   });
 
+  it('prints one actionable stdout line before yielding to a live modern holder', async () => {
+    const dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-monitor-e2e-live-yield-'));
+    tmpDirs.push(dir);
+    const inboxFile = path.join(dir, 'config-inboxes', 'inbox.log');
+    const worktree = path.join(dir, 'worktree');
+    mkdirSync(worktree);
+    const stateRoot = monitorStateRootForWorktree(worktree);
+    ensureInboxDir(inboxFile);
+    writeFileSync(inboxFile, '');
+
+    const owner = spawn(process.execPath, [DIST_BIN, '--state-root', stateRoot, inboxFile], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let ownerStderr = '';
+    owner.stderr?.on('data', (chunk) => { ownerStderr += chunk.toString(); });
+    const pidfile = pidfilePathFor(inboxFile, stateRoot);
+    const claimed = await new Promise<boolean>((resolve) => {
+      const deadline = Date.now() + 2_000;
+      const poll = () => {
+        if (existsSync(pidfile)) return resolve(true);
+        if (owner.exitCode !== null || Date.now() >= deadline) return resolve(false);
+        setTimeout(poll, 10);
+      };
+      poll();
+    });
+
+    try {
+      expect(claimed, ownerStderr).toBe(true);
+      expect(owner.pid).toBeTypeOf('number');
+
+      const contender = spawn(process.execPath, [DIST_BIN, '--state-root', stateRoot, inboxFile], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      contender.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
+      contender.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
+      const exitCode = await new Promise<number | null>((resolve) => {
+        contender.once('exit', (code) => resolve(code));
+      });
+
+      expect(exitCode).toBe(0);
+      expect(stdout.trim().split('\n')).toEqual([
+        `borg-inbox-monitor: seat inbox ${JSON.stringify(inboxFile)} is already monitored by a live instance ` +
+          `(pid ${owner.pid}); yielding — another session likely holds this seat.`,
+      ]);
+      expect(stderr).toBe('');
+      expect(owner.exitCode).toBeNull();
+    } finally {
+      const ownerExited = new Promise<void>((resolve) => {
+        if (owner.exitCode !== null) return resolve();
+        owner.once('exit', () => resolve());
+      });
+      owner.kill('SIGTERM');
+      await ownerExited;
+    }
+  });
+
   it('fails loud and preserves a stale legacy artifact instead of racing a cross-version handoff', async () => {
     const dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-monitor-e2e-legacy-veto-'));
     tmpDirs.push(dir);
