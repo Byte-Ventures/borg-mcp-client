@@ -617,6 +617,16 @@ export function parseMonitorInvocation(argv) {
     }
     return null;
 }
+function liveMonitorYieldLine(inboxPath, holderPidfilePath, deps) {
+    const raw = deps.read(holderPidfilePath);
+    const parsed = raw === null ? null : parsePidfileContent(raw.trim());
+    const livePid = parsed && Number.isSafeInteger(parsed.pid) && parsed.pid > 0 && deps.isAlive(parsed.pid)
+        ? parsed.pid
+        : null;
+    const holder = livePid === null ? 'another monitor instance' : `a live instance (pid ${livePid})`;
+    return (`borg-inbox-monitor: seat inbox ${JSON.stringify(inboxPath)} is already monitored by ${holder}; ` +
+        'yielding — another session likely holds this seat.');
+}
 function main() {
     const invocation = parseMonitorInvocation(process.argv.slice(2));
     if (!invocation) {
@@ -672,6 +682,7 @@ function main() {
     if (claimResult === 'legacy-live') {
         // An already-running old monitor still owns the wake path; yield without
         // touching its inbox-adjacent state.
+        console.log(liveMonitorYieldLine(inboxPath, legacyPidfilePathFor(inboxPath), lockDeps));
         process.exit(0);
     }
     if (claimResult === 'legacy-blocked') {
@@ -680,6 +691,7 @@ function main() {
         process.exit(1);
     }
     if (claimResult === 'modern-live') {
+        console.log(liveMonitorYieldLine(inboxPath, pidfilePath, lockDeps));
         process.exit(0);
     }
     // Releases occur under the same mutation guard as acquisition/reaping. If a

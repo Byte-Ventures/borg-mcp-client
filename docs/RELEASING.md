@@ -316,6 +316,12 @@ The unprivileged `verify` job performs one sequence:
 7. Upload only the tarball and its verifier-generated report as the same-run
    release artifact.
 
+After `verify` succeeds, the designated Queen operator alone approves the
+`npm-publish` environment. There is no separate pre-publication exact-artifact
+Security gate: the verify job is the mechanical authority for the exact bytes
+that the publish job consumes. Environment approval authorizes publication; it
+does not permit a rerun, a rebuilt artifact, or approval by another actor.
+
 The protected `publish` job alone receives `id-token: write`. It downloads the
 same-run artifact and rejects a report whose package name or version differs
 from the release, a version that already exists, an unclaimed package, or an
@@ -330,13 +336,21 @@ is no post-publication registry readback job: registry metadata and install
 visibility propagate asynchronously and cannot invalidate an immutable
 publication after npm accepts it.
 
+Separately, once the release is installable from the canonical registry, install
+it into an isolated prefix and exercise the real user update path end to end.
+This is product verification, not publication validation: failure routes a new
+reviewed fix and never invalidates, rebuilds, retags, or reruns the immutable
+release. Do not repeat byte comparisons, integrity/SRI checks, packed-version
+checks, source-tree verification, dist-tag readback, or provenance readback that
+the exact-artifact `verify` and publish jobs already completed.
+
 No separate checksum file is needed: the tarball verifier records canonical
 SHA-512 SRI in the artifact report. GitHub's same-run artifact transport and the
 report bind the reviewed candidate without repeated SHA512 choreography.
 
-Rely on npm Trusted Publishing and provenance at publication time. Do not add a
-post-publication registry readback, reconstruct DSSE, in-toto, SLSA,
-workflow-ref, or builder statements locally.
+Rely on npm Trusted Publishing. Do not perform post-publication provenance
+readback or reconstruct DSSE, in-toto, SLSA, workflow-ref, or builder statements
+locally.
 Do not add cross-run tuple variables, cross-run artifact selection, duplicate
 builds, duplicate package verification, checksum bundles, or SBOM ceremony.
 
