@@ -367,11 +367,14 @@ describe('seats store — reset deletes credential AND binding together', () => 
 });
 
 describe('seats store — observation + sole raw-bearer reader (CR#3, SR#5)', () => {
-  it('accepts a persisted seat bearer in the exact 43-character base64url format', async () => {
+  it.each([
+    ['current 43-character writer output', `${'aB0_-'.repeat(8)}abc`],
+    ['44-character contract value', 'x'.repeat(44)],
+    ['1024-character contract maximum', 'x'.repeat(1024)],
+  ])('accepts a persisted seat bearer with %s', async (_case, credential) => {
     const { dir, seats } = await load();
     const path = storeJson(dir);
     const ref = seats.seatRef(SEAT);
-    const credential = `${'aB0_-'.repeat(8)}abc`;
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     writeFileSync(path, JSON.stringify({
       version: 1,

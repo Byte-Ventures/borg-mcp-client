@@ -98,7 +98,7 @@ function emptyStore(): SeatsFile {
 
 const ROLE_CLASSES = new Set(['queen', 'worker']);
 const OPERATION_KINDS = new Set(['seat', 'sibling']);
-const SEAT_BEARER_RE = /^[A-Za-z0-9_-]{43}$/;
+const SEAT_BEARER_RE = /^[A-Za-z0-9_-]{43,1024}$/;
 const rejectedSeatRefs = new Set<string>();
 
 function isNonEmptyString(value: unknown): value is string {

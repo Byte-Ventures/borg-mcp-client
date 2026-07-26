@@ -52,7 +52,7 @@ function emptyStore() {
 }
 const ROLE_CLASSES = new Set(['queen', 'worker']);
 const OPERATION_KINDS = new Set(['seat', 'sibling']);
-const SEAT_BEARER_RE = /^[A-Za-z0-9_-]{43}$/;
+const SEAT_BEARER_RE = /^[A-Za-z0-9_-]{43,1024}$/;
 const rejectedSeatRefs = new Set();
 function isNonEmptyString(value) {
     return typeof value === 'string' && value.length > 0;
