@@ -183,6 +183,10 @@ replacement; only an authoritative eviction mints a fresh bearer and permits a
 remint. (The `retry_key` idempotency key applies to enrollment and cube-creation
 only — never to seat re-attach, which is idempotent through the bearer itself.)
 
+The complete persisted-state model, exact recovery output, duplicate-session
+guard, in-session re-attach contract, and deterministic multi-seat selection
+order are documented in [`SEAT_LIFECYCLE.md`](SEAT_LIFECYCLE.md).
+
 The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` values may include another port but must pass the same trust and endpoint policy.
 
 ## Recovery commands

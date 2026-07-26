@@ -1,0 +1,228 @@
+# Seat Lifecycle and Recovery
+
+This guide describes the local seat behavior shipped by the client. A seat is
+one server-side drone identity plus its client-generated session bearer and
+worktree binding. The bearer and binding are stored together in the private
+`seats.json` store; commands never reconstruct one from the other.
+
+## Stored states
+
+Only two seat states are persisted:
+
+| State | Meaning | What can use it |
+| --- | --- | --- |
+| `pending` | The client persisted a fresh bearer before attach completed. It may be unbound, or bound to a worktree after a recoverable finalize failure. | Retry logic only. It is never hydrated as a live seat. |
+| `active` | Attach completed and the server session metadata, display metadata, and worktree binding were committed together. | Normal coordination and re-attach. |
+
+`revoked`, `superseded`, and `evicted` are server verdicts, not values written
+to `seats.json`. Revocation and supersession do not silently delete local
+state. An authoritative eviction is the sole verdict that permits the terminal
+assimilation flow to replace a rejected seat. `borg reset-local-seat` is the
+explicit offline deletion path.
+
+Seat sessions do not expire. A legacy `expiresAt` field is ignored, and current
+attach responses containing `expires_at` are rejected. An enrollment
+invitation can expire; recovery is to request a new invitation. An expired
+stream cursor is also separate from seat identity and is recovered by resetting
+the cursor and reconnecting.
+
+The whole seat store fails closed if any persisted record is malformed. The
+store reader raises:
+
+```text
+Borg seat store is malformed or has an unsupported version; refusing to read it
+```
+
+The file is not rewritten and no bearer material is included in the error.
+
+## Enrollment, attach, and retry
+
+Enrollment establishes the authority-bound parent credential used to request
+seat attachment. Invitation enrollment persists its retry tuple before network
+I/O; a rejected or expired invitation requires a new invitation.
+
+For a seat attach, the client:
+
+1. Mints a 32-byte base64url session bearer and persists a `pending` record
+   before sending it.
+2. Sends that bearer to the server. The server stores only its digest.
+3. On success, atomically changes the same record to `active` and adds the
+   server metadata and worktree binding.
+
+An ambiguous retry reuses the same persisted bearer, so the server resolves the
+same seat instead of minting a duplicate. A crash after server acceptance but
+before local finalization is also resumed from that pending record. If a
+sibling worktree was already created when activation failed, Borg binds the
+still-pending record to that worktree without making it live; rerunning from
+there resends the same bearer.
+
+## Re-attaching from a terminal
+
+`borg assimilate --here` first resolves this worktree's saved active seat and
+probes it. A live seat is reattached with the identical bearer; its saved role
+is authoritative, and no new drone is minted. The success line is:
+
+```text
+re-attached to existing seat <drone-label> (same session, no new drone minted)
+```
+
+Before relaunch, Borg checks the seat's inbox-monitor PID. A live holder refuses
+the relaunch, names its PID, and gives both the safe fresh-worktree path and the
+explicit one-time override:
+
+```text
+This worktree's Borg seat already has a live session (inbox monitor pid <pid>).
+No agent was launched. Stop the existing session or use a fresh worktree with `borg assimilate --worktree <name>`. If the live monitor is wedged, override once with `borg assimilate --here --force`.
+```
+
+For a stale or missing heartbeat, the first line adds:
+
+```text
+Its heartbeat is <stale|missing>, so the process may be wedged.
+```
+
+A dead, absent, malformed, or unreadable PID file is not evidence of a live
+holder, so ordinary crash recovery proceeds without `--force`. The probe is
+read-only; it does not reap, kill, rewrite, or clear monitor state.
+
+If a second monitor reaches the singleton after launch, it exits successfully
+without tailing and prints:
+
+```text
+borg-inbox-monitor: seat inbox "<path>" is already monitored by a live instance (pid <pid>); yielding — another session likely holds this seat.
+```
+
+The existing monitor remains the sole inbox reader.
+
+## Re-attaching from an agent session
+
+The `borg_assimilate` MCP tool is re-attach-only. It can reuse this worktree's
+saved seat for the requested cube, but it cannot create a seat or switch the
+worktree to another cube.
+
+With no saved identity, it returns:
+
+```text
+◼ This session has no drone seat for this worktree, and in-session borg_assimilate is re-attach-only (it never creates seats — gh#780). To create a seat for cube "<cube>", run `borg assimilate` in a terminal — it spawns the worktree, persists the identity, and launches the agent in one step.
+```
+
+For another cube, it returns:
+
+```text
+◼ This worktree is attached to cube "<active-cube>"; in-session borg_assimilate is re-attach-only and cannot switch to "<requested-cube>" (gh#780). To work in "<requested-cube>", run `borg assimilate` in a terminal from that project (or spawn a fresh worktree for it).
+```
+
+A successful in-session re-attach begins:
+
+```text
+# Re-attached to cube: <cube>
+
+**Drone label:** <drone-label>
+**Seat:** existing identity reused — no new drone minted (gh#780)
+```
+
+If the server no longer accepts the saved seat, the tool fails rather than
+reminting:
+
+```text
+◼ Re-attach failed — this worktree's saved seat is unreachable (likely evicted or its session was revoked). Server said: <server-error>
+Recover by running `borg assimilate` in a terminal to create a fresh seat; in-session borg_assimilate never re-mints (gh#780).
+```
+
+## Terminal verdicts and recovery
+
+### Revoked or superseded session
+
+A pin-matched `SESSION_REVOKED` or `SESSION_REJECTED` is diagnosis only. Attach
+does not mutate the saved seat. The exact output is one of:
+
+```text
+Local session was revoked.
+Next: run borg reset-local-seat, then borg assimilate --host <server> --enroll.
+```
+
+```text
+Local session was superseded by a newer enrollment.
+Next: run borg reset-local-seat, then borg assimilate --host <server> --enroll.
+```
+
+Run the named offline reset, obtain a new invitation, and enroll again.
+
+### Evicted seat
+
+Only an authoritative `410 DRONE_EVICTED` permits replacement of a rejected
+saved seat. If the pre-attach probe establishes eviction, the terminal
+assimilation flow may replace the bearer and attach a fresh seat. Ambiguous
+transport, trust, endpoint, credential, or server failures never authorize that
+replacement.
+
+If the attach itself returns the eviction after re-attach began, Borg does not
+claim recovery. It prints:
+
+```text
+This worktree's saved seat on <server> was evicted. Remove this worktree, or from a fresh worktree run `borg assimilate --host <server>`.
+```
+
+The stream path also treats typed `DRONE_EVICTED` as terminal: it marks that
+exact local candidate rejected, stops retrying that seat, and does not restart
+the loop as though the failure were transient.
+
+### Rejected or expired invitation
+
+An invitation failure is enrollment recovery, not a seat reset:
+
+```text
+The enrollment invitation for <server> was rejected or expired. Ask the server operator for a replacement invitation — the server can stay running: for an unclaimed owner client run `borg-mcp-server owner-invite`; for an ordinary client run `borg-mcp-server client-invite`. Then rerun `borg assimilate --host <server> --enroll`.
+```
+
+## Offline reset
+
+`borg reset-local-seat` clears only the current worktree's saved credential and
+cube binding. It makes no network call, revokes nothing server-side, and leaves
+the server, trust anchor, cube, and sibling worktrees unchanged.
+
+Its shipped help describes the command as:
+
+```text
+borg reset-local-seat (borgmcp <version>) — clear ONLY this worktree's saved local seat
+
+Usage:
+  borg reset-local-seat                 Reset this worktree's saved seat (TTY confirms [y/N])
+  borg reset-local-seat --host <host>   No-op unless this worktree's seat is on <host>
+  borg reset-local-seat --yes           Reset without a prompt (required when non-interactive)
+  borg reset-local-seat --help          Show this help
+```
+
+The command snapshots the exact binding and token-safe bearer observation,
+prompts outside the store lock, then revalidates the same seat before deleting
+it. If another process replaced or reset the seat, the command is an honest
+no-op rather than deleting the successor. A successful reset prints an audit
+line and guidance to obtain a fresh invitation and rerun:
+
+```text
+borg assimilate --host <server> --enroll
+```
+
+## Multiple seats and deterministic selection
+
+An in-place seat uses operation kind `seat` and operation key
+`current-worktree`. A sibling uses operation kind `sibling`; named siblings key
+on their worktree name, while implicit siblings receive a unique operation key.
+These operations derive distinct credential references and distinct bearers.
+Creating a sibling therefore never moves or overwrites the original
+worktree's active seat.
+
+Historical recovery or interrupted operations can leave more than one active
+record bound to one worktree. Every process uses the same total order:
+
+1. A candidate not definitively rejected in this process comes before a
+   rejected, revoked, or evicted candidate.
+2. A `sibling` candidate finalized into this worktree comes before an older
+   in-place `seat` candidate.
+3. Remaining ties use the credential reference's lexical order.
+
+Only `active` records participate in normal selection. A bound `pending` record
+is discoverable only by the convergence path that resends its exact bearer.
+This ordering is shared by SessionStart, kickoff construction, MCP children,
+stream ownership, and normal active-cube hydration, so one process does not
+select different seats for different surfaces.

@@ -16,6 +16,7 @@ export const DOCS_BASE_URL = "https://github.com/Byte-Ventures/borg-mcp-client";
 
 const README_URL = `${DOCS_BASE_URL}#readme`;
 const LOCAL_SERVER_URL = `${DOCS_BASE_URL}/blob/main/docs/LOCAL_SERVER.md`;
+const SEAT_LIFECYCLE_URL = `${DOCS_BASE_URL}/blob/main/docs/SEAT_LIFECYCLE.md`;
 
 export interface DocsSection {
   /** logical topic key */
@@ -70,6 +71,14 @@ export const DOCS_SECTIONS: DocsSection[] = [
     page: "docs/LOCAL_SERVER.md",
     summary: "Connect a client to a self-hosted server: invitations, assimilate --host --enroll, credentials.",
     keywords: ["enroll", "enrollment", "invitation", "invite", "assimilate", "--host", "credential", "credentials", "owner", "join server"],
+  },
+  {
+    slug: "seat-lifecycle",
+    title: "Seat lifecycle and recovery",
+    url: SEAT_LIFECYCLE_URL,
+    page: "docs/SEAT_LIFECYCLE.md",
+    summary: "Saved-seat states, re-attach and reset recovery, duplicate-session guards, and deterministic multi-seat selection.",
+    keywords: ["seat", "lifecycle", "reattach", "re-attach", "reset-local-seat", "evicted", "revoked", "superseded", "inbox monitor", "multiple seats", "silent deafness"],
   },
   {
     slug: "self-hosting",
