@@ -936,11 +936,11 @@ describe('resolveLeanIdentity', () => {
     });
   });
 
-  it('uses local state entirely when result is null (net-free fallback on regen failure)', () => {
+  it('qualifies local state when regen failed instead of presenting it as live identity', () => {
     expect(resolveLeanIdentity(active, null)).toEqual({
-      cubeName: 'local-cube',
-      droneLabel: 'local-label',
-      roleName: 'Builder',
+      cubeName: 'local-cube (last confirmed)',
+      droneLabel: 'local-label (last confirmed)',
+      roleName: 'Builder (last confirmed)',
     });
   });
 

@@ -111,7 +111,7 @@ describe('local ActiveCube session persistence (single store)', () => {
     const { resolveLeanIdentity } = await import('../src/regen-format.js');
     const { buildKickoffWakePathClause } = await import('../src/codex-launch.js');
     const { streamLockPath } = await import('../src/stream-owner.js');
-    expect(resolveLeanIdentity(hook!, null).droneLabel).toBe('builder-live');
+    expect(resolveLeanIdentity(hook!, null).droneLabel).toBe('builder-live (last confirmed)');
     const inboxPath = cubes.inboxPathForDrone(launcher!.cubeId, launcher!.droneId);
     expect(buildKickoffWakePathClause('claude', inboxPath)).toContain(liveDroneId);
     expect(mcp?.sessionToken).toBe(liveBearer);

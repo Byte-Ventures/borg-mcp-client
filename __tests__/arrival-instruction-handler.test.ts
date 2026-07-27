@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   handlers: [] as Array<(request: any) => Promise<any>>,
   appendLog: vi.fn(),
+  whoami: vi.fn(),
 }));
 
 vi.mock('@modelcontextprotocol/sdk/server/index.js', () => ({
@@ -36,14 +37,17 @@ vi.mock('../src/cubes.js', async (importOriginal) => ({
     name: 'test-cube',
     droneId: 'drone-test',
     droneLabel: 'builder-test',
+    roleName: 'Builder',
     sessionToken: 'session-test',
     apiUrl: 'https://127.0.0.1:7091',
     serverTrustIdentity: 'spki-sha256:test',
   })),
+  refreshActiveCubeMetadata: vi.fn(async () => true),
 }));
 vi.mock('../src/remote-client.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/remote-client.js')>()),
   appendLog: state.appendLog,
+  whoami: state.whoami,
 }));
 vi.mock('../src/lifecycle-log-guard.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/lifecycle-log-guard.js')>()),
@@ -53,10 +57,12 @@ vi.mock('../src/lifecycle-log-guard.js', async (importOriginal) => ({
 
 import { main } from '../src/index.js';
 import { __resetRegenSessionState, getDronePlaybook } from '../src/regen-format.js';
+import { _resetDisplayIdentityForTests } from '../src/display-identity.js';
 
 describe('borg_log ARRIVAL instruction ordering', () => {
   afterEach(() => {
     __resetRegenSessionState();
+    _resetDisplayIdentityForTests();
     vi.restoreAllMocks();
   });
 
@@ -84,5 +90,64 @@ describe('borg_log ARRIVAL instruction ordering', () => {
     expect(result).toMatchObject({ isError: true });
     expect(result.content[0].text).toContain('injected append failure');
     expect(getDronePlaybook()).toContain('ARRIVAL:');
+  });
+
+  it('echoes the server-confirmed identity after whoami instead of persisted display fields', async () => {
+    state.handlers.length = 0;
+    state.whoami.mockResolvedValueOnce({
+      cube_id: 'cube-test',
+      cube_name: 'server-cube',
+      drone_id: 'drone-test',
+      drone_label: 'builder-server',
+      role_id: 'role-test',
+      role_name: 'Coordinator',
+      runtime_metadata: null,
+      runtime_metadata_reported: null,
+    });
+    state.appendLog.mockResolvedValueOnce({
+      entry: { id: 'entry-test' },
+      routing: null,
+      unreachableRecipients: [],
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main();
+    const callTool = state.handlers[1];
+    await callTool({ params: { name: 'borg_whoami', arguments: {} } });
+    const result = await callTool({
+      params: {
+        name: 'borg_log',
+        arguments: { message: 'ARRIVAL: online' },
+      },
+    });
+
+    expect(result.content[0].text).toContain('Logged to cube "server-cube" as builder-server.');
+    expect(result.content[0].text).not.toContain('builder-test');
+  });
+
+  it('qualifies later arrival echoes after an identity read fails', async () => {
+    state.handlers.length = 0;
+    state.whoami.mockRejectedValueOnce(new Error('identity read failed'));
+    state.appendLog.mockResolvedValueOnce({
+      entry: { id: 'entry-test' },
+      routing: null,
+      unreachableRecipients: [],
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main();
+    const callTool = state.handlers[1];
+    const failed = await callTool({ params: { name: 'borg_whoami', arguments: {} } });
+    expect(failed).toMatchObject({ isError: true });
+
+    const result = await callTool({
+      params: {
+        name: 'borg_log',
+        arguments: { message: 'ARRIVAL: online' },
+      },
+    });
+    expect(result.content[0].text).toContain(
+      'Logged to cube "test-cube (last confirmed)" as builder-test (last confirmed).',
+    );
   });
 });

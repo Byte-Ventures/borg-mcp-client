@@ -22,7 +22,6 @@ import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import {
   parseHookSource,
   formatLeanOrientation,
-  resolveLeanIdentity,
   type AgentKind,
 } from './regen-format.js';
 import { resolveSessionAgentKind } from './codex-app-wake.js';
@@ -30,6 +29,13 @@ import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { handleVersionFlag } from './version.js';
 import { gateAllowsActivation } from './launch-gate.js';
 import { resolveWorkingRepo } from './working-repo.js';
+import {
+  confirmDisplayIdentity,
+  identityFromRegen,
+  markDisplayIdentityReadFailed,
+  renderDisplayIdentity,
+  seedDisplayIdentity,
+} from './display-identity.js';
 
 /**
  * Drain the SessionStart hook's stdin payload (best-effort). Mirrors
@@ -68,6 +74,7 @@ async function main(): Promise<void> {
     await emitUnassimilatedNotice();
     return;
   }
+  seedDisplayIdentity(active);
 
   const inboxPath = inboxPathForDrone(active.cubeId, active.droneId);
   const monitorStateRoot = monitorStateRootForWorktree(findProjectRoot());
@@ -90,10 +97,12 @@ async function main(): Promise<void> {
       workingRepo: resolveWorkingRepo(),
       serverTrustIdentity: active.serverTrustIdentity,
     });
+    confirmDisplayIdentity(active, identityFromRegen(result));
   } catch {
+    markDisplayIdentityReadFailed(active);
     result = null;
   }
-  const identity = resolveLeanIdentity(active, result);
+  const identity = renderDisplayIdentity(active);
   process.stdout.write(
     formatLeanOrientation({ ...identity, inboxPath, monitorStateRoot, agentKind, source }) + '\n'
   );

@@ -95,14 +95,15 @@ export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
  * network `regen()` result and falling back per-field to the local
  * `getActiveCube` state. When `result` is null — the net-free fallback path
  * taken on a `regen()` network failure — identity comes entirely from local
- * state, so a weak drone that hits a SessionStart network blip still gets
- * oriented (with its wake-path arming) instead of left dormant.
+ * state, explicitly qualified as last-confirmed so a weak drone still gets
+ * oriented without presenting a failed identity read as current server truth.
  */
 export function resolveLeanIdentity(active, result) {
+    const qualifier = result === null ? ' (last confirmed)' : '';
     return {
-        cubeName: result?.cube?.name ?? active.name,
-        droneLabel: result?.drone?.label ?? active.droneLabel,
-        roleName: result?.role?.name ?? active.roleName ?? null,
+        cubeName: result?.cube?.name ?? `${active.name}${qualifier}`,
+        droneLabel: result?.drone?.label ?? `${active.droneLabel}${qualifier}`,
+        roleName: result?.role?.name ?? (active.roleName ? `${active.roleName}${qualifier}` : null),
     };
 }
 /**

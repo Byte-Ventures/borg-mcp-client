@@ -17,6 +17,7 @@ import {
   reassignDrone,
   type LocalManageOperation,
 } from './remote-client.js';
+import { confirmDisplayIdentity } from './display-identity.js';
 
 interface ManagedCube {
   id: string;
@@ -95,6 +96,11 @@ export async function runReassignDroneTool(
 
   let warning = '';
   if (drone.id === active.droneId) {
+    confirmDisplayIdentity(active, {
+      cubeName: cube.name,
+      droneLabel: drone.label,
+      roleName: role.name,
+    });
     try {
       const refreshed = await deps.refreshActiveCubeMetadata(activeCubeWithFreshRegenIdentity(active, {
         cube,

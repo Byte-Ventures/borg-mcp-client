@@ -113,6 +113,14 @@ import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
 import { renderSyncRolesResult } from './sync-roles-render.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import {
+  confirmDisplayIdentity,
+  identityFromRegen,
+  markDisplayIdentityReadFailed,
+  renderDisplayIdentity,
+  seedDisplayIdentity,
+  withRenderedRegenIdentity,
+} from './display-identity.js';
+import {
   resolveSessionAgentKind,
 } from './codex-app-wake.js';
 import { resolveReportableSessionAgentKind } from './agent-runtime.js';
@@ -369,16 +377,25 @@ export async function main() {
               ],
             };
           }
+          seedDisplayIdentity(active);
           const since = typeof args?.since === 'string' ? args.since : undefined;
           const mode = args?.mode === 'lite' ? 'lite' : 'full';
           const reportedModel = typeof args?.model === 'string' ? args.model : undefined;
-          const result = await regen(active.sessionToken, active.apiUrl, {
-            since,
-            reportedModel,
-            agentKind: resolveReportableSessionAgentKind(),
-            workingRepo: resolveWorkingRepo(),
-            serverTrustIdentity: active.serverTrustIdentity,
-          });
+          let result: Awaited<ReturnType<typeof regen>>;
+          try {
+            result = await regen(active.sessionToken, active.apiUrl, {
+              since,
+              reportedModel,
+              agentKind: resolveReportableSessionAgentKind(),
+              workingRepo: resolveWorkingRepo(),
+              serverTrustIdentity: active.serverTrustIdentity,
+            });
+          } catch (error) {
+            markDisplayIdentityReadFailed(active);
+            throw error;
+          }
+          const displayIdentity = confirmDisplayIdentity(active, identityFromRegen(result));
+          const displayedResult = withRenderedRegenIdentity(result, displayIdentity);
           const freshActive = activeCubeWithFreshRegenIdentity(active, result);
           if (freshActive !== active) {
             await refreshActiveCubeMetadata(freshActive);
@@ -407,8 +424,8 @@ export async function main() {
             ? formatWakePathPrefix({
                 inboxPath,
                 monitorStateRoot,
-                droneLabel: regenWakePathDroneLabel(result, freshActive.droneLabel),
-                cubeName: freshActive.name,
+                droneLabel: regenWakePathDroneLabel(displayedResult, displayIdentity.droneLabel),
+                cubeName: displayIdentity.cubeName,
               })
             : '';
 
@@ -427,7 +444,7 @@ export async function main() {
             }
           } catch { /* never break regen */ }
 
-          return { content: [{ type: 'text', text: versionHeader + prefix + formatRegenMarkdown(result, { mode }) }] };
+          return { content: [{ type: 'text', text: versionHeader + prefix + formatRegenMarkdown(displayedResult, { mode }) }] };
         }
 
         case 'borg_assimilate': {
@@ -451,27 +468,31 @@ export async function main() {
           // server-validated regen path (SR cond-4: no fabricated success
           // — an evicted/revoked seat FAILS server-side and is surfaced).
           try {
+            seedDisplayIdentity(active!);
             const result = await regen(active!.sessionToken, active!.apiUrl, {
               agentKind: resolveReportableSessionAgentKind(),
               workingRepo: resolveWorkingRepo(),
               serverTrustIdentity: active!.serverTrustIdentity,
             });
+            const displayIdentity = confirmDisplayIdentity(active!, identityFromRegen(result));
+            const displayedResult = withRenderedRegenIdentity(result, displayIdentity);
             const freshActive = activeCubeWithFreshRegenIdentity(active!, result);
             if (freshActive !== active) {
               await refreshActiveCubeMetadata(freshActive);
             }
             const header = [
-              `# Re-attached to cube: ${freshActive.name}`,
+              `# Re-attached to cube: ${displayIdentity.cubeName}`,
               ``,
-              `**Drone label:** ${freshActive.droneLabel}`,
+              `**Drone label:** ${displayIdentity.droneLabel}`,
               `**Seat:** existing identity reused — no new drone minted (gh#780)`,
               ``,
               ``,
             ].join('\n');
             return {
-              content: [{ type: 'text', text: header + formatRegenMarkdown(result, { mode: 'full' }) }],
+              content: [{ type: 'text', text: header + formatRegenMarkdown(displayedResult, { mode: 'full' }) }],
             };
           } catch (err: any) {
+            markDisplayIdentityReadFailed(active!);
             const failure = reattachFailureMessage(err ?? {});
             return { content: [{ type: 'text', text: failure }], isError: true };
           }
@@ -506,11 +527,34 @@ export async function main() {
 
         case 'borg_whoami': {
           const active = await requireActiveCube();
-          const result = await whoami(
-            active.sessionToken,
-            active.apiUrl,
-            active.serverTrustIdentity,
-          );
+          seedDisplayIdentity(active);
+          let result: Awaited<ReturnType<typeof whoami>>;
+          try {
+            result = await whoami(
+              active.sessionToken,
+              active.apiUrl,
+              active.serverTrustIdentity,
+            );
+          } catch (error) {
+            markDisplayIdentityReadFailed(active);
+            throw error;
+          }
+          confirmDisplayIdentity(active, {
+            cubeName: result.cube_name,
+            droneLabel: result.drone_label,
+            roleName: result.role_name,
+          });
+          try {
+            await refreshActiveCubeMetadata({
+              ...active,
+              name: result.cube_name,
+              droneLabel: result.drone_label,
+              roleName: result.role_name,
+            });
+          } catch {
+            // The invocation-local server truth remains authoritative even if
+            // the display-only persistence refresh cannot be written.
+          }
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
 
@@ -729,6 +773,8 @@ export async function main() {
           if (!message || typeof message !== 'string') throw new Error('message is required');
           const active = await getActiveCube();
           if (!active) throw new Error('Not assimilated to a cube. Use borg_assimilate <cube-name> first.');
+          seedDisplayIdentity(active);
+          const displayIdentity = renderDisplayIdentity(active);
           const lifecycleSignal = lifecycleSignalForMessage(message);
           if (lifecycleSignal) {
             const decision = await shouldSuppressLifecycleLog(active, message);
@@ -739,7 +785,7 @@ export async function main() {
                 content: [
                   {
                     type: 'text',
-                    text: `Suppressed duplicate ${decision.signal?.toUpperCase()} lifecycle log for ${active.droneLabel}; recent cube log already contains this signal.`,
+                    text: `Suppressed duplicate ${decision.signal?.toUpperCase()} lifecycle log for ${displayIdentity.droneLabel}; recent cube log already contains this signal.`,
                   },
                 ],
               };
@@ -773,7 +819,7 @@ export async function main() {
                 .map((r) => r.label)
                 .join(', ')}. Message delivered — they'll read it when they return.`
             : '';
-          const text = `Logged to cube "${active.name}" as ${active.droneLabel}. (entry id: ${result.entry.id})${echo}${unreachable}`;
+          const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${echo}${unreachable}`;
           return { content: [{ type: 'text', text }] };
         }
 
