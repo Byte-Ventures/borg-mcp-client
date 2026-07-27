@@ -5,6 +5,7 @@ export interface PublishedPackage {
     version: string;
     integrity: string;
     sharedVersion: string;
+    manifestShape?: string;
 }
 export interface InstalledPackage {
     name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE;
