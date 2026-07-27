@@ -8,13 +8,18 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildDefaultUpdateDeps } from '../src/update-cmd.js';
 
 const roots: string[] = [];
 const originalPath = process.env.PATH;
 
-function fakeNpm(registry: string) {
+function fakeNpm(registry: string, manifest: unknown = {
+  name: 'borgmcp',
+  version: '2.3.0',
+  'dist.integrity': `sha512-${Buffer.alloc(64, 1).toString('base64')}`,
+  'dependencies.borgmcp-shared': '0.6.5',
+}) {
   const root = mkdtempSync(join(tmpdir(), 'borg-update-npm-context-'));
   roots.push(root);
   const bin = join(root, 'bin');
@@ -36,25 +41,26 @@ const state = JSON.parse(readFileSync(${JSON.stringify(statePath)}, 'utf8'));
 if (args.join(' ') === 'config get registry') process.stdout.write(state.registry + '\\n');
 else if (args.join(' ') === 'prefix --global') process.stdout.write(state.prefix + '\\n');
 else if (args.join(' ') === 'root --global') process.stdout.write(state.prefix + '/lib/node_modules\\n');
-else if (args[0] === 'view') process.stdout.write(JSON.stringify({
-  name: 'borgmcp',
-  version: '2.3.0',
-  'dist.integrity': 'sha512-${Buffer.alloc(64, 1).toString('base64')}',
-  'dependencies.borgmcp-shared': '0.6.5'
-}));
 else if (args[0] === 'install') process.exit(0);
 else process.exit(91);
 `);
   chmodSync(npmPath, 0o755);
   process.env.PATH = `${bin}${delimiter}${originalPath ?? ''}`;
+  const fetch = vi.fn(async () => new Response(JSON.stringify(manifest), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  }));
+  vi.stubGlobal('fetch', fetch);
   return {
     log: () => readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]),
     setPrefix: (prefix: string) => writeFileSync(statePath, JSON.stringify({ registry, prefix })),
     prefixB,
+    fetch,
   };
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   process.env.PATH = originalPath;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
