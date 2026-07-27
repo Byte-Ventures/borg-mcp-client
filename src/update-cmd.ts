@@ -150,8 +150,8 @@ function renderServerState(
   );
 }
 
-function isExactSemver(value: string): boolean {
-  return EXACT_SEMVER.test(value);
+function isExactSemver(value: unknown): boolean {
+  return typeof value === 'string' && EXACT_SEMVER.test(value);
 }
 
 function isCanonicalSha512Integrity(value: unknown): boolean {

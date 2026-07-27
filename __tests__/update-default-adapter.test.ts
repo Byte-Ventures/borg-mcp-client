@@ -133,6 +133,23 @@ describe('default npm update adapter', () => {
       .rejects.toThrow(/invalid borgmcp manifest identity/);
   });
 
+  it('fails closed when the registry manifest version is a semver-coercible array', async () => {
+    fakeNpm('https://registry.npmjs.org/', {
+      name: 'borgmcp',
+      version: ['2.3.0'],
+      dist: {
+        integrity: `sha512-${Buffer.alloc(64, 1).toString('base64')}`,
+      },
+      dependencies: {
+        'borgmcp-shared': '0.6.5',
+      },
+    });
+    const deps = buildDefaultUpdateDeps();
+
+    await expect(deps.publishedPackage('borgmcp', 'latest'))
+      .rejects.toThrow(/invalid borgmcp manifest identity/);
+  });
+
   it.each([
     ['missing integrity', {
       name: 'borgmcp',
@@ -145,6 +162,12 @@ describe('default npm update adapter', () => {
       version: '2.3.0',
       dist: { integrity: `sha512-${Buffer.alloc(64, 1).toString('base64')}` },
       dependencies: { 'borgmcp-shared': null },
+    }],
+    ['semver-coercible shared dependency array', {
+      name: 'borgmcp',
+      version: '2.3.0',
+      dist: { integrity: `sha512-${Buffer.alloc(64, 1).toString('base64')}` },
+      dependencies: { 'borgmcp-shared': ['0.6.5'] },
     }],
   ])('fails closed with a designed field error for a nested manifest with %s', async (testCase, manifest) => {
     fakeNpm('https://registry.npmjs.org/', manifest);
