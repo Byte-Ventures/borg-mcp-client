@@ -154,8 +154,8 @@ function isExactSemver(value: string): boolean {
   return EXACT_SEMVER.test(value);
 }
 
-function isCanonicalSha512Integrity(value: string): boolean {
-  if (!value.startsWith('sha512-') || value.includes(' ')) return false;
+function isCanonicalSha512Integrity(value: unknown): boolean {
+  if (typeof value !== 'string' || !value.startsWith('sha512-') || value.includes(' ')) return false;
   const encoded = value.slice('sha512-'.length);
   try {
     const bytes = Buffer.from(encoded, 'base64');
@@ -893,7 +893,7 @@ async function defaultPublishedPackage(
   // contract directly rather than parsing npm CLI presentation output.
   void context;
   const endpoint = new URL(`${encodeURIComponent(name)}/${encodeURIComponent(version)}`, CANONICAL_NPM_REGISTRY);
-  let manifest: Record<string, unknown>;
+  let published: PublishedPackage;
   try {
     const response = await fetch(endpoint, {
       headers: { Accept: 'application/json' },
@@ -904,16 +904,20 @@ async function defaultPublishedPackage(
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('response was not a manifest object');
     }
-    manifest = parsed as Record<string, unknown>;
+    const manifest = parsed as Record<string, unknown>;
+    const dist = manifest.dist as Record<string, unknown> | undefined;
+    const dependencies = manifest.dependencies as Record<string, unknown> | undefined;
+    published = {
+      name: manifest.name as PublishedPackage['name'],
+      version: manifest.version as string,
+      integrity: dist?.integrity as string,
+      sharedVersion: dependencies?.[SHARED_PACKAGE] as string,
+    };
   } catch {
     throw new Error(`registry manifest lookup failed for ${name}@${version}`);
   }
-  return {
-    name: manifest.name as PublishedPackage['name'],
-    version: manifest.version as string,
-    integrity: manifest['dist.integrity'] as string,
-    sharedVersion: manifest[`dependencies.${SHARED_PACKAGE}`] as string,
-  };
+  validatePublishedPackage(published, name);
+  return published;
 }
 
 async function defaultConfirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'> {

@@ -49,7 +49,7 @@ function isExactSemver(value) {
     return EXACT_SEMVER.test(value);
 }
 function isCanonicalSha512Integrity(value) {
-    if (!value.startsWith('sha512-') || value.includes(' '))
+    if (typeof value !== 'string' || !value.startsWith('sha512-') || value.includes(' '))
         return false;
     const encoded = value.slice('sha512-'.length);
     try {
@@ -689,7 +689,7 @@ async function defaultPublishedPackage(name, version, context) {
     // contract directly rather than parsing npm CLI presentation output.
     void context;
     const endpoint = new URL(`${encodeURIComponent(name)}/${encodeURIComponent(version)}`, CANONICAL_NPM_REGISTRY);
-    let manifest;
+    let published;
     try {
         const response = await fetch(endpoint, {
             headers: { Accept: 'application/json' },
@@ -701,17 +701,21 @@ async function defaultPublishedPackage(name, version, context) {
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
             throw new Error('response was not a manifest object');
         }
-        manifest = parsed;
+        const manifest = parsed;
+        const dist = manifest.dist;
+        const dependencies = manifest.dependencies;
+        published = {
+            name: manifest.name,
+            version: manifest.version,
+            integrity: dist?.integrity,
+            sharedVersion: dependencies?.[SHARED_PACKAGE],
+        };
     }
     catch {
         throw new Error(`registry manifest lookup failed for ${name}@${version}`);
     }
-    return {
-        name: manifest.name,
-        version: manifest.version,
-        integrity: manifest['dist.integrity'],
-        sharedVersion: manifest[`dependencies.${SHARED_PACKAGE}`],
-    };
+    validatePublishedPackage(published, name);
+    return published;
 }
 async function defaultConfirm(message) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
