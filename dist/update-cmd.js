@@ -13,6 +13,8 @@ const SHARED_PACKAGE = 'borgmcp-shared';
 const CANONICAL_NPM_REGISTRY = 'https://registry.npmjs.org/';
 const REENTRY_ENV = 'BORG_UPDATE_REENTRY';
 const MAX_CAPTURE_BYTES = 1024 * 1024;
+const MAX_MANIFEST_SHAPE_KEYS = 8;
+const MAX_MANIFEST_SHAPE_KEY_LENGTH = 48;
 const EXACT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 function signalExitCode(error) {
     return error instanceof CommandSignalError ? error.exitCode : null;
@@ -722,11 +724,21 @@ function normalizeNpmViewManifest(value, name, version) {
     }
     const manifest = value;
     const keys = Object.keys(manifest).sort();
-    const renderedKeys = keys.slice(0, 8).join(',');
+    const renderedKeys = keys
+        .slice(0, MAX_MANIFEST_SHAPE_KEYS)
+        .map(renderManifestShapeKey)
+        .join(',');
     return {
         manifest,
-        shape: `object keys=[${renderedKeys}${keys.length > 8 ? ',…' : ''}]`,
+        shape: `object keys=[${renderedKeys}${keys.length > MAX_MANIFEST_SHAPE_KEYS ? ',…' : ''}]`,
     };
+}
+function renderManifestShapeKey(key) {
+    // JSON escaping makes control characters printable before this reaches stderr.
+    const escaped = JSON.stringify(key).slice(1, -1);
+    return escaped.length <= MAX_MANIFEST_SHAPE_KEY_LENGTH
+        ? escaped
+        : `${escaped.slice(0, MAX_MANIFEST_SHAPE_KEY_LENGTH - 1)}…`;
 }
 async function defaultConfirm(message) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });

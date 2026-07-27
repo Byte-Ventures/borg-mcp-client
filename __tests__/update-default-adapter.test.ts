@@ -122,6 +122,19 @@ describe('default npm update adapter', () => {
     expect(npm.log().some(([command]) => command === 'view')).toBe(true);
   });
 
+  it('bounds and escapes registry-supplied manifest shape keys', async () => {
+    const longKey = `x${'y'.repeat(100)}`;
+    const controlKey = '\n\u001b]0;unsafe\u0007';
+    const npm = fakeNpm('https://registry.npmjs.org/', { [longKey]: {}, [controlKey]: {} });
+
+    const manifest = await buildDefaultUpdateDeps().publishedPackage('borgmcp', 'latest');
+    expect(manifest.manifestShape).toMatch(/^object keys=\[.{1,97}\]$/u);
+    expect(manifest.manifestShape).not.toContain('\n');
+    expect(manifest.manifestShape).not.toContain('\u001b');
+    expect(manifest.manifestShape).toContain('\\n\\u001b');
+    expect(npm.log().some(([command]) => command === 'view')).toBe(true);
+  });
+
   it('rejects ambiguous multi-element manifest arrays', async () => {
     const npm = fakeNpm('https://registry.npmjs.org/', [{}, {}]);
 
