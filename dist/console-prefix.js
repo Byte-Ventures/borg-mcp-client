@@ -9,9 +9,9 @@
  * insufficient — the Queen reads the active terminal's output stream,
  * not its title bar.
  *
- * This module exports a one-shot initializer that resolves the prefix
- * from the local cube state cache, plus a synchronous getter that
- * call sites use to wrap each console.error.
+ * This module exports a one-shot initializer that seeds the process-local
+ * display identity from the selected seat, plus a synchronous getter that
+ * follows later server confirmations and wraps each console.error.
  *
  * Format (matches the terminal-title.ts middle-dot convention so
  * surfaces stay internally consistent):
@@ -26,42 +26,44 @@
 import { basename } from 'node:path';
 import chalk from 'chalk';
 import { getActiveCube } from './cubes.js';
-let cachedPrefix = null;
+import { _resetDisplayIdentityForTests, currentDisplayIdentity, seedDisplayIdentity, } from './display-identity.js';
+let initialized = false;
 /** Neutral prefix for a not-yet-assimilated session (gh#818 P1). */
 function unassimilatedPrefix() {
     return `[borg · ${basename(process.cwd())}]`;
 }
 /**
- * Resolve the drone-self-identification prefix from cube state and
- * cache it for subsequent synchronous reads. Idempotent — calling
- * multiple times returns the same value. Falls back silently to the
- * unassimilated shape on any read error so console emission is never
- * blocked.
+ * Resolve the drone-self-identification prefix from cube state and seed the
+ * shared display source. Idempotent — later calls do not re-read the store,
+ * while the synchronous prefix still follows server-confirmed display changes.
+ * Falls back silently on any read error so console emission is never blocked.
  */
 export async function initConsolePrefix() {
-    if (cachedPrefix !== null)
-        return cachedPrefix;
+    if (initialized)
+        return droneIdPrefix();
     try {
         const active = await getActiveCube();
         if (active?.droneLabel && active?.name) {
-            cachedPrefix = `[${active.droneLabel} · ${active.name}]`;
-            return cachedPrefix;
+            seedDisplayIdentity(active);
+            initialized = true;
+            return droneIdPrefix();
         }
     }
     catch {
         // Fall through to unassimilated fallback.
     }
-    cachedPrefix = unassimilatedPrefix();
-    return cachedPrefix;
+    initialized = true;
+    return unassimilatedPrefix();
 }
 /**
- * Synchronous prefix getter. Returns the cached value if initialized,
- * otherwise the unassimilated fallback — safe to call before
+ * Synchronous prefix getter. Returns the current process-local display value
+ * if initialized, otherwise the unassimilated fallback — safe to call before
  * initConsolePrefix() resolves.
  */
 export function droneIdPrefix() {
-    if (cachedPrefix !== null)
-        return cachedPrefix;
+    const identity = currentDisplayIdentity();
+    if (initialized && identity)
+        return `[${identity.droneLabel} · ${identity.cubeName}]`;
     return unassimilatedPrefix();
 }
 /**
@@ -91,6 +93,7 @@ export function cerr(...args) {
     }
 }
 export function _resetCachedPrefixForTests() {
-    cachedPrefix = null;
+    initialized = false;
+    _resetDisplayIdentityForTests();
 }
 //# sourceMappingURL=console-prefix.js.map

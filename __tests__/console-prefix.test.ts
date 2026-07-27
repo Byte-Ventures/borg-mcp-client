@@ -20,6 +20,7 @@ import {
   cerr,
   _resetCachedPrefixForTests,
 } from '../src/console-prefix.js';
+import { confirmDisplayIdentity } from '../src/display-identity.js';
 
 beforeEach(() => {
   _resetCachedPrefixForTests();
@@ -56,6 +57,26 @@ describe('initConsolePrefix — cube-cache-hit', () => {
     const prefix = await initConsolePrefix();
     expect(prefix).toBe('[drone-x · cube-a]');
     expect(droneIdPrefix()).toBe('[drone-x · cube-a]');
+  });
+
+  it('renders later server truth from the shared process display source', async () => {
+    const active = {
+      cubeId: '00000000-0000-0000-0000-000000000001',
+      droneId: '00000000-0000-0000-0000-000000000002',
+      name: 'cube-a',
+      sessionToken: 't',
+      droneLabel: 'drone-old',
+      apiUrl: 'https://x',
+    };
+    (getActiveCube as any).mockResolvedValue(active);
+    await initConsolePrefix();
+
+    confirmDisplayIdentity(active, {
+      cubeName: 'cube-server',
+      droneLabel: 'drone-server',
+    });
+
+    expect(droneIdPrefix()).toBe('[drone-server · cube-server]');
   });
 });
 

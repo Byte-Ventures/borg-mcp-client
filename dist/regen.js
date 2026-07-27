@@ -18,12 +18,13 @@
 import { regen, listCubes } from './remote-client.js';
 import { findProjectRoot, getActiveCube, inboxPathForDrone } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
-import { parseHookSource, formatLeanOrientation, resolveLeanIdentity, } from './regen-format.js';
+import { parseHookSource, formatLeanOrientation, } from './regen-format.js';
 import { resolveSessionAgentKind } from './codex-app-wake.js';
 import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { handleVersionFlag } from './version.js';
 import { gateAllowsActivation } from './launch-gate.js';
 import { resolveWorkingRepo } from './working-repo.js';
+import { confirmDisplayIdentity, identityFromRegen, markDisplayIdentityReadFailed, renderDisplayIdentity, seedDisplayIdentity, } from './display-identity.js';
 /**
  * Drain the SessionStart hook's stdin payload (best-effort). Mirrors
  * log-audit.ts: a TTY / manual run has no piped payload, so return ''
@@ -62,6 +63,7 @@ async function main() {
         await emitUnassimilatedNotice();
         return;
     }
+    seedDisplayIdentity(active);
     const inboxPath = inboxPathForDrone(active.cubeId, active.droneId);
     const monitorStateRoot = monitorStateRootForWorktree(findProjectRoot());
     const agentKind = resolveSessionAgentKind();
@@ -82,11 +84,13 @@ async function main() {
             workingRepo: resolveWorkingRepo(),
             serverTrustIdentity: active.serverTrustIdentity,
         });
+        confirmDisplayIdentity(active, identityFromRegen(result));
     }
     catch {
+        markDisplayIdentityReadFailed(active);
         result = null;
     }
-    const identity = resolveLeanIdentity(active, result);
+    const identity = renderDisplayIdentity(active);
     process.stdout.write(formatLeanOrientation({ ...identity, inboxPath, monitorStateRoot, agentKind, source }) + '\n');
 }
 /**

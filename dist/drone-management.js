@@ -1,6 +1,7 @@
 import { activeCubeWithFreshRegenIdentity, getActiveCube, refreshActiveCubeMetadata, } from './cubes.js';
 import { assertUuidShape, formatEvictDroneSuccess, formatReassignDroneSuccess, resolveDroneIdByLabel, } from './evict-drone.js';
 import { evictDrone, getCubeForManagement, reassignDrone, } from './remote-client.js';
+import { confirmDisplayIdentity } from './display-identity.js';
 const defaultDeps = {
     getActiveCube,
     getCubeForManagement,
@@ -45,6 +46,11 @@ export async function runReassignDroneTool(input, deps = defaultDeps) {
     }
     let warning = '';
     if (drone.id === active.droneId) {
+        confirmDisplayIdentity(active, {
+            cubeName: cube.name,
+            droneLabel: drone.label,
+            roleName: role.name,
+        });
         try {
             const refreshed = await deps.refreshActiveCubeMetadata(activeCubeWithFreshRegenIdentity(active, {
                 cube,
