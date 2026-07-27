@@ -46,7 +46,7 @@ function renderServerState(client, server, status, update) {
         `  server update: ${updateLine}\n`);
 }
 function isExactSemver(value) {
-    return EXACT_SEMVER.test(value);
+    return typeof value === 'string' && EXACT_SEMVER.test(value);
 }
 function isCanonicalSha512Integrity(value) {
     if (typeof value !== 'string' || !value.startsWith('sha512-') || value.includes(' '))

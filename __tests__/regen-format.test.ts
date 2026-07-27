@@ -102,6 +102,15 @@ describe('#921 de-template — universal layer is template-agnostic (STARTER con
     // "finished → what do I post?" — STARTER's OWN signals come from its role-text
     expect(regen).toContain('DONE');
     expect(regen).toContain('REVIEW-READY');
+    expect(regen).toContain(
+      'Holding unfinished assigned work? Resume it now, in this turn.'
+    );
+    expect(regen).toContain(
+      'A work item is finished when you post its completion or blocked signal, not when you answer a question.'
+    );
+    expect(regen).not.toContain(
+      'Nothing actionable + no prompt → done; wait for next wake.'
+    );
     // "blocked → escalate to whom?" — generic coordinating-role (universal) is actionable for a non-sw-dev cube
     expect(regen).toContain('coordinating role');
     // no sw-dev-EXCLUSIVE workflow-signal bled from the universal layer (getDronePlaybook +
@@ -115,6 +124,26 @@ describe('#921 de-template — universal layer is template-agnostic (STARTER con
 });
 
 describe('getDronePlaybook', () => {
+  it('keeps unfinished assigned work active after handling the current wake (gh#174)', () => {
+    const playbook = getDronePlaybook();
+
+    expect(playbook).toContain(
+      '5. Holding unfinished assigned work? Resume it now, in this turn. An acknowledgement'
+    );
+    expect(playbook).toContain(
+      'or a status reply must never be the last action of a turn while work is outstanding.'
+    );
+    expect(playbook).toContain(
+      '6. Nothing actionable, no prompt, and no work of your own outstanding → done; wait for next wake.'
+    );
+    expect(playbook).not.toContain(
+      '5. Nothing actionable + no prompt → done; wait for next wake.'
+    );
+    expect(playbook).toContain(
+      'A work item is finished when you post its completion or blocked signal, not when you answer a question.'
+    );
+  });
+
   it('de-templates idle/escalation guidance to a generic coordinating role — no sw-dev role-name, no hard-coded label (gh#921)', () => {
     const playbook = getDronePlaybook();
 
