@@ -49,7 +49,7 @@ function isExactSemver(value) {
     return EXACT_SEMVER.test(value);
 }
 function isCanonicalSha512Integrity(value) {
-    if (!value.startsWith('sha512-') || value.includes(' '))
+    if (typeof value !== 'string' || !value.startsWith('sha512-') || value.includes(' '))
         return false;
     const encoded = value.slice('sha512-'.length);
     try {
@@ -132,7 +132,7 @@ export function parseUpdateArgs(args, reentryAuthorized = false) {
 }
 function validatePublishedPackage(value, expectedName) {
     if (value.name !== expectedName || !isExactSemver(value.version)) {
-        throw new Error(`registry returned an invalid ${expectedName} manifest identity`);
+        throw new Error(`registry returned an invalid ${expectedName} manifest identity (missing or invalid name/version field)`);
     }
     if (!isCanonicalSha512Integrity(value.integrity)) {
         throw new Error(`registry returned invalid ${expectedName} SHA-512 integrity`);
@@ -318,11 +318,12 @@ export async function runUpdate(options, deps) {
             ? renderReentryPreflightFailure(error, options.target)
             : (`${errorMessage(error, 'Update preflight failed')}\n` +
                 `Observed update state:\n` +
-                `  client: unavailable (preflight incomplete)\n` +
-                `  server controller: unavailable (preflight incomplete)\n` +
+                `  client: not inspected (registry preflight incomplete)\n` +
+                `  server controller: not inspected (registry preflight incomplete)\n` +
                 `  prepared runtime: not inspected\n` +
                 `  running runtime: not inspected\n` +
-                `No mutation was attempted.\n`));
+                `No mutation was attempted.\n` +
+                `Manual fallback: npm install -g ${CLIENT_PACKAGE} && npm install -g ${SERVER_PACKAGE}\n`));
         return interrupted ?? 1;
     }
     const serverWasPresent = options.target?.serverPresent ?? discoveredServer !== null;
@@ -684,25 +685,37 @@ async function inspectNpmPackage(name, binName, required, context) {
 async function defaultPublishedPackage(name, version, context) {
     if (version !== 'latest' && !isExactSemver(version))
         throw new Error('invalid registry target version');
-    const result = await runCommand(context.commandPath, [
-        'view',
-        `${name}@${version}`,
-        'name',
-        'version',
-        'dist.integrity',
-        `dependencies.${SHARED_PACKAGE}`,
-        `--registry=${CANONICAL_NPM_REGISTRY}`,
-        '--json',
-    ]);
-    if (result.code !== 0)
-        throw new Error(`registry lookup failed for ${name}@${version}`);
-    const manifest = JSON.parse(result.stdout);
-    return {
-        name: manifest.name,
-        version: manifest.version,
-        integrity: manifest['dist.integrity'],
-        sharedVersion: manifest[`dependencies.${SHARED_PACKAGE}`],
-    };
+    // Keep npm context validation above, but read the registry's typed manifest
+    // contract directly rather than parsing npm CLI presentation output.
+    void context;
+    const endpoint = new URL(`${encodeURIComponent(name)}/${encodeURIComponent(version)}`, CANONICAL_NPM_REGISTRY);
+    let published;
+    try {
+        const response = await fetch(endpoint, {
+            headers: { Accept: 'application/json' },
+            redirect: 'error',
+        });
+        if (!response.ok)
+            throw new Error(`HTTP ${response.status}`);
+        const parsed = await response.json();
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('response was not a manifest object');
+        }
+        const manifest = parsed;
+        const dist = manifest.dist;
+        const dependencies = manifest.dependencies;
+        published = {
+            name: manifest.name,
+            version: manifest.version,
+            integrity: dist?.integrity,
+            sharedVersion: dependencies?.[SHARED_PACKAGE],
+        };
+    }
+    catch {
+        throw new Error(`registry manifest lookup failed for ${name}@${version}`);
+    }
+    validatePublishedPackage(published, name);
+    return published;
 }
 async function defaultConfirm(message) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });

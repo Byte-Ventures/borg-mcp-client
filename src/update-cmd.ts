@@ -154,8 +154,8 @@ function isExactSemver(value: string): boolean {
   return EXACT_SEMVER.test(value);
 }
 
-function isCanonicalSha512Integrity(value: string): boolean {
-  if (!value.startsWith('sha512-') || value.includes(' ')) return false;
+function isCanonicalSha512Integrity(value: unknown): boolean {
+  if (typeof value !== 'string' || !value.startsWith('sha512-') || value.includes(' ')) return false;
   const encoded = value.slice('sha512-'.length);
   try {
     const bytes = Buffer.from(encoded, 'base64');
@@ -242,7 +242,7 @@ function validatePublishedPackage(
   expectedName: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
 ): void {
   if (value.name !== expectedName || !isExactSemver(value.version)) {
-    throw new Error(`registry returned an invalid ${expectedName} manifest identity`);
+    throw new Error(`registry returned an invalid ${expectedName} manifest identity (missing or invalid name/version field)`);
   }
   if (!isCanonicalSha512Integrity(value.integrity)) {
     throw new Error(`registry returned invalid ${expectedName} SHA-512 integrity`);
@@ -471,11 +471,12 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       : (
         `${errorMessage(error, 'Update preflight failed')}\n` +
         `Observed update state:\n` +
-        `  client: unavailable (preflight incomplete)\n` +
-        `  server controller: unavailable (preflight incomplete)\n` +
+        `  client: not inspected (registry preflight incomplete)\n` +
+        `  server controller: not inspected (registry preflight incomplete)\n` +
         `  prepared runtime: not inspected\n` +
         `  running runtime: not inspected\n` +
-        `No mutation was attempted.\n`
+        `No mutation was attempted.\n` +
+        `Manual fallback: npm install -g ${CLIENT_PACKAGE} && npm install -g ${SERVER_PACKAGE}\n`
       ));
     return interrupted ?? 1;
   }
@@ -888,24 +889,35 @@ async function defaultPublishedPackage(
   context: NpmContext,
 ): Promise<PublishedPackage> {
   if (version !== 'latest' && !isExactSemver(version)) throw new Error('invalid registry target version');
-  const result = await runCommand(context.commandPath, [
-    'view',
-    `${name}@${version}`,
-    'name',
-    'version',
-    'dist.integrity',
-    `dependencies.${SHARED_PACKAGE}`,
-    `--registry=${CANONICAL_NPM_REGISTRY}`,
-    '--json',
-  ]);
-  if (result.code !== 0) throw new Error(`registry lookup failed for ${name}@${version}`);
-  const manifest = JSON.parse(result.stdout) as Record<string, unknown>;
-  return {
-    name: manifest.name as PublishedPackage['name'],
-    version: manifest.version as string,
-    integrity: manifest['dist.integrity'] as string,
-    sharedVersion: manifest[`dependencies.${SHARED_PACKAGE}`] as string,
-  };
+  // Keep npm context validation above, but read the registry's typed manifest
+  // contract directly rather than parsing npm CLI presentation output.
+  void context;
+  const endpoint = new URL(`${encodeURIComponent(name)}/${encodeURIComponent(version)}`, CANONICAL_NPM_REGISTRY);
+  let published: PublishedPackage;
+  try {
+    const response = await fetch(endpoint, {
+      headers: { Accept: 'application/json' },
+      redirect: 'error',
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const parsed: unknown = await response.json();
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('response was not a manifest object');
+    }
+    const manifest = parsed as Record<string, unknown>;
+    const dist = manifest.dist as Record<string, unknown> | undefined;
+    const dependencies = manifest.dependencies as Record<string, unknown> | undefined;
+    published = {
+      name: manifest.name as PublishedPackage['name'],
+      version: manifest.version as string,
+      integrity: dist?.integrity as string,
+      sharedVersion: dependencies?.[SHARED_PACKAGE] as string,
+    };
+  } catch {
+    throw new Error(`registry manifest lookup failed for ${name}@${version}`);
+  }
+  validatePublishedPackage(published, name);
+  return published;
 }
 
 async function defaultConfirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'> {
