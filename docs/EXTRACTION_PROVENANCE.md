@@ -22,7 +22,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
   recovery, `2.0.2`, `2.0.3`, `2.0.4`, `2.0.5`, and `2.0.6` successors were
   published and registry-verified. The immutable `2.0.7` workflow failed before
   package creation or npm publication. The `2.0.8`, `2.0.9`, `2.0.10`, `2.0.11`,
-  `2.1.0`, and `2.1.1` successors were published, and `2.2.0` was subsequently published, and `2.3.0` was subsequently published, so the next candidate identity is `2.4.0`. Extraction and
+  `2.1.0`, and `2.1.1` successors were published, and `2.2.0` was subsequently published, and `2.3.0` was subsequently published, and `2.4.0` was subsequently published, so the next candidate identity is `2.4.1`. Extraction and
   versioning do not authorize publication.
 
 ## Review Holds
@@ -42,7 +42,7 @@ resolves to the audited registry `borgmcp-shared@0.6.4` with integrity
 `sha512-Wm4b0uoOAw9JCz5OTHD0Q2uXKkeWYdkVksdeZvRG8l62XGMY+G8GkNEsZT9L533LbVbQ29GhgF0htjDenQThDg==`.
 The matching `borgmcp-server@0.1.21` release is published with integrity
 `sha512-g0QH4cKcsKuDyZs1MvBmvCoCLaZ4wVI04yHCGSvcAeWghWxSBH0IIF8Q5OFi1pLB7TZXOVP6D3QAabUQ2eJTFg==`
-and pins the same `borgmcp-shared@0.6.4` contract. Client `borgmcp@2.3.0` is published. The immutable `v2.0.7`
+and pins the same `borgmcp-shared@0.6.4` contract. Client `borgmcp@2.4.0` is published. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next
-candidate remains gated by reviewed `v2.4.0` source, a fresh annotated tag, and
+candidate remains gated by reviewed `v2.4.1` source, a fresh annotated tag, and
 the exact-artifact and protected-publication gates.
