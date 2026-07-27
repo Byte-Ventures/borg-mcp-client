@@ -242,7 +242,10 @@ function validatePublishedPackage(
   expectedName: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
 ): void {
   if (value.name !== expectedName || !isExactSemver(value.version)) {
-    throw new Error(`registry returned an invalid ${expectedName} manifest identity`);
+    throw new Error(
+      `registry returned an invalid ${expectedName} manifest identity ` +
+      `(observed name=${JSON.stringify(value.name)}, version=${JSON.stringify(value.version)})`,
+    );
   }
   if (!isCanonicalSha512Integrity(value.integrity)) {
     throw new Error(`registry returned invalid ${expectedName} SHA-512 integrity`);
@@ -471,11 +474,12 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       : (
         `${errorMessage(error, 'Update preflight failed')}\n` +
         `Observed update state:\n` +
-        `  client: unavailable (preflight incomplete)\n` +
-        `  server controller: unavailable (preflight incomplete)\n` +
+        `  client: not inspected (registry preflight incomplete)\n` +
+        `  server controller: not inspected (registry preflight incomplete)\n` +
         `  prepared runtime: not inspected\n` +
         `  running runtime: not inspected\n` +
-        `No mutation was attempted.\n`
+        `No mutation was attempted.\n` +
+        `Manual fallback: npm install -g ${CLIENT_PACKAGE} && npm install -g ${SERVER_PACKAGE}\n`
       ));
     return interrupted ?? 1;
   }
@@ -899,13 +903,34 @@ async function defaultPublishedPackage(
     '--json',
   ]);
   if (result.code !== 0) throw new Error(`registry lookup failed for ${name}@${version}`);
-  const manifest = JSON.parse(result.stdout) as Record<string, unknown>;
+  const parsed = JSON.parse(result.stdout) as unknown;
+  const manifest = normalizeNpmViewManifest(parsed, name, version);
   return {
     name: manifest.name as PublishedPackage['name'],
     version: manifest.version as string,
     integrity: manifest['dist.integrity'] as string,
     sharedVersion: manifest[`dependencies.${SHARED_PACKAGE}`] as string,
   };
+}
+
+function normalizeNpmViewManifest(
+  value: unknown,
+  name: string,
+  version: string,
+): Record<string, unknown> {
+  if (Array.isArray(value)) {
+    if (value.length !== 1 || !value[0] || typeof value[0] !== 'object') {
+      throw new Error(
+        `registry returned an ambiguous ${name}@${version} manifest response ` +
+        `(array length ${value.length})`,
+      );
+    }
+    return value[0] as Record<string, unknown>;
+  }
+  if (!value || typeof value !== 'object') {
+    throw new Error(`registry returned an invalid ${name}@${version} manifest response (${typeof value})`);
+  }
+  return value as Record<string, unknown>;
 }
 
 async function defaultConfirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'> {

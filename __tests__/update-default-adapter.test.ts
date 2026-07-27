@@ -14,7 +14,12 @@ import { buildDefaultUpdateDeps } from '../src/update-cmd.js';
 const roots: string[] = [];
 const originalPath = process.env.PATH;
 
-function fakeNpm(registry: string) {
+function fakeNpm(registry: string, viewResponse: unknown = {
+  name: 'borgmcp',
+  version: '2.3.0',
+  'dist.integrity': `sha512-${Buffer.alloc(64, 1).toString('base64')}`,
+  'dependencies.borgmcp-shared': '0.6.5',
+}) {
   const root = mkdtempSync(join(tmpdir(), 'borg-update-npm-context-'));
   roots.push(root);
   const bin = join(root, 'bin');
@@ -36,12 +41,7 @@ const state = JSON.parse(readFileSync(${JSON.stringify(statePath)}, 'utf8'));
 if (args.join(' ') === 'config get registry') process.stdout.write(state.registry + '\\n');
 else if (args.join(' ') === 'prefix --global') process.stdout.write(state.prefix + '\\n');
 else if (args.join(' ') === 'root --global') process.stdout.write(state.prefix + '/lib/node_modules\\n');
-else if (args[0] === 'view') process.stdout.write(JSON.stringify({
-  name: 'borgmcp',
-  version: '2.3.0',
-  'dist.integrity': 'sha512-${Buffer.alloc(64, 1).toString('base64')}',
-  'dependencies.borgmcp-shared': '0.6.5'
-}));
+else if (args[0] === 'view') process.stdout.write(JSON.stringify(${JSON.stringify(viewResponse)}));
 else if (args[0] === 'install') process.exit(0);
 else process.exit(91);
 `);
@@ -98,5 +98,27 @@ describe('default npm update adapter', () => {
       .rejects.toThrow(/active npm executable changed/);
     expect(original.log().some(([command]) => command === 'install')).toBe(false);
     expect(replacement.log()).toEqual([]);
+  });
+
+  it('accepts npm 12 single-element manifest arrays', async () => {
+    const manifest = {
+      name: 'borgmcp',
+      version: '2.3.0',
+      'dist.integrity': `sha512-${Buffer.alloc(64, 1).toString('base64')}`,
+      'dependencies.borgmcp-shared': '0.6.5',
+    };
+    const npm = fakeNpm('https://registry.npmjs.org/', [manifest]);
+
+    await expect(buildDefaultUpdateDeps().publishedPackage('borgmcp', 'latest'))
+      .resolves.toMatchObject({ name: 'borgmcp', version: '2.3.0' });
+    expect(npm.log().some(([command]) => command === 'view')).toBe(true);
+  });
+
+  it('rejects ambiguous multi-element manifest arrays', async () => {
+    const npm = fakeNpm('https://registry.npmjs.org/', [{}, {}]);
+
+    await expect(buildDefaultUpdateDeps().publishedPackage('borgmcp', 'latest'))
+      .rejects.toThrow(/ambiguous borgmcp@latest manifest response \(array length 2\)/);
+    expect(npm.log().some(([command]) => command === 'view')).toBe(true);
   });
 });
