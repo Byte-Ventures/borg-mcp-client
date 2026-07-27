@@ -124,6 +124,22 @@ describe('parseUpdateArgs', () => {
       target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
     });
   });
+
+  it('rejects a boxed string that RegExp.test would coerce to an exact semver', () => {
+    const boxedVersion = new String('2.3.0') as unknown as string;
+
+    expect(parseUpdateArgs(
+      [
+        '--target-client', boxedVersion,
+        '--target-server', '0.4.0',
+        '--server-present', 'yes',
+      ],
+      true,
+    )).toEqual({
+      ok: false,
+      error: 'internal update continuation requires exact versions',
+    });
+  });
 });
 
 describe('runUpdate', () => {
