@@ -114,6 +114,14 @@ describe('default npm update adapter', () => {
     expect(npm.log().some(([command]) => command === 'view')).toBe(true);
   });
 
+  it('retains a bounded object shape for an unexpected version-keyed response', async () => {
+    const npm = fakeNpm('https://registry.npmjs.org/', { '2.4.0': {} });
+
+    await expect(buildDefaultUpdateDeps().publishedPackage('borgmcp', 'latest'))
+      .resolves.toMatchObject({ manifestShape: 'object keys=[2.4.0]' });
+    expect(npm.log().some(([command]) => command === 'view')).toBe(true);
+  });
+
   it('rejects ambiguous multi-element manifest arrays', async () => {
     const npm = fakeNpm('https://registry.npmjs.org/', [{}, {}]);
 

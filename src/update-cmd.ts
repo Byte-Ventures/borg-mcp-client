@@ -21,6 +21,7 @@ export interface PublishedPackage {
   version: string;
   integrity: string;
   sharedVersion: string;
+  manifestShape?: string;
 }
 
 export interface InstalledPackage {
@@ -244,7 +245,8 @@ function validatePublishedPackage(
   if (value.name !== expectedName || !isExactSemver(value.version)) {
     throw new Error(
       `registry returned an invalid ${expectedName} manifest identity ` +
-      `(observed name=${JSON.stringify(value.name)}, version=${JSON.stringify(value.version)})`,
+      `(observed name=${JSON.stringify(value.name)}, version=${JSON.stringify(value.version)}, ` +
+      `shape=${value.manifestShape ?? 'unknown'})`,
     );
   }
   if (!isCanonicalSha512Integrity(value.integrity)) {
@@ -904,12 +906,13 @@ async function defaultPublishedPackage(
   ]);
   if (result.code !== 0) throw new Error(`registry lookup failed for ${name}@${version}`);
   const parsed = JSON.parse(result.stdout) as unknown;
-  const manifest = normalizeNpmViewManifest(parsed, name, version);
+  const { manifest, shape } = normalizeNpmViewManifest(parsed, name, version);
   return {
     name: manifest.name as PublishedPackage['name'],
     version: manifest.version as string,
     integrity: manifest['dist.integrity'] as string,
     sharedVersion: manifest[`dependencies.${SHARED_PACKAGE}`] as string,
+    manifestShape: shape,
   };
 }
 
@@ -917,7 +920,7 @@ function normalizeNpmViewManifest(
   value: unknown,
   name: string,
   version: string,
-): Record<string, unknown> {
+): { manifest: Record<string, unknown>; shape: string } {
   if (Array.isArray(value)) {
     if (value.length !== 1 || !value[0] || typeof value[0] !== 'object') {
       throw new Error(
@@ -925,12 +928,18 @@ function normalizeNpmViewManifest(
         `(array length ${value.length})`,
       );
     }
-    return value[0] as Record<string, unknown>;
+    return { manifest: value[0] as Record<string, unknown>, shape: 'array[1]' };
   }
   if (!value || typeof value !== 'object') {
     throw new Error(`registry returned an invalid ${name}@${version} manifest response (${typeof value})`);
   }
-  return value as Record<string, unknown>;
+  const manifest = value as Record<string, unknown>;
+  const keys = Object.keys(manifest).sort();
+  const renderedKeys = keys.slice(0, 8).join(',');
+  return {
+    manifest,
+    shape: `object keys=[${renderedKeys}${keys.length > 8 ? ',…' : ''}]`,
+  };
 }
 
 async function defaultConfirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'> {

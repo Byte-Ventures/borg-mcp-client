@@ -127,6 +127,24 @@ describe('parseUpdateArgs', () => {
 });
 
 describe('runUpdate', () => {
+  it('reports the raw npm manifest shape when identity parsing fails', async () => {
+    const d = deps({
+      publishedPackage: vi.fn(async (name) => name === 'borgmcp'
+        ? {
+            ...CLIENT_TARGET,
+            name: undefined as unknown as 'borgmcp',
+            version: undefined as unknown as string,
+            manifestShape: 'object keys=[2.4.0]',
+          }
+        : SERVER_TARGET),
+    });
+
+    await expect(runUpdate({ yes: true }, d)).resolves.toBe(1);
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      'observed name=undefined, version=undefined, shape=object keys=[2.4.0]',
+    ));
+  });
+
   it('refuses mismatched published shared pins before confirmation or mutation', async () => {
     const d = deps({
       publishedPackage: vi.fn(async (name) => name === 'borgmcp'

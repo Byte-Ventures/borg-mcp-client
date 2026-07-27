@@ -133,7 +133,8 @@ export function parseUpdateArgs(args, reentryAuthorized = false) {
 function validatePublishedPackage(value, expectedName) {
     if (value.name !== expectedName || !isExactSemver(value.version)) {
         throw new Error(`registry returned an invalid ${expectedName} manifest identity ` +
-            `(observed name=${JSON.stringify(value.name)}, version=${JSON.stringify(value.version)})`);
+            `(observed name=${JSON.stringify(value.name)}, version=${JSON.stringify(value.version)}, ` +
+            `shape=${value.manifestShape ?? 'unknown'})`);
     }
     if (!isCanonicalSha512Integrity(value.integrity)) {
         throw new Error(`registry returned invalid ${expectedName} SHA-512 integrity`);
@@ -699,12 +700,13 @@ async function defaultPublishedPackage(name, version, context) {
     if (result.code !== 0)
         throw new Error(`registry lookup failed for ${name}@${version}`);
     const parsed = JSON.parse(result.stdout);
-    const manifest = normalizeNpmViewManifest(parsed, name, version);
+    const { manifest, shape } = normalizeNpmViewManifest(parsed, name, version);
     return {
         name: manifest.name,
         version: manifest.version,
         integrity: manifest['dist.integrity'],
         sharedVersion: manifest[`dependencies.${SHARED_PACKAGE}`],
+        manifestShape: shape,
     };
 }
 function normalizeNpmViewManifest(value, name, version) {
@@ -713,12 +715,18 @@ function normalizeNpmViewManifest(value, name, version) {
             throw new Error(`registry returned an ambiguous ${name}@${version} manifest response ` +
                 `(array length ${value.length})`);
         }
-        return value[0];
+        return { manifest: value[0], shape: 'array[1]' };
     }
     if (!value || typeof value !== 'object') {
         throw new Error(`registry returned an invalid ${name}@${version} manifest response (${typeof value})`);
     }
-    return value;
+    const manifest = value;
+    const keys = Object.keys(manifest).sort();
+    const renderedKeys = keys.slice(0, 8).join(',');
+    return {
+        manifest,
+        shape: `object keys=[${renderedKeys}${keys.length > 8 ? ',…' : ''}]`,
+    };
 }
 async function defaultConfirm(message) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
