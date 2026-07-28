@@ -82,7 +82,7 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { connectOpenCodeDrone, computeOpenCodePort, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
-import { runEarlyServerFacade } from './server-facade.js';
+import { isClientOwnedCubeInitArgv, runEarlyServerFacade } from './server-facade.js';
 import { runEarlyUpdate } from './update-cmd.js';
 
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
@@ -105,6 +105,13 @@ export async function runAssimilateEntry(
 async function main() {
   const updateExitCode = await runEarlyUpdate(process.argv);
   if (updateExitCode !== null) process.exit(updateExitCode);
+
+  // Cube initialization is client-owned, so enable debug before its early
+  // facade dispatch. Server lifecycle commands keep their argv verbatim:
+  // their separate executable owns and parses `--debug`.
+  if (isClientOwnedCubeInitArgv(process.argv)) {
+    initDebugFromArgv(process.argv);
+  }
 
   const serverExitCode = await runEarlyServerFacade(process.argv);
   if (serverExitCode !== null) process.exit(serverExitCode);

@@ -20,6 +20,6 @@ if (!version.includes(manifest.version)) throw new Error('borg --version did not
 if (!help.includes('assimilate') || !assimilateHelp.includes('--host')) {
   throw new Error('borg --help is missing standalone onboarding guidance.');
 }
-if (cubeInitHelp !== cubeInitHelpText()) {
+if (cubeInitHelp !== cubeInitHelpText(manifest.version)) {
   throw new Error('borg server cube init --help did not match the built help contract.');
 }

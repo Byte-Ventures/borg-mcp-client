@@ -1,6 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildDefaultServerFacadeClientDeps,
+  cubeInitUsageErrorText,
+  isClientOwnedCubeInitArgv,
   parseServerFacadeArgs,
   missingServerExecutableText,
   runEarlyServerFacade,
@@ -47,6 +50,12 @@ function processDeps(child: FakeChild) {
 }
 
 describe('parseServerFacadeArgs', () => {
+  it('identifies only the client-owned cube-init argv for early client debug setup', () => {
+    expect(isClientOwnedCubeInitArgv(['node', 'borg', 'server', 'cube', 'init', '--debug'])).toBe(true);
+    expect(isClientOwnedCubeInitArgv(['node', 'borg', 'server', 'start', '--debug'])).toBe(false);
+    expect(isClientOwnedCubeInitArgv(['node', 'borg', 'assimilate', '--debug'])).toBe(false);
+  });
+
   it('routes cube init to the client-owned repository creation path', () => {
     expect(parseServerFacadeArgs(['cube', 'init', '--host', 'localhost:7091'])).toEqual({
       kind: 'cube-init',
@@ -177,7 +186,7 @@ describe('runEarlyServerFacade', () => {
       client,
     )).resolves.toBe(0);
 
-    expect(output.stdout()).toBe(cubeInitHelpText());
+    expect(output.stdout()).toBe(cubeInitHelpText('2.5.0'));
     expect(output.stderr()).toBe('');
     expect(client.cubeInit).not.toHaveBeenCalled();
     expect(deps.spawn).not.toHaveBeenCalled();
@@ -256,13 +265,13 @@ describe('runEarlyServerFacade', () => {
     const child = new FakeChild();
     const { deps } = processDeps(child);
     const pending = runEarlyServerFacade(
-      ['node', 'borg', 'server', 'dashboard', '--ascii'],
+      ['node', 'borg', 'server', 'dashboard', '--ascii', '--debug'],
       deps,
     );
 
     expect(deps.spawn).toHaveBeenCalledWith(
       'borg-mcp-server',
-      ['dashboard', '--ascii'],
+      ['dashboard', '--ascii', '--debug'],
       { shell: false, stdio: 'inherit' },
     );
     child.emit('exit', 7, null);
@@ -367,6 +376,42 @@ describe('runEarlyServerFacade', () => {
       expect(output.stderr()).not.toMatch(new RegExp(`${code}|/secret/path`));
     },
   );
+});
+
+describe('default cube-init parse surface', () => {
+  it.each([
+    [['Builder'], 'A role is not accepted because this command does not create a drone.'],
+    [['--worktree', 'drone-2'], '--worktree is not accepted because this command does not create a drone.'],
+    [['--here'], '--here is not accepted because this command does not create a drone.'],
+    [['--force'], '--force is not accepted because this command does not create a drone.'],
+    [['--cli', 'codex'], '--cli is not accepted because this command does not create a drone.'],
+    [['--model', 'claude:test'], '--model is not accepted because this command does not create a drone.'],
+    [['--no-template'], '--no-template is not accepted because this command does not create a drone.'],
+  ])('rejects %j with prefixed command-specific usage', async (args, reason) => {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await expect(buildDefaultServerFacadeClientDeps().cubeInit(args)).resolves.toBe(1);
+      const text = write.mock.calls.map(([value]) => String(value)).join('');
+      expect(text).toBe(cubeInitUsageErrorText(reason));
+      expect(text).toContain('◼ borg server cube init:');
+      expect(text).toContain('Run `borg server cube init --help` for usage.');
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it('turns parser failures into the same actionable command surface', async () => {
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await expect(buildDefaultServerFacadeClientDeps().cubeInit(['--host'])).resolves.toBe(1);
+      const text = write.mock.calls.map(([value]) => String(value)).join('');
+      expect(text).toContain('◼ borg server cube init: --host requires a host or URL');
+      expect(text).toContain('Run `borg server cube init --help` for usage.');
+      expect(text).not.toContain('Supported: --worktree');
+    } finally {
+      write.mockRestore();
+    }
+  });
 });
 
 describe('approved server facade copy', () => {

@@ -1,6 +1,9 @@
 import { spawn as spawnChild, type SpawnOptions } from 'node:child_process';
 import { constants } from 'node:os';
+import chalk from 'chalk';
 import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
+import { consolePrefix } from './console-prefix.js';
+import { getPackageVersion } from './version.js';
 
 export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'] as const;
 export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
@@ -11,6 +14,10 @@ export type ParsedServerFacadeArgs =
   | { kind: 'cube-init'; args: string[] }
   | { kind: 'command'; command: ServerLifecycleCommand; args: string[] }
   | { kind: 'error'; reason: 'unknown-command'; command: string };
+
+export function isClientOwnedCubeInitArgv(argv: readonly string[]): boolean {
+  return argv[2] === 'server' && argv[3] === 'cube' && argv[4] === 'init';
+}
 
 export function parseServerFacadeArgs(args: readonly string[]): ParsedServerFacadeArgs {
   const [command, ...rest] = args;
@@ -92,8 +99,9 @@ export function buildDefaultServerFacadeClientDeps(
         import('./assimilate-cmd.js'),
       ]);
       const parsed = parseAssimilateArgs([...args]);
-      if (!parsed.ok || parsed.role !== undefined) {
-        process.stderr.write(`${parsed.ok ? 'borg server cube init does not accept a role' : parsed.error}\n`);
+      const unsupported = parsed.ok ? unsupportedCubeInitInput(args, parsed) : undefined;
+      if (!parsed.ok || unsupported !== undefined) {
+        process.stderr.write(cubeInitUsageErrorText(parsed.ok ? unsupported! : parsed.error));
         return 1;
       }
       return runAssimilate(
@@ -102,6 +110,29 @@ export function buildDefaultServerFacadeClientDeps(
       );
     },
   };
+}
+
+function unsupportedCubeInitInput(
+  args: readonly string[],
+  parsed: { role: string | undefined },
+): string | undefined {
+  if (parsed.role !== undefined) {
+    return 'A role is not accepted because this command does not create a drone.';
+  }
+  const unsupported = ['--worktree', '--here', '--force', '--cli', '--model', '--backend', '--no-template'];
+  const flag = args.find((arg) => unsupported.some((candidate) =>
+    arg === candidate || arg.startsWith(`${candidate}=`)));
+  return flag === undefined
+    ? undefined
+    : `${flag.split('=', 1)[0]} is not accepted because this command does not create a drone.`;
+}
+
+export function cubeInitUsageErrorText(reason: string): string {
+  const sentence = /[.!?]$/.test(reason) ? reason : `${reason}.`;
+  return (
+    chalk.red(`${consolePrefix()}◼ borg server cube init: ${sentence}\n`) +
+    'Run `borg server cube init --help` for usage.\n'
+  );
 }
 
 const defaultClientDeps = buildDefaultServerFacadeClientDeps();
@@ -222,7 +253,7 @@ export async function runEarlyServerFacade(
     return 0;
   }
   if (parsed.kind === 'cube-init-help') {
-    output.writeStdout(cubeInitHelpText());
+    output.writeStdout(cubeInitHelpText(getPackageVersion()));
     return 0;
   }
   if (parsed.kind === 'error') {

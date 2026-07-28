@@ -43,8 +43,16 @@ async function ask(deps, message, operation = 'creation') {
     }
 }
 function renderResult(deps, input) {
+    const resultWriter = deps.writeResult ?? deps.write;
+    const heading = input.adopted
+        ? 'Existing cube associated with this repository.'
+        : input.existing
+            ? 'Cube already initialized.'
+            : 'Cube created.';
     const lines = [
-        input.adopted ? 'Existing cube associated with this repository.' : input.existing ? 'Cube already initialized.' : 'Cube created.',
+        input.mode === 'cube-init'
+            ? `${deps.useColor?.() ? '\u001b[32m✓\u001b[0m' : '✓'} ${heading}`
+            : heading,
         `  Name: ${input.response.name}`,
         `  Template: ${presentation(input.response.template).label}`,
         `  Repository: ${input.root}`,
@@ -59,7 +67,7 @@ function renderResult(deps, input) {
     else {
         lines.push('Continuing with role and seat setup...');
     }
-    deps.write(`${lines.join('\n')}\n`);
+    resultWriter(`${lines.join('\n')}\n`);
 }
 export async function initializeRepositoryCube(input, deps) {
     const repository = await deps.getIdentity(input.context);
@@ -193,7 +201,10 @@ export async function initializeRepositoryCube(input, deps) {
     if (proposedAdoption)
         return proposedAdoption;
     if (input.canCreate === false) {
-        deps.write(`This enrolled client cannot create a cube on ${input.serverOrigin}. Ask the server operator to grant access to a cube, then rerun borg assimilate --host ${shellEscape(input.serverOrigin)}.\n`);
+        const retryCommand = input.mode === 'cube-init'
+            ? `borg server cube init --host ${shellEscape(input.serverOrigin)}`
+            : `borg assimilate --host ${shellEscape(input.serverOrigin)}`;
+        deps.write(`This enrolled client cannot create a cube on ${input.serverOrigin}. Ask the server operator to grant access to a cube, then rerun ${retryCommand}.\n`);
         return { kind: 'stop', code: 1 };
     }
     if (input.flags.noTemplate) {

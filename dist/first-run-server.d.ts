@@ -27,5 +27,5 @@ export declare function buildDefaultFirstRunServerInstallDeps(): FirstRunServerI
  * Returning anything except `present`/`installed` means no caller-owned setup
  * or assimilation work should continue.
  */
-export declare function offerFirstRunServerInstall(deps?: FirstRunServerInstallDeps): Promise<FirstRunServerInstallResult>;
+export declare function offerFirstRunServerInstall(deps?: FirstRunServerInstallDeps, connectCommand?: string): Promise<FirstRunServerInstallResult>;
 //# sourceMappingURL=first-run-server.d.ts.map

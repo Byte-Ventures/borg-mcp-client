@@ -6,12 +6,12 @@
   },
   {
     "file": "src/server-facade.ts",
-    "lineNumber": 5,
+    "lineNumber": 8,
     "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'] as const;"
   },
   {
     "file": "src/server-facade.ts",
-    "lineNumber": 130,
+    "lineNumber": 161,
     "line": "`Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\\n` +"
   },
   {
@@ -26,12 +26,12 @@
   },
   {
     "file": "dist/server-facade.js",
-    "lineNumber": 4,
+    "lineNumber": 7,
     "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'];"
   },
   {
     "file": "dist/server-facade.js",
-    "lineNumber": 71,
+    "lineNumber": 93,
     "line": "`Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\\n` +"
   }
 ]

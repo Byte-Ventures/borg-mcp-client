@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const CUBE_INIT_HELP_TEXT =
-  `borg server cube init — initialize this Git repository's cube without creating a drone\n\n` +
+function cubeInitHelpText(version) {
+  return `borg server cube init (borgmcp ${version}) — initialize this Git repository's cube without creating a drone\n\n` +
   `Usage:\n` +
   `  borg server cube init [options]\n\n` +
   `Options:\n` +
@@ -14,7 +14,14 @@ export const CUBE_INIT_HELP_TEXT =
   `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
   `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
   `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
-  `  --help, -h                       Show this help\n`;
+  `  --help, -h                       Show this help\n\n` +
+  `An existing repository association skips all prompts. One accessible exact-name legacy\n` +
+  `cube requires explicit interactive adoption; ambiguous matches fail closed. An enrolled\n` +
+  `owner client may create a repository cube; ordinary clients require an explicit cube grant.\n`;
+}
+
+const sourceManifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+export const CUBE_INIT_HELP_TEXT = cubeInitHelpText(sourceManifest.version);
 
 async function runImportSmoke(packageRoot, exportTarget, timeoutMs) {
   const entryUrl = pathToFileURL(resolve(packageRoot, exportTarget)).href;
@@ -49,7 +56,7 @@ async function runImportSmoke(packageRoot, exportTarget, timeoutMs) {
   });
 }
 
-async function runServerFacadeSmoke(generatedBin, timeoutMs) {
+async function runServerFacadeSmoke(generatedBin, timeoutMs, version) {
   const directory = await mkdtemp(join(tmpdir(), 'borgmcp-server-facade-smoke-'));
   const fakeServer = join(directory, 'borg-mcp-server');
   const expected = 'status\0--json';
@@ -121,7 +128,7 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
     if (
       cubeInitHelp.error ||
       cubeInitHelp.status !== 0 ||
-      cubeInitHelp.stdout !== CUBE_INIT_HELP_TEXT ||
+      cubeInitHelp.stdout !== cubeInitHelpText(version) ||
       cubeInitHelp.stderr !== ''
     ) {
       throw new Error(
@@ -317,7 +324,7 @@ export async function smokePackedClient(packageRoot, options = {}) {
     child.kill('SIGTERM');
   }
   const borgBin = resolve(options.borgBinPath ?? join(dirname(generatedBin), 'borg'));
-  return { ...result, ...await runServerFacadeSmoke(borgBin, timeoutMs) };
+  return { ...result, ...await runServerFacadeSmoke(borgBin, timeoutMs, manifest.version) };
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';

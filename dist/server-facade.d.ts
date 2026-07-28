@@ -17,6 +17,7 @@ export type ParsedServerFacadeArgs = {
     reason: 'unknown-command';
     command: string;
 };
+export declare function isClientOwnedCubeInitArgv(argv: readonly string[]): boolean;
 export declare function parseServerFacadeArgs(args: readonly string[]): ParsedServerFacadeArgs;
 interface ServerFacadeChild {
     once(event: 'error', listener: (error: Error) => void): this;
@@ -48,6 +49,7 @@ export type ServerFacadeProcessResult = {
     error: Error;
 };
 export declare function buildDefaultServerFacadeClientDeps(buildDeps?: AssimilateDepsBuilder): ServerFacadeClientDeps;
+export declare function cubeInitUsageErrorText(reason: string): string;
 export declare function unknownServerCommandText(command: string): string;
 export declare function missingServerExecutableText(command: ServerLifecycleCommand): string;
 export declare function serverCommandStartupFailureText(command: ServerLifecycleCommand): string;

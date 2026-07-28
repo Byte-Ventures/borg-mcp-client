@@ -5,6 +5,7 @@ import { buildDefaultUpdateDeps, isExactSemver, resolveCompatibleServerTarget, }
 const CLIENT_PACKAGE = 'borgmcp';
 const SERVER_PACKAGE = 'borgmcp-server';
 const SHARED_PACKAGE = 'borgmcp-shared';
+const DEFAULT_CONNECT_COMMAND = 'borg assimilate --host <host>';
 function readClientSharedVersion() {
     const here = fileURLToPath(import.meta.url);
     const manifestPath = join(dirname(here), '..', 'package.json');
@@ -52,7 +53,7 @@ export function buildDefaultFirstRunServerInstallDeps() {
  * Returning anything except `present`/`installed` means no caller-owned setup
  * or assimilation work should continue.
  */
-export async function offerFirstRunServerInstall(deps = buildDefaultFirstRunServerInstallDeps()) {
+export async function offerFirstRunServerInstall(deps = buildDefaultFirstRunServerInstallDeps(), connectCommand = DEFAULT_CONNECT_COMMAND) {
     let installed;
     try {
         installed = await deps.currentServer();
@@ -68,7 +69,7 @@ export async function offerFirstRunServerInstall(deps = buildDefaultFirstRunServ
     if (!deps.isTTY()) {
         deps.stderr(`No local ${SERVER_PACKAGE} installation was found. No installation was attempted because this terminal is non-interactive.\n` +
             `Run \`borg setup\` in an interactive terminal, or connect to an existing server with ` +
-            `\`borg assimilate --host <host>\`.\n`);
+            `\`${connectCommand}\`.\n`);
         return { kind: 'non-interactive' };
     }
     let target;
@@ -80,7 +81,7 @@ export async function offerFirstRunServerInstall(deps = buildDefaultFirstRunServ
         deps.stderr(`Borg could not resolve a compatible local server. No installation was attempted.\n` +
             `${error instanceof Error ? error.message : String(error)}\n` +
             `Run \`borg update\`, then run \`borg setup\` again. Or connect to an existing server with ` +
-            `\`borg assimilate --host <host>\`.\n`);
+            `\`${connectCommand}\`.\n`);
         return { kind: 'failed' };
     }
     const command = exactInstallCommand(target.version);

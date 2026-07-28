@@ -440,6 +440,149 @@ describe('runAssimilate: progress output (gh#653 B4)', () => {
   });
 });
 
+describe('runAssimilate: cube-init surrounding surface', () => {
+  it('writes the affirmative final frame to stdout while progress stays on stderr', async () => {
+    const stdout = vi.fn();
+    const stderr = vi.fn();
+    const deps = makeStubDeps({ stdout, stderr, isTTY: () => true });
+
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { yes: true },
+      mode: 'cube-init',
+    }, deps)).resolves.toBe(0);
+
+    const result = stdout.mock.calls.map(([text]) => String(text)).join('');
+    const progress = stderr.mock.calls.map(([text]) => String(text)).join('');
+    expect(result).toContain('✓');
+    expect(result).toContain('Cube created.');
+    expect(result).toContain('No drone was created.');
+    expect(result).toContain("Next: borg assimilate --host 'https://server.test'");
+    expect(progress).toContain('Create a cube for this repository');
+    expect(progress).toContain('Creating cube...');
+    expect(progress).not.toContain('✓');
+    expect(progress).not.toContain('Cube created.');
+  });
+
+  it('uses the assimilation color gate for the cube-init success frame', async () => {
+    const previous = process.env.NO_COLOR;
+    process.env.NO_COLOR = '1';
+    try {
+      const stdout = vi.fn();
+      const deps = makeStubDeps({ stdout, isTTY: () => true });
+      await expect(runAssimilate({
+        role: undefined,
+        flags: { yes: true },
+        mode: 'cube-init',
+      }, deps)).resolves.toBe(0);
+      const result = stdout.mock.calls.map(([text]) => String(text)).join('');
+      expect(result).toContain('✓ Cube created.');
+      expect(result).not.toContain('\u001b[');
+    } finally {
+      if (previous === undefined) delete process.env.NO_COLOR;
+      else process.env.NO_COLOR = previous;
+    }
+  });
+
+  it('names cube init in pre-core bare-repository recovery', async () => {
+    const deps = makeStubDeps({
+      resolveRepositoryContext: vi.fn(async () => { throw new Error('BARE_REPOSITORY'); }),
+    });
+    await expect(runAssimilate({
+      role: undefined,
+      flags: {},
+      mode: 'cube-init',
+    }, deps)).resolves.toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(
+      'borg server cube init requires a non-bare repository worktree. Clone or check out the repository, then retry.\n',
+    );
+  });
+
+  it('names cube init in pre-core server recovery', async () => {
+    const deps = makeStubDeps({
+      connectServer: vi.fn(async () => { throw new Error('network unreachable'); }),
+    });
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { server: 'server.example.com' },
+      mode: 'cube-init',
+    }, deps)).resolves.toBe(1);
+    const output = vi.mocked(deps.stderr).mock.calls.map(([text]) => String(text)).join('');
+    expect(output).toContain(
+      'then rerun `borg server cube init --host https://server.example.com`.',
+    );
+    expect(output).not.toContain('rerun `borg assimilate');
+  });
+
+  it('does not recommend an unsupported --here flag when cube init has no authority', async () => {
+    const deps = makeStubDeps({ isTTY: () => false, defaultAuthority: undefined });
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { yes: true },
+      mode: 'cube-init',
+    }, deps)).resolves.toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(
+      'No local server selected. Use `borg server cube init --host <host>` to select a local server.\n',
+    );
+  });
+
+  it('names cube init in saved-seat collision recovery before authority selection', async () => {
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => {
+        throw new LegacySessionCredentialCollisionError('https://server.test');
+      }),
+    });
+    await expect(runAssimilate({
+      role: undefined,
+      flags: {},
+      mode: 'cube-init',
+    }, deps)).resolves.toBe(1);
+    const output = vi.mocked(deps.stderr).mock.calls.map(([text]) => String(text)).join('');
+    expect(output).toContain(
+      'Next: run `borg server cube init --host https://server.test --enroll`.',
+    );
+    expect(deps.detectLocalServer).not.toHaveBeenCalled();
+  });
+
+  it('names cube init after a pin-matched saved-session rejection', async () => {
+    const deps = makeStubDeps({
+      connectServer: vi.fn(async () => {
+        throw new BorgServerError('SESSION_REJECTED', 'superseded');
+      }),
+    });
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { server: 'server.example.com' },
+      mode: 'cube-init',
+    }, deps)).resolves.toBe(1);
+    const output = vi.mocked(deps.stderr).mock.calls.map(([text]) => String(text)).join('');
+    expect(output).toContain(
+      'then `borg server cube init --host https://server.example.com --enroll`.',
+    );
+    expect(output).not.toContain('then borg assimilate');
+  });
+
+  it('names cube init when an ordinary client needs an explicit cube grant', async () => {
+    const deps = makeStubDeps({
+      connectServer: vi.fn(async () => ({
+        token: 'ordinary-token',
+        trustIdentity: SERVER_TRUST_IDENTITY,
+        serverCapabilities: [],
+      })),
+    });
+    await expect(runAssimilate({
+      role: undefined,
+      flags: { server: 'server.example.com', yes: true },
+      mode: 'cube-init',
+    }, deps)).resolves.toBe(1);
+    const output = vi.mocked(deps.stderr).mock.calls.map(([text]) => String(text)).join('');
+    expect(output).toContain(
+      "then rerun borg server cube init --host 'https://server.example.com'.",
+    );
+    expect(output).not.toContain('rerun borg assimilate');
+  });
+});
+
 describe('runAssimilate: step 8 (launch Claude Code)', () => {
   it.each(['claude', 'codex', 'opencode'] as const)('ensures borg MCP registration for the selected %s CLI before launch', async (cli) => {
     const exec = vi.fn(async () => 0);
@@ -2842,11 +2985,34 @@ describe('runAssimilate: #1015 authority selection', () => {
 
       expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(expectedExit);
 
-      expect(ensureLocalServerInstalled).toHaveBeenCalledOnce();
+      expect(ensureLocalServerInstalled).toHaveBeenCalledWith(
+        'borg assimilate --host <host>',
+      );
       expect(preparePrivateRoot).not.toHaveBeenCalled();
       expect(connectServer).not.toHaveBeenCalled();
     },
   );
+
+  it('passes the cube-init recovery command into the pre-core first-run helper', async () => {
+    const preparePrivateRoot = vi.fn(async () => {});
+    const ensureLocalServerInstalled = vi.fn(async () => 'non-interactive' as const);
+    const deps = makeStubDeps({
+      defaultAuthority: undefined,
+      preparePrivateRoot,
+      ensureLocalServerInstalled,
+    });
+
+    await expect(runAssimilate({
+      role: undefined,
+      flags: {},
+      mode: 'cube-init',
+    }, deps)).resolves.toBe(1);
+
+    expect(ensureLocalServerInstalled).toHaveBeenCalledWith(
+      'borg server cube init --host <host>',
+    );
+    expect(preparePrivateRoot).not.toHaveBeenCalled();
+  });
 
   it('gives an endpoint-bound recovery command when a local role is unavailable', async () => {
     const stderr = vi.fn();
