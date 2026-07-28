@@ -469,7 +469,7 @@ async function main() {
     // OpenCode launch: start TUI with the kickoff passed via --prompt
     // (auto-submits it as the first message). BORG_SESSION is pinned in
     // opencode.json. A unique port is assigned so the MCP child can connect
-    // via the HTTP API for context-streaming (injectOpenCodeEntry).
+    // to OpenCode's local HTTP API for durable entry injection.
     const dronePort = active
       ? computeOpenCodePort(active.droneId)
       : 14096;
@@ -507,7 +507,7 @@ async function main() {
   }
 
   // gh#857 WI-2: wake-target recording is codex-only (app-server bridge).
-  // OpenCode has no remote-wake mechanisms yet; claude uses the inbox Monitor.
+  // OpenCode uses HTTP entry injection; Claude uses the inbox Monitor.
   if (cli === 'codex' && active && codexSocketPath) {
     void recordCodexWakeTarget({
       deps: { setCodexWakeTarget, findLoadedCodexThread },

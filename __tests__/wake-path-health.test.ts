@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { renderStreamStatus } from '../src/stream-status';
 import {
   inspectWakePath,
@@ -37,6 +38,26 @@ const connectedStream: StreamStatus = {
 };
 
 describe('runtime wake-path health', () => {
+  it('keeps every issue-6 OpenCode surface aligned with HTTP injection', () => {
+    const source = [
+      '../src/codex-launch.ts',
+      '../src/regen-format.ts',
+      '../src/claude.ts',
+      '../src/assimilate-cmd.ts',
+    ].map((path) =>
+      readFileSync(new URL(path, import.meta.url), 'utf8')
+    ).join('\n');
+
+    expect(source).not.toMatch(/SDK-driven|context-streaming/i);
+    expect(source).not.toMatch(/no remote-wake mechanisms/i);
+    expect(source).not.toMatch(/check activity by calling borg_read-log periodically/i);
+    expect(source).not.toMatch(/via\s+the SDK/i);
+    expect(source).not.toMatch(/OpenCode (?:wakes|session|app-server).*app-server/i);
+    expect(source).not.toContain('OpenCode app-server');
+    expect(source).toContain('HTTP entry injection');
+    expect(source).toContain("OpenCode's local HTTP API");
+  });
+
   it('reports a forced OpenCode delivery failure through borg_stream-status', async () => {
     const failed = openCodeState({
       deliveryStates: {

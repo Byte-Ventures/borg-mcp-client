@@ -759,7 +759,7 @@ describe('wakePathArming', () => {
 
     it('retains its native injected wake path without Claude recovery deadlines', () => {
       expect(arming).toBe(OPENCODE_WAKE_PATH_GUIDANCE);
-      expect(arming).toContain('SDK-driven entry injection');
+      expect(arming).toContain('HTTP entry injection');
       expect(arming).not.toContain('adaptive recovery deadline');
       expect(arming).not.toContain('[9000, 12600]');
       expect(arming).not.toContain('[720, 1080]');
@@ -838,7 +838,7 @@ describe('formatLeanOrientation', () => {
 
   it('describes the durable OpenCode injection and degraded recovery path', () => {
     const out = formatLeanOrientation({ ...base, agentKind: 'opencode' });
-    expect(out).toContain('OpenCode wakes through SDK-driven entry injection');
+    expect(out).toContain('OpenCode wakes through HTTP entry injection');
     expect(out).toContain('durable inbox');
     expect(out).toContain('delivered-unconfirmed');
     expect(out).toContain('borg_stream-status');
