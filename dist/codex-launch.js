@@ -1,4 +1,5 @@
 import { wakePathArming } from './regen-format.js';
+import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
 /**
  * The claude kickoff prompt's wake-path section (gh#929) — the SAME shared
  * `wakePathArming` the SessionStart hook + /clear orientation use (one place,
@@ -31,7 +32,7 @@ export function buildAgentKickoffPrompt(options) {
         : '';
     const codexWakePathClause = options.codexWakePathClause ??
         `Codex Borg wakeups use remote-control when available; if no wake arrives, run borg_regen manually when returning to the session.`;
-    const opencodeWakePathClause = `OpenCode wakes: the inbox Monitor is not available yet for OpenCode; check activity by calling borg_read-log periodically.`;
+    const opencodeWakePathClause = OPENCODE_WAKE_PATH_GUIDANCE;
     const loopOrEmpty = options.cli === 'claude' ? '/loop ' : '';
     const wakeClause = options.cli === 'claude'
         ? options.monitorClause

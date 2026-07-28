@@ -31,13 +31,14 @@ export declare function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Pro
 export declare function injectOpenCodeEntry(text: string, entryId?: string, allowSubmit?: boolean): Promise<boolean>;
 export declare function probeOpenCodeDroneArmed(): Promise<boolean | null>;
 export declare function disconnectOpenCodeDrone(): void;
-export declare function getOpenCodeConnectionState(): {
+export interface OpenCodeConnectionState {
     connected: boolean;
     sessionId: string | null;
     totalEntriesInjected: number;
     totalEntriesRetried: number;
     deliveryStates: Record<OpenCodeDeliveryState, number>;
-};
+}
+export declare function getOpenCodeConnectionState(): OpenCodeConnectionState;
 export declare function computeOpenCodePort(droneId: string, base?: number): number;
 /** Test-only cleanup for module state and the local cross-process binding. */
 export declare function __resetOpenCodeDroneForTests(): void;

@@ -1,0 +1,8 @@
+export const OPENCODE_WAKE_PATH_GUIDANCE =
+  'OpenCode wakes through SDK-driven entry injection into the active TUI session. ' +
+  'Borg writes each entry to the durable inbox before one injection attempt and ' +
+  'confirms delivery by exact message ID; no inbox Monitor or polling loop is used. ' +
+  'If injection is rejected or cannot be ' +
+  'confirmed, the durable entry remains available and `borg_stream-status` reports ' +
+  'it as failed or delivered-unconfirmed; run `borg_read-log unread_only=true` and ' +
+  'drain the unread log to recover.';

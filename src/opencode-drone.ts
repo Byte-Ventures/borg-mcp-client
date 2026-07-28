@@ -724,13 +724,15 @@ export function disconnectOpenCodeDrone(): void {
   state = null;
 }
 
-export function getOpenCodeConnectionState(): {
+export interface OpenCodeConnectionState {
   connected: boolean;
   sessionId: string | null;
   totalEntriesInjected: number;
   totalEntriesRetried: number;
   deliveryStates: Record<OpenCodeDeliveryState, number>;
-} {
+}
+
+export function getOpenCodeConnectionState(): OpenCodeConnectionState {
   const deliveryStates: Record<OpenCodeDeliveryState, number> = {
     queued: 0,
     'delivered-unconfirmed': state?.unconfirmedEntries.size ?? 0,

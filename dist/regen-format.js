@@ -11,6 +11,7 @@ import { formatDroneAddressToken } from 'borgmcp-shared/drone-address';
 import { RUNTIME_METADATA_ADVISORY, renderRuntimeMetadataLines, } from './roster-render.js';
 import { shellEscape } from './shell-escape.js';
 import { resolveInboxMonitorPath } from './self-path.js';
+import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
  *
@@ -71,9 +72,7 @@ export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
         ].join(' ');
     }
     if (agentKind === 'opencode') {
-        return ('Wake path: OpenCode wakes via SDK-driven entry injection into the TUI session — ' +
-            'there is no tail-Monitor or `/loop` heartbeat to arm. Cube posts are delivered ' +
-            'directly into your active session. Use \`borg_regen\` at any time for fresh context.');
+        return OPENCODE_WAKE_PATH_GUIDANCE;
     }
     // gh#client#18: use absolute path to THIS installation's borg-inbox-monitor
     // so the orientation command always resolves to the same version as the
