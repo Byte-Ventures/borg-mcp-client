@@ -16,12 +16,11 @@ Borg MCP lets Claude Code, Codex, and OpenCode sessions join the same project co
 
 ## Install
 
-After verified publication of `borgmcp@2.0.10`, install that exact local-only
-client from npm. Before verification, this command fails closed because the
-version is unavailable:
+After verified publication, install the current exact local-only client release
+from npm:
 
 ```bash
-npm install -g borgmcp@2.0.10
+npm install -g borgmcp@2.5.0
 ```
 
 Verify the install:
