@@ -220,4 +220,24 @@ describe('default npm update adapter', () => {
     expect(original.log().some(([command]) => command === 'install')).toBe(false);
     expect(replacement.log()).toEqual([]);
   });
+
+  it('passes --ignore-scripts when the caller requires a lifecycle-safe install', async () => {
+    const npm = fakeNpm('https://registry.npmjs.org/');
+    const deps = buildDefaultUpdateDeps();
+
+    await expect(deps.installGlobal(
+      'borgmcp-server',
+      '0.6.0',
+      { ignoreScripts: true },
+    )).resolves.toBeUndefined();
+
+    expect(npm.log().find(([command]) => command === 'install')).toEqual([
+      'install',
+      '--global',
+      '--ignore-scripts',
+      expect.stringMatching(/^--prefix=/),
+      '--registry=https://registry.npmjs.org/',
+      'borgmcp-server@0.6.0',
+    ]);
+  });
 });

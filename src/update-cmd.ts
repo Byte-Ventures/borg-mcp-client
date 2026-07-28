@@ -54,7 +54,11 @@ export interface UpdateDeps {
     name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
     version: string,
   ): Promise<PublishedPackage>;
-  installGlobal(name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE, version: string): Promise<void>;
+  installGlobal(
+    name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
+    version: string,
+    options?: { ignoreScripts?: boolean },
+  ): Promise<void>;
   reenter(binPath: string, args: readonly string[]): Promise<number>;
   serverJson(binPath: string, command: 'update' | 'status'): Promise<unknown>;
   verifyRunningProtocol(origin: string): Promise<void>;
@@ -150,7 +154,7 @@ function renderServerState(
   );
 }
 
-function isExactSemver(value: unknown): boolean {
+export function isExactSemver(value: unknown): value is string {
   return typeof value === 'string' && EXACT_SEMVER.test(value);
 }
 
@@ -273,6 +277,29 @@ async function publishedPair(
     );
   }
   return { client, server };
+}
+
+/**
+ * Resolve the exact published server that can run with an already-installed
+ * client. First-run onboarding uses this instead of inventing a second
+ * registry path or installing an unpinned `latest` spec.
+ */
+export async function resolveCompatibleServerTarget(
+  clientSharedVersion: string,
+  deps: Pick<UpdateDeps, 'publishedPackage'>,
+): Promise<PublishedPackage> {
+  if (!isExactSemver(clientSharedVersion)) {
+    throw new Error(`installed client has an invalid ${SHARED_PACKAGE} pin`);
+  }
+  const server = await deps.publishedPackage(SERVER_PACKAGE, 'latest');
+  validatePublishedPackage(server, SERVER_PACKAGE);
+  if (server.sharedVersion !== clientSharedVersion) {
+    throw new Error(
+      `published ${SERVER_PACKAGE}@${server.version} pins ${SHARED_PACKAGE}@${server.sharedVersion}, ` +
+      `but this client requires ${SHARED_PACKAGE}@${clientSharedVersion}`,
+    );
+  }
+  return server;
 }
 
 function assertInstalled(
@@ -958,11 +985,12 @@ export function buildDefaultUpdateDeps(): UpdateDeps {
       await context(),
     ),
     publishedPackage: async (name, version) => defaultPublishedPackage(name, version, await context()),
-    installGlobal: async (name, version) => {
+    installGlobal: async (name, version, options) => {
       const npm = await context();
       const result = await runCommand(npm.commandPath, [
         'install',
         '--global',
+        ...(options?.ignoreScripts ? ['--ignore-scripts'] : []),
         `--prefix=${npm.prefix}`,
         `--registry=${CANONICAL_NPM_REGISTRY}`,
         `${name}@${version}`,

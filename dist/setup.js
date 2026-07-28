@@ -18,6 +18,7 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { handleVersionFlag } from './version.js';
 import { initDebugFromArgv } from './debug.js';
 import { defaultApprovalIo, setupApprovalWarnings } from './cli-tool-approval.js';
+import { offerFirstRunServerInstall } from './first-run-server.js';
 /**
  * Main setup wizard
  */
@@ -56,6 +57,15 @@ async function main() {
         console.error(chalk.gray('  OpenCode: https://opencode.ai\n'));
         process.exit(1);
     }
+    // Resolve the separately published local server before setup writes agent
+    // configuration. Decline/non-interactive/failure paths therefore leave no
+    // partial setup state behind.
+    console.log(chalk.blue('◼ Local Server'));
+    const serverInstall = await offerFirstRunServerInstall();
+    if (serverInstall.kind !== 'present' && serverInstall.kind !== 'installed') {
+        process.exit(serverInstall.kind === 'declined' ? 0 : 1);
+    }
+    console.log('');
     // Step 1: Configure every detected agent CLI
     console.log(chalk.blue('◼ Agent CLI Integration'));
     const yes = parseYesFlag(process.argv);

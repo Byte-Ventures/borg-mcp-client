@@ -225,6 +225,15 @@ export async function runAssimilate(args, deps) {
             'Run this command inside a Git repository.\n');
         return 1;
     }
+    if (args.flags.server === undefined && deps.defaultAuthority === undefined) {
+        const serverInstall = await deps.ensureLocalServerInstalled();
+        if (serverInstall !== 'present') {
+            // A newly installed server still needs its explicit setup/start journey.
+            // Decline, non-interactive, and failure paths have already printed exact
+            // recovery commands. None may continue into private-state mutation.
+            return serverInstall === 'installed' ? 0 : 1;
+        }
+    }
     try {
         await deps.preparePrivateRoot();
     }

@@ -33,7 +33,9 @@ export interface UpdateDeps {
     currentClient(): Promise<InstalledPackage>;
     currentServer(): Promise<InstalledPackage | null>;
     publishedPackage(name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE, version: string): Promise<PublishedPackage>;
-    installGlobal(name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE, version: string): Promise<void>;
+    installGlobal(name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE, version: string, options?: {
+        ignoreScripts?: boolean;
+    }): Promise<void>;
     reenter(binPath: string, args: readonly string[]): Promise<number>;
     serverJson(binPath: string, command: 'update' | 'status'): Promise<unknown>;
     verifyRunningProtocol(origin: string): Promise<void>;
@@ -43,7 +45,14 @@ export interface UpdateDeps {
     stderr(text: string): void;
     calls?: string[];
 }
+export declare function isExactSemver(value: unknown): value is string;
 export declare function parseUpdateArgs(args: readonly string[], reentryAuthorized?: boolean): ParsedUpdateArgs;
+/**
+ * Resolve the exact published server that can run with an already-installed
+ * client. First-run onboarding uses this instead of inventing a second
+ * registry path or installing an unpinned `latest` spec.
+ */
+export declare function resolveCompatibleServerTarget(clientSharedVersion: string, deps: Pick<UpdateDeps, 'publishedPackage'>): Promise<PublishedPackage>;
 export declare function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promise<number>;
 export declare function inspectNpmPackageAt(input: {
     name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE;

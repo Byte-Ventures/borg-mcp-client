@@ -45,7 +45,7 @@ function renderServerState(client, server, status, update) {
         `  running integrity: ${status?.runningIntegrity ?? 'unavailable'}\n` +
         `  server update: ${updateLine}\n`);
 }
-function isExactSemver(value) {
+export function isExactSemver(value) {
     return typeof value === 'string' && EXACT_SEMVER.test(value);
 }
 function isCanonicalSha512Integrity(value) {
@@ -157,6 +157,23 @@ async function publishedPair(target, deps) {
             `Wait for a compatible published pair and rerun borg update.`);
     }
     return { client, server };
+}
+/**
+ * Resolve the exact published server that can run with an already-installed
+ * client. First-run onboarding uses this instead of inventing a second
+ * registry path or installing an unpinned `latest` spec.
+ */
+export async function resolveCompatibleServerTarget(clientSharedVersion, deps) {
+    if (!isExactSemver(clientSharedVersion)) {
+        throw new Error(`installed client has an invalid ${SHARED_PACKAGE} pin`);
+    }
+    const server = await deps.publishedPackage(SERVER_PACKAGE, 'latest');
+    validatePublishedPackage(server, SERVER_PACKAGE);
+    if (server.sharedVersion !== clientSharedVersion) {
+        throw new Error(`published ${SERVER_PACKAGE}@${server.version} pins ${SHARED_PACKAGE}@${server.sharedVersion}, ` +
+            `but this client requires ${SHARED_PACKAGE}@${clientSharedVersion}`);
+    }
+    return server;
 }
 function assertInstalled(installed, published) {
     if (installed.name !== published.name ||
@@ -754,11 +771,12 @@ export function buildDefaultUpdateDeps() {
         },
         currentServer: async () => inspectNpmPackage(SERVER_PACKAGE, 'borg-mcp-server', false, await context()),
         publishedPackage: async (name, version) => defaultPublishedPackage(name, version, await context()),
-        installGlobal: async (name, version) => {
+        installGlobal: async (name, version, options) => {
             const npm = await context();
             const result = await runCommand(npm.commandPath, [
                 'install',
                 '--global',
+                ...(options?.ignoreScripts ? ['--ignore-scripts'] : []),
                 `--prefix=${npm.prefix}`,
                 `--registry=${CANONICAL_NPM_REGISTRY}`,
                 `${name}@${version}`,
