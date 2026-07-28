@@ -111,6 +111,12 @@ describe('runtime wake-path health', () => {
     expect(openCodeWakePathHealthy(openCodeState())).toBe(true);
   });
 
+  it('does not report a configured but unbound OpenCode target as healthy', () => {
+    expect(openCodeWakePathHealthy(openCodeState({
+      sessionId: null,
+    }))).toBeNull();
+  });
+
   it('uses the real Codex bridge probe instead of granting health by CLI kind', async () => {
     const probeCodex = vi.fn(async () => false);
     const wakePath = await inspectWakePath(

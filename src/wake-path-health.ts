@@ -41,6 +41,7 @@ export function openCodeWakePathHealthy(
   ) {
     return null;
   }
+  if (state.sessionId === null) return null;
   return true;
 }
 
