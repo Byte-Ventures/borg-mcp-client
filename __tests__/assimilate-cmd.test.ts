@@ -52,6 +52,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       message.startsWith('Cube name') ? '' : message.startsWith('Create cube?') ? 'y' : '1'),
     promptSecret: vi.fn(async () => 'i'.repeat(43)),
     isTTY: () => true,
+    ensureLocalServerInstalled: vi.fn(async () => 'present'),
     chdir: vi.fn(),
     homedir: vi.fn(() => '/home/test'),
     mkdirp: vi.fn(),
@@ -2805,6 +2806,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(await runAssimilate({ role: undefined, flags: { server: 'localhost:8787', yes: true } }, deps)).toBe(0);
 
     expect(connectServer).toHaveBeenCalledWith('https://localhost:8787');
+    expect(deps.ensureLocalServerInstalled).not.toHaveBeenCalled();
     expect(prompt).not.toHaveBeenCalled();
     expect(listCubes).toHaveBeenCalledWith(
       'https://localhost:8787',
@@ -2819,6 +2821,32 @@ describe('runAssimilate: #1015 authority selection', () => {
       }),
     }));
   });
+
+  it.each([
+    ['declined', 1],
+    ['non-interactive', 1],
+    ['failed', 1],
+    ['installed', 0],
+  ] as const)(
+    'stops before private-state mutation when first-run server installation is %s',
+    async (serverInstall, expectedExit) => {
+      const preparePrivateRoot = vi.fn(async () => {});
+      const connectServer = vi.fn();
+      const ensureLocalServerInstalled = vi.fn(async () => serverInstall);
+      const deps = makeStubDeps({
+        defaultAuthority: undefined,
+        preparePrivateRoot,
+        connectServer,
+        ensureLocalServerInstalled,
+      });
+
+      expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(expectedExit);
+
+      expect(ensureLocalServerInstalled).toHaveBeenCalledOnce();
+      expect(preparePrivateRoot).not.toHaveBeenCalled();
+      expect(connectServer).not.toHaveBeenCalled();
+    },
+  );
 
   it('gives an endpoint-bound recovery command when a local role is unavailable', async () => {
     const stderr = vi.fn();

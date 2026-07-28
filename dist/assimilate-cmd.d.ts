@@ -90,6 +90,7 @@ export interface AssimilateDeps {
     prompt: (message: string) => Promise<string>;
     promptSecret: (message: string) => Promise<string>;
     isTTY: () => boolean;
+    ensureLocalServerInstalled: () => Promise<'present' | 'installed' | 'declined' | 'non-interactive' | 'failed'>;
     /** Selected-harness approval inspection/consent (client#20). */
     resolveCliApprovals?: (cli: BorgCli, cwd: string) => Promise<LaunchApprovalDecision>;
     getHostname: () => string;

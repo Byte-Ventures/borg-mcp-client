@@ -54,7 +54,12 @@ export interface UpdateDeps {
     name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
     version: string,
   ): Promise<PublishedPackage>;
-  installGlobal(name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE, version: string): Promise<void>;
+  publishedVersions(name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE): Promise<string[]>;
+  installGlobal(
+    name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
+    version: string,
+    options?: { ignoreScripts?: boolean },
+  ): Promise<void>;
   reenter(binPath: string, args: readonly string[]): Promise<number>;
   serverJson(binPath: string, command: 'update' | 'status'): Promise<unknown>;
   verifyRunningProtocol(origin: string): Promise<void>;
@@ -150,7 +155,7 @@ function renderServerState(
   );
 }
 
-function isExactSemver(value: unknown): boolean {
+export function isExactSemver(value: unknown): value is string {
   return typeof value === 'string' && EXACT_SEMVER.test(value);
 }
 
@@ -273,6 +278,44 @@ async function publishedPair(
     );
   }
   return { client, server };
+}
+
+/**
+ * Resolve the exact published server that can run with an already-installed
+ * client. First-run onboarding uses this instead of inventing a second
+ * registry path or installing an unpinned `latest` spec.
+ */
+export async function resolveCompatibleServerTarget(
+  clientSharedVersion: string,
+  deps: Pick<UpdateDeps, 'publishedPackage' | 'publishedVersions'>,
+): Promise<PublishedPackage> {
+  if (!isExactSemver(clientSharedVersion)) {
+    throw new Error(`installed client has an invalid ${SHARED_PACKAGE} pin`);
+  }
+  const stableVersions = (await deps.publishedVersions(SERVER_PACKAGE))
+    .filter((version) => isExactSemver(version) && !version.includes('-'))
+    .sort(compareStableSemverDescending);
+  for (const version of stableVersions) {
+    const server = await deps.publishedPackage(SERVER_PACKAGE, version);
+    validatePublishedPackage(server, SERVER_PACKAGE);
+    if (server.version !== version) {
+      throw new Error(`registry returned the wrong ${SERVER_PACKAGE} manifest version`);
+    }
+    if (server.sharedVersion === clientSharedVersion) return server;
+  }
+  throw new Error(
+    `no published ${SERVER_PACKAGE} release uses ${SHARED_PACKAGE}@${clientSharedVersion}`,
+  );
+}
+
+function compareStableSemverDescending(left: string, right: string): number {
+  const leftParts = left.split('+', 1)[0].split('.').map((part) => BigInt(part));
+  const rightParts = right.split('+', 1)[0].split('.').map((part) => BigInt(part));
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] > rightParts[index]) return -1;
+    if (leftParts[index] < rightParts[index]) return 1;
+  }
+  return right.localeCompare(left);
 }
 
 function assertInstalled(
@@ -920,6 +963,36 @@ async function defaultPublishedPackage(
   return published;
 }
 
+async function defaultPublishedVersions(
+  name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
+  context: NpmContext,
+): Promise<string[]> {
+  void context;
+  const endpoint = new URL(encodeURIComponent(name), CANONICAL_NPM_REGISTRY);
+  try {
+    const response = await fetch(endpoint, {
+      headers: { Accept: 'application/json' },
+      redirect: 'error',
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const parsed: unknown = await response.json();
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('response was not a package object');
+    }
+    const versions = (parsed as Record<string, unknown>).versions;
+    if (!versions || typeof versions !== 'object' || Array.isArray(versions)) {
+      throw new Error('package versions were not an object');
+    }
+    const values = Object.keys(versions);
+    if (values.length === 0 || values.some((version) => !isExactSemver(version))) {
+      throw new Error('package versions were missing or invalid');
+    }
+    return values;
+  } catch {
+    throw new Error(`registry version lookup failed for ${name}`);
+  }
+}
+
 async function defaultConfirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   let interrupted = false;
@@ -958,11 +1031,13 @@ export function buildDefaultUpdateDeps(): UpdateDeps {
       await context(),
     ),
     publishedPackage: async (name, version) => defaultPublishedPackage(name, version, await context()),
-    installGlobal: async (name, version) => {
+    publishedVersions: async (name) => defaultPublishedVersions(name, await context()),
+    installGlobal: async (name, version, options) => {
       const npm = await context();
       const result = await runCommand(npm.commandPath, [
         'install',
         '--global',
+        ...(options?.ignoreScripts ? ['--ignore-scripts'] : []),
         `--prefix=${npm.prefix}`,
         `--registry=${CANONICAL_NPM_REGISTRY}`,
         `${name}@${version}`,
