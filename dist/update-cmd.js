@@ -403,7 +403,7 @@ export async function runUpdate(options, deps) {
     if (client.version !== pair.client.version || client.sharedVersion !== pair.client.sharedVersion) {
         let installedClient = null;
         try {
-            await deps.installGlobal(CLIENT_PACKAGE, pair.client.version);
+            await deps.installGlobal(CLIENT_PACKAGE, pair.client.version, { ignoreScripts: true });
             installedClient = await deps.currentClient();
             assertInstalled(installedClient, pair.client);
             const args = [
@@ -459,7 +459,7 @@ export async function runUpdate(options, deps) {
             throw new Error('previously installed server is unavailable');
         if (discoveredServer.version !== pair.server.version ||
             discoveredServer.sharedVersion !== pair.server.sharedVersion) {
-            await deps.installGlobal(SERVER_PACKAGE, pair.server.version);
+            await deps.installGlobal(SERVER_PACKAGE, pair.server.version, { ignoreScripts: true });
         }
         const verified = await deps.currentServer();
         if (!verified)

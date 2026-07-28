@@ -264,7 +264,11 @@ describe('runUpdate', () => {
     const d = deps({ reenter: vi.fn(async () => { throw new Error('spawn failed'); }) });
 
     await expect(runUpdate({ yes: true }, d)).resolves.toBe(1);
-    expect(d.installGlobal).toHaveBeenCalledWith('borgmcp', '2.3.0');
+    expect(d.installGlobal).toHaveBeenCalledWith(
+      'borgmcp',
+      '2.3.0',
+      { ignoreScripts: true },
+    );
     expect(d.reenter).toHaveBeenCalledOnce();
     expect(d.serverJson).not.toHaveBeenCalled();
     expect(d.stderr).toHaveBeenCalledOnce();
@@ -406,7 +410,11 @@ describe('runUpdate', () => {
 
     await expect(runUpdate({ yes: true }, d)).resolves.toBe(0);
     expect(d.installGlobal).toHaveBeenCalledOnce();
-    expect(d.installGlobal).toHaveBeenCalledWith('borgmcp', '2.3.0');
+    expect(d.installGlobal).toHaveBeenCalledWith(
+      'borgmcp',
+      '2.3.0',
+      { ignoreScripts: true },
+    );
     expect(d.serverJson).not.toHaveBeenCalled();
   });
 
