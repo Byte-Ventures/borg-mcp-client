@@ -9,10 +9,76 @@ import {
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildDefaultUpdateDeps } from '../src/update-cmd.js';
+import {
+  buildDefaultUpdateDeps,
+  runUpdate,
+  type PublishedPackage,
+  type UpdateDeps,
+} from '../src/update-cmd.js';
 
 const roots: string[] = [];
 const originalPath = process.env.PATH;
+const CLIENT_TARGET: PublishedPackage = {
+  name: 'borgmcp',
+  version: '2.3.0',
+  integrity: `sha512-${Buffer.alloc(64, 1).toString('base64')}`,
+  sharedVersion: '0.6.5',
+};
+const SERVER_TARGET: PublishedPackage = {
+  name: 'borgmcp-server',
+  version: '0.4.0',
+  integrity: `sha512-${Buffer.alloc(64, 2).toString('base64')}`,
+  sharedVersion: '0.6.5',
+};
+
+function installed(
+  target: PublishedPackage,
+  version = target.version,
+  sharedVersion = target.sharedVersion,
+) {
+  const packageRoot = `/npm/lib/node_modules/${target.name}`;
+  return {
+    name: target.name,
+    version,
+    sharedVersion,
+    packageRoot,
+    binPath: `${packageRoot}/dist/${target.name === 'borgmcp' ? 'claude.js' : 'cli.js'}`,
+  };
+}
+
+function updateDeps(
+  adapter: UpdateDeps,
+  overrides: Partial<UpdateDeps>,
+): UpdateDeps {
+  return {
+    ...adapter,
+    currentClient: vi.fn(async () => installed(CLIENT_TARGET)),
+    currentServer: vi.fn(async () => null),
+    publishedPackage: vi.fn(async (name) =>
+      name === 'borgmcp' ? CLIENT_TARGET : SERVER_TARGET),
+    publishedVersions: vi.fn(async (name) =>
+      name === 'borgmcp' ? [CLIENT_TARGET.version] : [SERVER_TARGET.version]),
+    reenter: vi.fn(async () => 0),
+    serverJson: vi.fn(async () => ({
+      status: 'running',
+      installed_controller: 'borgmcp-server@0.4.0',
+      prepared_runtime: 'borgmcp-server@0.4.0',
+      prepared_integrity: SERVER_TARGET.integrity,
+      running_runtime: 'borgmcp-server@0.4.0',
+      running_integrity: SERVER_TARGET.integrity,
+      build_identity: 'a'.repeat(40),
+      endpoint: 'https://127.0.0.1:7091',
+      mode: 'managed',
+      service_adapter: 'launchd',
+      data_identity: 'available',
+      next_action: null,
+    })),
+    verifyRunningProtocol: vi.fn(async () => undefined),
+    stdout: vi.fn(),
+    stderr: vi.fn(),
+    ...overrides,
+  };
+}
 
 function fakeNpm(registry: string, manifest: unknown = {
   name: 'borgmcp',
@@ -260,6 +326,53 @@ describe('default npm update adapter', () => {
       expect.stringMatching(/^--prefix=/),
       '--registry=https://registry.npmjs.org/',
       'borgmcp-server@0.6.0',
+    ]);
+  });
+
+  it('runs the client update install with lifecycle scripts disabled', async () => {
+    const npm = fakeNpm('https://registry.npmjs.org/');
+    const adapter = buildDefaultUpdateDeps();
+    const deps = updateDeps(adapter, {
+      currentClient: vi.fn()
+        .mockResolvedValueOnce(installed(CLIENT_TARGET, '2.2.0', '0.6.4'))
+        .mockResolvedValueOnce(installed(CLIENT_TARGET)),
+    });
+
+    await expect(runUpdate({ yes: true }, deps)).resolves.toBe(0);
+    expect(npm.log().find(([command]) => command === 'install')).toEqual([
+      'install',
+      '--global',
+      '--ignore-scripts',
+      expect.stringMatching(/^--prefix=/),
+      '--registry=https://registry.npmjs.org/',
+      'borgmcp@2.3.0',
+    ]);
+  });
+
+  it('runs the server update install with lifecycle scripts disabled', async () => {
+    const npm = fakeNpm('https://registry.npmjs.org/');
+    const adapter = buildDefaultUpdateDeps();
+    const deps = updateDeps(adapter, {
+      currentServer: vi.fn()
+        .mockResolvedValueOnce(installed(SERVER_TARGET, '0.3.0', '0.6.4'))
+        .mockResolvedValue(installed(SERVER_TARGET)),
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: {
+        clientVersion: CLIENT_TARGET.version,
+        serverVersion: SERVER_TARGET.version,
+        serverPresent: true,
+      },
+    }, deps)).resolves.toBe(0);
+    expect(npm.log().find(([command]) => command === 'install')).toEqual([
+      'install',
+      '--global',
+      '--ignore-scripts',
+      expect.stringMatching(/^--prefix=/),
+      '--registry=https://registry.npmjs.org/',
+      'borgmcp-server@0.4.0',
     ]);
   });
 });
