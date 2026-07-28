@@ -4,6 +4,7 @@ interface ConnectDeps {
     droneLabel: string;
     cubeName: string;
 }
+export type OpenCodeDeliveryState = 'queued' | 'delivered-unconfirmed' | 'retried' | 'failed';
 export interface OpenCodeLaunchKickoff {
     prompt: string;
     nonce: string;
@@ -23,16 +24,19 @@ export declare function connectOpenCodeDrone(deps: ConnectDeps): Promise<void>;
  */
 export declare function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promise<boolean>;
 /**
- * Inject a silent context entry (noReply) into our session.
- * Falls through silently — caller falls back to inbox write.
+ * Queue one durable inbox entry for delivery into the bound OpenCode session.
+ * The SSE entry ID becomes a stable OpenCode message ID, so retries and replay
+ * can confirm an earlier ambiguous submission without running it twice.
  */
-export declare function injectOpenCodeEntry(text: string): Promise<boolean>;
+export declare function injectOpenCodeEntry(text: string, entryId?: string): Promise<boolean>;
 export declare function probeOpenCodeDroneArmed(): Promise<boolean | null>;
 export declare function disconnectOpenCodeDrone(): void;
 export declare function getOpenCodeConnectionState(): {
     connected: boolean;
     sessionId: string | null;
     totalEntriesInjected: number;
+    totalEntriesRetried: number;
+    deliveryStates: Record<OpenCodeDeliveryState, number>;
 };
 export declare function computeOpenCodePort(droneId: string, base?: number): number;
 /** Test-only cleanup for module state and the local cross-process binding. */

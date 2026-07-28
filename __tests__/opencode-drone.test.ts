@@ -40,12 +40,24 @@ function installOpenCodeApi(options: {
   messages?: Record<string, unknown[]>;
   missing?: Set<string>;
   promptStatus?: Record<string, number>;
+  promptResponse?: (input: {
+    sessionId: string;
+    body: Record<string, unknown>;
+    attempt: number;
+  }) => Response | Promise<Response>;
+  exactMessageResponse?: (input: {
+    sessionId: string;
+    messageId: string;
+    promptBodies: Array<Record<string, unknown>>;
+  }) => Response | Promise<Response>;
 }) {
   const prompts: string[] = [];
+  const promptBodies: Array<Record<string, unknown>> = [];
+  const injectedMessages = new Map<string, { info: { id: string; role: string }; parts: unknown[] }>();
   const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const path = url.pathname;
-    const id = path.match(/^\/session\/([^/]+)(?:\/([^/]+))?$/)?.[1];
+    const id = path.match(/^\/session\/([^/]+)(?:\/.*)?$/)?.[1];
     const suffix = path.match(/^\/session\/[^/]+\/(.+)$/)?.[1];
 
     if (path === '/session') {
@@ -54,9 +66,41 @@ function installOpenCodeApi(options: {
     if (id && suffix === 'message') {
       return new Response(JSON.stringify(options.messages?.[id] ?? []), { status: 200 });
     }
+    if (id && suffix?.startsWith('message/')) {
+      const messageId = suffix.slice('message/'.length);
+      if (options.exactMessageResponse) {
+        return options.exactMessageResponse({
+          sessionId: id,
+          messageId,
+          promptBodies,
+        });
+      }
+      const message = injectedMessages.get(`${id}\0${messageId}`);
+      return message
+        ? new Response(JSON.stringify(message), { status: 200 })
+        : new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+    }
     if (id && suffix === 'prompt_async') {
       prompts.push(id);
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      promptBodies.push(body);
+      if (options.promptResponse) {
+        return options.promptResponse({
+          sessionId: id,
+          body,
+          attempt: promptBodies.length,
+        });
+      }
       const status = options.promptStatus?.[id] ?? 204;
+      if (status === 200 || status === 204) {
+        const messageID = typeof body.messageID === 'string' ? body.messageID : undefined;
+        if (messageID) {
+          injectedMessages.set(`${id}\0${messageID}`, {
+            info: { id: messageID, role: 'user' },
+            parts: Array.isArray(body.parts) ? body.parts : [],
+          });
+        }
+      }
       return new Response(status === 204 ? null : '', { status });
     }
     if (id) {
@@ -69,7 +113,7 @@ function installOpenCodeApi(options: {
     throw new Error(`Unhandled OpenCode API request: ${init?.method ?? 'GET'} ${path}`);
   });
   vi.stubGlobal('fetch', fetchMock);
-  return { prompts, fetchMock };
+  return { prompts, promptBodies, fetchMock };
 }
 
 async function connect(droneLabel = 'drone-7') {
@@ -277,7 +321,153 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState().sessionId).toBeNull();
   });
 
-  it('clears a stale cached ID after an injection failure', async () => {
+  it('recovers from an initial injection failure without changing the stable message ID', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('injection-recovery');
+    const root = session('recovery-root', 10);
+    let acceptedMessageId: string | null = null;
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      promptResponse: ({ body, attempt }) => {
+        if (attempt === 1) return new Response('', { status: 503 });
+        acceptedMessageId = String(body.messageID);
+        return new Response(null, { status: 204 });
+      },
+      exactMessageResponse: ({ messageId }) => acceptedMessageId === messageId
+        ? new Response(JSON.stringify({
+          info: { id: messageId, role: 'user' },
+          parts: [{ type: 'text', text: 'recovered' }],
+        }), { status: 200 })
+        : new Response(JSON.stringify({ error: 'not found' }), { status: 404 }),
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const delivery = injectOpenCodeEntry('recover me', 'entry-recovery');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getOpenCodeConnectionState().deliveryStates.retried).toBe(1);
+    await vi.runAllTimersAsync();
+    await expect(delivery).resolves.toBe(true);
+
+    expect(api.promptBodies).toHaveLength(2);
+    expect(api.promptBodies[1]?.messageID).toBe(api.promptBodies[0]?.messageID);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      totalEntriesInjected: 1,
+      totalEntriesRetried: 1,
+      deliveryStates: {
+        queued: 0,
+        'delivered-unconfirmed': 0,
+        retried: 0,
+        failed: 0,
+      },
+    });
+  });
+
+  it('does not resubmit when acceptance persisted before confirmation was interrupted', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('confirmation-interrupted');
+    const root = session('confirmation-root', 10);
+    let lookupCount = 0;
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      promptResponse: () => new Response(null, { status: 204 }),
+      exactMessageResponse: ({ messageId }) => {
+        lookupCount++;
+        if (lookupCount === 1) {
+          return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+        }
+        if (lookupCount === 2) throw new Error('OpenCode process terminated');
+        return new Response(JSON.stringify({
+          info: { id: messageId, role: 'user' },
+          parts: [{ type: 'text', text: 'persisted before termination' }],
+        }), { status: 200 });
+      },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const delivery = injectOpenCodeEntry('wake once', 'entry-confirmation-interrupted');
+    await vi.runAllTimersAsync();
+    await expect(delivery).resolves.toBe(true);
+
+    expect(api.promptBodies).toHaveLength(1);
+    expect(lookupCount).toBe(3);
+    expect(getOpenCodeConnectionState().totalEntriesRetried).toBe(1);
+  });
+
+  it('serializes burst delivery and deduplicates active and completed replay by entry ID', async () => {
+    const launch = launchKickoff('burst-order');
+    const root = session('burst-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const first = injectOpenCodeEntry('first', 'entry-first');
+    const duplicate = injectOpenCodeEntry('first', 'entry-first');
+    const second = injectOpenCodeEntry('second', 'entry-second');
+    const third = injectOpenCodeEntry('third', 'entry-third');
+    await expect(Promise.all([first, duplicate, second, third])).resolves.toEqual([
+      true,
+      true,
+      true,
+      true,
+    ]);
+    await expect(injectOpenCodeEntry('first', 'entry-first')).resolves.toBe(true);
+
+    expect(api.promptBodies.map((body) =>
+      ((body.parts as Array<{ text: string }>)[0]?.text)
+    )).toEqual(['first', 'second', 'third']);
+    expect(new Set(api.promptBodies.map((body) => body.messageID)).size).toBe(3);
+  });
+
+  it('exposes delivered-unconfirmed while exact-message confirmation is pending', async () => {
+    const launch = launchKickoff('unconfirmed-state');
+    const root = session('unconfirmed-root', 10);
+    let lookupCount = 0;
+    let releaseConfirmation!: (response: Response) => void;
+    const confirmation = new Promise<Response>((resolve) => {
+      releaseConfirmation = resolve;
+    });
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      promptResponse: () => new Response(null, { status: 204 }),
+      exactMessageResponse: () => {
+        lookupCount++;
+        if (lookupCount === 1) {
+          return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+        }
+        return confirmation;
+      },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const delivery = injectOpenCodeEntry('pending confirmation', 'entry-unconfirmed');
+    expect(getOpenCodeConnectionState().deliveryStates.queued).toBe(1);
+    await vi.waitFor(() => expect(api.promptBodies).toHaveLength(1));
+    expect(getOpenCodeConnectionState().deliveryStates).toEqual({
+      queued: 0,
+      'delivered-unconfirmed': 1,
+      retried: 0,
+      failed: 0,
+    });
+
+    const messageId = String(api.promptBodies[0]?.messageID);
+    releaseConfirmation(new Response(JSON.stringify({
+      info: { id: messageId, role: 'user' },
+      parts: [{ type: 'text', text: 'pending confirmation' }],
+    }), { status: 200 }));
+    await expect(delivery).resolves.toBe(true);
+  });
+
+  it('retains a valid binding and exposes failed state after bounded injection retries', async () => {
+    vi.useFakeTimers();
     const launch = launchKickoff('failed-launch');
     const root = session('failed-root', 10);
     const api = installOpenCodeApi({
@@ -288,9 +478,59 @@ describe('OpenCode wake target binding', () => {
 
     await connect();
     await injectInitialKickoff(launch);
-    await expect(injectOpenCodeEntry('wake that fails')).resolves.toBe(false);
+    const delivery = injectOpenCodeEntry('wake that fails', 'entry-that-fails');
+    await vi.runAllTimersAsync();
+    await expect(delivery).resolves.toBe(false);
 
-    expect(api.prompts).toEqual([root.id]);
-    expect(getOpenCodeConnectionState().sessionId).toBeNull();
+    expect(api.prompts).toEqual([root.id, root.id, root.id, root.id]);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      sessionId: root.id,
+      totalEntriesRetried: 3,
+      deliveryStates: { failed: 1 },
+    });
+  });
+
+  it('retries one stable message ID when async acceptance is lost before persistence', async () => {
+    const launch = launchKickoff('post-acceptance-loss');
+    const root = session('loss-root', 10);
+    const promptBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+
+      if (path === '/session') {
+        return new Response(JSON.stringify([root]), { status: 200 });
+      }
+      if (path === `/session/${root.id}/message`) {
+        return new Response(JSON.stringify(kickoffMessages(launch.prompt)), { status: 200 });
+      }
+      if (path === `/session/${root.id}`) {
+        return new Response(JSON.stringify(root), { status: 200 });
+      }
+      if (path === `/session/${root.id}/prompt_async`) {
+        promptBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(null, { status: 204 });
+      }
+      if (path.startsWith(`/session/${root.id}/message/msg_`)) {
+        if (promptBodies.length < 2) {
+          return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+        }
+        return new Response(JSON.stringify({
+          info: { id: promptBodies[1]?.messageID, role: 'user' },
+          parts: [{ type: 'text', text: 'wake after acceptance' }],
+        }), { status: 200 });
+      }
+      throw new Error(`Unhandled OpenCode API request: ${init?.method ?? 'GET'} ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await connect();
+    await injectInitialKickoff(launch);
+    await expect(
+      injectOpenCodeEntry('wake after acceptance', 'entry-post-acceptance-loss'),
+    ).resolves.toBe(true);
+
+    expect(promptBodies).toHaveLength(2);
+    expect(promptBodies[0]?.messageID).toMatch(/^msg_/);
+    expect(promptBodies[1]?.messageID).toBe(promptBodies[0]?.messageID);
   });
 });

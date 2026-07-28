@@ -46,7 +46,7 @@ export declare const CURSOR_EXPIRED_CODE = "CURSOR_EXPIRED";
 export declare class StreamCursorExpiredError extends Error {
     constructor(message?: string);
 }
-export declare function setModuleInjectOpenCode(fn: (text: string) => Promise<boolean>): void;
+export declare function setModuleInjectOpenCode(fn: (text: string, entryId: string) => Promise<boolean>): void;
 export declare const INBOX_TAIL_LINES_CAP = 512;
 export declare const INBOX_TAIL_TRIM_THRESHOLD_LINES: number;
 export type RunLoopHealth = 'connected' | 'reconnecting' | 'silent-inert' | 'never-started';
@@ -131,13 +131,8 @@ export interface StreamDeps {
     ownerDeps?: import('./stream-owner.js').StreamOwnerDeps;
     /** Override owner stale threshold in focused duplicate-process tests. */
     ownerStaleMs?: number;
-    /**
-     * Optional opencode entry injector for autonomous drone processing.
-     * When provided AND the injection succeeds, the inbox file write is skipped
-     * (the drone processes the entry autonomously). On failure, falls through
-     * to the inbox write for backup.
-     */
-    injectOpenCode?: (text: string) => Promise<boolean>;
+    /** Optional OpenCode wake delivery after the durable inbox append. */
+    injectOpenCode?: (text: string, entryId: string) => Promise<boolean>;
 }
 /**
  * Test-only injection seam for runLoop (gh#866 item 2). Production calls
@@ -191,6 +186,7 @@ export type ParsedEvent = {
     as_of: string | null;
 } | {
     type: 'eviction';
+    id: string | null;
     cube_id: string | null;
     reason: string | null;
 } | {

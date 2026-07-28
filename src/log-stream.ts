@@ -120,9 +120,13 @@ function isProcessAlive(pid: number): boolean {
  * startup (from index.ts) once the opencode drone module is initialized.
  * Used by defaultDeps when no explicit injectOpenCode is supplied.
  */
-let _moduleInjectOpenCode: ((text: string) => Promise<boolean>) | undefined;
+let _moduleInjectOpenCode:
+  | ((text: string, entryId: string) => Promise<boolean>)
+  | undefined;
 
-export function setModuleInjectOpenCode(fn: (text: string) => Promise<boolean>): void {
+export function setModuleInjectOpenCode(
+  fn: (text: string, entryId: string) => Promise<boolean>
+): void {
   _moduleInjectOpenCode = fn;
 }
 
@@ -387,13 +391,8 @@ export interface StreamDeps {
   ownerDeps?: import('./stream-owner.js').StreamOwnerDeps;
   /** Override owner stale threshold in focused duplicate-process tests. */
   ownerStaleMs?: number;
-  /**
-   * Optional opencode entry injector for autonomous drone processing.
-   * When provided AND the injection succeeds, the inbox file write is skipped
-   * (the drone processes the entry autonomously). On failure, falls through
-   * to the inbox write for backup.
-   */
-  injectOpenCode?: (text: string) => Promise<boolean>;
+  /** Optional OpenCode wake delivery after the durable inbox append. */
+  injectOpenCode?: (text: string, entryId: string) => Promise<boolean>;
 }
 
 const defaultDeps: Required<StreamDeps> = {
@@ -408,7 +407,10 @@ const defaultDeps: Required<StreamDeps> = {
   abortSignal: new AbortController().signal,
   ownerDeps: {},
   ownerStaleMs: 70_000,
-  injectOpenCode: (text) => _moduleInjectOpenCode ? _moduleInjectOpenCode(text) : Promise.resolve(false),
+  injectOpenCode: (text, entryId) =>
+    _moduleInjectOpenCode
+      ? _moduleInjectOpenCode(text, entryId)
+      : Promise.resolve(false),
 };
 
 // ------------------------------------------------------------------
@@ -814,24 +816,24 @@ export async function streamOnce(
     ev: Extract<ParsedEvent, { type: 'log' }>
   ): Promise<'persisted-skip' | 'written'> => {
     const line = formatInboxLine(withSseEventId(ev.data, ev.id));
-    if (
-      isCatchingUp &&
+    const alreadyPersisted = isCatchingUp && (
       // gh#441: pass the rendered line so the dedup can also recognize LEGACY
       // (no-entry_id-prefix) on-disk lines, not just the [entry_id:] marker.
-      (await hasInboxEntryId(active.cubeId, active.droneId, ev.id, line))
-    ) {
+      await hasInboxEntryId(active.cubeId, active.droneId, ev.id, line)
+    );
+    if (alreadyPersisted) {
+      // Replay still re-enters the OpenCode delivery queue with the same entry
+      // ID. The queue confirms/deduplicates it by stable OpenCode message ID.
+      await injectOpenCode(line, ev.id);
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
     }
-    // gh#opencode: try autonomous opencode injection first. When the drone's
-    // child session processes entries directly, skip the inbox write (the
-    // Monitor/tail-F path is unused for opencode). Falls through to inbox on
-    // failure so the entry is never lost.
-    if (await injectOpenCode(line)) {
-      return 'written';
-    }
+    // The inbox append is the durable record. OpenCode injection is only the
+    // wake attempt and may return before the agent finishes processing.
     await appendLine(active.cubeId, active.droneId, line);
-    wakeCodex(formatCodexWakePrompt(line));
+    if (!(await injectOpenCode(line, ev.id))) {
+      wakeCodex(formatCodexWakePrompt(line));
+    }
     return 'written';
   };
 
@@ -978,11 +980,16 @@ export async function streamOnce(
       if (event.type === 'eviction') {
         streamState.lastContentEventAt = nowIso;
         try {
+          const line = formatEvictionSentinelLine(event.reason);
           await appendLine(
             active.cubeId,
             active.droneId,
-            formatEvictionSentinelLine(event.reason)
+            line
           );
+          const entryId =
+            event.id ??
+            `control:eviction:${active.cubeId}:${active.droneId}:${event.reason ?? ''}`;
+          await injectOpenCode(line, entryId);
         } catch {
           // Inbox write failed — the Path-B 410 backstop still tears the drone
           // down on its next authed call. Best-effort wake only.
@@ -1178,7 +1185,7 @@ export type ParsedEvent =
   | { type: 'heartbeat'; ts: string | null; hwm: BroadcastHwm | null }
   | { type: 'bookmark'; as_of: string | null }
   // gh#877 Path-A: terminal eviction control frame (wake hint, zero authority).
-  | { type: 'eviction'; cube_id: string | null; reason: string | null }
+  | { type: 'eviction'; id: string | null; cube_id: string | null; reason: string | null }
   | { type: 'unknown'; raw: string };
 
 /**
@@ -1336,7 +1343,7 @@ function parseEventBlock(block: string): ParsedEvent | null {
     } catch {
       // fall through with nulls
     }
-    return { type: 'eviction', cube_id, reason };
+    return { type: 'eviction', id: id || null, cube_id, reason };
   }
   return { type: 'unknown', raw: block };
 }
