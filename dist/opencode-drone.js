@@ -11,6 +11,8 @@ function log(msg) {
     catch { }
 }
 let state = null;
+const OPEN_CODE_DELIVERY_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000];
+const OPEN_CODE_DELIVERY_HISTORY_LIMIT = 256;
 // This is correlation metadata, intentionally not an instruction to the
 // launched agent. A markdown comment keeps it benign in the user-visible
 // kickoff while preserving it in OpenCode's stored message text.
@@ -28,7 +30,18 @@ export function createOpenCodeLaunchKickoff(kickoff, nonce = randomUUID()) {
     };
 }
 const bindingPathsForTests = new Set();
+function abandonOpenCodeDeliveries(current) {
+    if (!current)
+        return;
+    current.connected = false;
+    for (const delivery of current.activeDeliveries.values()) {
+        delivery.resolve(false);
+    }
+    current.activeDeliveries.clear();
+    current.deliveryQueue.length = 0;
+}
 export async function connectOpenCodeDrone(deps) {
+    abandonOpenCodeDeliveries(state);
     state = {
         serverUrl: deps.serverUrl,
         sessionId: null,
@@ -39,6 +52,13 @@ export async function connectOpenCodeDrone(deps) {
         cubeName: deps.cubeName,
         connected: true,
         totalEntriesInjected: 0,
+        totalEntriesRetried: 0,
+        deliveryQueue: [],
+        activeDeliveries: new Map(),
+        deliveredEntries: new Map(),
+        unconfirmedEntries: new Map(),
+        failedEntries: new Map(),
+        processingDeliveries: false,
     };
     log(`connected url=${deps.serverUrl} dir=${deps.directory}`);
 }
@@ -88,15 +108,12 @@ async function listSessions() {
     return JSON.parse(body);
 }
 async function getSession(id) {
-    try {
-        const { status, body } = await rawGet(`/session/${id}`);
-        if (status !== 200)
-            return null;
-        return JSON.parse(body);
-    }
-    catch {
+    const { status, body } = await rawGet(`/session/${id}`);
+    if (status === 404)
         return null;
-    }
+    if (status !== 200)
+        throw new Error(`OpenCode session request failed (${status})`);
+    return JSON.parse(body);
 }
 async function listSessionMessages(id) {
     const { status, body } = await rawGet(`/session/${id}/message`);
@@ -104,9 +121,22 @@ async function listSessionMessages(id) {
         throw new Error(`OpenCode session messages request failed (${status})`);
     return JSON.parse(body);
 }
+async function getSessionMessage(sessionId, messageId) {
+    const { status, body } = await rawGet(`/session/${sessionId}/message/${encodeURIComponent(messageId)}`);
+    if (status === 404)
+        return 'missing';
+    if (status !== 200) {
+        throw new Error(`OpenCode message request failed (${status})`);
+    }
+    const message = JSON.parse(body);
+    if (message.info?.id !== messageId || message.info.role !== 'user') {
+        throw new Error('OpenCode returned the wrong injected message');
+    }
+    return 'found';
+}
 async function promptSession(id, bodyObj) {
     const { status } = await rawPost(`/session/${id}/prompt_async`, bodyObj);
-    return status === 200 || status === 204;
+    return status;
 }
 // ---------------------------------------------------------------------------
 // Persist the launch-selected session for the separately spawned MCP child.
@@ -294,12 +324,146 @@ async function resolveInjectionSession() {
     }
     return bound;
 }
-async function rebindAfterFailure(knownRootSessionIds) {
-    const replacement = await findUnseenTopLevelSession(knownRootSessionIds);
-    if (!replacement)
-        return null;
-    saveBinding(replacement.session, replacement.knownRootSessionIds);
-    return replacement.session;
+function openCodeMessageId(entryId) {
+    const digest = createHash('sha256').update(entryId).digest('hex');
+    return `msg_borg_${digest}`;
+}
+function rememberBounded(entries, entryId, text) {
+    entries.delete(entryId);
+    entries.set(entryId, text);
+    while (entries.size > OPEN_CODE_DELIVERY_HISTORY_LIMIT) {
+        const oldest = entries.keys().next().value;
+        if (typeof oldest !== 'string')
+            break;
+        entries.delete(oldest);
+    }
+}
+function waitForDeliveryRetry(attempt) {
+    const delay = OPEN_CODE_DELIVERY_RETRY_DELAYS_MS[attempt] ?? 0;
+    return delay > 0
+        ? new Promise((resolve) => setTimeout(resolve, delay))
+        : Promise.resolve();
+}
+async function deliverOpenCodeEntry(owner, delivery) {
+    let target = null;
+    // Before the one allowed POST, retries are safe: no submission has happened.
+    // A replayed inbox entry sets allowSubmit=false, so it can only confirm an
+    // earlier submission and can never manufacture a second prompt.
+    for (let attempt = 0; attempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; attempt++) {
+        if (state !== owner || !owner.connected)
+            return 'failed';
+        if (attempt > 0) {
+            delivery.state = 'retried';
+            owner.totalEntriesRetried++;
+            await waitForDeliveryRetry(attempt);
+            if (state !== owner || !owner.connected)
+                return 'failed';
+        }
+        if (!target) {
+            try {
+                target = await resolveInjectionSession();
+            }
+            catch (err) {
+                log(`entry ${delivery.entryId} target unavailable: ${err}`);
+                continue;
+            }
+            if (!target)
+                return 'failed';
+        }
+        try {
+            if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
+                return 'delivered';
+            }
+        }
+        catch (err) {
+            log(`entry ${delivery.entryId} confirmation unavailable: ${err}`);
+            continue;
+        }
+        if (!delivery.allowSubmit) {
+            continue;
+        }
+        // OpenCode does not deduplicate repeated prompt_async calls by messageID:
+        // they append duplicate parts. Submit at most once, then only poll the
+        // exact message. A transport failure is ambiguous and follows the same
+        // confirmation-only path.
+        let status = null;
+        try {
+            status = await promptSession(target.id, {
+                messageID: delivery.messageId,
+                parts: [{ type: 'text', text: delivery.text }],
+            });
+        }
+        catch (err) {
+            log(`entry ${delivery.entryId} submission outcome unavailable: ${err}`);
+        }
+        delivery.state = 'delivered-unconfirmed';
+        if (status !== null && status !== 200 && status !== 204) {
+            if (status === 404)
+                clearBinding();
+            return 'failed';
+        }
+        for (let confirmationAttempt = 0; confirmationAttempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; confirmationAttempt++) {
+            if (confirmationAttempt > 0) {
+                delivery.state = 'retried';
+                owner.totalEntriesRetried++;
+                await waitForDeliveryRetry(confirmationAttempt);
+                if (state !== owner || !owner.connected)
+                    return 'delivered-unconfirmed';
+                delivery.state = 'delivered-unconfirmed';
+            }
+            try {
+                if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
+                    return 'delivered';
+                }
+            }
+            catch (err) {
+                log(`entry ${delivery.entryId} post-acceptance confirmation unavailable: ${err}`);
+            }
+        }
+        return 'delivered-unconfirmed';
+    }
+    // A replay begins from a durable inbox record but cannot know whether the
+    // prior process stopped before or after submission. Missing confirmation
+    // therefore remains unknown, not a definite delivery failure.
+    return delivery.allowSubmit ? 'failed' : 'delivered-unconfirmed';
+}
+async function processOpenCodeDeliveries(owner) {
+    if (owner.processingDeliveries)
+        return;
+    owner.processingDeliveries = true;
+    try {
+        while (state === owner && owner.deliveryQueue.length > 0) {
+            const delivery = owner.deliveryQueue.shift();
+            let outcome = 'failed';
+            try {
+                outcome = await deliverOpenCodeEntry(owner, delivery);
+            }
+            catch (err) {
+                log(`entry ${delivery.entryId} delivery error: ${err}`);
+            }
+            owner.activeDeliveries.delete(delivery.entryId);
+            if (outcome === 'delivered') {
+                owner.unconfirmedEntries.delete(delivery.entryId);
+                owner.failedEntries.delete(delivery.entryId);
+                rememberBounded(owner.deliveredEntries, delivery.entryId, delivery.text);
+                owner.totalEntriesInjected++;
+                delivery.resolve(true);
+            }
+            else if (outcome === 'delivered-unconfirmed') {
+                owner.failedEntries.delete(delivery.entryId);
+                rememberBounded(owner.unconfirmedEntries, delivery.entryId, delivery.text);
+                delivery.resolve(true);
+            }
+            else {
+                owner.unconfirmedEntries.delete(delivery.entryId);
+                rememberBounded(owner.failedEntries, delivery.entryId, delivery.text);
+                delivery.resolve(false);
+            }
+        }
+    }
+    finally {
+        owner.processingDeliveries = false;
+    }
 }
 // ---------------------------------------------------------------------------
 // Public API
@@ -347,43 +511,60 @@ export async function injectInitialKickoff(launch) {
     }
 }
 /**
- * Inject a silent context entry (noReply) into our session.
- * Falls through silently — caller falls back to inbox write.
+ * Queue one durable inbox entry for delivery into the bound OpenCode session.
+ * The SSE entry ID becomes a stable OpenCode message ID, so retries and replay
+ * can confirm an earlier ambiguous submission without running it twice.
  */
-export async function injectOpenCodeEntry(text) {
-    if (!state?.connected)
-        return false;
-    try {
-        const target = await resolveInjectionSession();
-        if (!target)
-            return false;
-        const body = {
-            parts: [{ type: 'text', text }],
-        };
-        if (await promptSession(target.id, body)) {
-            state.totalEntriesInjected++;
-            return true;
+export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(text).digest('hex'), allowSubmit = true) {
+    const owner = state;
+    if (!owner?.connected)
+        return Promise.resolve(false);
+    const deliveredText = owner.deliveredEntries.get(entryId);
+    if (deliveredText !== undefined) {
+        if (deliveredText !== text) {
+            log(`entry ${entryId} replay text mismatch`);
+            rememberBounded(owner.failedEntries, entryId, text);
+            return Promise.resolve(false);
         }
-        // A failed prompt means the cached target is no longer trustworthy. Clear
-        // it before considering only a newer root created by `/new`; never fall
-        // through to a child or arbitrary newest session.
-        const knownRootSessionIds = [...state.knownRootSessionIds];
-        clearBinding();
-        const replacement = await rebindAfterFailure(knownRootSessionIds);
-        if (!replacement)
-            return false;
-        if (await promptSession(replacement.id, body)) {
-            state.totalEntriesInjected++;
-            return true;
+        return Promise.resolve(true);
+    }
+    const unconfirmedText = owner.unconfirmedEntries.get(entryId);
+    if (unconfirmedText !== undefined) {
+        if (unconfirmedText !== text) {
+            log(`entry ${entryId} unconfirmed replay text mismatch`);
+            rememberBounded(owner.failedEntries, entryId, text);
+            return Promise.resolve(false);
         }
-        clearBinding();
-        return false;
+        return Promise.resolve(true);
     }
-    catch (err) {
-        log(`entry error: ${err}`);
-        clearBinding();
-        return false;
+    const active = owner.activeDeliveries.get(entryId);
+    if (active) {
+        if (active.text !== text) {
+            log(`entry ${entryId} active text mismatch`);
+            rememberBounded(owner.failedEntries, entryId, text);
+            return Promise.resolve(false);
+        }
+        return active.promise;
     }
+    let resolveDelivery;
+    const promise = new Promise((resolve) => {
+        resolveDelivery = resolve;
+    });
+    const delivery = {
+        entryId,
+        text,
+        messageId: openCodeMessageId(entryId),
+        allowSubmit,
+        state: 'queued',
+        resolve: resolveDelivery,
+        promise,
+    };
+    owner.unconfirmedEntries.delete(entryId);
+    owner.failedEntries.delete(entryId);
+    owner.activeDeliveries.set(entryId, delivery);
+    owner.deliveryQueue.push(delivery);
+    void processOpenCodeDeliveries(owner);
+    return promise;
 }
 export async function probeOpenCodeDroneArmed() {
     if (!state?.connected)
@@ -399,18 +580,29 @@ export async function probeOpenCodeDroneArmed() {
         return false;
     }
     catch {
-        clearBinding();
         return false;
     }
 }
 export function disconnectOpenCodeDrone() {
+    abandonOpenCodeDeliveries(state);
     state = null;
 }
 export function getOpenCodeConnectionState() {
+    const deliveryStates = {
+        queued: 0,
+        'delivered-unconfirmed': state?.unconfirmedEntries.size ?? 0,
+        retried: 0,
+        failed: state?.failedEntries.size ?? 0,
+    };
+    for (const delivery of state?.activeDeliveries.values() ?? []) {
+        deliveryStates[delivery.state]++;
+    }
     return {
         connected: state?.connected ?? false,
         sessionId: state?.sessionId ?? null,
         totalEntriesInjected: state?.totalEntriesInjected ?? 0,
+        totalEntriesRetried: state?.totalEntriesRetried ?? 0,
+        deliveryStates,
     };
 }
 export function computeOpenCodePort(droneId, base = 14096) {
@@ -424,6 +616,7 @@ export function computeOpenCodePort(droneId, base = 14096) {
 }
 /** Test-only cleanup for module state and the local cross-process binding. */
 export function __resetOpenCodeDroneForTests() {
+    abandonOpenCodeDeliveries(state);
     state = null;
     for (const path of bindingPathsForTests) {
         try {

@@ -299,7 +299,9 @@ const defaultDeps = {
     abortSignal: new AbortController().signal,
     ownerDeps: {},
     ownerStaleMs: 70_000,
-    injectOpenCode: (text) => _moduleInjectOpenCode ? _moduleInjectOpenCode(text) : Promise.resolve(false),
+    injectOpenCode: (text, entryId, allowSubmit) => _moduleInjectOpenCode
+        ? _moduleInjectOpenCode(text, entryId, allowSubmit)
+        : Promise.resolve(false),
 };
 async function runLoop(testDeps = {}) {
     const _getActiveCube = testDeps.getActiveCube ?? getActiveCube;
@@ -619,22 +621,23 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     // here, then continues WITHOUT re-recording); 'written' after a fresh append.
     const writeInboxLine = async (ev) => {
         const line = formatInboxLine(withSseEventId(ev.data, ev.id));
-        if (isCatchingUp &&
-            // gh#441: pass the rendered line so the dedup can also recognize LEGACY
-            // (no-entry_id-prefix) on-disk lines, not just the [entry_id:] marker.
-            (await hasInboxEntryId(active.cubeId, active.droneId, ev.id, line))) {
+        const alreadyPersisted = isCatchingUp && (
+        // gh#441: pass the rendered line so the dedup can also recognize LEGACY
+        // (no-entry_id-prefix) on-disk lines, not just the [entry_id:] marker.
+        await hasInboxEntryId(active.cubeId, active.droneId, ev.id, line));
+        if (alreadyPersisted) {
+            // Replay still re-enters the OpenCode delivery queue with the same entry
+            // ID. The queue confirms/deduplicates it by stable OpenCode message ID.
+            await injectOpenCode(line, ev.id, false);
             markEventPersisted(ev.id, ev.data?.created_at ?? '');
             return 'persisted-skip';
         }
-        // gh#opencode: try autonomous opencode injection first. When the drone's
-        // child session processes entries directly, skip the inbox write (the
-        // Monitor/tail-F path is unused for opencode). Falls through to inbox on
-        // failure so the entry is never lost.
-        if (await injectOpenCode(line)) {
-            return 'written';
-        }
+        // The inbox append is the durable record. OpenCode injection is only the
+        // wake attempt and may return before the agent finishes processing.
         await appendLine(active.cubeId, active.droneId, line);
-        wakeCodex(formatCodexWakePrompt(line));
+        if (!(await injectOpenCode(line, ev.id, true))) {
+            wakeCodex(formatCodexWakePrompt(line));
+        }
         return 'written';
     };
     // Record the event in the bounded recent-ids dedup set (FIFO-capped) and
@@ -771,7 +774,11 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
             if (event.type === 'eviction') {
                 streamState.lastContentEventAt = nowIso;
                 try {
-                    await appendLine(active.cubeId, active.droneId, formatEvictionSentinelLine(event.reason));
+                    const line = formatEvictionSentinelLine(event.reason);
+                    await appendLine(active.cubeId, active.droneId, line);
+                    const entryId = event.id ??
+                        `control:eviction:${active.cubeId}:${active.droneId}:${event.reason ?? ''}`;
+                    await injectOpenCode(line, entryId, true);
                 }
                 catch {
                     // Inbox write failed — the Path-B 410 backstop still tears the drone
@@ -1090,7 +1097,7 @@ function parseEventBlock(block) {
         catch {
             // fall through with nulls
         }
-        return { type: 'eviction', cube_id, reason };
+        return { type: 'eviction', id: id || null, cube_id, reason };
     }
     return { type: 'unknown', raw: block };
 }

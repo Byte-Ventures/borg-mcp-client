@@ -273,13 +273,13 @@ describe('parseSSE', () => {
   // gh#877 Path-A: terminal eviction control frame.
   it('parses an eviction event into a typed eviction ParsedEvent', async () => {
     const blocks = [
-      'event: eviction\ndata: {"cube_id":"cube-1","reason":"evicted from cube"}\n\n',
+      'event: eviction\nid: eviction-1\ndata: {"cube_id":"cube-1","reason":"evicted from cube"}\n\n',
     ];
     const resp = makeSSEResponse(blocks);
     const events: any[] = [];
     for await (const e of parseSSE(resp.body!)) events.push(e);
     expect(events).toEqual([
-      { type: 'eviction', cube_id: 'cube-1', reason: 'evicted from cube' },
+      { type: 'eviction', id: 'eviction-1', cube_id: 'cube-1', reason: 'evicted from cube' },
     ]);
   });
 
@@ -385,21 +385,89 @@ describe('streamOnce', () => {
     await expect(first).resolves.toBe('streamed');
   });
 
+  it('persists an OpenCode entry before submitting its stable SSE entry ID', async () => {
+    const order: string[] = [];
+    const appendLine = vi.fn(async () => {
+      order.push('append');
+    });
+    const injectOpenCode = vi.fn(async (
+      _line: string,
+      entryId: string,
+      allowSubmit: boolean,
+    ) => {
+      expect(order).toEqual(['append']);
+      expect(entryId).toBe('e-durable');
+      expect(allowSubmit).toBe(true);
+      order.push('inject');
+      return true;
+    });
+    const wakeCodex = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-durable\ndata: {"id":"e-durable","drone_id":"other","drone_label":"drone-2","role_name":"Builder","message":"durable first","created_at":"2026-05-11T12:00:01Z"}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      injectOpenCode,
+      wakeCodex,
+    });
+
+    expect(order).toEqual(['append', 'inject']);
+    expect(appendLine).toHaveBeenCalledTimes(1);
+    expect(injectOpenCode).toHaveBeenCalledWith(
+      expect.stringContaining('[entry_id: e-durable]'),
+      'e-durable',
+      true,
+    );
+    expect(wakeCodex).not.toHaveBeenCalled();
+  });
+
+  it('replays a durable catchup entry through OpenCode without appending it twice', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-replay\ndata: {"id":"e-replay","drone_id":"other","drone_label":"drone-2","role_name":"Builder","message":"replay me","created_at":"2026-05-11T12:00:01Z"}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, 'older-entry', vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      hasInboxEntryId: vi.fn().mockResolvedValue(true),
+      injectOpenCode,
+    });
+
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).toHaveBeenCalledWith(
+      expect.stringContaining('[entry_id: e-replay]'),
+      'e-replay',
+      false,
+    );
+  });
+
   // gh#877 Path-A: an eviction frame writes the wake SENTINEL to the inbox and
   // closes the session (streamOnce returns). The sentinel is a WAKE HINT — the
   // agent confirms via an authed 410 before tearing down (tested via the funnel
   // elsewhere); streamOnce's job is just to deliver the wake + close cleanly.
   it('writes the [CUBE-EVICTED] wake sentinel and closes the session on an eviction frame', async () => {
+    const order: string[] = [];
     const blocks = [
       'event: bookmark\ndata: {"as_of":"2026-05-11T12:00:00Z"}\n\n',
-      'event: eviction\ndata: {"cube_id":"cube-1","reason":"evicted from cube"}\n\n',
+      'event: eviction\nid: eviction-1\ndata: {"cube_id":"cube-1","reason":"evicted from cube"}\n\n',
       // A trailing log entry must NOT be written — the loop broke on eviction.
       'event: log\nid: e_after\ndata: {"id":"e_after","message":"should not append","created_at":"2026-05-11T12:00:02Z"}\n\n',
     ];
-    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const appendLine = vi.fn(async () => {
+      order.push('append');
+    });
+    const injectOpenCode = vi.fn(async () => {
+      order.push('inject');
+      return true;
+    });
     const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse(blocks));
 
-    await streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(fetchImpl, appendLine));
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      injectOpenCode,
+    });
 
     expect(appendLine).toHaveBeenCalledTimes(1);
     expect(appendLine).toHaveBeenCalledWith(
@@ -412,6 +480,12 @@ describe('streamOnce', () => {
       ACTIVE_CUBE.cubeId,
       ACTIVE_CUBE.droneId,
       expect.stringContaining('should not append')
+    );
+    expect(order).toEqual(['append', 'inject']);
+    expect(injectOpenCode).toHaveBeenCalledWith(
+      expect.stringContaining('[CUBE-EVICTED]'),
+      'eviction-1',
+      true,
     );
   });
 
