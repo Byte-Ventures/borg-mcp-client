@@ -108,6 +108,28 @@ describe('default npm update adapter', () => {
     ]);
   });
 
+  it('lists exact published versions from the canonical package endpoint without redirects', async () => {
+    const npm = fakeNpm('https://registry.npmjs.org/', {
+      versions: {
+        '0.6.0': {},
+        '0.7.0': {},
+      },
+    });
+    const deps = buildDefaultUpdateDeps();
+
+    await expect(deps.publishedVersions('borgmcp-server')).resolves.toEqual([
+      '0.6.0',
+      '0.7.0',
+    ]);
+    expect(npm.fetch).toHaveBeenCalledWith(
+      new URL('https://registry.npmjs.org/borgmcp-server'),
+      {
+        headers: { Accept: 'application/json' },
+        redirect: 'error',
+      },
+    );
+  });
+
   it('fails closed generically when the registry response is not a manifest object', async () => {
     fakeNpm('https://registry.npmjs.org/', ['unexpected']);
     const deps = buildDefaultUpdateDeps();
@@ -219,5 +241,25 @@ describe('default npm update adapter', () => {
       .rejects.toThrow(/active npm executable changed/);
     expect(original.log().some(([command]) => command === 'install')).toBe(false);
     expect(replacement.log()).toEqual([]);
+  });
+
+  it('passes --ignore-scripts when the caller requires a lifecycle-safe install', async () => {
+    const npm = fakeNpm('https://registry.npmjs.org/');
+    const deps = buildDefaultUpdateDeps();
+
+    await expect(deps.installGlobal(
+      'borgmcp-server',
+      '0.6.0',
+      { ignoreScripts: true },
+    )).resolves.toBeUndefined();
+
+    expect(npm.log().find(([command]) => command === 'install')).toEqual([
+      'install',
+      '--global',
+      '--ignore-scripts',
+      expect.stringMatching(/^--prefix=/),
+      '--registry=https://registry.npmjs.org/',
+      'borgmcp-server@0.6.0',
+    ]);
   });
 });

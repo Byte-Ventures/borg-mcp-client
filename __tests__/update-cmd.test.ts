@@ -71,6 +71,8 @@ function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
     })),
     publishedPackage: vi.fn(async (name) =>
       name === 'borgmcp' ? CLIENT_TARGET : SERVER_TARGET),
+    publishedVersions: vi.fn(async (name) =>
+      name === 'borgmcp' ? [CLIENT_TARGET.version] : [SERVER_TARGET.version]),
     installGlobal: vi.fn(async (name) => {
       calls.push(`install:${name}`);
       if (name === 'borgmcp') {

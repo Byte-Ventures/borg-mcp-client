@@ -119,8 +119,13 @@ use the server's `/api/cubes/*` coordination routes. They cannot use hosted OAut
 credentials or change authority implicitly.
 
 The lifecycle facade invokes the separately installed `borgmcp-server`; it does
-not bundle the server into the client. The server must be running and trusted
-before assimilation. An owner enrollment carrying the persisted `create_cube`
+not bundle the server into the client. During interactive setup or a first
+`borg assimilate` with no selected server, the client offers to install the
+exact server release that pins the same `borgmcp-shared` version. A
+non-interactive invocation never prompts or installs; run `borg setup` in an
+interactive terminal, or pass `borg assimilate --host <host>` to use an
+existing server. The server must be running and trusted before assimilation.
+An owner enrollment carrying the persisted `create_cube`
 capability creates one idempotent cube per repository during normal
 assimilation or `borg server cube init`, using Software Development or Starter;
 repeating an

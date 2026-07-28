@@ -18,6 +18,7 @@ import { readinessProbeEnv } from './readiness-probe.js';
 import { resolveMcpBinaryPath } from './self-path.js';
 import { buildRuntimeMetadataReport } from './runtime-metadata.js';
 import { inspectLiveInboxMonitor } from './seat-reattach-guard.js';
+import { offerFirstRunServerInstall } from './first-run-server.js';
 
 import type { AssimilateDeps } from './assimilate-cmd.js';
 import {
@@ -149,6 +150,8 @@ export function buildDefaultAssimilateDeps(
       return typeof result.invitation === 'string' ? result.invitation : '';
     },
     isTTY: () => process.stdin.isTTY === true,
+    ensureLocalServerInstalled: async () =>
+      (await offerFirstRunServerInstall()).kind,
     resolveCliApprovals: (cli, cwd) => resolveLaunchBorgApprovals(
       cli,
       defaultApprovalIo(

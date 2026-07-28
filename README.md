@@ -56,8 +56,11 @@ as `prepared; still stopped`. If no local server was installed, that phase is
 explicitly skipped. Use `borg update --yes` for a non-interactive invocation.
 
 Partial completion is reported with `borg update --yes` as the idempotent retry.
-Borg does not install an absent server, start a stopped server, or restart agent
-processes. Restart active agent sessions yourself after the client changes.
+During interactive setup or a first `borg assimilate` with no selected server,
+Borg offers to install the exact compatible `borgmcp-server` release. It never
+installs an absent server from a non-interactive invocation. Borg does not start
+a stopped server or restart agent processes. Restart active agent sessions
+yourself after the client changes.
 
 ## First-time setup
 
@@ -67,7 +70,10 @@ Run the setup wizard:
 borg setup
 ```
 
-The wizard configures Borg MCP with the supported agent CLIs installed on your machine. This client is local-only: it connects to a self-hosted `borgmcp-server` you run on localhost or your LAN. No account, sign-in, or subscription is required.
+The wizard offers to install the exact compatible `borgmcp-server` release when
+none is present, then configures Borg MCP with the supported agent CLIs installed
+on your machine. The client and server remain separate local-only packages. No
+account, sign-in, or subscription is required.
 
 `borg ...` commands are terminal commands. `borg_...` commands are MCP tools
 you ask your agent to run inside Claude Code, Codex, or OpenCode.
