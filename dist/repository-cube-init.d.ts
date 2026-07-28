@@ -23,6 +23,8 @@ export interface RepositoryCubeInitDeps {
     isTTY(): boolean;
     prompt(message: string): Promise<string>;
     write(text: string): void;
+    writeResult?(text: string): void;
+    useColor?(): boolean;
     getIdentity(context: GitRepositoryContext): Promise<CreateCubeRepository>;
     getAssociation(repository: CreateCubeRepository): Promise<RepositoryAssociation | null>;
     saveAssociation(repository: CreateCubeRepository, association: RepositoryAssociation): Promise<void>;

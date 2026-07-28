@@ -55,6 +55,9 @@ describe('gh#611 — top-level borg --help', () => {
 describe('borg server help', () => {
   it('lists the facade in top-level help', () => {
     expect(topLevelHelpText('9.9.9')).toContain('borg server <command> [arguments]');
+    expect(topLevelHelpText('9.9.9')).toContain(
+      `  borg server cube init    Initialize this repository's cube without creating a drone`,
+    );
   });
 
   it('uses the approved bounded client-owned copy', () => {
@@ -74,8 +77,8 @@ describe('borg server help', () => {
   });
 
   it('pins command-specific cube init usage and options', () => {
-    expect(cubeInitHelpText()).toBe(
-      `borg server cube init — initialize this Git repository's cube without creating a drone\n\n` +
+    expect(cubeInitHelpText('9.9.9')).toBe(
+      `borg server cube init (borgmcp 9.9.9) — initialize this Git repository's cube without creating a drone\n\n` +
       `Usage:\n` +
       `  borg server cube init [options]\n\n` +
       `Options:\n` +
@@ -84,9 +87,12 @@ describe('borg server help', () => {
       `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
       `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
       `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
-      `  --help, -h                       Show this help\n`,
+      `  --help, -h                       Show this help\n\n` +
+      `An existing repository association skips all prompts. One accessible exact-name legacy\n` +
+      `cube requires explicit interactive adoption; ambiguous matches fail closed. An enrolled\n` +
+      `owner client may create a repository cube; ordinary clients require an explicit cube grant.\n`,
     );
-    expect(cubeInitHelpText()).not.toMatch(/--worktree|--here|--cli|--model/);
+    expect(cubeInitHelpText('9.9.9')).not.toMatch(/--worktree|--here|--cli|--model/);
   });
 });
 

@@ -40,7 +40,7 @@ Run borg server <command> --help for server command options.
 `borg server cube init --help` prints:
 
 ```text
-borg server cube init — initialize this Git repository's cube without creating a drone
+borg server cube init (borgmcp <version>) — initialize this Git repository's cube without creating a drone
 
 Usage:
   borg server cube init [options]
@@ -52,6 +52,10 @@ Options:
   --template software-dev|starter  New-cube template (default: software-dev)
   --yes, -y                        Accept new-cube defaults; never adopt by name
   --help, -h                       Show this help
+
+An existing repository association skips all prompts. One accessible exact-name legacy
+cube requires explicit interactive adoption; ambiguous matches fail closed. An enrolled
+owner client may create a repository cube; ordinary clients require an explicit cube grant.
 ```
 
 Local server client credentials are stored in the owner-controlled

@@ -28,7 +28,7 @@ export function topLevelHelpText(version) {
         `  borg assimilate [role]   Join or create a cube\n` +
         `  borg assimilate --host <host>   Join or create on an explicit server\n` +
         `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
-        `  borg server cube init   Initialize this repository's cube without creating a drone\n` +
+        `  borg server cube init    Initialize this repository's cube without creating a drone\n` +
         `  borg reset-local-seat    Clear ONLY this worktree's saved local seat (offline; after a rejection)\n` +
         `  borg sync [--prune]      Sync this worktree's branch to origin/main\n` +
         `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
@@ -71,8 +71,8 @@ export function serverHelpText() {
         `Run borg server <command> --help for server command options.\n`);
 }
 /** Client-owned help for repository cube initialization without a drone. */
-export function cubeInitHelpText() {
-    return (`borg server cube init — initialize this Git repository's cube without creating a drone\n\n` +
+export function cubeInitHelpText(version) {
+    return (`borg server cube init (borgmcp ${version}) — initialize this Git repository's cube without creating a drone\n\n` +
         `Usage:\n` +
         `  borg server cube init [options]\n\n` +
         `Options:\n` +
@@ -81,7 +81,10 @@ export function cubeInitHelpText() {
         `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
         `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
         `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
-        `  --help, -h                       Show this help\n`);
+        `  --help, -h                       Show this help\n\n` +
+        `An existing repository association skips all prompts. One accessible exact-name legacy\n` +
+        `cube requires explicit interactive adoption; ambiguous matches fail closed. An enrolled\n` +
+        `owner client may create a repository cube; ordinary clients require an explicit cube grant.\n`);
 }
 /**
  * Help text for `borg assimilate --help` — the home for the full assimilate flag

@@ -12,12 +12,18 @@ describe('server facade CLI wiring', () => {
     expect(updateDispatch).toBeLessThan(source.indexOf('await initConsolePrefix()'));
   });
 
-  it('dispatches server commands before client debug, version, prefix, or startup state', async () => {
+  it('initializes debug before client-owned cube init but keeps general client initialization after facade dispatch', async () => {
     const source = await readFile(new URL('../src/claude.ts', import.meta.url), 'utf8');
     const dispatch = source.indexOf('await runEarlyServerFacade(process.argv)');
+    const earlyCubeInit = source.indexOf('if (isClientOwnedCubeInitArgv(process.argv))');
+    const earlyDebug = source.indexOf('initDebugFromArgv(process.argv)', earlyCubeInit);
+    const generalDebug = source.indexOf('initDebugFromArgv(process.argv)', earlyDebug + 1);
 
     expect(dispatch).toBeGreaterThan(0);
-    expect(dispatch).toBeLessThan(source.indexOf('initDebugFromArgv(process.argv)'));
+    expect(earlyCubeInit).toBeGreaterThan(0);
+    expect(earlyCubeInit).toBeLessThan(earlyDebug);
+    expect(earlyDebug).toBeLessThan(dispatch);
+    expect(dispatch).toBeLessThan(generalDebug);
     expect(dispatch).toBeLessThan(source.indexOf('handleVersionFlag()'));
     expect(dispatch).toBeLessThan(source.indexOf('await initConsolePrefix()'));
   });

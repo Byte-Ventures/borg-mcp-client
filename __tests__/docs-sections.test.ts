@@ -1,16 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { cubeInitHelpText } from '../src/cli-help.js';
+import { getPackageVersion } from '../src/version.js';
 import { reattachFailureMessage, reattachOnlyRefusal } from '../src/assimilate-guard.js';
 import { DOCS_SECTIONS, matchDocsSections, formatDocsIndex } from '../src/docs-sections';
 import { formatSeatReattachRefusal } from '../src/seat-reattach-guard.js';
 import { TOOL_MANIFEST } from '../src/tool-manifest';
 
 describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
-  it('keeps documented cube-init help byte-exact with the CLI contract', () => {
+  it('keeps documented cube-init help exact with a release-stable version placeholder', () => {
     const docs = readFileSync(new URL('../docs/LOCAL_SERVER.md', import.meta.url), 'utf8');
     const match = docs.match(/`borg server cube init --help` prints:\n\n```text\n([\s\S]*?)```/);
-    expect(match?.[1]).toBe(cubeInitHelpText());
+    expect(match?.[1].replace('<version>', getPackageVersion()))
+      .toBe(cubeInitHelpText(getPackageVersion()));
   });
 
   it('every section is well-formed (slug/title/url/summary/keywords; url is repository-local, never hosted)', () => {
