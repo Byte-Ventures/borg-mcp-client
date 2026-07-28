@@ -27,6 +27,7 @@ function deps(overrides: Partial<FirstRunServerInstallDeps> = {}) {
   const value: FirstRunServerInstallDeps = {
     currentServer: vi.fn(async () => installed),
     publishedPackage: vi.fn(async () => SERVER),
+    publishedVersions: vi.fn(async () => [SERVER.version]),
     installGlobal: vi.fn(async () => { installed = INSTALLED; }),
     confirm: vi.fn(async () => 'yes'),
     isTTY: vi.fn(() => true),
@@ -71,7 +72,8 @@ describe('offerFirstRunServerInstall', () => {
       kind: 'installed',
       server: INSTALLED,
     });
-    expect(d.value.publishedPackage).toHaveBeenCalledWith('borgmcp-server', 'latest');
+    expect(d.value.publishedVersions).toHaveBeenCalledWith('borgmcp-server');
+    expect(d.value.publishedPackage).toHaveBeenCalledWith('borgmcp-server', '0.6.0');
     expect(d.value.confirm).toHaveBeenCalledWith(expect.stringContaining(
       'Command: npm install --global --ignore-scripts borgmcp-server@0.6.0',
     ));
@@ -99,9 +101,44 @@ describe('offerFirstRunServerInstall', () => {
     },
   );
 
-  it('refuses a published server whose exact shared pin differs from the client', async () => {
+  it('selects the newest older server compatible with the client when latest has moved ahead', async () => {
+    const releases: Record<string, PublishedPackage> = {
+      '0.7.0': { ...SERVER, version: '0.7.0', sharedVersion: '0.8.0' },
+      '0.6.1': { ...SERVER, version: '0.6.1' },
+      '0.6.0': SERVER,
+    };
+    let installed: InstalledPackage | null = null;
     const d = deps({
-      publishedPackage: vi.fn(async () => ({ ...SERVER, sharedVersion: '0.6.4' })),
+      currentServer: vi.fn(async () => installed),
+      publishedVersions: vi.fn(async () => ['0.6.0', '0.7.0', '0.6.1']),
+      publishedPackage: vi.fn(async (_name, version) => releases[version]),
+      installGlobal: vi.fn(async (_name, version) => {
+        installed = { ...INSTALLED, version };
+      }),
+    });
+
+    await expect(offerFirstRunServerInstall(d.value)).resolves.toEqual({
+      kind: 'installed',
+      server: { ...INSTALLED, version: '0.6.1' },
+    });
+    expect(d.value.publishedPackage).toHaveBeenNthCalledWith(1, 'borgmcp-server', '0.7.0');
+    expect(d.value.publishedPackage).toHaveBeenNthCalledWith(2, 'borgmcp-server', '0.6.1');
+    expect(d.value.publishedPackage).not.toHaveBeenCalledWith('borgmcp-server', '0.6.0');
+    expect(d.value.installGlobal).toHaveBeenCalledWith(
+      'borgmcp-server',
+      '0.6.1',
+      { ignoreScripts: true },
+    );
+  });
+
+  it('fails closed with actionable direction when no compatible server release exists', async () => {
+    const d = deps({
+      publishedVersions: vi.fn(async () => ['0.7.0']),
+      publishedPackage: vi.fn(async () => ({
+        ...SERVER,
+        version: '0.7.0',
+        sharedVersion: '0.8.0',
+      })),
     });
 
     await expect(offerFirstRunServerInstall(d.value)).resolves.toEqual({
@@ -110,7 +147,11 @@ describe('offerFirstRunServerInstall', () => {
     expect(d.value.confirm).not.toHaveBeenCalled();
     expect(d.value.installGlobal).not.toHaveBeenCalled();
     expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
-      'but this client requires borgmcp-shared@0.7.0',
+      'no published borgmcp-server release uses borgmcp-shared@0.7.0',
+    ));
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('`borg update`'));
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      '`borg assimilate --host <host>`',
     ));
   });
 

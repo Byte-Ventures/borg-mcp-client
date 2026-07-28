@@ -33,6 +33,7 @@ export interface UpdateDeps {
     currentClient(): Promise<InstalledPackage>;
     currentServer(): Promise<InstalledPackage | null>;
     publishedPackage(name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE, version: string): Promise<PublishedPackage>;
+    publishedVersions(name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE): Promise<string[]>;
     installGlobal(name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE, version: string, options?: {
         ignoreScripts?: boolean;
     }): Promise<void>;
@@ -52,7 +53,7 @@ export declare function parseUpdateArgs(args: readonly string[], reentryAuthoriz
  * client. First-run onboarding uses this instead of inventing a second
  * registry path or installing an unpinned `latest` spec.
  */
-export declare function resolveCompatibleServerTarget(clientSharedVersion: string, deps: Pick<UpdateDeps, 'publishedPackage'>): Promise<PublishedPackage>;
+export declare function resolveCompatibleServerTarget(clientSharedVersion: string, deps: Pick<UpdateDeps, 'publishedPackage' | 'publishedVersions'>): Promise<PublishedPackage>;
 export declare function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promise<number>;
 export declare function inspectNpmPackageAt(input: {
     name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE;

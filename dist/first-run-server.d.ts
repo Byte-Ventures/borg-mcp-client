@@ -11,6 +11,7 @@ export type FirstRunServerInstallResult = {
 export interface FirstRunServerInstallDeps {
     currentServer(): Promise<InstalledPackage | null>;
     publishedPackage(name: 'borgmcp' | 'borgmcp-server', version: string): Promise<PublishedPackage>;
+    publishedVersions(name: 'borgmcp' | 'borgmcp-server'): Promise<string[]>;
     installGlobal(name: 'borgmcp' | 'borgmcp-server', version: string, options?: {
         ignoreScripts?: boolean;
     }): Promise<void>;

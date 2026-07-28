@@ -167,13 +167,30 @@ export async function resolveCompatibleServerTarget(clientSharedVersion, deps) {
     if (!isExactSemver(clientSharedVersion)) {
         throw new Error(`installed client has an invalid ${SHARED_PACKAGE} pin`);
     }
-    const server = await deps.publishedPackage(SERVER_PACKAGE, 'latest');
-    validatePublishedPackage(server, SERVER_PACKAGE);
-    if (server.sharedVersion !== clientSharedVersion) {
-        throw new Error(`published ${SERVER_PACKAGE}@${server.version} pins ${SHARED_PACKAGE}@${server.sharedVersion}, ` +
-            `but this client requires ${SHARED_PACKAGE}@${clientSharedVersion}`);
+    const stableVersions = (await deps.publishedVersions(SERVER_PACKAGE))
+        .filter((version) => isExactSemver(version) && !version.includes('-'))
+        .sort(compareStableSemverDescending);
+    for (const version of stableVersions) {
+        const server = await deps.publishedPackage(SERVER_PACKAGE, version);
+        validatePublishedPackage(server, SERVER_PACKAGE);
+        if (server.version !== version) {
+            throw new Error(`registry returned the wrong ${SERVER_PACKAGE} manifest version`);
+        }
+        if (server.sharedVersion === clientSharedVersion)
+            return server;
     }
-    return server;
+    throw new Error(`no published ${SERVER_PACKAGE} release uses ${SHARED_PACKAGE}@${clientSharedVersion}`);
+}
+function compareStableSemverDescending(left, right) {
+    const leftParts = left.split('+', 1)[0].split('.').map((part) => BigInt(part));
+    const rightParts = right.split('+', 1)[0].split('.').map((part) => BigInt(part));
+    for (let index = 0; index < 3; index += 1) {
+        if (leftParts[index] > rightParts[index])
+            return -1;
+        if (leftParts[index] < rightParts[index])
+            return 1;
+    }
+    return right.localeCompare(left);
 }
 function assertInstalled(installed, published) {
     if (installed.name !== published.name ||
@@ -734,6 +751,34 @@ async function defaultPublishedPackage(name, version, context) {
     validatePublishedPackage(published, name);
     return published;
 }
+async function defaultPublishedVersions(name, context) {
+    void context;
+    const endpoint = new URL(encodeURIComponent(name), CANONICAL_NPM_REGISTRY);
+    try {
+        const response = await fetch(endpoint, {
+            headers: { Accept: 'application/json' },
+            redirect: 'error',
+        });
+        if (!response.ok)
+            throw new Error(`HTTP ${response.status}`);
+        const parsed = await response.json();
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('response was not a package object');
+        }
+        const versions = parsed.versions;
+        if (!versions || typeof versions !== 'object' || Array.isArray(versions)) {
+            throw new Error('package versions were not an object');
+        }
+        const values = Object.keys(versions);
+        if (values.length === 0 || values.some((version) => !isExactSemver(version))) {
+            throw new Error('package versions were missing or invalid');
+        }
+        return values;
+    }
+    catch {
+        throw new Error(`registry version lookup failed for ${name}`);
+    }
+}
 async function defaultConfirm(message) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     let interrupted = false;
@@ -771,6 +816,7 @@ export function buildDefaultUpdateDeps() {
         },
         currentServer: async () => inspectNpmPackage(SERVER_PACKAGE, 'borg-mcp-server', false, await context()),
         publishedPackage: async (name, version) => defaultPublishedPackage(name, version, await context()),
+        publishedVersions: async (name) => defaultPublishedVersions(name, await context()),
         installGlobal: async (name, version, options) => {
             const npm = await context();
             const result = await runCommand(npm.commandPath, [

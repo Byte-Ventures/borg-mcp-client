@@ -25,6 +25,7 @@ export interface FirstRunServerInstallDeps {
     name: 'borgmcp' | 'borgmcp-server',
     version: string,
   ): Promise<PublishedPackage>;
+  publishedVersions(name: 'borgmcp' | 'borgmcp-server'): Promise<string[]>;
   installGlobal(
     name: 'borgmcp' | 'borgmcp-server',
     version: string,
@@ -80,6 +81,7 @@ export function buildDefaultFirstRunServerInstallDeps(): FirstRunServerInstallDe
   return {
     currentServer: update.currentServer,
     publishedPackage: update.publishedPackage,
+    publishedVersions: update.publishedVersions,
     installGlobal: update.installGlobal,
     confirm: update.confirm,
     isTTY: update.isTTY,
@@ -127,7 +129,8 @@ export async function offerFirstRunServerInstall(
     deps.stderr(
       `Borg could not resolve a compatible local server. No installation was attempted.\n` +
       `${error instanceof Error ? error.message : String(error)}\n` +
-      `Run \`borg setup\` again after a compatible ${SERVER_PACKAGE} release is available.\n`,
+      `Run \`borg update\`, then run \`borg setup\` again. Or connect to an existing server with ` +
+      `\`borg assimilate --host <host>\`.\n`,
     );
     return { kind: 'failed' };
   }
