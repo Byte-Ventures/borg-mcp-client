@@ -345,6 +345,9 @@ function waitForDeliveryRetry(attempt) {
 }
 async function deliverOpenCodeEntry(owner, delivery) {
     let target = null;
+    // Before the one allowed POST, retries are safe: no submission has happened.
+    // A replayed inbox entry sets allowSubmit=false, so it can only confirm an
+    // earlier submission and can never manufacture a second prompt.
     for (let attempt = 0; attempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; attempt++) {
         if (state !== owner || !owner.connected)
             return false;
@@ -366,9 +369,6 @@ async function deliverOpenCodeEntry(owner, delivery) {
             if (!target)
                 return false;
         }
-        // A retry first asks whether the prior ambiguous submission persisted.
-        // Never submit again while that answer is unknown: a lost HTTP response
-        // may still have created the message and re-posting could run it twice.
         try {
             if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
                 return true;
@@ -378,7 +378,14 @@ async function deliverOpenCodeEntry(owner, delivery) {
             log(`entry ${delivery.entryId} confirmation unavailable: ${err}`);
             continue;
         }
-        let status;
+        if (!delivery.allowSubmit) {
+            continue;
+        }
+        // OpenCode does not deduplicate repeated prompt_async calls by messageID:
+        // they append duplicate parts. Submit at most once, then only poll the
+        // exact message. A transport failure is ambiguous and follows the same
+        // confirmation-only path.
+        let status = null;
         try {
             status = await promptSession(target.id, {
                 messageID: delivery.messageId,
@@ -386,25 +393,33 @@ async function deliverOpenCodeEntry(owner, delivery) {
             });
         }
         catch (err) {
-            log(`entry ${delivery.entryId} submission unavailable: ${err}`);
-            continue;
-        }
-        if (status !== 200 && status !== 204) {
-            if (status === 404) {
-                clearBinding();
-                return false;
-            }
-            continue;
+            log(`entry ${delivery.entryId} submission outcome unavailable: ${err}`);
         }
         delivery.state = 'delivered-unconfirmed';
-        try {
-            if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
-                return true;
+        if (status !== null && status !== 200 && status !== 204) {
+            if (status === 404)
+                clearBinding();
+            return false;
+        }
+        for (let confirmationAttempt = 0; confirmationAttempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; confirmationAttempt++) {
+            if (confirmationAttempt > 0) {
+                delivery.state = 'retried';
+                owner.totalEntriesRetried++;
+                await waitForDeliveryRetry(confirmationAttempt);
+                if (state !== owner || !owner.connected)
+                    return false;
+                delivery.state = 'delivered-unconfirmed';
+            }
+            try {
+                if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
+                    return true;
+                }
+            }
+            catch (err) {
+                log(`entry ${delivery.entryId} post-acceptance confirmation unavailable: ${err}`);
             }
         }
-        catch (err) {
-            log(`entry ${delivery.entryId} post-acceptance confirmation unavailable: ${err}`);
-        }
+        return false;
     }
     return false;
 }
@@ -488,7 +503,7 @@ export async function injectInitialKickoff(launch) {
  * The SSE entry ID becomes a stable OpenCode message ID, so retries and replay
  * can confirm an earlier ambiguous submission without running it twice.
  */
-export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(text).digest('hex')) {
+export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(text).digest('hex'), allowSubmit = true) {
     const owner = state;
     if (!owner?.connected)
         return Promise.resolve(false);
@@ -518,6 +533,7 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
         entryId,
         text,
         messageId: openCodeMessageId(entryId),
+        allowSubmit,
         state: 'queued',
         resolve: resolveDelivery,
         promise,

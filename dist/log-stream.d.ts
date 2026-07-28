@@ -46,7 +46,7 @@ export declare const CURSOR_EXPIRED_CODE = "CURSOR_EXPIRED";
 export declare class StreamCursorExpiredError extends Error {
     constructor(message?: string);
 }
-export declare function setModuleInjectOpenCode(fn: (text: string, entryId: string) => Promise<boolean>): void;
+export declare function setModuleInjectOpenCode(fn: (text: string, entryId: string, allowSubmit: boolean) => Promise<boolean>): void;
 export declare const INBOX_TAIL_LINES_CAP = 512;
 export declare const INBOX_TAIL_TRIM_THRESHOLD_LINES: number;
 export type RunLoopHealth = 'connected' | 'reconnecting' | 'silent-inert' | 'never-started';
@@ -132,7 +132,7 @@ export interface StreamDeps {
     /** Override owner stale threshold in focused duplicate-process tests. */
     ownerStaleMs?: number;
     /** Optional OpenCode wake delivery after the durable inbox append. */
-    injectOpenCode?: (text: string, entryId: string) => Promise<boolean>;
+    injectOpenCode?: (text: string, entryId: string, allowSubmit: boolean) => Promise<boolean>;
 }
 /**
  * Test-only injection seam for runLoop (gh#866 item 2). Production calls

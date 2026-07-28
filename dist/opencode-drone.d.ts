@@ -28,7 +28,7 @@ export declare function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Pro
  * The SSE entry ID becomes a stable OpenCode message ID, so retries and replay
  * can confirm an earlier ambiguous submission without running it twice.
  */
-export declare function injectOpenCodeEntry(text: string, entryId?: string): Promise<boolean>;
+export declare function injectOpenCodeEntry(text: string, entryId?: string, allowSubmit?: boolean): Promise<boolean>;
 export declare function probeOpenCodeDroneArmed(): Promise<boolean | null>;
 export declare function disconnectOpenCodeDrone(): void;
 export declare function getOpenCodeConnectionState(): {

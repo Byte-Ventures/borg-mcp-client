@@ -121,11 +121,11 @@ function isProcessAlive(pid: number): boolean {
  * Used by defaultDeps when no explicit injectOpenCode is supplied.
  */
 let _moduleInjectOpenCode:
-  | ((text: string, entryId: string) => Promise<boolean>)
+  | ((text: string, entryId: string, allowSubmit: boolean) => Promise<boolean>)
   | undefined;
 
 export function setModuleInjectOpenCode(
-  fn: (text: string, entryId: string) => Promise<boolean>
+  fn: (text: string, entryId: string, allowSubmit: boolean) => Promise<boolean>
 ): void {
   _moduleInjectOpenCode = fn;
 }
@@ -392,7 +392,11 @@ export interface StreamDeps {
   /** Override owner stale threshold in focused duplicate-process tests. */
   ownerStaleMs?: number;
   /** Optional OpenCode wake delivery after the durable inbox append. */
-  injectOpenCode?: (text: string, entryId: string) => Promise<boolean>;
+  injectOpenCode?: (
+    text: string,
+    entryId: string,
+    allowSubmit: boolean
+  ) => Promise<boolean>;
 }
 
 const defaultDeps: Required<StreamDeps> = {
@@ -407,9 +411,9 @@ const defaultDeps: Required<StreamDeps> = {
   abortSignal: new AbortController().signal,
   ownerDeps: {},
   ownerStaleMs: 70_000,
-  injectOpenCode: (text, entryId) =>
+  injectOpenCode: (text, entryId, allowSubmit) =>
     _moduleInjectOpenCode
-      ? _moduleInjectOpenCode(text, entryId)
+      ? _moduleInjectOpenCode(text, entryId, allowSubmit)
       : Promise.resolve(false),
 };
 
@@ -824,14 +828,14 @@ export async function streamOnce(
     if (alreadyPersisted) {
       // Replay still re-enters the OpenCode delivery queue with the same entry
       // ID. The queue confirms/deduplicates it by stable OpenCode message ID.
-      await injectOpenCode(line, ev.id);
+      await injectOpenCode(line, ev.id, false);
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
     }
     // The inbox append is the durable record. OpenCode injection is only the
     // wake attempt and may return before the agent finishes processing.
     await appendLine(active.cubeId, active.droneId, line);
-    if (!(await injectOpenCode(line, ev.id))) {
+    if (!(await injectOpenCode(line, ev.id, true))) {
       wakeCodex(formatCodexWakePrompt(line));
     }
     return 'written';
@@ -989,7 +993,7 @@ export async function streamOnce(
           const entryId =
             event.id ??
             `control:eviction:${active.cubeId}:${active.droneId}:${event.reason ?? ''}`;
-          await injectOpenCode(line, entryId);
+          await injectOpenCode(line, entryId, true);
         } catch {
           // Inbox write failed — the Path-B 410 backstop still tears the drone
           // down on its next authed call. Best-effort wake only.

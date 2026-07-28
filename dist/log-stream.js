@@ -299,8 +299,8 @@ const defaultDeps = {
     abortSignal: new AbortController().signal,
     ownerDeps: {},
     ownerStaleMs: 70_000,
-    injectOpenCode: (text, entryId) => _moduleInjectOpenCode
-        ? _moduleInjectOpenCode(text, entryId)
+    injectOpenCode: (text, entryId, allowSubmit) => _moduleInjectOpenCode
+        ? _moduleInjectOpenCode(text, entryId, allowSubmit)
         : Promise.resolve(false),
 };
 async function runLoop(testDeps = {}) {
@@ -628,14 +628,14 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         if (alreadyPersisted) {
             // Replay still re-enters the OpenCode delivery queue with the same entry
             // ID. The queue confirms/deduplicates it by stable OpenCode message ID.
-            await injectOpenCode(line, ev.id);
+            await injectOpenCode(line, ev.id, false);
             markEventPersisted(ev.id, ev.data?.created_at ?? '');
             return 'persisted-skip';
         }
         // The inbox append is the durable record. OpenCode injection is only the
         // wake attempt and may return before the agent finishes processing.
         await appendLine(active.cubeId, active.droneId, line);
-        if (!(await injectOpenCode(line, ev.id))) {
+        if (!(await injectOpenCode(line, ev.id, true))) {
             wakeCodex(formatCodexWakePrompt(line));
         }
         return 'written';
@@ -778,7 +778,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                     await appendLine(active.cubeId, active.droneId, line);
                     const entryId = event.id ??
                         `control:eviction:${active.cubeId}:${active.droneId}:${event.reason ?? ''}`;
-                    await injectOpenCode(line, entryId);
+                    await injectOpenCode(line, entryId, true);
                 }
                 catch {
                     // Inbox write failed — the Path-B 410 backstop still tears the drone

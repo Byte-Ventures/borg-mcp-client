@@ -321,25 +321,29 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState().sessionId).toBeNull();
   });
 
-  it('recovers from an initial injection failure without changing the stable message ID', async () => {
+  it('recovers before submission, then posts the stable message ID exactly once', async () => {
     vi.useFakeTimers();
     const launch = launchKickoff('injection-recovery');
     const root = session('recovery-root', 10);
+    let lookupCount = 0;
     let acceptedMessageId: string | null = null;
     const api = installOpenCodeApi({
       sessions: () => [root],
       messages: { [root.id]: kickoffMessages(launch.prompt) },
-      promptResponse: ({ body, attempt }) => {
-        if (attempt === 1) return new Response('', { status: 503 });
+      promptResponse: ({ body }) => {
         acceptedMessageId = String(body.messageID);
         return new Response(null, { status: 204 });
       },
-      exactMessageResponse: ({ messageId }) => acceptedMessageId === messageId
-        ? new Response(JSON.stringify({
-          info: { id: messageId, role: 'user' },
-          parts: [{ type: 'text', text: 'recovered' }],
-        }), { status: 200 })
-        : new Response(JSON.stringify({ error: 'not found' }), { status: 404 }),
+      exactMessageResponse: ({ messageId }) => {
+        lookupCount++;
+        if (lookupCount === 1) throw new Error('OpenCode process unavailable');
+        return acceptedMessageId === messageId
+          ? new Response(JSON.stringify({
+            info: { id: messageId, role: 'user' },
+            parts: [{ type: 'text', text: 'recovered' }],
+          }), { status: 200 })
+          : new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+      },
     });
 
     await connect();
@@ -350,8 +354,8 @@ describe('OpenCode wake target binding', () => {
     await vi.runAllTimersAsync();
     await expect(delivery).resolves.toBe(true);
 
-    expect(api.promptBodies).toHaveLength(2);
-    expect(api.promptBodies[1]?.messageID).toBe(api.promptBodies[0]?.messageID);
+    expect(api.promptBodies).toHaveLength(1);
+    expect(api.promptBodies[0]?.messageID).toMatch(/^msg_borg_/);
     expect(getOpenCodeConnectionState()).toMatchObject({
       totalEntriesInjected: 1,
       totalEntriesRetried: 1,
@@ -395,6 +399,36 @@ describe('OpenCode wake target binding', () => {
     expect(api.promptBodies).toHaveLength(1);
     expect(lookupCount).toBe(3);
     expect(getOpenCodeConnectionState().totalEntriesRetried).toBe(1);
+  });
+
+  it('confirms a delayed prior-process submission on replay without posting again', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('prior-process-replay');
+    const root = session('prior-process-root', 10);
+    const visibleAt = Date.now() + 500;
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      exactMessageResponse: ({ messageId }) => Date.now() < visibleAt
+        ? new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
+        : new Response(JSON.stringify({
+          info: { id: messageId, role: 'user' },
+          parts: [{ type: 'text', text: 'persisted by prior process' }],
+        }), { status: 200 }),
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const delivery = injectOpenCodeEntry(
+      'persisted by prior process',
+      'entry-prior-process',
+      false,
+    );
+    await vi.runAllTimersAsync();
+    await expect(delivery).resolves.toBe(true);
+
+    expect(api.promptBodies).toHaveLength(0);
+    expect(getOpenCodeConnectionState().totalEntriesRetried).toBe(2);
   });
 
   it('serializes burst delivery and deduplicates active and completed replay by entry ID', async () => {
@@ -473,7 +507,9 @@ describe('OpenCode wake target binding', () => {
     const api = installOpenCodeApi({
       sessions: () => [root],
       messages: { [root.id]: kickoffMessages(launch.prompt) },
-      promptStatus: { [root.id]: 500 },
+      promptResponse: () => {
+        throw new Error('connection closed after submission');
+      },
     });
 
     await connect();
@@ -482,7 +518,7 @@ describe('OpenCode wake target binding', () => {
     await vi.runAllTimersAsync();
     await expect(delivery).resolves.toBe(false);
 
-    expect(api.prompts).toEqual([root.id, root.id, root.id, root.id]);
+    expect(api.prompts).toEqual([root.id]);
     expect(getOpenCodeConnectionState()).toMatchObject({
       sessionId: root.id,
       totalEntriesRetried: 3,
@@ -490,10 +526,14 @@ describe('OpenCode wake target binding', () => {
     });
   });
 
-  it('retries one stable message ID when async acceptance is lost before persistence', async () => {
+  it('waits for delayed post-acceptance visibility without resubmitting', async () => {
+    vi.useFakeTimers();
     const launch = launchKickoff('post-acceptance-loss');
     const root = session('loss-root', 10);
     const promptBodies: Array<Record<string, unknown>> = [];
+    const storedParts: unknown[] = [];
+    let visibleAt = Number.POSITIVE_INFINITY;
+    let exactLookupCount = 0;
     const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
       const path = new URL(String(input)).pathname;
 
@@ -507,16 +547,20 @@ describe('OpenCode wake target binding', () => {
         return new Response(JSON.stringify(root), { status: 200 });
       }
       if (path === `/session/${root.id}/prompt_async`) {
-        promptBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        promptBodies.push(body);
+        storedParts.push(...(Array.isArray(body.parts) ? body.parts : []));
+        if (!Number.isFinite(visibleAt)) visibleAt = Date.now() + 500;
         return new Response(null, { status: 204 });
       }
       if (path.startsWith(`/session/${root.id}/message/msg_`)) {
-        if (promptBodies.length < 2) {
+        exactLookupCount++;
+        if (Date.now() < visibleAt) {
           return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
         }
         return new Response(JSON.stringify({
-          info: { id: promptBodies[1]?.messageID, role: 'user' },
-          parts: [{ type: 'text', text: 'wake after acceptance' }],
+          info: { id: promptBodies[0]?.messageID, role: 'user' },
+          parts: storedParts,
         }), { status: 200 });
       }
       throw new Error(`Unhandled OpenCode API request: ${init?.method ?? 'GET'} ${path}`);
@@ -525,12 +569,16 @@ describe('OpenCode wake target binding', () => {
 
     await connect();
     await injectInitialKickoff(launch);
-    await expect(
-      injectOpenCodeEntry('wake after acceptance', 'entry-post-acceptance-loss'),
-    ).resolves.toBe(true);
+    const delivery = injectOpenCodeEntry(
+      'wake after acceptance',
+      'entry-post-acceptance-loss',
+    );
+    await vi.runAllTimersAsync();
+    await expect(delivery).resolves.toBe(true);
 
-    expect(promptBodies).toHaveLength(2);
+    expect(promptBodies).toHaveLength(1);
     expect(promptBodies[0]?.messageID).toMatch(/^msg_/);
-    expect(promptBodies[1]?.messageID).toBe(promptBodies[0]?.messageID);
+    expect(storedParts).toHaveLength(1);
+    expect(exactLookupCount).toBeGreaterThanOrEqual(3);
   });
 });

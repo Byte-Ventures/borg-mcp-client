@@ -390,9 +390,14 @@ describe('streamOnce', () => {
     const appendLine = vi.fn(async () => {
       order.push('append');
     });
-    const injectOpenCode = vi.fn(async (_line: string, entryId: string) => {
+    const injectOpenCode = vi.fn(async (
+      _line: string,
+      entryId: string,
+      allowSubmit: boolean,
+    ) => {
       expect(order).toEqual(['append']);
       expect(entryId).toBe('e-durable');
+      expect(allowSubmit).toBe(true);
       order.push('inject');
       return true;
     });
@@ -412,6 +417,7 @@ describe('streamOnce', () => {
     expect(injectOpenCode).toHaveBeenCalledWith(
       expect.stringContaining('[entry_id: e-durable]'),
       'e-durable',
+      true,
     );
     expect(wakeCodex).not.toHaveBeenCalled();
   });
@@ -433,6 +439,7 @@ describe('streamOnce', () => {
     expect(injectOpenCode).toHaveBeenCalledWith(
       expect.stringContaining('[entry_id: e-replay]'),
       'e-replay',
+      false,
     );
   });
 
@@ -478,6 +485,7 @@ describe('streamOnce', () => {
     expect(injectOpenCode).toHaveBeenCalledWith(
       expect.stringContaining('[CUBE-EVICTED]'),
       'eviction-1',
+      true,
     );
   });
 
