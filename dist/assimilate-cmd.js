@@ -237,7 +237,10 @@ export async function runAssimilate(args, deps) {
         return 1;
     }
     if (args.flags.server === undefined && deps.defaultAuthority === undefined) {
-        const serverInstall = await deps.ensureLocalServerInstalled();
+        const connectCommand = mode === 'cube-init'
+            ? 'borg server cube init --host <host>'
+            : 'borg assimilate --host <host>';
+        const serverInstall = await deps.ensureLocalServerInstalled(connectCommand);
         if (serverInstall !== 'present') {
             // A newly installed server still needs its explicit setup/start journey.
             // Decline, non-interactive, and failure paths have already printed exact
@@ -358,7 +361,7 @@ export async function runAssimilate(args, deps) {
             isTTY: deps.isTTY,
             prompt: deps.prompt,
             write: deps.stderr,
-            writeResult: mode === 'cube-init' ? deps.stdout : deps.stderr,
+            ...(mode === 'cube-init' ? { writeResult: deps.stdout } : {}),
             useColor: () => deps.isTTY() && !process.env.NO_COLOR && !process.env.CI,
             getIdentity: deps.getRepositoryIdentity,
             getAssociation: (repository) => deps.getRepositoryAssociation(auth.serverTrustIdentity, repository),

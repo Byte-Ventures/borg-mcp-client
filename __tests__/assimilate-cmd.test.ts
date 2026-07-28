@@ -2985,11 +2985,34 @@ describe('runAssimilate: #1015 authority selection', () => {
 
       expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(expectedExit);
 
-      expect(ensureLocalServerInstalled).toHaveBeenCalledOnce();
+      expect(ensureLocalServerInstalled).toHaveBeenCalledWith(
+        'borg assimilate --host <host>',
+      );
       expect(preparePrivateRoot).not.toHaveBeenCalled();
       expect(connectServer).not.toHaveBeenCalled();
     },
   );
+
+  it('passes the cube-init recovery command into the pre-core first-run helper', async () => {
+    const preparePrivateRoot = vi.fn(async () => {});
+    const ensureLocalServerInstalled = vi.fn(async () => 'non-interactive' as const);
+    const deps = makeStubDeps({
+      defaultAuthority: undefined,
+      preparePrivateRoot,
+      ensureLocalServerInstalled,
+    });
+
+    await expect(runAssimilate({
+      role: undefined,
+      flags: {},
+      mode: 'cube-init',
+    }, deps)).resolves.toBe(1);
+
+    expect(ensureLocalServerInstalled).toHaveBeenCalledWith(
+      'borg server cube init --host <host>',
+    );
+    expect(preparePrivateRoot).not.toHaveBeenCalled();
+  });
 
   it('gives an endpoint-bound recovery command when a local role is unavailable', async () => {
     const stderr = vi.fn();

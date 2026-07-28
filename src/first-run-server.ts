@@ -13,6 +13,7 @@ import {
 const CLIENT_PACKAGE = 'borgmcp';
 const SERVER_PACKAGE = 'borgmcp-server';
 const SHARED_PACKAGE = 'borgmcp-shared';
+const DEFAULT_CONNECT_COMMAND = 'borg assimilate --host <host>';
 
 export type FirstRunServerInstallResult =
   | { kind: 'present'; server: InstalledPackage }
@@ -98,6 +99,7 @@ export function buildDefaultFirstRunServerInstallDeps(): FirstRunServerInstallDe
  */
 export async function offerFirstRunServerInstall(
   deps: FirstRunServerInstallDeps = buildDefaultFirstRunServerInstallDeps(),
+  connectCommand = DEFAULT_CONNECT_COMMAND,
 ): Promise<FirstRunServerInstallResult> {
   let installed: InstalledPackage | null;
   try {
@@ -116,7 +118,7 @@ export async function offerFirstRunServerInstall(
     deps.stderr(
       `No local ${SERVER_PACKAGE} installation was found. No installation was attempted because this terminal is non-interactive.\n` +
       `Run \`borg setup\` in an interactive terminal, or connect to an existing server with ` +
-      `\`borg assimilate --host <host>\`.\n`,
+      `\`${connectCommand}\`.\n`,
     );
     return { kind: 'non-interactive' };
   }
@@ -130,7 +132,7 @@ export async function offerFirstRunServerInstall(
       `Borg could not resolve a compatible local server. No installation was attempted.\n` +
       `${error instanceof Error ? error.message : String(error)}\n` +
       `Run \`borg update\`, then run \`borg setup\` again. Or connect to an existing server with ` +
-      `\`borg assimilate --host <host>\`.\n`,
+      `\`${connectCommand}\`.\n`,
     );
     return { kind: 'failed' };
   }

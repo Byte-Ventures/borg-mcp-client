@@ -65,6 +65,20 @@ describe('offerFirstRunServerInstall', () => {
     expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('`borg assimilate --host <host>`'));
   });
 
+  it('uses the caller-owned cube-init recovery command outside an interactive terminal', async () => {
+    const d = deps({ isTTY: vi.fn(() => false) });
+
+    await expect(offerFirstRunServerInstall(
+      d.value,
+      'borg server cube init --host <host>',
+    )).resolves.toEqual({ kind: 'non-interactive' });
+
+    const output = d.stderr.mock.calls.map(([text]) => String(text)).join('');
+    expect(output).toContain('`borg server cube init --host <host>`');
+    expect(output).not.toContain('`borg assimilate --host <host>`');
+    expect(d.value.publishedPackage).not.toHaveBeenCalled();
+  });
+
   it('installs and verifies the exact compatible server selected by the client', async () => {
     const d = deps();
 
@@ -153,6 +167,27 @@ describe('offerFirstRunServerInstall', () => {
     expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
       '`borg assimilate --host <host>`',
     ));
+  });
+
+  it('uses the caller-owned cube-init recovery command when compatibility resolution fails', async () => {
+    const d = deps({
+      publishedVersions: vi.fn(async () => ['0.7.0']),
+      publishedPackage: vi.fn(async () => ({
+        ...SERVER,
+        version: '0.7.0',
+        sharedVersion: '0.8.0',
+      })),
+    });
+
+    await expect(offerFirstRunServerInstall(
+      d.value,
+      'borg server cube init --host <host>',
+    )).resolves.toEqual({ kind: 'failed' });
+
+    const output = d.stderr.mock.calls.map(([text]) => String(text)).join('');
+    expect(output).toContain('`borg server cube init --host <host>`');
+    expect(output).not.toContain('`borg assimilate --host <host>`');
+    expect(d.value.confirm).not.toHaveBeenCalled();
   });
 
   it('fails closed when the installed server cannot be verified after npm returns', async () => {

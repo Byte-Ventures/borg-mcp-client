@@ -114,6 +114,9 @@ describe('guided repository cube initialization', () => {
     expect(createCube).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Product API', template: 'starter', workingRepoName: 'repo',
     }));
+    expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining(
+      'Continuing with role and seat setup...',
+    ));
   });
 
   it('does not prompt or create when an association already exists', async () => {
