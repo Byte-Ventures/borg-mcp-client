@@ -98,7 +98,11 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
         return 1;
     }
     if (error instanceof BorgServerError && error.code === 'NOT_ENROLLED') {
-        deps.stderr(`No saved enrollment for ${apiUrl}. Run ` +
+        deps.stderr(`Borg could not find a saved enrollment for ${apiUrl}. ` +
+            `This can mean that this client has not enrolled with the server, or that its enrollment ` +
+            `is saved for a different endpoint. Confirm that the host, port, and IPv4 or IPv6 ` +
+            `loopback form in ${apiUrl} match the endpoint used during enrollment. ` +
+            `If this client has never enrolled with that server, run ` +
             `${localAssimilateCommand(apiUrl, true, mode)} from the operator’s terminal.\n`);
         return 1;
     }

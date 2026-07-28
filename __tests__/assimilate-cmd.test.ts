@@ -3546,7 +3546,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(output).not.toContain('\u001b');
   });
 
-  it('uses deterministic recovery copy when no enrollment is stored', async () => {
+  it('does not mistake an endpoint mismatch for a missing enrollment', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
@@ -3561,7 +3561,11 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'No saved enrollment for https://localhost:8787. Run ' +
+      'Borg could not find a saved enrollment for https://localhost:8787. ' +
+        'This can mean that this client has not enrolled with the server, or that its enrollment ' +
+        'is saved for a different endpoint. Confirm that the host, port, and IPv4 or IPv6 ' +
+        'loopback form in https://localhost:8787 match the endpoint used during enrollment. ' +
+        'If this client has never enrolled with that server, run ' +
         '`borg assimilate --host https://localhost:8787 --enroll` from the operator’s terminal.\n',
     );
   });
