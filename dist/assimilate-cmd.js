@@ -1316,7 +1316,7 @@ export async function runAssimilate(args, deps) {
         // OpenCode assimilate launch: start TUI with the kickoff passed via
         // --prompt (auto-submits it as the first message). BORG_SESSION is
         // pinned in opencode.json. A unique port is assigned so the MCP child
-        // can connect via the HTTP API for context-streaming (injectOpenCodeEntry).
+        // can connect to OpenCode's local HTTP API for durable entry injection.
         dronePort = computeOpenCodePort(result.drone_id);
         installBorgPlugin();
         const cwd = agentCwd;
@@ -1340,9 +1340,8 @@ export async function runAssimilate(args, deps) {
             launchedAtSeconds: Math.floor(Date.now() / 1000),
         });
     }
-    // gh#opencode: inject the kickoff prompt into the TUI's first session via
-    // the SDK. OpenCode doesn't accept a prompt as a CLI arg, so we do it
-    // programmatically once the HTTP server is ready. Best-effort.
+    // gh#opencode: bind to the kickoff-bearing session through OpenCode's local
+    // HTTP API after the TUI auto-submits --prompt. Best-effort.
     if (cli === 'opencode' && openCodeKickoff) {
         const launchKickoff = openCodeKickoff;
         const serverUrl = `http://127.0.0.1:${dronePort}`;

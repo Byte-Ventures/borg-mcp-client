@@ -7,6 +7,7 @@ import {
   socketPathFromRemoteArgs,
   threadIdFromPassthroughArgs,
 } from '../src/codex-launch';
+import { OPENCODE_WAKE_PATH_GUIDANCE } from '../src/opencode-wake-copy';
 
 describe('codex launch helpers', () => {
   it('keeps the Claude launcher source aligned with adaptive recovery guidance', () => {
@@ -43,7 +44,12 @@ describe('codex launch helpers', () => {
     expect(codex).toContain('MCP server disconnected');
     expect(codex).toContain('Codex Borg wakeups use remote-control'); // codexWakePathClause default
     expect(opencodePrompt).toContain('MCP server disconnected');
+    expect(opencodePrompt).toContain(OPENCODE_WAKE_PATH_GUIDANCE);
     expect(opencodePrompt).toContain('OpenCode wakes');
+    expect(opencodePrompt).toContain('durable inbox');
+    expect(opencodePrompt).toContain('delivered-unconfirmed');
+    expect(opencodePrompt).toContain('borg_read-log unread_only=true');
+    expect(opencodePrompt).not.toContain('check activity by calling borg_read-log periodically');
 
     // STRIPPED (gh#929): the playbook-duplicated read-log-triage paragraph
     // (loopFreshnessClause — the playbook owns it post-gh#914)…

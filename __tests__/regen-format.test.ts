@@ -18,6 +18,7 @@ import {
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { formatWakePathPrefix } from '../src/stream-status';
 import { shellEscape } from '../src/shell-escape';
+import { OPENCODE_WAKE_PATH_GUIDANCE } from '../src/opencode-wake-copy';
 import {
   GIT_OPERATIONAL_DISCIPLINE_BUILDER,
   GIT_OPERATIONAL_DISCIPLINE_COORDINATOR,
@@ -757,7 +758,8 @@ describe('wakePathArming', () => {
     const arming = wakePathArming('opencode', inboxPath);
 
     it('retains its native injected wake path without Claude recovery deadlines', () => {
-      expect(arming).toContain('SDK-driven entry injection');
+      expect(arming).toBe(OPENCODE_WAKE_PATH_GUIDANCE);
+      expect(arming).toContain('HTTP entry injection');
       expect(arming).not.toContain('adaptive recovery deadline');
       expect(arming).not.toContain('[9000, 12600]');
       expect(arming).not.toContain('[720, 1080]');
@@ -834,6 +836,17 @@ describe('formatLeanOrientation', () => {
     expect(out).not.toContain('ScheduleWakeup');
   });
 
+  it('describes the durable OpenCode injection and degraded recovery path', () => {
+    const out = formatLeanOrientation({ ...base, agentKind: 'opencode' });
+    expect(out).toContain('OpenCode wakes through HTTP entry injection');
+    expect(out).toContain('durable inbox');
+    expect(out).toContain('delivered-unconfirmed');
+    expect(out).toContain('borg_stream-status');
+    expect(out).toContain('borg_read-log unread_only=true');
+    expect(out).not.toContain('wakes reliably');
+    expect(out).not.toContain('check activity by calling borg_read-log periodically');
+  });
+
   it('adds a /clear-specific note when Claude wake state was cleared', () => {
     const out = formatLeanOrientation({ ...base, source: 'clear' });
     expect(out).toContain('/clear');
@@ -854,9 +867,13 @@ describe('formatLeanOrientation', () => {
   it('keeps the quiet-clear fallback out of Codex and OpenCode orientation', () => {
     for (const agentKind of ['codex', 'opencode'] as const) {
       const out = formatLeanOrientation({ ...base, agentKind, source: 'clear' });
-      expect(out).not.toContain('borg_stream-status');
       expect(out).not.toContain('borg_roster');
       expect(out).not.toContain('Quiet-clear fallback');
+      if (agentKind === 'codex') {
+        expect(out).not.toContain('borg_stream-status');
+      } else {
+        expect(out).toContain('borg_stream-status');
+      }
     }
   });
 

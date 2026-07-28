@@ -27,7 +27,8 @@ import { DOCS_SECTIONS, matchDocsSections, formatDocsIndex } from './docs-sectio
 import { renderRoleList } from './list-roles-render.js';
 import { filterToolsForRole } from './tool-scope.js';
 import { getPackageVersion, getOnDiskVersion, handleVersionFlag } from './version.js';
-import { renderStreamStatus, checkInboxMonitorHealthy, formatWakePathPrefix, shouldShowWakePathWarning, } from './stream-status.js';
+import { renderStreamStatus, formatWakePathPrefix, shouldShowWakePathWarning, } from './stream-status.js';
+import { inspectWakePath } from './wake-path-health.js';
 import { RUNTIME_METADATA_ADVISORY, renderRoster, renderRuntimeMetadataLines, } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
 import { DroneEvictedError, formatEvictedToolResult, } from './drone-lifecycle.js';
@@ -270,31 +271,28 @@ export async function main() {
                     if (freshActive !== active) {
                         await refreshActiveCubeMetadata(freshActive);
                     }
-                    // Wake-path self-heal (gh#43): SSE delivery to the inbox file
-                    // is independent from Claude Code waking on file writes. The
-                    // latter requires a `tail -F` Monitor against the inbox path;
-                    // if that Monitor dies (or was never armed across a session
-                    // boundary), the drone misses every incoming entry until the
-                    // /loop fallback heartbeat. Because regen runs on every /loop
-                    // iteration, surfacing the breakage here gives self-healing at
-                    // worst-case latency = the heartbeat interval. Mirrors the
-                    // State-5 self-arm instruction in stream-status.ts.
+                    // Wake-path self-heal (gh#43): SSE delivery to the durable inbox
+                    // is distinct from the runtime-specific mechanism that wakes the
+                    // agent. Inspect that real mechanism for Claude, Codex, or OpenCode
+                    // and surface a runtime-specific recovery prefix when it is broken.
                     const streamStatus = getStreamStatus();
                     const inboxPath = inboxPathForDrone(freshActive.cubeId, freshActive.droneId);
                     const monitorStateRoot = monitorStateRootForWorktree(findProjectRoot());
-                    // Non-Claude CLIs do not use the Claude inbox Monitor. Keep the
-                    // agent CLI distinction independent from whether Codex's optional
-                    // remote-wake transport is currently armed.
                     const agentKind = resolveSessionAgentKind();
-                    const inboxMonitorHealthy = agentKind === 'claude'
-                        ? checkInboxMonitorHealthy(inboxPath, monitorStateRoot)
-                        : true;
+                    const wakePath = await inspectWakePath({
+                        agentKind,
+                        active: freshActive,
+                        inboxPath,
+                        monitorStateRoot,
+                    });
+                    const inboxMonitorHealthy = wakePath.healthy;
                     const prefix = shouldShowWakePathWarning(streamStatus, inboxMonitorHealthy)
                         ? formatWakePathPrefix({
                             inboxPath,
                             monitorStateRoot,
                             droneLabel: regenWakePathDroneLabel(displayedResult, displayIdentity.droneLabel),
                             cubeName: displayIdentity.cubeName,
+                            wakePath,
                         })
                         : '';
                     // gh#285: version-mismatch nudge when on-disk package is newer.
@@ -524,9 +522,9 @@ export async function main() {
                     // Probe the in-process SSE consumer state. Does NOT require
                     // an active cube — if the consumer hasn't started or is
                     // between cubes, the snapshot still reports current values.
-                    // Also probes wake-path completeness (T1.2): is anyone tailing
-                    // the inbox file? Without that, SSE delivery still works but
-                    // the harness `/loop` never wakes on the file write.
+                    // Also probes runtime-specific wake-path completeness: Claude's
+                    // inbox Monitor, Codex's remote-control bridge, or OpenCode's
+                    // durable injection delivery state.
                     const status = getStreamStatus();
                     const active = await getActiveCube();
                     const inboxPath = active
@@ -535,14 +533,13 @@ export async function main() {
                     const monitorStateRoot = active
                         ? monitorStateRootForWorktree(findProjectRoot())
                         : null;
-                    // Non-Claude CLIs have their own wake mechanism, so this Claude-only
-                    // Monitor diagnostic must not be inferred from Codex transport state.
-                    const nonClaudeSession = active && resolveSessionAgentKind() !== 'claude';
-                    const inboxMonitorHealthy = active
-                        ? nonClaudeSession
-                            ? true
-                            : checkInboxMonitorHealthy(inboxPath, monitorStateRoot)
-                        : null;
+                    const wakePath = await inspectWakePath({
+                        agentKind: resolveSessionAgentKind(),
+                        active,
+                        inboxPath,
+                        monitorStateRoot,
+                    });
+                    const inboxMonitorHealthy = wakePath.healthy;
                     let silentInertWarning = '';
                     if (status.runLoopHealth === 'silent-inert') {
                         silentInertWarning = '## ⚠ SSE stream loop silent-inert — run /mcp and reconnect to restart\n\n' +
@@ -551,6 +548,7 @@ export async function main() {
                     const text = renderStreamStatus({
                         status,
                         inboxMonitorHealthy,
+                        wakePath,
                         inboxPath,
                         monitorStateRoot,
                         droneLabel: active?.droneLabel ?? null,

@@ -111,15 +111,20 @@ export function isHeartbeatStale(inboxPath, monitorStateRoot) {
  */
 export function renderStreamStatus(inputs) {
     const { status, inboxMonitorHealthy, inboxPath, monitorStateRoot, droneLabel, cubeName, humanAgo } = inputs;
+    const wakePath = inputs.wakePath ?? {
+        agentKind: 'claude',
+        healthy: inboxMonitorHealthy,
+        openCode: null,
+    };
+    const wakePathHealthy = wakePath.healthy;
     const isNotStarted = status.reconnectAttempts === 0 &&
         status.lastWireActivityAt === null &&
         !status.connected;
     const ownedByOther = status.ownership?.state === 'owned-by-other-process';
     const orphanedInitialization = status.ownership?.state === 'orphaned-initialization';
     const ownershipInitializing = status.ownership?.state === 'initializing';
-    // Top-line verdict — 5 states + override per drone-4 contract.
-    // Precedence: disconnected > no-inbox-Monitor (wire-down upstream
-    // cause; State 5 only applies when wire is healthy).
+    // Top-line verdict — 5 states + runtime wake-path override.
+    // Precedence: disconnected > wake-path failure.
     let summary;
     if (orphanedInitialization) {
         summary = '**Stream blocked by an orphaned initialization lock.**';
@@ -133,8 +138,12 @@ export function renderStreamStatus(inputs) {
     else if (!status.connected) {
         summary = `**Stream disconnected (reconnect attempt ${status.reconnectAttempts}).**`;
     }
-    else if (inboxMonitorHealthy === false) {
-        summary = '**Stream connected (no inbox-Monitor — wake path broken).**';
+    else if (wakePathHealthy === false) {
+        summary = wakePath.agentKind === 'opencode'
+            ? '**Stream connected (OpenCode delivery degraded).**'
+            : wakePath.agentKind === 'codex'
+                ? '**Stream connected (Codex wake path unavailable).**'
+                : '**Stream connected (no inbox-Monitor — wake path broken).**';
     }
     else if (status.lastContentEventAt === null) {
         // State 2: wire works, no content yet. Collapses two underlying
@@ -194,13 +203,31 @@ export function renderStreamStatus(inputs) {
             ? `${Math.max(0, Math.round(owner.ageMs / 1000))}s`
             : '_(unknown)_'}`);
     }
-    // State-5 body line + self-arm instruction. Only fires when we
-    // POSITIVELY detected wake-path breakage AND the wire is up — the
-    // disconnected case takes precedence above and would never reach
-    // here. When `inboxMonitorHealthy === null` (couldn't determine) we
-    // stay silent; surfacing an uncertain failure mode is worse UX than
-    // omitting it.
-    if (status.connected && inboxMonitorHealthy === false) {
+    if (wakePath.agentKind === 'opencode' && wakePath.openCode) {
+        const delivery = wakePath.openCode.deliveryStates;
+        lines.push(`- **OpenCode delivery connected**: ${wakePath.openCode.connected}`);
+        lines.push(`- **OpenCode queued**: ${delivery.queued}`);
+        lines.push(`- **OpenCode delivered-unconfirmed**: ${delivery['delivered-unconfirmed']}`);
+        lines.push(`- **OpenCode retried**: ${delivery.retried}`);
+        lines.push(`- **OpenCode failed**: ${delivery.failed}`);
+    }
+    // Runtime-specific wake-path warning. The wire-down case takes
+    // precedence above; an indeterminate signal remains honest and silent.
+    if (status.connected && wakePathHealthy === false) {
+        if (wakePath.agentKind === 'opencode') {
+            lines.push('- **OpenCode delivery**: _(degraded — inspect the durable unread log)_');
+            lines.push('');
+            lines.push('## OpenCode wake delivery is degraded');
+            lines.push('One or more durable inbox entries were rejected or could not be confirmed. Run `borg_read-log unread_only=true` and drain the unread log now. Use `borg_stream-status` to check whether failed or delivered-unconfirmed entries remain.');
+            return lines.join('\n');
+        }
+        if (wakePath.agentKind === 'codex') {
+            lines.push('- **Codex wake path**: _(remote-control bridge unavailable)_');
+            lines.push('');
+            lines.push('## Codex wake delivery is unavailable');
+            lines.push('The Codex remote-control bridge cannot currently deliver a wake. Run `borg_read-log unread_only=true` and drain the unread log now, then reconnect the Codex wake path.');
+            return lines.join('\n');
+        }
         lines.push(`- **inbox-monitor**: _(no watcher detected — wake path broken)_`);
         if (inboxPath && droneLabel && cubeName) {
             lines.push('');
@@ -217,19 +244,19 @@ export function renderStreamStatus(inputs) {
  * from the inline ternary in `src/index.ts` for direct unit-test
  * coverage of the (connected × healthy) cross-product).
  *
- * Returns true ONLY when the wire is up AND we positively detected a
- * dead inbox Monitor (`=== false` strict). The `null` branch
+ * Returns true ONLY when the wire is up AND the runtime-specific wake
+ * mechanism is positively unhealthy (`=== false` strict). The `null` branch
  * (couldn't determine) stays silent — surfacing an uncertain failure
  * mode is worse UX than omitting it (mirrors the State-5 precedence
  * rule in `renderStreamStatus`). When disconnected, the wire-down case
  * is the upstream cause and takes precedence; no point warning about
- * the wake path when the wake-path's input has no events to deliver.
+ * the wake path when its input has no events to deliver.
  */
 export function shouldShowWakePathWarning(streamStatus, inboxMonitorHealthy) {
     return streamStatus.connected && inboxMonitorHealthy === false;
 }
 /**
- * Wake-path-broken prefix for `borg_regen` output (gh#43).
+ * Runtime-specific wake-path-broken prefix for `borg_regen` output.
  *
  * Pure function — caller decides whether to call (gates on
  * `shouldShowWakePathWarning`). Returns an empty string when called
@@ -246,7 +273,30 @@ export function shouldShowWakePathWarning(streamStatus, inboxMonitorHealthy) {
  * called.
  */
 export function formatWakePathPrefix(inputs) {
-    const { inboxPath, monitorStateRoot, droneLabel, cubeName } = inputs;
+    const { inboxPath, monitorStateRoot, droneLabel, cubeName, wakePath } = inputs;
+    if (wakePath?.agentKind === 'opencode') {
+        const delivery = wakePath.openCode?.deliveryStates;
+        return [
+            '## ⚠ OpenCode wake delivery degraded',
+            '',
+            `Durable delivery has ${delivery
+                ? `${delivery['delivered-unconfirmed']} delivered-unconfirmed and ${delivery.failed} failed entries`
+                : 'an unhealthy runtime signal'}. Run \`borg_stream-status\`, then run \`borg_read-log unread_only=true\` and drain the unread log.`,
+            '',
+            '---',
+            '',
+        ].join('\n');
+    }
+    if (wakePath?.agentKind === 'codex') {
+        return [
+            '## ⚠ Codex wake path unavailable',
+            '',
+            'The remote-control bridge cannot currently deliver a wake. Run `borg_read-log unread_only=true` and drain the unread log, then reconnect the Codex wake path.',
+            '',
+            '---',
+            '',
+        ].join('\n');
+    }
     if (!inboxPath || !droneLabel || !cubeName)
         return '';
     return [

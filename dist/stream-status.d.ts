@@ -19,6 +19,7 @@
  *   when the wire is healthy but the file-watch isn't.
  */
 import type { StreamStatus } from './log-stream.js';
+import type { WakePathSnapshot } from './wake-path-health.js';
 /**
  * Best-effort check: is a process tailing this inbox file?
  *
@@ -52,11 +53,10 @@ export declare function checkInboxMonitorHealthy(inboxPath: string | null, monit
 export declare function isHeartbeatStale(inboxPath: string, monitorStateRoot?: string | null): boolean;
 export interface RenderInputs {
     status: StreamStatus;
-    /**
-     * Tri-state Monitor liveness: true = healthy, false = wake-path
-     * broken, null = cannot determine.
-     */
+    /** Legacy Claude Monitor health; runtime-aware callers also pass `wakePath`. */
     inboxMonitorHealthy: boolean | null;
+    /** Runtime-specific wake-path evidence. Omitted by legacy pure-render callers. */
+    wakePath?: WakePathSnapshot;
     /**
      * Inbox path for the State-5 self-arm instruction. Pass null when
      * unknown (no active cube); State 5 will then surface the failure
@@ -83,17 +83,17 @@ export declare function renderStreamStatus(inputs: RenderInputs): string;
  * from the inline ternary in `src/index.ts` for direct unit-test
  * coverage of the (connected × healthy) cross-product).
  *
- * Returns true ONLY when the wire is up AND we positively detected a
- * dead inbox Monitor (`=== false` strict). The `null` branch
+ * Returns true ONLY when the wire is up AND the runtime-specific wake
+ * mechanism is positively unhealthy (`=== false` strict). The `null` branch
  * (couldn't determine) stays silent — surfacing an uncertain failure
  * mode is worse UX than omitting it (mirrors the State-5 precedence
  * rule in `renderStreamStatus`). When disconnected, the wire-down case
  * is the upstream cause and takes precedence; no point warning about
- * the wake path when the wake-path's input has no events to deliver.
+ * the wake path when its input has no events to deliver.
  */
 export declare function shouldShowWakePathWarning(streamStatus: StreamStatus, inboxMonitorHealthy: boolean | null): boolean;
 /**
- * Wake-path-broken prefix for `borg_regen` output (gh#43).
+ * Runtime-specific wake-path-broken prefix for `borg_regen` output.
  *
  * Pure function — caller decides whether to call (gates on
  * `shouldShowWakePathWarning`). Returns an empty string when called
@@ -114,5 +114,6 @@ export declare function formatWakePathPrefix(inputs: {
     monitorStateRoot?: string | null;
     droneLabel: string | null;
     cubeName: string | null;
+    wakePath?: WakePathSnapshot;
 }): string;
 //# sourceMappingURL=stream-status.d.ts.map
