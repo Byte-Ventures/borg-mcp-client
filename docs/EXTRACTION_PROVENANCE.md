@@ -8,7 +8,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 
 ## Deliberate Transformations
 
-- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release `borgmcp-shared@0.6.4` and a fresh standalone lockfile.
+- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release pinned at extraction time (0.6.4) and a fresh standalone lockfile.
 - Replaced local template, role-section, drone-address, and log high-water-mark implementations with `borgmcp-shared` exports.
 - Removed monorepo-only website anti-drift tests and re-anchored remaining filesystem tests to this repository.
 - Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
@@ -38,11 +38,11 @@ artifact reaches no hosted authority.
 Local enrollment now uses the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
-resolves to the audited registry `borgmcp-shared@0.6.4` with integrity
-`sha512-Wm4b0uoOAw9JCz5OTHD0Q2uXKkeWYdkVksdeZvRG8l62XGMY+G8GkNEsZT9L533LbVbQ29GhgF0htjDenQThDg==`.
-The matching `borgmcp-server@0.1.21` release is published with integrity
-`sha512-g0QH4cKcsKuDyZs1MvBmvCoCLaZ4wVI04yHCGSvcAeWghWxSBH0IIF8Q5OFi1pLB7TZXOVP6D3QAabUQ2eJTFg==`
-and pins the same `borgmcp-shared@0.6.4` contract. Client `borgmcp@2.4.0` is published. The immutable `v2.0.7`
+resolves to the audited registry `borgmcp-shared@0.7.0` with integrity
+`sha512-CLpQo3P/fE9GzC/R7Xw61LWxxsgcVLwmpGb5Ot5PDRe1Bvnf+EB31kiBdU5rvyvvPhiK4oUQtJAZE4ULFRAA2A==`.
+The matching `borgmcp-server@0.6.0` release is published with integrity
+`sha512-AUNn82ivcuWgcL6kPDI+6yNzJ1hf8F7NwWDRuZr60fInOe4FQPGxg0CD2kvuQlEB5c+OOv5qegPXQe1H8ENCLA==`
+and pins the same `borgmcp-shared@0.7.0` contract. Client `borgmcp@2.4.0` is published. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next
 candidate remains gated by reviewed `v2.4.1` source, a fresh annotated tag, and
 the exact-artifact and protected-publication gates.

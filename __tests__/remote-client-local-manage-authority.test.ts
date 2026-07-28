@@ -11,12 +11,12 @@ const SESSION = 's'.repeat(43);
 const PARENT = 'p'.repeat(43);
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '5', request_id: requestId, payload };
+  return { protocol_version: '6', request_id: requestId, payload };
 }
 
 function errorEnvelope(code: string, message = 'server detail must not be surfaced') {
   return {
-    protocol_version: '5',
+    protocol_version: '6',
     request_id: 'local-error-1',
     error: { code, message },
   };

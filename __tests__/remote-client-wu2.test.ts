@@ -12,7 +12,7 @@ const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function envelope(payload: unknown) {
-  return JSON.stringify({ protocol_version: '5', request_id: 'wu2-test', payload });
+  return JSON.stringify({ protocol_version: '6', request_id: 'wu2-test', payload });
 }
 
 describe('Sprint 10 WU2 local adapter', () => {

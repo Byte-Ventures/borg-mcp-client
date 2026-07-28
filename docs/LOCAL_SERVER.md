@@ -216,8 +216,8 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 
 ## Release status
 
-This self-hosted path pins published `borgmcp-shared@0.6.4` and requires the
-matching published `borgmcp-server@0.1.21` for protocol v5 repository resolve
+This self-hosted path pins published `borgmcp-shared@0.7.0` and requires the
+matching published `borgmcp-server@0.6.0` for protocol v6 repository resolve
 and association. The server owner-enrollment, repository resolve/association,
 cube-create, attach, restart, log, and SSE implementation must also pass the full
 process-level local dogfood gate. Until that gate opens the self-hosted path remains preview-only, and the client
