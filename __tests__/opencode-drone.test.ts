@@ -431,6 +431,36 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState().totalEntriesRetried).toBe(2);
   });
 
+  it('leaves an unverifiable prior-process submission unconfirmed without posting', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('unverifiable-prior-process-replay');
+    const root = session('unverifiable-prior-process-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const delivery = injectOpenCodeEntry(
+      'possibly submitted by prior process',
+      'entry-unverifiable-prior-process',
+      false,
+    );
+    await vi.runAllTimersAsync();
+    await expect(delivery).resolves.toBe(true);
+
+    expect(api.promptBodies).toHaveLength(0);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      totalEntriesInjected: 0,
+      totalEntriesRetried: 3,
+      deliveryStates: {
+        'delivered-unconfirmed': 1,
+        failed: 0,
+      },
+    });
+  });
+
   it('serializes burst delivery and deduplicates active and completed replay by entry ID', async () => {
     const launch = launchKickoff('burst-order');
     const root = session('burst-root', 10);
@@ -500,7 +530,7 @@ describe('OpenCode wake target binding', () => {
     await expect(delivery).resolves.toBe(true);
   });
 
-  it('retains a valid binding and exposes failed state after bounded injection retries', async () => {
+  it('retains an ambiguous submission as terminal delivered-unconfirmed', async () => {
     vi.useFakeTimers();
     const launch = launchKickoff('failed-launch');
     const root = session('failed-root', 10);
@@ -516,13 +546,46 @@ describe('OpenCode wake target binding', () => {
     await injectInitialKickoff(launch);
     const delivery = injectOpenCodeEntry('wake that fails', 'entry-that-fails');
     await vi.runAllTimersAsync();
-    await expect(delivery).resolves.toBe(false);
+    await expect(delivery).resolves.toBe(true);
 
     expect(api.prompts).toEqual([root.id]);
     expect(getOpenCodeConnectionState()).toMatchObject({
       sessionId: root.id,
       totalEntriesRetried: 3,
-      deliveryStates: { failed: 1 },
+      deliveryStates: {
+        'delivered-unconfirmed': 1,
+        failed: 0,
+      },
+    });
+    await expect(
+      injectOpenCodeEntry('wake that fails', 'entry-that-fails'),
+    ).resolves.toBe(true);
+    expect(api.prompts).toEqual([root.id]);
+  });
+
+  it('exposes a definite prompt rejection as failed without retrying submission', async () => {
+    const launch = launchKickoff('failed-launch');
+    const root = session('failed-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      promptStatus: { [root.id]: 500 },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    await expect(
+      injectOpenCodeEntry('wake that is rejected', 'entry-that-is-rejected'),
+    ).resolves.toBe(false);
+
+    expect(api.prompts).toEqual([root.id]);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      sessionId: root.id,
+      totalEntriesRetried: 0,
+      deliveryStates: {
+        'delivered-unconfirmed': 0,
+        failed: 1,
+      },
     });
   });
 

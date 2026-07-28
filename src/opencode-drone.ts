@@ -23,6 +23,7 @@ interface OpenCodeDroneState {
   deliveryQueue: OpenCodeDelivery[];
   activeDeliveries: Map<string, OpenCodeDelivery>;
   deliveredEntries: Map<string, string>;
+  unconfirmedEntries: Map<string, string>;
   failedEntries: Map<string, string>;
   processingDeliveries: boolean;
 }
@@ -72,6 +73,8 @@ interface OpenCodeDelivery {
   resolve: (delivered: boolean) => void;
   promise: Promise<boolean>;
 }
+
+type OpenCodeDeliveryOutcome = 'delivered' | 'delivered-unconfirmed' | 'failed';
 
 const OPEN_CODE_DELIVERY_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000] as const;
 const OPEN_CODE_DELIVERY_HISTORY_LIMIT = 256;
@@ -141,6 +144,7 @@ export async function connectOpenCodeDrone(deps: ConnectDeps): Promise<void> {
     deliveryQueue: [],
     activeDeliveries: new Map(),
     deliveredEntries: new Map(),
+    unconfirmedEntries: new Map(),
     failedEntries: new Map(),
     processingDeliveries: false,
   };
@@ -468,19 +472,19 @@ function waitForDeliveryRetry(attempt: number): Promise<void> {
 async function deliverOpenCodeEntry(
   owner: OpenCodeDroneState,
   delivery: OpenCodeDelivery,
-): Promise<boolean> {
+): Promise<OpenCodeDeliveryOutcome> {
   let target: OCSession | null = null;
 
   // Before the one allowed POST, retries are safe: no submission has happened.
   // A replayed inbox entry sets allowSubmit=false, so it can only confirm an
   // earlier submission and can never manufacture a second prompt.
   for (let attempt = 0; attempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; attempt++) {
-    if (state !== owner || !owner.connected) return false;
+    if (state !== owner || !owner.connected) return 'failed';
     if (attempt > 0) {
       delivery.state = 'retried';
       owner.totalEntriesRetried++;
       await waitForDeliveryRetry(attempt);
-      if (state !== owner || !owner.connected) return false;
+      if (state !== owner || !owner.connected) return 'failed';
     }
 
     if (!target) {
@@ -490,12 +494,12 @@ async function deliverOpenCodeEntry(
         log(`entry ${delivery.entryId} target unavailable: ${err}`);
         continue;
       }
-      if (!target) return false;
+      if (!target) return 'failed';
     }
 
     try {
       if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
-        return true;
+        return 'delivered';
       }
     } catch (err) {
       log(`entry ${delivery.entryId} confirmation unavailable: ${err}`);
@@ -523,7 +527,7 @@ async function deliverOpenCodeEntry(
     delivery.state = 'delivered-unconfirmed';
     if (status !== null && status !== 200 && status !== 204) {
       if (status === 404) clearBinding();
-      return false;
+      return 'failed';
     }
 
     for (
@@ -535,22 +539,25 @@ async function deliverOpenCodeEntry(
         delivery.state = 'retried';
         owner.totalEntriesRetried++;
         await waitForDeliveryRetry(confirmationAttempt);
-        if (state !== owner || !owner.connected) return false;
+        if (state !== owner || !owner.connected) return 'delivered-unconfirmed';
         delivery.state = 'delivered-unconfirmed';
       }
       try {
         if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
-          return true;
+          return 'delivered';
         }
       } catch (err) {
         log(`entry ${delivery.entryId} post-acceptance confirmation unavailable: ${err}`);
       }
     }
 
-    return false;
+    return 'delivered-unconfirmed';
   }
 
-  return false;
+  // A replay begins from a durable inbox record but cannot know whether the
+  // prior process stopped before or after submission. Missing confirmation
+  // therefore remains unknown, not a definite delivery failure.
+  return delivery.allowSubmit ? 'failed' : 'delivered-unconfirmed';
 }
 
 async function processOpenCodeDeliveries(owner: OpenCodeDroneState): Promise<void> {
@@ -559,22 +566,29 @@ async function processOpenCodeDeliveries(owner: OpenCodeDroneState): Promise<voi
   try {
     while (state === owner && owner.deliveryQueue.length > 0) {
       const delivery = owner.deliveryQueue.shift()!;
-      let delivered = false;
+      let outcome: OpenCodeDeliveryOutcome = 'failed';
       try {
-        delivered = await deliverOpenCodeEntry(owner, delivery);
+        outcome = await deliverOpenCodeEntry(owner, delivery);
       } catch (err) {
         log(`entry ${delivery.entryId} delivery error: ${err}`);
       }
 
       owner.activeDeliveries.delete(delivery.entryId);
-      if (delivered) {
+      if (outcome === 'delivered') {
+        owner.unconfirmedEntries.delete(delivery.entryId);
         owner.failedEntries.delete(delivery.entryId);
         rememberBounded(owner.deliveredEntries, delivery.entryId, delivery.text);
         owner.totalEntriesInjected++;
+        delivery.resolve(true);
+      } else if (outcome === 'delivered-unconfirmed') {
+        owner.failedEntries.delete(delivery.entryId);
+        rememberBounded(owner.unconfirmedEntries, delivery.entryId, delivery.text);
+        delivery.resolve(true);
       } else {
+        owner.unconfirmedEntries.delete(delivery.entryId);
         rememberBounded(owner.failedEntries, delivery.entryId, delivery.text);
+        delivery.resolve(false);
       }
-      delivery.resolve(delivered);
     }
   } finally {
     owner.processingDeliveries = false;
@@ -649,6 +663,16 @@ export function injectOpenCodeEntry(
     return Promise.resolve(true);
   }
 
+  const unconfirmedText = owner.unconfirmedEntries.get(entryId);
+  if (unconfirmedText !== undefined) {
+    if (unconfirmedText !== text) {
+      log(`entry ${entryId} unconfirmed replay text mismatch`);
+      rememberBounded(owner.failedEntries, entryId, text);
+      return Promise.resolve(false);
+    }
+    return Promise.resolve(true);
+  }
+
   const active = owner.activeDeliveries.get(entryId);
   if (active) {
     if (active.text !== text) {
@@ -672,6 +696,7 @@ export function injectOpenCodeEntry(
     resolve: resolveDelivery,
     promise,
   };
+  owner.unconfirmedEntries.delete(entryId);
   owner.failedEntries.delete(entryId);
   owner.activeDeliveries.set(entryId, delivery);
   owner.deliveryQueue.push(delivery);
@@ -708,7 +733,7 @@ export function getOpenCodeConnectionState(): {
 } {
   const deliveryStates: Record<OpenCodeDeliveryState, number> = {
     queued: 0,
-    'delivered-unconfirmed': 0,
+    'delivered-unconfirmed': state?.unconfirmedEntries.size ?? 0,
     retried: 0,
     failed: state?.failedEntries.size ?? 0,
   };

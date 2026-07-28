@@ -56,6 +56,7 @@ export async function connectOpenCodeDrone(deps) {
         deliveryQueue: [],
         activeDeliveries: new Map(),
         deliveredEntries: new Map(),
+        unconfirmedEntries: new Map(),
         failedEntries: new Map(),
         processingDeliveries: false,
     };
@@ -350,13 +351,13 @@ async function deliverOpenCodeEntry(owner, delivery) {
     // earlier submission and can never manufacture a second prompt.
     for (let attempt = 0; attempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; attempt++) {
         if (state !== owner || !owner.connected)
-            return false;
+            return 'failed';
         if (attempt > 0) {
             delivery.state = 'retried';
             owner.totalEntriesRetried++;
             await waitForDeliveryRetry(attempt);
             if (state !== owner || !owner.connected)
-                return false;
+                return 'failed';
         }
         if (!target) {
             try {
@@ -367,11 +368,11 @@ async function deliverOpenCodeEntry(owner, delivery) {
                 continue;
             }
             if (!target)
-                return false;
+                return 'failed';
         }
         try {
             if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
-                return true;
+                return 'delivered';
             }
         }
         catch (err) {
@@ -399,7 +400,7 @@ async function deliverOpenCodeEntry(owner, delivery) {
         if (status !== null && status !== 200 && status !== 204) {
             if (status === 404)
                 clearBinding();
-            return false;
+            return 'failed';
         }
         for (let confirmationAttempt = 0; confirmationAttempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; confirmationAttempt++) {
             if (confirmationAttempt > 0) {
@@ -407,21 +408,24 @@ async function deliverOpenCodeEntry(owner, delivery) {
                 owner.totalEntriesRetried++;
                 await waitForDeliveryRetry(confirmationAttempt);
                 if (state !== owner || !owner.connected)
-                    return false;
+                    return 'delivered-unconfirmed';
                 delivery.state = 'delivered-unconfirmed';
             }
             try {
                 if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
-                    return true;
+                    return 'delivered';
                 }
             }
             catch (err) {
                 log(`entry ${delivery.entryId} post-acceptance confirmation unavailable: ${err}`);
             }
         }
-        return false;
+        return 'delivered-unconfirmed';
     }
-    return false;
+    // A replay begins from a durable inbox record but cannot know whether the
+    // prior process stopped before or after submission. Missing confirmation
+    // therefore remains unknown, not a definite delivery failure.
+    return delivery.allowSubmit ? 'failed' : 'delivered-unconfirmed';
 }
 async function processOpenCodeDeliveries(owner) {
     if (owner.processingDeliveries)
@@ -430,23 +434,31 @@ async function processOpenCodeDeliveries(owner) {
     try {
         while (state === owner && owner.deliveryQueue.length > 0) {
             const delivery = owner.deliveryQueue.shift();
-            let delivered = false;
+            let outcome = 'failed';
             try {
-                delivered = await deliverOpenCodeEntry(owner, delivery);
+                outcome = await deliverOpenCodeEntry(owner, delivery);
             }
             catch (err) {
                 log(`entry ${delivery.entryId} delivery error: ${err}`);
             }
             owner.activeDeliveries.delete(delivery.entryId);
-            if (delivered) {
+            if (outcome === 'delivered') {
+                owner.unconfirmedEntries.delete(delivery.entryId);
                 owner.failedEntries.delete(delivery.entryId);
                 rememberBounded(owner.deliveredEntries, delivery.entryId, delivery.text);
                 owner.totalEntriesInjected++;
+                delivery.resolve(true);
+            }
+            else if (outcome === 'delivered-unconfirmed') {
+                owner.failedEntries.delete(delivery.entryId);
+                rememberBounded(owner.unconfirmedEntries, delivery.entryId, delivery.text);
+                delivery.resolve(true);
             }
             else {
+                owner.unconfirmedEntries.delete(delivery.entryId);
                 rememberBounded(owner.failedEntries, delivery.entryId, delivery.text);
+                delivery.resolve(false);
             }
-            delivery.resolve(delivered);
         }
     }
     finally {
@@ -516,6 +528,15 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
         }
         return Promise.resolve(true);
     }
+    const unconfirmedText = owner.unconfirmedEntries.get(entryId);
+    if (unconfirmedText !== undefined) {
+        if (unconfirmedText !== text) {
+            log(`entry ${entryId} unconfirmed replay text mismatch`);
+            rememberBounded(owner.failedEntries, entryId, text);
+            return Promise.resolve(false);
+        }
+        return Promise.resolve(true);
+    }
     const active = owner.activeDeliveries.get(entryId);
     if (active) {
         if (active.text !== text) {
@@ -538,6 +559,7 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
         resolve: resolveDelivery,
         promise,
     };
+    owner.unconfirmedEntries.delete(entryId);
     owner.failedEntries.delete(entryId);
     owner.activeDeliveries.set(entryId, delivery);
     owner.deliveryQueue.push(delivery);
@@ -568,7 +590,7 @@ export function disconnectOpenCodeDrone() {
 export function getOpenCodeConnectionState() {
     const deliveryStates = {
         queued: 0,
-        'delivered-unconfirmed': 0,
+        'delivered-unconfirmed': state?.unconfirmedEntries.size ?? 0,
         retried: 0,
         failed: state?.failedEntries.size ?? 0,
     };
