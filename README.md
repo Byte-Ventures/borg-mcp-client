@@ -20,7 +20,7 @@ After verified publication, install the current exact local-only client release
 from npm:
 
 ```bash
-npm install -g borgmcp@2.5.0
+npm install -g borgmcp@2.6.0
 ```
 
 Verify the install:
