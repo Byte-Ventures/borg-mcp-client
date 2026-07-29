@@ -6,8 +6,8 @@ import { type AgentKind } from './regen-format.js';
  * not three), plus a one-line NEVER-TaskStop safety reminder preserved from
  * the pre-gh#929 monitorClause. Built by both launch call sites
  * (claude.ts + assimilate-cmd.ts) and passed to `buildAgentKickoffPrompt` as
- * `monitorClause`. Codex wakes via the app-server (no tail-Monitor / `/loop`
- * to arm) → empty; no active cube (no inboxPath) → empty.
+ * `monitorClause`. Codex wakes via the app-server (no tail-Monitor to arm) →
+ * empty; no active cube (no inboxPath) → empty.
  */
 export declare function buildKickoffWakePathClause(agentKind: AgentKind, inboxPath: string | null, monitorStateRoot?: string | null): string;
 export interface CodexWakeTargetDeps {

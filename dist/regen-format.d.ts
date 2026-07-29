@@ -12,9 +12,8 @@
  * one of `startup` / `resume` / `clear` / `compact`. The `borg-regen`
  * SessionStart hook uses this to detect a `/clear` re-orientation, which is
  * the FIRST time the hook is the SOLE orientation path (the launch kickoff
- * prompt is gone) AND the moment Claude Code clears the session-scoped
- * `/loop` + `ScheduleWakeup` — so the re-injected orientation must instruct
- * an operational re-arm.
+ * prompt is gone), so the re-injected orientation must instruct an operational
+ * Monitor re-arm.
  *
  * Best-effort + total: empty input (manual / TTY run with no stdin),
  * malformed JSON, a missing `source`, or a non-string `source` all return
@@ -34,9 +33,8 @@ export type AgentKind = 'claude' | 'codex' | 'opencode';
  *
  * Agent-branched on the existing env-agnostic signal (BORG_SESSION-style
  * `isCodexRemoteWakeEnabled`), NOT on a mutable server-recorded field:
- * - claude: arm the inbox-file tail Monitor + engage `/loop` + maintain one
- *   adaptive `ScheduleWakeup` recovery deadline (long while the Monitor is
- *   healthy or indeterminate; short only while explicitly broken).
+ * - claude: arm the inbox-file tail Monitor, drain unread entries on every
+ *   wake, and re-arm the Monitor if it exits or is missing.
  * - codex: Borg's activity stream reaches the app-server remote-control inbox
  *   channel; each wake is followed by an unread-log drain. Manual full regen
  *   + drain is a degraded fallback when remote control is unavailable.

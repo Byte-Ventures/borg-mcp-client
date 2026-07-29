@@ -338,6 +338,8 @@ describe('formatWakePathPrefix (gh#43 — regen self-heal)', () => {
     expect(out).toContain('/work/repo/.borgmcp/inbox-monitor');
     expect(out).toContain('/tmp/inbox/cube-a/drone-x.log');
     expect(out).toContain('borg inbox for drone-1 on cube borg-mcp');
+    expect(out).toContain('this session has no wake path');
+    expect(out).not.toContain('/loop');
     // Ends with a separator + trailing newline so the prefix concatenates
     // cleanly with the regen markdown that follows.
     expect(out).toMatch(/---\n$/);
