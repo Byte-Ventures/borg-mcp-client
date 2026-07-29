@@ -78,6 +78,26 @@ test('prepare generates exactly the client identity surfaces and verifies their 
   assert.equal(verified.tree, git(fixture.root, ['rev-parse', 'HEAD^{tree}']));
 });
 
+for (const [name, readme] of [
+  ['no guarded README install command', '# Install\n'],
+  [
+    'multiple guarded README install commands',
+    `npm install -g borgmcp@${oldVersion}\nnpm install -g borgmcp@${oldVersion}\n`,
+  ],
+]) {
+  test(`prepare rejects ${name}`, async (t) => {
+    const fixture = await createFixture(t);
+    await writeFile(join(fixture.root, readmePath), readme);
+    commitAll(fixture.root, `fixture: ${name}`);
+    await assert.rejects(
+      prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities),
+      {
+        message: `${readmePath} must document exactly the current manifest version in its client install command.`,
+      },
+    );
+  });
+}
+
 test('trusted-base classification is green on the transform and red on a self-bypassing candidate', async (t) => {
   const fixture = await preparedFixture(t);
   git(fixture.root, ['checkout', '--detach', '-q', fixture.base]);
@@ -151,13 +171,6 @@ for (const [name, mutate] of [
       `const CLIENT_VERSION = '${oldVersion}';`,
     ));
   }],
-  ['a stale README install version', async (fixture) => {
-    const path = join(fixture.root, readmePath);
-    await writeFile(path, (await readFile(path, 'utf8')).replace(
-      `npm install -g borgmcp@${newVersion}`,
-      `npm install -g borgmcp@${oldVersion}`,
-    ));
-  }],
   ['a deleted release evidence assertion', async (fixture) => {
     const path = join(fixture.root, releaseTestPath);
     await writeFile(path, (await readFile(path, 'utf8')).replace(`    '${fixture.record.commit}',\n`, ''));
@@ -188,6 +201,20 @@ for (const [name, mutate] of [
     ));
   });
 }
+
+test('release identity rejects a stale README install version for the precise path mismatch', async (t) => {
+  const fixture = await preparedFixture(t);
+  const path = join(fixture.root, readmePath);
+  await writeFile(path, (await readFile(path, 'utf8')).replace(
+    `npm install -g borgmcp@${newVersion}`,
+    `npm install -g borgmcp@${oldVersion}`,
+  ));
+  const candidate = commitAll(fixture.root, 'mutate a stale README install version');
+  assert.throws(
+    () => verifyReleaseIdentity(fixture.root, fixture.base, candidate, fixture.authorities),
+    { message: `Release identity shape mismatch: ${readmePath}` },
+  );
+});
 
 async function preparedFixture(t) {
   const fixture = await createFixture(t);
