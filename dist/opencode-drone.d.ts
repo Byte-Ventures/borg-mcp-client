@@ -25,8 +25,9 @@ export declare function connectOpenCodeDrone(deps: ConnectDeps): Promise<void>;
 export declare function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promise<boolean>;
 /**
  * Queue one durable inbox entry for delivery into the bound OpenCode session.
- * The SSE entry ID becomes a stable OpenCode message ID, so retries and replay
- * can confirm an earlier ambiguous submission without running it twice.
+ * The durable inbox text identifies the OpenCode-generated user message, so
+ * retries and replay can confirm an earlier ambiguous submission without
+ * supplying an ordering-breaking caller message ID or running it twice.
  */
 export declare function injectOpenCodeEntry(text: string, entryId?: string, allowSubmit?: boolean): Promise<boolean>;
 export declare function probeOpenCodeDroneArmed(): Promise<boolean | null>;

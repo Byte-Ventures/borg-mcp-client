@@ -827,7 +827,7 @@ export async function streamOnce(
     );
     if (alreadyPersisted) {
       // Replay still re-enters the OpenCode delivery queue with the same entry
-      // ID. The queue confirms/deduplicates it by stable OpenCode message ID.
+      // ID. The queue confirms/deduplicates it by the unique persisted entry text.
       await injectOpenCode(line, ev.id, false);
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
