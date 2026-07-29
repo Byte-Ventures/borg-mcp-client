@@ -49,7 +49,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     stderr: vi.fn(),
     stdout: vi.fn(),
     prompt: vi.fn(async (message: string) =>
-      message.startsWith('Cube name') ? '' : message.startsWith('Create cube?') ? 'y' : '1'),
+      message.startsWith('Cube name') ? '' : message.startsWith('Create cube ') ? 'y' : '1'),
     promptSecret: vi.fn(async () => 'i'.repeat(43)),
     isTTY: () => true,
     ensureLocalServerInstalled: vi.fn(async () => 'present'),
@@ -407,7 +407,7 @@ describe('runAssimilate: progress output (gh#653 B4)', () => {
     expect(exit).toBe(0);
     const text = stderr.mock.calls.map((c) => String(c[0])).join('');
     expect(text).toContain('Create a cube for this repository');
-    expect(text).toContain('Creating cube...');
+    expect(text).toContain("Creating cube 'myrepo'…");
     expect(text).toContain('Joining cube');
   });
 
@@ -459,7 +459,7 @@ describe('runAssimilate: cube-init surrounding surface', () => {
     expect(result).toContain('No drone was created.');
     expect(result).toContain("Next: borg assimilate --host 'https://server.test'");
     expect(progress).toContain('Create a cube for this repository');
-    expect(progress).toContain('Creating cube...');
+    expect(progress).toContain("Creating cube 'myrepo'…");
     expect(progress).not.toContain('✓');
     expect(progress).not.toContain('Cube created.');
   });
@@ -2217,8 +2217,10 @@ describe('runAssimilate: step 4 (cube existence + detail)', () => {
     expect(listCubes).toHaveBeenCalledOnce();
     expect(createCube).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(
-      'Adopting an existing cube requires interactive confirmation; --yes is not accepted here.\n' +
-      'Rerun without --yes in an interactive terminal. No cube, repository binding, or drone was created.\n',
+      "Found existing cube 'myrepo' on https://server.test.\n" +
+      'Linking a repository to an existing cube requires one interactive confirmation.\n' +
+      "Run borg assimilate --host 'https://server.test' once in an interactive terminal to link it; scripted runs work from then on.\n" +
+      'No cube, repository binding, or drone was created.\n',
     );
   });
 });
