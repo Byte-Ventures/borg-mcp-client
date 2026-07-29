@@ -356,7 +356,8 @@ test('release documentation describes the activated minimal publication lane', a
 
   assert.equal(manifest.scripts['release:exercise'], 'npm run build && node scripts/release-exercise.mjs');
 
-  assert.match(readme, /After verified publication/);
+  assert.match(readme, /Install the current exact local-only client release from npm:/);
+  assert.doesNotMatch(readme, /After verified publication/);
   const documentedClientInstalls = [
     ...readme.matchAll(/^npm install -g borgmcp@([^\s]+)$/gm),
   ].map((match) => match[1]);
