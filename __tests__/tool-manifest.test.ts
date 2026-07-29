@@ -67,6 +67,14 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(tool.inputSchema.required ?? []).not.toContain('model');
   });
 
+  it('describes silent wake failures through the inbox Monitor, not /loop', () => {
+    for (const toolName of ['borg_roster', 'borg_stream-status']) {
+      const description = TOOL_MANIFEST.find((entry) => entry.name === toolName)?.description ?? '';
+      expect(description).toMatch(/inbox Monitor|inbox-Monitor/);
+      expect(description).not.toContain('/loop');
+    }
+  });
+
   it('borg_remove-decision exposes its exactly-one selector contract', () => {
     const tool = TOOL_MANIFEST.find((entry) => entry.name === 'borg_remove-decision');
     expect(tool?.inputSchema.oneOf).toEqual([{ required: ['topic'] }, { required: ['decision_id'] }]);

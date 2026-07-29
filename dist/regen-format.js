@@ -19,9 +19,8 @@ import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
  * one of `startup` / `resume` / `clear` / `compact`. The `borg-regen`
  * SessionStart hook uses this to detect a `/clear` re-orientation, which is
  * the FIRST time the hook is the SOLE orientation path (the launch kickoff
- * prompt is gone) AND the moment Claude Code clears the session-scoped
- * `/loop` + `ScheduleWakeup` — so the re-injected orientation must instruct
- * an operational re-arm.
+ * prompt is gone), so the re-injected orientation must instruct an operational
+ * Monitor re-arm.
  *
  * Best-effort + total: empty input (manual / TTY run with no stdin),
  * malformed JSON, a missing `source`, or a non-string `source` all return
@@ -50,9 +49,8 @@ export function parseHookSource(raw) {
  *
  * Agent-branched on the existing env-agnostic signal (BORG_SESSION-style
  * `isCodexRemoteWakeEnabled`), NOT on a mutable server-recorded field:
- * - claude: arm the inbox-file tail Monitor + engage `/loop` + maintain one
- *   adaptive `ScheduleWakeup` recovery deadline (long while the Monitor is
- *   healthy or indeterminate; short only while explicitly broken).
+ * - claude: arm the inbox-file tail Monitor, drain unread entries on every
+ *   wake, and re-arm the Monitor if it exits or is missing.
  * - codex: Borg's activity stream reaches the app-server remote-control inbox
  *   channel; each wake is followed by an unread-log drain. Manual full regen
  *   + drain is a degraded fallback when remote control is unavailable.
@@ -84,9 +82,8 @@ export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
     return [
         'Arm your wake path before working:',
         `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`${monitorCommand}\` so cube posts wake you in real time.`,
-        '2. **Engage `/loop`** (self-paced) so you keep waking to triage the cube.',
-        '3. **Adaptive recovery** — set ONE `ScheduleWakeup`: [9000, 12600]s (3h ±30m) when Monitor healthy/indeterminate; [720, 1080]s (15m ±3m) when broken. Re-arm Monitor; retry short until healthy. A real Monitor wake resets, not stacks.',
-        '4. **Recovery tick** — drain `borg_read-log unread_only=true`. If empty, check wake status, set deadline, resume prior work. No full-regen or liveness post on empty; safety probes may still wake.',
+        '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
+        '3. **Monitor recovery** — if the Monitor exits or is missing, re-arm it when the exit notification wakes you.',
     ].join('\n');
 }
 /**
@@ -136,8 +133,8 @@ export function formatLeanOrientation(args) {
             ? '\n_(`/clear` cleared your conversation; Codex remote-control wake remains active. Follow the required Codex wake path below.)_\n'
             : agentKind === 'claude'
                 ? [
-                    '\n_(`/clear` cleared Claude\'s `/loop` and recovery deadline — re-arm them now.)_',
-                    '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, drain `borg_read-log unread_only=true`, then re-arm Monitor, `/loop`, and the recovery deadline._\n',
+                    '\n_(`/clear` cleared Claude\'s conversation — re-arm the inbox Monitor now.)_',
+                    '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, drain `borg_read-log unread_only=true`, then re-arm the Monitor._\n',
                 ].join('\n')
                 : ''
         : '';

@@ -172,7 +172,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_roster',
           description:
-            "List all currently connected drones in your cube, with each drone's label, role, and last-seen time. Optional `since` argument adds a sender-side liveness column — pass either an activity_log entry id (e.g., from a dispatch you posted) or an ISO-8601 timestamp; each drone is marked `awake` if they've posted a log entry after that point, otherwise `stale-since-X`. Useful for confirming a dispatch reached its named recipients (catches the silent-wake-path-failure class where SSE delivered but the drone's /loop never woke).",
+            "List all currently connected drones in your cube, with each drone's label, role, and last-seen time. Optional `since` argument adds a sender-side liveness column — pass either an activity_log entry id (e.g., from a dispatch you posted) or an ISO-8601 timestamp; each drone is marked `awake` if they've posted a log entry after that point, otherwise `stale-since-X`. Useful for confirming a dispatch reached its named recipients (catches the silent-wake-path-failure class where SSE delivered but the drone's inbox Monitor never woke it).",
           inputSchema: {
             type: 'object',
             properties: {
@@ -188,7 +188,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_stream-status',
           description:
-            "Diagnostic probe of the local SSE log-stream consumer: returns `connected`, `lastContentEventAt`, `lastWireActivityAt`, `lastHeartbeatAt`, `lastPersistedEventId`, `reconnectAttempts`, plus a wake-path check that flags if SSE is attached but no inbox-Monitor is watching the file (the silent failure where `/loop` never wakes on incoming entries). Read-only in-process state; does NOT re-open the stream. Use when troubleshooting wake-ups or verifying the stream is alive.",
+            "Diagnostic probe of the local SSE log-stream consumer: returns `connected`, `lastContentEventAt`, `lastWireActivityAt`, `lastHeartbeatAt`, `lastPersistedEventId`, `reconnectAttempts`, plus a wake-path check that flags if SSE is attached but no inbox Monitor is watching the file (the silent failure where incoming entries reach disk but do not wake the drone). Read-only in-process state; does NOT re-open the stream. Use when troubleshooting wake-ups or verifying the stream is alive.",
           inputSchema: {
             type: 'object',
             properties: {},

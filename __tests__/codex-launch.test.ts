@@ -36,7 +36,8 @@ describe('codex launch helpers', () => {
     });
 
     // KEPT: core + recovery + the (caller-built) wake-path/monitor clause.
-    expect(claude).toContain('/loop Call borg_regen');
+    expect(claude).toContain('Call borg_regen');
+    expect(claude).not.toContain('/loop');
     expect(claude).toContain('Monitor clause.');
     expect(claude).toContain('MCP server disconnected'); // MCP-disconnect recovery fallback
     expect(claude).toContain('ToolSearch');
@@ -75,10 +76,10 @@ describe('codex launch helpers', () => {
     expect(clause).toContain('--state-root');
     expect(clause).toContain(stateRoot);
     expect(clause).toContain(inboxPath);
-    expect(clause).toContain('ScheduleWakeup');
-    expect(clause).toContain('[9000, 12600]');
-    expect(clause).toContain('[720, 1080]');
-    expect(clause).not.toContain('3600');
+    expect(clause).toContain('borg_read-log unread_only=true');
+    expect(clause).toMatch(/Monitor exits or is missing.*re-arm/i);
+    expect(clause).not.toContain('/loop');
+    expect(clause).not.toContain('ScheduleWakeup');
     // NEVER-TaskStop safety reminder preserved (not dropped in the compaction)
     expect(clause).toMatch(/never\s+TaskStop/i);
     expect(clause).toContain('410');
