@@ -11,6 +11,7 @@ const WORKFLOW_PATH = '.github/workflows/publish.yml';
 const ALLOWLIST_PATH = 'scripts/release-identity-allowlist.json';
 const PACKAGE_PATH = 'package.json';
 const LOCK_PATH = 'package-lock.json';
+const README_PATH = 'README.md';
 const EXTRACTION_PATH = 'docs/EXTRACTION_PROVENANCE.md';
 const RELEASING_PATH = 'docs/RELEASING.md';
 const RELEASE_TEST_PATH = 'test/release-lane.test.mjs';
@@ -231,6 +232,19 @@ function transformLock(raw, oldVersion, newVersion) {
   return canonicalJson(lock);
 }
 
+function transformReadme(raw, oldVersion, newVersion) {
+  const documentedClientInstalls = [
+    ...raw.matchAll(/^npm install -g borgmcp@([^\s]+)$/gmu),
+  ].map((match) => match[1]);
+  if (JSON.stringify(documentedClientInstalls) !== JSON.stringify([oldVersion])) {
+    fail(`${README_PATH} must document exactly the current manifest version in its client install command.`);
+  }
+  return raw.replace(
+    /^npm install -g borgmcp@[^\s]+$/mu,
+    `npm install -g borgmcp@${newVersion}`,
+  );
+}
+
 function transformExtraction(raw, oldVersion, newVersion) {
   const candidate = `so the next candidate identity is \`${oldVersion}\``;
   const published = `and \`${oldVersion}\` was subsequently published, so the next candidate identity is \`${newVersion}\``;
@@ -311,6 +325,7 @@ export function buildReleaseTransform(baseFiles, oldVersion, newVersion, recordI
   return new Map([
     [PACKAGE_PATH, transformPackage(requireFile(baseFiles, PACKAGE_PATH), oldVersion, newVersion)],
     [LOCK_PATH, transformLock(requireFile(baseFiles, LOCK_PATH), oldVersion, newVersion)],
+    [README_PATH, transformReadme(requireFile(baseFiles, README_PATH), oldVersion, newVersion)],
     [EXTRACTION_PATH, transformExtraction(requireFile(baseFiles, EXTRACTION_PATH), oldVersion, newVersion)],
     [RELEASING_PATH, transformReleasing(requireFile(baseFiles, RELEASING_PATH), oldVersion, newVersion, record)],
     [RELEASE_TEST_PATH, transformReleaseTest(requireFile(baseFiles, RELEASE_TEST_PATH), oldVersion, newVersion, record)],
@@ -318,7 +333,7 @@ export function buildReleaseTransform(baseFiles, oldVersion, newVersion, recordI
 }
 
 function transformPaths() {
-  return [PACKAGE_PATH, LOCK_PATH, EXTRACTION_PATH, RELEASING_PATH, RELEASE_TEST_PATH].sort();
+  return [PACKAGE_PATH, LOCK_PATH, README_PATH, EXTRACTION_PATH, RELEASING_PATH, RELEASE_TEST_PATH].sort();
 }
 
 function allPaths(allowlistRaw) {

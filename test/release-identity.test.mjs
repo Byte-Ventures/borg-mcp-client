@@ -18,6 +18,7 @@ const integrity = `sha512-${'A'.repeat(86)}==`;
 const allowlistPath = 'scripts/release-identity-allowlist.json';
 const stablePath = 'scripts/local-dashboard-occurrences.json';
 const releaseTestPath = 'test/release-lane.test.mjs';
+const readmePath = 'README.md';
 
 test('the classifier loads protected-base bytes and never executes candidate code', async () => {
   const workflow = await readFile(join(root, '.github', 'workflows', 'release-identity.yml'), 'utf8');
@@ -58,12 +59,17 @@ test('prepare generates exactly the client identity surfaces and verifies their 
   const fixture = await createFixture(t);
   const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
   assert.deepEqual(prepared.paths, [
+    readmePath,
     'docs/EXTRACTION_PROVENANCE.md',
     'docs/RELEASING.md',
     'package-lock.json',
     'package.json',
     releaseTestPath,
   ]);
+  assert.match(
+    await readFile(join(fixture.root, readmePath), 'utf8'),
+    new RegExp(`^npm install -g borgmcp@${newVersion.replaceAll('.', '\\.')}$`, 'mu'),
+  );
   const candidate = commitAll(fixture.root, 'prepare release');
   const verified = verifyReleaseIdentity(fixture.root, fixture.base, candidate, fixture.authorities);
   assert.equal(verified.oldVersion, oldVersion);
@@ -145,6 +151,13 @@ for (const [name, mutate] of [
       `const CLIENT_VERSION = '${oldVersion}';`,
     ));
   }],
+  ['a stale README install version', async (fixture) => {
+    const path = join(fixture.root, readmePath);
+    await writeFile(path, (await readFile(path, 'utf8')).replace(
+      `npm install -g borgmcp@${newVersion}`,
+      `npm install -g borgmcp@${oldVersion}`,
+    ));
+  }],
   ['a deleted release evidence assertion', async (fixture) => {
     const path = join(fixture.root, releaseTestPath);
     await writeFile(path, (await readFile(path, 'utf8')).replace(`    '${fixture.record.commit}',\n`, ''));
@@ -215,6 +228,7 @@ async function createFixture(t) {
       },
     },
   }, null, 2)}\n`);
+  await writeFixture(directory, readmePath, `npm install -g borgmcp@${oldVersion}\n`);
   await writeFixture(directory, 'docs/EXTRACTION_PROVENANCE.md',
     `Published successors were published, so the next candidate identity is \`${oldVersion}\`.\n` +
     `Client \`borgmcp@2.1.1\` is published. Publication remains gated by reviewed \`v${oldVersion}\` source.\n`);
