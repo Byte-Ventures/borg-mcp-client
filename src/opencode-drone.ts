@@ -67,7 +67,6 @@ export type OpenCodeDeliveryState =
 interface OpenCodeDelivery {
   entryId: string;
   text: string;
-  messageId: string;
   allowSubmit: boolean;
   state: Exclude<OpenCodeDeliveryState, 'failed'>;
   resolve: (delivered: boolean) => void;
@@ -212,22 +211,16 @@ async function listSessionMessages(id: string): Promise<OCMessage[]> {
   return JSON.parse(body);
 }
 
-async function getSessionMessage(
-  sessionId: string,
-  messageId: string,
-): Promise<'found' | 'missing'> {
-  const { status, body } = await rawGet(
-    `/session/${sessionId}/message/${encodeURIComponent(messageId)}`,
-  );
-  if (status === 404) return 'missing';
-  if (status !== 200) {
-    throw new Error(`OpenCode message request failed (${status})`);
+async function findInjectedMessage(sessionId: string, text: string): Promise<string | null> {
+  const messages = await listSessionMessages(sessionId);
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.info?.role !== 'user' || typeof message.info.id !== 'string') continue;
+    if (message.parts?.some((part) => part.type === 'text' && part.text === text)) {
+      return message.info.id;
+    }
   }
-  const message = JSON.parse(body) as OCMessage;
-  if (message.info?.id !== messageId || message.info.role !== 'user') {
-    throw new Error('OpenCode returned the wrong injected message');
-  }
-  return 'found';
+  return null;
 }
 
 async function promptSession(id: string, bodyObj: Record<string, unknown>): Promise<number> {
@@ -443,11 +436,6 @@ async function resolveInjectionSession(): Promise<OCSession | null> {
   return bound;
 }
 
-function openCodeMessageId(entryId: string): string {
-  const digest = createHash('sha256').update(entryId).digest('hex');
-  return `msg_borg_${digest}`;
-}
-
 function rememberBounded(
   entries: Map<string, string>,
   entryId: string,
@@ -476,8 +464,10 @@ async function deliverOpenCodeEntry(
   let target: OCSession | null = null;
 
   // Before the one allowed POST, retries are safe: no submission has happened.
-  // A replayed inbox entry sets allowSubmit=false, so it can only confirm an
-  // earlier submission and can never manufacture a second prompt.
+  // OpenCode must generate the message ID: its run loop treats IDs as
+  // lexicographically ordered, so arbitrary caller IDs can persist without
+  // ever becoming the active user turn. The unique inbox text correlates the
+  // generated message across confirmation and process-replay instead.
   for (let attempt = 0; attempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; attempt++) {
     if (state !== owner || !owner.connected) return 'failed';
     if (attempt > 0) {
@@ -498,7 +488,7 @@ async function deliverOpenCodeEntry(
     }
 
     try {
-      if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
+      if (await findInjectedMessage(target.id, delivery.text)) {
         return 'delivered';
       }
     } catch (err) {
@@ -510,14 +500,12 @@ async function deliverOpenCodeEntry(
       continue;
     }
 
-    // OpenCode does not deduplicate repeated prompt_async calls by messageID:
-    // they append duplicate parts. Submit at most once, then only poll the
-    // exact message. A transport failure is ambiguous and follows the same
+    // prompt_async is not idempotent. Submit at most once, then only poll for
+    // the exact text. A transport failure is ambiguous and follows the same
     // confirmation-only path.
     let status: number | null = null;
     try {
       status = await promptSession(target.id, {
-        messageID: delivery.messageId,
         parts: [{ type: 'text', text: delivery.text }],
       });
     } catch (err) {
@@ -543,7 +531,7 @@ async function deliverOpenCodeEntry(
         delivery.state = 'delivered-unconfirmed';
       }
       try {
-        if (await getSessionMessage(target.id, delivery.messageId) === 'found') {
+        if (await findInjectedMessage(target.id, delivery.text)) {
           return 'delivered';
         }
       } catch (err) {
@@ -583,7 +571,7 @@ async function processOpenCodeDeliveries(owner: OpenCodeDroneState): Promise<voi
       } else if (outcome === 'delivered-unconfirmed') {
         owner.failedEntries.delete(delivery.entryId);
         rememberBounded(owner.unconfirmedEntries, delivery.entryId, delivery.text);
-        delivery.resolve(true);
+        delivery.resolve(false);
       } else {
         owner.unconfirmedEntries.delete(delivery.entryId);
         rememberBounded(owner.failedEntries, delivery.entryId, delivery.text);
@@ -642,8 +630,9 @@ export async function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promi
 
 /**
  * Queue one durable inbox entry for delivery into the bound OpenCode session.
- * The SSE entry ID becomes a stable OpenCode message ID, so retries and replay
- * can confirm an earlier ambiguous submission without running it twice.
+ * The durable inbox text identifies the OpenCode-generated user message, so
+ * retries and replay can confirm an earlier ambiguous submission without
+ * supplying an ordering-breaking caller message ID or running it twice.
  */
 export function injectOpenCodeEntry(
   text: string,
@@ -670,7 +659,7 @@ export function injectOpenCodeEntry(
       rememberBounded(owner.failedEntries, entryId, text);
       return Promise.resolve(false);
     }
-    return Promise.resolve(true);
+    return Promise.resolve(false);
   }
 
   const active = owner.activeDeliveries.get(entryId);
@@ -690,7 +679,6 @@ export function injectOpenCodeEntry(
   const delivery: OpenCodeDelivery = {
     entryId,
     text,
-    messageId: openCodeMessageId(entryId),
     allowSubmit,
     state: 'queued',
     resolve: resolveDelivery,

@@ -443,6 +443,29 @@ describe('streamOnce', () => {
     );
   });
 
+  it('does not suppress fallback wake handling for an unconfirmed OpenCode delivery', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(false);
+    const wakeCodex = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-unconfirmed\ndata: {"id":"e-unconfirmed","drone_id":"other","drone_label":"drone-2","role_name":"Builder","message":"confirm me","created_at":"2026-05-11T12:00:01Z"}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      injectOpenCode,
+      wakeCodex,
+    });
+
+    expect(appendLine).toHaveBeenCalledTimes(1);
+    expect(injectOpenCode).toHaveBeenCalledWith(
+      expect.stringContaining('[entry_id: e-unconfirmed]'),
+      'e-unconfirmed',
+      true,
+    );
+    expect(wakeCodex).toHaveBeenCalledTimes(1);
+  });
+
   // gh#877 Path-A: an eviction frame writes the wake SENTINEL to the inbox and
   // closes the session (streamOnce returns). The sentinel is a WAKE HINT — the
   // agent confirms via an authed 410 before tearing down (tested via the funnel

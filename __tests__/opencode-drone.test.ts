@@ -45,10 +45,10 @@ function installOpenCodeApi(options: {
     body: Record<string, unknown>;
     attempt: number;
   }) => Response | Promise<Response>;
-  exactMessageResponse?: (input: {
+  messageListResponse?: (input: {
     sessionId: string;
-    messageId: string;
     promptBodies: Array<Record<string, unknown>>;
+    messages: unknown[];
   }) => Response | Promise<Response>;
 }) {
   const prompts: string[] = [];
@@ -64,21 +64,16 @@ function installOpenCodeApi(options: {
       return new Response(JSON.stringify(options.sessions()), { status: 200 });
     }
     if (id && suffix === 'message') {
-      return new Response(JSON.stringify(options.messages?.[id] ?? []), { status: 200 });
-    }
-    if (id && suffix?.startsWith('message/')) {
-      const messageId = suffix.slice('message/'.length);
-      if (options.exactMessageResponse) {
-        return options.exactMessageResponse({
-          sessionId: id,
-          messageId,
-          promptBodies,
-        });
+      const messages = [
+        ...(options.messages?.[id] ?? []),
+        ...[...injectedMessages.entries()]
+          .filter(([key]) => key.startsWith(`${id}\0`))
+          .map(([, message]) => message),
+      ];
+      if (options.messageListResponse) {
+        return options.messageListResponse({ sessionId: id, promptBodies, messages });
       }
-      const message = injectedMessages.get(`${id}\0${messageId}`);
-      return message
-        ? new Response(JSON.stringify(message), { status: 200 })
-        : new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+      return new Response(JSON.stringify(messages), { status: 200 });
     }
     if (id && suffix === 'prompt_async') {
       prompts.push(id);
@@ -93,13 +88,13 @@ function installOpenCodeApi(options: {
       }
       const status = options.promptStatus?.[id] ?? 204;
       if (status === 200 || status === 204) {
-        const messageID = typeof body.messageID === 'string' ? body.messageID : undefined;
-        if (messageID) {
-          injectedMessages.set(`${id}\0${messageID}`, {
-            info: { id: messageID, role: 'user' },
-            parts: Array.isArray(body.parts) ? body.parts : [],
-          });
-        }
+        const messageID = typeof body.messageID === 'string'
+          ? body.messageID
+          : `msg_${String(promptBodies.length).padStart(12, '0')}generated`;
+        injectedMessages.set(`${id}\0${messageID}`, {
+          info: { id: messageID, role: 'user' },
+          parts: Array.isArray(body.parts) ? body.parts : [],
+        });
       }
       return new Response(status === 204 ? null : '', { status });
     }
@@ -321,28 +316,18 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState().sessionId).toBeNull();
   });
 
-  it('recovers before submission, then posts the stable message ID exactly once', async () => {
+  it('recovers before submission, then lets OpenCode generate the message ID', async () => {
     vi.useFakeTimers();
     const launch = launchKickoff('injection-recovery');
     const root = session('recovery-root', 10);
     let lookupCount = 0;
-    let acceptedMessageId: string | null = null;
     const api = installOpenCodeApi({
       sessions: () => [root],
       messages: { [root.id]: kickoffMessages(launch.prompt) },
-      promptResponse: ({ body }) => {
-        acceptedMessageId = String(body.messageID);
-        return new Response(null, { status: 204 });
-      },
-      exactMessageResponse: ({ messageId }) => {
+      messageListResponse: ({ messages }) => {
         lookupCount++;
-        if (lookupCount === 1) throw new Error('OpenCode process unavailable');
-        return acceptedMessageId === messageId
-          ? new Response(JSON.stringify({
-            info: { id: messageId, role: 'user' },
-            parts: [{ type: 'text', text: 'recovered' }],
-          }), { status: 200 })
-          : new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+        if (lookupCount === 2) throw new Error('OpenCode process unavailable');
+        return new Response(JSON.stringify(messages), { status: 200 });
       },
     });
 
@@ -355,7 +340,7 @@ describe('OpenCode wake target binding', () => {
     await expect(delivery).resolves.toBe(true);
 
     expect(api.promptBodies).toHaveLength(1);
-    expect(api.promptBodies[0]?.messageID).toMatch(/^msg_borg_/);
+    expect(api.promptBodies[0]).not.toHaveProperty('messageID');
     expect(getOpenCodeConnectionState()).toMatchObject({
       totalEntriesInjected: 1,
       totalEntriesRetried: 1,
@@ -376,17 +361,13 @@ describe('OpenCode wake target binding', () => {
     const api = installOpenCodeApi({
       sessions: () => [root],
       messages: { [root.id]: kickoffMessages(launch.prompt) },
-      promptResponse: () => new Response(null, { status: 204 }),
-      exactMessageResponse: ({ messageId }) => {
-        lookupCount++;
-        if (lookupCount === 1) {
-          return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+      messageListResponse: ({ promptBodies, messages }) => {
+        if (promptBodies.length === 0) {
+          return new Response(JSON.stringify(messages), { status: 200 });
         }
-        if (lookupCount === 2) throw new Error('OpenCode process terminated');
-        return new Response(JSON.stringify({
-          info: { id: messageId, role: 'user' },
-          parts: [{ type: 'text', text: 'persisted before termination' }],
-        }), { status: 200 });
+        lookupCount++;
+        if (lookupCount === 1) throw new Error('OpenCode process terminated');
+        return new Response(JSON.stringify(messages), { status: 200 });
       },
     });
 
@@ -397,7 +378,7 @@ describe('OpenCode wake target binding', () => {
     await expect(delivery).resolves.toBe(true);
 
     expect(api.promptBodies).toHaveLength(1);
-    expect(lookupCount).toBe(3);
+    expect(lookupCount).toBe(2);
     expect(getOpenCodeConnectionState().totalEntriesRetried).toBe(1);
   });
 
@@ -408,13 +389,18 @@ describe('OpenCode wake target binding', () => {
     const visibleAt = Date.now() + 500;
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
-      exactMessageResponse: ({ messageId }) => Date.now() < visibleAt
-        ? new Response(JSON.stringify({ error: 'not found' }), { status: 404 })
-        : new Response(JSON.stringify({
-          info: { id: messageId, role: 'user' },
-          parts: [{ type: 'text', text: 'persisted by prior process' }],
-        }), { status: 200 }),
+      messages: {
+        [root.id]: [
+          ...kickoffMessages(launch.prompt),
+          {
+            info: { id: 'msg_000000000001prior', role: 'user' },
+            parts: [{ type: 'text', text: 'persisted by prior process' }],
+          },
+        ],
+      },
+      messageListResponse: ({ messages }) => new Response(JSON.stringify(
+        Date.now() < visibleAt ? messages.slice(0, -1) : messages,
+      ), { status: 200 }),
     });
 
     await connect();
@@ -448,7 +434,7 @@ describe('OpenCode wake target binding', () => {
       false,
     );
     await vi.runAllTimersAsync();
-    await expect(delivery).resolves.toBe(true);
+    await expect(delivery).resolves.toBe(false);
 
     expect(api.promptBodies).toHaveLength(0);
     expect(getOpenCodeConnectionState()).toMatchObject({
@@ -486,10 +472,10 @@ describe('OpenCode wake target binding', () => {
     expect(api.promptBodies.map((body) =>
       ((body.parts as Array<{ text: string }>)[0]?.text)
     )).toEqual(['first', 'second', 'third']);
-    expect(new Set(api.promptBodies.map((body) => body.messageID)).size).toBe(3);
+    expect(api.promptBodies.every((body) => !Object.hasOwn(body, 'messageID'))).toBe(true);
   });
 
-  it('exposes delivered-unconfirmed while exact-message confirmation is pending', async () => {
+  it('exposes delivered-unconfirmed while generated-message confirmation is pending', async () => {
     const launch = launchKickoff('unconfirmed-state');
     const root = session('unconfirmed-root', 10);
     let lookupCount = 0;
@@ -500,13 +486,14 @@ describe('OpenCode wake target binding', () => {
     const api = installOpenCodeApi({
       sessions: () => [root],
       messages: { [root.id]: kickoffMessages(launch.prompt) },
-      promptResponse: () => new Response(null, { status: 204 }),
-      exactMessageResponse: () => {
-        lookupCount++;
-        if (lookupCount === 1) {
-          return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
+      messageListResponse: ({ promptBodies, messages }) => {
+        if (promptBodies.length === 0) {
+          return new Response(JSON.stringify(messages), { status: 200 });
         }
-        return confirmation;
+        lookupCount++;
+        return lookupCount === 1
+          ? confirmation
+          : new Response(JSON.stringify(messages), { status: 200 });
       },
     });
 
@@ -522,11 +509,10 @@ describe('OpenCode wake target binding', () => {
       failed: 0,
     });
 
-    const messageId = String(api.promptBodies[0]?.messageID);
-    releaseConfirmation(new Response(JSON.stringify({
-      info: { id: messageId, role: 'user' },
+    releaseConfirmation(new Response(JSON.stringify([{
+      info: { id: 'msg_000000000001generated', role: 'user' },
       parts: [{ type: 'text', text: 'pending confirmation' }],
-    }), { status: 200 }));
+    }]), { status: 200 }));
     await expect(delivery).resolves.toBe(true);
   });
 
@@ -546,7 +532,7 @@ describe('OpenCode wake target binding', () => {
     await injectInitialKickoff(launch);
     const delivery = injectOpenCodeEntry('wake that fails', 'entry-that-fails');
     await vi.runAllTimersAsync();
-    await expect(delivery).resolves.toBe(true);
+    await expect(delivery).resolves.toBe(false);
 
     expect(api.prompts).toEqual([root.id]);
     expect(getOpenCodeConnectionState()).toMatchObject({
@@ -559,7 +545,7 @@ describe('OpenCode wake target binding', () => {
     });
     await expect(
       injectOpenCodeEntry('wake that fails', 'entry-that-fails'),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     expect(api.prompts).toEqual([root.id]);
   });
 
@@ -596,7 +582,7 @@ describe('OpenCode wake target binding', () => {
     const promptBodies: Array<Record<string, unknown>> = [];
     const storedParts: unknown[] = [];
     let visibleAt = Number.POSITIVE_INFINITY;
-    let exactLookupCount = 0;
+    let messageListCount = 0;
     const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
       const path = new URL(String(input)).pathname;
 
@@ -604,7 +590,15 @@ describe('OpenCode wake target binding', () => {
         return new Response(JSON.stringify([root]), { status: 200 });
       }
       if (path === `/session/${root.id}/message`) {
-        return new Response(JSON.stringify(kickoffMessages(launch.prompt)), { status: 200 });
+        messageListCount++;
+        const messages = kickoffMessages(launch.prompt);
+        if (promptBodies.length > 0 && Date.now() >= visibleAt) {
+          messages.push({
+            info: { id: 'msg_000000000001generated', role: 'user', time: { created: Date.now() } },
+            parts: storedParts,
+          });
+        }
+        return new Response(JSON.stringify(messages), { status: 200 });
       }
       if (path === `/session/${root.id}`) {
         return new Response(JSON.stringify(root), { status: 200 });
@@ -615,16 +609,6 @@ describe('OpenCode wake target binding', () => {
         storedParts.push(...(Array.isArray(body.parts) ? body.parts : []));
         if (!Number.isFinite(visibleAt)) visibleAt = Date.now() + 500;
         return new Response(null, { status: 204 });
-      }
-      if (path.startsWith(`/session/${root.id}/message/msg_`)) {
-        exactLookupCount++;
-        if (Date.now() < visibleAt) {
-          return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
-        }
-        return new Response(JSON.stringify({
-          info: { id: promptBodies[0]?.messageID, role: 'user' },
-          parts: storedParts,
-        }), { status: 200 });
       }
       throw new Error(`Unhandled OpenCode API request: ${init?.method ?? 'GET'} ${path}`);
     });
@@ -640,8 +624,8 @@ describe('OpenCode wake target binding', () => {
     await expect(delivery).resolves.toBe(true);
 
     expect(promptBodies).toHaveLength(1);
-    expect(promptBodies[0]?.messageID).toMatch(/^msg_/);
+    expect(promptBodies[0]).not.toHaveProperty('messageID');
     expect(storedParts).toHaveLength(1);
-    expect(exactLookupCount).toBeGreaterThanOrEqual(3);
+    expect(messageListCount).toBeGreaterThanOrEqual(4);
   });
 });
