@@ -34,7 +34,7 @@ export type AgentKind = 'claude' | 'codex' | 'opencode';
  * Agent-branched on the existing env-agnostic signal (BORG_SESSION-style
  * `isCodexRemoteWakeEnabled`), NOT on a mutable server-recorded field:
  * - claude: arm the inbox-file tail Monitor, drain unread entries on every
- *   wake, and re-arm the Monitor if it exits or is missing.
+ *   wake, and re-arm the Monitor after an exit or whenever none is armed.
  * - codex: Borg's activity stream reaches the app-server remote-control inbox
  *   channel; each wake is followed by an unread-log drain. Manual full regen
  *   + drain is a degraded fallback when remote control is unavailable.

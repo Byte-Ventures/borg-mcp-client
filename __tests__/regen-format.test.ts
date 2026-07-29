@@ -725,8 +725,9 @@ describe('wakePathArming', () => {
       expect(arming).toMatch(/if.*empty/i);
       expect(arming).toMatch(/without a full regen/i);
       expect(arming).toMatch(/liveness post/i);
-      expect(arming).toMatch(/Monitor exits or is missing.*re-arm/i);
-      expect(arming).toMatch(/exit notification wakes you/i);
+      expect(arming).toContain(
+        're-arm the Monitor when its exit notification wakes you, and whenever you notice no Monitor is armed.',
+      );
       expect(arming).toMatch(/resume prior work/i);
     });
   });
@@ -812,7 +813,9 @@ describe('formatLeanOrientation', () => {
     expect(out).toContain('--state-root');
     expect(out).toContain(base.monitorStateRoot);
     expect(out).toContain('borg_read-log unread_only=true');
-    expect(out).toMatch(/Monitor exits or is missing.*re-arm/i);
+    expect(out).toContain(
+      're-arm the Monitor when its exit notification wakes you, and whenever you notice no Monitor is armed.',
+    );
     expect(out).not.toContain('/loop');
     expect(out).not.toContain('ScheduleWakeup');
   });
