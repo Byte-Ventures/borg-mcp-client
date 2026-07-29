@@ -711,30 +711,23 @@ describe('wakePathArming', () => {
   describe('claude', () => {
     const arming = wakePathArming('claude', inboxPath, monitorStateRoot);
 
-    it('uses one adaptive Claude recovery deadline without stacking wake timers', () => {
+    it('uses the inbox Monitor without a polling wake timer', () => {
       expect(arming).toContain('inbox-monitor');
       expect(arming).toContain('--state-root');
       expect(arming).toContain(monitorStateRoot);
       expect(arming).toContain(inboxPath);
-      expect(arming).toContain('/loop');
-      expect(arming).toContain('ScheduleWakeup');
-      expect(arming).toMatch(/adaptive recovery/i);
-      expect(arming).toContain('[9000, 12600]');
-      expect(arming).toContain('[720, 1080]');
-      expect(arming).toMatch(/healthy.*indeterminate/i);
-      expect(arming).toMatch(/broken/i);
-      expect(arming).toMatch(/resets.*not stacks/i);
-      expect(arming).not.toContain('3600');
+      expect(arming).not.toContain('/loop');
+      expect(arming).not.toContain('ScheduleWakeup');
     });
 
-    it('makes an empty recovery tick a cheap wake-status check before prior work resumes', () => {
+    it('drains on every wake and re-arms an exited Monitor', () => {
       expect(arming).toContain('borg_read-log unread_only=true');
       expect(arming).toMatch(/if.*empty/i);
-      expect(arming).toMatch(/no full-regen/i);
+      expect(arming).toMatch(/without a full regen/i);
       expect(arming).toMatch(/liveness post/i);
-      expect(arming).toMatch(/re-arm.*retry.*until healthy/i);
+      expect(arming).toMatch(/Monitor exits or is missing.*re-arm/i);
+      expect(arming).toMatch(/exit notification wakes you/i);
       expect(arming).toMatch(/resume prior work/i);
-      expect(arming).not.toContain('zero idle-wake cost');
     });
   });
 
@@ -813,15 +806,15 @@ describe('formatLeanOrientation', () => {
     expect(out.indexOf('borg_role')).toBeLessThan(out.indexOf('borg_playbook'));
   });
 
-  it('embeds the adaptive Claude Monitor/loop recovery deadline', () => {
+  it('embeds the Claude Monitor-only wake path', () => {
     const out = formatLeanOrientation(base);
     expect(out).toContain('inbox-monitor');
     expect(out).toContain('--state-root');
     expect(out).toContain(base.monitorStateRoot);
-    expect(out).toContain('/loop');
-    expect(out).toContain('ScheduleWakeup');
-    expect(out).toContain('[9000, 12600]');
-    expect(out).toContain('[720, 1080]');
+    expect(out).toContain('borg_read-log unread_only=true');
+    expect(out).toMatch(/Monitor exits or is missing.*re-arm/i);
+    expect(out).not.toContain('/loop');
+    expect(out).not.toContain('ScheduleWakeup');
   });
 
   it('embeds the required Codex stream/inbox/log-drain wake path', () => {
@@ -860,8 +853,8 @@ describe('formatLeanOrientation', () => {
     expect(out).toContain('borg_regen mode="full"');
     expect(out).toContain('borg_read-log unread_only=true');
     expect(out).toContain('Monitor');
-    expect(out).toContain('/loop');
-    expect(out).toContain('ScheduleWakeup');
+    expect(out).not.toContain('/loop');
+    expect(out).not.toContain('ScheduleWakeup');
   });
 
   it('keeps the quiet-clear fallback out of Codex and OpenCode orientation', () => {

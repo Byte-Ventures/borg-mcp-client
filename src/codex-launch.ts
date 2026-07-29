@@ -8,8 +8,8 @@ import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
  * not three), plus a one-line NEVER-TaskStop safety reminder preserved from
  * the pre-gh#929 monitorClause. Built by both launch call sites
  * (claude.ts + assimilate-cmd.ts) and passed to `buildAgentKickoffPrompt` as
- * `monitorClause`. Codex wakes via the app-server (no tail-Monitor / `/loop`
- * to arm) → empty; no active cube (no inboxPath) → empty.
+ * `monitorClause`. Codex wakes via the app-server (no tail-Monitor to arm) →
+ * empty; no active cube (no inboxPath) → empty.
  */
 export function buildKickoffWakePathClause(
   agentKind: AgentKind,
@@ -20,8 +20,8 @@ export function buildKickoffWakePathClause(
     return (
       wakePathArming('claude', inboxPath, monitorStateRoot) +
       '\nKeep this Monitor armed for the whole session — NEVER TaskStop it (the generic ' +
-      '/loop "TaskStop any Monitor you armed" step does NOT apply to the cube inbox Monitor; ' +
-      'it targets throwaway loop-scratch watches only). The sole exception is a confirmed ' +
+      '"TaskStop any Monitor you armed" guidance does NOT apply to the cube inbox Monitor; ' +
+      'it targets throwaway scratch watches only). The sole exception is a confirmed ' +
       'terminal eviction (410 DRONE_EVICTED). '
     );
   }
@@ -62,14 +62,13 @@ export function buildAgentKickoffPrompt(options: {
     options.codexWakePathClause ??
     `Codex Borg wakeups use remote-control when available; if no wake arrives, run borg_regen manually when returning to the session.`;
   const opencodeWakePathClause = OPENCODE_WAKE_PATH_GUIDANCE;
-  const loopOrEmpty = options.cli === 'claude' ? '/loop ' : '';
   const wakeClause = options.cli === 'claude'
     ? options.monitorClause
     : options.cli === 'codex'
       ? codexWakePathClause
       : opencodeWakePathClause;
   return (
-    `${loopOrEmpty}Call borg_regen and follow the playbook in its response. ` +
+    `Call borg_regen and follow the playbook in its response. ` +
     codexNonceClause +
     `Note: at session start the borg MCP server is still spinning up in ` +
     `parallel — if a system reminder claims "MCP server disconnected" or ` +

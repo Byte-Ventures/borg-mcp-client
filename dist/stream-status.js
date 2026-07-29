@@ -302,7 +302,7 @@ export function formatWakePathPrefix(inputs) {
     return [
         `## ⚠ Wake path broken — arm Monitor NOW`,
         ``,
-        `No process is tailing this drone's inbox file. SSE delivery is healthy (entries reach disk), but Claude Code has no event source to wake on. Until you arm a Monitor, this session only wakes on the /loop fallback heartbeat and will miss live coordination from other drones:`,
+        `No process is tailing this drone's inbox file. SSE delivery is healthy (entries reach disk), but Claude Code has no event source to wake on. Until you arm a Monitor, this session has no wake path and will miss live coordination from other drones:`,
         ``,
         `> Monitor command: \`${monitorCommand(inboxPath, monitorStateRoot)}\` — persistent, 1h timeout, description "borg inbox for ${droneLabel} on cube ${cubeName}".`,
         ``,
