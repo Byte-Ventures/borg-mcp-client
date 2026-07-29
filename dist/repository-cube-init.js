@@ -65,7 +65,7 @@ function renderResult(deps, input) {
         lines.push('No drone was created.', `Next: borg assimilate --host ${shellEscape(input.serverOrigin)}`);
     }
     else {
-        lines.push('Continuing with role and seat setup...');
+        lines.push('Continuing with role and seat setup…');
     }
     resultWriter(`${lines.join('\n')}\n`);
 }
@@ -76,7 +76,7 @@ export async function initializeRepositoryCube(input, deps) {
         input.flags.template !== undefined || input.flags.noTemplate === true || input.flags.yes === true;
     const creationOptionsUnused = association !== null && creationOptionsRequested;
     if (association) {
-        deps.write(`Checking this repository's cube on ${input.serverOrigin}…\n`);
+        deps.write(`Checking for this repository's cube on ${input.serverOrigin}…\n`);
         const cube = await deps.getCube(association.cubeId);
         const response = {
             result: 'resolved',
@@ -134,7 +134,7 @@ export async function initializeRepositoryCube(input, deps) {
         });
         return { kind: 'success', creation: { response, cube }, existing: true };
     };
-    deps.write(`Checking this repository's cube on ${input.serverOrigin}…\n`);
+    deps.write(`Checking for this repository's cube on ${input.serverOrigin}…\n`);
     const serverAssociation = await deps.resolveAssociation(repository, input.context.derivedName);
     if (serverAssociation.result === 'resolved') {
         return saveResolvedAssociation(serverAssociation, {

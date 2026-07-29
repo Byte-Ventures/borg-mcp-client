@@ -117,7 +117,7 @@ describe('guided repository cube initialization', () => {
       name: 'Product API', template: 'starter', workingRepoName: 'repo',
     }));
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining(
-      'Continuing with role and seat setup...',
+      'Continuing with role and seat setup…',
     ));
   });
 
@@ -145,7 +145,7 @@ describe('guided repository cube initialization', () => {
     expect(inputDeps.listCubes).not.toHaveBeenCalled();
     expect(inputDeps.write).toHaveBeenNthCalledWith(
       1,
-      "Checking this repository's cube on https://borg.test…\n",
+      "Checking for this repository's cube on https://borg.test…\n",
     );
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining('Creation options were not used'));
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining('No drone was created.'));
@@ -166,7 +166,7 @@ describe('guided repository cube initialization', () => {
       `Create cube 'repo' (${NEW_CUBE_TEMPLATE_PRESENTATIONS[0].label}) on https://borg.test? [Y/n]: `,
     ]);
     expect(write.mock.calls.map(([text]) => text)).toEqual([
-      "Checking this repository's cube on https://borg.test…\n",
+      "Checking for this repository's cube on https://borg.test…\n",
       'Create a cube for this repository\nRepository: /repo\nServer: https://borg.test\n',
       expect.stringContaining('Choose a template:\n'),
       "Creating cube 'repo'…\n",
@@ -278,7 +278,7 @@ describe('guided repository cube initialization', () => {
     expect(prompt).toHaveBeenCalledWith('Link this repository to that cube? [Y/n]: ');
     expect(associateCube).toHaveBeenCalledTimes(1);
     expect(write.mock.calls.map(([text]) => text)).toEqual([
-      "Checking this repository's cube on https://borg.test…\n",
+      "Checking for this repository's cube on https://borg.test…\n",
       'Found an existing cube matching this repository:\n' +
         '  cube:       repo\n' +
         '  repository: /repo\n' +
@@ -306,7 +306,7 @@ describe('guided repository cube initialization', () => {
     expect(associateCube).not.toHaveBeenCalled();
     expect(prompt).toHaveBeenCalledWith('Link this repository to that cube? [Y/n]: ');
     expect(write.mock.calls.map(([text]) => text)).toEqual([
-      "Checking this repository's cube on https://borg.test…\n",
+      "Checking for this repository's cube on https://borg.test…\n",
       'Found an existing cube matching this repository:\n' +
         '  cube:       repo\n' +
         '  repository: /repo\n' +
