@@ -4362,6 +4362,41 @@ describe('runAssimilate: gh#864 worktree branch-collision dedup', () => {
     );
     expect(stderr.mock.calls.map((call) => String(call[0])).join('')).not.toContain('Borg could not create sibling worktree');
   });
+
+  it('terminates when git creates the branch before a residual worktree failure', async () => {
+    let failedBranch: string | null = null;
+    let addCalls = 0;
+    const stderr = vi.fn();
+    const runSync = vi.fn((_cmd: string, args: string[]) => {
+      if (args[0] === 'remote') return { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return { status: 0, stdout: 'worktree /work/myrepo\nbranch refs/heads/main\n', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        addCalls++;
+        if (addCalls > 1) throw new Error('residual failure was incorrectly retried');
+        failedBranch = String(args[3]);
+        return { status: 128, stdout: '', stderr: 'fatal: could not create leading directories: Permission denied' };
+      }
+      if (args[0] === 'rev-parse' && typeof args[3] === 'string' && args[3].startsWith('refs/heads/')) {
+        return args[3] === `refs/heads/${failedBranch}`
+          ? { status: 0, stdout: 'abc123\n', stderr: '' }
+          : { status: 1, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const deps = baseDeps(runSync);
+    deps.stderr = stderr;
+
+    await expect(runAssimilate({ role: undefined, flags: { yes: true, worktree: 'residual' } }, deps)).resolves.toBe(1);
+
+    expect(addCalls).toBe(1);
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('Permission denied');
+    expect(output).toContain('Git left branch wt-residual without a registered worktree; Borg preserved it.');
+    expect(output).toContain('A seat was reserved and remains pending');
+    expect(output).toContain('rerun `borg assimilate`');
+  });
 });
 
 // Helper: runSync stub that returns a git remote URL so cube name = 'myrepo'.

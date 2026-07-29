@@ -1009,6 +1009,7 @@ export async function runAssimilate(args, deps) {
             n++;
         }
         let wt;
+        let residualBranch = null;
         while (true) {
             // gh#556 Part 1: create the intermediate ~/.borg/worktrees/<repo>/ before
             // `git worktree add` (git creates the leaf, not the parent chain). Plain
@@ -1027,9 +1028,13 @@ export async function runAssimilate(args, deps) {
             const collision = deps.pathExists(candidate) ||
                 refreshed?.names.has(basename(candidate)) === true ||
                 refreshed?.branches.has(wtBranch) === true ||
-                branchAppeared;
-            if (!collision || refreshed === null)
+                (!branchExisted && worktreeAddReportedCollision(wt.stderr));
+            if (!collision || refreshed === null) {
+                if (branchAppeared && refreshed?.branches.has(wtBranch) !== true) {
+                    residualBranch = wtBranch;
+                }
                 break;
+            }
             registeredWorktrees = refreshed;
             do {
                 candidate = computeWorktreePath(homeDir, repoBase, suffix, n);
@@ -1043,6 +1048,9 @@ export async function runAssimilate(args, deps) {
         if (wt.status !== 0) {
             deps.stderr(`Borg could not create sibling worktree ${candidate} on branch ${wtBranch}. ` +
                 `Git reported: ${safeStderr(wt.stderr)}\n` +
+                (residualBranch
+                    ? `Git left branch ${residualBranch} without a registered worktree; Borg preserved it.\n`
+                    : '') +
                 'Run `git worktree list` and `git status` to inspect repository state, resolve the reported Git error, then rerun `borg assimilate`.\n' +
                 'A seat was reserved and remains pending; rerunning after fixing the worktree issue resumes that seat.\n');
             return 1;
@@ -1451,6 +1459,10 @@ function renderInPlaceWorktreeNote(worktreePath, wtBranch) {
  */
 export function safeStderr(msg) {
     return msg.replace(/[\x00-\x1F\x7F]/g, '');
+}
+function worktreeAddReportedCollision(stderr) {
+    const message = safeStderr(stderr);
+    return /(?:branch named .* already exists|already checked out|already registered|already exists at)/i.test(message);
 }
 function listRegisteredWorktrees(deps, projectRoot) {
     const res = deps.runSync('git', ['worktree', 'list', '--porcelain'], projectRoot);
