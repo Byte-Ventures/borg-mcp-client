@@ -17,6 +17,7 @@ import {
 import { createPromptAdapter } from '../src/assimilate-deps.js';
 import { PromptInterruptedError } from '../src/repository-cube-init.js';
 import { cubeInitHelpText } from '../src/cli-help.js';
+import { getPackageVersion } from '../src/version.js';
 
 class FakeChild extends EventEmitter {
   kill = vi.fn(() => true);
@@ -186,7 +187,7 @@ describe('runEarlyServerFacade', () => {
       client,
     )).resolves.toBe(0);
 
-    expect(output.stdout()).toBe(cubeInitHelpText('2.5.0'));
+    expect(output.stdout()).toBe(cubeInitHelpText(getPackageVersion()));
     expect(output.stderr()).toBe('');
     expect(client.cubeInit).not.toHaveBeenCalled();
     expect(deps.spawn).not.toHaveBeenCalled();
