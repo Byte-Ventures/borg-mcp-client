@@ -76,6 +76,7 @@ export async function initializeRepositoryCube(input, deps) {
         input.flags.template !== undefined || input.flags.noTemplate === true || input.flags.yes === true;
     const creationOptionsUnused = association !== null && creationOptionsRequested;
     if (association) {
+        deps.write(`Checking this repository's cube on ${input.serverOrigin}…\n`);
         const cube = await deps.getCube(association.cubeId);
         const response = {
             result: 'resolved',
@@ -133,6 +134,7 @@ export async function initializeRepositoryCube(input, deps) {
         });
         return { kind: 'success', creation: { response, cube }, existing: true };
     };
+    deps.write(`Checking this repository's cube on ${input.serverOrigin}…\n`);
     const serverAssociation = await deps.resolveAssociation(repository, input.context.derivedName);
     if (serverAssociation.result === 'resolved') {
         return saveResolvedAssociation(serverAssociation, {
@@ -155,8 +157,13 @@ export async function initializeRepositoryCube(input, deps) {
             return { kind: 'stop', code: 1 };
         }
         if (!deps.isTTY() || input.flags.yes) {
-            deps.write('Adopting an existing cube requires interactive confirmation; --yes is not accepted here.\n' +
-                'Rerun without --yes in an interactive terminal. No cube, repository binding, or drone was created.\n');
+            const retryCommand = input.mode === 'cube-init'
+                ? `borg server cube init --host ${shellEscape(input.serverOrigin)}`
+                : `borg assimilate --host ${shellEscape(input.serverOrigin)}`;
+            deps.write(`Found existing cube '${matches[0].name}' on ${input.serverOrigin}.\n` +
+                'Linking a repository to an existing cube requires one interactive confirmation.\n' +
+                `Run ${retryCommand} --cube-name ${shellEscape(matches[0].name)} once in an interactive terminal to link it; scripted runs work from then on.\n` +
+                'No cube, repository binding, or drone was created.\n');
             return { kind: 'stop', code: 1 };
         }
         deps.write(`Found an existing cube matching this repository:\n` +
@@ -164,18 +171,19 @@ export async function initializeRepositoryCube(input, deps) {
             `  repository: ${input.context.root}\n` +
             `  server:     ${input.serverOrigin}\n`);
         while (true) {
-            const answer = await ask(deps, 'Link this repository to that cube? [y/N]: ', 'adoption');
+            const answer = await ask(deps, 'Link this repository to that cube? [Y/n]: ', 'adoption');
             if ('stop' in answer)
                 return { kind: 'stop', code: answer.stop };
             const confirmation = answer.value.trim().toLowerCase();
-            if (confirmation === 'y' || confirmation === 'yes')
+            if (confirmation === '' || confirmation === 'y' || confirmation === 'yes')
                 break;
-            if (confirmation === '' || confirmation === 'n' || confirmation === 'no') {
+            if (confirmation === 'n' || confirmation === 'no') {
                 deps.write('No cube, repository binding, or drone was created.\n');
                 return { kind: 'stop', code: 0 };
             }
             deps.write('Enter y or n.\n');
         }
+        deps.write(`Linking this repository to cube '${matches[0].name}'…\n`);
         const associated = await deps.associateCube({
             cubeId: matches[0].id,
             workingRepoName: input.context.derivedName,
@@ -189,7 +197,11 @@ export async function initializeRepositoryCube(input, deps) {
             if (confirmed.result !== 'resolved' || confirmed.cube_id !== associated.cube_id) {
                 throw new RepositoryAssociationConfirmationError();
             }
-            return await saveResolvedAssociation(confirmed, { adopted: true, creationOptionsUnused: creationOptionsRequested });
+            return await saveResolvedAssociation(confirmed, {
+                adopted: true,
+                creationOptionsUnused: input.flags.template !== undefined ||
+                    input.flags.noTemplate === true,
+            });
         }
         catch (error) {
             if (error instanceof RepositoryAssociationSaveError)
@@ -269,14 +281,9 @@ export async function initializeRepositoryCube(input, deps) {
     }
     template ??= 'software-dev';
     if (deps.isTTY() && !input.flags.yes) {
-        deps.write(`Create this cube?\n` +
-            `  Name: ${name}\n` +
-            `  Template: ${presentation(template).label}\n` +
-            `  Repository: ${input.context.root}\n` +
-            `  Server: ${input.serverOrigin}\n`);
         let confirmed = false;
         while (!confirmed) {
-            const answer = await ask(deps, 'Create cube? [Y/n]: ');
+            const answer = await ask(deps, `Create cube '${name}' (${presentation(template).label}) on ${input.serverOrigin}? [Y/n]: `);
             if ('stop' in answer)
                 return { kind: 'stop', code: answer.stop };
             const confirmation = answer.value.trim().toLowerCase();
@@ -291,7 +298,7 @@ export async function initializeRepositoryCube(input, deps) {
             deps.write('Enter y or n.\n');
         }
     }
-    deps.write('Creating cube...\n');
+    deps.write(`Creating cube '${name}'…\n`);
     const workingRepoName = input.context.derivedName;
     let creation;
     try {

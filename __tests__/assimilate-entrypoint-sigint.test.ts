@@ -291,11 +291,11 @@ describe.each(entrypoints)('production prompt interruption through $entry', ({ r
   });
 });
 
-describe.each(entrypoints)('repository association through $entry', ({ run }) => {
+describe.each(entrypoints)('repository association through $entry', ({ entry, run }) => {
   it('does not associate unassociated repo B with active repo A', async () => {
     const repositoryB = { kind: 'origin' as const, value: 'https://github.com/org/repo-b' };
     const state = makeEntryDeps(async (message) =>
-      message.startsWith('Cube name') ? '' : message.startsWith('Create cube?') ? 'y' : '1');
+      message.startsWith('Cube name') ? '' : message.startsWith('Create cube ') ? 'y' : '1');
     state.deps.getActiveCube = vi.fn(async () => ({
       cubeId: 'cube-a',
       droneId: 'drone-a',
@@ -550,9 +550,14 @@ describe.each(entrypoints)('legacy repository cube adoption through $entry', ({ 
     expect(state.createCube).not.toHaveBeenCalled();
     expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
     expect(state.assimilate).not.toHaveBeenCalled();
+    const retryCommand = entry === 'borg server cube init'
+      ? "borg server cube init --host 'https://localhost:8787'"
+      : "borg assimilate --host 'https://localhost:8787'";
     expect(state.stderr).toHaveBeenCalledWith(
-      'Adopting an existing cube requires interactive confirmation; --yes is not accepted here.\n' +
-      'Rerun without --yes in an interactive terminal. No cube, repository binding, or drone was created.\n',
+      "Found existing cube 'repo' on https://localhost:8787.\n" +
+      'Linking a repository to an existing cube requires one interactive confirmation.\n' +
+      `Run ${retryCommand} --cube-name 'repo' once in an interactive terminal to link it; scripted runs work from then on.\n` +
+      'No cube, repository binding, or drone was created.\n',
     );
   });
 

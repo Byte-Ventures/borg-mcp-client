@@ -109,7 +109,9 @@ describe('guided repository cube initialization', () => {
 
     expect(result.kind).toBe('success');
     expect(prompt.mock.calls.map(([message]) => message)).toEqual([
-      'Cube name [repo]: ', 'Template [1]: ', 'Create cube? [Y/n]: ',
+      'Cube name [repo]: ',
+      'Template [1]: ',
+      `Create cube 'Product API' (${NEW_CUBE_TEMPLATE_PRESENTATIONS[1].label}) on https://borg.test? [Y/n]: `,
     ]);
     expect(createCube).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Product API', template: 'starter', workingRepoName: 'repo',
@@ -133,7 +135,7 @@ describe('guided repository cube initialization', () => {
 
     const result = await initializeRepositoryCube({
       mode: 'cube-init', context, serverOrigin: 'https://borg.test',
-      flags: { cubeName: 'ignored', template: 'starter' },
+      flags: { cubeName: 'other-name' },
     }, inputDeps);
 
     expect(result).toMatchObject({ kind: 'success', existing: true });
@@ -141,8 +143,35 @@ describe('guided repository cube initialization', () => {
     expect(createCube).not.toHaveBeenCalled();
     expect(inputDeps.resolveAssociation).not.toHaveBeenCalled();
     expect(inputDeps.listCubes).not.toHaveBeenCalled();
+    expect(inputDeps.write).toHaveBeenNthCalledWith(
+      1,
+      "Checking this repository's cube on https://borg.test…\n",
+    );
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining('Creation options were not used'));
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining('No drone was created.'));
+  });
+
+  it('renders the all-default fresh-create transcript checkpoints', async () => {
+    const prompt = vi.fn(async () => '');
+    const write = vi.fn();
+    const inputDeps = deps({ prompt, write });
+
+    await expect(initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+    }, inputDeps)).resolves.toMatchObject({ kind: 'success', existing: false });
+
+    expect(prompt.mock.calls.map(([message]) => message)).toEqual([
+      'Cube name [repo]: ',
+      'Template [1]: ',
+      `Create cube 'repo' (${NEW_CUBE_TEMPLATE_PRESENTATIONS[0].label}) on https://borg.test? [Y/n]: `,
+    ]);
+    expect(write.mock.calls.map(([text]) => text)).toEqual([
+      "Checking this repository's cube on https://borg.test…\n",
+      'Create a cube for this repository\nRepository: /repo\nServer: https://borg.test\n',
+      expect.stringContaining('Choose a template:\n'),
+      "Creating cube 'repo'…\n",
+      expect.stringContaining('Cube created.\n  Name: repo\n'),
+    ]);
   });
 
   it('uses the authoritative cube name without rewriting a trusted local association from partial readback', async () => {
@@ -231,6 +260,174 @@ describe('guided repository cube initialization', () => {
     expect(inputDeps.saveAssociation).not.toHaveBeenCalled();
   });
 
+  it('adopts an exact legacy match when the operator accepts the default', async () => {
+    const prompt = vi.fn(async () => '');
+    const write = vi.fn();
+    const associateCube = vi.fn(deps().associateCube);
+    const inputDeps = deps({
+      prompt,
+      write,
+      listCubes: vi.fn(async () => [{ id: 'cube-existing', name: 'repo' }]),
+      associateCube,
+    });
+
+    await expect(initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+    }, inputDeps)).resolves.toMatchObject({ kind: 'success', existing: true });
+
+    expect(prompt).toHaveBeenCalledWith('Link this repository to that cube? [Y/n]: ');
+    expect(associateCube).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls.map(([text]) => text)).toEqual([
+      "Checking this repository's cube on https://borg.test…\n",
+      'Found an existing cube matching this repository:\n' +
+        '  cube:       repo\n' +
+        '  repository: /repo\n' +
+        '  server:     https://borg.test\n',
+      "Linking this repository to cube 'repo'…\n",
+      expect.stringContaining('Existing cube associated with this repository.\n  Name: repo\n'),
+    ]);
+  });
+
+  it('declines an exact legacy match only on an explicit negative answer', async () => {
+    const associateCube = vi.fn();
+    const prompt = vi.fn(async () => 'no');
+    const write = vi.fn();
+    const inputDeps = deps({
+      prompt,
+      write,
+      listCubes: vi.fn(async () => [{ id: 'cube-existing', name: 'repo' }]),
+      associateCube,
+    });
+
+    await expect(initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+    }, inputDeps)).resolves.toEqual({ kind: 'stop', code: 0 });
+
+    expect(associateCube).not.toHaveBeenCalled();
+    expect(prompt).toHaveBeenCalledWith('Link this repository to that cube? [Y/n]: ');
+    expect(write.mock.calls.map(([text]) => text)).toEqual([
+      "Checking this repository's cube on https://borg.test…\n",
+      'Found an existing cube matching this repository:\n' +
+        '  cube:       repo\n' +
+        '  repository: /repo\n' +
+        '  server:     https://borg.test\n',
+      'No cube, repository binding, or drone was created.\n',
+    ]);
+  });
+
+  it.each([
+    ['assimilate', "borg assimilate --host 'https://borg.test'"],
+    ['cube-init', "borg server cube init --host 'https://borg.test'"],
+  ] as const)('keeps --yes adoption fail-closed in %s mode with an interactive rerun', async (mode, command) => {
+    const associateCube = vi.fn();
+    const inputDeps = deps({
+      listCubes: vi.fn(async () => [{ id: 'cube-existing', name: 'repo' }]),
+      associateCube,
+    });
+
+    await expect(initializeRepositoryCube({
+      mode, context, serverOrigin: 'https://borg.test', flags: { yes: true }, canCreate: true,
+    }, inputDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
+
+    expect(associateCube).not.toHaveBeenCalled();
+    expect(inputDeps.write).toHaveBeenLastCalledWith(
+      "Found existing cube 'repo' on https://borg.test.\n" +
+        'Linking a repository to an existing cube requires one interactive confirmation.\n' +
+        `Run ${command} --cube-name 'repo' once in an interactive terminal to link it; scripted runs work from then on.\n` +
+        'No cube, repository binding, or drone was created.\n',
+    );
+  });
+
+  it.each([
+    ['assimilate', "borg assimilate --host 'https://borg.test'"],
+    ['cube-init', "borg server cube init --host 'https://borg.test'"],
+  ] as const)('preserves a mismatched legacy cube name across the %s interactive retry', async (mode, command) => {
+    const mismatchContext = { ...context, derivedName: 'worktree-seat' };
+    const listCubes = vi.fn(async () => [{ id: 'cube-existing', name: 'Legacy Cube' }]);
+    const failClosedDeps = deps({ listCubes });
+
+    await expect(initializeRepositoryCube({
+      mode,
+      context: mismatchContext,
+      serverOrigin: 'https://borg.test',
+      flags: { cubeName: 'Legacy Cube', yes: true },
+      canCreate: true,
+    }, failClosedDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
+
+    expect(failClosedDeps.write).toHaveBeenLastCalledWith(
+      "Found existing cube 'Legacy Cube' on https://borg.test.\n" +
+        'Linking a repository to an existing cube requires one interactive confirmation.\n' +
+        `Run ${command} --cube-name 'Legacy Cube' once in an interactive terminal to link it; scripted runs work from then on.\n` +
+        'No cube, repository binding, or drone was created.\n',
+    );
+
+    const createCube = vi.fn();
+    const write = vi.fn();
+    const retryDeps = deps({
+      prompt: vi.fn(async () => ''),
+      write,
+      listCubes,
+      createCube,
+      associateCube: vi.fn(async (input) => ({
+        result: 'resolved' as const,
+        cube_id: input.cubeId,
+        name: 'Legacy Cube',
+        working_repo_name: input.workingRepoName,
+        repository: input.repository,
+        template: 'default' as const,
+        human_seat_role_id: 'role-human',
+        default_worker_role_id: 'role-default',
+        access: 'manage' as const,
+      })),
+      getCube: vi.fn(async () => ({
+        id: 'cube-existing',
+        name: 'Legacy Cube',
+        roles: [
+          { id: 'role-human', is_human_seat: true },
+          { id: 'role-default', is_default: true },
+        ],
+      })),
+    });
+
+    await expect(initializeRepositoryCube({
+      mode,
+      context: mismatchContext,
+      serverOrigin: 'https://borg.test',
+      flags: { cubeName: 'Legacy Cube' },
+      canCreate: true,
+    }, retryDeps)).resolves.toMatchObject({ kind: 'success', existing: true });
+
+    expect(retryDeps.associateCube).toHaveBeenCalledTimes(1);
+    expect(createCube).not.toHaveBeenCalled();
+    expect(write.mock.calls.map(([text]) => text).join('')).not.toContain(
+      'Creation options were not used because this repository is already initialized.',
+    );
+  });
+
+  it('keeps non-TTY adoption fail-closed without attempting mutation', async () => {
+    const associateCube = vi.fn();
+    const prompt = vi.fn();
+    const inputDeps = deps({
+      isTTY: () => false,
+      prompt,
+      listCubes: vi.fn(async () => [{ id: 'cube-existing', name: 'repo' }]),
+      associateCube,
+    });
+
+    await expect(initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+    }, inputDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
+
+    expect(associateCube).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+    expect(inputDeps.write).toHaveBeenLastCalledWith(
+      "Found existing cube 'repo' on https://borg.test.\n" +
+        'Linking a repository to an existing cube requires one interactive confirmation.\n' +
+        "Run borg assimilate --host 'https://borg.test' --cube-name 'repo' once in an interactive terminal to link it; scripted runs work from then on.\n" +
+        'No cube, repository binding, or drone was created.\n',
+    );
+  });
+
   it('rejects a resolved association whose authoritative role IDs are absent from cube readback', async () => {
     const inputDeps = deps({
       resolveAssociation: vi.fn(async () => ({
@@ -291,7 +488,7 @@ describe('guided repository cube initialization', () => {
 
     expect(prompt.mock.calls.map(([message]) => message)).toEqual([
       'Cube name [repo]: ',
-      'Link this repository to that cube? [y/N]: ',
+      'Link this repository to that cube? [Y/n]: ',
     ]);
     expect(inputDeps.write).toHaveBeenCalledWith(
       'Found an existing cube matching this repository:\n' +
