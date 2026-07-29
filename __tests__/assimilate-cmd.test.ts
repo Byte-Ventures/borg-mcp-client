@@ -514,16 +514,21 @@ describe('runAssimilate: cube-init surrounding surface', () => {
     expect(output).not.toContain('rerun `borg assimilate');
   });
 
-  it('does not recommend an unsupported --here flag when cube init has no authority', async () => {
+  it.each([
+    ['assimilate', undefined, '`borg assimilate --host <host> --here`'],
+    ['cube init', 'cube-init' as const, '`borg server cube init --host <host>`'],
+  ])('keeps non-interactive %s authority guidance byte-identical', async (_label, mode, command) => {
     const deps = makeStubDeps({ isTTY: () => false, defaultAuthority: undefined });
     await expect(runAssimilate({
       role: undefined,
       flags: { yes: true },
-      mode: 'cube-init',
+      ...(mode ? { mode } : {}),
     }, deps)).resolves.toBe(1);
     expect(deps.stderr).toHaveBeenCalledWith(
-      'No local server selected. Use `borg server cube init --host <host>` to select a local server.\n',
+      `No local server selected. Use ${command} to select a local server.\n`,
     );
+    expect(deps.detectLocalServer).not.toHaveBeenCalled();
+    expect(deps.prompt).not.toHaveBeenCalled();
   });
 
   it('names cube init in saved-seat collision recovery before authority selection', async () => {
@@ -3696,9 +3701,23 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
-  it('prompts for a custom host when no local server is detected', async () => {
-    const answers = ['server.example.com'];
-    const prompt = vi.fn(async () => answers.shift() ?? '');
+  it.each([
+    ['assimilate', undefined, 'borg assimilate'],
+    ['cube init', 'cube-init' as const, 'borg server cube init'],
+  ])('explains a missing default server before the %s host prompt', async (_label, mode, rerunCommand) => {
+    const expectedPrompt =
+      'No running Borg server was found at https://127.0.0.1:7091 (the default).\n' +
+      '- If your server runs on another host or port, enter it below (e.g. 127.0.0.1:7091 or https://server.local:7091; bare hosts default to HTTPS).\n' +
+      `- If your server is installed but stopped, run \`borg server start\`, then rerun \`${rerunCommand}\`.\n` +
+      '- If you do not have a server yet, cancel (Ctrl-C) and run `borg server setup`.\n' +
+      'Borg server host or URL: ';
+    const prompt = vi.fn(async (message: string) => {
+      if (message === expectedPrompt) return 'server.example.com';
+      if (message.startsWith('Cube name')) return '';
+      if (message.startsWith('Template')) return '1';
+      if (message.startsWith('Create cube')) return 'y';
+      return '1';
+    });
     const connectServer = vi.fn(async () => ({
       token: 'server-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
@@ -3709,9 +3728,43 @@ describe('runAssimilate: #1015 authority selection', () => {
       connectServer,
     });
 
-    expect(await runAssimilate({ role: undefined, flags: {} }, deps)).toBe(0);
+    expect(await runAssimilate({ role: undefined, flags: {}, ...(mode ? { mode } : {}) }, deps)).toBe(0);
 
-    expect(String(prompt.mock.calls[0][0])).toContain('host or URL');
+    expect(prompt.mock.calls[0][0]).toBe(expectedPrompt);
+    expect(connectServer).toHaveBeenCalledWith('https://server.example.com');
+  });
+
+  it.each([
+    ['assimilate', undefined],
+    ['cube init', 'cube-init' as const],
+  ])('adds input context after the operator declines a detected server in %s mode', async (_label, mode) => {
+    const detectedPrompt =
+      'Local Borg server detected at https://localhost:8787.\nConnect this project to it? [Y/n]: ';
+    const alternatePrompt =
+      'Enter another Borg server host or URL (e.g. 127.0.0.1:7091 or https://server.local:7091; bare hosts default to HTTPS).\n' +
+      'Borg server host or URL: ';
+    const prompt = vi.fn(async (message: string) => {
+      if (message === detectedPrompt) return 'n';
+      if (message === alternatePrompt) return 'server.example.com';
+      if (message.startsWith('Cube name')) return '';
+      if (message.startsWith('Template')) return '1';
+      if (message.startsWith('Create cube')) return 'y';
+      return '1';
+    });
+    const connectServer = vi.fn(async () => ({
+      token: 'server-token',
+      trustIdentity: SERVER_TRUST_IDENTITY,
+    }));
+    const deps = makeStubDeps({
+      prompt,
+      detectLocalServer: vi.fn(async () => 'localhost:8787'),
+      connectServer,
+    });
+
+    expect(await runAssimilate({ role: undefined, flags: {}, ...(mode ? { mode } : {}) }, deps)).toBe(0);
+
+    expect(prompt.mock.calls[0][0]).toBe(detectedPrompt);
+    expect(prompt.mock.calls[1][0]).toBe(alternatePrompt);
     expect(connectServer).toHaveBeenCalledWith('https://server.example.com');
   });
 
