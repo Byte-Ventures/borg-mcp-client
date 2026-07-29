@@ -16,8 +16,7 @@ Borg MCP lets Claude Code, Codex, and OpenCode sessions join the same project co
 
 ## Install
 
-After verified publication, install the current exact local-only client release
-from npm:
+Install the current exact local-only client release from npm:
 
 ```bash
 npm install -g borgmcp@2.7.1
@@ -105,7 +104,12 @@ borg server cube init
 
 Both commands use the same idempotent repository association. Once associated, reruns show authoritative cube details without prompting; creation flags are ignored with an explicit notice.
 
-To connect directly to a local server (non-interactive):
+`borg assimilate --yes` and other non-interactive runs require an explicit
+`--host <server>`. Without a selected local server, assimilation fails closed
+with an actionable `No local server selected` error. The host names a
+self-hosted `borgmcp-server` on localhost or your LAN.
+
+To connect directly to a local server non-interactively:
 
 ```bash
 borg assimilate --host 127.0.0.1:7091
@@ -207,10 +211,9 @@ After assimilation, the agent session has `borg_` tools available:
 
 ## Typical two-agent flow
 
-1. From the reviewed client checkout, install and run setup.
+1. Run setup from the installed package.
 
    ```bash
-   npm install -g .
    borg setup
    ```
 
@@ -286,10 +289,6 @@ CLI-specific recovery it prints:
   or `borg assimilate --cli codex` if needed, and run `borg_regen` manually when
   returning to the session if no wake arrived.
 
-## Migration: local-only onboarding
-
-**Breaking change for automation:** this client is local-only. `borg assimilate` with `--yes` or in a non-interactive terminal requires an explicit `--host <server>`; without a selected local server it fails closed with an actionable error ("No local server selected"). There is no hosted authority — `--host` names a self-hosted `borgmcp-server` on localhost or your LAN, and needs no account or subscription.
-
 ## Development
 
 From the standalone repository root:
@@ -300,6 +299,12 @@ npm run check
 npm test
 npm run build
 npm run onboarding:smoke
+```
+
+To install and exercise the reviewed checkout globally:
+
+```bash
+npm install -g .
 ```
 
 ## License
