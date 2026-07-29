@@ -26,7 +26,8 @@ import {
   verifyManifest,
   verifyReleaseReadiness,
 } from '../scripts/verify-release-readiness.mjs';
-import { CUBE_INIT_HELP_TEXT, smokePackedClient } from '../scripts/smoke-packed-client.mjs';
+import { smokePackedClient } from '../scripts/smoke-packed-client.mjs';
+import { cubeInitHelpText } from '../dist/cli-help.js';
 
 const root = resolve(import.meta.dirname, '..');
 const CLIENT_VERSION = '2.7.0';
@@ -246,7 +247,7 @@ if (process.argv.slice(2).join('\\0') === 'update\\0--help') {
   process.exit(0);
 }
 if (process.argv.slice(2).join('\\0') === 'server\\0cube\\0init\\0--help') {
-  process.stdout.write(${JSON.stringify(CUBE_INIT_HELP_TEXT)});
+  process.stdout.write(${JSON.stringify(cubeInitHelpText(manifest.version))});
   process.exit(0);
 }
 const [command, ...args] = process.argv.slice(3);
