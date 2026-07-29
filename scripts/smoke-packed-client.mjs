@@ -4,24 +4,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-function cubeInitHelpText(version) {
-  return `borg server cube init (borgmcp ${version}) — initialize this Git repository's cube without creating a drone\n\n` +
-  `Usage:\n` +
-  `  borg server cube init [options]\n\n` +
-  `Options:\n` +
-  `  --host <host>                    Borg server host or URL (bare hosts default to HTTPS)\n` +
-  `  --enroll                         Prompt for a hidden enrollment invitation\n` +
-  `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
-  `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
-  `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
-  `  --help, -h                       Show this help\n\n` +
-  `An existing repository association skips all prompts. One accessible exact-name legacy\n` +
-  `cube requires explicit interactive adoption; ambiguous matches fail closed. An enrolled\n` +
-  `owner client may create a repository cube; ordinary clients require an explicit cube grant.\n`;
-}
-
-const sourceManifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-export const CUBE_INIT_HELP_TEXT = cubeInitHelpText(sourceManifest.version);
+const { cubeInitHelpText } = await import(new URL('../dist/cli-help.js', import.meta.url));
 
 async function runImportSmoke(packageRoot, exportTarget, timeoutMs) {
   const entryUrl = pathToFileURL(resolve(packageRoot, exportTarget)).href;

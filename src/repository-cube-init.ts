@@ -33,6 +33,17 @@ export interface RepositoryCubeCreation {
   cube: RepositoryCubeDetail;
 }
 
+type NewCubeTemplate = Exclude<CubeTemplate, 'default'>;
+
+const NEW_CUBE_TEMPLATE_NAMES: readonly NewCubeTemplate[] =
+  NEW_CUBE_TEMPLATE_PRESENTATIONS.map(({ name }) => name);
+const NEW_CUBE_TEMPLATE_OPTIONS = NEW_CUBE_TEMPLATE_NAMES.join('|');
+const NEW_CUBE_TEMPLATE_LIST = NEW_CUBE_TEMPLATE_NAMES.join(', ');
+
+function parseNewCubeTemplate(value: string): NewCubeTemplate | undefined {
+  return NEW_CUBE_TEMPLATE_PRESENTATIONS.find(({ name }) => name === value)?.name;
+}
+
 export type RepositoryCubeResolution = ResolveRepositoryCubeResponse;
 
 export interface RepositoryCubeInitFlags {
@@ -63,7 +74,7 @@ export interface RepositoryCubeInitDeps {
     name: string;
     workingRepoName: string;
     repository: CreateCubeRepository;
-    template: Exclude<CubeTemplate, 'default'>;
+    template: NewCubeTemplate;
   }): Promise<RepositoryCubeCreation>;
 }
 
@@ -332,16 +343,19 @@ export async function initializeRepositoryCube(input: {
   }
 
   if (input.flags.noTemplate) {
-    deps.write('--no-template is not supported for repository cube creation. Use --template software-dev or --template starter.\n');
+    deps.write(`--no-template is not supported for repository cube creation. Use --template ${NEW_CUBE_TEMPLATE_OPTIONS}.\n`);
     return { kind: 'stop', code: 1 };
   }
-  if (input.flags.template !== undefined && input.flags.template !== 'software-dev' && input.flags.template !== 'starter') {
+  const requestedTemplate = input.flags.template === undefined
+    ? undefined
+    : parseNewCubeTemplate(input.flags.template);
+  if (input.flags.template !== undefined && requestedTemplate === undefined) {
     const safe = input.flags.template.replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, 120);
-    deps.write(`Unknown template '${safe}'. Use software-dev or starter.\n`);
+    deps.write(`Unknown template '${safe}'. Available templates: ${NEW_CUBE_TEMPLATE_LIST}.\n`);
     return { kind: 'stop', code: 1 };
   }
   if (!deps.isTTY() && !input.flags.yes && (!input.flags.cubeName || !input.flags.template)) {
-    deps.write('Non-interactive cube creation requires --cube-name <name> and --template software-dev|starter, or --yes to use repository defaults.\n');
+    deps.write(`Non-interactive cube creation requires --cube-name <name> and --template ${NEW_CUBE_TEMPLATE_OPTIONS}, or --yes to use repository defaults.\n`);
     return { kind: 'stop', code: 1 };
   }
 
@@ -370,7 +384,7 @@ export async function initializeRepositoryCube(input: {
     if (editedNameAdoption) return editedNameAdoption;
   }
 
-  let template = input.flags.template as 'software-dev' | 'starter' | undefined;
+  let template = requestedTemplate;
   if (!template && deps.isTTY() && !input.flags.yes) {
     let menu = 'Choose a template:\n';
     for (let i = 0; i < NEW_CUBE_TEMPLATE_PRESENTATIONS.length; i += 1) {
@@ -384,12 +398,15 @@ export async function initializeRepositoryCube(input: {
       const answer = await ask(deps, 'Template [1]: ');
       if ('stop' in answer) return { kind: 'stop', code: answer.stop };
       const selected = answer.value.trim();
-      if (selected === '' || selected === '1') template = 'software-dev';
-      else if (selected === '2') template = 'starter';
-      else deps.write('Choose 1 or 2.\n');
+      const selectedIndex = selected === ''
+        ? 0
+        : /^[1-9]\d*$/.test(selected) ? Number(selected) - 1 : -1;
+      const selectedPresentation = NEW_CUBE_TEMPLATE_PRESENTATIONS[selectedIndex];
+      if (selectedPresentation) template = selectedPresentation.name;
+      else deps.write(`Choose 1-${NEW_CUBE_TEMPLATE_PRESENTATIONS.length}.\n`);
     }
   }
-  template ??= 'software-dev';
+  template ??= NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
 
   if (deps.isTTY() && !input.flags.yes) {
     let confirmed = false;

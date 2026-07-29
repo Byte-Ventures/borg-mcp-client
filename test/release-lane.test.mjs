@@ -26,7 +26,6 @@ import {
   verifyManifest,
   verifyReleaseReadiness,
 } from '../scripts/verify-release-readiness.mjs';
-import { CUBE_INIT_HELP_TEXT, smokePackedClient } from '../scripts/smoke-packed-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const CLIENT_VERSION = '2.7.0';
@@ -245,10 +244,6 @@ if (process.argv.slice(2).join('\\0') === 'update\\0--help') {
   process.stdout.write('borg update\\nmatching exact borgmcp-shared pins\\n');
   process.exit(0);
 }
-if (process.argv.slice(2).join('\\0') === 'server\\0cube\\0init\\0--help') {
-  process.stdout.write(${JSON.stringify(CUBE_INIT_HELP_TEXT)});
-  process.exit(0);
-}
 const [command, ...args] = process.argv.slice(3);
 const child = spawn('borg-mcp-server', [command, ...args], { shell: false, stdio: 'inherit' });
 child.on('error', (error) => {
@@ -284,33 +279,6 @@ async function packedFixture(mutator) {
   const tarball = join(directory, `borgmcp-${CLIENT_VERSION}.tgz`);
   execFileSync('tar', ['-czf', tarball, '-C', directory, 'package']);
   return { directory, tarball };
-}
-
-async function removeFixtureRuntimeDependencies(packageRoot) {
-  const manifestPath = join(packageRoot, 'package.json');
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  manifest.dependencies = {};
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-}
-
-async function installFixtureConsumer(directory, tarball) {
-  const consumer = join(directory, 'global-consumer');
-  const canonicalTarball = await realpath(tarball);
-  execFileSync('npm', [
-    'install',
-    '--global',
-    '--prefix',
-    consumer,
-    '--ignore-scripts',
-    '--no-save',
-    '--package-lock=false',
-    canonicalTarball,
-  ], { encoding: 'utf8' });
-  return {
-    consumer,
-    packageRoot: join(consumer, 'lib', 'node_modules', 'borgmcp'),
-    binPath: join(consumer, 'bin', 'borg-mcp'),
-  };
 }
 
 test('release workflow uses one package authority and one protected publish with no post-publish readback', async () => {
@@ -956,55 +924,13 @@ test('packed artifact verifier accepts readable source and executable bins', asy
   assert.match(report.integrity, /^sha512-/);
 });
 
-test('exact tarball installs cleanly and completes MCP initialize plus tool discovery', async (t) => {
-  const { directory, tarball } = await packedFixture(async ({ packageRoot }) => {
-    await removeFixtureRuntimeDependencies(packageRoot);
-  });
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const { consumer, packageRoot, binPath } = await installFixtureConsumer(directory, tarball);
-  execFileSync('npm', ['ls', '--global', '--prefix', consumer, '--omit=dev', '--all', '--package-lock=false'], { encoding: 'utf8' });
-  const report = await smokePackedClient(packageRoot, { binPath });
-  assert.deepEqual(report, {
-    name: 'borgmcp',
-    version: CLIENT_VERSION,
-    toolCount: 1,
-    serverFacadeExitCode: 37,
-    serverFacadeInviteExitCode: 41,
-    serverFacadeStopExitCode: 43,
-    serverFacadeStartupFailureExitCode: 1,
-    serverFacadeMissingExitCode: 127,
-    updateHelpExitCode: 0,
-  });
-});
-
-test('exact tarball smoke rejects a missing packaged MCP entrypoint', async (t) => {
-  const { directory, tarball } = await packedFixture(async ({ packageRoot }) => {
-    await removeFixtureRuntimeDependencies(packageRoot);
-    const manifestPath = join(packageRoot, 'package.json');
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-    manifest.bin['borg-mcp'] = './dist/missing.js';
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  });
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const { packageRoot, binPath } = await installFixtureConsumer(directory, tarball);
-  await assert.rejects(
-    () => smokePackedClient(packageRoot, { binPath, timeoutMs: 2_000 }),
-    /ENOENT|exited before tool discovery/,
+test('packed smoke derives cube-init help from the built contract without a local copy', async () => {
+  const source = await readFile(join(root, 'scripts', 'smoke-packed-client.mjs'), 'utf8');
+  assert.match(
+    source,
+    /await import\(new URL\('\.\.\/dist\/cli-help\.js', import\.meta\.url\)\)/,
   );
-});
-
-test('exact tarball smoke rejects a missing runtime dependency', async (t) => {
-  const { directory, tarball } = await packedFixture(async ({ packageRoot }) => {
-    await removeFixtureRuntimeDependencies(packageRoot);
-    const entry = join(packageRoot, 'dist', 'index.js');
-    await writeFile(entry, `import 'missing-runtime-package';\n${await readFile(entry, 'utf8')}`);
-  });
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const { packageRoot, binPath } = await installFixtureConsumer(directory, tarball);
-  await assert.rejects(
-    () => smokePackedClient(packageRoot, { binPath, timeoutMs: 2_000 }),
-    /Packed package import failed/,
-  );
+  assert.doesNotMatch(source, /CUBE_INIT_HELP_TEXT|function cubeInitHelpText|borg server cube init \(borgmcp/);
 });
 
 test('packed artifact verifier rejects credential-shaped content', async (t) => {

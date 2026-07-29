@@ -37,7 +37,8 @@ Commands:
 Run borg server <command> --help for server command options.
 ```
 
-`borg server cube init --help` prints:
+`borg server cube init --help` derives accepted template names from the pinned
+shared release. Relevant options include:
 
 ```text
 borg server cube init (borgmcp <version>) — initialize this Git repository's cube without creating a drone
@@ -49,7 +50,7 @@ Options:
   --host <host>                    Borg server host or URL (bare hosts default to HTTPS)
   --enroll                         Prompt for a hidden enrollment invitation
   --cube-name <name>               Repository cube name (otherwise edit the proposed name)
-  --template software-dev|starter  New-cube template (default: software-dev)
+  --template <name>                 New-cube template (default: recommended template)
   --yes, -y                        Accept new-cube defaults; never adopt by name
   --help, -h                       Show this help
 
@@ -102,11 +103,12 @@ match displays the cube, repository, and server and requires explicit interactiv
 confirmation before the server atomically associates it; multiple matches fail
 closed. `--yes` never adopts a cube by name. With no match, an authorized owner
 continues to the creation guide, which shows the repository and server, proposes
-an editable name, offers the Software Development and Starter templates, and
-asks for one confirmation. `--cube-name <name>` and `--template
-software-dev|starter` supply those creation values directly; `--yes` accepts the
-repository default name and Software Development template. `borg server cube
-init` stops after authoritative cube readback and never creates a drone. Bare
+an editable name, offers every new-cube template shipped by the pinned shared
+release with the recommended template first, and asks for one confirmation.
+`--cube-name <name>` and `--template <name>` supply those creation values
+directly; run either command with `--help` for the accepted template names.
+`--yes` accepts the repository default name and recommended template. `borg
+server cube init` stops after authoritative cube readback and never creates a drone. Bare
 repositories fail closed.
 
 For repositories with a canonical public `origin`, that origin is the stable
@@ -131,8 +133,8 @@ interactive terminal, or pass `borg assimilate --host <host>` to use an
 existing server. The server must be running and trusted before assimilation.
 An owner enrollment carrying the persisted `create_cube`
 capability creates one idempotent cube per repository during normal
-assimilation or `borg server cube init`, using Software Development or Starter;
-repeating an
+assimilation or `borg server cube init`, using a template shipped by the pinned
+shared release; repeating an
 ambiguous request does not duplicate the cube, and distinct repositories can
 create distinct bounded cubes. An ordinary enrolled client is denied before a
 create request is sent. Cloud-only capabilities fail explicitly rather than

@@ -12,6 +12,7 @@ export interface RepositoryCubeCreation {
     response: CreateCubeResponse;
     cube: RepositoryCubeDetail;
 }
+type NewCubeTemplate = Exclude<CubeTemplate, 'default'>;
 export type RepositoryCubeResolution = ResolveRepositoryCubeResponse;
 export interface RepositoryCubeInitFlags {
     cubeName?: string;
@@ -43,7 +44,7 @@ export interface RepositoryCubeInitDeps {
         name: string;
         workingRepoName: string;
         repository: CreateCubeRepository;
-        template: Exclude<CubeTemplate, 'default'>;
+        template: NewCubeTemplate;
     }): Promise<RepositoryCubeCreation>;
 }
 export type RepositoryCubeInitResult = {
@@ -71,4 +72,5 @@ export declare function initializeRepositoryCube(input: {
     flags: RepositoryCubeInitFlags;
     canCreate?: boolean;
 }, deps: RepositoryCubeInitDeps): Promise<RepositoryCubeInitResult>;
+export {};
 //# sourceMappingURL=repository-cube-init.d.ts.map

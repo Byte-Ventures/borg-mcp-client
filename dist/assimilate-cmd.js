@@ -20,6 +20,7 @@ import { installBorgPlugin } from './opencode-plugin.js';
 import { computeOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
+import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
 import { BorgServerError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, LegacySessionCredentialCollisionError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
@@ -64,12 +65,25 @@ async function selectAssimilationAuthority(flags, deps, mode) {
         // Detection is advisory. A failed probe is the same UX state as "none
         // found"; an explicitly selected endpoint remains fail-closed below.
     }
+    let hostPrompt;
     if (detected) {
         const answer = await deps.prompt(`Local Borg server detected at ${detected}.\nConnect this project to it? [Y/n]: `);
         if (affirmative(answer))
             return { kind: 'server', apiUrl: detected };
+        hostPrompt =
+            'Enter another Borg server host or URL (e.g. 127.0.0.1:7091 or https://server.local:7091; bare hosts default to HTTPS).\n' +
+                'Borg server host or URL: ';
     }
-    const host = await deps.prompt('Borg server host or URL: ');
+    else {
+        const rerunCommand = mode === 'cube-init' ? 'borg server cube init' : 'borg assimilate';
+        hostPrompt =
+            `No running Borg server was found at ${DEFAULT_LOCAL_SERVER_ORIGIN} (the default).\n` +
+                '- If your server runs on another host or port, enter it below (e.g. 127.0.0.1:7091 or https://server.local:7091; bare hosts default to HTTPS).\n' +
+                `- If your server is installed but stopped, run \`borg server start\`, then rerun \`${rerunCommand}\`.\n` +
+                '- If you do not have a server yet, cancel (Ctrl-C) and run `borg server setup`.\n' +
+                'Borg server host or URL: ';
+    }
+    const host = await deps.prompt(hostPrompt);
     try {
         return { kind: 'server', apiUrl: normalizeServerEndpoint(host) };
     }

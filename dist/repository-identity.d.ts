@@ -1,4 +1,4 @@
-import type { CreateCubeRepository, CubeTemplate } from 'borgmcp-shared/protocol';
+import { type CreateCubeRepository, type CubeTemplate } from 'borgmcp-shared/protocol';
 export interface GitRepositoryContext {
     root: string;
     commonDir: string;
