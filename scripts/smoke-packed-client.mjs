@@ -213,6 +213,9 @@ export async function smokePackedClient(packageRoot, options = {}) {
       ...process.env,
       BORG_SESSION: '1',
       BORG_AGENT_KIND: 'claude',
+      // A launcher-pinned kind must override stale legacy markers inherited
+      // from a parent agent session.
+      BORG_OPENCODE: '1',
       CI: '1',
       NO_COLOR: '1',
     },

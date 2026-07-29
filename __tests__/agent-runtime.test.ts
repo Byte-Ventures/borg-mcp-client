@@ -15,7 +15,12 @@ describe('agent runtime identity', () => {
     expect(resolveSessionAgentKind({
       [BORG_AGENT_KIND_ENV]: 'claude',
       [BORG_CODEX_REMOTE_WAKE_ENV]: '1',
+      [BORG_OPENCODE_ENV]: '1',
     } as NodeJS.ProcessEnv)).toBe('claude');
+    expect(resolveSessionAgentKind({
+      [BORG_AGENT_KIND_ENV]: 'codex',
+      [BORG_OPENCODE_ENV]: '1',
+    } as NodeJS.ProcessEnv)).toBe('codex');
     expect(resolveSessionAgentKind({
       [BORG_AGENT_KIND_ENV]: 'opencode',
       [BORG_CODEX_REMOTE_WAKE_ENV]: '1',
