@@ -50,7 +50,7 @@ export function parseHookSource(raw) {
  * Agent-branched on the existing env-agnostic signal (BORG_SESSION-style
  * `isCodexRemoteWakeEnabled`), NOT on a mutable server-recorded field:
  * - claude: arm the inbox-file tail Monitor, drain unread entries on every
- *   wake, and re-arm the Monitor if it exits or is missing.
+ *   wake, and re-arm the Monitor after an exit or whenever none is armed.
  * - codex: Borg's activity stream reaches the app-server remote-control inbox
  *   channel; each wake is followed by an unread-log drain. Manual full regen
  *   + drain is a degraded fallback when remote control is unavailable.
@@ -83,7 +83,7 @@ export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
         'Arm your wake path before working:',
         `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`${monitorCommand}\` so cube posts wake you in real time.`,
         '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
-        '3. **Monitor recovery** — if the Monitor exits or is missing, re-arm it when the exit notification wakes you.',
+        '3. **Monitor recovery** — re-arm the Monitor when its exit notification wakes you, and whenever you notice no Monitor is armed.',
     ].join('\n');
 }
 /**
