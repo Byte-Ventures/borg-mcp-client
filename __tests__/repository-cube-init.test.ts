@@ -135,7 +135,7 @@ describe('guided repository cube initialization', () => {
 
     const result = await initializeRepositoryCube({
       mode: 'cube-init', context, serverOrigin: 'https://borg.test',
-      flags: { cubeName: 'ignored', template: 'starter' },
+      flags: { cubeName: 'other-name' },
     }, inputDeps);
 
     expect(result).toMatchObject({ kind: 'success', existing: true });
@@ -333,8 +333,74 @@ describe('guided repository cube initialization', () => {
     expect(inputDeps.write).toHaveBeenLastCalledWith(
       "Found existing cube 'repo' on https://borg.test.\n" +
         'Linking a repository to an existing cube requires one interactive confirmation.\n' +
-        `Run ${command} once in an interactive terminal to link it; scripted runs work from then on.\n` +
+        `Run ${command} --cube-name 'repo' once in an interactive terminal to link it; scripted runs work from then on.\n` +
         'No cube, repository binding, or drone was created.\n',
+    );
+  });
+
+  it.each([
+    ['assimilate', "borg assimilate --host 'https://borg.test'"],
+    ['cube-init', "borg server cube init --host 'https://borg.test'"],
+  ] as const)('preserves a mismatched legacy cube name across the %s interactive retry', async (mode, command) => {
+    const mismatchContext = { ...context, derivedName: 'worktree-seat' };
+    const listCubes = vi.fn(async () => [{ id: 'cube-existing', name: 'Legacy Cube' }]);
+    const failClosedDeps = deps({ listCubes });
+
+    await expect(initializeRepositoryCube({
+      mode,
+      context: mismatchContext,
+      serverOrigin: 'https://borg.test',
+      flags: { cubeName: 'Legacy Cube', yes: true },
+      canCreate: true,
+    }, failClosedDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
+
+    expect(failClosedDeps.write).toHaveBeenLastCalledWith(
+      "Found existing cube 'Legacy Cube' on https://borg.test.\n" +
+        'Linking a repository to an existing cube requires one interactive confirmation.\n' +
+        `Run ${command} --cube-name 'Legacy Cube' once in an interactive terminal to link it; scripted runs work from then on.\n` +
+        'No cube, repository binding, or drone was created.\n',
+    );
+
+    const createCube = vi.fn();
+    const write = vi.fn();
+    const retryDeps = deps({
+      prompt: vi.fn(async () => ''),
+      write,
+      listCubes,
+      createCube,
+      associateCube: vi.fn(async (input) => ({
+        result: 'resolved' as const,
+        cube_id: input.cubeId,
+        name: 'Legacy Cube',
+        working_repo_name: input.workingRepoName,
+        repository: input.repository,
+        template: 'default' as const,
+        human_seat_role_id: 'role-human',
+        default_worker_role_id: 'role-default',
+        access: 'manage' as const,
+      })),
+      getCube: vi.fn(async () => ({
+        id: 'cube-existing',
+        name: 'Legacy Cube',
+        roles: [
+          { id: 'role-human', is_human_seat: true },
+          { id: 'role-default', is_default: true },
+        ],
+      })),
+    });
+
+    await expect(initializeRepositoryCube({
+      mode,
+      context: mismatchContext,
+      serverOrigin: 'https://borg.test',
+      flags: { cubeName: 'Legacy Cube' },
+      canCreate: true,
+    }, retryDeps)).resolves.toMatchObject({ kind: 'success', existing: true });
+
+    expect(retryDeps.associateCube).toHaveBeenCalledTimes(1);
+    expect(createCube).not.toHaveBeenCalled();
+    expect(write.mock.calls.map(([text]) => text).join('')).not.toContain(
+      'Creation options were not used because this repository is already initialized.',
     );
   });
 
@@ -357,7 +423,7 @@ describe('guided repository cube initialization', () => {
     expect(inputDeps.write).toHaveBeenLastCalledWith(
       "Found existing cube 'repo' on https://borg.test.\n" +
         'Linking a repository to an existing cube requires one interactive confirmation.\n' +
-        "Run borg assimilate --host 'https://borg.test' once in an interactive terminal to link it; scripted runs work from then on.\n" +
+        "Run borg assimilate --host 'https://borg.test' --cube-name 'repo' once in an interactive terminal to link it; scripted runs work from then on.\n" +
         'No cube, repository binding, or drone was created.\n',
     );
   });

@@ -556,7 +556,7 @@ describe.each(entrypoints)('legacy repository cube adoption through $entry', ({ 
     expect(state.stderr).toHaveBeenCalledWith(
       "Found existing cube 'repo' on https://localhost:8787.\n" +
       'Linking a repository to an existing cube requires one interactive confirmation.\n' +
-      `Run ${retryCommand} once in an interactive terminal to link it; scripted runs work from then on.\n` +
+      `Run ${retryCommand} --cube-name 'repo' once in an interactive terminal to link it; scripted runs work from then on.\n` +
       'No cube, repository binding, or drone was created.\n',
     );
   });

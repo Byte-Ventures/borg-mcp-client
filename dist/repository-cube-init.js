@@ -162,7 +162,7 @@ export async function initializeRepositoryCube(input, deps) {
                 : `borg assimilate --host ${shellEscape(input.serverOrigin)}`;
             deps.write(`Found existing cube '${matches[0].name}' on ${input.serverOrigin}.\n` +
                 'Linking a repository to an existing cube requires one interactive confirmation.\n' +
-                `Run ${retryCommand} once in an interactive terminal to link it; scripted runs work from then on.\n` +
+                `Run ${retryCommand} --cube-name ${shellEscape(matches[0].name)} once in an interactive terminal to link it; scripted runs work from then on.\n` +
                 'No cube, repository binding, or drone was created.\n');
             return { kind: 'stop', code: 1 };
         }
@@ -197,7 +197,11 @@ export async function initializeRepositoryCube(input, deps) {
             if (confirmed.result !== 'resolved' || confirmed.cube_id !== associated.cube_id) {
                 throw new RepositoryAssociationConfirmationError();
             }
-            return await saveResolvedAssociation(confirmed, { adopted: true, creationOptionsUnused: creationOptionsRequested });
+            return await saveResolvedAssociation(confirmed, {
+                adopted: true,
+                creationOptionsUnused: input.flags.template !== undefined ||
+                    input.flags.noTemplate === true,
+            });
         }
         catch (error) {
             if (error instanceof RepositoryAssociationSaveError)

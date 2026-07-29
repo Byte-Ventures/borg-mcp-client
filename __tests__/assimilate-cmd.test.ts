@@ -2219,7 +2219,7 @@ describe('runAssimilate: step 4 (cube existence + detail)', () => {
     expect(stderr).toHaveBeenCalledWith(
       "Found existing cube 'myrepo' on https://server.test.\n" +
       'Linking a repository to an existing cube requires one interactive confirmation.\n' +
-      "Run borg assimilate --host 'https://server.test' once in an interactive terminal to link it; scripted runs work from then on.\n" +
+      "Run borg assimilate --host 'https://server.test' --cube-name 'myrepo' once in an interactive terminal to link it; scripted runs work from then on.\n" +
       'No cube, repository binding, or drone was created.\n',
     );
   });
