@@ -223,7 +223,7 @@ export async function main() {
   // installed client version.
   handleVersionFlag();
   const readinessProbe = isMcpReadinessProbe();
-  const openCodeRuntime = process.env.BORG_OPENCODE === '1';
+  const openCodeRuntime = resolveSessionAgentKind() === 'opencode';
   const startupServices = {
     // Auto-register the SessionStart hook so existing users get borg-regen
     // auto-orientation on session start without re-running borg setup. Idempotent.
@@ -262,7 +262,7 @@ export async function main() {
     openCode: async () => {
       installBorgPlugin();
       const active = await getActiveCube();
-      if (active && process.env.BORG_OPENCODE === '1') {
+      if (active && openCodeRuntime) {
         const port = computeOpenCodePort(active.droneId);
         const serverUrl = `http://127.0.0.1:${port}`;
         await connectOpenCodeDrone({
