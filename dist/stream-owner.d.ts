@@ -9,6 +9,9 @@ export interface StreamOwnerRecord {
     cwd: string;
     startedAt: string;
     heartbeatAt: string;
+    worktree?: string;
+    droneLabel?: string;
+    cubeName?: string;
 }
 export interface StreamOwnershipSnapshot {
     state: 'owner' | 'owned-by-other-process' | 'initializing' | 'orphaned-initialization' | 'unowned';
@@ -17,6 +20,9 @@ export interface StreamOwnershipSnapshot {
     cwd?: string;
     startedAt?: string;
     heartbeatAt?: string;
+    worktree?: string;
+    droneLabel?: string;
+    cubeName?: string;
     ageMs?: number;
     lockPath?: string;
     /** Opened-directory identity used to bind inspection to later takeover. */
@@ -36,6 +42,9 @@ export interface StreamOwnerDeps {
     locksDir?: string;
     processNonce?: string;
     processStartedAt?: string;
+    worktree?: string;
+    droneLabel?: string;
+    cubeName?: string;
     isPidAlive?: (pid: number) => boolean;
     beforeTakeoverVerify?: (takeoverPath: string) => Promise<void>;
     beforeLeaseRefreshMutation?: (lockPath: string) => Promise<void>;

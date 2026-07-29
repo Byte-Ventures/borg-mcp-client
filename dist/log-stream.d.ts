@@ -169,6 +169,9 @@ export interface ActiveCube {
     serverTrustIdentity?: string;
     localSessionCredentialRef?: string;
     localSessionExpiresAt?: string | null;
+    worktree?: string;
+    droneLabel?: string;
+    name?: string;
 }
 export declare function streamOnce(active: ActiveCube, lastEventId: string | null, onEventId: (id: string) => void, deps?: StreamDeps): Promise<void>;
 export declare function streamOnceIfOwner(active: ActiveCube, lastEventId: string | null, onEventId: (id: string) => void, deps?: StreamDeps): Promise<'streamed' | 'skipped'>;

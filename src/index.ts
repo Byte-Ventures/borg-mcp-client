@@ -64,9 +64,11 @@ import {
 import {
   activeCubeWithFreshRegenIdentity,
   getActiveCube,
+  getActiveCubeForWorktree,
   refreshActiveCubeMetadata,
   findProjectRoot,
   inboxPathForDrone,
+  pinMcpSeatIdentity,
 } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
 import { addSessionStartHook, addUserPromptSubmitHook } from './config-utils.js';
@@ -140,6 +142,11 @@ import {
   normalizeDirectLogRecipients,
 } from './direct-log.js';
 import { formatLocalManageToolResult } from './local-manage-tool-result.js';
+import {
+  OpenCodeSeatIdentityError,
+  formatOpenCodeSeatIdentityError,
+  resolveOpenCodeSeatIdentity,
+} from './opencode-seat-identity.js';
 import {
   runEvictDroneTool,
   runReassignDroneTool,
@@ -216,8 +223,8 @@ export async function main() {
   // installed client version.
   handleVersionFlag();
   const readinessProbe = isMcpReadinessProbe();
-
-  await runMcpStartupServices(readinessProbe, {
+  const openCodeRuntime = process.env.BORG_OPENCODE === '1';
+  const startupServices = {
     // Auto-register the SessionStart hook so existing users get borg-regen
     // auto-orientation on session start without re-running borg setup. Idempotent.
     sessionStartHook: () => {
@@ -260,14 +267,17 @@ export async function main() {
         const serverUrl = `http://127.0.0.1:${port}`;
         await connectOpenCodeDrone({
           serverUrl,
-          directory: process.cwd(),
+          directory: active.worktree ?? findProjectRoot(),
           droneLabel: active.droneLabel,
           cubeName: active.name,
         });
         setModuleInjectOpenCode(injectOpenCodeEntry);
       }
     },
-  });
+  };
+  // Claude and Codex retain their existing pre-handshake startup behavior.
+  // OpenCode must first obtain the session-scoped MCP root from its client.
+  if (!openCodeRuntime) await runMcpStartupServices(readinessProbe, startupServices);
 
   // Create MCP server. `version` is the installed borgmcp version
   // (T1.4 of 0.6.0): read at runtime from package.json so Claude
@@ -286,6 +296,16 @@ export async function main() {
     }
   );
 
+  let openCodeIdentityFailure: OpenCodeSeatIdentityError | null = null;
+  let finishOpenCodeIdentity: (() => void) | null = null;
+  const openCodeIdentityReady = openCodeRuntime && !readinessProbe
+    ? new Promise<void>((resolveIdentity) => { finishOpenCodeIdentity = resolveIdentity; })
+    : null;
+  const waitForOpenCodeIdentity = async (): Promise<OpenCodeSeatIdentityError | null> => {
+    if (openCodeIdentityReady) await openCodeIdentityReady;
+    return openCodeIdentityFailure;
+  };
+
   // gh#899: tool definitions built once at setup, then role-scoped per caller
   // in the ListTools handler below (the dispatcher reaches deferred tools).
   const allToolDefs: ToolManifestEntry[] = TOOL_MANIFEST;
@@ -294,6 +314,7 @@ export async function main() {
   // (old cubes.json / pre-assimilate) → full set; deferred tools stay reachable
   // via borg_tool. Never an auth boundary — live per-client cube grants govern.
   server.setRequestHandler(ListToolsRequestSchema, async () => {
+    await waitForOpenCodeIdentity();
     let scope: { roleName?: string; roleClass?: 'queen' | 'worker'; isHumanSeat?: boolean } | null = null;
     try {
       const active = await getActiveCube();
@@ -309,6 +330,17 @@ export async function main() {
   // Register tool execution handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     let { name, arguments: args } = request.params;
+
+    const identityFailure = await waitForOpenCodeIdentity();
+    if (identityFailure) {
+      return {
+        content: [{
+          type: 'text',
+          text: formatOpenCodeSeatIdentityError(identityFailure, process.cwd()),
+        }],
+        isError: true,
+      };
+    }
 
     // gh#899: borg_describe-tool — schema-only, NEVER executes. Returns the
     // named tool's def from allToolDefs so a role-scoped session can learn a
@@ -386,7 +418,7 @@ export async function main() {
               since,
               reportedModel,
               agentKind: resolveReportableSessionAgentKind(),
-              workingRepo: resolveWorkingRepo(),
+              workingRepo: resolveWorkingRepo(active.worktree),
               serverTrustIdentity: active.serverTrustIdentity,
             });
           } catch (error) {
@@ -467,7 +499,7 @@ export async function main() {
             seedDisplayIdentity(active!);
             const result = await regen(active!.sessionToken, active!.apiUrl, {
               agentKind: resolveReportableSessionAgentKind(),
-              workingRepo: resolveWorkingRepo(),
+              workingRepo: resolveWorkingRepo(active!.worktree),
               serverTrustIdentity: active!.serverTrustIdentity,
             });
             const displayIdentity = confirmDisplayIdentity(active!, identityFromRegen(result));
@@ -1259,8 +1291,35 @@ export async function main() {
   // Create stdio transport
   const transport = new StdioServerTransport();
 
+  if (openCodeIdentityReady) {
+    server.oninitialized = () => {
+      void resolveOpenCodeSeatIdentity({
+        listRoots: () => server.listRoots(),
+        findProjectRoot,
+        getActiveCubeForWorktree,
+        pinSeatIdentity: pinMcpSeatIdentity,
+        childCwd: process.cwd(),
+      }).catch((error) => {
+        openCodeIdentityFailure = error instanceof OpenCodeSeatIdentityError
+          ? error
+          : new OpenCodeSeatIdentityError('ROOTS_UNAVAILABLE', String(error));
+      }).finally(() => {
+        finishOpenCodeIdentity?.();
+      });
+    };
+  }
+
   // Connect server to transport
   await server.connect(transport);
+
+  if (openCodeIdentityReady) {
+    await openCodeIdentityReady;
+    if (openCodeIdentityFailure) {
+      console.error(formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd()));
+    } else {
+      await runMcpStartupServices(false, startupServices, { openCodeFirst: true });
+    }
+  }
 
   // Resolve drone self-identification prefix before any console output
   // (gh#25). Falls back to `[unassimilated · <repo>]` if no cube cached.

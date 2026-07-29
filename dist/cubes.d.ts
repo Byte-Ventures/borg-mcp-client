@@ -35,6 +35,8 @@ export interface ActiveCube {
     roleName?: string;
     roleClass?: 'queen' | 'worker';
     isHumanSeat?: boolean;
+    /** Canonical worktree bound to this exact durable seat. */
+    worktree?: string;
 }
 export type ActiveCubeInput = Omit<ActiveCube, 'sessionToken'> & {
     sessionToken?: string;
@@ -44,11 +46,12 @@ export interface CodexWakeTargetRecord {
     socketPath: string;
     updatedAt: string;
 }
-/**
- * Walk up from cwd looking for a .git directory. If found, return that
- * directory. If not found by filesystem root, return the original cwd.
- * The returned absolute path is the "project key" used to scope cube state.
- */
+export declare class McpSeatIdentityChangedError extends Error {
+    readonly code = "SEAT_IDENTITY_CHANGED";
+    constructor();
+}
+export declare function pinMcpProjectRoot(worktree: string): void;
+export declare function pinMcpSeatIdentity(active: ActiveCube): void;
 export declare function findProjectRoot(cwd?: string): string;
 export declare function inboxPathForDrone(cubeId: string, droneId: string): string;
 export declare function atomicWriteFile(filePath: string, data: string, opts?: {
@@ -66,6 +69,7 @@ export declare function atomicWriteFile(filePath: string, data: string, opts?: {
  * refresh.
  */
 export declare function getActiveCube(): Promise<ActiveCube | null>;
+export declare function getActiveCubeForWorktree(worktree: string): Promise<ActiveCube | null>;
 /**
  * True iff this worktree has an ACTIVE bound seat in seats.json. In the collapsed
  * single-store model the credential and the worktree binding are one atomic unit,
@@ -73,6 +77,7 @@ export declare function getActiveCube(): Promise<ActiveCube | null>;
  * an active bound seat always hydrates.
  */
 export declare function hasPersistedActiveCube(): Promise<boolean>;
+export declare function __resetPinnedMcpProjectRootForTests(): void;
 /**
  * Token-free lookup used after an offline reset. A surviving seat is only
  * described as saved local state; the caller must still revalidate it with the

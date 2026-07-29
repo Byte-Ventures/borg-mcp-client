@@ -4,10 +4,15 @@
  * SSE, mutating hooks, or starting timers because it is intentionally killed
  * immediately after that response.
  */
-export async function runMcpStartupServices(readinessProbe, services) {
+export async function runMcpStartupServices(readinessProbe, services, options = {}) {
     if (readinessProbe)
         return;
-    const tasks = [
+    const tasks = options.openCodeFirst ? [
+        services.sessionStartHook,
+        services.auditHook,
+        services.openCode,
+        services.sseStream,
+    ] : [
         services.sessionStartHook,
         services.auditHook,
         services.sseStream,

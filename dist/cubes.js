@@ -29,7 +29,43 @@ const INBOX_DIR = join(CUBES_DIR, 'inboxes');
  * directory. If not found by filesystem root, return the original cwd.
  * The returned absolute path is the "project key" used to scope cube state.
  */
-export function findProjectRoot(cwd = process.cwd()) {
+let pinnedMcpProjectRoot = null;
+let pinnedMcpSeatIdentity = null;
+export class McpSeatIdentityChangedError extends Error {
+    code = 'SEAT_IDENTITY_CHANGED';
+    constructor() {
+        super('The saved Borg seat changed after this MCP session pinned its identity. Exit this session and relaunch from the intended worktree.');
+        this.name = 'McpSeatIdentityChangedError';
+    }
+}
+export function pinMcpProjectRoot(worktree) {
+    const normalized = resolve(worktree);
+    if (pinnedMcpProjectRoot !== null && pinnedMcpProjectRoot !== normalized) {
+        throw new Error(`Borg MCP session project root is already pinned to ${pinnedMcpProjectRoot}`);
+    }
+    pinnedMcpProjectRoot = normalized;
+}
+export function pinMcpSeatIdentity(active) {
+    if (!active.worktree)
+        throw new McpSeatIdentityChangedError();
+    pinMcpProjectRoot(active.worktree);
+    const next = {
+        worktree: resolve(active.worktree),
+        cubeId: active.cubeId,
+        droneId: active.droneId,
+        ...(active.localSessionCredentialRef
+            ? { credentialRef: active.localSessionCredentialRef }
+            : {}),
+    };
+    if (pinnedMcpSeatIdentity && (pinnedMcpSeatIdentity.worktree !== next.worktree ||
+        pinnedMcpSeatIdentity.cubeId !== next.cubeId ||
+        pinnedMcpSeatIdentity.droneId !== next.droneId ||
+        pinnedMcpSeatIdentity.credentialRef !== next.credentialRef)) {
+        throw new McpSeatIdentityChangedError();
+    }
+    pinnedMcpSeatIdentity = next;
+}
+export function findProjectRoot(cwd = pinnedMcpProjectRoot ?? process.cwd()) {
     let dir = resolve(cwd);
     while (true) {
         if (existsSync(join(dir, '.git')))
@@ -164,10 +200,20 @@ async function writeCodexWakeTargetsFile(data) {
  * refresh.
  */
 export async function getActiveCube() {
-    const record = await getActiveSeatForWorktree(findProjectRoot());
+    return getActiveCubeForWorktree(findProjectRoot());
+}
+export async function getActiveCubeForWorktree(worktree) {
+    const record = await getActiveSeatForWorktree(findProjectRoot(worktree));
     if (!record || !record.cubeId || !record.droneId)
         return null;
-    return hydrateActiveCube(record);
+    const active = await hydrateActiveCube(record);
+    if (active && pinnedMcpSeatIdentity && (resolve(active.worktree ?? '') !== pinnedMcpSeatIdentity.worktree ||
+        active.cubeId !== pinnedMcpSeatIdentity.cubeId ||
+        active.droneId !== pinnedMcpSeatIdentity.droneId ||
+        active.localSessionCredentialRef !== pinnedMcpSeatIdentity.credentialRef)) {
+        throw new McpSeatIdentityChangedError();
+    }
+    return active;
 }
 /**
  * True iff this worktree has an ACTIVE bound seat in seats.json. In the collapsed
@@ -202,10 +248,15 @@ async function hydrateActiveCube(record) {
         serverTrustIdentity: record.trustIdentity,
         localSessionCredentialRef: ref,
         operation: record.operation,
+        worktree: record.worktree,
         ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
         ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),
         ...(record.isHumanSeat !== undefined ? { isHumanSeat: record.isHumanSeat } : {}),
     };
+}
+export function __resetPinnedMcpProjectRootForTests() {
+    pinnedMcpProjectRoot = null;
+    pinnedMcpSeatIdentity = null;
 }
 /**
  * Token-free lookup used after an offline reset. A surviving seat is only
