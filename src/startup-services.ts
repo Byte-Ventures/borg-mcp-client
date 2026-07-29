@@ -16,10 +16,16 @@ export interface McpStartupServices {
  */
 export async function runMcpStartupServices(
   readinessProbe: boolean,
-  services: McpStartupServices
+  services: McpStartupServices,
+  options: { openCodeFirst?: boolean } = {},
 ): Promise<void> {
   if (readinessProbe) return;
-  const tasks = [
+  const tasks = options.openCodeFirst ? [
+    services.sessionStartHook,
+    services.auditHook,
+    services.openCode,
+    services.sseStream,
+  ] : [
     services.sessionStartHook,
     services.auditHook,
     services.sseStream,

@@ -108,6 +108,9 @@ export async function readOwnershipSnapshot(cubeId, droneId, deps = {}) {
         cwd: parsed.cwd,
         startedAt: parsed.startedAt,
         heartbeatAt: parsed.heartbeatAt,
+        worktree: parsed.worktree,
+        droneLabel: parsed.droneLabel,
+        cubeName: parsed.cubeName,
         ageMs,
         lockPath,
         lockDev: lockStat.dev,
@@ -441,7 +444,10 @@ function sameOwner(left, right) {
         left.processNonce === right.processNonce &&
         left.cwd === right.cwd &&
         left.startedAt === right.startedAt &&
-        left.heartbeatAt === right.heartbeatAt;
+        left.heartbeatAt === right.heartbeatAt &&
+        left.worktree === right.worktree &&
+        left.droneLabel === right.droneLabel &&
+        left.cubeName === right.cubeName;
 }
 async function readOwnershipRecord(lockPath) {
     try {
@@ -520,6 +526,9 @@ function makeRecord(deps) {
         cwd: deps.cwd ?? process.cwd(),
         startedAt: deps.processStartedAt ?? processStartedAt,
         heartbeatAt: now().toISOString(),
+        ...(deps.worktree ? { worktree: deps.worktree } : {}),
+        ...(deps.droneLabel ? { droneLabel: deps.droneLabel } : {}),
+        ...(deps.cubeName ? { cubeName: deps.cubeName } : {}),
     };
 }
 function isRecord(value) {
@@ -531,7 +540,10 @@ function isRecord(value) {
         isSafeLeaseText(value.processNonce, 128) &&
         isSafeLeaseText(value.cwd, 4096) &&
         isIsoTimestamp(value.startedAt) &&
-        isIsoTimestamp(value.heartbeatAt));
+        isIsoTimestamp(value.heartbeatAt) &&
+        (value.worktree === undefined || isSafeLeaseText(value.worktree, 4096)) &&
+        (value.droneLabel === undefined || isSafeLeaseText(value.droneLabel, 256)) &&
+        (value.cubeName === undefined || isSafeLeaseText(value.cubeName, 256)));
 }
 function isSafeLeaseText(value, maxLength) {
     return typeof value === 'string' && value.length > 0 && value.length <= maxLength &&

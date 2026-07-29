@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   handlers: [] as Array<(request: any) => Promise<any>>,
@@ -60,7 +60,18 @@ import { __resetRegenSessionState, getDronePlaybook } from '../src/regen-format.
 import { _resetDisplayIdentityForTests } from '../src/display-identity.js';
 
 describe('borg_log ARRIVAL instruction ordering', () => {
+  const originalOpenCode = process.env.BORG_OPENCODE;
+  const originalAgentKind = process.env.BORG_AGENT_KIND;
+  beforeEach(() => {
+    delete process.env.BORG_OPENCODE;
+    delete process.env.BORG_AGENT_KIND;
+  });
+
   afterEach(() => {
+    if (originalOpenCode === undefined) delete process.env.BORG_OPENCODE;
+    else process.env.BORG_OPENCODE = originalOpenCode;
+    if (originalAgentKind === undefined) delete process.env.BORG_AGENT_KIND;
+    else process.env.BORG_AGENT_KIND = originalAgentKind;
     __resetRegenSessionState();
     _resetDisplayIdentityForTests();
     vi.restoreAllMocks();

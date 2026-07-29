@@ -24,6 +24,9 @@ export interface StreamOwnerRecord {
   cwd: string;
   startedAt: string;
   heartbeatAt: string;
+  worktree?: string;
+  droneLabel?: string;
+  cubeName?: string;
 }
 
 export interface StreamOwnershipSnapshot {
@@ -33,6 +36,9 @@ export interface StreamOwnershipSnapshot {
   cwd?: string;
   startedAt?: string;
   heartbeatAt?: string;
+  worktree?: string;
+  droneLabel?: string;
+  cubeName?: string;
   ageMs?: number;
   lockPath?: string;
   /** Opened-directory identity used to bind inspection to later takeover. */
@@ -54,6 +60,9 @@ export interface StreamOwnerDeps {
   locksDir?: string;
   processNonce?: string;
   processStartedAt?: string;
+  worktree?: string;
+  droneLabel?: string;
+  cubeName?: string;
   isPidAlive?: (pid: number) => boolean;
   beforeTakeoverVerify?: (takeoverPath: string) => Promise<void>;
   beforeLeaseRefreshMutation?: (lockPath: string) => Promise<void>;
@@ -177,6 +186,9 @@ export async function readOwnershipSnapshot(
     cwd: parsed.cwd,
     startedAt: parsed.startedAt,
     heartbeatAt: parsed.heartbeatAt,
+    worktree: parsed.worktree,
+    droneLabel: parsed.droneLabel,
+    cubeName: parsed.cubeName,
     ageMs,
     lockPath,
     lockDev: lockStat.dev,
@@ -572,7 +584,10 @@ function sameOwner(left: StreamOwnerRecord, right: StreamOwnerRecord): boolean {
     left.processNonce === right.processNonce &&
     left.cwd === right.cwd &&
     left.startedAt === right.startedAt &&
-    left.heartbeatAt === right.heartbeatAt;
+    left.heartbeatAt === right.heartbeatAt &&
+    left.worktree === right.worktree &&
+    left.droneLabel === right.droneLabel &&
+    left.cubeName === right.cubeName;
 }
 
 async function readOwnershipRecord(lockPath: string): Promise<StreamOwnerRecord | null> {
@@ -655,6 +670,9 @@ function makeRecord(deps: StreamOwnerDeps): StreamOwnerRecord {
     cwd: deps.cwd ?? process.cwd(),
     startedAt: deps.processStartedAt ?? processStartedAt,
     heartbeatAt: now().toISOString(),
+    ...(deps.worktree ? { worktree: deps.worktree } : {}),
+    ...(deps.droneLabel ? { droneLabel: deps.droneLabel } : {}),
+    ...(deps.cubeName ? { cubeName: deps.cubeName } : {}),
   };
 }
 
@@ -668,7 +686,10 @@ function isRecord(value: any): value is StreamOwnerRecord {
     isSafeLeaseText(value.processNonce, 128) &&
     isSafeLeaseText(value.cwd, 4096) &&
     isIsoTimestamp(value.startedAt) &&
-    isIsoTimestamp(value.heartbeatAt)
+    isIsoTimestamp(value.heartbeatAt) &&
+    (value.worktree === undefined || isSafeLeaseText(value.worktree, 4096)) &&
+    (value.droneLabel === undefined || isSafeLeaseText(value.droneLabel, 256)) &&
+    (value.cubeName === undefined || isSafeLeaseText(value.cubeName, 256))
   );
 }
 

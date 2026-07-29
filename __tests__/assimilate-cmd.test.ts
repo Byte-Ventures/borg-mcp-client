@@ -2352,6 +2352,55 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(stderrPayload).toContain('work created in the primary won\'t reach your wt-branch without manual surgery (cherry-pick/merge)');
   });
 
+  it('uses the common repository namespace and bumps duplicate worktree names across fragmented paths', async () => {
+    const stderr = vi.fn();
+    const runSync = vi.fn((_cmd: string, args: string[]) => {
+      if (args[0] === 'remote') return { status: 0, stdout: 'git@github.com:org/borg-mcp.git', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return {
+          status: 0,
+          stdout:
+            'worktree /work/borg-mcp\nHEAD abc\nbranch refs/heads/main\n\n' +
+            'worktree /home/test/.borg/worktrees/product-strategy/builder\nHEAD def\nbranch refs/heads/wt-builder\n',
+          stderr: '',
+        };
+      }
+      if (args[0] === 'worktree' && args[1] === 'add') return { status: 0, stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse' && typeof args[3] === 'string' && args[3].startsWith('refs/heads/')) {
+        return { status: 1, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const deps = makeStubDeps({
+      runSync,
+      stderr,
+      cwd: () => '/home/test/.borg/worktrees/product-strategy',
+      findProjectRoot: () => '/home/test/.borg/worktrees/product-strategy',
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/home/test/.borg/worktrees/product-strategy',
+        commonDir: '/work/borg-mcp/.git',
+        derivedName: 'product-strategy',
+        publicRepository: { kind: 'origin', value: 'https://github.com/org/borg-mcp' },
+        publicRepositoryName: 'org/borg-mcp',
+      })),
+      getActiveCube: vi.fn(async () => ({ cubeId: 'old', droneId: 'd', name: 'borg-mcp', sessionToken: 's', droneLabel: 'l', apiUrl: 'a' })),
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'borg-mcp' }]),
+      getCube: vi.fn(async () => ({ id: 'cube-1', name: 'borg-mcp', roles: [
+        { id: 'role-builder', name: 'Builder', is_default: false, is_human_seat: false },
+      ]})),
+    });
+
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'builder' } }, deps);
+    expect(exit, stderr.mock.calls.map((call) => String(call[0])).join('')).toBe(0);
+
+    expect(runSync).toHaveBeenCalledWith(
+      'git',
+      ['worktree', 'add', '-b', 'wt-builder-2', '/home/test/.borg/worktrees/borg-mcp/builder-2', 'origin/main'],
+      '/home/test/.borg/worktrees/product-strategy',
+    );
+    expect(deps.chdir).toHaveBeenCalledWith('/home/test/.borg/worktrees/borg-mcp/builder-2');
+  });
+
   it('starts a sibling from local HEAD when the repository has no usable origin', async () => {
     const calls: string[][] = [];
     const runSync = vi.fn((_cmd: string, args: string[]) => {
@@ -2439,8 +2488,12 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(stderrCalls).not.toContain('\x00');
     expect(stderrCalls).not.toContain('\x07');
     // Printable remainder of the git message is preserved.
-    expect(stderrCalls).toContain('git worktree add failed:');
+    expect(stderrCalls).toContain('Borg could not create sibling worktree');
     expect(stderrCalls).toContain('fatal: [2Jmalicious');
+    expect(stderrCalls).toContain('git worktree list');
+    expect(stderrCalls).toContain('git status');
+    expect(stderrCalls).toContain('A seat was reserved and remains pending');
+    expect(stderrCalls).toContain('rerun `borg assimilate`');
   });
 
   it('BUG-4 / unborn HEAD: fails fast with actionable error before git worktree add', async () => {
@@ -4271,6 +4324,78 @@ describe('runAssimilate: gh#864 worktree branch-collision dedup', () => {
       (c: any[]) => c[1][0] === 'worktree' && c[1][1] === 'add' && c[1][2] === '/home/test/.borg/worktrees/myrepo/review-1'
     );
     expect(adoptReview1).toHaveLength(0);
+  });
+
+  it('retries with a unique name when another process claims the branch during creation', async () => {
+    let raced = false;
+    const stderr = vi.fn();
+    const runSync = vi.fn((_cmd: string, args: string[]) => {
+      if (args[0] === 'remote') return { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return raced
+          ? { status: 0, stdout: 'worktree /work/myrepo\nbranch refs/heads/main\n\nworktree /legacy/slot\nbranch refs/heads/wt-review-1\n', stderr: '' }
+          : { status: 0, stdout: 'worktree /work/myrepo\nbranch refs/heads/main\n', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        if (!raced) {
+          raced = true;
+          return { status: 128, stdout: '', stderr: "fatal: a branch named 'wt-review-1' already exists" };
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && typeof args[3] === 'string' && args[3].startsWith('refs/heads/')) {
+        return raced && args[3] === 'refs/heads/wt-review-1'
+          ? { status: 0, stdout: 'abc123\n', stderr: '' }
+          : { status: 1, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const deps = baseDeps(runSync);
+    deps.stderr = stderr;
+
+    await expect(runAssimilate({ role: undefined, flags: { yes: true, worktree: 'review-1' } }, deps)).resolves.toBe(0);
+
+    expect(runSync).toHaveBeenCalledWith(
+      'git',
+      ['worktree', 'add', '-b', 'wt-review-1-2', '/home/test/.borg/worktrees/myrepo/review-1-2', 'origin/main'],
+      '/work/myrepo',
+    );
+    expect(stderr.mock.calls.map((call) => String(call[0])).join('')).not.toContain('Borg could not create sibling worktree');
+  });
+
+  it('terminates when git creates the branch before a residual worktree failure', async () => {
+    let failedBranch: string | null = null;
+    let addCalls = 0;
+    const stderr = vi.fn();
+    const runSync = vi.fn((_cmd: string, args: string[]) => {
+      if (args[0] === 'remote') return { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return { status: 0, stdout: 'worktree /work/myrepo\nbranch refs/heads/main\n', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        addCalls++;
+        if (addCalls > 1) throw new Error('residual failure was incorrectly retried');
+        failedBranch = String(args[3]);
+        return { status: 128, stdout: '', stderr: 'fatal: could not create leading directories: Permission denied' };
+      }
+      if (args[0] === 'rev-parse' && typeof args[3] === 'string' && args[3].startsWith('refs/heads/')) {
+        return args[3] === `refs/heads/${failedBranch}`
+          ? { status: 0, stdout: 'abc123\n', stderr: '' }
+          : { status: 1, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const deps = baseDeps(runSync);
+    deps.stderr = stderr;
+
+    await expect(runAssimilate({ role: undefined, flags: { yes: true, worktree: 'residual' } }, deps)).resolves.toBe(1);
+
+    expect(addCalls).toBe(1);
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain('Permission denied');
+    expect(output).toContain('Git left branch wt-residual without a registered worktree; Borg preserved it.');
+    expect(output).toContain('A seat was reserved and remains pending');
+    expect(output).toContain('rerun `borg assimilate`');
   });
 });
 

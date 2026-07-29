@@ -118,6 +118,9 @@ describe('stream-owner lease', () => {
       pid: 1001,
       processNonce: 'first',
       cwd: '/work/a',
+      worktree: '/work/repo-builder',
+      droneLabel: 'builder-1',
+      cubeName: 'repo',
       now: () => new Date('2026-05-28T12:00:00.000Z'),
     });
     const second = await acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, {
@@ -140,6 +143,8 @@ describe('stream-owner lease', () => {
     expect(snapshot.state).toBe('owned-by-other-process');
     expect(snapshot.pid).toBe(1001);
     expect(snapshot.cwd).toBe('/work/a');
+    expect(snapshot.worktree).toBe('/work/repo-builder');
+    expect(snapshot.droneLabel).toBe('builder-1');
   });
 
   it('reclaims a stale lease', async () => {

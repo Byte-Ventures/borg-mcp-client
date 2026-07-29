@@ -496,7 +496,12 @@ async function runLoop(testDeps: RunLoopTestDeps = {}): Promise<void> {
         active.cubeId,
         active.droneId,
         STREAM_OWNER_STALE_MS,
-        { isPidAlive: isProcessAlive },
+        {
+          isPidAlive: isProcessAlive,
+          ...(active.worktree ? { worktree: active.worktree } : {}),
+          ...(active.droneLabel ? { droneLabel: active.droneLabel } : {}),
+          ...(active.name ? { cubeName: active.name } : {}),
+        },
       );
       leaseKey = lease ? nextLeaseKey : null;
     }
@@ -642,6 +647,9 @@ export interface ActiveCube {
   serverTrustIdentity?: string;
   localSessionCredentialRef?: string;
   localSessionExpiresAt?: string | null;
+  worktree?: string;
+  droneLabel?: string;
+  name?: string;
 }
 
 export async function streamOnce(

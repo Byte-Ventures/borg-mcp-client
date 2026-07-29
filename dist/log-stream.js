@@ -351,7 +351,12 @@ async function runLoop(testDeps = {}) {
                 leaseKey = null;
             }
             if (!lease) {
-                lease = await _acquireStreamLease(active.cubeId, active.droneId, STREAM_OWNER_STALE_MS, { isPidAlive: isProcessAlive });
+                lease = await _acquireStreamLease(active.cubeId, active.droneId, STREAM_OWNER_STALE_MS, {
+                    isPidAlive: isProcessAlive,
+                    ...(active.worktree ? { worktree: active.worktree } : {}),
+                    ...(active.droneLabel ? { droneLabel: active.droneLabel } : {}),
+                    ...(active.name ? { cubeName: active.name } : {}),
+                });
                 leaseKey = lease ? nextLeaseKey : null;
             }
             if (!lease) {

@@ -1456,7 +1456,10 @@ export async function runAssimilate(
       }
     }
 
-    const repoBase = basename(projectRoot);
+    // The common Git directory identifies the repository across every linked
+    // worktree. Using projectRoot here fragments one repository's siblings when
+    // assimilation starts inside an existing sibling worktree.
+    const repoBase = basename(dirname(repositoryContext.commonDir));
     const suffix = args.flags.worktree ?? roleSlug(assignedRole.name);
     // gh#556 Part 1: empty-suffix guard (CR-binding). roleSlug can yield '' for a
     // pathological all-special-char role name; an empty leaf would let join() collapse
@@ -1473,6 +1476,15 @@ export async function runAssimilate(
     // (was a sibling <parent>/<repo>-<name>). Existing siblings are untouched
     // (absolute git-registered paths). Collision dedup KEPT (<name>-<n>).
     const homeDir = deps.homedir();
+    let registeredWorktrees = listRegisteredWorktrees(deps, projectRoot);
+    if (registeredWorktrees === null) {
+      deps.stderr(
+        'Borg could not enumerate this repository’s existing worktrees, so it did not risk creating a colliding sibling.\n' +
+        'Run `git worktree list` from this repository and resolve the reported Git error, then rerun `borg assimilate`.\n' +
+        'A seat was reserved and remains pending; rerunning after fixing the worktree issue resumes that seat.\n',
+      );
+      return 1;
+    }
     let candidate = computeWorktreePath(homeDir, repoBase, suffix);
     let wtBranch = perWorktreeBranchName(basename(candidate), repoBase);
     let n = 2;
@@ -1485,7 +1497,8 @@ export async function runAssimilate(
     // fresh suffix so we never reuse/clobber its work.
     while (
       deps.pathExists(candidate) ||
-      worktreeRegistered(deps, projectRoot, candidate) ||
+      registeredWorktrees.names.has(basename(candidate)) ||
+      registeredWorktrees.branches.has(wtBranch) ||
       (localBranchExists(deps.runSync, projectRoot, wtBranch) &&
         !isMerged(deps.runSync, projectRoot, wtBranch, startRef))
     ) {
@@ -1493,26 +1506,56 @@ export async function runAssimilate(
       wtBranch = perWorktreeBranchName(basename(candidate), repoBase);
       n++;
     }
-    // gh#556 Part 1: create the intermediate ~/.borg/worktrees/<repo>/ before
-    // `git worktree add` (git creates the leaf, not the parent chain). Plain
-    // recursive mkdir — NO chmod of the existing ~/.borg (credentials file).
-    deps.mkdirp(dirname(candidate));
-    // gh#33 (Q1/Q4): spawn on a named per-worktree branch (wt-<suffix>),
-    // NOT detached HEAD. The named branch is current with startRef and is
-    // where the drone's feature branches get cut from. Uniform for every
-    // role incl. coordinator — main is never a working branch (Q4).
-    // Branch naming is UNAFFECTED by the relocation: perWorktreeBranchName's
-    // as-is else-branch maps the new basename <suffix> → wt-<suffix> (== old).
-    //
-    // gh#864: if <wtBranch> already exists here it is MERGED (the loop bumped
-    // past any unmerged ref), so ADOPT it — `git worktree add <path> <branch>`
-    // (no -b) attaches the merged branch instead of failing on a create-
-    // collision. A fresh suffix has no ref → create it at startRef with -b.
-    const wt = localBranchExists(deps.runSync, projectRoot, wtBranch)
-      ? deps.runSync('git', ['worktree', 'add', candidate, wtBranch], projectRoot)
-      : deps.runSync('git', ['worktree', 'add', '-b', wtBranch, candidate, startRef], projectRoot);
+    let wt: ReturnType<AssimilateDeps['runSync']>;
+    let residualBranch: string | null = null;
+    while (true) {
+      // gh#556 Part 1: create the intermediate ~/.borg/worktrees/<repo>/ before
+      // `git worktree add` (git creates the leaf, not the parent chain). Plain
+      // recursive mkdir — NO chmod of the existing ~/.borg (credentials file).
+      deps.mkdirp(dirname(candidate));
+      const branchExisted = localBranchExists(deps.runSync, projectRoot, wtBranch);
+      wt = branchExisted
+        ? deps.runSync('git', ['worktree', 'add', candidate, wtBranch], projectRoot)
+        : deps.runSync('git', ['worktree', 'add', '-b', wtBranch, candidate, startRef], projectRoot);
+      if (wt.status === 0) break;
+
+      // Another assimilate may claim the name or branch after our first list.
+      // Refresh and suffix-bump instead of surfacing a collision to the operator.
+      const refreshed = listRegisteredWorktrees(deps, projectRoot);
+      const branchAppeared = !branchExisted && localBranchExists(deps.runSync, projectRoot, wtBranch);
+      const collision =
+        deps.pathExists(candidate) ||
+        refreshed?.names.has(basename(candidate)) === true ||
+        refreshed?.branches.has(wtBranch) === true ||
+        (!branchExisted && worktreeAddReportedCollision(wt.stderr));
+      if (!collision || refreshed === null) {
+        if (branchAppeared && refreshed?.branches.has(wtBranch) !== true) {
+          residualBranch = wtBranch;
+        }
+        break;
+      }
+      registeredWorktrees = refreshed;
+      do {
+        candidate = computeWorktreePath(homeDir, repoBase, suffix, n);
+        wtBranch = perWorktreeBranchName(basename(candidate), repoBase);
+        n++;
+      } while (
+        deps.pathExists(candidate) ||
+        registeredWorktrees.names.has(basename(candidate)) ||
+        registeredWorktrees.branches.has(wtBranch) ||
+        localBranchExists(deps.runSync, projectRoot, wtBranch)
+      );
+    }
     if (wt.status !== 0) {
-      deps.stderr(`git worktree add failed: ${safeStderr(wt.stderr)}\n`);
+      deps.stderr(
+        `Borg could not create sibling worktree ${candidate} on branch ${wtBranch}. ` +
+        `Git reported: ${safeStderr(wt.stderr)}\n` +
+        (residualBranch
+          ? `Git left branch ${residualBranch} without a registered worktree; Borg preserved it.\n`
+          : '') +
+        'Run `git worktree list` and `git status` to inspect repository state, resolve the reported Git error, then rerun `borg assimilate`.\n' +
+        'A seat was reserved and remains pending; rerunning after fixing the worktree issue resumes that seat.\n',
+      );
       return 1;
     }
     deps.stderr(
@@ -1958,10 +2001,24 @@ export function safeStderr(msg: string): string {
   return msg.replace(/[\x00-\x1F\x7F]/g, '');
 }
 
-function worktreeRegistered(deps: AssimilateDeps, projectRoot: string, candidate: string): boolean {
+function worktreeAddReportedCollision(stderr: string): boolean {
+  const message = safeStderr(stderr);
+  return /(?:branch named .* already exists|already checked out|already registered|already exists at)/i.test(message);
+}
+
+function listRegisteredWorktrees(
+  deps: AssimilateDeps,
+  projectRoot: string,
+): { names: Set<string>; branches: Set<string> } | null {
   const res = deps.runSync('git', ['worktree', 'list', '--porcelain'], projectRoot);
-  if (res.status !== 0) return false;
-  return res.stdout.split('\n').some((line) => line === `worktree ${candidate}`);
+  if (res.status !== 0) return null;
+  const names = new Set<string>();
+  const branches = new Set<string>();
+  for (const line of res.stdout.split('\n')) {
+    if (line.startsWith('worktree ')) names.add(basename(line.slice('worktree '.length)));
+    if (line.startsWith('branch refs/heads/')) branches.add(line.slice('branch refs/heads/'.length));
+  }
+  return { names, branches };
 }
 
 /**

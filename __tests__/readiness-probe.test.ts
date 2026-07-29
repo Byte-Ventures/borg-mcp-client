@@ -157,4 +157,15 @@ process.stdin.on('data', (chunk) => {
     });
     expect(calls).toEqual(['audit-hook', 'sse-stream', 'opencode']);
   });
+
+  it('initializes OpenCode injection before SSE without changing the default CLI order', async () => {
+    const calls: string[] = [];
+    await runMcpStartupServices(false, {
+      sessionStartHook: () => { calls.push('session-hook'); },
+      auditHook: () => { calls.push('audit-hook'); },
+      sseStream: () => { calls.push('sse-stream'); },
+      openCode: () => { calls.push('opencode'); },
+    }, { openCodeFirst: true });
+    expect(calls).toEqual(['session-hook', 'audit-hook', 'opencode', 'sse-stream']);
+  });
 });

@@ -12,5 +12,7 @@ export interface McpStartupServices {
  * SSE, mutating hooks, or starting timers because it is intentionally killed
  * immediately after that response.
  */
-export declare function runMcpStartupServices(readinessProbe: boolean, services: McpStartupServices): Promise<void>;
+export declare function runMcpStartupServices(readinessProbe: boolean, services: McpStartupServices, options?: {
+    openCodeFirst?: boolean;
+}): Promise<void>;
 //# sourceMappingURL=startup-services.d.ts.map
