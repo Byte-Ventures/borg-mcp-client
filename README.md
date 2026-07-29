@@ -94,8 +94,8 @@ From inside your project repo:
 borg assimilate
 ```
 
-You will be prompted for the self-hosted server to connect to. Borg first resolves an existing repository association. Without one, an exact-name accessible cube requires explicit interactive confirmation before Borg associates it with this repository; otherwise Borg shows the repository context, lets you edit the proposed cube name, offers the Software Development and Starter templates, and asks for creation confirmation. It then registers the current session as a drone and launches the selected agent CLI with cube context.
-Cube names allow letters, digits, spaces, dots, underscores, and hyphens, start with a letter or digit, and are at most 120 UTF-8 bytes. Use `--cube-name <name>` to supply one directly. Pass `--yes` to accept the repository name and Software Development template non-interactively only when creating a new cube; it never adopts an existing cube by name.
+You will be prompted for the self-hosted server to connect to. Borg first resolves an existing repository association. Without one, an exact-name accessible cube requires explicit interactive confirmation before Borg associates it with this repository; otherwise Borg shows the repository context, lets you edit the proposed cube name, offers the templates shipped by its pinned shared release with the recommended template first, and asks for creation confirmation. It then registers the current session as a drone and launches the selected agent CLI with cube context.
+Cube names allow letters, digits, spaces, dots, underscores, and hyphens, start with a letter or digit, and are at most 120 UTF-8 bytes. Use `--cube-name <name>` to supply one directly. Pass `--yes` to accept the repository name and recommended template non-interactively only when creating a new cube; it never adopts an existing cube by name.
 
 To initialize the repository cube without creating a drone or launching an agent:
 
@@ -137,7 +137,7 @@ borg assimilate
 
 Setup provisions the first same-machine owner credential in the owner-only
 `~/.borg/credentials` file. Bare assimilation uses that credential without an
-invitation prompt, creates or joins the Software Development repository cube, attaches a drone to a
+invitation prompt, creates or joins the repository cube with the recommended template, attaches a drone to a
 role seat, and launches the selected agent. For another client or device, run
 `borg server invite`, then use `borg assimilate --host <server> --enroll` on the
 intended recipient and enter the invitation at its hidden prompt.

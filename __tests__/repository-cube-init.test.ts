@@ -522,6 +522,9 @@ describe('guided repository cube initialization', () => {
       mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {},
     }, inputDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
     expect(createCube).not.toHaveBeenCalled();
+    expect(inputDeps.write).toHaveBeenCalledWith(
+      `Non-interactive cube creation requires --cube-name <name> and --template ${NEW_CUBE_TEMPLATE_PRESENTATIONS.map(({ name }) => name).join('|')}, or --yes to use repository defaults.\n`,
+    );
   });
 
   it('renders template menu labels from shared NEW_CUBE_TEMPLATE_PRESENTATIONS', async () => {
@@ -548,6 +551,57 @@ describe('guided repository cube initialization', () => {
       expect(fullMenu).toContain(presentation.short_description);
     }
     expect(fullMenu).toContain('(recommended)');
+  });
+
+  it.each(NEW_CUBE_TEMPLATE_PRESENTATIONS.map((template, index) => ({ template, index })))(
+    'selects $template.name by rendered index and accepts its --template name',
+    async ({ template, index }) => {
+      const interactiveCreate = vi.fn(deps().createCube);
+      const interactiveDeps = deps({
+        prompt: vi.fn()
+          .mockResolvedValueOnce('')
+          .mockResolvedValueOnce(String(index + 1))
+          .mockResolvedValueOnce('y'),
+        createCube: interactiveCreate,
+      });
+
+      await expect(initializeRepositoryCube({
+        mode: 'cube-init', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+      }, interactiveDeps)).resolves.toMatchObject({ kind: 'success', existing: false });
+      expect(interactiveCreate).toHaveBeenCalledWith(expect.objectContaining({ template: template.name }));
+
+      const flaggedCreate = vi.fn(deps().createCube);
+      const flaggedDeps = deps({ isTTY: () => false, createCube: flaggedCreate });
+      await expect(initializeRepositoryCube({
+        mode: 'cube-init',
+        context,
+        serverOrigin: 'https://borg.test',
+        flags: { cubeName: 'repo', template: template.name },
+        canCreate: true,
+      }, flaggedDeps)).resolves.toMatchObject({ kind: 'success', existing: false });
+      expect(flaggedCreate).toHaveBeenCalledWith(expect.objectContaining({ template: template.name }));
+    },
+  );
+
+  it('derives template validation copy from every rendered presentation', async () => {
+    const names = NEW_CUBE_TEMPLATE_PRESENTATIONS.map(({ name }) => name);
+    const optionList = names.join('|');
+
+    const noTemplateDeps = deps();
+    await expect(initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: { noTemplate: true }, canCreate: true,
+    }, noTemplateDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
+    expect(noTemplateDeps.write).toHaveBeenLastCalledWith(
+      `--no-template is not supported for repository cube creation. Use --template ${optionList}.\n`,
+    );
+
+    const unknownDeps = deps();
+    await expect(initializeRepositoryCube({
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: { template: 'research' }, canCreate: true,
+    }, unknownDeps)).resolves.toEqual({ kind: 'stop', code: 1 });
+    expect(unknownDeps.write).toHaveBeenLastCalledWith(
+      `Unknown template 'research'. Available templates: ${names.join(', ')}.\n`,
+    );
   });
 
   it('re-prompts on invalid name without false EOF', async () => {
@@ -586,7 +640,7 @@ describe('guided repository cube initialization', () => {
     }, inputDeps);
 
     expect(result.kind).toBe('success');
-    expect(write).toHaveBeenCalledWith('Choose 1 or 2.\n');
+    expect(write).toHaveBeenCalledWith(`Choose 1-${NEW_CUBE_TEMPLATE_PRESENTATIONS.length}.\n`);
     expect(write).not.toContain('Input ended before cube creation');
   });
 
