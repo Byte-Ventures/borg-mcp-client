@@ -7,6 +7,7 @@
  * glue (print + exit before the wizard import).
  */
 import { describe, it, expect } from 'vitest';
+import { NEW_CUBE_TEMPLATE_PRESENTATIONS } from 'borgmcp-shared/templates';
 import {
   assimilateHelpText,
   cubeInitHelpText,
@@ -77,6 +78,8 @@ describe('borg server help', () => {
   });
 
   it('pins command-specific cube init usage and options', () => {
+    const templateOptions = NEW_CUBE_TEMPLATE_PRESENTATIONS.map(({ name }) => name).join('|');
+    const defaultTemplate = NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
     expect(cubeInitHelpText('9.9.9')).toBe(
       `borg server cube init (borgmcp 9.9.9) — initialize this Git repository's cube without creating a drone\n\n` +
       `Usage:\n` +
@@ -85,7 +88,7 @@ describe('borg server help', () => {
       `  --host <host>                    Borg server host or URL (bare hosts default to HTTPS)\n` +
       `  --enroll                         Prompt for a hidden enrollment invitation\n` +
       `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
-      `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
+      `  --template ${templateOptions}  New-cube template (default: ${defaultTemplate})\n` +
       `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
       `  --help, -h                       Show this help\n\n` +
       `An existing repository association skips all prompts. One accessible exact-name legacy\n` +
@@ -93,6 +96,15 @@ describe('borg server help', () => {
       `owner client may create a repository cube; ordinary clients require an explicit cube grant.\n`,
     );
     expect(cubeInitHelpText('9.9.9')).not.toMatch(/--worktree|--here|--cli|--model/);
+  });
+
+  it('derives accepted template copy for both creation commands from shared presentations', () => {
+    const templateOptions = NEW_CUBE_TEMPLATE_PRESENTATIONS.map(({ name }) => name).join('|');
+    const defaultTemplate = NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
+    for (const help of [cubeInitHelpText('9.9.9'), assimilateHelpText('9.9.9')]) {
+      expect(help).toContain(`--template ${templateOptions}`);
+      expect(help).toContain(`New-cube template (default: ${defaultTemplate})`);
+    }
   });
 });
 

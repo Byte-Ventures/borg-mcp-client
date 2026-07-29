@@ -6,6 +6,11 @@
  * and cli-platform.ts.
  */
 
+import { NEW_CUBE_TEMPLATE_PRESENTATIONS } from 'borgmcp-shared/templates';
+
+const NEW_CUBE_TEMPLATE_OPTIONS = NEW_CUBE_TEMPLATE_PRESENTATIONS.map(({ name }) => name).join('|');
+const DEFAULT_NEW_CUBE_TEMPLATE = NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
+
 /** True for the standard help flags `--help` / `-h`. */
 export function isHelpFlag(arg: string | undefined): boolean {
   return arg === '--help' || arg === '-h';
@@ -91,7 +96,7 @@ export function cubeInitHelpText(version: string): string {
     `  --host <host>                    Borg server host or URL (bare hosts default to HTTPS)\n` +
     `  --enroll                         Prompt for a hidden enrollment invitation\n` +
     `  --cube-name <name>               Repository cube name (otherwise edit the proposed name)\n` +
-    `  --template software-dev|starter  New-cube template (default: software-dev)\n` +
+    `  --template ${NEW_CUBE_TEMPLATE_OPTIONS}  New-cube template (default: ${DEFAULT_NEW_CUBE_TEMPLATE})\n` +
     `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
     `  --help, -h                       Show this help\n\n` +
     `An existing repository association skips all prompts. One accessible exact-name legacy\n` +
@@ -123,7 +128,7 @@ export function assimilateHelpText(version: string): string {
     `  --cube-name <name>         Repository cube name (otherwise edit the proposed name)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
     `  --enroll                   Prompt for a hidden enrollment invitation in the operator terminal\n` +
-    `  --template software-dev|starter   New-cube template (default: software-dev)\n` +
+    `  --template ${NEW_CUBE_TEMPLATE_OPTIONS}   New-cube template (default: ${DEFAULT_NEW_CUBE_TEMPLATE})\n` +
     `  --no-template              Unsupported for repository cube creation\n` +
     `  --cli claude|codex|opencode         Agent CLI to launch (default: claude)\n` +
     `  --model claude:<model>   Legacy Claude model override (configure models in the agent CLI)\n` +

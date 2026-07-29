@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { CUBE_TEMPLATES } from 'borgmcp-shared/protocol';
 import {
   getOrCreateRepositoryIdentity,
   getRepositoryAssociation,
@@ -89,6 +90,21 @@ describe('repository identity', () => {
 
     await expect(getRepositoryAssociation('trust-a', repository, { root })).resolves.toEqual(association);
     await expect(getRepositoryAssociation('trust-b', repository, { root })).resolves.toBeNull();
+  });
+
+  it.each(CUBE_TEMPLATES)('round-trips a real association using the shared %s template', async (template) => {
+    const root = temporaryRoot();
+    const repository = { kind: 'local' as const, value: 'ad1b74bd-1262-45dd-b015-298e7395c550' };
+    const association = {
+      cubeId: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826',
+      name: 'repo',
+      workingRepoName: 'repo',
+      template,
+    };
+
+    await saveRepositoryAssociation('trust-a', repository, association, { root });
+
+    await expect(getRepositoryAssociation('trust-a', repository, { root })).resolves.toEqual(association);
   });
 
   it('fails closed on control-bearing association display state', async () => {

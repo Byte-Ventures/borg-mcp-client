@@ -2,6 +2,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { basename, isAbsolute, join } from 'node:path';
 import { realpath } from 'node:fs/promises';
+import { CUBE_TEMPLATES } from 'borgmcp-shared/protocol';
 import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
 import { normalizeCubeName } from './cube-name.js';
 import { borgConfigRoot, ensurePrivateBorgConfigRoot } from './private-root.js';
@@ -82,7 +83,7 @@ function parseState(raw) {
             !DISPLAY_NAME_RE.test(value.name) ||
             typeof value.workingRepoName !== 'string' || Buffer.byteLength(value.workingRepoName, 'utf8') > 120 ||
             !DISPLAY_NAME_RE.test(value.workingRepoName) ||
-            (value.template !== 'software-dev' && value.template !== 'starter' && value.template !== 'default')) {
+            !CUBE_TEMPLATES.some((template) => template === value.template)) {
             throw new Error('Borg repository identity store is malformed or unsupported');
         }
     }
