@@ -63,9 +63,11 @@ borg assimilate
 Borg creates or reuses a repository-specific cube, registers the new drone, and
 launches your agent CLI with the cube's context.
 
-Run another agent from the same repository to start coordinating:
+To run another agent at the same time, open a third terminal and change to the
+same Git repository:
 
 ```bash
+cd ~/code/my-app
 borg assimilate builder
 ```
 
