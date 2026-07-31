@@ -19,7 +19,7 @@ Borg MCP lets Claude Code, Codex, and OpenCode sessions join the same project co
 Install the current exact local-only client release from npm:
 
 ```bash
-npm install -g borgmcp@2.7.2
+npm install -g borgmcp@2.7.3
 ```
 
 Verify the install:
