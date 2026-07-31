@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
@@ -157,6 +158,16 @@ export function createPinnedServerFetch(origin: string, caCertificate: string): 
 
     const body = requestBody(init.body);
     const headers = new Headers(init.headers);
+    if (body !== undefined) {
+      const contentLength = String(
+        typeof body === 'string' ? Buffer.byteLength(body, 'utf8') : body.byteLength,
+      );
+      const declaredLength = headers.get('Content-Length');
+      if (declaredLength !== null && declaredLength !== contentLength) {
+        throw new Error('Borg server transport refused an inconsistent Content-Length');
+      }
+      if (declaredLength === null) headers.set('Content-Length', contentLength);
+    }
     return await new Promise<Response>((resolvePromise, rejectPromise) => {
       const request = httpsRequest({
         protocol: 'https:',

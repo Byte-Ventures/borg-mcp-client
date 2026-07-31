@@ -11,15 +11,15 @@
  */
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, } from 'borgmcp-shared/protocol';
+import { createProtocolEnvelope, decodeDeleteCubeResponse, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
-import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
+import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, } from './drone-lifecycle.js';
 import { getTemplate } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { buildRuntimeMetadataPatch } from './runtime-metadata.js';
 import { loadBorgServerTrust } from './server-trust.js';
-import { BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
+import { BorgServerError, BorgServerHttpError, BorgProtocolMismatchError, BorgServerTrustError, BorgServerUnreachableError, CubeDeletionConfirmationError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
 import { markSeatRejected } from './seats.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
@@ -151,6 +151,10 @@ async function decodeLocalProtocolResponse(request, allowNoContent, decodePayloa
             // CR5: a TYPED transport-timeout verdict (message kept for call-site parity).
             throw new BorgServerUnreachableError('Local Borg server request timed out');
         }
+        if (error instanceof ProtocolContractError &&
+            error.code === ErrorCode.UNSUPPORTED_PROTOCOL_VERSION) {
+            throw new BorgProtocolMismatchError();
+        }
         throw error;
     }
     finally {
@@ -215,6 +219,9 @@ async function localManageRequest(active, path, method, operation, payload, deco
         }), true, decodePayload);
     }
     catch (error) {
+        if (error instanceof CubeDeletedError) {
+            throw new CubeDeletedError(operation.cubeName);
+        }
         if (error instanceof BorgServerHttpError &&
             error.status === 403 &&
             error.code === ErrorCode.ACCESS_DENIED) {
@@ -490,13 +497,18 @@ async function authedFetch(path, init = {}) {
         // terminal controls. Decode only the bounded protocol error code for typed
         // branching; never surface the server-provided message or details.
         let code;
+        let protocolMismatch = false;
         try {
             const body = await readBoundedResponseBody(response, AUTH_ERROR_ENVELOPE_LIMIT_BYTES, 'Local Borg server error response exceeded the response limit');
             const parsed = JSON.parse(body);
             try {
                 code = decodeProtocolErrorEnvelope(parsed).error.code;
             }
-            catch {
+            catch (error) {
+                if (error instanceof ProtocolContractError &&
+                    error.code === ErrorCode.UNSUPPORTED_PROTOCOL_VERSION) {
+                    protocolMismatch = true;
+                }
                 if (parsed !== null && typeof parsed === 'object' &&
                     parsed.error !== null && typeof parsed.error === 'object' &&
                     parsed.error.code === ROLE_SECTION_CONFLICT_CODE) {
@@ -520,10 +532,17 @@ async function authedFetch(path, init = {}) {
             code = undefined;
         }
         debugLog(`✗ ${response.status} ${method} ${path}`);
+        if (protocolMismatch)
+            throw new BorgProtocolMismatchError();
         if (droneSession !== undefined && response.status === 410 && code === DRONE_EVICTED_CODE) {
             if (localSessionCredentialRef !== undefined)
                 markSeatRejected(localSessionCredentialRef);
             throw new DroneEvictedError();
+        }
+        if (response.status === 410 && code === CUBE_DELETED_CODE) {
+            if (localSessionCredentialRef !== undefined)
+                markSeatRejected(localSessionCredentialRef);
+            throw new CubeDeletedError();
         }
         throw new BorgServerHttpError(response.status, `Borg server request failed (HTTP ${response.status})`, code);
     }
@@ -886,9 +905,25 @@ export async function patchTaxonomyClass(cubeId, op, activeOverride, connectionO
  * Delete a cube. Cascade-deletes all roles, drones, and log entries.
  * Requires a live cube-manage grant on the selected local client.
  */
-export async function deleteCube(cubeId) {
-    void cubeId;
-    localUnsupported('cube deletion');
+export async function deleteCube(cubeId, confirmCubeId) {
+    if (confirmCubeId !== cubeId) {
+        throw new CubeDeletionConfirmationError(cubeId, confirmCubeId);
+    }
+    assertUuidShape(cubeId, 'cube_id');
+    const active = await getActiveCube();
+    if (!active?.serverTrustIdentity)
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    const cubeName = cubeId === active.cubeId ? active.name : cubeId;
+    const result = await localManageRequest(active, `/api/cubes/${cubeId}`, 'DELETE', {
+        operation: `delete cube ${manageCopyValue(cubeName)}`,
+        cubeName,
+        noMutation: 'The cube was not deleted.',
+    }, {}, decodeDeleteCubeResponse);
+    if (!result)
+        throw new Error('Local Borg server returned an empty cube deletion response');
+    if (result.cube_id !== cubeId) {
+        throw new Error('Local Borg server returned a deletion response for an unexpected cube');
+    }
 }
 /**
  * Create a role inside a cube. is_default=true demotes the previous

@@ -32,7 +32,7 @@ import { getActiveCube, inboxPathForDrone } from './cubes.js';
 import { assertUuidShape } from './evict-drone.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { advanceLocalServerCursor, clearLocalServerCursor, encodeLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
-import { DroneEvictedError, DRONE_EVICTED_CODE, EVICTED_RESULT_MARKER, errorCodeFromBody, } from './drone-lifecycle.js';
+import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, EVICTED_RESULT_MARKER, errorCodeFromBody, } from './drone-lifecycle.js';
 import { CODEX_HEARTBEAT_CADENCE_MS, fireCodexHeartbeatTick, formatCodexWakePrompt, startCodexHeartbeat, wakeCodexViaAppServer, } from './codex-app-wake.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { BorgServerError } from './server-errors.js';
@@ -419,7 +419,7 @@ async function runLoop(testDeps = {}) {
                 // loop quiesces cleanly. The agent's graceful shutdown (TaskStop Monitor,
                 // no /loop reschedule) is driven separately by the EVICTED tool-result it
                 // already received on the authed call that produced this verdict.
-                if (err instanceof DroneEvictedError || err instanceof BorgServerError) {
+                if (err instanceof CubeDeletedError || err instanceof DroneEvictedError || err instanceof BorgServerError) {
                     if (active.localSessionCredentialRef) {
                         markSeatRejected(active.localSessionCredentialRef);
                     }
@@ -436,14 +436,16 @@ async function runLoop(testDeps = {}) {
                         streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
                         continue;
                     }
-                    if (err instanceof DroneEvictedError) {
+                    if (err instanceof DroneEvictedError || err instanceof CubeDeletedError) {
                         if (lease)
                             await lease.release().catch(() => { });
                         lease = null;
                         leaseKey = null;
                         streamState.connected = false;
                         streamState.ownership = await readOwnershipSnapshot(active.cubeId, active.droneId);
-                        process.stderr.write(`[borg-mcp log stream] drone evicted — stream terminated (no reconnect).\n`);
+                        process.stderr.write(err instanceof CubeDeletedError
+                            ? '[borg-mcp log stream] cube deleted — stream terminated (no reconnect).\n'
+                            : '[borg-mcp log stream] drone evicted — stream terminated (no reconnect).\n');
                     }
                     throw new TerminalStreamError();
                 }
@@ -732,6 +734,11 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                     markSeatRejected(active.localSessionCredentialRef);
                 throw new DroneEvictedError();
             }
+            if (code === CUBE_DELETED_CODE) {
+                if (active.localSessionCredentialRef)
+                    markSeatRejected(active.localSessionCredentialRef);
+                throw new CubeDeletedError();
+            }
             // client#42: an expired resume cursor is RECOVERABLE, not terminal. The
             // pointed-at entry was pruned server-side, so retrying the SAME cursor
             // 410s forever (a wedged, silently-dead wake path). Reset the stream's
@@ -791,6 +798,15 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                 }
                 // Close this SSE session; the reconnect will hit the authoritative 410.
                 break;
+            }
+            if (event.type === 'error') {
+                if (active.localSessionCredentialRef)
+                    markSeatRejected(active.localSessionCredentialRef);
+                if (event.code === CUBE_DELETED_CODE)
+                    throw new CubeDeletedError();
+                if (event.code === DRONE_EVICTED_CODE)
+                    throw new DroneEvictedError();
+                throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server terminated the stream');
             }
             if (event.type === 'heartbeat') {
                 streamState.lastHeartbeatAt = nowIso;
@@ -1103,6 +1119,14 @@ function parseEventBlock(block) {
             // fall through with nulls
         }
         return { type: 'eviction', id: id || null, cube_id, reason };
+    }
+    if (eventName === 'error') {
+        try {
+            return { type: 'error', code: decodeProtocolErrorEnvelope(JSON.parse(dataStr)).error.code };
+        }
+        catch {
+            return { type: 'unknown', raw: block };
+        }
     }
     return { type: 'unknown', raw: block };
 }

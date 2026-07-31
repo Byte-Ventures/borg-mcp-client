@@ -28,10 +28,10 @@ import {
 } from '../scripts/verify-release-readiness.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const CLIENT_VERSION = '2.7.3';
-const SHARED_VERSION = '0.7.0';
-const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.7.0.tgz';
-const SHARED_INTEGRITY = 'sha512-CLpQo3P/fE9GzC/R7Xw61LWxxsgcVLwmpGb5Ot5PDRe1Bvnf+EB31kiBdU5rvyvvPhiK4oUQtJAZE4ULFRAA2A==';
+const CLIENT_VERSION = '2.7.4';
+const SHARED_VERSION = '0.7.1';
+const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.7.1.tgz';
+const SHARED_INTEGRITY = 'sha512-d4GE7ezGyoFN0uwA62gvRPUMfMdJ1kxhTunqU8dW3Qhy1n2SlNXZWr1Nthm6Goo0bAgvax8KEywyReodA6FyQA==';
 
 test('release-lane current version matches the package manifest', async () => {
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
@@ -495,11 +495,15 @@ test('release documentation describes the activated minimal publication lane', a
     '30491774435',
     'sha512-j/OKr5FzhnDbnLn4pNadbi6XQwR6hcmlfSQHuDsy696KYroL1UagIzelpLJXR+uR/T6FKbD2Zdphr/s81l1Rfw==',
     'v2.7.3',
+    'b084eb3d2177fc93aa87ca58efde402542b90b8f',
+    '83fadd1b308f2b770ce0d8da6a3b61183ec94f8d',
+    '30618377765',
+    'sha512-Jb+Kg/+H3cPU34JX7eFV3gEO/PzdfJEruNU1mJwYlQZKG7TMfrLJzwghDzxmlMupHJHL3rzAVZ224wioM/pclg==',
   ]) assert.ok(releasing.includes(evidence), `Missing immutable release evidence: ${evidence}`);
   assert.match(releasing, /failed before package\s+creation or npm publication/);
   assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
-  assert.match(extraction, /borgmcp-server@0\.6\.0/);
-  assert.match(extraction, /sha512-AUNn82ivcuWgcL6kPDI\+6yNzJ1hf8F7NwWDRuZr60fInOe4FQPGxg0CD2kvuQlEB5c\+OOv5qegPXQe1H8ENCLA==/);
+  assert.match(extraction, /borgmcp-server@0\.8\.0/);
+  assert.match(extraction, /sha512-OSnBBcdZOM88Dokr7WICcTmF19c\+Nr0TOl7NXy8DSUeCpBttiKKx\+KuFvGbaXAWikFkm0UUBUca5cLZAOWw4Xw==/);
   assert.ok(extraction.includes(`reviewed \`v${manifest.version}\` source`));
   assert.doesNotMatch(`${readme}\n${security}\n${releasing}`, /publication is deferred|not yet published/);
 });

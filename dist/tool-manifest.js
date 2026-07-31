@@ -369,13 +369,14 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_delete-cube',
-        description: 'Delete a cube and all its roles, drones, and log entries. Irreversible — confirm with the user before invoking unless the cube is clearly disposable.',
+        description: 'Delete a cube and all its roles, drones, and log entries. Irreversible; requires the exact cube UUID again after explicit user confirmation.',
         inputSchema: {
             type: 'object',
             properties: {
                 cube_id: { type: 'string', description: 'UUID of the cube to delete.' },
+                confirm_cube_id: { type: 'string', description: 'Explicit user confirmation: repeat the exact cube UUID to confirm this irreversible deletion.' },
             },
-            required: ['cube_id'],
+            required: ['cube_id', 'confirm_cube_id'],
         },
     },
     {

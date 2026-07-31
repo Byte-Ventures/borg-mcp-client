@@ -13,6 +13,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
+import { CubeDeletionConfirmationError } from './server-errors.js';
 import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, getActiveCubeForWorktree, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, pinMcpSeatIdentity, } from './cubes.js';
@@ -31,7 +32,7 @@ import { renderStreamStatus, formatWakePathPrefix, shouldShowWakePathWarning, } 
 import { inspectWakePath } from './wake-path-health.js';
 import { RUNTIME_METADATA_ADVISORY, renderRoster, renderRuntimeMetadataLines, } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
-import { DroneEvictedError, formatEvictedToolResult, } from './drone-lifecycle.js';
+import { CubeDeletedError, DroneEvictedError, formatCubeDeletedErrorToolResult, formatEvictedToolResult, } from './drone-lifecycle.js';
 import { classifyInSessionAssimilate, reattachOnlyRefusal, reattachFailureMessage, } from './assimilate-guard.js';
 import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
 import { renderSyncRolesResult } from './sync-roles-render.js';
@@ -856,7 +857,11 @@ export async function main() {
                     const cubeId = args?.cube_id;
                     if (!cubeId)
                         throw new Error('cube_id is required');
-                    await deleteCube(cubeId);
+                    const confirmCubeId = args?.confirm_cube_id;
+                    if (confirmCubeId !== cubeId) {
+                        throw new CubeDeletionConfirmationError(cubeId, confirmCubeId);
+                    }
+                    await deleteCube(cubeId, confirmCubeId);
                     return { content: [{ type: 'text', text: `Deleted cube ${cubeId} (and all its roles, drones, log entries).` }] };
                 }
                 case 'borg_create-role': {
@@ -1077,6 +1082,13 @@ export async function main() {
                 const active = await getActiveCube();
                 return {
                     content: [{ type: 'text', text: formatEvictedToolResult(active?.name) }],
+                    isError: true,
+                };
+            }
+            if (error instanceof CubeDeletedError) {
+                const active = await getActiveCube();
+                return {
+                    content: [{ type: 'text', text: formatCubeDeletedErrorToolResult(error, active?.name) }],
                     isError: true,
                 };
             }

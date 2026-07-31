@@ -24,7 +24,7 @@ const SESSION = 's'.repeat(43);
 const ROLE_TEXT_LIMIT = 51_200;
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '6', request_id: requestId, payload };
+  return { protocol_version: '7', request_id: requestId, payload };
 }
 
 describe('MCP role-text proxy policy (local path)', () => {
@@ -39,7 +39,7 @@ describe('MCP role-text proxy policy (local path)', () => {
       if (url.pathname === `/api/cubes/${CUBE_ID}/roles/${ROLE_ID}/section-patch` && init?.method === 'POST') {
         if (sectionErrorCode) {
           return new Response(JSON.stringify({
-            protocol_version: '6',
+            protocol_version: '7',
             request_id: 'role-section-error',
             error: {
               code: sectionErrorCode,

@@ -12,7 +12,7 @@ const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '6', request_id: requestId, payload };
+  return { protocol_version: '7', request_id: requestId, payload };
 }
 
 describe('local server route adapter', () => {

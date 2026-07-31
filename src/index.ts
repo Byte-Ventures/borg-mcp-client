@@ -20,6 +20,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { assertRoleMatches } from './role-match.js';
+import { CubeDeletionConfirmationError } from './server-errors.js';
 
 import {
   getCubeInfo,
@@ -103,7 +104,9 @@ import {
 } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
 import {
+  CubeDeletedError,
   DroneEvictedError,
+  formatCubeDeletedErrorToolResult,
   formatEvictedToolResult,
 } from './drone-lifecycle.js';
 import {
@@ -1048,7 +1051,11 @@ export async function main() {
         case 'borg_delete-cube': {
           const cubeId = args?.cube_id as string;
           if (!cubeId) throw new Error('cube_id is required');
-          await deleteCube(cubeId);
+          const confirmCubeId = args?.confirm_cube_id as string | undefined;
+          if (confirmCubeId !== cubeId) {
+            throw new CubeDeletionConfirmationError(cubeId, confirmCubeId);
+          }
+          await deleteCube(cubeId, confirmCubeId);
           return { content: [{ type: 'text', text: `Deleted cube ${cubeId} (and all its roles, drones, log entries).` }] };
         }
 
@@ -1258,6 +1265,13 @@ export async function main() {
         const active = await getActiveCube();
         return {
           content: [{ type: 'text', text: formatEvictedToolResult(active?.name) }],
+          isError: true,
+        };
+      }
+      if (error instanceof CubeDeletedError) {
+        const active = await getActiveCube();
+        return {
+          content: [{ type: 'text', text: formatCubeDeletedErrorToolResult(error, active?.name) }],
           isError: true,
         };
       }

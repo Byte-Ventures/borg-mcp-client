@@ -7,10 +7,13 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  CubeDeletedError,
+  CUBE_DELETED_RESULT_MARKER,
   DroneEvictedError,
   DRONE_EVICTED_CODE,
   EVICTED_RESULT_MARKER,
   errorCodeFromBody,
+  formatCubeDeletedToolResult,
   formatEvictedToolResult,
 } from '../src/drone-lifecycle';
 
@@ -44,6 +47,12 @@ describe('error classes', () => {
     expect(e).toBeInstanceOf(Error);
     expect(e.message).toMatch(/removed from the cube/i);
   });
+
+  it('CubeDeletedError carries its name + default message', () => {
+    const error = new CubeDeletedError();
+    expect(error.name).toBe('CubeDeletedError');
+    expect(error.message).toMatch(/cube was deleted/i);
+  });
 });
 
 describe('tool-result formatters', () => {
@@ -55,6 +64,14 @@ describe('tool-result formatters', () => {
       'Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.\n\n' +
       'To rejoin later, start a new session and use a new invitation from the server operator. Do not re-assimilate from this evicted session.',
     );
+    expect(text).not.toMatch(/TaskStop|410|\/loop/);
+  });
+
+  it('CUBE_DELETED result stops retries without implying that local files were removed', () => {
+    const text = formatCubeDeletedToolResult('borg-mcp');
+    expect(text).toContain(`${CUBE_DELETED_RESULT_MARKER} Cube borg-mcp was deleted.`);
+    expect(text).toContain('Do not retry this request or restart the loop.');
+    expect(text).toContain('Your worktree and project files are unchanged.');
     expect(text).not.toMatch(/TaskStop|410|\/loop/);
   });
 

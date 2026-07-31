@@ -23,6 +23,13 @@ export class BorgServerHttpError extends Error {
         this.name = 'BorgServerHttpError';
     }
 }
+export class BorgProtocolMismatchError extends Error {
+    constructor() {
+        super('This client and the selected Borg server use different protocol versions. ' +
+            'Update `borgmcp-server` and `borgmcp` to matching releases, server first and then client.');
+        this.name = 'BorgProtocolMismatchError';
+    }
+}
 export class LocalManageRequiredError extends Error {
     operation;
     cubeName;
@@ -86,6 +93,18 @@ export class CubeCreationConfirmationError extends Error {
     constructor(message = 'The Borg server returned conflicting repository cube state.') {
         super(message);
         this.name = 'CubeCreationConfirmationError';
+    }
+}
+export class CubeDeletionConfirmationError extends Error {
+    cubeId;
+    confirmCubeId;
+    constructor(cubeId, confirmCubeId) {
+        const supplied = confirmCubeId === undefined ? '(missing)' : `"${confirmCubeId}"`;
+        super(`Cube deletion is irreversible. The confirmation cube ID ${supplied} must exactly match ` +
+            `the requested cube ID "${cubeId}". No cube was deleted.`);
+        this.cubeId = cubeId;
+        this.confirmCubeId = confirmCubeId;
+        this.name = 'CubeDeletionConfirmationError';
     }
 }
 export class RepositoryAssociationOperationError extends Error {

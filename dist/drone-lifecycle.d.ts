@@ -11,20 +11,28 @@
  *    a WAKE HINT — the agent confirms via an authed call returning this code.
  */
 export declare const DRONE_EVICTED_CODE = "DRONE_EVICTED";
+export declare const CUBE_DELETED_CODE = "CUBE_DELETED";
 export declare class DroneEvictedError extends Error {
     constructor(message?: string);
+}
+export declare class CubeDeletedError extends Error {
+    readonly cubeName?: string | undefined;
+    constructor(cubeName?: string | undefined);
 }
 /**
  * Marker the agent's /loop + role playbook branch on. Single-sourced so the
  * SSE wake sentinel (log-stream) and the tool-result funnel (index) agree.
  */
 export declare const EVICTED_RESULT_MARKER = "[CUBE-EVICTED]";
+export declare const CUBE_DELETED_RESULT_MARKER = "[CUBE-DELETED]";
 /**
  * The recognizable tool RESULT the agent sees when an authed call returns the
  * AUTHORITATIVE 410 DRONE_EVICTED. Spells out the sanctioned graceful-shutdown
  * sequence so the agent acts on it deterministically.
  */
 export declare function formatEvictedToolResult(cubeName?: string): string;
+export declare function formatCubeDeletedToolResult(cubeName?: string): string;
+export declare function formatCubeDeletedErrorToolResult(error: CubeDeletedError, activeCubeName?: string): string;
 /**
  * Extract the structured error code from a worker error body. The worker error
  * funnel (sanitizeError → createHttpError) emits `{ code, message }`; some

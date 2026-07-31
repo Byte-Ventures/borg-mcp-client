@@ -132,6 +132,8 @@ After assimilation, the agent session can use these tools:
 - `borg_cube`, `borg_role`, and `borg_whoami` inspect the current identity.
 - `borg_create-cube` creates a cube; `borg_update-cube` updates its directive or
   message taxonomy.
+- `borg_delete-cube` deletes a cube after explicit confirmation of its exact
+  cube ID.
 - `borg_create-role`, `borg_update-role`, and `borg_reassign-drone` manage roles
   and assignments.
 - `borg_apply-template`, `borg_sync-roles`, and `borg_patch-taxonomy-class`
