@@ -22,7 +22,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
   recovery, `2.0.2`, `2.0.3`, `2.0.4`, `2.0.5`, and `2.0.6` successors were
   published and registry-verified. The immutable `2.0.7` workflow failed before
   package creation or npm publication. The `2.0.8`, `2.0.9`, `2.0.10`, `2.0.11`,
-  `2.1.0`, and `2.1.1` successors were published, and `2.2.0` was subsequently published, and `2.3.0` was subsequently published, and `2.4.0` was subsequently published, and `2.4.1` was subsequently published, and `2.5.0` was subsequently published, and `2.6.0` was subsequently published, and `2.6.1` was subsequently published, and `2.7.0` was subsequently published, and `2.7.1` was subsequently published, and `2.7.2` was subsequently published, so the next candidate identity is `2.7.3`. Extraction and
+  `2.1.0`, and `2.1.1` successors were published, and `2.2.0` was subsequently published, and `2.3.0` was subsequently published, and `2.4.0` was subsequently published, and `2.4.1` was subsequently published, and `2.5.0` was subsequently published, and `2.6.0` was subsequently published, and `2.6.1` was subsequently published, and `2.7.0` was subsequently published, and `2.7.1` was subsequently published, and `2.7.2` was subsequently published, and `2.7.3` was subsequently published, so the next candidate identity is `2.8.0`. Extraction and
   versioning do not authorize publication.
 
 ## Review Holds
@@ -44,5 +44,5 @@ The matching `borgmcp-server@0.8.0` release is published with integrity
 `sha512-OSnBBcdZOM88Dokr7WICcTmF19c+Nr0TOl7NXy8DSUeCpBttiKKx+KuFvGbaXAWikFkm0UUBUca5cLZAOWw4Xw==`
 and pins the same `borgmcp-shared@0.7.1` contract. Client `borgmcp@2.7.3` is published. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next
-candidate remains gated by reviewed `v2.7.3` source, a fresh annotated tag, and
+candidate remains gated by reviewed `v2.8.0` source, a fresh annotated tag, and
 the exact-artifact and protected-publication gates.
