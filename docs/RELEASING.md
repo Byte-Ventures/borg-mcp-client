@@ -168,8 +168,14 @@ Never move, replace, reuse, or rerun that tag or workflow. The annotated `v2.7.2
 `52b8a54565f548560dd674d689e0b841e2d8590d`. Workflow run `30491774435`, attempt 1,
 successfully published that exact source as `borgmcp@2.7.2`; the same-run artifact report records integrity
 `sha512-j/OKr5FzhnDbnLn4pNadbi6XQwR6hcmlfSQHuDsy696KYroL1UagIzelpLJXR+uR/T6FKbD2Zdphr/s81l1Rfw==`.
+Never move, replace, reuse, or rerun that tag or workflow. The annotated
+`v2.7.3` tag object `b084eb3d2177fc93aa87ca58efde402542b90b8f` peels to
+protected-main commit `83fadd1b308f2b770ce0d8da6a3b61183ec94f8d`. Workflow run
+`30618377765`, attempt 1, successfully published that exact source as
+`borgmcp@2.7.3`; the same-run artifact report records integrity
+`sha512-Jb+Kg/+H3cPU34JX7eFV3gEO/PzdfJEruNU1mJwYlQZKG7TMfrLJzwghDzxmlMupHJHL3rzAVZ224wioM/pclg==`.
 Never move, replace, reuse, or rerun that tag or workflow. The next candidate
-uses the unused `v2.7.3` identity from a fresh reviewed protected-main commit
+uses the unused `v2.7.4` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
@@ -181,12 +187,12 @@ Before creating the release tag, independently verify all of these conditions:
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- the exact audited registry dependency `borgmcp-shared@0.7.0` remains locked to
+- the exact audited registry dependency `borgmcp-shared@0.7.1` remains locked to
   its canonical tarball and integrity
-  `sha512-CLpQo3P/fE9GzC/R7Xw61LWxxsgcVLwmpGb5Ot5PDRe1Bvnf+EB31kiBdU5rvyvvPhiK4oUQtJAZE4ULFRAA2A==`;
-- the client and matching published `borgmcp-server@0.6.0`, integrity
-  `sha512-AUNn82ivcuWgcL6kPDI+6yNzJ1hf8F7NwWDRuZr60fInOe4FQPGxg0CD2kvuQlEB5c+OOv5qegPXQe1H8ENCLA==`, which pins
-  `borgmcp-shared@0.7.0`, pass the complete local dogfood gate;
+  `sha512-d4GE7ezGyoFN0uwA62gvRPUMfMdJ1kxhTunqU8dW3Qhy1n2SlNXZWr1Nthm6Goo0bAgvax8KEywyReodA6FyQA==`;
+- the client and matching published `borgmcp-server@0.8.0`, integrity
+  `sha512-OSnBBcdZOM88Dokr7WICcTmF19c+Nr0TOl7NXy8DSUeCpBttiKKx+KuFvGbaXAWikFkm0UUBUca5cLZAOWw4Xw==`, which pins
+  `borgmcp-shared@0.7.1`, pass the complete local dogfood gate;
 - the selected stable client version is unused and the exact release commit is
   on protected `main`;
 - the repository and protected npm environment settings pass an operator audit;

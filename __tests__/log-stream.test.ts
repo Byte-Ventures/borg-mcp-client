@@ -283,6 +283,16 @@ describe('parseSSE', () => {
     ]);
   });
 
+  it('parses a protocol error event into a typed terminal error ParsedEvent', async () => {
+    const blocks = [
+      'event: error\ndata: {"protocol_version":"7","error":{"code":"CUBE_DELETED","message":"Cube deleted."}}\n\n',
+    ];
+    const events: any[] = [];
+    for await (const event of parseSSE(makeSSEResponse(blocks).body!)) events.push(event);
+
+    expect(events).toEqual([{ type: 'error', code: 'CUBE_DELETED' }]);
+  });
+
   // SEC R5: an UNKNOWN/forged event type must still no-op (default-ignore).
   it('parses a forged/unknown event type as unknown (default-ignore preserved)', async () => {
     const blocks = ['event: totally-made-up\ndata: {"x":1}\n\n'];
@@ -297,6 +307,15 @@ describe('parseSSE', () => {
 // ---------------- streamOnce ----------------
 
 describe('streamOnce', () => {
+  it('treats a CUBE_DELETED error frame as terminal without waiting for reconnect', async () => {
+    const deleted = vi.fn(async () => makeSSEResponse([
+      'event: error\ndata: {"protocol_version":"7","error":{"code":"CUBE_DELETED","message":"Cube deleted."}}\n\n',
+    ]));
+
+    await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(deleted as typeof fetch)))
+      .rejects.toMatchObject({ name: 'CubeDeletedError' });
+  });
+
   it.each([
     ['cube_id', { cubeId: '../protocol' }],
     ['drone_id', { droneId: 'not-a-uuid' }],
@@ -322,14 +341,14 @@ describe('streamOnce', () => {
 
   it('treats obsolete AUTH_EXPIRED as a terminal credential rejection', async () => {
     const expired = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '6',
+      protocol_version: '7',
       error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
     }), { status: 401 }));
     await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(expired as typeof fetch)))
       .rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
 
     const stale = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '6',
+      protocol_version: '7',
       error: { code: 'SESSION_REJECTED', message: 'Authentication failed.' },
     }), { status: 401 }));
     await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(stale as typeof fetch)))

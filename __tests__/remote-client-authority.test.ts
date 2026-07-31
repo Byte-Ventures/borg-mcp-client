@@ -48,7 +48,7 @@ describe('remote-client explicit authority connection', () => {
     const auth = mockLocalAuthority();
     const fetchSpy = vi.fn(async () =>
       new Response(JSON.stringify({
-        protocol_version: '6',
+        protocol_version: '7',
         request_id: 'cubes-response-1',
         payload: { cubes: [] },
       }), {
@@ -97,7 +97,7 @@ describe('remote-client explicit authority connection', () => {
           ? { drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID, ...UNREPORTED_DRONE_RUNTIME_METADATA }] }
           : { cube: { id: CUBE_ID, name: 'local-cube' } };
       return new Response(JSON.stringify({
-        protocol_version: '6',
+        protocol_version: '7',
         request_id: 'cube-response-1',
         payload,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -239,7 +239,7 @@ describe('remote-client explicit authority connection', () => {
   it('maps an exact trusted drone-session 410 DRONE_EVICTED envelope to the terminal error', async () => {
     const auth = mockLocalAuthority();
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '6',
+      protocol_version: '7',
       request_id: 'evicted-1',
       error: { code: 'DRONE_EVICTED', message: 'untrusted detail' },
     }), { status: 410 })));
@@ -253,10 +253,69 @@ describe('remote-client explicit authority connection', () => {
     expect(auth.markSeatRejected).toHaveBeenCalledWith(SEAT_REF);
   });
 
-  it('never renews or retries an unexpected AUTH_EXPIRED response', async () => {
+  it('turns a protocol-v6 response into an actionable typed mismatch without retrying', async () => {
     mockLocalAuthority();
     const fetchSpy = vi.fn(async () => new Response(JSON.stringify({
       protocol_version: '6',
+      request_id: 'old-server-1',
+      payload: { cube: {} },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const { listCubes } = await import('../src/remote-client.js');
+
+    await expect(listCubes({
+      apiUrl: 'https://localhost:8787',
+      authToken: 'local-enrollment-token',
+      serverTrustIdentity: 'spki-sha256:test-server',
+    })).rejects.toMatchObject({
+      name: 'BorgProtocolMismatchError',
+      message: expect.stringMatching(/Update `borgmcp-server` and `borgmcp` to matching releases/),
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns a protocol-v6 error envelope into the same actionable typed mismatch', async () => {
+    mockLocalAuthority();
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '6',
+      request_id: 'old-server-error-1',
+      error: { code: 'INVALID_INPUT', message: 'untrusted detail' },
+    }), { status: 400 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const { listCubes } = await import('../src/remote-client.js');
+
+    await expect(listCubes({
+      apiUrl: 'https://localhost:8787',
+      authToken: 'local-enrollment-token',
+      serverTrustIdentity: 'spki-sha256:test-server',
+    })).rejects.toMatchObject({
+      name: 'BorgProtocolMismatchError',
+      message: expect.stringMatching(/Update `borgmcp-server` and `borgmcp` to matching releases/),
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps an exact trusted 410 CUBE_DELETED envelope to the terminal error', async () => {
+    const auth = mockLocalAuthority();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '7',
+      request_id: 'deleted-1',
+      error: { code: 'CUBE_DELETED', message: 'untrusted detail' },
+    }), { status: 410 })));
+    const { getCubeInfo } = await import('../src/remote-client.js');
+
+    await expect(getCubeInfo(
+      'drone-session',
+      'https://localhost:8787',
+      'spki-sha256:test-server',
+    )).rejects.toMatchObject({ name: 'CubeDeletedError' });
+    expect(auth.markSeatRejected).toHaveBeenCalledWith(SEAT_REF);
+  });
+
+  it('never renews or retries an unexpected AUTH_EXPIRED response', async () => {
+    mockLocalAuthority();
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({
+      protocol_version: '7',
       error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
     }), { status: 401 }));
     vi.stubGlobal('fetch', fetchSpy);
@@ -270,8 +329,8 @@ describe('remote-client explicit authority connection', () => {
   });
 
   it.each([
-    ['SESSION_REJECTED', JSON.stringify({ protocol_version: '6', error: { code: 'SESSION_REJECTED', message: 'no' } }), 'SESSION_REJECTED'],
-    ['SESSION_REVOKED', JSON.stringify({ protocol_version: '6', error: { code: 'SESSION_REVOKED', message: 'no' } }), 'SESSION_REVOKED'],
+    ['SESSION_REJECTED', JSON.stringify({ protocol_version: '7', error: { code: 'SESSION_REJECTED', message: 'no' } }), 'SESSION_REJECTED'],
+    ['SESSION_REVOKED', JSON.stringify({ protocol_version: '7', error: { code: 'SESSION_REVOKED', message: 'no' } }), 'SESSION_REVOKED'],
     ['ambiguous 401', 'unauthorized', 'CREDENTIAL_REJECTED'],
   ])('preserves terminal %s without renewal', async (_case, body, code) => {
     const auth = mockLocalAuthority();
@@ -288,8 +347,8 @@ describe('remote-client explicit authority connection', () => {
   });
 
   it.each([
-    ['exact code on a parent request', JSON.stringify({ protocol_version: '6', request_id: 'parent-1', error: { code: 'DRONE_EVICTED', message: 'no' } })],
-    ['wrong code', JSON.stringify({ protocol_version: '6', request_id: 'wrong-1', error: { code: 'ACCESS_DENIED', message: 'no' } })],
+    ['exact code on a parent request', JSON.stringify({ protocol_version: '7', request_id: 'parent-1', error: { code: 'DRONE_EVICTED', message: 'no' } })],
+    ['wrong code', JSON.stringify({ protocol_version: '7', request_id: 'wrong-1', error: { code: 'ACCESS_DENIED', message: 'no' } })],
     ['bare body', 'gone'],
     ['malformed body', '{'],
   ])('keeps a trusted parent 410 with %s generic', async (_case, body) => {

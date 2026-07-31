@@ -31,7 +31,7 @@ import { renderStreamStatus, formatWakePathPrefix, shouldShowWakePathWarning, } 
 import { inspectWakePath } from './wake-path-health.js';
 import { RUNTIME_METADATA_ADVISORY, renderRoster, renderRuntimeMetadataLines, } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
-import { DroneEvictedError, formatEvictedToolResult, } from './drone-lifecycle.js';
+import { CubeDeletedError, DroneEvictedError, formatCubeDeletedToolResult, formatEvictedToolResult, } from './drone-lifecycle.js';
 import { classifyInSessionAssimilate, reattachOnlyRefusal, reattachFailureMessage, } from './assimilate-guard.js';
 import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
 import { renderSyncRolesResult } from './sync-roles-render.js';
@@ -856,7 +856,10 @@ export async function main() {
                     const cubeId = args?.cube_id;
                     if (!cubeId)
                         throw new Error('cube_id is required');
-                    await deleteCube(cubeId);
+                    if (args?.confirm !== true) {
+                        throw new Error('Cube deletion is irreversible; pass confirm=true to proceed. No cube was deleted.');
+                    }
+                    await deleteCube(cubeId, true);
                     return { content: [{ type: 'text', text: `Deleted cube ${cubeId} (and all its roles, drones, log entries).` }] };
                 }
                 case 'borg_create-role': {
@@ -1077,6 +1080,13 @@ export async function main() {
                 const active = await getActiveCube();
                 return {
                     content: [{ type: 'text', text: formatEvictedToolResult(active?.name) }],
+                    isError: true,
+                };
+            }
+            if (error instanceof CubeDeletedError) {
+                const active = await getActiveCube();
+                return {
+                    content: [{ type: 'text', text: formatCubeDeletedToolResult(active?.name) }],
                     isError: true,
                 };
             }

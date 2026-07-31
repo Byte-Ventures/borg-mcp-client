@@ -182,4 +182,46 @@ describe('CR5 pinned-transport trust verdicts (real wrong cert)', () => {
 
     await expect(request).rejects.not.toBeInstanceOf(BorgServerTrustError);
   });
+
+  it.each([
+    ['DELETE', 'string', 'delete café', { 'Content-Length': '12' }],
+    ['POST', 'Uint8Array', new TextEncoder().encode('delete café'), undefined],
+    ['PATCH', 'ArrayBuffer', new TextEncoder().encode('delete café').buffer, undefined],
+  ])('sets the exact Content-Length for a supported %s %s body', async (method, _kind, body, headers) => {
+    const dir = tmp();
+    const serverCert = genSelfSigned(dir, 'body', '/CN=127.0.0.1', 'IP:127.0.0.1');
+    let receivedLength: string | undefined;
+    let receivedBody = '';
+    const server = createHttpsServer({ cert: serverCert.cert, key: serverCert.key }, (req, res) => {
+      receivedLength = req.headers['content-length'];
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => { receivedBody += chunk; });
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{}');
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    await createPinnedServerFetch(origin, serverCert.cert)(`${origin}/api/cubes`, {
+      method,
+      headers,
+      body: body as BodyInit,
+    });
+
+    expect(receivedLength).toBe(String(Buffer.byteLength('delete café', 'utf8')));
+    expect(receivedBody).toBe('delete café');
+  });
+
+  it.each([
+    ['mismatched', { 'Content-Length': '999' }],
+    ['ambiguous', [['Content-Length', '12'], ['content-length', '12']]],
+  ])('rejects a caller-provided %s Content-Length before network access', async (_case, headers) => {
+    await expect(createPinnedServerFetch('https://127.0.0.1:1', 'unused')(
+      'https://127.0.0.1:1/api/cubes',
+      { method: 'DELETE', headers: headers as HeadersInit, body: 'delete café' },
+    )).rejects.toThrow(/inconsistent Content-Length/);
+  });
 });

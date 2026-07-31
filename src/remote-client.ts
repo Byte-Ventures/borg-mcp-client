@@ -16,6 +16,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import {
   createProtocolEnvelope,
+  decodeDeleteCubeResponse,
   decodeDroneRuntimeMetadataState,
   decodeEvictDroneResult,
   decodeProtocolEnvelope,
@@ -23,6 +24,7 @@ import {
   decodeReassignDroneResult,
   decodeUpdateDroneRuntimeMetadataResponse,
   ErrorCode,
+  ProtocolContractError,
   type AgentKind,
   type EvictDroneResult,
   type ReassignDroneResult,
@@ -30,7 +32,12 @@ import {
 import { consolePrefix } from './console-prefix.js';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
-import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
+import {
+  CubeDeletedError,
+  CUBE_DELETED_CODE,
+  DroneEvictedError,
+  DRONE_EVICTED_CODE,
+} from './drone-lifecycle.js';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import { getTemplate, type Template, type TemplateRole } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
@@ -41,6 +48,7 @@ import { loadBorgServerTrust, type ServerFetch } from './server-trust.js';
 import {
   BorgServerError,
   BorgServerHttpError,
+  BorgProtocolMismatchError,
   BorgServerTrustError,
   BorgServerUnreachableError,
   LocalManageCredentialUnavailableError,
@@ -225,6 +233,12 @@ async function decodeLocalProtocolResponse<T>(
     if (controller.signal.aborted) {
       // CR5: a TYPED transport-timeout verdict (message kept for call-site parity).
       throw new BorgServerUnreachableError('Local Borg server request timed out');
+    }
+    if (
+      error instanceof ProtocolContractError &&
+      error.code === ErrorCode.UNSUPPORTED_PROTOCOL_VERSION
+    ) {
+      throw new BorgProtocolMismatchError();
     }
     throw error;
   } finally {
@@ -704,6 +718,7 @@ async function authedFetch(
     // terminal controls. Decode only the bounded protocol error code for typed
     // branching; never surface the server-provided message or details.
     let code: ErrorCode | undefined;
+    let protocolMismatch = false;
     try {
       const body = await readBoundedResponseBody(
         response,
@@ -713,7 +728,13 @@ async function authedFetch(
       const parsed = JSON.parse(body);
       try {
         code = decodeProtocolErrorEnvelope(parsed).error.code;
-      } catch {
+      } catch (error) {
+        if (
+          error instanceof ProtocolContractError &&
+          error.code === ErrorCode.UNSUPPORTED_PROTOCOL_VERSION
+        ) {
+          protocolMismatch = true;
+        }
         if (
           parsed !== null && typeof parsed === 'object' &&
           parsed.error !== null && typeof parsed.error === 'object' &&
@@ -738,9 +759,14 @@ async function authedFetch(
       code = undefined;
     }
     debugLog(`✗ ${response.status} ${method} ${path}`);
+    if (protocolMismatch) throw new BorgProtocolMismatchError();
     if (droneSession !== undefined && response.status === 410 && code === DRONE_EVICTED_CODE) {
       if (localSessionCredentialRef !== undefined) markSeatRejected(localSessionCredentialRef);
       throw new DroneEvictedError();
+    }
+    if (response.status === 410 && code === CUBE_DELETED_CODE) {
+      if (localSessionCredentialRef !== undefined) markSeatRejected(localSessionCredentialRef);
+      throw new CubeDeletedError();
     }
     throw new BorgServerHttpError(
       response.status,
@@ -1316,9 +1342,30 @@ export async function patchTaxonomyClass(
  * Delete a cube. Cascade-deletes all roles, drones, and log entries.
  * Requires a live cube-manage grant on the selected local client.
  */
-export async function deleteCube(cubeId: string): Promise<void> {
-  void cubeId;
-  localUnsupported('cube deletion');
+export async function deleteCube(cubeId: string, confirmed: boolean): Promise<void> {
+  if (confirmed !== true) {
+    throw new Error('Cube deletion is irreversible; pass confirm=true to proceed. No cube was deleted.');
+  }
+  assertUuidShape(cubeId, 'cube_id');
+  const active = await getActiveCube();
+  if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
+  const cubeName = cubeId === active.cubeId ? active.name : cubeId;
+  const result = await localManageRequest(
+    active,
+    `/api/cubes/${cubeId}`,
+    'DELETE',
+    {
+      operation: `delete cube ${manageCopyValue(cubeName)}`,
+      cubeName,
+      noMutation: 'The cube was not deleted.',
+    },
+    {},
+    decodeDeleteCubeResponse,
+  );
+  if (!result) throw new Error('Local Borg server returned an empty cube deletion response');
+  if (result.cube_id !== cubeId) {
+    throw new Error('Local Borg server returned a deletion response for an unexpected cube');
+  }
 }
 
 /**

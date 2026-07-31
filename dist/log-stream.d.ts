@@ -24,6 +24,7 @@
  * connection, no second auth — just an in-process state snapshot).
  */
 import { type BroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
+import { ErrorCode } from 'borgmcp-shared/protocol';
 import { getActiveCube } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
@@ -192,6 +193,9 @@ export type ParsedEvent = {
     id: string | null;
     cube_id: string | null;
     reason: string | null;
+} | {
+    type: 'error';
+    code: ErrorCode;
 } | {
     type: 'unknown';
     raw: string;

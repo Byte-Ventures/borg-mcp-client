@@ -12,6 +12,7 @@
  */
 
 export const DRONE_EVICTED_CODE = 'DRONE_EVICTED';
+export const CUBE_DELETED_CODE = 'CUBE_DELETED';
 
 export class DroneEvictedError extends Error {
   constructor(
@@ -22,11 +23,19 @@ export class DroneEvictedError extends Error {
   }
 }
 
+export class CubeDeletedError extends Error {
+  constructor(message = 'This cube was deleted.') {
+    super(message);
+    this.name = 'CubeDeletedError';
+  }
+}
+
 /**
  * Marker the agent's /loop + role playbook branch on. Single-sourced so the
  * SSE wake sentinel (log-stream) and the tool-result funnel (index) agree.
  */
 export const EVICTED_RESULT_MARKER = '[CUBE-EVICTED]';
+export const CUBE_DELETED_RESULT_MARKER = '[CUBE-DELETED]';
 
 /**
  * The recognizable tool RESULT the agent sees when an authed call returns the
@@ -40,6 +49,15 @@ export function formatEvictedToolResult(cubeName?: string): string {
     'Borg has stopped listening for activity for this seat. Do not retry this request or restart the loop.\n\n' +
     'Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.\n\n' +
     'To rejoin later, start a new session and use a new invitation from the server operator. Do not re-assimilate from this evicted session.'
+  );
+}
+
+export function formatCubeDeletedToolResult(cubeName?: string): string {
+  const cube = cubeName ?? 'the selected cube';
+  return (
+    `${CUBE_DELETED_RESULT_MARKER} Cube ${cube} was deleted.\n\n` +
+    'Borg has stopped listening for activity for this cube. Do not retry this request or restart the loop.\n\n' +
+    'Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.'
   );
 }
 

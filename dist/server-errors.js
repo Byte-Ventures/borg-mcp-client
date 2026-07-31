@@ -23,6 +23,13 @@ export class BorgServerHttpError extends Error {
         this.name = 'BorgServerHttpError';
     }
 }
+export class BorgProtocolMismatchError extends Error {
+    constructor() {
+        super('This client and the selected Borg server use different protocol versions. ' +
+            'Update `borgmcp-server` and `borgmcp` to matching releases, server first and then client.');
+        this.name = 'BorgProtocolMismatchError';
+    }
+}
 export class LocalManageRequiredError extends Error {
     operation;
     cubeName;

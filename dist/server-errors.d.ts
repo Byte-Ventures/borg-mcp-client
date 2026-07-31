@@ -15,6 +15,9 @@ export declare class BorgServerHttpError extends Error {
     readonly code?: ErrorCode | undefined;
     constructor(status: number, message: string, code?: ErrorCode | undefined);
 }
+export declare class BorgProtocolMismatchError extends Error {
+    constructor();
+}
 export declare class LocalManageRequiredError extends Error {
     readonly operation: string;
     readonly cubeName: string;

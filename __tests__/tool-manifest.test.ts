@@ -114,6 +114,22 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(`${reassign?.description}\n${evict?.description}`).not.toMatch(/not exposed|unsupported|Cloud/i);
   });
 
+  it('requires explicit cube-deletion confirmation in the schema and handler', () => {
+    const deletion = TOOL_MANIFEST.find((entry) => entry.name === 'borg_delete-cube');
+    expect(deletion?.inputSchema.properties.confirm).toMatchObject({
+      type: 'boolean',
+      description: expect.stringMatching(/irreversible/i),
+    });
+    expect(deletion?.inputSchema.required).toContain('confirm');
+
+    const handler = clientEntrySource.slice(
+      clientEntrySource.indexOf("case 'borg_delete-cube':"),
+      clientEntrySource.indexOf("case 'borg_create-role':"),
+    );
+    expect(handler).toMatch(/args\?\.confirm !== true/);
+    expect(handler.indexOf('args?.confirm !== true')).toBeLessThan(handler.indexOf('deleteCube('));
+  });
+
   it('describes apply and sync as non-atomic client orchestration over managed primitives', () => {
     for (const toolName of ['borg_apply-template', 'borg_sync-roles']) {
       const description = TOOL_MANIFEST.find((entry) => entry.name === toolName)?.description ?? '';

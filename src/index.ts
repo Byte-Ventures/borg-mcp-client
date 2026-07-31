@@ -103,7 +103,9 @@ import {
 } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
 import {
+  CubeDeletedError,
   DroneEvictedError,
+  formatCubeDeletedToolResult,
   formatEvictedToolResult,
 } from './drone-lifecycle.js';
 import {
@@ -1048,7 +1050,10 @@ export async function main() {
         case 'borg_delete-cube': {
           const cubeId = args?.cube_id as string;
           if (!cubeId) throw new Error('cube_id is required');
-          await deleteCube(cubeId);
+          if (args?.confirm !== true) {
+            throw new Error('Cube deletion is irreversible; pass confirm=true to proceed. No cube was deleted.');
+          }
+          await deleteCube(cubeId, true);
           return { content: [{ type: 'text', text: `Deleted cube ${cubeId} (and all its roles, drones, log entries).` }] };
         }
 
@@ -1258,6 +1263,13 @@ export async function main() {
         const active = await getActiveCube();
         return {
           content: [{ type: 'text', text: formatEvictedToolResult(active?.name) }],
+          isError: true,
+        };
+      }
+      if (error instanceof CubeDeletedError) {
+        const active = await getActiveCube();
+        return {
+          content: [{ type: 'text', text: formatCubeDeletedToolResult(active?.name) }],
           isError: true,
         };
       }
