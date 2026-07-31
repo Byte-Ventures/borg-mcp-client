@@ -19,6 +19,7 @@ import { handleVersionFlag } from './version.js';
 import { initDebugFromArgv } from './debug.js';
 import { defaultApprovalIo, setupApprovalWarnings } from './cli-tool-approval.js';
 import { offerFirstRunServerInstall } from './first-run-server.js';
+import { setupNextStepsText } from './cli-help.js';
 /**
  * Main setup wizard
  */
@@ -167,10 +168,7 @@ async function main() {
     // Success message
     console.log(chalk.green.bold('\nSetup complete!\n'));
     console.log(chalk.yellow('🔄 Restart Claude Code / Codex / OpenCode (or open a new session) for the changes to take effect.\n'));
-    console.log(chalk.gray('◼ Next steps:'));
-    console.log(chalk.gray('1. cd into your project, then run "borg assimilate --host <host>" to join a cube'));
-    console.log(chalk.gray('   (this connects to your local server and launches your agent)'));
-    console.log(chalk.gray('2. Use `borg assimilate --host <host> --enroll` from the operator terminal to enroll a new client\n'));
+    console.log(chalk.gray(setupNextStepsText()));
 }
 // Run wizard
 main().catch((error) => {

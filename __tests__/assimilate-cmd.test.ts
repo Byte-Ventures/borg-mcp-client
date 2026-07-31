@@ -3443,10 +3443,35 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(stderr).toHaveBeenCalledWith(
       'Borg could not verify the expected server identity for https://localhost:8787. ' +
-        'Verify that this is the expected server. If it was re-initialized, stop it, ' +
-        'run `borg-mcp-server start`, then rerun ' +
+        'Verify that this is the expected server. If it was re-initialized, ask the server ' +
+        'operator to restore the expected identity. For a local server on this machine, use ' +
+        '`borg server setup` and `borg server start`, then rerun ' +
         '`borg assimilate --host https://localhost:8787`.\n',
     );
+  });
+
+  it('gives a distinct local-wrapper recovery when this machine has no server trust material', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      connectServer: vi.fn(async () => {
+        throw new Error('Borg server trust files were not found');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    expect(stderr).toHaveBeenCalledWith(
+      'This machine has no trust material for Borg server https://localhost:8787. ' +
+        'For a local server on this machine, run `borg server setup`, then run ' +
+        '`borg server start`, and rerun `borg assimilate --host https://localhost:8787`. ' +
+        'A server on another machine requires a supported trust-bootstrap step before enrollment; ' +
+        'an invitation alone cannot establish server identity.\n',
+    );
+    expect(stderr.mock.calls.flat().join('')).not.toContain('borg-mcp-server');
   });
 
   it('tells an enrolled ordinary client to request a grant or join an accessible cube', async () => {

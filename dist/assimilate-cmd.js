@@ -178,10 +178,19 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
             `Ensure its directory on this machine is readable and writable, then rerun ${retryCommand}.\n`);
         return 1;
     }
+    if (/Borg server trust files were not found/i.test(message)) {
+        deps.stderr(`This machine has no trust material for Borg server ${apiUrl}. ` +
+            'For a local server on this machine, run `borg server setup`, then run ' +
+            '`borg server start`, and rerun ' +
+            `${retryCommand}. A server on another machine requires a supported trust-bootstrap ` +
+            'step before enrollment; an invitation alone cannot establish server identity.\n');
+        return 1;
+    }
     if (/trust|certificate|\bCA\b|authority state|pinned identity|cross-authority/i.test(message)) {
         deps.stderr(`Borg could not verify the expected server identity for ${apiUrl}. ` +
-            'Verify that this is the expected server. If it was re-initialized, stop it, ' +
-            'run `borg-mcp-server start`, then rerun ' +
+            'Verify that this is the expected server. If it was re-initialized, ask the server ' +
+            'operator to restore the expected identity. For a local server on this machine, use ' +
+            '`borg server setup` and `borg server start`, then rerun ' +
             `${retryCommand}.\n`);
         return 1;
     }

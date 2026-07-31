@@ -7,6 +7,11 @@
  */
 /** True for the standard help flags `--help` / `-h`. */
 export declare function isHelpFlag(arg: string | undefined): boolean;
+export declare function syncHelpText(version: string): string;
+export declare function cleanupHelpText(version: string): string;
+export declare function launchAllHelpText(version: string): string;
+export declare function clientSubcommandHelpText(command: string | undefined, args: readonly string[], version: string): string | null;
+export declare function setupNextStepsText(): string;
 /**
  * Help text for top-level `borg --help`.
  *

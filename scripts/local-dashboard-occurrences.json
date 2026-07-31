@@ -1,7 +1,7 @@
 [
   {
     "file": "src/cli-help.ts",
-    "lineNumber": 83,
+    "lineNumber": 147,
     "line": "`  dashboard   View the running local server dashboard.\\n` +"
   },
   {
@@ -16,7 +16,7 @@
   },
   {
     "file": "dist/cli-help.js",
-    "lineNumber": 72,
+    "lineNumber": 120,
     "line": "`  dashboard   View the running local server dashboard.\\n` +"
   },
   {

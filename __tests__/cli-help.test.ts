@@ -10,10 +10,16 @@ import { describe, it, expect } from 'vitest';
 import { NEW_CUBE_TEMPLATE_PRESENTATIONS } from 'borgmcp-shared/templates';
 import {
   assimilateHelpText,
+  cleanupHelpText,
+  clientSubcommandHelpText,
   cubeInitHelpText,
   isHelpFlag,
+  launchAllHelpText,
+  resetLocalSeatHelpText,
   serverHelpText,
   setupHelpText,
+  setupNextStepsText,
+  syncHelpText,
   topLevelHelpText,
   updateHelpText,
 } from '../src/cli-help';
@@ -50,6 +56,40 @@ describe('gh#611 — top-level borg --help', () => {
     expect(t).toContain('borg setup');
     // The removed Cloud device-code flow must not resurface in help.
     expect(t).not.toContain('--no-browser');
+  });
+});
+
+describe('client subcommand help', () => {
+  it.each([
+    ['setup', setupHelpText],
+    ['assimilate', assimilateHelpText],
+    ['reset-local-seat', resetLocalSeatHelpText],
+    ['sync', syncHelpText],
+    ['cleanup', cleanupHelpText],
+    ['launch-all', launchAllHelpText],
+  ] as const)('routes borg %s --help before command parsing', (command, render) => {
+    expect(clientSubcommandHelpText(command, ['--help'], '9.9.9')).toBe(render('9.9.9'));
+    expect(clientSubcommandHelpText(command, ['-h'], '9.9.9')).toBe(render('9.9.9'));
+    expect(clientSubcommandHelpText(command, [], '9.9.9')).toBeNull();
+  });
+
+  it('documents every accepted launch-all option', () => {
+    const text = launchAllHelpText('9.9.9');
+    for (const flag of [
+      '--mode', '--only', '--dry-run', '--cli', '--no-attach', '--yes', '--force',
+      '--launch-delay', '--help',
+    ]) expect(text).toContain(flag);
+  });
+});
+
+describe('setup completion copy', () => {
+  it('prints the local wrapper flow without remote enrollment flags', () => {
+    const text = setupNextStepsText();
+    expect(text).toContain('`borg server setup`');
+    expect(text).toContain('`borg server start`');
+    expect(text).toContain('`borg assimilate`');
+    expect(text).toMatch(/second terminal/i);
+    expect(text).not.toMatch(/--host|--enroll|borg-mcp-server/);
   });
 });
 
@@ -181,6 +221,7 @@ describe('model configuration ownership', () => {
     expect(t).toContain('borg assimilate');
     expect(t).toContain('9.9.9');
     expect(t).toContain('Usage:');
+    expect(t).not.toContain('(default: claude)');
     for (const flag of [
       '--worktree',
       '--template',

@@ -54,6 +54,19 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     }
   });
 
+  it('keeps user-facing descriptions free of tracker and unexplained workflow shorthand', () => {
+    const rendered = JSON.stringify(TOOL_MANIFEST);
+    expect(rendered).not.toMatch(/gh#(?:740|780)|non-queen|drone seat|EXISTING seat|in regen/i);
+
+    const assimilate = TOOL_MANIFEST.find((tool) => tool.name === 'borg_assimilate')?.description ?? '';
+    expect(assimilate).toContain('never creates drones');
+    expect(assimilate).toContain('run `borg assimilate` in a terminal');
+
+    const createCube = TOOL_MANIFEST.find((tool) => tool.name === 'borg_create-cube');
+    expect(createCube?.inputSchema.properties.cube_directive.description)
+      .toContain('refreshes cube context');
+  });
+
   it('borg_role declares an optional role argument', () => {
     const tool = TOOL_MANIFEST.find((t: any) => t.name === 'borg_role');
     expect(tool.inputSchema.properties).toHaveProperty('role');
