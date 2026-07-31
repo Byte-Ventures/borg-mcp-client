@@ -12,6 +12,54 @@ const DEFAULT_NEW_CUBE_TEMPLATE = NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
 export function isHelpFlag(arg) {
     return arg === '--help' || arg === '-h';
 }
+export function syncHelpText(version) {
+    return (`borg sync (borgmcp ${version}) — update this Borg worktree from origin/main\n\n` +
+        `Usage:\n` +
+        `  borg sync             Update safely; refuse if the worktree is dirty\n` +
+        `  borg sync --prune     Also delete a merged local feature branch\n` +
+        `  borg sync --help      Show this help\n`);
+}
+export function cleanupHelpText(version) {
+    return (`borg cleanup (borgmcp ${version}) — review orphaned Borg-managed worktrees\n\n` +
+        `Usage:\n` +
+        `  borg cleanup          Report what is safe to remove; change nothing\n` +
+        `  borg cleanup --prune  Remove only worktrees proven safe to prune\n` +
+        `  borg cleanup --help   Show this help\n`);
+}
+export function launchAllHelpText(version) {
+    return (`borg launch-all (borgmcp ${version}) — launch a cube's saved drone worktrees\n\n` +
+        `Usage:\n` +
+        `  borg launch-all [cube] [options]\n\n` +
+        `Options:\n` +
+        `  --mode <tmux|windows|pastelist>       Select the launch backend\n` +
+        `  --only <name>                         Launch one role or drone label\n` +
+        `  --dry-run                             Show what would launch\n` +
+        `  --cli <claude|codex|opencode>         Select the agent CLI\n` +
+        `  --no-attach                           Do not attach to the tmux session\n` +
+        `  --yes, -y                             Skip the large-fleet confirmation\n` +
+        `  --force                               Override live-session skips\n` +
+        `  --launch-delay <ms>                   Wait between launches\n` +
+        `  --help, -h                            Show this help\n`);
+}
+export function clientSubcommandHelpText(command, args, version) {
+    if (!args.some(isHelpFlag))
+        return null;
+    switch (command) {
+        case 'setup': return setupHelpText(version);
+        case 'assimilate': return assimilateHelpText(version);
+        case 'reset-local-seat': return resetLocalSeatHelpText(version);
+        case 'sync': return syncHelpText(version);
+        case 'cleanup': return cleanupHelpText(version);
+        case 'launch-all': return launchAllHelpText(version);
+        default: return null;
+    }
+}
+export function setupNextStepsText() {
+    return (`◼ Next steps:\n` +
+        `1. Run \`borg server setup\` to prepare the local server.\n` +
+        `2. Run \`borg server start\` and leave that terminal open.\n` +
+        `3. In a second terminal, cd into your project and run \`borg assimilate\`.\n`);
+}
 /**
  * Help text for top-level `borg --help`.
  *
@@ -113,7 +161,7 @@ export function assimilateHelpText(version) {
         `  --enroll                   Prompt for a hidden enrollment invitation in the operator terminal\n` +
         `  --template ${NEW_CUBE_TEMPLATE_OPTIONS}   New-cube template (default: ${DEFAULT_NEW_CUBE_TEMPLATE})\n` +
         `  --no-template              Unsupported for repository cube creation\n` +
-        `  --cli claude|codex|opencode         Agent CLI to launch (default: claude)\n` +
+        `  --cli claude|codex|opencode         Agent CLI to launch\n` +
         `  --model claude:<model>   Legacy Claude model override (configure models in the agent CLI)\n` +
         `  --yes, -y                  Accept new-cube defaults; never adopt by name\n\n` +
         `Creation shows repository context, name, template, and one confirmation. An existing\n` +

@@ -28,7 +28,7 @@ import { findProjectRoot, getActiveCube, inboxPathForDrone, setCodexWakeTarget, 
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import { formatSeatReattachRefusal, inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 import { handleVersionFlag, getPackageVersion } from './version.js';
-import { isHelpFlag, setupHelpText, topLevelHelpText, assimilateHelpText, resetLocalSeatHelpText } from './cli-help.js';
+import { clientSubcommandHelpText, topLevelHelpText } from './cli-help.js';
 import { runSpawn } from './spawn.js';
 import { buildClaudeLaunchArgs } from './claude-launch-args.js';
 import { parseSyncArgs, runSync } from './sync.js';
@@ -142,31 +142,26 @@ async function main() {
     process.exit(0);
   }
 
+  const subcommandHelp = clientSubcommandHelpText(
+    process.argv[2],
+    process.argv.slice(3),
+    getPackageVersion(),
+  );
+  if (subcommandHelp !== null) {
+    process.stdout.write(subcommandHelp);
+    process.exit(0);
+  }
+
   // Re-route subcommands.
   if (process.argv[2] === 'setup') {
-    // gh#520: `borg setup --help` must show help, not run the wizard.
-    if (isHelpFlag(process.argv[3])) {
-      process.stdout.write(setupHelpText(getPackageVersion()));
-      process.exit(0);
-    }
     await import('./setup.js');
     return;
   }
   if (process.argv[2] === 'assimilate') {
-    // `borg assimilate --help` (or `... <role> --help`) must show help, not be
-    // rejected by the parser as an unknown flag.
-    if (process.argv.slice(3).some(isHelpFlag)) {
-      process.stdout.write(assimilateHelpText(getPackageVersion()));
-      process.exit(0);
-    }
     const code = await runAssimilateEntry(process.argv.slice(3));
     process.exit(code);
   }
   if (process.argv[2] === 'reset-local-seat') {
-    if (process.argv.slice(3).some(isHelpFlag)) {
-      process.stdout.write(resetLocalSeatHelpText(getPackageVersion()));
-      process.exit(0);
-    }
     const parsed = parseResetLocalSeatArgs(process.argv.slice(3));
     if (!parsed.ok) {
       process.stderr.write(

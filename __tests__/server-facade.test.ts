@@ -9,6 +9,7 @@ import {
   runEarlyServerFacade,
   runServerFacadeProcess,
   serverCommandStartupFailureText,
+  serverLifecycleHelpText,
   unknownServerCommandText,
   type ServerFacadeOutputDeps,
   type ServerFacadeProcessDeps,
@@ -16,7 +17,7 @@ import {
 } from '../src/server-facade.js';
 import { createPromptAdapter } from '../src/assimilate-deps.js';
 import { PromptInterruptedError } from '../src/repository-cube-init.js';
-import { cubeInitHelpText } from '../src/cli-help.js';
+import { cubeInitHelpText, serverHelpText } from '../src/cli-help.js';
 import { getPackageVersion } from '../src/version.js';
 
 class FakeChild extends EventEmitter {
@@ -84,6 +85,13 @@ describe('parseServerFacadeArgs', () => {
       });
     },
   );
+
+  it.each(['--help', '-h'])('routes lifecycle command %s before server execution', (helpFlag) => {
+    expect(parseServerFacadeArgs(['start', '--future-server-option', helpFlag])).toEqual({
+      kind: 'command-help',
+      command: 'start',
+    });
+  });
 
   it.each([[[]], [['--help']], [['-h']]] as const)('routes %j to facade help', (args) => {
     expect(parseServerFacadeArgs(args)).toEqual({ kind: 'help' });
@@ -219,6 +227,32 @@ describe('runEarlyServerFacade', () => {
       expect(deps.spawn).not.toHaveBeenCalled();
     },
   );
+
+  it('renders usage without execution for every command advertised by server help', async () => {
+    const advertisedCommands = serverHelpText()
+      .split('\n')
+      .flatMap((line) => /^  (.+?)\s{2,}\S/.exec(line)?.[1] ?? []);
+
+    expect(advertisedCommands.length).toBeGreaterThan(0);
+    for (const command of advertisedCommands) {
+      const child = new FakeChild();
+      const { deps } = processDeps(child);
+      const output = outputDeps();
+      const pending = runEarlyServerFacade(
+        ['node', 'borg', 'server', ...command.split(' '), '--help'],
+        deps,
+        output.output,
+      );
+
+      expect(deps.spawn, `${command} must not execute for --help`).not.toHaveBeenCalled();
+      await expect(pending).resolves.toBe(0);
+      expect(output.stdout()).toBe(command === 'cube init'
+        ? cubeInitHelpText(getPackageVersion())
+        : serverLifecycleHelpText(command as Parameters<typeof serverLifecycleHelpText>[0]));
+      expect(output.stdout()).toContain('Usage:');
+      expect(output.stderr()).toBe('');
+    }
+  });
 
   it('renders an unknown command as inert text without forwarding trailing arguments', async () => {
     const child = new FakeChild();

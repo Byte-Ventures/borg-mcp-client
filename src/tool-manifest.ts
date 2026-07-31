@@ -58,10 +58,10 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_assimilate',
           description:
-            "RE-ATTACH this session to the drone seat already saved for this worktree (gh#780: " +
-            "this tool never creates seats). Provide the cube's name; on a match it returns the " +
-            "cube directive, your role's instructions, and recent activity for the EXISTING seat. " +
-            'To create a seat or switch cubes, run `borg assimilate` in a terminal instead.',
+            "Reconnect this session to the existing drone saved for this worktree. This tool " +
+            "never creates drones. Provide the cube's name; on a match it returns the cube " +
+            "directive, your role's instructions, and recent activity for that drone. To create " +
+            'a drone or switch cubes, run `borg assimilate` in a terminal instead.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -116,7 +116,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_playbook',
           description:
-            'Load the full operating-playbook chapter — the detailed disciplines, rationale, and examples behind the rule-spine in your regen (verification discipline v1/v2/v3, concrete source-of-truth surfaces, four-surface propagation). This detail is kept OUT of the regen bootstrap to keep it light; fetch it ONCE per session when doing review/verify-class work. Static text — do NOT re-fetch on every wake.',
+            'Load the full operating-playbook chapter — the detailed disciplines, rationale, and examples behind the abbreviated session instructions (verification discipline v1/v2/v3, concrete source-of-truth surfaces, four-surface propagation). This detail is omitted from the initial context to keep it light; fetch it ONCE per session when doing review/verify-class work. Static text — do NOT re-fetch on every wake.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -153,7 +153,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
           name: 'borg_role-rationale',
           description:
             "Fetch an on-demand rationale/case-study section for a role playbook. " +
-            "Pass a role name/id and a plain-label section key to read the rationale without expanding every regen.",
+            "Pass a role name/id and a plain-label section key to read the rationale without expanding every context refresh.",
           inputSchema: {
             type: 'object',
             properties: {
@@ -249,7 +249,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_decide',
           description:
-            'Record a RATIFIED cube decision in the durable decision registry (gh#740) so drones cite it by topic instead of restating from memory. Coordinator/Queen are workflow-eligible to ratify, but their labels grant no server permission; the selected local client must have a live cube-manage grant. Recording IS the ratification act; a decision is not ratified until it is in the registry. Topic-keyed: recording a new decision on an existing topic supersedes the prior (one active per topic). Surfaces in borg_regen + borg_decisions.',
+            'Record a RATIFIED cube decision in the durable decision registry so drones cite it by topic instead of restating from memory. Coordinator and Queen roles are workflow-eligible to ratify, but role labels grant no server permission; the selected local client must have a live cube-manage grant. Recording IS the ratification act; a decision is not ratified until it is in the registry. Topic-keyed: recording a new decision on an existing topic supersedes the prior (one active per topic). The decision appears in borg_regen and borg_decisions.',
           inputSchema: {
             type: 'object',
             required: ['topic', 'decision'],
@@ -272,7 +272,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_decisions',
           description:
-            'List the active ratified decisions for the cube (gh#740) — the source of truth to CITE instead of restating a decision from memory. Any member may read. Pass `topic` to fetch one topic\'s active decision; omit for all active decisions.',
+            'List the active ratified decisions for the cube — the source of truth to CITE instead of restating a decision from memory. Any member may read. Pass `topic` to fetch one topic\'s active decision; omit for all active decisions.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -350,7 +350,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
                 pattern: '^[a-z0-9-]+$',
                 maxLength: 64,
               },
-              cube_directive: { type: 'string', description: 'Markdown text every drone in this cube will see in regen. Anything project-specific.' },
+              cube_directive: { type: 'string', description: 'Project-specific Markdown shown to every drone when it refreshes cube context.' },
               template: {
                 type: 'string',
                 description: 'Optional template name to apply after cube creation (e.g. "software-dev"). Roles are merged by name; the default Drone role gets overwritten by the template if a same-named role is in the template.',
@@ -439,7 +439,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
               short_description: { type: 'string', description: 'One-line summary, shown to every drone in the cube.' },
               detailed_description: { type: 'string', description: 'Full playbook for drones in this role — workflow, conventions, log signals to post.' },
               is_default: { type: 'boolean', description: 'If true, new drones assimilating into this cube are assigned this role. Demotes the previous default.' },
-              is_mandatory: { type: 'boolean', description: 'If true, role-less assimilate fills this unoccupied non-queen role before ordinary worker roles. A mandatory human-seat role is therefore selected first until occupied.' },
+              is_mandatory: { type: 'boolean', description: 'If true, role-less assimilation prioritizes this unoccupied role before ordinary worker roles. Platform-wide management roles are never auto-assigned; a mandatory human-operator role is selected first until occupied.' },
               is_human_seat: { type: 'boolean', description: 'If true, this role represents the cube\'s human-occupied seat (where the human Queen sits directly). The class-hierarchy guard in reassign-drone allows promotion FROM a human-seat role TO the platform Queen role; promotion from non-human-seat roles is rejected.' },
               can_broadcast: { type: 'boolean', description: 'If true, drones in this role may post broadcast log entries when strict broadcast gating is enabled.' },
               receives_all_direct: { type: 'boolean', description: 'If true, drones in this role can see direct log entries as observer/audit recipients.' },
@@ -458,7 +458,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
               short_description: { type: 'string', description: 'New short description (optional).' },
               detailed_description: { type: 'string', description: 'New detailed playbook (optional).' },
               is_default: { type: 'boolean', description: 'Set true to make this the cube\'s default role (optional).' },
-              is_mandatory: { type: 'boolean', description: 'Set true/false to prioritize this unoccupied non-queen role during role-less assimilate.' },
+              is_mandatory: { type: 'boolean', description: 'Set true/false to prioritize this unoccupied role during role-less assimilation. Platform-wide management roles are never auto-assigned.' },
               is_human_seat: { type: 'boolean', description: 'Set true/false to mark/unmark this as the cube\'s human-occupied seat (the elevation source for the platform Queen role).' },
               can_broadcast: { type: 'boolean', description: 'Set true/false to allow or deny broadcast log entries when strict broadcast gating is enabled.' },
               receives_all_direct: { type: 'boolean', description: 'Set true/false to grant or remove observer visibility into direct log entries.' },
