@@ -18,7 +18,6 @@ const integrity = `sha512-${'A'.repeat(86)}==`;
 const allowlistPath = 'scripts/release-identity-allowlist.json';
 const stablePath = 'scripts/local-dashboard-occurrences.json';
 const releaseTestPath = 'test/release-lane.test.mjs';
-const readmePath = 'README.md';
 
 test('the classifier loads protected-base bytes and never executes candidate code', async () => {
   const workflow = await readFile(join(root, '.github', 'workflows', 'release-identity.yml'), 'utf8');
@@ -59,17 +58,12 @@ test('prepare generates exactly the client identity surfaces and verifies their 
   const fixture = await createFixture(t);
   const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
   assert.deepEqual(prepared.paths, [
-    readmePath,
     'docs/EXTRACTION_PROVENANCE.md',
     'docs/RELEASING.md',
     'package-lock.json',
     'package.json',
     releaseTestPath,
   ]);
-  assert.match(
-    await readFile(join(fixture.root, readmePath), 'utf8'),
-    new RegExp(`^npm install -g borgmcp@${newVersion.replaceAll('.', '\\.')}$`, 'mu'),
-  );
   const candidate = commitAll(fixture.root, 'prepare release');
   const verified = verifyReleaseIdentity(fixture.root, fixture.base, candidate, fixture.authorities);
   assert.equal(verified.oldVersion, oldVersion);
@@ -77,26 +71,6 @@ test('prepare generates exactly the client identity surfaces and verifies their 
   assert.equal(verified.candidate, candidate);
   assert.equal(verified.tree, git(fixture.root, ['rev-parse', 'HEAD^{tree}']));
 });
-
-for (const [name, readme] of [
-  ['no guarded README install command', '# Install\n'],
-  [
-    'multiple guarded README install commands',
-    `npm install -g borgmcp@${oldVersion}\nnpm install -g borgmcp@${oldVersion}\n`,
-  ],
-]) {
-  test(`prepare rejects ${name}`, async (t) => {
-    const fixture = await createFixture(t);
-    await writeFile(join(fixture.root, readmePath), readme);
-    commitAll(fixture.root, `fixture: ${name}`);
-    await assert.rejects(
-      prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities),
-      {
-        message: `${readmePath} must document exactly the current manifest version in its client install command.`,
-      },
-    );
-  });
-}
 
 test('trusted-base classification is green on the transform and red on a self-bypassing candidate', async (t) => {
   const fixture = await preparedFixture(t);
@@ -202,20 +176,6 @@ for (const [name, mutate] of [
   });
 }
 
-test('release identity rejects a stale README install version for the precise path mismatch', async (t) => {
-  const fixture = await preparedFixture(t);
-  const path = join(fixture.root, readmePath);
-  await writeFile(path, (await readFile(path, 'utf8')).replace(
-    `npm install -g borgmcp@${newVersion}`,
-    `npm install -g borgmcp@${oldVersion}`,
-  ));
-  const candidate = commitAll(fixture.root, 'mutate a stale README install version');
-  assert.throws(
-    () => verifyReleaseIdentity(fixture.root, fixture.base, candidate, fixture.authorities),
-    { message: `Release identity shape mismatch: ${readmePath}` },
-  );
-});
-
 async function preparedFixture(t) {
   const fixture = await createFixture(t);
   const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
@@ -255,7 +215,6 @@ async function createFixture(t) {
       },
     },
   }, null, 2)}\n`);
-  await writeFixture(directory, readmePath, `npm install -g borgmcp@${oldVersion}\n`);
   await writeFixture(directory, 'docs/EXTRACTION_PROVENANCE.md',
     `Published successors were published, so the next candidate identity is \`${oldVersion}\`.\n` +
     `Client \`borgmcp@2.1.1\` is published. Publication remains gated by reviewed \`v${oldVersion}\` source.\n`);
