@@ -116,6 +116,20 @@ export class CubeCreationConfirmationError extends Error {
   }
 }
 
+export class CubeDeletionConfirmationError extends Error {
+  constructor(
+    public readonly cubeId: string,
+    public readonly confirmCubeId: string | undefined,
+  ) {
+    const supplied = confirmCubeId === undefined ? '(missing)' : `"${confirmCubeId}"`;
+    super(
+      `Cube deletion is irreversible. The confirmation cube ID ${supplied} must exactly match ` +
+      `the requested cube ID "${cubeId}". No cube was deleted.`,
+    );
+    this.name = 'CubeDeletionConfirmationError';
+  }
+}
+
 export type RepositoryAssociationFailure =
   | 'repository-already-associated'
   | 'cube-already-associated'

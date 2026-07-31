@@ -55,6 +55,11 @@ export declare class CubeCreationOutcomeUnknownError extends Error {
 export declare class CubeCreationConfirmationError extends Error {
     constructor(message?: string);
 }
+export declare class CubeDeletionConfirmationError extends Error {
+    readonly cubeId: string;
+    readonly confirmCubeId: string | undefined;
+    constructor(cubeId: string, confirmCubeId: string | undefined);
+}
 export type RepositoryAssociationFailure = 'repository-already-associated' | 'cube-already-associated' | 'access-denied' | 'invalid-cube';
 export declare class RepositoryAssociationOperationError extends Error {
     readonly failure: RepositoryAssociationFailure;

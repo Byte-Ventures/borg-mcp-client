@@ -419,14 +419,14 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         },
         {
           name: 'borg_delete-cube',
-          description: 'Delete a cube and all its roles, drones, and log entries. Irreversible; requires confirm=true after explicit user confirmation.',
+          description: 'Delete a cube and all its roles, drones, and log entries. Irreversible; requires the exact cube UUID again after explicit user confirmation.',
           inputSchema: {
             type: 'object',
             properties: {
               cube_id: { type: 'string', description: 'UUID of the cube to delete.' },
-              confirm: { type: 'boolean', description: 'Must be true to confirm this irreversible deletion.' },
+              confirm_cube_id: { type: 'string', description: 'Explicit user confirmation: repeat the exact cube UUID to confirm this irreversible deletion.' },
             },
-            required: ['cube_id', 'confirm'],
+            required: ['cube_id', 'confirm_cube_id'],
           },
         },
         {

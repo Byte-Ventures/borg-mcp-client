@@ -20,6 +20,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { assertRoleMatches } from './role-match.js';
+import { CubeDeletionConfirmationError } from './server-errors.js';
 
 import {
   getCubeInfo,
@@ -1050,10 +1051,11 @@ export async function main() {
         case 'borg_delete-cube': {
           const cubeId = args?.cube_id as string;
           if (!cubeId) throw new Error('cube_id is required');
-          if (args?.confirm !== true) {
-            throw new Error('Cube deletion is irreversible; pass confirm=true to proceed. No cube was deleted.');
+          const confirmCubeId = args?.confirm_cube_id as string | undefined;
+          if (confirmCubeId !== cubeId) {
+            throw new CubeDeletionConfirmationError(cubeId, confirmCubeId);
           }
-          await deleteCube(cubeId, true);
+          await deleteCube(cubeId, confirmCubeId);
           return { content: [{ type: 'text', text: `Deleted cube ${cubeId} (and all its roles, drones, log entries).` }] };
         }
 

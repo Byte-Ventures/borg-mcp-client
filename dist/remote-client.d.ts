@@ -322,7 +322,7 @@ export declare function patchTaxonomyClass(cubeId: string, op: {
  * Delete a cube. Cascade-deletes all roles, drones, and log entries.
  * Requires a live cube-manage grant on the selected local client.
  */
-export declare function deleteCube(cubeId: string, confirmed: boolean): Promise<void>;
+export declare function deleteCube(cubeId: string, confirmCubeId: string): Promise<void>;
 /**
  * Create a role inside a cube. is_default=true demotes the previous
  * default role; the cube always has exactly one default.

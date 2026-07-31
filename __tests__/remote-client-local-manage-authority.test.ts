@@ -125,7 +125,7 @@ describe('local manage-request authority', () => {
       action: 'add',
       class_def: { class: 'qa', prefixes: ['QA:'], routing: 'broadcast' },
     });
-    await remote.deleteCube(CUBE_ID, true);
+    await remote.deleteCube(CUBE_ID, CUBE_ID);
     await remote.createRole(CUBE_ID, {
       name: 'Builder',
       short_description: 'builds',
@@ -181,7 +181,7 @@ describe('local manage-request authority', () => {
     ['evict', `remove "builder-1" from cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.evictDrone(DRONE_ID, { cubeId: CUBE_ID, cubeName: 'local-cube', targetReference: 'builder-1' })), 'No drone was removed.'],
     ['cube delete', `delete cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
-      remote.deleteCube(CUBE_ID, true)), 'The cube was not deleted.'],
+      remote.deleteCube(CUBE_ID, CUBE_ID)), 'The cube was not deleted.'],
   ])('maps exact ACCESS_DENIED 403 for a %s operation to actionable no-mutation copy', async (_kind, opening, call, noMutation) => {
     failure = { status: 403, code: 'ACCESS_DENIED' };
 
@@ -292,10 +292,21 @@ describe('local manage-request authority', () => {
     expect(hostedFetch).not.toHaveBeenCalled();
   });
 
-  it('rejects cube deletion without literal confirmation before authority lookup or network access', async () => {
+  it.each([
+    ['missing', undefined],
+    ['mismatched', TARGET_CUBE_ID],
+  ])('rejects %s target confirmation before authority lookup or network access', async (_case, confirmation) => {
     const { deleteCube } = await import('../src/remote-client.js');
 
-    await expect(deleteCube(CUBE_ID, false)).rejects.toThrow(/confirm=true/);
+    await expect(deleteCube(CUBE_ID, confirmation as unknown as string)).rejects.toMatchObject({
+      name: 'CubeDeletionConfirmationError',
+      cubeId: CUBE_ID,
+      confirmCubeId: confirmation,
+      message: expect.stringContaining(CUBE_ID),
+    });
+    if (confirmation !== undefined) {
+      await expect(deleteCube(CUBE_ID, confirmation)).rejects.toThrow(confirmation);
+    }
     expect(getServerCredential).not.toHaveBeenCalled();
     expect(localFetch).not.toHaveBeenCalled();
     expect(hostedFetch).not.toHaveBeenCalled();
@@ -304,7 +315,7 @@ describe('local manage-request authority', () => {
   it('sends confirmed deletion as an empty protocol-v7 envelope with the parent credential', async () => {
     const { deleteCube } = await import('../src/remote-client.js');
 
-    await deleteCube(CUBE_ID, true);
+    await deleteCube(CUBE_ID, CUBE_ID);
 
     const [input, init] = localFetch.mock.calls[0];
     expect(new URL(input.toString()).pathname).toBe(`/api/cubes/${CUBE_ID}`);
@@ -321,7 +332,7 @@ describe('local manage-request authority', () => {
     const { deleteCube } = await import('../src/remote-client.js');
     const { formatCubeDeletedErrorToolResult } = await import('../src/drone-lifecycle.js');
 
-    const error = await deleteCube(TARGET_CUBE_ID, true).then(() => null, (caught) => caught);
+    const error = await deleteCube(TARGET_CUBE_ID, TARGET_CUBE_ID).then(() => null, (caught) => caught);
     expect(error).toMatchObject({
       name: 'CubeDeletedError',
       cubeName: TARGET_CUBE_ID,
@@ -338,7 +349,7 @@ describe('local manage-request authority', () => {
     })), { status: 200 }));
     const { deleteCube } = await import('../src/remote-client.js');
 
-    await expect(deleteCube(CUBE_ID, true)).rejects.toThrow(/unexpected cube/);
+    await expect(deleteCube(CUBE_ID, CUBE_ID)).rejects.toThrow(/unexpected cube/);
   });
 
   it('rejects dot-segment IDs before credential lookup or network access', async () => {

@@ -51,6 +51,7 @@ import {
   BorgProtocolMismatchError,
   BorgServerTrustError,
   BorgServerUnreachableError,
+  CubeDeletionConfirmationError,
   LocalManageCredentialUnavailableError,
   LocalManageRequiredError,
 } from './server-errors.js';
@@ -1345,9 +1346,9 @@ export async function patchTaxonomyClass(
  * Delete a cube. Cascade-deletes all roles, drones, and log entries.
  * Requires a live cube-manage grant on the selected local client.
  */
-export async function deleteCube(cubeId: string, confirmed: boolean): Promise<void> {
-  if (confirmed !== true) {
-    throw new Error('Cube deletion is irreversible; pass confirm=true to proceed. No cube was deleted.');
+export async function deleteCube(cubeId: string, confirmCubeId: string): Promise<void> {
+  if (confirmCubeId !== cubeId) {
+    throw new CubeDeletionConfirmationError(cubeId, confirmCubeId);
   }
   assertUuidShape(cubeId, 'cube_id');
   const active = await getActiveCube();

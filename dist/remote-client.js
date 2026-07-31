@@ -19,7 +19,7 @@ import { getTemplate } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { buildRuntimeMetadataPatch } from './runtime-metadata.js';
 import { loadBorgServerTrust } from './server-trust.js';
-import { BorgServerError, BorgServerHttpError, BorgProtocolMismatchError, BorgServerTrustError, BorgServerUnreachableError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
+import { BorgServerError, BorgServerHttpError, BorgProtocolMismatchError, BorgServerTrustError, BorgServerUnreachableError, CubeDeletionConfirmationError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
 import { markSeatRejected } from './seats.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
@@ -905,9 +905,9 @@ export async function patchTaxonomyClass(cubeId, op, activeOverride, connectionO
  * Delete a cube. Cascade-deletes all roles, drones, and log entries.
  * Requires a live cube-manage grant on the selected local client.
  */
-export async function deleteCube(cubeId, confirmed) {
-    if (confirmed !== true) {
-        throw new Error('Cube deletion is irreversible; pass confirm=true to proceed. No cube was deleted.');
+export async function deleteCube(cubeId, confirmCubeId) {
+    if (confirmCubeId !== cubeId) {
+        throw new CubeDeletionConfirmationError(cubeId, confirmCubeId);
     }
     assertUuidShape(cubeId, 'cube_id');
     const active = await getActiveCube();
