@@ -48,6 +48,37 @@ const updatedResult = {
   next_action: null,
 };
 
+const stoppedManagedStatus = {
+  status: 'stopped',
+  installed_controller: 'borgmcp-server@0.4.0',
+  prepared_runtime: 'borgmcp-server@0.4.0',
+  prepared_integrity: SERVER_TARGET.integrity,
+  running_runtime: null,
+  running_integrity: null,
+  build_identity: null,
+  endpoint: null,
+  mode: 'stopped',
+  service_adapter: 'launchd',
+  service_state: 'inactive',
+  service_recovery: {
+    kind: 'run-platform-command',
+    command: ['launchctl', 'kickstart', 'gui/501/ai.borgmcp.server'],
+  },
+  data_identity: 'available',
+  next_action: null,
+};
+
+function outdatedRunningStatus(integrity: string) {
+  return {
+    ...runningStatus,
+    prepared_runtime: 'borgmcp-server@0.3.0',
+    prepared_integrity: integrity,
+    running_runtime: 'borgmcp-server@0.3.0',
+    running_integrity: integrity,
+    next_action: 'borg-mcp-server update',
+  };
+}
+
 function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
   const calls: string[] = [];
   let clientVersion = '2.2.0';
@@ -98,6 +129,22 @@ function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
     calls,
     ...overrides,
   };
+}
+
+function targetDeps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
+  return deps({
+    currentClient: vi.fn(async () => ({
+      name: 'borgmcp', version: '2.3.0', sharedVersion: '0.6.5',
+      packageRoot: '/npm/lib/node_modules/borgmcp',
+      binPath: '/npm/lib/node_modules/borgmcp/dist/claude.js',
+    })),
+    currentServer: vi.fn(async () => ({
+      name: 'borgmcp-server', version: '0.4.0', sharedVersion: '0.6.5',
+      packageRoot: '/npm/lib/node_modules/borgmcp-server',
+      binPath: '/npm/lib/node_modules/borgmcp-server/dist/cli.js',
+    })),
+    ...overrides,
+  });
 }
 
 describe('parseUpdateArgs', () => {
@@ -165,8 +212,10 @@ describe('runUpdate', () => {
 
     await expect(runUpdate({ yes: false }, d)).resolves.toBe(0);
     expect(d.stdout).toHaveBeenCalledWith(expect.stringMatching(
-      /borgmcp@2\.2\.0 -> borgmcp@2\.3\.0[\s\S]*target integrity: sha512-[A-Za-z0-9+/=]+[\s\S]*borgmcp-server@0\.3\.0 -> borgmcp-server@0\.4\.0/,
+      /Published update plan \(https:\/\/registry\.npmjs\.org\/\):[\s\S]*borgmcp@2\.2\.0 -> borgmcp@2\.3\.0[\s\S]*target integrity: sha512-[A-Za-z0-9+/=]+[\s\S]*borgmcp-server@0\.3\.0 -> borgmcp-server@0\.4\.0/,
     ));
+    expect(vi.mocked(d.stdout).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(d.confirm).mock.invocationCallOrder[0]);
     expect(d.installGlobal).not.toHaveBeenCalled();
   });
 
@@ -336,31 +385,7 @@ describe('runUpdate', () => {
   });
 
   it('accepts a stopped server only when controller and prepared runtime match target', async () => {
-    const stoppedStatus = {
-      status: 'stopped',
-      installed_controller: 'borgmcp-server@0.4.0',
-      prepared_runtime: 'borgmcp-server@0.4.0',
-      prepared_integrity: SERVER_TARGET.integrity,
-      running_runtime: null,
-      running_integrity: null,
-      build_identity: null,
-      endpoint: null,
-      mode: 'stopped',
-      service_adapter: null,
-      data_identity: 'available',
-      next_action: null,
-    };
-    const d = deps({
-      currentClient: vi.fn(async () => ({
-        name: 'borgmcp', version: '2.3.0', sharedVersion: '0.6.5',
-        packageRoot: '/npm/lib/node_modules/borgmcp',
-        binPath: '/npm/lib/node_modules/borgmcp/dist/claude.js',
-      })),
-      currentServer: vi.fn(async () => ({
-        name: 'borgmcp-server', version: '0.4.0', sharedVersion: '0.6.5',
-        packageRoot: '/npm/lib/node_modules/borgmcp-server',
-        binPath: '/npm/lib/node_modules/borgmcp-server/dist/cli.js',
-      })),
+    const d = targetDeps({
       serverJson: vi.fn(async (_bin, command) => command === 'update'
         ? {
           status: 'prepared',
@@ -373,7 +398,7 @@ describe('runUpdate', () => {
           data_identity: 'preserved',
           next_action: null,
         }
-        : stoppedStatus),
+        : stoppedManagedStatus),
     });
 
     await expect(runUpdate({
@@ -381,7 +406,156 @@ describe('runUpdate', () => {
       target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
     }, d)).resolves.toBe(0);
     expect(d.verifyRunningProtocol).not.toHaveBeenCalled();
-    expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining('prepared; still stopped'));
+    expect(d.stdout).toHaveBeenCalledWith(
+      `Updated borgmcp@2.3.0 and borgmcp-server@0.4.0: prepared.\n` +
+      `Local server service is stopped.\n` +
+      `Restart it with: 'launchctl' 'kickstart' 'gui/501/ai.borgmcp.server'\n`,
+    );
+  });
+
+  it('renders the exact shell-safe systemd recovery for an inactive managed service', async () => {
+    const systemdStatus = {
+      ...stoppedManagedStatus,
+      service_adapter: 'systemd',
+      service_recovery: {
+        kind: 'run-platform-command',
+        command: ['systemctl', '--user', 'restart', 'borgmcp-server.service'],
+      },
+    };
+    const d = targetDeps({ serverJson: vi.fn(async () => systemdStatus) });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
+    }, d)).resolves.toBe(0);
+    expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining(
+      `Restart it with: 'systemctl' '--user' 'restart' 'borgmcp-server.service'\n`,
+    ));
+  });
+
+  it('rechecks service state after activation failure and gives stage-specific recovery', async () => {
+    const oldIntegrity = `sha512-${Buffer.alloc(64, 3).toString('base64')}`;
+    let statusCalls = 0;
+    const d = targetDeps({
+      serverJson: vi.fn(async (_bin, command) => {
+        if (command === 'update') {
+          return {
+            status: 'failed',
+            error_code: 'ACTIVATION_FAILED',
+            recovery: 'stopped',
+            data_identity: 'preserved',
+          };
+        }
+        statusCalls += 1;
+        return statusCalls === 1
+          ? outdatedRunningStatus(oldIntegrity)
+          : stoppedManagedStatus;
+      }),
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
+    }, d)).resolves.toBe(1);
+    expect(d.serverJson).toHaveBeenCalledTimes(3);
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      'Server update failed during server runtime activation: server update failed: ACTIVATION_FAILED (stopped).',
+    ));
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      `Local server service is stopped.\n` +
+      `Restart it with: 'launchctl' 'kickstart' 'gui/501/ai.borgmcp.server'\n` +
+      `Then retry the failed stage with: borg server update\n`,
+    ));
+    expect(d.stderr).not.toHaveBeenCalledWith(expect.stringContaining('Retry with: borg update --yes'));
+  });
+
+  it('fails loudly when an update leaves a previously running service stopped', async () => {
+    const oldIntegrity = `sha512-${Buffer.alloc(64, 3).toString('base64')}`;
+    let statusCalls = 0;
+    const d = targetDeps({
+      serverJson: vi.fn(async (_bin, command) => {
+        if (command === 'update') {
+          return {
+            status: 'prepared',
+            installed_controller: 'borgmcp-server@0.4.0',
+            artifact: 'borgmcp-server@0.4.0',
+            artifact_integrity: SERVER_TARGET.integrity,
+            running_runtime: null,
+            build_identity: null,
+            mode: 'stopped',
+            data_identity: 'preserved',
+            next_action: null,
+          };
+        }
+        statusCalls += 1;
+        return statusCalls === 1
+          ? outdatedRunningStatus(oldIntegrity)
+          : stoppedManagedStatus;
+      }),
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
+    }, d)).resolves.toBe(1);
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      'Server update failed during managed service continuity check: a previously running local server is now stopped.',
+    ));
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      `Local server service is stopped.\n` +
+      `Restart it with: 'launchctl' 'kickstart' 'gui/501/ai.borgmcp.server'\n`,
+    ));
+  });
+
+  it('reports an interrupted runtime update with stopped-service recovery', async () => {
+    const oldIntegrity = `sha512-${Buffer.alloc(64, 3).toString('base64')}`;
+    let statusCalls = 0;
+    const d = targetDeps({
+      serverJson: vi.fn(async (_bin, command) => {
+        if (command === 'update') throw new Error('command stopped by SIGTERM');
+        statusCalls += 1;
+        return statusCalls === 1
+          ? outdatedRunningStatus(oldIntegrity)
+          : stoppedManagedStatus;
+      }),
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
+    }, d)).resolves.toBe(1);
+    expect(d.serverJson).toHaveBeenCalledTimes(3);
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      'Server update failed during server runtime activation: command stopped by SIGTERM.',
+    ));
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      `Restart it with: 'launchctl' 'kickstart' 'gui/501/ai.borgmcp.server'`,
+    ));
+  });
+
+  it('gives status and restart recovery when service state cannot be rechecked', async () => {
+    const oldIntegrity = `sha512-${Buffer.alloc(64, 3).toString('base64')}`;
+    let statusCalls = 0;
+    const d = targetDeps({
+      serverJson: vi.fn(async (_bin, command) => {
+        if (command === 'update') throw new Error('server update connection ended');
+        statusCalls += 1;
+        if (statusCalls > 1) throw new Error('server status unavailable');
+        return outdatedRunningStatus(oldIntegrity);
+      }),
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
+    }, d)).resolves.toBe(1);
+    expect(d.serverJson).toHaveBeenCalledTimes(3);
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      'Local server service state could not be verified; it may be stopped.\n' +
+      'Check it with: borg server status\n' +
+      'If it is stopped, run the recovery command reported by borg server status.\n' +
+      'Next: borg server update\n',
+    ));
   });
 
   it('does not reactivate an already verified server runtime', async () => {
@@ -518,7 +692,7 @@ describe('runUpdate', () => {
     expect(d.verifyRunningProtocol).not.toHaveBeenCalled();
     expect(d.stderr).toHaveBeenCalledOnce();
     expect(d.stderr).toHaveBeenCalledWith(
-      `Server update or final verification failed: final server verification failed: running runtime mismatched.\n` +
+      `Server update failed during final server state verification: final server verification failed: running runtime mismatched.\n` +
       `Observed update state:\n` +
       `  client (last verified): borgmcp@2.3.0 (borgmcp-shared@0.6.5)\n` +
       `  server controller (last verified): borgmcp-server@0.4.0 (borgmcp-shared@0.6.5)\n` +
@@ -527,7 +701,7 @@ describe('runUpdate', () => {
       `  running runtime: borgmcp-server@0.3.0\n` +
       `  running integrity: ${oldIntegrity}\n` +
       `  server update: updated borgmcp-server@0.4.0 (${SERVER_TARGET.integrity})\n` +
-      `Retry with: borg update --yes\n`,
+      `Next: borg server update\n`,
     );
   });
 
@@ -634,7 +808,7 @@ describe('runUpdate', () => {
       yes: true,
       target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
     }, d)).resolves.toBe(1);
-    expect(serverJson).toHaveBeenCalledTimes(2);
+    expect(serverJson).toHaveBeenCalledTimes(3);
     expect(d.verifyRunningProtocol).not.toHaveBeenCalled();
     expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('server returned invalid JSON update result'));
   });
@@ -675,16 +849,16 @@ describe('runUpdate', () => {
     }, d)).resolves.toBe(1);
     expect(d.stderr).toHaveBeenCalledOnce();
     expect(d.stderr).toHaveBeenCalledWith(
-      `Server update or final verification failed: server update failed: ACTIVATION_FAILED (restored).\n` +
+      `Server update failed during server runtime activation: server update failed: ACTIVATION_FAILED (restored).\n` +
       `Observed update state:\n` +
       `  client (last verified): borgmcp@2.3.0 (borgmcp-shared@0.6.5)\n` +
       `  server controller (last verified): borgmcp-server@0.4.0 (borgmcp-shared@0.6.5)\n` +
-      `  prepared runtime: unavailable\n` +
-      `  prepared integrity: unavailable\n` +
-      `  running runtime: unavailable\n` +
-      `  running integrity: unavailable\n` +
+      `  prepared runtime: borgmcp-server@0.3.0\n` +
+      `  prepared integrity: ${SERVER_TARGET.integrity}\n` +
+      `  running runtime: borgmcp-server@0.3.0\n` +
+      `  running integrity: ${SERVER_TARGET.integrity}\n` +
       `  server update: failed ACTIVATION_FAILED (restored)\n` +
-      `Retry with: borg update --yes\n`,
+      `Next: borg server update\n`,
     );
   });
 
@@ -708,7 +882,7 @@ describe('runUpdate', () => {
     expect(d.serverJson).not.toHaveBeenCalled();
     expect(d.stderr).toHaveBeenCalledOnce();
     expect(d.stderr).toHaveBeenCalledWith(
-      `published update targets changed during client re-entry\n` +
+      `Update preflight failed: published update targets changed during client re-entry\n` +
       `Observed update state:\n` +
       `  client: borgmcp@2.3.0 installed and verified before re-entry\n` +
       `  server controller: not changed by this continuation\n` +

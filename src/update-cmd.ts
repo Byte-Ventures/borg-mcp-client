@@ -7,6 +7,7 @@ import which from 'which';
 import { updateHelpText } from './cli-help.js';
 import { preflightBorgServerTag } from './server-handshake.js';
 import { loadBorgServerTrust } from './server-trust.js';
+import { shellEscape } from './shell-escape.js';
 
 const CLIENT_PACKAGE = 'borgmcp';
 const SERVER_PACKAGE = 'borgmcp-server';
@@ -81,6 +82,7 @@ interface ServerStatus {
   endpoint: string | null;
   mode: 'foreground' | 'managed' | 'legacy' | 'stopped';
   serviceAdapter: 'launchd' | 'systemd' | null;
+  serviceRecovery: { command: string[] } | null;
   dataIdentity: 'available' | 'unavailable';
   nextAction: string | null;
 }
@@ -103,6 +105,15 @@ interface ServerUpdateFailure {
 }
 
 type ServerUpdateResult = ServerUpdateSuccess | ServerUpdateFailure;
+type ServerUpdateFailureStage =
+  | 'initial server status check'
+  | 'server controller identity check'
+  | 'server runtime activation'
+  | 'post-update server status check'
+  | 'final server state verification'
+  | 'final package verification'
+  | 'managed service continuity check'
+  | 'running server protocol verification';
 
 interface NpmContext {
   commandPath: string;
@@ -119,9 +130,13 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
+}
+
 function renderReentryPreflightFailure(error: unknown, target: UpdateTarget): string {
   return (
-    `${errorMessage(error, 'Update preflight failed')}\n` +
+    `Update preflight failed: ${errorMessage(error, 'unknown failure')}\n` +
     `Observed update state:\n` +
     `  client: ${CLIENT_PACKAGE}@${target.clientVersion} installed and verified before re-entry\n` +
     `  server controller: not changed by this continuation\n` +
@@ -346,6 +361,18 @@ function isNextAction(value: unknown): value is string | null {
   );
 }
 
+function decodeManagedServiceRecovery(value: unknown): { command: string[] } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.kind !== 'run-platform-command' || !Array.isArray(record.command) ||
+      record.command.length === 0 || record.command.length > 32 ||
+      record.command.some((arg) => typeof arg !== 'string' || arg.length === 0 ||
+        Array.from(arg).length > 1024 || /\p{Cc}/u.test(arg))) {
+    return null;
+  }
+  return { command: record.command as string[] };
+}
+
 function decodeServerStatus(value: unknown): ServerStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('server returned invalid JSON status');
@@ -379,12 +406,18 @@ function decodeServerStatus(value: unknown): ServerStatus {
       record.running_integrity !== null ||
       record.build_identity !== null ||
       record.endpoint !== null ||
-      record.mode !== 'stopped' ||
-      record.service_adapter !== null
+      record.mode !== 'stopped'
     )) ||
     (record.status === 'running' && record.mode === 'stopped')
   ) {
     throw new Error('server returned inconsistent JSON status');
+  }
+  const managedRecovery = record.status === 'stopped' && record.service_adapter !== null
+    ? decodeManagedServiceRecovery(record.service_recovery)
+    : null;
+  if (record.status === 'stopped' && record.service_adapter !== null &&
+      (record.service_state !== 'inactive' || managedRecovery === null)) {
+    throw new Error('server returned invalid managed-service recovery status');
   }
   return {
     state: record.status,
@@ -397,6 +430,7 @@ function decodeServerStatus(value: unknown): ServerStatus {
     endpoint: record.endpoint,
     mode: record.mode as ServerStatus['mode'],
     serviceAdapter: record.service_adapter,
+    serviceRecovery: managedRecovery,
     dataIdentity: record.data_identity,
     nextAction: record.next_action,
   };
@@ -472,7 +506,6 @@ function verifyServerStatus(status: ServerStatus, target: PublishedPackage): 'ru
       status.buildIdentity !== null ||
       status.endpoint !== null ||
       status.mode !== 'stopped' ||
-      status.serviceAdapter !== null ||
       status.dataIdentity !== 'available'
     ) {
       throw new Error('final server verification failed: stopped server reported a running runtime');
@@ -490,6 +523,37 @@ function verifyServerStatus(status: ServerStatus, target: PublishedPackage): 'ru
     throw new Error('final server verification failed: running runtime mismatched');
   }
   return 'running';
+}
+
+function renderServerFailureRecovery(
+  status: ServerStatus | null,
+  updateAttempted: boolean,
+  retryCommand: 'borg update --yes' | 'borg server status' | 'borg server update' | 'borg server start',
+): string {
+  let text = '';
+  if (status?.state === 'stopped') {
+    text += renderStoppedServiceRecovery(status);
+  } else if (updateAttempted && status === null) {
+    text += (
+      `Local server service state could not be verified; it may be stopped.\n` +
+      `Check it with: borg server status\n` +
+      `If it is stopped, run the recovery command reported by borg server status.\n`
+    );
+  }
+  if (retryCommand !== 'borg server start') {
+    text += status?.state === 'stopped'
+      ? `Then retry the failed stage with: ${retryCommand}\n`
+      : `Next: ${retryCommand}\n`;
+  }
+  return text;
+}
+
+function renderStoppedServiceRecovery(status: ServerStatus): string {
+  if (status.serviceRecovery !== null) {
+    const command = status.serviceRecovery.command.map(shellEscape).join(' ');
+    return `Local server service is stopped.\nRestart it with: ${command}\n`;
+  }
+  return `Local server service is stopped.\nStart it with: borg server start\n`;
 }
 
 export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promise<number> {
@@ -512,7 +576,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
     deps.stderr(options.target
       ? renderReentryPreflightFailure(error, options.target)
       : (
-        `${errorMessage(error, 'Update preflight failed')}\n` +
+        `Update preflight failed: ${errorMessage(error, 'unknown failure')}\n` +
         `Observed update state:\n` +
         `  client: not inspected (registry preflight incomplete)\n` +
         `  server controller: not inspected (registry preflight incomplete)\n` +
@@ -540,7 +604,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
   }
 
   deps.stdout(
-    `Published update plan (npm registry):\n` +
+    `Published update plan (${CANONICAL_NPM_REGISTRY}):\n` +
     `  client: ${CLIENT_PACKAGE}@${client.version} -> ${CLIENT_PACKAGE}@${pair.client.version}\n` +
     `    target integrity: ${pair.client.integrity}\n` +
     `  server: ${discoveredServer ? `${SERVER_PACKAGE}@${discoveredServer.version}` : 'not installed'} -> ${SERVER_PACKAGE}@${pair.server.version}\n` +
@@ -624,7 +688,8 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
         : 'not installed'}\n` +
       `  prepared runtime: not inspected\n` +
       `  running runtime: not inspected\n` +
-      `Server mutation was not attempted.\n`,
+      `Server mutation was not attempted.\n` +
+      `Next: reinstall ${CLIENT_PACKAGE}@${pair.client.version} from ${CANONICAL_NPM_REGISTRY}, then rerun borg update --yes.\n`,
     );
     return interrupted ?? 1;
   }
@@ -671,19 +736,39 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
 
   let observedStatus: ServerStatus | null = null;
   let observedUpdate: ServerUpdateResult | null = null;
+  let initialServerState: ServerStatus['state'] | null = null;
+  let updateAttempted = false;
+  let recoveryStatusAttempted = false;
+  let failureStage: ServerUpdateFailureStage = 'initial server status check';
+  let retryCommand: Parameters<typeof renderServerFailureRecovery>[2] = 'borg server status';
+  const observeStatusAfterFailure = async (): Promise<void> => {
+    recoveryStatusAttempted = true;
+    try {
+      observedStatus = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+    } catch {
+      observedStatus = null;
+    }
+  };
   try {
     let status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
     observedStatus = status;
+    initialServerState = status.state;
     if (status.installedController !== exactServerIdentity(pair.server.version)) {
+      failureStage = 'server controller identity check';
+      retryCommand = 'borg update --yes';
       throw new Error('server status contradicted the verified controller identity');
     }
     try {
       verifyServerStatus(status, pair.server);
     } catch {
       observedStatus = null;
+      updateAttempted = true;
+      failureStage = 'server runtime activation';
+      retryCommand = 'borg server update';
       const update = decodeServerUpdate(await deps.serverJson(server.binPath, 'update'));
       observedUpdate = update;
       if (update.status === 'failed') {
+        await observeStatusAfterFailure();
         throw new Error(`server update failed: ${update.errorCode} (${update.recovery})`);
       }
       const serverIdentity = exactServerIdentity(pair.server.version);
@@ -696,10 +781,17 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       ) {
         throw new Error('server update result did not reach the target artifact');
       }
+      failureStage = 'post-update server status check';
+      retryCommand = 'borg server status';
+      recoveryStatusAttempted = true;
       status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
       observedStatus = status;
     }
+    failureStage = 'final server state verification';
+    retryCommand = 'borg server update';
     const state = verifyServerStatus(status, pair.server);
+    failureStage = 'final package verification';
+    retryCommand = 'borg update --yes';
     const [finalClient, finalServer] = await Promise.all([
       deps.currentClient(),
       deps.currentServer(),
@@ -707,20 +799,35 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
     assertInstalled(finalClient, pair.client);
     if (!finalServer) throw new Error('server controller disappeared during final verification');
     assertInstalled(finalServer, pair.server);
-    if (state === 'running') await deps.verifyRunningProtocol(status.endpoint!);
+    if (initialServerState === 'running' && state === 'stopped') {
+      failureStage = 'managed service continuity check';
+      retryCommand = 'borg server start';
+      throw new Error('a previously running local server is now stopped');
+    }
+    if (state === 'running') {
+      failureStage = 'running server protocol verification';
+      retryCommand = 'borg server status';
+      await deps.verifyRunningProtocol(status.endpoint!);
+    }
     deps.stdout(
       state === 'stopped'
-        ? `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}: prepared; still stopped.\n`
+        ? (
+          `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}: prepared.\n` +
+          renderStoppedServiceRecovery(status)
+        )
         : `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; running identities and protocol verified.\n`,
     );
     deps.stdout('Restart active agent sessions to load the updated client.\n');
     return 0;
   } catch (error) {
     const interrupted = signalExitCode(error);
+    if (updateAttempted && !recoveryStatusAttempted && observedStatus === null) {
+      await observeStatusAfterFailure();
+    }
     deps.stderr(
-      `Server update or final verification failed: ${errorMessage(error, 'unknown failure')}.\n` +
+      `Server update failed during ${failureStage}: ${errorMessage(error, 'unknown failure')}.\n` +
       renderServerState(client, server, observedStatus, observedUpdate) +
-      `Retry with: borg update --yes\n`,
+      renderServerFailureRecovery(observedStatus, updateAttempted, retryCommand),
     );
     return interrupted ?? 1;
   }
@@ -735,8 +842,8 @@ interface CommandResult {
 class CommandSignalError extends Error {
   readonly exitCode: number;
 
-  constructor(signal: NodeJS.Signals) {
-    super(`command stopped by ${signal}`);
+  constructor(signal: NodeJS.Signals, stderr = '') {
+    super(`command stopped by ${signal}${serverCommandStderr(stderr)}`);
     this.name = 'CommandSignalError';
     this.exitCode = 128 + (constants.signals[signal] ?? 1);
   }
@@ -775,7 +882,7 @@ function runCommand(
     child.once('exit', (code, signal) => {
       if (settled) return;
       if (signal) {
-        fail(new CommandSignalError(signal));
+        fail(new CommandSignalError(signal, stderr));
         return;
       }
       settled = true;
@@ -798,6 +905,14 @@ function singleLine(text: string, label: string): string {
     throw new Error(`npm returned an invalid ${label}`);
   }
   return value;
+}
+
+function serverCommandStderr(stderr: string): string {
+  const detail = stderr.trim();
+  if (detail === '') return '';
+  const bounded = Array.from(detail).slice(-4096).join('')
+    .replace(/\p{Cc}/gu, (character) => character === '\n' || character === '\t' ? character : '?');
+  return `\nServer command stderr:\n${bounded}`;
 }
 
 async function npmText(commandPath: string, args: readonly string[], label: string): Promise<string> {
@@ -924,6 +1039,18 @@ async function inspectNpmPackage(
   } catch {
     if (!required) return null;
     throw new Error(`${binName} is not available on PATH`);
+  }
+  try {
+    await realpath(join(context.root, name));
+  } catch (error) {
+    if (hasErrorCode(error, 'ENOENT')) {
+      throw new Error(
+        `${binName} is on PATH from a different npm global prefix. ` +
+        `borg update only manages packages under the active npm prefix. ` +
+        `Run npm prefix --global to inspect it, then update the other installation with its package manager.`,
+      );
+    }
+    throw error;
   }
   return inspectNpmPackageAt({
     name,
@@ -1065,10 +1192,12 @@ export function buildDefaultUpdateDeps(): UpdateDeps {
       try {
         parsed = JSON.parse(result.stdout);
       } catch {
-        throw new Error(`server ${command} returned invalid JSON`);
+        throw new Error(`server ${command} returned invalid JSON${serverCommandStderr(result.stderr)}`);
       }
       if (result.code !== 0 && command !== 'update') {
-        throw new Error(`server ${command} exited ${result.code}`);
+        throw new Error(
+          `server ${command} exited ${result.code}${serverCommandStderr(result.stderr)}`,
+        );
       }
       return parsed;
     },
