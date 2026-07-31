@@ -53,7 +53,7 @@ borg server start
 `borg server start` stays in the foreground. Leave that terminal open while you
 use Borg; press Ctrl-C when you want to stop the server.
 
-In a second terminal, open your project and join its cube:
+In a second terminal, open your project's Git repository and join its cube:
 
 ```bash
 cd ~/code/my-app
