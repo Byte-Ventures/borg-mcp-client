@@ -16,7 +16,8 @@ export declare class DroneEvictedError extends Error {
     constructor(message?: string);
 }
 export declare class CubeDeletedError extends Error {
-    constructor(message?: string);
+    readonly cubeName?: string | undefined;
+    constructor(cubeName?: string | undefined);
 }
 /**
  * Marker the agent's /loop + role playbook branch on. Single-sourced so the
@@ -31,6 +32,7 @@ export declare const CUBE_DELETED_RESULT_MARKER = "[CUBE-DELETED]";
  */
 export declare function formatEvictedToolResult(cubeName?: string): string;
 export declare function formatCubeDeletedToolResult(cubeName?: string): string;
+export declare function formatCubeDeletedErrorToolResult(error: CubeDeletedError, activeCubeName?: string): string;
 /**
  * Extract the structured error code from a worker error body. The worker error
  * funnel (sanitizeError → createHttpError) emits `{ code, message }`; some

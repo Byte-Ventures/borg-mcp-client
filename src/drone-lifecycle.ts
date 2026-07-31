@@ -24,8 +24,8 @@ export class DroneEvictedError extends Error {
 }
 
 export class CubeDeletedError extends Error {
-  constructor(message = 'This cube was deleted.') {
-    super(message);
+  constructor(public readonly cubeName?: string) {
+    super('This cube was deleted.');
     this.name = 'CubeDeletedError';
   }
 }
@@ -59,6 +59,13 @@ export function formatCubeDeletedToolResult(cubeName?: string): string {
     'Borg has stopped listening for activity for this cube. Do not retry this request or restart the loop.\n\n' +
     'Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.'
   );
+}
+
+export function formatCubeDeletedErrorToolResult(
+  error: CubeDeletedError,
+  activeCubeName?: string,
+): string {
+  return formatCubeDeletedToolResult(error.cubeName ?? activeCubeName);
 }
 
 /**

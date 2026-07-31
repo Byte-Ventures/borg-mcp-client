@@ -19,8 +19,10 @@ export class DroneEvictedError extends Error {
     }
 }
 export class CubeDeletedError extends Error {
-    constructor(message = 'This cube was deleted.') {
-        super(message);
+    cubeName;
+    constructor(cubeName) {
+        super('This cube was deleted.');
+        this.cubeName = cubeName;
         this.name = 'CubeDeletedError';
     }
 }
@@ -47,6 +49,9 @@ export function formatCubeDeletedToolResult(cubeName) {
     return (`${CUBE_DELETED_RESULT_MARKER} Cube ${cube} was deleted.\n\n` +
         'Borg has stopped listening for activity for this cube. Do not retry this request or restart the loop.\n\n' +
         'Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.');
+}
+export function formatCubeDeletedErrorToolResult(error, activeCubeName) {
+    return formatCubeDeletedToolResult(error.cubeName ?? activeCubeName);
 }
 /**
  * Extract the structured error code from a worker error body. The worker error

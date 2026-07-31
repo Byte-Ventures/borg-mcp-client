@@ -5,6 +5,7 @@ const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
 const LOG_ID = '44444444-4444-4444-8444-444444444444';
+const TARGET_CUBE_ID = '55555555-5555-4555-8555-555555555555';
 const ORIGIN = 'https://localhost:8787';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
@@ -313,6 +314,21 @@ describe('local manage-request authority', () => {
       protocol_version: '7',
       payload: {},
     });
+  });
+
+  it('renders the client-known deleted target instead of the live active cube', async () => {
+    failure = { status: 410, code: 'CUBE_DELETED' };
+    const { deleteCube } = await import('../src/remote-client.js');
+    const { formatCubeDeletedErrorToolResult } = await import('../src/drone-lifecycle.js');
+
+    const error = await deleteCube(TARGET_CUBE_ID, true).then(() => null, (caught) => caught);
+    expect(error).toMatchObject({
+      name: 'CubeDeletedError',
+      cubeName: TARGET_CUBE_ID,
+    });
+    const text = formatCubeDeletedErrorToolResult(error, 'local-cube');
+    expect(text).toContain(`Cube ${TARGET_CUBE_ID} was deleted.`);
+    expect(text).not.toContain('Cube local-cube was deleted.');
   });
 
   it('fails closed when a successful deletion response names a different cube', async () => {

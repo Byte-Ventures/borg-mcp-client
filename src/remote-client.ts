@@ -343,6 +343,9 @@ async function localManageRequest<T>(
         }),
     }), true, decodePayload);
   } catch (error) {
+    if (error instanceof CubeDeletedError) {
+      throw new CubeDeletedError(operation.cubeName);
+    }
     if (
       error instanceof BorgServerHttpError &&
       error.status === 403 &&

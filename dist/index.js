@@ -31,7 +31,7 @@ import { renderStreamStatus, formatWakePathPrefix, shouldShowWakePathWarning, } 
 import { inspectWakePath } from './wake-path-health.js';
 import { RUNTIME_METADATA_ADVISORY, renderRoster, renderRuntimeMetadataLines, } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
-import { CubeDeletedError, DroneEvictedError, formatCubeDeletedToolResult, formatEvictedToolResult, } from './drone-lifecycle.js';
+import { CubeDeletedError, DroneEvictedError, formatCubeDeletedErrorToolResult, formatEvictedToolResult, } from './drone-lifecycle.js';
 import { classifyInSessionAssimilate, reattachOnlyRefusal, reattachFailureMessage, } from './assimilate-guard.js';
 import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
 import { renderSyncRolesResult } from './sync-roles-render.js';
@@ -1086,7 +1086,7 @@ export async function main() {
             if (error instanceof CubeDeletedError) {
                 const active = await getActiveCube();
                 return {
-                    content: [{ type: 'text', text: formatCubeDeletedToolResult(active?.name) }],
+                    content: [{ type: 'text', text: formatCubeDeletedErrorToolResult(error, active?.name) }],
                     isError: true,
                 };
             }

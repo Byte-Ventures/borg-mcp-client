@@ -219,6 +219,9 @@ async function localManageRequest(active, path, method, operation, payload, deco
         }), true, decodePayload);
     }
     catch (error) {
+        if (error instanceof CubeDeletedError) {
+            throw new CubeDeletedError(operation.cubeName);
+        }
         if (error instanceof BorgServerHttpError &&
             error.status === 403 &&
             error.code === ErrorCode.ACCESS_DENIED) {

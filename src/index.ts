@@ -105,7 +105,7 @@ import { resolveWorkingRepo } from './working-repo.js';
 import {
   CubeDeletedError,
   DroneEvictedError,
-  formatCubeDeletedToolResult,
+  formatCubeDeletedErrorToolResult,
   formatEvictedToolResult,
 } from './drone-lifecycle.js';
 import {
@@ -1269,7 +1269,7 @@ export async function main() {
       if (error instanceof CubeDeletedError) {
         const active = await getActiveCube();
         return {
-          content: [{ type: 'text', text: formatCubeDeletedToolResult(active?.name) }],
+          content: [{ type: 'text', text: formatCubeDeletedErrorToolResult(error, active?.name) }],
           isError: true,
         };
       }
