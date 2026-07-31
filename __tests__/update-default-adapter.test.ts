@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -124,6 +125,8 @@ else process.exit(91);
   return {
     log: () => readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]),
     setPrefix: (prefix: string) => writeFileSync(statePath, JSON.stringify({ registry, prefix })),
+    bin,
+    prefixA,
     prefixB,
     fetch,
   };
@@ -136,6 +139,23 @@ afterEach(() => {
 });
 
 describe('default npm update adapter', () => {
+  it('includes bounded server stderr when a JSON command fails before producing JSON', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'borg-update-server-json-'));
+    roots.push(root);
+    const server = join(root, 'borg-mcp-server');
+    writeFileSync(server, `#!/usr/bin/env node
+process.stderr.write('Migration 17 does not match its recorded checksum\\n');
+process.stdout.write('not-json\\n');
+process.exit(1);
+`);
+    chmodSync(server, 0o755);
+    const deps = buildDefaultUpdateDeps();
+
+    await expect(deps.serverJson(server, 'status')).rejects.toThrow(
+      /server status returned invalid JSON[\s\S]*Migration 17 does not match its recorded checksum/,
+    );
+  });
+
   it('rejects a configured alternate registry before lookup or mutation', async () => {
     const npm = fakeNpm('https://mirror.example.invalid/');
     const deps = buildDefaultUpdateDeps();
@@ -292,6 +312,29 @@ describe('default npm update adapter', () => {
     await expect(deps.installGlobal('borgmcp', '2.3.0'))
       .rejects.toThrow(/npm global prefix changed/);
     expect(npm.log().some(([command]) => command === 'install')).toBe(false);
+  });
+
+  it('renders a designed refusal when a server bin belongs to another npm prefix', async () => {
+    const npm = fakeNpm('https://registry.npmjs.org/');
+    const packageRoot = join(npm.prefixB, 'lib', 'node_modules', 'borgmcp-server');
+    mkdirSync(join(packageRoot, 'dist'), { recursive: true });
+    mkdirSync(join(packageRoot, 'node_modules', 'borgmcp-shared'), { recursive: true });
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+      name: 'borgmcp-server',
+      version: '0.4.0',
+      bin: { 'borg-mcp-server': './dist/cli.js' },
+    }));
+    writeFileSync(join(packageRoot, 'node_modules', 'borgmcp-shared', 'package.json'), JSON.stringify({
+      name: 'borgmcp-shared',
+      version: '0.6.5',
+    }));
+    writeFileSync(join(packageRoot, 'dist', 'cli.js'), '');
+    symlinkSync(join(packageRoot, 'dist', 'cli.js'), join(npm.bin, 'borg-mcp-server'));
+    const deps = buildDefaultUpdateDeps();
+
+    await expect(deps.currentServer()).rejects.toThrow(
+      'borg-mcp-server is on PATH from a different npm global prefix',
+    );
   });
 
   it('rejects PATH substitution instead of selecting a different npm for install', async () => {
