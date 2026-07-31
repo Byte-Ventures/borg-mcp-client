@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import which from 'which';
 import {
   buildDefaultUpdateDeps,
   runUpdate,
@@ -328,8 +329,12 @@ process.exit(1);
       name: 'borgmcp-shared',
       version: '0.6.5',
     }));
-    writeFileSync(join(packageRoot, 'dist', 'cli.js'), '');
-    symlinkSync(join(packageRoot, 'dist', 'cli.js'), join(npm.bin, 'borg-mcp-server'));
+    const serverBin = join(packageRoot, 'dist', 'cli.js');
+    const pathBin = join(npm.bin, 'borg-mcp-server');
+    writeFileSync(serverBin, '');
+    chmodSync(serverBin, 0o755);
+    symlinkSync(serverBin, pathBin);
+    expect(which.sync('borg-mcp-server')).toBe(pathBin);
     const deps = buildDefaultUpdateDeps();
 
     await expect(deps.currentServer()).rejects.toThrow(
