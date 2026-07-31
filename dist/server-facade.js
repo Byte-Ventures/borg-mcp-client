@@ -22,6 +22,9 @@ export function parseServerFacadeArgs(args) {
     if (!SERVER_LIFECYCLE_COMMANDS.includes(command)) {
         return { kind: 'error', reason: 'unknown-command', command };
     }
+    if (rest.some(isHelpFlag)) {
+        return { kind: 'command-help', command: command };
+    }
     return {
         kind: 'command',
         command: command,
@@ -92,6 +95,10 @@ export function unknownServerCommandText(command) {
     return (`Unknown server command: ${inertCommand(command)}.\n` +
         `Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\n` +
         `Next: run borg server --help.\n`);
+}
+export function serverLifecycleHelpText(command) {
+    return (`Usage: borg server ${command} [arguments]\n\n` +
+        `Command arguments are server-owned and pass to the verified borg-mcp-server executable when run.\n`);
 }
 export function missingServerExecutableText(command) {
     return (`Local server command is unavailable: borg-mcp-server was not found.\n` +
@@ -165,6 +172,10 @@ export async function runEarlyServerFacade(argv, deps = defaultProcessDeps, outp
     }
     if (parsed.kind === 'cube-init-help') {
         output.writeStdout(cubeInitHelpText(getPackageVersion()));
+        return 0;
+    }
+    if (parsed.kind === 'command-help') {
+        output.writeStdout(serverLifecycleHelpText(parsed.command));
         return 0;
     }
     if (parsed.kind === 'error') {

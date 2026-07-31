@@ -9,6 +9,9 @@ export type ParsedServerFacadeArgs = {
     kind: 'cube-init';
     args: string[];
 } | {
+    kind: 'command-help';
+    command: ServerLifecycleCommand;
+} | {
     kind: 'command';
     command: ServerLifecycleCommand;
     args: string[];
@@ -51,6 +54,7 @@ export type ServerFacadeProcessResult = {
 export declare function buildDefaultServerFacadeClientDeps(buildDeps?: AssimilateDepsBuilder): ServerFacadeClientDeps;
 export declare function cubeInitUsageErrorText(reason: string): string;
 export declare function unknownServerCommandText(command: string): string;
+export declare function serverLifecycleHelpText(command: ServerLifecycleCommand): string;
 export declare function missingServerExecutableText(command: ServerLifecycleCommand): string;
 export declare function serverCommandStartupFailureText(command: ServerLifecycleCommand): string;
 export declare function runServerFacadeProcess(input: {
