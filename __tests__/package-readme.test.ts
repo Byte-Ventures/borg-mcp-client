@@ -90,4 +90,31 @@ describe('published package artifact', () => {
       rmSync(packDir, { recursive: true, force: true });
     }
   });
+
+  it('ships an unpinned install command with package-relative links that resolve', () => {
+    const packDir = mkdtempSync(join(tmpdir(), 'borgmcp-pack-readme-links-'));
+
+    try {
+      const packResult = JSON.parse(
+        execFileSync(
+          process.platform === 'win32' ? 'npm.cmd' : 'npm',
+          ['pack', '--json', '--ignore-scripts', '--pack-destination', packDir],
+          { cwd: clientRoot, encoding: 'utf8' },
+        ),
+      ) as Array<{ filename: string }>;
+      const tarball = join(packDir, packResult[0].filename);
+      const packedReadme = readTarEntry(tarball, 'package/README.md');
+
+      expect(packedReadme.match(/^npm install -g borgmcp$/gm)).toHaveLength(1);
+      expect(packedReadme).not.toMatch(/^npm install -g borgmcp@/gm);
+      const relativeLinks = [...packedReadme.matchAll(/\[[^\]]+\]\((?!https?:|#)([^)#]+)(?:#[^)]+)?\)/g)]
+        .map((match) => match[1].replace(/^\.\//, ''));
+      expect(relativeLinks.length).toBeGreaterThan(0);
+      for (const target of relativeLinks) {
+        expect(() => readTarEntry(tarball, `package/${target}`), target).not.toThrow();
+      }
+    } finally {
+      rmSync(packDir, { recursive: true, force: true });
+    }
+  });
 });

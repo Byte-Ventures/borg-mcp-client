@@ -356,19 +356,12 @@ test('release documentation describes the activated minimal publication lane', a
 
   assert.equal(manifest.scripts['release:exercise'], 'npm run build && node scripts/release-exercise.mjs');
 
-  assert.match(readme, /Install the current exact local-only client release from npm:/);
+  assert.match(readme, /Install the client from npm:/);
   assert.doesNotMatch(readme, /After verified publication/);
-  const documentedClientInstalls = [
-    ...readme.matchAll(/^npm install -g borgmcp@([^\s]+)$/gm),
-  ].map((match) => match[1]);
-  assert.deepEqual(
-    documentedClientInstalls,
-    [manifest.version],
-    'README must document exactly the current manifest version in its client install command',
-  );
-  assert.doesNotMatch(readme, /npm install -g borgmcp(?:\s|$)/);
-  assert.match(readme, /exact-name accessible cube requires explicit interactive confirmation/);
-  assert.match(readme, /never adopts an existing cube by name/);
+  assert.equal(readme.match(/^npm install -g borgmcp$/gm)?.length, 1);
+  assert.doesNotMatch(readme, /^npm install -g borgmcp@/gm);
+  assert.match(readme, /asks before linking that cube to the repository/);
+  assert.match(readme, /never links an existing\s+cube by name during a non-interactive run/);
   assert.match(security, /protected npm environment and Trusted Publishing/);
   for (const boundary of [
     'same-run artifact',
