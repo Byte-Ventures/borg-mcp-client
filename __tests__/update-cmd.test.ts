@@ -409,8 +409,28 @@ describe('runUpdate', () => {
     expect(d.stdout).toHaveBeenCalledWith(
       `Updated borgmcp@2.3.0 and borgmcp-server@0.4.0: prepared.\n` +
       `Local server service is stopped.\n` +
-      `Start it with: borg server start\n`,
+      `Restart it with: 'launchctl' 'kickstart' 'gui/501/ai.borgmcp.server'\n`,
     );
+  });
+
+  it('renders the exact shell-safe systemd recovery for an inactive managed service', async () => {
+    const systemdStatus = {
+      ...stoppedManagedStatus,
+      service_adapter: 'systemd',
+      service_recovery: {
+        kind: 'run-platform-command',
+        command: ['systemctl', '--user', 'restart', 'borgmcp-server.service'],
+      },
+    };
+    const d = targetDeps({ serverJson: vi.fn(async () => systemdStatus) });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
+    }, d)).resolves.toBe(0);
+    expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining(
+      `Restart it with: 'systemctl' '--user' 'restart' 'borgmcp-server.service'\n`,
+    ));
   });
 
   it('rechecks service state after activation failure and gives stage-specific recovery', async () => {
@@ -442,7 +462,9 @@ describe('runUpdate', () => {
       'Server update failed during server runtime activation: server update failed: ACTIVATION_FAILED (stopped).',
     ));
     expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
-      'Local server service is stopped.\nStart it with: borg server start\nThen retry the failed stage with: borg server update\n',
+      `Local server service is stopped.\n` +
+      `Restart it with: 'launchctl' 'kickstart' 'gui/501/ai.borgmcp.server'\n` +
+      `Then retry the failed stage with: borg server update\n`,
     ));
     expect(d.stderr).not.toHaveBeenCalledWith(expect.stringContaining('Retry with: borg update --yes'));
   });
@@ -480,7 +502,8 @@ describe('runUpdate', () => {
       'Server update failed during managed service continuity check: a previously running local server is now stopped.',
     ));
     expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
-      'Local server service is stopped.\nStart it with: borg server start\n',
+      `Local server service is stopped.\n` +
+      `Restart it with: 'launchctl' 'kickstart' 'gui/501/ai.borgmcp.server'\n`,
     ));
   });
 
@@ -505,7 +528,9 @@ describe('runUpdate', () => {
     expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
       'Server update failed during server runtime activation: command stopped by SIGTERM.',
     ));
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('Start it with: borg server start'));
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      `Restart it with: 'launchctl' 'kickstart' 'gui/501/ai.borgmcp.server'`,
+    ));
   });
 
   it('gives status and restart recovery when service state cannot be rechecked', async () => {
@@ -528,7 +553,7 @@ describe('runUpdate', () => {
     expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
       'Local server service state could not be verified; it may be stopped.\n' +
       'Check it with: borg server status\n' +
-      'If it is stopped, start it with: borg server start\n' +
+      'If it is stopped, run the recovery command reported by borg server status.\n' +
       'Next: borg server update\n',
     ));
   });

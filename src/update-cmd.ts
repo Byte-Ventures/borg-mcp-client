@@ -7,6 +7,7 @@ import which from 'which';
 import { updateHelpText } from './cli-help.js';
 import { preflightBorgServerTag } from './server-handshake.js';
 import { loadBorgServerTrust } from './server-trust.js';
+import { shellEscape } from './shell-escape.js';
 
 const CLIENT_PACKAGE = 'borgmcp';
 const SERVER_PACKAGE = 'borgmcp-server';
@@ -81,6 +82,7 @@ interface ServerStatus {
   endpoint: string | null;
   mode: 'foreground' | 'managed' | 'legacy' | 'stopped';
   serviceAdapter: 'launchd' | 'systemd' | null;
+  serviceRecovery: { command: string[] } | null;
   dataIdentity: 'available' | 'unavailable';
   nextAction: string | null;
 }
@@ -359,6 +361,18 @@ function isNextAction(value: unknown): value is string | null {
   );
 }
 
+function decodeManagedServiceRecovery(value: unknown): { command: string[] } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.kind !== 'run-platform-command' || !Array.isArray(record.command) ||
+      record.command.length === 0 || record.command.length > 32 ||
+      record.command.some((arg) => typeof arg !== 'string' || arg.length === 0 ||
+        Array.from(arg).length > 1024 || /\p{Cc}/u.test(arg))) {
+    return null;
+  }
+  return { command: record.command as string[] };
+}
+
 function decodeServerStatus(value: unknown): ServerStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('server returned invalid JSON status');
@@ -398,6 +412,13 @@ function decodeServerStatus(value: unknown): ServerStatus {
   ) {
     throw new Error('server returned inconsistent JSON status');
   }
+  const managedRecovery = record.status === 'stopped' && record.service_adapter !== null
+    ? decodeManagedServiceRecovery(record.service_recovery)
+    : null;
+  if (record.status === 'stopped' && record.service_adapter !== null &&
+      (record.service_state !== 'inactive' || managedRecovery === null)) {
+    throw new Error('server returned invalid managed-service recovery status');
+  }
   return {
     state: record.status,
     installedController: record.installed_controller,
@@ -409,6 +430,7 @@ function decodeServerStatus(value: unknown): ServerStatus {
     endpoint: record.endpoint,
     mode: record.mode as ServerStatus['mode'],
     serviceAdapter: record.service_adapter,
+    serviceRecovery: managedRecovery,
     dataIdentity: record.data_identity,
     nextAction: record.next_action,
   };
@@ -510,12 +532,12 @@ function renderServerFailureRecovery(
 ): string {
   let text = '';
   if (status?.state === 'stopped') {
-    text += `Local server service is stopped.\nStart it with: borg server start\n`;
+    text += renderStoppedServiceRecovery(status);
   } else if (updateAttempted && status === null) {
     text += (
       `Local server service state could not be verified; it may be stopped.\n` +
       `Check it with: borg server status\n` +
-      `If it is stopped, start it with: borg server start\n`
+      `If it is stopped, run the recovery command reported by borg server status.\n`
     );
   }
   if (retryCommand !== 'borg server start') {
@@ -524,6 +546,14 @@ function renderServerFailureRecovery(
       : `Next: ${retryCommand}\n`;
   }
   return text;
+}
+
+function renderStoppedServiceRecovery(status: ServerStatus): string {
+  if (status.serviceRecovery !== null) {
+    const command = status.serviceRecovery.command.map(shellEscape).join(' ');
+    return `Local server service is stopped.\nRestart it with: ${command}\n`;
+  }
+  return `Local server service is stopped.\nStart it with: borg server start\n`;
 }
 
 export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promise<number> {
@@ -783,8 +813,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       state === 'stopped'
         ? (
           `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}: prepared.\n` +
-          `Local server service is stopped.\n` +
-          `Start it with: borg server start\n`
+          renderStoppedServiceRecovery(status)
         )
         : `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; running identities and protocol verified.\n`,
     );
