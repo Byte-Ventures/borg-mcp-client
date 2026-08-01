@@ -1009,7 +1009,7 @@ export async function runAssimilate(args, deps) {
         if (registeredWorktrees === null) {
             deps.stderr('Borg could not enumerate this repository’s existing worktrees, so it did not risk creating a colliding sibling.\n' +
                 'Run `git worktree list` from this repository and resolve the reported Git error, then rerun `borg assimilate`.\n' +
-                'A seat was reserved and remains pending; rerunning after fixing the worktree issue resumes that seat.\n');
+                'A local drone reservation was created and remains pending; rerunning after fixing the worktree issue resumes that reservation.\n');
             return 1;
         }
         let candidate = computeWorktreePath(homeDir, repoBase, suffix);
@@ -1075,11 +1075,11 @@ export async function runAssimilate(args, deps) {
                     ? `Git left branch ${residualBranch} without a registered worktree; Borg preserved it.\n`
                     : '') +
                 'Run `git worktree list` and `git status` to inspect repository state, resolve the reported Git error, then rerun `borg assimilate`.\n' +
-                'A seat was reserved and remains pending; rerunning after fixing the worktree issue resumes that seat.\n');
+                'A local drone reservation was created and remains pending; rerunning after fixing the worktree issue resumes that reservation.\n');
             return 1;
         }
         deps.stderr(`spawned sibling worktree at ${candidate} on branch ${wtBranch} (${startRef}); ` +
-            `the original dir keeps its active seat — run \`borg reset-local-seat\` there if that binding is stale.\n`);
+            `the original dir keeps its active drone binding — run \`borg reset-local-seat\` there if that binding is stale.\n`);
         deps.chdir(candidate);
         deps.stderr(renderWorktreeSteeringNote(candidate, wtBranch, projectRoot));
         spawnedWorktreePath = deps.cwd();
