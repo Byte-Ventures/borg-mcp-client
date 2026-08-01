@@ -1,11 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  parseConfirmationAnswer,
   parseUpdateArgs,
   runEarlyUpdate,
   runUpdate,
   type PublishedPackage,
   type UpdateDeps,
 } from '../src/update-cmd.js';
+
+describe('confirmation defaults', () => {
+  it('accepts empty input only when the prompt declares a yes default', () => {
+    expect(parseConfirmationAnswer('', true)).toBe('yes');
+    expect(parseConfirmationAnswer('  ', true)).toBe('yes');
+    expect(parseConfirmationAnswer('', false)).toBe('no');
+    expect(parseConfirmationAnswer('n', true)).toBe('no');
+  });
+});
 
 const CLIENT_TARGET: PublishedPackage = {
   name: 'borgmcp',

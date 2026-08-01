@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,10 +15,12 @@ const CLIENT_PACKAGE = 'borgmcp';
 const SERVER_PACKAGE = 'borgmcp-server';
 const SHARED_PACKAGE = 'borgmcp-shared';
 const DEFAULT_CONNECT_COMMAND = 'borg assimilate --host <host>';
+const CLIENT_ONBOARDING_ENV = 'BORG_CLIENT_ONBOARDING';
+export const HINT_SUPPORTED_FROM = '0.8.1';
 
 export type FirstRunServerInstallResult =
-  | { kind: 'present'; server: InstalledPackage }
-  | { kind: 'installed'; server: InstalledPackage }
+  | { kind: 'present'; server: InstalledPackage; suppressClientNextSteps?: boolean }
+  | { kind: 'installed'; server: InstalledPackage; suppressClientNextSteps?: boolean }
   | { kind: 'declined' | 'non-interactive' | 'failed' };
 
 export interface FirstRunServerInstallDeps {
@@ -32,7 +35,8 @@ export interface FirstRunServerInstallDeps {
     version: string,
     options?: { ignoreScripts?: boolean },
   ): Promise<void>;
-  confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
+  runServerSetup(server: InstalledPackage, options?: { onboardingHint?: boolean }): Promise<number>;
+  confirm(message: string, defaultYes?: boolean): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
   isTTY(): boolean;
   stdout(text: string): void;
   stderr(text: string): void;
@@ -84,6 +88,18 @@ export function buildDefaultFirstRunServerInstallDeps(): FirstRunServerInstallDe
     publishedPackage: update.publishedPackage,
     publishedVersions: update.publishedVersions,
     installGlobal: update.installGlobal,
+    runServerSetup: (server, options = {}) => new Promise((resolve) => {
+      const childEnv = { ...process.env };
+      delete childEnv[CLIENT_ONBOARDING_ENV];
+      if (options.onboardingHint) childEnv[CLIENT_ONBOARDING_ENV] = '1';
+      const child = spawn(server.binPath, ['setup'], {
+        stdio: 'inherit',
+        shell: false,
+        env: childEnv,
+      });
+      child.once('error', () => resolve(1));
+      child.once('exit', (code) => resolve(code ?? 1));
+    }),
     confirm: update.confirm,
     isTTY: update.isTTY,
     stdout: update.stdout,
@@ -100,6 +116,7 @@ export function buildDefaultFirstRunServerInstallDeps(): FirstRunServerInstallDe
 export async function offerFirstRunServerInstall(
   deps: FirstRunServerInstallDeps = buildDefaultFirstRunServerInstallDeps(),
   connectCommand = DEFAULT_CONNECT_COMMAND,
+  options: { initializeServer?: boolean } = {},
 ): Promise<FirstRunServerInstallResult> {
   let installed: InstalledPackage | null;
   try {
@@ -112,7 +129,15 @@ export async function offerFirstRunServerInstall(
     );
     return { kind: 'failed' };
   }
-  if (installed) return { kind: 'present', server: installed };
+  if (installed) {
+    return initializeServerIfRequested(
+      installed,
+      deps,
+      options.initializeServer,
+      'present',
+      shouldSuppressClientNextSteps(installed.version),
+    );
+  }
 
   if (!deps.isTTY()) {
     deps.stderr(
@@ -140,9 +165,11 @@ export async function offerFirstRunServerInstall(
   const command = exactInstallCommand(target.version);
   const decision = await deps.confirm(
     `No local ${SERVER_PACKAGE} installation was found. ` +
-    `Install ${SERVER_PACKAGE}@${target.version}, which uses ${SHARED_PACKAGE}@${target.sharedVersion}, now?\n` +
+      `Install ${SERVER_PACKAGE}@${target.version}, the local coordination server, ` +
+      `which uses ${SHARED_PACKAGE}@${target.sharedVersion}, now?\n` +
     `Command: ${command}\n` +
-    `Continue? [y/N] `,
+      `Install it now? [Y/n] `,
+      true,
   );
   if (decision !== 'yes') {
     const reason = decision === 'interrupted'
@@ -172,7 +199,43 @@ export async function offerFirstRunServerInstall(
 
   deps.stdout(
     `Installed ${SERVER_PACKAGE}@${target.version} with ${SHARED_PACKAGE}@${target.sharedVersion}.\n` +
-    `Next, run \`borg server setup\`, then run \`borg server start\` in a terminal you keep open.\n`,
+    (options.initializeServer
+      ? `The local server package is ready.\n`
+      : `Next, run \`borg server setup\`, then run \`borg server start\` in a terminal you keep open.\n`),
   );
-  return { kind: 'installed', server: installed };
+  return initializeServerIfRequested(installed, deps, options.initializeServer, 'installed');
+}
+
+async function initializeServerIfRequested(
+  server: InstalledPackage,
+  deps: FirstRunServerInstallDeps,
+  requested: boolean | undefined,
+  kind: 'present' | 'installed',
+  suppressClientNextSteps = false,
+): Promise<FirstRunServerInstallResult> {
+  if (!requested) return { kind, server, ...(suppressClientNextSteps ? { suppressClientNextSteps: true } : {}) };
+  try {
+    const exitCode = await deps.runServerSetup(server, { onboardingHint: !suppressClientNextSteps });
+    if (exitCode === 0) {
+      return { kind, server, ...(suppressClientNextSteps ? { suppressClientNextSteps: true } : {}) };
+    }
+  } catch (error) {
+    deps.stderr(`Local server setup could not be completed. ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+  deps.stderr(
+    'Run `borg server setup` to retry local server initialization, then run `borg server start`.\n',
+  );
+  return { kind: 'failed' };
+}
+
+function shouldSuppressClientNextSteps(version: unknown): boolean {
+  if (!isExactSemver(version)) return false;
+  const installedParts = version.split('.').slice(0, 3).map(Number);
+  const supportedParts = HINT_SUPPORTED_FROM.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (installedParts[index] !== supportedParts[index]) {
+      return installedParts[index] < supportedParts[index];
+    }
+  }
+  return false;
 }

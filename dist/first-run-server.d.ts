@@ -1,10 +1,13 @@
 import { type InstalledPackage, type PublishedPackage } from './update-cmd.js';
+export declare const HINT_SUPPORTED_FROM = "0.8.1";
 export type FirstRunServerInstallResult = {
     kind: 'present';
     server: InstalledPackage;
+    suppressClientNextSteps?: boolean;
 } | {
     kind: 'installed';
     server: InstalledPackage;
+    suppressClientNextSteps?: boolean;
 } | {
     kind: 'declined' | 'non-interactive' | 'failed';
 };
@@ -15,7 +18,10 @@ export interface FirstRunServerInstallDeps {
     installGlobal(name: 'borgmcp' | 'borgmcp-server', version: string, options?: {
         ignoreScripts?: boolean;
     }): Promise<void>;
-    confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
+    runServerSetup(server: InstalledPackage, options?: {
+        onboardingHint?: boolean;
+    }): Promise<number>;
+    confirm(message: string, defaultYes?: boolean): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
     isTTY(): boolean;
     stdout(text: string): void;
     stderr(text: string): void;
@@ -27,5 +33,7 @@ export declare function buildDefaultFirstRunServerInstallDeps(): FirstRunServerI
  * Returning anything except `present`/`installed` means no caller-owned setup
  * or assimilation work should continue.
  */
-export declare function offerFirstRunServerInstall(deps?: FirstRunServerInstallDeps, connectCommand?: string): Promise<FirstRunServerInstallResult>;
+export declare function offerFirstRunServerInstall(deps?: FirstRunServerInstallDeps, connectCommand?: string, options?: {
+    initializeServer?: boolean;
+}): Promise<FirstRunServerInstallResult>;
 //# sourceMappingURL=first-run-server.d.ts.map

@@ -1128,7 +1128,13 @@ async function defaultPublishedVersions(
   }
 }
 
-async function defaultConfirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'> {
+export function parseConfirmationAnswer(answer: string, defaultYes = false): 'yes' | 'no' {
+  const normalized = answer.trim().toLowerCase();
+  if (normalized === '') return defaultYes ? 'yes' : 'no';
+  return normalized === 'y' || normalized === 'yes' ? 'yes' : 'no';
+}
+
+async function defaultConfirm(message: string, defaultYes = false): Promise<'yes' | 'no' | 'eof' | 'interrupted'> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   let interrupted = false;
   rl.once('SIGINT', () => {
@@ -1136,8 +1142,7 @@ async function defaultConfirm(message: string): Promise<'yes' | 'no' | 'eof' | '
     rl.close();
   });
   try {
-    const answer = (await rl.question(message)).trim().toLowerCase();
-    return answer === 'y' || answer === 'yes' ? 'yes' : 'no';
+    return parseConfirmationAnswer(await rl.question(message), defaultYes);
   } catch (error) {
     if (interrupted) return 'interrupted';
     if ((error as NodeJS.ErrnoException).code === 'ERR_USE_AFTER_CLOSE') return 'eof';

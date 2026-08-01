@@ -62,11 +62,12 @@ async function main() {
     // configuration. Decline/non-interactive/failure paths therefore leave no
     // partial setup state behind.
     console.log(chalk.blue('◼ Local Server'));
-    const serverInstall = await offerFirstRunServerInstall();
+    const serverInstall = await offerFirstRunServerInstall(undefined, undefined, { initializeServer: true });
     if (serverInstall.kind !== 'present' && serverInstall.kind !== 'installed') {
         process.exit(serverInstall.kind === 'declined' ? 0 : 1);
     }
     console.log('');
+    console.log('◼ Local server initialized');
     // Step 1: Configure every detected agent CLI
     console.log(chalk.blue('◼ Agent CLI Integration'));
     const yes = parseYesFlag(process.argv);
@@ -168,7 +169,9 @@ async function main() {
     // Success message
     console.log(chalk.green.bold('\nSetup complete!\n'));
     console.log(chalk.yellow('🔄 Restart Claude Code / Codex / OpenCode (or open a new session) for the changes to take effect.\n'));
-    console.log(chalk.gray(setupNextStepsText()));
+    if (!serverInstall.suppressClientNextSteps) {
+        console.log(chalk.gray(setupNextStepsText()));
+    }
 }
 // Run wizard
 main().catch((error) => {

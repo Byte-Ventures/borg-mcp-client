@@ -885,7 +885,13 @@ async function defaultPublishedVersions(name, context) {
         throw new Error(`registry version lookup failed for ${name}`);
     }
 }
-async function defaultConfirm(message) {
+export function parseConfirmationAnswer(answer, defaultYes = false) {
+    const normalized = answer.trim().toLowerCase();
+    if (normalized === '')
+        return defaultYes ? 'yes' : 'no';
+    return normalized === 'y' || normalized === 'yes' ? 'yes' : 'no';
+}
+async function defaultConfirm(message, defaultYes = false) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     let interrupted = false;
     rl.once('SIGINT', () => {
@@ -893,8 +899,7 @@ async function defaultConfirm(message) {
         rl.close();
     });
     try {
-        const answer = (await rl.question(message)).trim().toLowerCase();
-        return answer === 'y' || answer === 'yes' ? 'yes' : 'no';
+        return parseConfirmationAnswer(await rl.question(message), defaultYes);
     }
     catch (error) {
         if (interrupted)
