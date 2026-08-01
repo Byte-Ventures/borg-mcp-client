@@ -361,6 +361,11 @@ function affirmative(answer: string): boolean {
   return normalized === '' || normalized === 'y' || normalized === 'yes';
 }
 
+function strictAffirmative(answer: string): boolean {
+  const normalized = answer.trim().toLowerCase();
+  return normalized === 'y' || normalized === 'yes';
+}
+
 async function selectAssimilationAuthority(
   flags: AssimilateFlags,
   deps: AssimilateDeps,
@@ -472,14 +477,6 @@ function reportServerFailure(
     deps.stderr(
       `The saved enrollment for ${apiUrl} was rejected. Re-run ` +
         `${localAssimilateCommand(apiUrl, true, mode)} from the operator’s terminal.\n`,
-    );
-    return 1;
-  }
-  if (error instanceof BorgServerError && error.code === 'LOCAL_CREDENTIAL_EXISTS') {
-    deps.stderr(
-      `A local enrollment for ${apiUrl} already exists and was not replaced. ` +
-        `Re-run ${localAssimilateCommand(apiUrl, true, mode)} and explicitly confirm replacement ` +
-        'only if the first enrolled client should be abandoned.\n',
     );
     return 1;
   }
@@ -748,7 +745,7 @@ export async function runAssimilate(
            try {
              serverAuth = await deps.connectServer(authority.apiUrl, {
                invitation,
-               confirmReplacement: async () => affirmative(await deps.prompt(
+               confirmReplacement: async () => strictAffirmative(await deps.prompt(
                  `A local enrollment for ${authority.apiUrl} already exists. Replacing it will orphan ` +
                    'the first enrolled client. Replace it? [y/N]: ',
                )),
