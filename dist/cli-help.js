@@ -57,7 +57,7 @@ export function clientSubcommandHelpText(command, args, version) {
 export function setupNextStepsText() {
     return (`◼ Next steps:\n` +
         `1. Run \`borg server start\` and leave that terminal open.\n` +
-        `2. In a second terminal, cd into your project and run \`borg assimilate\`.\n`);
+        `2. In a second terminal, cd into your project's Git repository and run \`borg assimilate\`.\n`);
 }
 /**
  * Help text for top-level `borg --help`.
