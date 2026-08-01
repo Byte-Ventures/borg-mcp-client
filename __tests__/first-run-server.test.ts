@@ -55,26 +55,33 @@ describe('offerFirstRunServerInstall', () => {
     const child = new EventEmitter();
     spawnMock.mockReturnValueOnce(child);
     const defaultDeps = buildDefaultFirstRunServerInstallDeps();
-    const setup = defaultDeps.runServerSetup(INSTALLED, { onboardingHint: true });
+    const previousHint = process.env.BORG_CLIENT_ONBOARDING;
+    process.env.BORG_CLIENT_ONBOARDING = '1';
+    try {
+      const setup = defaultDeps.runServerSetup(INSTALLED, { onboardingHint: true });
 
-    expect(spawnMock).toHaveBeenCalledWith(INSTALLED.binPath, ['setup'], {
-      env: expect.objectContaining({ BORG_CLIENT_ONBOARDING: '1' }),
-      shell: false,
-      stdio: 'inherit',
-    });
-    child.emit('exit', 0);
-    await expect(setup).resolves.toBe(0);
+      expect(spawnMock).toHaveBeenCalledWith(INSTALLED.binPath, ['setup'], {
+        env: expect.objectContaining({ BORG_CLIENT_ONBOARDING: '1' }),
+        shell: false,
+        stdio: 'inherit',
+      });
+      child.emit('exit', 0);
+      await expect(setup).resolves.toBe(0);
 
-    const oldServerChild = new EventEmitter();
-    spawnMock.mockReturnValueOnce(oldServerChild);
-    const oldServerSetup = defaultDeps.runServerSetup(INSTALLED, { onboardingHint: false });
-    expect(spawnMock).toHaveBeenLastCalledWith(INSTALLED.binPath, ['setup'], {
-      env: process.env,
-      shell: false,
-      stdio: 'inherit',
-    });
-    oldServerChild.emit('exit', 0);
-    await expect(oldServerSetup).resolves.toBe(0);
+      const oldServerChild = new EventEmitter();
+      spawnMock.mockReturnValueOnce(oldServerChild);
+      const oldServerSetup = defaultDeps.runServerSetup(INSTALLED, { onboardingHint: false });
+      expect(spawnMock).toHaveBeenLastCalledWith(INSTALLED.binPath, ['setup'], {
+        env: expect.not.objectContaining({ BORG_CLIENT_ONBOARDING: '1' }),
+        shell: false,
+        stdio: 'inherit',
+      });
+      oldServerChild.emit('exit', 0);
+      await expect(oldServerSetup).resolves.toBe(0);
+    } finally {
+      if (previousHint === undefined) delete process.env.BORG_CLIENT_ONBOARDING;
+      else process.env.BORG_CLIENT_ONBOARDING = previousHint;
+    }
   });
 
   it('does nothing when the verified npm-global server is already present', async () => {

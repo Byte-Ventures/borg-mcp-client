@@ -89,12 +89,13 @@ export function buildDefaultFirstRunServerInstallDeps(): FirstRunServerInstallDe
     publishedVersions: update.publishedVersions,
     installGlobal: update.installGlobal,
     runServerSetup: (server, options = {}) => new Promise((resolve) => {
+      const childEnv = { ...process.env };
+      delete childEnv[CLIENT_ONBOARDING_ENV];
+      if (options.onboardingHint) childEnv[CLIENT_ONBOARDING_ENV] = '1';
       const child = spawn(server.binPath, ['setup'], {
         stdio: 'inherit',
         shell: false,
-        env: options.onboardingHint
-          ? { ...process.env, [CLIENT_ONBOARDING_ENV]: '1' }
-          : process.env,
+        env: childEnv,
       });
       child.once('error', () => resolve(1));
       child.once('exit', (code) => resolve(code ?? 1));
