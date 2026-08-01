@@ -1,9 +1,15 @@
+import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildDefaultFirstRunServerInstallDeps,
+  HINT_SUPPORTED_FROM,
   offerFirstRunServerInstall,
   type FirstRunServerInstallDeps,
 } from '../src/first-run-server.js';
 import type { InstalledPackage, PublishedPackage } from '../src/update-cmd.js';
+
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 
 const SERVER: PublishedPackage = {
   name: 'borgmcp-server',
@@ -29,6 +35,7 @@ function deps(overrides: Partial<FirstRunServerInstallDeps> = {}) {
     publishedPackage: vi.fn(async () => SERVER),
     publishedVersions: vi.fn(async () => [SERVER.version]),
     installGlobal: vi.fn(async () => { installed = INSTALLED; }),
+    runServerSetup: vi.fn(async () => 0),
     confirm: vi.fn(async () => 'yes'),
     isTTY: vi.fn(() => true),
     stdout,
@@ -40,12 +47,43 @@ function deps(overrides: Partial<FirstRunServerInstallDeps> = {}) {
 }
 
 describe('offerFirstRunServerInstall', () => {
+  it('pins the onboarding hint capability to the first hint-aware server release', () => {
+    expect(HINT_SUPPORTED_FROM).toBe('0.8.1');
+  });
+
+  it('marks the inherited-stdio setup child as client onboarding', async () => {
+    const child = new EventEmitter();
+    spawnMock.mockReturnValueOnce(child);
+    const defaultDeps = buildDefaultFirstRunServerInstallDeps();
+    const setup = defaultDeps.runServerSetup(INSTALLED, { onboardingHint: true });
+
+    expect(spawnMock).toHaveBeenCalledWith(INSTALLED.binPath, ['setup'], {
+      env: expect.objectContaining({ BORG_CLIENT_ONBOARDING: '1' }),
+      shell: false,
+      stdio: 'inherit',
+    });
+    child.emit('exit', 0);
+    await expect(setup).resolves.toBe(0);
+
+    const oldServerChild = new EventEmitter();
+    spawnMock.mockReturnValueOnce(oldServerChild);
+    const oldServerSetup = defaultDeps.runServerSetup(INSTALLED, { onboardingHint: false });
+    expect(spawnMock).toHaveBeenLastCalledWith(INSTALLED.binPath, ['setup'], {
+      env: process.env,
+      shell: false,
+      stdio: 'inherit',
+    });
+    oldServerChild.emit('exit', 0);
+    await expect(oldServerSetup).resolves.toBe(0);
+  });
+
   it('does nothing when the verified npm-global server is already present', async () => {
     const d = deps({ currentServer: vi.fn(async () => INSTALLED) });
 
     await expect(offerFirstRunServerInstall(d.value)).resolves.toEqual({
       kind: 'present',
       server: INSTALLED,
+      suppressClientNextSteps: true,
     });
     expect(d.value.publishedPackage).not.toHaveBeenCalled();
     expect(d.value.confirm).not.toHaveBeenCalled();
@@ -90,14 +128,76 @@ describe('offerFirstRunServerInstall', () => {
     expect(d.value.publishedPackage).toHaveBeenCalledWith('borgmcp-server', '0.6.0');
     expect(d.value.confirm).toHaveBeenCalledWith(expect.stringContaining(
       'Command: npm install --global --ignore-scripts borgmcp-server@0.6.0',
-    ));
+    ), true);
     expect(d.value.installGlobal).toHaveBeenCalledWith(
       'borgmcp-server',
       '0.6.0',
       { ignoreScripts: true },
     );
+    expect(d.value.confirm).toHaveBeenCalledWith(expect.stringContaining('Install it now? [Y/n]'), true);
     expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining('`borg server setup`'));
-    expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining('`borg server start`'));
+  });
+
+  it('initializes an installed server when the caller requests the one-flow setup', async () => {
+    const d = deps({ currentServer: vi.fn(async () => INSTALLED) });
+
+    await expect(offerFirstRunServerInstall(d.value, undefined, { initializeServer: true })).resolves.toEqual({
+      kind: 'present',
+      server: INSTALLED,
+      suppressClientNextSteps: true,
+    });
+    expect(d.value.runServerSetup).toHaveBeenCalledWith(INSTALLED, { onboardingHint: false });
+  });
+
+  it('suppresses client next steps for a pre-hint installed server', async () => {
+    const d = deps({ currentServer: vi.fn(async () => INSTALLED) });
+
+    await expect(offerFirstRunServerInstall(d.value, undefined, { initializeServer: true })).resolves.toEqual({
+      kind: 'present',
+      server: INSTALLED,
+      suppressClientNextSteps: true,
+    });
+  });
+
+  it('keeps client next steps for a hint-aware installed server', async () => {
+    const d = deps({
+      currentServer: vi.fn(async () => ({ ...INSTALLED, version: HINT_SUPPORTED_FROM })),
+    });
+
+    await expect(offerFirstRunServerInstall(d.value, undefined, { initializeServer: true })).resolves.toEqual({
+      kind: 'present',
+      server: { ...INSTALLED, version: HINT_SUPPORTED_FROM },
+    });
+  });
+
+  it('keeps client next steps when an installed server version is unparseable', async () => {
+    const d = deps({
+      currentServer: vi.fn(async () => ({ ...INSTALLED, version: 'unknown' } as InstalledPackage)),
+    });
+
+    await expect(offerFirstRunServerInstall(d.value, undefined, { initializeServer: true })).resolves.toEqual({
+      kind: 'present',
+      server: { ...INSTALLED, version: 'unknown' },
+    });
+  });
+
+  it('initializes a newly installed server when the caller requests the one-flow setup', async () => {
+    const d = deps();
+
+    await expect(offerFirstRunServerInstall(d.value, undefined, { initializeServer: true })).resolves.toEqual({
+      kind: 'installed',
+      server: INSTALLED,
+    });
+    expect(d.value.runServerSetup).toHaveBeenCalledWith(INSTALLED, { onboardingHint: true });
+  });
+
+  it('fails with retry guidance when one-flow server initialization fails', async () => {
+    const d = deps({ runServerSetup: vi.fn(async () => 1) });
+
+    await expect(offerFirstRunServerInstall(d.value, undefined, { initializeServer: true })).resolves.toEqual({
+      kind: 'failed',
+    });
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('`borg server setup`'));
   });
 
   it.each(['no', 'eof', 'interrupted'] as const)(

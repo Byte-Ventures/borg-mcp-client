@@ -62,6 +62,7 @@ export declare function inspectNpmPackageAt(input: {
     commandPath: string;
     invokedPath?: string;
 }): Promise<InstalledPackage>;
+export declare function parseConfirmationAnswer(answer: string, defaultYes?: boolean): 'yes' | 'no';
 export declare function buildDefaultUpdateDeps(): UpdateDeps;
 export declare function runEarlyUpdate(argv: readonly string[], deps?: UpdateDeps): Promise<number | null>;
 export {};

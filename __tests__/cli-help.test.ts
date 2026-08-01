@@ -85,7 +85,7 @@ describe('client subcommand help', () => {
 describe('setup completion copy', () => {
   it('prints the local wrapper flow without remote enrollment flags', () => {
     const text = setupNextStepsText();
-    expect(text).toContain('`borg server setup`');
+    expect(text).not.toContain('`borg server setup`');
     expect(text).toContain('`borg server start`');
     expect(text).toContain('`borg assimilate`');
     expect(text).toMatch(/second terminal/i);
