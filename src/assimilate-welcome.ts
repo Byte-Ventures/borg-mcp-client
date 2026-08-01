@@ -33,7 +33,7 @@ export function renderAssimilationWelcome(
     ``,
     `In the launched agent, run \`borg_whoami\` and \`borg_roster\` to verify the seat`,
     `and begin coordinating.`,
-    `Future sessions in this repository launch with \`borg\`.`,
+    `Launch future sessions in this repository with \`borg\`.`,
     ...teammateLines,
     ``,
   ].join('\n');
