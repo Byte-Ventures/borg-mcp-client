@@ -452,6 +452,8 @@ export async function enrollBorgServer(
     prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+    confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
   } = {},
 ): Promise<NewServerEnrollment> {
@@ -460,6 +462,24 @@ export async function enrollBorgServer(
   // incompatible server must be rejected before any credential is created or
   // persisted and before any invitation/secret-bearing request is sent.
   const protocol = await preflightBorgServerTag(origin, fetchImpl);
+
+  const existingCredential = await (deps.loadCredentialRecord ?? getServerCredentialRecord)(
+    origin,
+    trustIdentity,
+  );
+  let replacementConfirmed = false;
+  if (existingCredential) {
+    const confirmed = deps.confirmReplacement !== undefined
+      ? await deps.confirmReplacement()
+      : false;
+    if (!confirmed) {
+      throw new BorgServerError(
+        'LOCAL_CREDENTIAL_EXISTS',
+        'a local enrollment already exists for this server and was not replaced',
+      );
+    }
+    replacementConfirmed = true;
+  }
 
   const pending = await (deps.prepareEnrollment ?? getOrCreatePendingServerEnrollment)({
     origin,
@@ -528,6 +548,7 @@ export async function enrollBorgServer(
     credential: pending.credential,
     clientId: decoded.payload.client_id,
     serverCapabilities: decoded.payload.server_capabilities,
+    ...(replacementConfirmed ? { allowReplacement: true } : {}),
   });
   return {
     token: pending.credential,
@@ -1011,6 +1032,8 @@ export async function enrollLocalBorgServer(
     prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+    confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
   } = {},
 ): Promise<NewServerEnrollment> {
@@ -1022,6 +1045,12 @@ export async function enrollLocalBorgServer(
     ...(deps.clearPendingEnrollment === undefined
       ? {}
       : { clearPendingEnrollment: deps.clearPendingEnrollment }),
+    ...(deps.loadCredentialRecord === undefined
+      ? {}
+      : { loadCredentialRecord: deps.loadCredentialRecord }),
+    ...(deps.confirmReplacement === undefined
+      ? {}
+      : { confirmReplacement: deps.confirmReplacement }),
     ...(deps.clientName === undefined ? {} : { clientName: deps.clientName }),
   });
 }

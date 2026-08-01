@@ -277,7 +277,7 @@ export interface AssimilateDeps {
   detectLocalServer: () => Promise<string | null>;
   connectServer: (
     apiUrl: string,
-    enrollment?: { invitation: string },
+    enrollment?: { invitation: string; confirmReplacement?: () => Promise<boolean> },
   ) => Promise<{
     token: string;
     trustIdentity: string;
@@ -359,6 +359,11 @@ type AssimilationAuthority =
 function affirmative(answer: string): boolean {
   const normalized = answer.trim().toLowerCase();
   return normalized === '' || normalized === 'y' || normalized === 'yes';
+}
+
+function strictAffirmative(answer: string): boolean {
+  const normalized = answer.trim().toLowerCase();
+  return normalized === 'y' || normalized === 'yes';
 }
 
 async function selectAssimilationAuthority(
@@ -472,6 +477,14 @@ function reportServerFailure(
     deps.stderr(
       `The saved enrollment for ${apiUrl} was rejected. Re-run ` +
         `${localAssimilateCommand(apiUrl, true, mode)} from the operator’s terminal.\n`,
+    );
+    return 1;
+  }
+  if (error instanceof BorgServerError && error.code === 'LOCAL_CREDENTIAL_EXISTS') {
+    deps.stderr(
+      `A local enrollment for ${apiUrl} already exists and was not replaced. ` +
+        `Re-run ${localAssimilateCommand(apiUrl, true, mode)} and explicitly confirm replacement ` +
+        'only if the first enrolled client should be abandoned.\n',
     );
     return 1;
   }
@@ -729,8 +742,14 @@ export async function runAssimilate(
             );
             return 1;
           }
-          try {
-            serverAuth = await deps.connectServer(authority.apiUrl, { invitation });
+           try {
+             serverAuth = await deps.connectServer(authority.apiUrl, {
+               invitation,
+               confirmReplacement: async () => strictAffirmative(await deps.prompt(
+                 `A local enrollment for ${authority.apiUrl} already exists. Replacing it will orphan ` +
+                   'the first enrolled client. Replace it? [y/N]: ',
+               )),
+             });
           } finally {
             // Strings cannot be zeroized in JavaScript, but drop this command's
             // reference immediately after the exchange instead of retaining the

@@ -123,6 +123,8 @@ export declare function enrollBorgServer(origin: string, trustIdentity: string, 
     prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+    confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
 }): Promise<NewServerEnrollment>;
 /** Resume an exact durable enrollment tuple without asking for the invitation again. */
@@ -216,6 +218,8 @@ export declare function enrollLocalBorgServer(origin: string, invitation: string
     prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+    confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
 }): Promise<NewServerEnrollment>;
 /** Load verified trust and resume a prior ambiguous enrollment before prompting. */

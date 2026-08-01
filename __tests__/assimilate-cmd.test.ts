@@ -3213,13 +3213,18 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
     expect(connectServer).toHaveBeenCalledWith(
       'https://localhost:8787',
-      { invitation },
+      { invitation, confirmReplacement: expect.any(Function) },
     );
+    const confirmReplacement = connectServer.mock.calls[0][1].confirmReplacement;
+    prompt.mockResolvedValueOnce('');
+    await expect(confirmReplacement?.()).resolves.toBe(false);
+    prompt.mockResolvedValueOnce('yes');
+    await expect(confirmReplacement?.()).resolves.toBe(true);
     expect(deps.stderr).toHaveBeenCalledWith(
       'Owner client enrolled with `https://localhost:8787`. ' +
         'Creating or joining this repository’s cube next.\n',
     );
-    expect(prompt).not.toHaveBeenCalled();
+    expect(prompt).toHaveBeenCalledTimes(2);
   });
 
   it('gives an ordinary enrolled client a distinct next step without owner wording', async () => {

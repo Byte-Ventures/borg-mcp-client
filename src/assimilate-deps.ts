@@ -241,6 +241,9 @@ export function buildDefaultAssimilateDeps(
     connectServer: async (apiUrl, enrollment) => {
       if (enrollment) {
         return enrollLocalBorgServer(apiUrl, enrollment.invitation, {
+          ...(enrollment.confirmReplacement === undefined
+            ? {}
+            : { confirmReplacement: enrollment.confirmReplacement }),
           clientName: osHostname(),
         });
       }

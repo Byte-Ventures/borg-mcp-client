@@ -235,6 +235,72 @@ describe('self-hosted server handshake', () => {
     );
   });
 
+  it('fails closed before replacing an existing enrollment without explicit confirmation', async () => {
+    const fetchImpl = vi.fn(async () => tagPreflightBody());
+    const prepareEnrollment = vi.fn();
+
+    await expect(enrollBorgServer(
+      'https://server.example.com',
+      'sha256:server-a',
+      'i'.repeat(43),
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: 'https://server.example.com',
+          trustIdentity: 'sha256:server-a',
+          credential: 'c'.repeat(43),
+          clientId: '66666666-6666-4666-8666-666666666666',
+          serverCapabilities: [],
+        })),
+        prepareEnrollment,
+      },
+    )).rejects.toMatchObject({ code: 'LOCAL_CREDENTIAL_EXISTS' });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(prepareEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('replaces an existing enrollment only after explicit confirmation', async () => {
+    const invitation = 'i'.repeat(43);
+    const credential = 'c'.repeat(43);
+    const retryKey = '55555555-5555-4555-8555-555555555555';
+    const clientId = '66666666-6666-4666-8666-666666666666';
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        protocol_version: '7',
+        request_id: 'enroll-replacement',
+        payload: { purpose: 'owner', client_id: clientId, server_capabilities: ['create_cube'] },
+      }), { status: 201 }));
+    const activateEnrollment = vi.fn(async () => {});
+
+    await expect(enrollBorgServer(
+      'https://server.example.com',
+      'sha256:server-a',
+      invitation,
+      {
+        fetchImpl: fetchImpl as typeof fetch,
+        loadCredentialRecord: vi.fn(async () => ({
+          origin: 'https://server.example.com',
+          trustIdentity: 'sha256:server-a',
+          credential: 'o'.repeat(43),
+          clientId,
+          serverCapabilities: [],
+        })),
+        confirmReplacement: vi.fn(async () => true),
+        prepareEnrollment: vi.fn(async () => ({
+          origin: 'https://server.example.com', trustIdentity: 'sha256:server-a',
+          invitation, retryKey, credential,
+        })),
+        activateEnrollment,
+      },
+    )).resolves.toMatchObject({ token: credential });
+
+    expect(activateEnrollment).toHaveBeenCalledWith(expect.objectContaining({
+      allowReplacement: true,
+    }));
+  });
+
   it('rejects an incompatible server at the preflight before any credential prepare, POST, or activation (first enrollment)', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ protocol_version: '1' }), { status: 200 }));
     const prepareEnrollment = vi.fn();

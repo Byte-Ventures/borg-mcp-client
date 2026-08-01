@@ -94,6 +94,7 @@ export declare function activatePendingServerEnrollment(input: {
     credential: string;
     clientId: string;
     serverCapabilities: ServerCapability[];
+    allowReplacement?: boolean;
 }): Promise<void>;
 /** Delete only the exact definitively rejected pending attempt. */
 export declare function clearPendingServerEnrollment(origin: string, trustIdentity: string, retryKey: string): Promise<void>;

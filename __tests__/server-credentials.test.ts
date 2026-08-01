@@ -136,6 +136,18 @@ describe('self-hosted server credential storage', () => {
       clientName: 'operator-laptop',
     })).rejects.toThrow(/does not match/i);
 
+    await storeServerCredential({ origin, trustIdentity, credential: 'o'.repeat(43) });
+    await expect(activatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      retryKey: pending.retryKey,
+      credential: pending.credential,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+    })).rejects.toThrow(/already exists/i);
+    await expect(getServerCredential(origin, trustIdentity)).resolves.toBe('o'.repeat(43));
+    await expect(getPendingServerEnrollment(origin, trustIdentity)).resolves.toEqual(pending);
+
     await activatePendingServerEnrollment({
       origin,
       trustIdentity,
@@ -143,6 +155,7 @@ describe('self-hosted server credential storage', () => {
       credential: pending.credential,
       clientId: '11111111-1111-4111-8111-111111111111',
       serverCapabilities: ['create_cube'],
+      allowReplacement: true,
     });
     await expect(getServerCredentialRecord(origin, trustIdentity)).resolves.toMatchObject({
       credential: pending.credential,

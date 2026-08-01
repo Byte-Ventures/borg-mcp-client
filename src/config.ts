@@ -447,6 +447,7 @@ export async function activatePendingServerEnrollment(
     credential: string;
     clientId: string;
     serverCapabilities: ServerCapability[];
+    allowReplacement?: boolean;
   },
 ): Promise<void> {
   validateServerCredentialBinding(input.origin, input.trustIdentity);
@@ -470,6 +471,9 @@ export async function activatePendingServerEnrollment(
       }
     } catch {
       throw new Error('pending Borg server enrollment does not match the verified response');
+    }
+    if (!input.allowReplacement && await backend.get(serverCredentialAccount(input.origin, input.trustIdentity))) {
+      throw new Error('local Borg server enrollment already exists');
     }
     // Already inside the single store lock — use the UNLOCKED write body so we do
     // not re-acquire (and self-deadlock on) CREDENTIALS_LOCK (CR3b).
