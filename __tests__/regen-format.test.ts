@@ -11,6 +11,8 @@ import {
   compressRoleText,
   parseRationalePointer,
   parseHookSource,
+  formatPlainSessionReminder,
+  shouldRelayPlainSessionReminder,
   formatLeanOrientation,
   wakePathArming,
   resolveLeanIdentity,
@@ -28,6 +30,34 @@ import {
   ESCALATION_DISCIPLINE,
   TEMPLATES,
 } from 'borgmcp-shared/templates';
+
+describe('formatPlainSessionReminder', () => {
+  it('instructs one verbatim relay with the invariant, consequence, and action', () => {
+    const text = formatPlainSessionReminder();
+    expect(text).toContain('Relay exactly this one line to the user once');
+    expect(text).toContain('repository is connected to a Borg cube');
+    expect(text).toContain('coordination is inactive for this session');
+    expect(text).toContain('Relaunch with `borg`');
+  });
+
+  it.each([
+    ['startup', 'claude', true, undefined, undefined, true],
+    ['resume', 'claude', true, undefined, undefined, false],
+    ['startup', 'opencode', true, undefined, undefined, false],
+    ['startup', 'claude', false, undefined, undefined, false],
+    ['startup', 'claude', true, '1', undefined, false],
+    ['startup', 'claude', true, undefined, '', false],
+    ['startup', 'claude', true, undefined, undefined, true],
+  ] as const)('only relays for a plain assimilated startup', (source, agentKind, hasActiveCube, borgSession, disabled, expected) => {
+    expect(shouldRelayPlainSessionReminder({
+      source,
+      agentKind,
+      hasActiveCube,
+      borgSession,
+      disabled,
+    })).toBe(expected);
+  });
+});
 
 describe('formatLogEntryMarkdown', () => {
   it('includes the activity log entry_id for borg_ack targeting', () => {

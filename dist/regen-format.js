@@ -39,6 +39,20 @@ export function parseHookSource(raw) {
         return null;
     }
 }
+/** Best-effort relay directive for a plain Claude/Codex session. */
+export function formatPlainSessionReminder() {
+    return [
+        'Relay exactly this one line to the user once, without paraphrasing:',
+        'This repository is connected to a Borg cube, but this session was not launched with `borg`; cube coordination is inactive for this session. Relaunch with `borg` to use cube coordination.',
+    ].join('\n');
+}
+export function shouldRelayPlainSessionReminder(args) {
+    return (args.source === 'startup' &&
+        args.agentKind !== 'opencode' &&
+        args.hasActiveCube &&
+        args.borgSession === undefined &&
+        args.disabled === undefined);
+}
 /**
  * The agent-branched WAKE-PATH ARMING sub-block (gh#929/gh#927) — the single
  * shared "re-establish your wake path" instruction reused by the launch

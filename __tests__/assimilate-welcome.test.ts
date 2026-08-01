@@ -31,6 +31,11 @@ describe('renderAssimilationWelcome — structural shape', () => {
     expect(out).toContain('another terminal');
   });
 
+  it('teaches that future sessions in this repository launch with borg', () => {
+    const out = renderAssimilationWelcome('one-of-one-coordinator', 'coordinator', 'my-project', false);
+    expect(out).toContain('Future sessions in this repository launch with `borg`.');
+  });
+
   it('keeps the next-seat command bound to the selected local authority', () => {
     const out = renderAssimilationWelcome(
       'one-of-one-coordinator',

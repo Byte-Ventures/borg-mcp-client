@@ -18,11 +18,11 @@
 import { regen, listCubes } from './remote-client.js';
 import { findProjectRoot, getActiveCube, inboxPathForDrone } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
-import { parseHookSource, formatLeanOrientation, } from './regen-format.js';
+import { parseHookSource, formatLeanOrientation, formatPlainSessionReminder, shouldRelayPlainSessionReminder, } from './regen-format.js';
 import { resolveSessionAgentKind } from './codex-app-wake.js';
 import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { handleVersionFlag } from './version.js';
-import { gateAllowsActivation } from './launch-gate.js';
+import { BORG_LAUNCH_REMINDER_DISABLED_ENV, BORG_SESSION_ENV, gateAllowsActivation, } from './launch-gate.js';
 import { resolveWorkingRepo } from './working-repo.js';
 import { confirmDisplayIdentity, identityFromRegen, markDisplayIdentityReadFailed, renderDisplayIdentity, seedDisplayIdentity, } from './display-identity.js';
 /**
@@ -46,18 +46,42 @@ async function readStdin() {
 }
 async function main() {
     handleVersionFlag();
+    const hookSource = parseHookSource(await readStdin());
     // gh#673 P1 (WI-4): the SessionStart orientation only activates in
     // borg-launched sessions — a vanilla `claude` anywhere (including an
     // assimilated repo) stays vanilla. Exit-0 no-op: a hook must never
     // block session start. ACTIVATION-only, never a security gate.
     if (!gateAllowsActivation('borg-regen SessionStart hook')) {
+        // launch-reminder-ux: plain sessions get one model-mediated relay only on
+        // the initial SessionStart event. No repo connection means no output.
+        let hasActiveCube = false;
+        try {
+            hasActiveCube = (await getActiveCube()) !== null;
+        }
+        catch {
+            hasActiveCube = false;
+        }
+        if (shouldRelayPlainSessionReminder({
+            source: hookSource,
+            agentKind: resolveSessionAgentKind(),
+            hasActiveCube,
+            borgSession: process.env[BORG_SESSION_ENV],
+            disabled: process.env[BORG_LAUNCH_REMINDER_DISABLED_ENV],
+        })) {
+            try {
+                process.stdout.write(`${formatPlainSessionReminder()}\n`);
+            }
+            catch {
+                // Plain-session discovery is best-effort and must stay silent on failure.
+            }
+        }
         return;
     }
     // gh#926/gh#927: the SessionStart `source` (startup/resume/clear/compact)
     // tags the orientation; on `/clear` Claude Code has cleared the
     // session-scoped `/loop` + `ScheduleWakeup`, and the kickoff prompt is
     // gone, so the lean orientation adds a "re-establish your wake path" note.
-    const source = parseHookSource(await readStdin());
+    const source = hookSource;
     const active = await getActiveCube();
     if (!active) {
         await emitUnassimilatedNotice();

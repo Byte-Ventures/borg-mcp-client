@@ -11,7 +11,7 @@
  *   2. the borg-regen SessionStart hook bin — exit-0 no-op;
  *   3. the borg-clear-rewake clear-only hook bin — exit-0 no-op;
  *   4. the borg-log-audit UserPromptSubmit hook bin — exit-0 no-op.
- * Result: `claude` launched directly is vanilla Claude Code; `borg`
+ * Result: direct agent launches keep the Borg surface inactive; `borg`
  * launches get the full surface.
  *
  * Codex (V2/V2b probes): codex does NOT forward parent env to MCP
@@ -36,6 +36,8 @@ import { envToggleOn } from './auth-env.js';
 import { debugLog } from './debug.js';
 
 export const BORG_SESSION_ENV = 'BORG_SESSION';
+/** Presence-based local opt-out for the plain-session launch reminder. */
+export const BORG_LAUNCH_REMINDER_DISABLED_ENV = 'BORG_DISABLE_LAUNCH_REMINDER';
 
 /** True when this process runs inside a borg-launched session. */
 export function isBorgSession(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -43,16 +45,13 @@ export function isBorgSession(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * The non-silent per-tool notice a vanilla (non-borg-launched) session
- * receives when invoking a borg_* tool. Explains the state — nothing is
- * wrong with the cube — and points at the borg launch path.
+ * The non-silent per-tool notice a non-borg-launched session receives when
+ * invoking a borg_* tool. Outcome first; no CLI-specific or seat language.
  */
 export function borgSessionToolNotice(toolName: string): string {
   return (
-    `◼ ${toolName} is inactive: this session wasn't launched via \`borg\`, so the borg ` +
-    `coordination surface is dormant (vanilla Claude Code). To use cube coordination, ` +
-    `re-launch from a terminal with \`borg\` (or \`borg assimilate\` to set up a seat first). ` +
-    `Power users can opt in manually by launching with BORG_SESSION=1.`
+    `◼ ${toolName} did not run: Borg tools are inactive because this session was not ` +
+    `launched with \`borg\`. Relaunch this session with \`borg\` to use cube coordination.`
   );
 }
 

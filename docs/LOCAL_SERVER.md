@@ -20,6 +20,13 @@ must never imply that a daemon, LaunchAgent, or systemd service was installed.
 Ctrl-C stops the foreground process. Managed persistence is a separate explicit
 handoff.
 
+## Agent Launch State
+
+Borg tools are inactive unless the agent session was launched with `borg`.
+`BORG_DISABLE_LAUNCH_REMINDER` is a presence-based local opt-out for launch
+orientation messaging; setting it does not activate Borg tools or change server
+authorization.
+
 The available lifecycle facade commands are:
 
 ```text
