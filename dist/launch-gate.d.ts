@@ -11,7 +11,7 @@
  *   2. the borg-regen SessionStart hook bin — exit-0 no-op;
  *   3. the borg-clear-rewake clear-only hook bin — exit-0 no-op;
  *   4. the borg-log-audit UserPromptSubmit hook bin — exit-0 no-op.
- * Result: `claude` launched directly is vanilla Claude Code; `borg`
+ * Result: direct agent launches keep the Borg surface inactive; `borg`
  * launches get the full surface.
  *
  * Codex (V2/V2b probes): codex does NOT forward parent env to MCP
@@ -32,12 +32,13 @@
  * security boundary and is unchanged by this gate.
  */
 export declare const BORG_SESSION_ENV = "BORG_SESSION";
+/** Presence-based local opt-out for the plain-session launch reminder. */
+export declare const BORG_LAUNCH_REMINDER_DISABLED_ENV = "BORG_DISABLE_LAUNCH_REMINDER";
 /** True when this process runs inside a borg-launched session. */
 export declare function isBorgSession(env?: NodeJS.ProcessEnv): boolean;
 /**
- * The non-silent per-tool notice a vanilla (non-borg-launched) session
- * receives when invoking a borg_* tool. Explains the state — nothing is
- * wrong with the cube — and points at the borg launch path.
+ * The non-silent per-tool notice a non-borg-launched session receives when
+ * invoking a borg_* tool. Outcome first; no CLI-specific or seat language.
  */
 export declare function borgSessionToolNotice(toolName: string): string;
 /**

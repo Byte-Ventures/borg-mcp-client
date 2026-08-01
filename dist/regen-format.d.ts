@@ -21,6 +21,15 @@
  * hook bin must never throw on unexpected stdin.
  */
 export declare function parseHookSource(raw: string): string | null;
+/** Best-effort relay directive for a plain Claude/Codex session. */
+export declare function formatPlainSessionReminder(): string;
+export declare function shouldRelayPlainSessionReminder(args: {
+    source: string | null;
+    agentKind: AgentKind;
+    hasActiveCube: boolean;
+    borgSession: string | undefined;
+    disabled: string | undefined;
+}): boolean;
 /** The agent runtime a session runs under — drives the wake-path branch. */
 export type AgentKind = 'claude' | 'codex' | 'opencode';
 /**

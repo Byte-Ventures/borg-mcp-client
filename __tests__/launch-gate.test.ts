@@ -32,11 +32,13 @@ describe('isBorgSession', () => {
 });
 
 describe('borgSessionToolNotice', () => {
-  it('names the refused tool and directs to a borg launch — non-silent, never a half-success', () => {
+  it('reports the refused tool first and directs to a borg launch', () => {
     const msg = borgSessionToolNotice('borg_regen');
     expect(msg).toContain('borg_regen');
-    expect(msg).toMatch(/launched via `?borg`?|launched with `?borg`?/i);
-    expect(msg).toMatch(/borg assimilate|`borg`/);
+    expect(msg).toMatch(/did not run/i);
+    expect(msg).toMatch(/launched with `?borg`?/i);
+    expect(msg).not.toContain('vanilla Claude Code');
+    expect(msg).not.toMatch(/\bseat\b/i);
   });
 
   it('explains the vanilla-session state rather than implying an error in the cube', () => {

@@ -140,6 +140,14 @@ create distinct bounded cubes. An ordinary enrolled client is denied before a
 create request is sent. Cloud-only capabilities fail explicitly rather than
 being redirected.
 
+## Agent Launch State
+
+Borg tools are inactive unless the agent session was launched with `borg`.
+For Claude Code and Codex, `BORG_DISABLE_LAUNCH_REMINDER` is a presence-based
+local opt-out for launch orientation messaging; setting it does not activate
+Borg tools or change server authorization. OpenCode has no launch-reminder
+surface.
+
 ## Updating Borg
 
 For an npm-global installation, use the whole-product command:

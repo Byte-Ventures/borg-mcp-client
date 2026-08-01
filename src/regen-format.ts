@@ -19,6 +19,7 @@ import {
 import { shellEscape } from './shell-escape.js';
 import { resolveInboxMonitorPath } from './self-path.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
+import { isBorgSession } from './launch-gate.js';
 
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
@@ -44,6 +45,30 @@ export function parseHookSource(raw: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Best-effort relay directive for a plain Claude/Codex session. */
+export function formatPlainSessionReminder(): string {
+  return [
+    'Relay exactly this one line to the user once, without paraphrasing:',
+    'This repository is connected to a Borg cube, but this session was not launched with `borg`; cube coordination is inactive for this session. Relaunch with `borg` to use cube coordination.',
+  ].join('\n');
+}
+
+export function shouldRelayPlainSessionReminder(args: {
+  source: string | null;
+  agentKind: AgentKind;
+  hasActiveCube: boolean;
+  borgSession: string | undefined;
+  disabled: string | undefined;
+}): boolean {
+  return (
+    args.source === 'startup' &&
+    args.agentKind !== 'opencode' &&
+    args.hasActiveCube &&
+    !isBorgSession({ BORG_SESSION: args.borgSession }) &&
+    args.disabled === undefined
+  );
 }
 
 /** The agent runtime a session runs under — drives the wake-path branch. */
