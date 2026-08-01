@@ -725,7 +725,7 @@ export async function regen(sessionToken, apiUrl, opts = {}) {
         opts.workingRepo !== undefined) {
         const patch = buildRuntimeMetadataPatch({
             agentKind: opts.agentKind ?? null,
-            reportedModel: opts.reportedModel,
+            reportedModel: opts.reportedModel ?? null,
             workingRepo: opts.workingRepo,
         });
         try {

@@ -78,6 +78,12 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     const tool = TOOL_MANIFEST.find((t: any) => t.name === 'borg_regen');
     expect(tool.inputSchema.properties).toHaveProperty('model');
     expect(tool.inputSchema.required ?? []).not.toContain('model');
+    expect(tool.inputSchema.properties.model).toMatchObject({
+      type: 'string',
+      minLength: 1,
+      maxLength: 160,
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._/@:+-]*$',
+    });
   });
 
   it('describes silent wake failures through the inbox Monitor, not /loop', () => {

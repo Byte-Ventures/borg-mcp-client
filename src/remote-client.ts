@@ -1041,7 +1041,7 @@ export async function regen(
   opts: {
     since?: string;
     /** Advisory self-report from the running agent; never model-routing config. */
-    reportedModel?: string;
+    reportedModel?: string | null;
     /** Positively identified running Agent CLI; null means explicitly unknown. */
     agentKind?: AgentKind | null;
     /** Current cwd-derived identity; refreshed each regen to avoid stale routing data. */
@@ -1077,7 +1077,7 @@ export async function regen(
   ) {
     const patch = buildRuntimeMetadataPatch({
       agentKind: opts.agentKind ?? null,
-      reportedModel: opts.reportedModel,
+      reportedModel: opts.reportedModel ?? null,
       workingRepo: opts.workingRepo,
     });
     try {

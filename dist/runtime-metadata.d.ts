@@ -7,7 +7,7 @@ export declare function buildRuntimeMetadataReport(input: {
 }): DroneRuntimeMetadata;
 export declare function buildRuntimeMetadataPatch(input: {
     agentKind: AgentKind | null;
-    reportedModel?: string;
+    reportedModel?: string | null;
     workingRepo?: WorkingRepo;
 }): DroneRuntimeMetadataPatch;
 //# sourceMappingURL=runtime-metadata.d.ts.map
