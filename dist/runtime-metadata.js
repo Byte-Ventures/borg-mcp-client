@@ -40,9 +40,9 @@ export function buildRuntimeMetadataReport(input) {
 export function buildRuntimeMetadataPatch(input) {
     const patch = { agent_kind: input.agentKind };
     if (input.reportedModel !== undefined) {
-        const model = safeReportedModel(input.reportedModel);
-        if (model !== null)
-            patch.reported_model = model;
+        patch.reported_model = input.reportedModel === null
+            ? null
+            : validateReportedModel(input.reportedModel);
     }
     const repository = reportableRepository(input.workingRepo);
     if (repository)

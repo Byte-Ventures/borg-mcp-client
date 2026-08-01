@@ -20,7 +20,7 @@ function localEnvelope(payload: unknown) {
 
 describe('regen() runtime metadata self-heal', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
-  let metadata = { ...emptyMetadata };
+  let metadata: Record<string, string | null> = { ...emptyMetadata };
   let reported = false;
 
   beforeEach(() => {
@@ -118,6 +118,57 @@ describe('regen() runtime metadata self-heal', () => {
     });
   });
 
+  it('rejects an invalid explicit model before stale metadata can be presented as current', async () => {
+    metadata = {
+      ...emptyMetadata,
+      agent_kind: 'codex',
+      reported_model: 'gpt-5',
+    };
+    reported = true;
+    const { regen } = await import('../src/remote-client.js');
+
+    await expect(regen(SESSION, ORIGIN, {
+      agentKind: 'claude',
+      reportedModel: 'claude-opus-5[1m]',
+      serverTrustIdentity: TRUST_IDENTITY,
+    })).rejects.toMatchObject({
+      name: 'RuntimeMetadataValidationError',
+      field: 'reported_model',
+      reason: 'must be a printable model identifier',
+    });
+
+    expect(metadata).toMatchObject({
+      agent_kind: 'codex',
+      reported_model: 'gpt-5',
+    });
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/drones/self/metadata'))).toBe(false);
+  });
+
+  it('clears a stale model when a runtime refresh cannot report the current model', async () => {
+    metadata = {
+      ...emptyMetadata,
+      agent_kind: 'codex',
+      reported_model: 'gpt-5',
+    };
+    reported = true;
+    const { regen } = await import('../src/remote-client.js');
+
+    const result = await regen(SESSION, ORIGIN, {
+      agentKind: 'claude',
+      serverTrustIdentity: TRUST_IDENTITY,
+    });
+
+    expect(result.drone).toMatchObject({
+      agent_kind: 'claude',
+      reported_model: null,
+      runtime_metadata_reported: true,
+    });
+    expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body)).payload).toEqual({
+      agent_kind: 'claude',
+      reported_model: null,
+    });
+  });
+
   it('preserves omission when no runtime facts are supplied', async () => {
     const { regen } = await import('../src/remote-client.js');
     const result = await regen(SESSION, ORIGIN, { serverTrustIdentity: TRUST_IDENTITY });
@@ -134,6 +185,7 @@ describe('regen() runtime metadata self-heal', () => {
     });
     expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body)).payload).toEqual({
       agent_kind: null,
+      reported_model: null,
       working_repo_name: null,
       working_repo_origin: null,
     });
@@ -151,7 +203,10 @@ describe('regen() runtime metadata self-heal', () => {
       serverTrustIdentity: TRUST_IDENTITY,
     });
     const body = String(fetchSpy.mock.calls[0][1]?.body);
-    expect(JSON.parse(body).payload).toEqual({ agent_kind: 'claude' });
+    expect(JSON.parse(body).payload).toEqual({
+      agent_kind: 'claude',
+      reported_model: null,
+    });
     expect(body).not.toContain('credential');
   });
 

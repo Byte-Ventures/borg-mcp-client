@@ -9,7 +9,7 @@ export const TOOL_MANIFEST = [
             'Optional `since` (entry-id UUID or ISO-8601 timestamp) trims the recent-log section ' +
             'to entries strictly after the anchor — pass your last-seen entry id to skip ' +
             'already-processed history on each refresh. If you know the current session model, pass ' +
-            'optional `model` to self-report it as advisory metadata; unrecognized model strings are accepted.',
+            'optional `model` to self-report its printable identifier as advisory metadata; model names are not allowlisted.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -24,8 +24,10 @@ export const TOOL_MANIFEST = [
                 },
                 model: {
                     type: 'string',
-                    maxLength: 256,
-                    description: 'Optional advisory self-report of the model running this agent session. Use the model identifier you know from session context; the server does not infer or validate it against an allowlist.',
+                    minLength: 1,
+                    maxLength: 160,
+                    pattern: '^[A-Za-z0-9][A-Za-z0-9._/@:+-]*$',
+                    description: 'Optional advisory self-report of the model running this agent session. Use a printable model identifier of 1-160 ASCII characters; model names are not allowlisted.',
                 },
             },
             required: [],

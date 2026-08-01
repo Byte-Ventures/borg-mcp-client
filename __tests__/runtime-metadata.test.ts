@@ -35,10 +35,26 @@ describe('runtime metadata collection', () => {
     });
   });
 
-  it('omits rejected model and repository values from self-heal patches', () => {
-    expect(buildRuntimeMetadataPatch({
+  it('rejects an invalid explicit model in self-heal patches', () => {
+    expect(() => buildRuntimeMetadataPatch({
       agentKind: 'claude',
       reportedModel: 'unsafe model',
+    })).toThrow('reported_model: must be a printable model identifier');
+  });
+
+  it('clears an explicitly unknown model in self-heal patches', () => {
+    expect(buildRuntimeMetadataPatch({
+      agentKind: 'claude',
+      reportedModel: null,
+    })).toEqual({
+      agent_kind: 'claude',
+      reported_model: null,
+    });
+  });
+
+  it('omits rejected repository values from self-heal patches', () => {
+    expect(buildRuntimeMetadataPatch({
+      agentKind: 'claude',
       workingRepo: {
         name: 'owner/repo',
         origin: 'https://user:secret@github.com/owner/repo?token=secret',

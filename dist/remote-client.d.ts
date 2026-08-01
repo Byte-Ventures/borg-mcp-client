@@ -207,7 +207,7 @@ export declare function removeDecision(sessionToken: string, apiUrl: string, sel
 export declare function regen(sessionToken: string, apiUrl: string, opts?: {
     since?: string;
     /** Advisory self-report from the running agent; never model-routing config. */
-    reportedModel?: string;
+    reportedModel?: string | null;
     /** Positively identified running Agent CLI; null means explicitly unknown. */
     agentKind?: AgentKind | null;
     /** Current cwd-derived identity; refreshed each regen to avoid stale routing data. */
