@@ -125,6 +125,18 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
             `${localAssimilateCommand(apiUrl, true, mode)} from the operator’s terminal.\n`);
         return 1;
     }
+    if (error instanceof BorgServerError && error.code === 'LOCAL_CREDENTIAL_EXISTS') {
+        deps.stderr(`A local enrollment for ${apiUrl} already exists and was not replaced. ` +
+            `Re-run ${localAssimilateCommand(apiUrl, true, mode)} and explicitly confirm replacement ` +
+            'only if the first enrolled client should be abandoned.\n');
+        return 1;
+    }
+    if (error instanceof BorgServerError && error.code === 'LOCAL_CREDENTIAL_EXISTS') {
+        deps.stderr(`A local enrollment for ${apiUrl} already exists and was not replaced. ` +
+            `Re-run ${localAssimilateCommand(apiUrl, true, mode)} and explicitly confirm replacement ` +
+            'only if the first enrolled client should be abandoned.\n');
+        return 1;
+    }
     if (error instanceof LegacySessionCredentialCollisionError) {
         const recovery = mode === 'cube-init'
             ? localAssimilateCommand(error.origin, true, mode)
@@ -331,7 +343,11 @@ export async function runAssimilate(args, deps) {
                         return 1;
                     }
                     try {
-                        serverAuth = await deps.connectServer(authority.apiUrl, { invitation });
+                        serverAuth = await deps.connectServer(authority.apiUrl, {
+                            invitation,
+                            confirmReplacement: async () => affirmative(await deps.prompt(`A local enrollment for ${authority.apiUrl} already exists. Replacing it will orphan ` +
+                                'the first enrolled client. Replace it? [y/N]: ')),
+                        });
                     }
                     finally {
                         // Strings cannot be zeroized in JavaScript, but drop this command's

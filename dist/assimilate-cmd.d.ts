@@ -152,6 +152,7 @@ export interface AssimilateDeps {
     detectLocalServer: () => Promise<string | null>;
     connectServer: (apiUrl: string, enrollment?: {
         invitation: string;
+        confirmReplacement?: () => Promise<boolean>;
     }) => Promise<{
         token: string;
         trustIdentity: string;

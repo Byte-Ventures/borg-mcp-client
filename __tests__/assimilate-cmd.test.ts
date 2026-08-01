@@ -3213,7 +3213,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
     expect(connectServer).toHaveBeenCalledWith(
       'https://localhost:8787',
-      { invitation },
+      { invitation, confirmReplacement: expect.any(Function) },
     );
     expect(deps.stderr).toHaveBeenCalledWith(
       'Owner client enrolled with `https://localhost:8787`. ' +
