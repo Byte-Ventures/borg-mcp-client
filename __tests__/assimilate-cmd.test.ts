@@ -2449,10 +2449,10 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       'note: no usable origin; new worktree will start on local HEAD (16c1405)\n',
     );
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toContain(
-      'the original dir keeps its active drone binding',
+      'the original dir keeps its active drone binding — run `borg reset-local-seat` there if that binding is stale.',
     );
-    expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toContain('borg reset-local-seat');
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('active seat');
+    expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('that seat binding');
   });
 
   // BUG-4 / gh#150 regression (Sprint 3): step 3 must detect unborn-HEAD
@@ -2497,8 +2497,10 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(stderrCalls).toContain('fatal: [2Jmalicious');
     expect(stderrCalls).toContain('git worktree list');
     expect(stderrCalls).toContain('git status');
-    expect(stderrCalls).toContain('A local drone reservation was created and remains pending');
-    expect(stderrCalls).toContain('rerun `borg assimilate`');
+    expect(stderrCalls).toContain(
+      'A local drone reservation was created and remains pending; rerunning after fixing the worktree issue resumes that reservation.',
+    );
+    expect(stderrCalls).not.toContain('resumes that seat');
   });
 
   it('BUG-4 / unborn HEAD: fails fast with actionable error before git worktree add', async () => {
@@ -4429,8 +4431,10 @@ describe('runAssimilate: gh#864 worktree branch-collision dedup', () => {
     const output = stderr.mock.calls.map((call) => String(call[0])).join('');
     expect(output).toContain('Permission denied');
     expect(output).toContain('Git left branch wt-residual without a registered worktree; Borg preserved it.');
-    expect(output).toContain('A local drone reservation was created and remains pending');
-    expect(output).toContain('rerun `borg assimilate`');
+    expect(output).toContain(
+      'A local drone reservation was created and remains pending; rerunning after fixing the worktree issue resumes that reservation.',
+    );
+    expect(output).not.toContain('resumes that seat');
   });
 });
 
