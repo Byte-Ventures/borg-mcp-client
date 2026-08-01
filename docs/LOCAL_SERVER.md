@@ -37,14 +37,6 @@ Commands:
 Run borg server <command> --help for server command options.
 ```
 
-## Agent Launch State
-
-Borg tools are inactive unless the agent session was launched with `borg`.
-For Claude Code and Codex, `BORG_DISABLE_LAUNCH_REMINDER` is a presence-based
-local opt-out for launch orientation messaging; setting it does not activate
-Borg tools or change server authorization. OpenCode has no launch-reminder
-surface.
-
 `borg server cube init --help` derives accepted template names from the pinned
 shared release. Relevant options include:
 
@@ -147,6 +139,14 @@ ambiguous request does not duplicate the cube, and distinct repositories can
 create distinct bounded cubes. An ordinary enrolled client is denied before a
 create request is sent. Cloud-only capabilities fail explicitly rather than
 being redirected.
+
+## Agent Launch State
+
+Borg tools are inactive unless the agent session was launched with `borg`.
+For Claude Code and Codex, `BORG_DISABLE_LAUNCH_REMINDER` is a presence-based
+local opt-out for launch orientation messaging; setting it does not activate
+Borg tools or change server authorization. OpenCode has no launch-reminder
+surface.
 
 ## Updating Borg
 
