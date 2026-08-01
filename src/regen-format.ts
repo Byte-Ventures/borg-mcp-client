@@ -19,6 +19,7 @@ import {
 import { shellEscape } from './shell-escape.js';
 import { resolveInboxMonitorPath } from './self-path.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
+import { isBorgSession } from './launch-gate.js';
 
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
@@ -65,7 +66,7 @@ export function shouldRelayPlainSessionReminder(args: {
     args.source === 'startup' &&
     args.agentKind !== 'opencode' &&
     args.hasActiveCube &&
-    args.borgSession === undefined &&
+    !isBorgSession({ BORG_SESSION: args.borgSession }) &&
     args.disabled === undefined
   );
 }

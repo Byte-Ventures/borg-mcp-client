@@ -46,6 +46,10 @@ describe('formatPlainSessionReminder', () => {
     ['startup', 'opencode', true, undefined, undefined, false],
     ['startup', 'claude', false, undefined, undefined, false],
     ['startup', 'claude', true, '1', undefined, false],
+    ['startup', 'claude', true, '', undefined, true],
+    ['startup', 'claude', true, '0', undefined, true],
+    ['startup', 'claude', true, 'false', undefined, true],
+    ['startup', 'codex', true, '0', undefined, true],
     ['startup', 'claude', true, undefined, '', false],
     ['startup', 'claude', true, undefined, undefined, true],
   ] as const)('only relays for a plain assimilated startup', (source, agentKind, hasActiveCube, borgSession, disabled, expected) => {
