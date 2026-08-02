@@ -104,8 +104,7 @@ async function selectAssimilationAuthority(flags, deps, mode) {
 }
 function localAssimilateCommand(apiUrl, enroll = false, mode = 'assimilate') {
     const command = mode === 'cube-init' ? 'borg server cube init' : 'borg assimilate';
-    const host = apiUrl === undefined ? '' : ` --host ${apiUrl}`;
-    return `\`${command}${host}${enroll ? ' --enroll' : ''}\``;
+    return `\`${command} --host ${apiUrl}${enroll ? ' --enroll' : ''}\``;
 }
 function localAssimilateRoleCommand(apiUrl) {
     return `\`borg assimilate --host ${apiUrl} <role>\``;
@@ -312,18 +311,12 @@ export async function runAssimilate(args, deps) {
             'Run this command inside a Git repository.\n');
         return 1;
     }
-    const hostlessEnrollment = args.flags.enroll === true &&
-        args.flags.server === undefined && deps.defaultAuthority === undefined;
-    const artifactOnlyEnrollment = hostlessEnrollment && deps.isTTY();
+    const artifactOnlyEnrollment = args.flags.enroll === true &&
+        args.flags.server === undefined && deps.defaultAuthority === undefined && deps.isTTY();
     let preResumeAttempted = false;
     let preResumedEnrollment = null;
     let prefetchedInvitation;
     let prefetchedArtifact;
-    if (hostlessEnrollment && !deps.isTTY()) {
-        deps.stderr('Local enrollment requires an interactive operator terminal. ' +
-            `Re-run ${localAssimilateCommand(undefined, true, mode)} from the operator’s terminal.\n`);
-        return 1;
-    }
     // An explicit --host plus a new invitation must be rejected on the pure
     // input path. Decode and compare the operator-presented artifact before any
     // pending-enrollment lookup: the lookup enumerates the credential backend,

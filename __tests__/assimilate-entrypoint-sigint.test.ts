@@ -227,29 +227,6 @@ describe.each(cleanPathEntrypoints)('clean-machine enrollment through $entry', (
   });
 });
 
-describe.each(cleanPathEntrypoints)('non-TTY hostless enrollment through $entry', ({ entry, run }) => {
-  it('fails closed before local-server discovery with a hostless rerun command', async () => {
-    const state = makeEntryDeps(async () => '1');
-    const ensureLocalServerInstalled = vi.fn(async () => 'present' as const);
-    state.deps.isTTY = () => false;
-    state.deps.ensureLocalServerInstalled = ensureLocalServerInstalled;
-
-    await expect(run(state.deps)).resolves.toBe(1);
-
-    expect(state.deps.promptSecret).not.toHaveBeenCalled();
-    expect(ensureLocalServerInstalled).not.toHaveBeenCalled();
-    expect(state.deps.connectServer).not.toHaveBeenCalled();
-    expect(state.deps.preparePrivateRoot).not.toHaveBeenCalled();
-    const command = entry === 'borg server cube init'
-      ? '`borg server cube init --enroll`'
-      : '`borg assimilate --enroll`';
-    expect(state.stderr).toHaveBeenCalledWith(
-      'Local enrollment requires an interactive operator terminal. ' +
-        `Re-run ${command} from the operator’s terminal.\n`,
-    );
-  });
-});
-
 describe.each(entrypoints)('production prompt interruption through $entry', ({ run }) => {
   it.each([
     {
