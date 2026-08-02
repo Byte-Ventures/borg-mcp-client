@@ -20,6 +20,7 @@ export type TokenBackendName = 'file';
 export interface TokenBackend {
   readonly name: TokenBackendName;
   get(account: string): Promise<string | null>;
+  readonly entries?: () => Promise<Record<string, string>>;
   set(account: string, value: string): Promise<void>;
   delete(account: string): Promise<void>;
 }
@@ -87,6 +88,7 @@ export function makeFileBackend(
     atomicWrite0600(filePath, JSON.stringify({ version: 1, accounts }, null, 2) + '\n', options);
   return {
     name: 'file',
+    entries: load,
     async get(account) {
       const accounts = await load();
       return Object.prototype.hasOwnProperty.call(accounts, account) ? accounts[account] : null;

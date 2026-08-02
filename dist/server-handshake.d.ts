@@ -1,5 +1,5 @@
 import { type InvitationArtifact, type AssociateRepositoryCubeResponse, type CreateCubeRepository, type CreateCubeResponse, type CubeTemplate, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ResolveRepositoryCubeResponse, type ServerCapability } from 'borgmcp-shared/protocol';
-import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment } from './config.js';
+import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, type ActivateSeatOutcome, type BindPendingSeatOutcome, type SeatBinding, type SeatOperation as ServerSessionOperation } from './seats.js';
 import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
@@ -124,9 +124,12 @@ export declare function enrollBorgServer(origin: string, trustIdentity: string, 
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     loadCredentialRecord?: typeof getServerCredentialRecord;
+    hasCredentialForOrigin?: typeof hasServerCredentialForOrigin;
     confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
     expectedAuthority?: InvitationArtifact['authority'];
+    commitTrust?: () => Promise<void>;
+    discardTrust?: () => Promise<void>;
 }): Promise<NewServerEnrollment>;
 /** Resume an exact durable enrollment tuple without asking for the invitation again. */
 export declare function resumeBorgServerEnrollment(origin: string, trustIdentity: string, deps?: {

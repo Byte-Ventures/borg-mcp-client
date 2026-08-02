@@ -244,6 +244,7 @@ export function __setServerCredentialBackendForTest(backend: TokenBackend | null
 async function writeServerCredentialRecord(
   backend: TokenBackend,
   record: ServerCredentialRecord,
+  allowReplacement = false,
 ): Promise<void> {
   validateServerCredentialBinding(record.origin, record.trustIdentity);
   validateEnrollmentCredential(record.credential);
@@ -251,6 +252,24 @@ async function writeServerCredentialRecord(
     validateUuid(record.clientId, 'client identity');
   }
   const serverCapabilities = validateServerCapabilities(record.serverCapabilities ?? []);
+  if (backend.entries) {
+    const accounts = await backend.entries();
+    const conflicts = Object.entries(accounts).filter(([account, value]) => {
+      if (account === serverCredentialAccount(record.origin, record.trustIdentity)) return false;
+      try {
+        const parsed = JSON.parse(value) as { version?: unknown; origin?: unknown };
+        return parsed.version === SERVER_CREDENTIAL_RECORD_VERSION && parsed.origin === record.origin;
+      } catch {
+        return false;
+      }
+    });
+    if (conflicts.length > 0 && !allowReplacement) {
+      throw new Error('local Borg server enrollment already exists for this origin and replacement was not confirmed');
+    }
+    if (allowReplacement) {
+      for (const [account] of conflicts) await backend.delete(account);
+    }
+  }
   await backend.set(
     serverCredentialAccount(record.origin, record.trustIdentity),
     JSON.stringify({
@@ -274,9 +293,12 @@ async function writeServerCredentialRecord(
  * not credential sources. CR3b: the load→set→rename runs inside ONE hold of the
  * single store lock so a concurrent writer cannot lose an unrelated account.
  */
-export async function storeServerCredential(record: ServerCredentialRecord): Promise<void> {
+export async function storeServerCredential(
+  record: ServerCredentialRecord,
+  options: { allowReplacement?: boolean } = {},
+): Promise<void> {
   const backend = await getServerCredentialBackend();
-  await withCredentialStoreLock(() => writeServerCredentialRecord(backend, record));
+  await withCredentialStoreLock(() => writeServerCredentialRecord(backend, record, options.allowReplacement === true));
 }
 
 /** Read an authority-bound active client record, failing closed on corruption. */
@@ -327,6 +349,20 @@ export async function getServerCredential(
   trustIdentity: string,
 ): Promise<string | null> {
   return (await getServerCredentialRecord(origin, trustIdentity))?.credential ?? null;
+}
+
+export async function hasServerCredentialForOrigin(origin: string): Promise<boolean> {
+  const backend = await getServerCredentialBackend();
+  if (!backend.entries) return false;
+  const accounts = await backend.entries();
+  return Object.values(accounts).some((value) => {
+    try {
+      const record = JSON.parse(value) as { version?: unknown; origin?: unknown };
+      return record.version === SERVER_CREDENTIAL_RECORD_VERSION && record.origin === origin;
+    } catch {
+      return false;
+    }
+  });
 }
 
 function decodePendingServerEnrollment(
@@ -483,7 +519,7 @@ export async function activatePendingServerEnrollment(
       credential: input.credential,
       clientId: input.clientId,
       serverCapabilities,
-    });
+    }, input.allowReplacement === true);
     await backend.delete(pendingAccount);
   });
 }

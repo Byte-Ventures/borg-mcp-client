@@ -37,6 +37,7 @@ import {
   clearPendingServerEnrollment,
   getServerCredential,
   getServerCredentialRecord,
+  hasServerCredentialForOrigin,
   getPendingServerEnrollment,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
@@ -68,6 +69,7 @@ import {
   loadBorgServerTrust,
   loadBorgServerTrustFromPresentedChain,
   type BorgServerTrust,
+  type StagedBorgServerTrust,
 } from './server-trust.js';
 import {
   InvitationArtifactCompatibilityError,
@@ -461,27 +463,40 @@ export async function enrollBorgServer(
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     loadCredentialRecord?: typeof getServerCredentialRecord;
+    hasCredentialForOrigin?: typeof hasServerCredentialForOrigin;
     confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
     expectedAuthority?: InvitationArtifact['authority'];
+    commitTrust?: () => Promise<void>;
+    discardTrust?: () => Promise<void>;
   } = {},
 ): Promise<NewServerEnrollment> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   // Credential-free tag preflight FIRST (CR fb4d6eba): after pinned TLS, an
   // incompatible server must be rejected before any credential is created or
   // persisted and before any invitation/secret-bearing request is sent.
-  const protocol = await preflightBorgServerTag(origin, fetchImpl);
+  let protocol: ProtocolTagPreflight;
+  try {
+    protocol = await preflightBorgServerTag(origin, fetchImpl);
+  } catch (error) {
+    await deps.discardTrust?.();
+    throw error;
+  }
 
   const existingCredential = await (deps.loadCredentialRecord ?? getServerCredentialRecord)(
     origin,
     trustIdentity,
   );
+  const existingOriginCredential = existingCredential !== null || await (
+    deps.hasCredentialForOrigin ?? hasServerCredentialForOrigin
+  )(origin);
   let replacementConfirmed = false;
-  if (existingCredential) {
+  if (existingOriginCredential) {
     const confirmed = deps.confirmReplacement !== undefined
       ? await deps.confirmReplacement()
       : false;
     if (!confirmed) {
+      await deps.discardTrust?.();
       throw new BorgServerError(
         'LOCAL_CREDENTIAL_EXISTS',
         'a local enrollment already exists for this server and was not replaced',
@@ -524,9 +539,13 @@ export async function enrollBorgServer(
       clearTimeout(timeout);
     }
   }
-  if (!response) throw lastTransportError;
+  if (!response) {
+    await deps.discardTrust?.();
+    throw lastTransportError;
+  }
 
   if (response.status === 401 || response.status === 403) {
+    await deps.discardTrust?.();
     await (deps.clearPendingEnrollment ?? clearPendingServerEnrollment)(
       origin,
       trustIdentity,
@@ -538,6 +557,7 @@ export async function enrollBorgServer(
     );
   }
   if (response.status !== 201) {
+    await deps.discardTrust?.();
     throw new Error(`Borg server enrollment failed (HTTP ${response.status})`);
   }
   let decoded: ReturnType<typeof decodeEnrollmentExchangeResponseEnvelope>;
@@ -546,6 +566,7 @@ export async function enrollBorgServer(
       JSON.parse(await readHandshakeBodyWithTimeout(response)),
     );
   } catch (error) {
+    await deps.discardTrust?.();
     if (error instanceof Error && error.message.includes('response limit')) throw error;
     throw new Error('Borg server returned an invalid enrollment envelope');
   }
@@ -558,10 +579,12 @@ export async function enrollBorgServer(
         trustIdentity,
         pending.retryKey,
       );
+      await deps.discardTrust?.();
       throw new InvitationArtifactTrustError();
     }
   }
 
+  await deps.commitTrust?.();
   await (deps.activateEnrollment ?? activatePendingServerEnrollment)({
     origin,
     trustIdentity,
@@ -1085,7 +1108,7 @@ export async function enrollLocalBorgServerArtifact(
   } = {},
 ): Promise<NewServerEnrollment> {
   const verifiedArtifact = decodeAndVerifyInvitationArtifact(artifact);
-  let trust: BorgServerTrust;
+  let trust: StagedBorgServerTrust;
   try {
     trust = await loadBorgServerTrustFromPresentedChain(
       verifiedArtifact.endpoint,
@@ -1103,6 +1126,8 @@ export async function enrollLocalBorgServerArtifact(
     ...(deps.confirmReplacement === undefined ? {} : { confirmReplacement: deps.confirmReplacement }),
     ...(deps.clientName === undefined ? {} : { clientName: deps.clientName }),
     expectedAuthority: verifiedArtifact.authority,
+    commitTrust: trust.commitTrust,
+    discardTrust: trust.discardTrust,
   });
 }
 
@@ -1115,7 +1140,13 @@ export async function resumeLocalBorgServerEnrollment(
     onPending?: () => void;
   } = {},
 ): Promise<NewServerEnrollment | null> {
-  const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+  let trust: BorgServerTrust;
+  try {
+    trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+  } catch (error) {
+    if (error instanceof Error && /trust files were not found|trust metadata/i.test(error.message)) return null;
+    throw error;
+  }
   return resumeBorgServerEnrollment(origin, trust.identity, {
     fetchImpl: trust.fetchImpl,
     ...(deps.loadPendingEnrollment === undefined

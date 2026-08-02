@@ -24,6 +24,7 @@ function memoryBackend(): { backend: TokenBackend; values: Map<string, string> }
     values,
     backend: {
       name: 'file',
+      entries: async () => Object.fromEntries(values),
       get: async (account) => values.get(account) ?? null,
       set: async (account, value) => { values.set(account, value); },
       delete: async (account) => { values.delete(account); },
@@ -61,6 +62,24 @@ describe('self-hosted server credential storage', () => {
     expect(account).not.toContain('server-a');
   });
 
+  it('requires writer-bound consent before replacing a different trust identity for one origin', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    await storeServerCredential({ origin, trustIdentity, credential });
+    await expect(storeServerCredential({
+      origin,
+      trustIdentity: 'sha256:server-b',
+      credential: 'd'.repeat(43),
+    })).rejects.toThrow(/replacement was not confirmed/i);
+    await storeServerCredential({
+      origin,
+      trustIdentity: 'sha256:server-b',
+      credential: 'd'.repeat(43),
+    }, { allowReplacement: true });
+    await expect(getServerCredential(origin, trustIdentity)).resolves.toBeNull();
+    await expect(getServerCredential(origin, 'sha256:server-b')).resolves.toBe('d'.repeat(43));
+  });
+
   it('fails closed on a corrupt stored record and supports explicit removal', async () => {
     const { backend, values } = memoryBackend();
     __setServerCredentialBackendForTest(backend);
@@ -77,14 +96,17 @@ describe('self-hosted server credential storage', () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'borg-cred-concurrency-')));
     try {
       __setServerCredentialBackendForTest(makeFileBackend(join(dir, 'credentials.json')));
-      // Distinct authorities → distinct accounts in ONE file. Without the store
+      // Distinct origins → distinct accounts in ONE file. Without the store
       // lock, each unlocked load→set→rename races and loses unrelated accounts.
-      const trusts = Array.from({ length: 8 }, (_, i) => `sha256:server-${i}`);
+      const authorities = Array.from({ length: 8 }, (_, i) => ({
+        origin: `https://server-${i}.example:7091`,
+        trustIdentity: `sha256:server-${i}`,
+      }));
       await Promise.all(
-        trusts.map((t) => storeServerCredential({ origin, trustIdentity: t, credential })),
+        authorities.map((authority) => storeServerCredential({ ...authority, credential })),
       );
-      for (const t of trusts) {
-        expect(await getServerCredential(origin, t)).toBe(credential);
+      for (const authority of authorities) {
+        expect(await getServerCredential(authority.origin, authority.trustIdentity)).toBe(credential);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

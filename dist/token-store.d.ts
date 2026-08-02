@@ -14,6 +14,7 @@ export type TokenBackendName = 'file';
 export interface TokenBackend {
     readonly name: TokenBackendName;
     get(account: string): Promise<string | null>;
+    readonly entries?: () => Promise<Record<string, string>>;
     set(account: string, value: string): Promise<void>;
     delete(account: string): Promise<void>;
 }

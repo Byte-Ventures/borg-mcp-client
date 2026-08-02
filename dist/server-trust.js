@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { access, mkdir, open, rename, unlink, writeFile } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import { homedir } from 'node:os';
@@ -42,6 +42,19 @@ function isPinnedTransportTrustFailure(code) {
 const trustCache = new Map();
 function serverDataDirectory() {
     return resolve(process.env.BORG_SERVER_DATA_DIR ?? join(homedir(), '.borg', 'server'));
+}
+function remoteTrustDirectory(origin) {
+    const key = createHash('sha256').update(origin).digest('hex');
+    return join(homedir(), '.borg', 'server-trust', key);
+}
+async function trustFilesExist(directory) {
+    try {
+        await Promise.all([access(join(directory, 'ca.crt')), access(join(directory, 'server.json'))]);
+        return true;
+    }
+    catch {
+        return false;
+    }
 }
 async function readTrustFile(path) {
     let handle;
@@ -210,14 +223,21 @@ export function createPinnedServerFetch(origin, caCertificate) {
         });
     });
 }
-export async function loadBorgServerTrust(origin, dataDirectory = serverDataDirectory()) {
-    const key = `${dataDirectory}\0${origin}`;
+export async function loadBorgServerTrust(origin, dataDirectory) {
+    const requestedDirectory = dataDirectory ?? serverDataDirectory();
+    const key = `${requestedDirectory}\0${origin}`;
     let pending = trustCache.get(key);
     if (!pending) {
         pending = (async () => {
+            const remoteDirectory = remoteTrustDirectory(origin);
+            const directory = dataDirectory === undefined && await trustFilesExist(remoteDirectory)
+                ? remoteDirectory
+                : dataDirectory === undefined && !(await trustFilesExist(requestedDirectory))
+                    ? remoteDirectory
+                    : requestedDirectory;
             const [certificate, configText] = await Promise.all([
-                readTrustFile(join(dataDirectory, 'ca.crt')),
-                readTrustFile(join(dataDirectory, 'server.json')),
+                readTrustFile(join(directory, 'ca.crt')),
+                readTrustFile(join(directory, 'server.json')),
             ]);
             const config = decodeTrustConfig(configText);
             const identity = verifyCaIdentity(certificate, config.ca_spki_sha256);
@@ -289,10 +309,7 @@ export async function loadBorgServerTrustFromPresentedChain(origin, caSpkiSha256
                 .digest('hex');
             if (actual !== caSpkiSha256)
                 continue;
-            return {
-                identity: `spki-sha256:${actual}`,
-                fetchImpl: createPinnedServerFetch(origin, pemCertificate(raw)),
-            };
+            return stageBorgServerTrust(origin, pemCertificate(raw), `spki-sha256:${actual}`);
         }
         catch {
             // Ignore malformed chain members; the typed compatibility failure below is safer.
@@ -301,6 +318,39 @@ export async function loadBorgServerTrustFromPresentedChain(origin, caSpkiSha256
     if (!sawCa)
         throw new Error('Borg server did not present the required certificate chain');
     throw new Error('Borg server presented a certificate chain with the wrong pinned identity');
+}
+export async function stageBorgServerTrust(origin, certificate, identity) {
+    const directory = remoteTrustDirectory(origin);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const suffix = `${process.pid}-${Date.now()}`;
+    const temporaryCertificate = join(directory, `.ca.crt.${suffix}.tmp`);
+    const temporaryConfig = join(directory, `.server.json.${suffix}.tmp`);
+    const finalCertificate = join(directory, 'ca.crt');
+    const finalConfig = join(directory, 'server.json');
+    await Promise.all([
+        writeFile(temporaryCertificate, certificate, { mode: 0o600, flag: 'wx' }),
+        writeFile(temporaryConfig, JSON.stringify({ ca_spki_sha256: identity.replace(/^spki-sha256:/, '') }), { mode: 0o600, flag: 'wx' }),
+    ]);
+    let committed = false;
+    return {
+        identity,
+        fetchImpl: createPinnedServerFetch(origin, certificate),
+        commitTrust: async () => {
+            if (committed)
+                return;
+            await rename(temporaryCertificate, finalCertificate);
+            await rename(temporaryConfig, finalConfig);
+            committed = true;
+        },
+        discardTrust: async () => {
+            if (committed)
+                return;
+            await Promise.all([
+                unlink(temporaryCertificate).catch(() => undefined),
+                unlink(temporaryConfig).catch(() => undefined),
+            ]);
+        },
+    };
 }
 export function __clearServerTrustCacheForTest() {
     trustCache.clear();

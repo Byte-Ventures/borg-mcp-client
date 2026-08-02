@@ -194,9 +194,10 @@ Before creating the release tag, independently verify all of these conditions:
 - the exact audited registry dependency `borgmcp-shared@0.8.0` remains locked to
   its canonical tarball and integrity
   `sha512-0p/ZC03Y6G4N6bfBjMD5b+WcQXcLalhU/3QqGjSWYCFKa3q2/183O53w6Tu6y8h2DkhTw5prnamsOozmVpXZew==`;
-- the client and matching published `borgmcp-server@0.8.0`, integrity
-  `sha512-OSnBBcdZOM88Dokr7WICcTmF19c+Nr0TOl7NXy8DSUeCpBttiKKx+KuFvGbaXAWikFkm0UUBUca5cLZAOWw4Xw==`, which pins
-  `borgmcp-shared@0.8.0`, pass the complete local dogfood gate;
+- the coupled client/server release is published only after the server artifact
+  is rebuilt against `borgmcp-shared@0.8.0` and both pass the complete local
+  dogfood gate; the already-published server 0.8.0 remains immutable at its
+  older immutable shared dependency pin;
 - the selected stable client version is unused and the exact release commit is
   on protected `main`;
 - the repository and protected npm environment settings pass an operator audit;

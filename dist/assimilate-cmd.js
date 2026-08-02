@@ -22,7 +22,7 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
 import { BorgServerError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, LegacySessionCredentialCollisionError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
-import { decodeAndVerifyInvitationArtifact, InvitationArtifactCompatibilityError, InvitationArtifactFormatError, InvitationArtifactLegacyError, InvitationArtifactTransportError, InvitationArtifactTrustError, } from './invitation-artifact.js';
+import { decodeAndVerifyInvitationArtifact, InvitationArtifactCompatibilityError, InvitationArtifactEndpointMismatchError, InvitationArtifactFormatError, InvitationArtifactLegacyError, InvitationArtifactTransportError, InvitationArtifactTrustError, } from './invitation-artifact.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
 import { resolveWorkingRepo } from './working-repo.js';
@@ -182,6 +182,10 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
         deps.stderr(`${error.message}\n`);
         return 1;
     }
+    if (error instanceof InvitationArtifactEndpointMismatchError) {
+        deps.stderr(`${error.message}\n`);
+        return 1;
+    }
     if (error instanceof InvitationArtifactTransportError) {
         deps.stderr(`${error.message}\n`);
         return 1;
@@ -301,6 +305,40 @@ export async function runAssimilate(args, deps) {
     }
     const artifactOnlyEnrollment = args.flags.enroll === true &&
         args.flags.server === undefined && deps.defaultAuthority === undefined && deps.isTTY();
+    let preResumeAttempted = false;
+    let preResumedEnrollment = null;
+    if (args.flags.enroll && args.flags.server !== undefined && deps.isTTY()) {
+        try {
+            const preResumeOrigin = normalizeServerEndpoint(args.flags.server);
+            preResumeAttempted = true;
+            preResumedEnrollment = await deps.resumeServerEnrollment(preResumeOrigin, () => {
+                deps.stderr(`Resuming the pending enrollment for \`${preResumeOrigin}\`; ` +
+                    'do not enter another invitation unless the server certificate was reissued; ' +
+                    'if it was, request a current invitation and rerun this command.\n');
+            });
+        }
+        catch {
+            preResumeAttempted = false;
+        }
+    }
+    let prefetchedInvitation;
+    let prefetchedArtifact;
+    if (artifactOnlyEnrollment && !(await deps.hasPersistedActiveCube()) ||
+        preResumeAttempted && preResumedEnrollment === null) {
+        prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
+        if (!prefetchedInvitation) {
+            deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
+            return 1;
+        }
+        try {
+            prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
+        }
+        catch (error) {
+            deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
+            prefetchedInvitation = undefined;
+            return 1;
+        }
+    }
     if (!artifactOnlyEnrollment && args.flags.server === undefined && deps.defaultAuthority === undefined) {
         const connectCommand = mode === 'cube-init'
             ? 'borg server cube init --host <host>'
@@ -355,18 +393,22 @@ export async function runAssimilate(args, deps) {
                         `Re-run ${localAssimilateCommand(authority.apiUrl, true, mode)} from the operator’s terminal.\n`);
                     return 1;
                 }
-                const resumed = artifactOnlyEnrollment
+                const resumed = prefetchedArtifact !== undefined
                     ? null
-                    : await deps.resumeServerEnrollment(authority.apiUrl, () => {
-                        deps.stderr(`Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
-                            'do not enter another invitation unless the server certificate was reissued; ' +
-                            'if it was, request a current invitation and rerun this command.\n');
-                    });
+                    : preResumeAttempted
+                        ? preResumedEnrollment
+                        : artifactOnlyEnrollment
+                            ? null
+                            : await deps.resumeServerEnrollment(authority.apiUrl, () => {
+                                deps.stderr(`Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
+                                    'do not enter another invitation unless the server certificate was reissued; ' +
+                                    'if it was, request a current invitation and rerun this command.\n');
+                            });
                 if (resumed) {
                     serverAuth = resumed;
                 }
                 else {
-                    let invitation = await deps.promptSecret(artifactOnlyEnrollment
+                    let invitation = prefetchedInvitation ?? await deps.promptSecret(artifactOnlyEnrollment
                         ? 'Enrollment invitation (single-use; hidden input):'
                         : `Enrollment invitation for \`${authority.apiUrl}\` (single-use; hidden input):`);
                     if (!invitation) {
@@ -377,7 +419,10 @@ export async function runAssimilate(args, deps) {
                         return 1;
                     }
                     try {
-                        const artifact = decodeAndVerifyInvitationArtifact(invitation);
+                        const artifact = prefetchedArtifact ?? decodeAndVerifyInvitationArtifact(invitation);
+                        if (args.flags.server !== undefined && authority.apiUrl !== artifact.endpoint) {
+                            throw new InvitationArtifactEndpointMismatchError();
+                        }
                         authority = { kind: 'server', apiUrl: artifact.endpoint };
                         serverAuth = await deps.connectServer(authority.apiUrl, {
                             invitation,

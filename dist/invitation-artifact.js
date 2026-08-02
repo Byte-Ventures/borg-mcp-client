@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { decodeInvitationArtifact, getInvitationArtifactIntegrityInput, } from 'borgmcp-shared/protocol';
+import { decodeInvitationArtifact, encodeInvitationArtifact, getInvitationArtifactIntegrityInput, } from 'borgmcp-shared/protocol';
 export const COMPATIBILITY_INVITATION_ERROR = 'This server did not present the certificate chain required for cross-machine enrollment. Update the Borg server on that machine and restart it, then run this command again. No invitation or credential was sent and no local trust or credential state was changed.';
 export const TRUST_INVITATION_ERROR = 'Borg could not verify the server identity named by this invitation. No invitation or credential was sent and no local trust or credential state was changed. Ask the server operator for a current invitation, then retry.';
 export const FORMAT_INVITATION_ERROR = 'This enrollment invitation is invalid or incomplete. No invitation or credential was sent and no local trust or credential state was changed. Ask the server operator for a new invitation, then retry.';
@@ -20,6 +20,12 @@ export class InvitationArtifactFormatError extends Error {
     constructor(message = FORMAT_INVITATION_ERROR) {
         super(message);
         this.name = 'InvitationArtifactFormatError';
+    }
+}
+export class InvitationArtifactEndpointMismatchError extends Error {
+    constructor() {
+        super('The enrollment invitation endpoint does not match the selected `--host`. No invitation or credential was sent and no local trust or credential state was changed. Omit `--host` or select the exact endpoint named by the invitation, then retry.');
+        this.name = 'InvitationArtifactEndpointMismatchError';
     }
 }
 export class InvitationArtifactTransportError extends Error {
@@ -45,7 +51,7 @@ function invitationIntegrity(artifact) {
 export function decodeAndVerifyInvitationArtifact(value) {
     let artifact;
     try {
-        artifact = decodeInvitationArtifact(value);
+        artifact = decodeInvitationArtifact(typeof value === 'string' ? value : encodeInvitationArtifact(value));
     }
     catch (error) {
         const message = error instanceof Error ? error.message : '';

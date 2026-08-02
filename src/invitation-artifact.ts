@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   decodeInvitationArtifact,
+  encodeInvitationArtifact,
   getInvitationArtifactIntegrityInput,
   type InvitationArtifact,
 } from 'borgmcp-shared/protocol';
@@ -40,6 +41,15 @@ export class InvitationArtifactFormatError extends Error {
   }
 }
 
+export class InvitationArtifactEndpointMismatchError extends Error {
+  constructor() {
+    super(
+      'The enrollment invitation endpoint does not match the selected `--host`. No invitation or credential was sent and no local trust or credential state was changed. Omit `--host` or select the exact endpoint named by the invitation, then retry.',
+    );
+    this.name = 'InvitationArtifactEndpointMismatchError';
+  }
+}
+
 export class InvitationArtifactTransportError extends Error {
   constructor(message = TRANSPORT_INVITATION_ERROR) {
     super(message);
@@ -66,7 +76,9 @@ function invitationIntegrity(artifact: InvitationArtifact): string {
 export function decodeAndVerifyInvitationArtifact(value: unknown): InvitationArtifact {
   let artifact: InvitationArtifact;
   try {
-    artifact = decodeInvitationArtifact(value);
+    artifact = decodeInvitationArtifact(
+      typeof value === 'string' ? value : encodeInvitationArtifact(value as InvitationArtifact),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if (typeof value === 'string' && value.length === 43) throw new InvitationArtifactLegacyError();

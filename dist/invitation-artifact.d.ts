@@ -12,6 +12,9 @@ export declare class InvitationArtifactLegacyError extends Error {
 export declare class InvitationArtifactFormatError extends Error {
     constructor(message?: string);
 }
+export declare class InvitationArtifactEndpointMismatchError extends Error {
+    constructor();
+}
 export declare class InvitationArtifactTransportError extends Error {
     constructor(message?: string);
 }

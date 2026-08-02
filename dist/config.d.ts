@@ -68,11 +68,14 @@ export declare function __setServerCredentialBackendForTest(backend: TokenBacken
  * not credential sources. CR3b: the load→set→rename runs inside ONE hold of the
  * single store lock so a concurrent writer cannot lose an unrelated account.
  */
-export declare function storeServerCredential(record: ServerCredentialRecord): Promise<void>;
+export declare function storeServerCredential(record: ServerCredentialRecord, options?: {
+    allowReplacement?: boolean;
+}): Promise<void>;
 /** Read an authority-bound active client record, failing closed on corruption. */
 export declare function getServerCredentialRecord(origin: string, trustIdentity: string): Promise<ActiveServerCredentialRecord | null>;
 /** Read only the bearer for existing call sites that do not need capability metadata. */
 export declare function getServerCredential(origin: string, trustIdentity: string): Promise<string | null>;
+export declare function hasServerCredentialForOrigin(origin: string): Promise<boolean>;
 /** Load an exact durable PENDING tuple so a new process can resume it. */
 export declare function getPendingServerEnrollment(origin: string, trustIdentity: string): Promise<PendingServerEnrollmentRecord | null>;
 /**

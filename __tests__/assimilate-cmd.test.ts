@@ -3233,7 +3233,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(0);
 
     expect(promptSecret).toHaveBeenCalledWith(
-      'Enrollment invitation for `https://localhost:8787` (single-use; hidden input):',
+      'Enrollment invitation (single-use; hidden input):',
     );
     expect(connectServer).toHaveBeenCalledWith(
       'https://localhost:8787',
