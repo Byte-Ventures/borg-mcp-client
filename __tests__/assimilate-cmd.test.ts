@@ -3981,8 +3981,10 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(connectServer).not.toHaveBeenCalled();
     expect(listCubes).not.toHaveBeenCalled();
+    expect(deps.ensureLocalServerInstalled).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(
-      'No local server selected. Use `borg assimilate --host <host> --here` to select a local server.\n',
+      'Local enrollment requires an interactive operator terminal. ' +
+        'Re-run `borg assimilate --enroll` from the operator’s terminal.\n',
     );
   });
 
