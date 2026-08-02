@@ -8,6 +8,7 @@ import {
   REPOSITORY_CUBE_RESOLVE_PATH,
   createAttachRequestEnvelope,
   createProtocolEnvelope,
+  encodeInvitationArtifact,
   decodeAssociateRepositoryCubeRequest,
   decodeAssociateRepositoryCubeResponseEnvelope,
   decodeAttachResponseEnvelope,
@@ -1110,14 +1111,26 @@ export async function enrollLocalBorgServer(
 export async function enrollLocalBorgServerArtifact(
   artifact: InvitationArtifact,
   deps: {
+    invitation?: string;
     confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
+    loadTrustFromPresentedChain?: typeof loadBorgServerTrustFromPresentedChain;
+    prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
+    activateEnrollment?: typeof activatePendingServerEnrollment;
+    clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+    hasCredentialForOrigin?: typeof hasServerCredentialForOrigin;
   } = {},
 ): Promise<NewServerEnrollment> {
-  const verifiedArtifact = decodeAndVerifyInvitationArtifact(artifact);
+  // Preserve the byte-exact opaque artifact from the operator's prompt. The
+  // decoded object is enough to inspect the endpoint/pin, but it is not the
+  // enrollment protocol's invitation material: replacing it with
+  // `verifiedArtifact.secret` silently degrades v2 composite artifacts.
+  const opaqueArtifact = deps.invitation ?? encodeInvitationArtifact(artifact);
+  const verifiedArtifact = decodeAndVerifyInvitationArtifact(opaqueArtifact);
   let trust: StagedBorgServerTrust;
   try {
-    trust = await loadBorgServerTrustFromPresentedChain(
+    trust = await (deps.loadTrustFromPresentedChain ?? loadBorgServerTrustFromPresentedChain)(
       verifiedArtifact.endpoint,
       verifiedArtifact.ca_spki_sha256,
     );
@@ -1128,10 +1141,15 @@ export async function enrollLocalBorgServerArtifact(
     if (error instanceof InvitationArtifactStorageError) throw error;
     throw new InvitationArtifactTransportError();
   }
-  return enrollBorgServer(verifiedArtifact.endpoint, trust.identity, verifiedArtifact.secret, {
+  return enrollBorgServer(verifiedArtifact.endpoint, trust.identity, opaqueArtifact, {
     fetchImpl: trust.fetchImpl,
     ...(deps.confirmReplacement === undefined ? {} : { confirmReplacement: deps.confirmReplacement }),
     ...(deps.clientName === undefined ? {} : { clientName: deps.clientName }),
+    ...(deps.prepareEnrollment === undefined ? {} : { prepareEnrollment: deps.prepareEnrollment }),
+    ...(deps.activateEnrollment === undefined ? {} : { activateEnrollment: deps.activateEnrollment }),
+    ...(deps.clearPendingEnrollment === undefined ? {} : { clearPendingEnrollment: deps.clearPendingEnrollment }),
+    ...(deps.loadCredentialRecord === undefined ? {} : { loadCredentialRecord: deps.loadCredentialRecord }),
+    ...(deps.hasCredentialForOrigin === undefined ? {} : { hasCredentialForOrigin: deps.hasCredentialForOrigin }),
     expectedAuthority: verifiedArtifact.authority,
     commitTrust: trust.commitTrust,
     discardTrust: trust.discardTrust,

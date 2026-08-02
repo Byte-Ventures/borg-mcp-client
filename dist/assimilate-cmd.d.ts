@@ -164,6 +164,12 @@ export interface AssimilateDeps {
         trustIdentity: string;
         serverCapabilities?: readonly string[];
     } | null>;
+    /** Read-only pending-artifact peek used to validate an explicit host before
+     * the normal resume path performs trust/credential work. */
+    peekPendingServerEnrollment?: () => Promise<{
+        origin: string;
+        invitation: string;
+    } | null>;
     resumePendingServerEnrollment?: (onPending?: () => void) => Promise<{
         token: string;
         apiUrl?: string;

@@ -244,6 +244,7 @@ export function buildDefaultAssimilateDeps(
       if (enrollment) {
         if (enrollment.artifact) {
           return enrollLocalBorgServerArtifact(enrollment.artifact, {
+            invitation: enrollment.invitation,
             ...(enrollment.confirmReplacement === undefined
               ? {}
               : { confirmReplacement: enrollment.confirmReplacement }),
@@ -263,6 +264,12 @@ export function buildDefaultAssimilateDeps(
       resumeLocalBorgServerEnrollment(apiUrl, {
         ...(onPending === undefined ? {} : { onPending }),
       }),
+    peekPendingServerEnrollment: async () => {
+      const pending = await findPendingServerEnrollment();
+      return pending === null
+        ? null
+        : { origin: pending.origin, invitation: pending.invitation };
+    },
     resumePendingServerEnrollment: async (onPending) =>
       (async () => {
         const pending = await findPendingServerEnrollment();

@@ -44,6 +44,16 @@ const TEST_ARTIFACT = encodeInvitationArtifact({
     .digest('base64url'),
 });
 
+function artifactForEndpoint(endpoint: string): string {
+  const base = { ...TEST_ARTIFACT_BASE, endpoint };
+  return encodeInvitationArtifact({
+    ...base,
+    integrity: createHmac('sha256', TEST_ARTIFACT_SECRET)
+      .update(getInvitationArtifactIntegrityInput(base))
+      .digest('base64url'),
+  });
+}
+
 vi.mock('../src/opencode-drone.js', () => openCodeDroneMocks);
 vi.mock('../src/opencode-plugin.js', () => ({ installBorgPlugin: vi.fn() }));
 vi.mock('../src/ensure-mcp-config.js', () => mcpConfigMocks);
@@ -108,6 +118,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       serverCapabilities: ['create_cube'],
     })),
     resumeServerEnrollment: vi.fn(async () => null),
+    peekPendingServerEnrollment: vi.fn(async () => null),
     resolveRepositoryCube: vi.fn(async () => serverRepositoryResolution),
     associateRepositoryCube: vi.fn(async (_apiUrl, _token, input) => {
       serverRepositoryResolution = {
@@ -3251,6 +3262,42 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(prompt).toHaveBeenCalledTimes(2);
   });
 
+  it('rejects an explicit-host artifact contradiction before private state, trust, credentials, or network', async () => {
+    const stderr = vi.fn();
+    const preparePrivateRoot = vi.fn(async () => {});
+    const getActiveCube = vi.fn(async () => null);
+    const hasPersistedActiveCube = vi.fn(async () => false);
+    const resumeServerEnrollment = vi.fn(async () => null);
+    const connectServer = vi.fn(async () => ({
+      token: 'server-token',
+      trustIdentity: SERVER_TRUST_IDENTITY,
+    }));
+    const deps = makeStubDeps({
+      stderr,
+      preparePrivateRoot,
+      getActiveCube,
+      hasPersistedActiveCube,
+      resumeServerEnrollment,
+      connectServer,
+      promptSecret: vi.fn(async () => artifactForEndpoint('https://server.example.com')),
+      peekPendingServerEnrollment: vi.fn(async () => null),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', enroll: true, yes: true },
+    }, deps)).toBe(1);
+
+    expect(stderr.mock.calls.flat().join('')).toContain(
+      'does not match the selected `--host`',
+    );
+    expect(preparePrivateRoot).not.toHaveBeenCalled();
+    expect(getActiveCube).not.toHaveBeenCalled();
+    expect(hasPersistedActiveCube).not.toHaveBeenCalled();
+    expect(resumeServerEnrollment).not.toHaveBeenCalled();
+    expect(connectServer).not.toHaveBeenCalled();
+  });
+
   it('gives an ordinary enrolled client a distinct next step without owner wording', async () => {
     const invitation = TEST_ARTIFACT;
     const stderr = vi.fn();
@@ -3304,6 +3351,10 @@ describe('runAssimilate: #1015 authority selection', () => {
       promptSecret,
       connectServer,
       resumeServerEnrollment,
+      peekPendingServerEnrollment: vi.fn(async () => ({
+        origin: 'https://localhost:8787',
+        invitation: TEST_ARTIFACT,
+      })),
     });
 
     expect(await runAssimilate({

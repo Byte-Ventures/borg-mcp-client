@@ -1,7 +1,7 @@
 import { type InvitationArtifact, type AssociateRepositoryCubeResponse, type CreateCubeRepository, type CreateCubeResponse, type CubeTemplate, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ResolveRepositoryCubeResponse, type ServerCapability } from 'borgmcp-shared/protocol';
 import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, type ActivateSeatOutcome, type BindPendingSeatOutcome, type SeatBinding, type SeatOperation as ServerSessionOperation } from './seats.js';
-import { loadBorgServerTrust, type BorgServerTrust } from './server-trust.js';
+import { loadBorgServerTrust, loadBorgServerTrustFromPresentedChain, type BorgServerTrust } from './server-trust.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
 type FetchLike = typeof fetch;
 /** Bodyless, non-identifying liveness probe from the shared contract. */
@@ -228,8 +228,15 @@ export declare function enrollLocalBorgServer(origin: string, invitation: string
 }): Promise<NewServerEnrollment>;
 /** Enroll from a verified v2 artifact whose endpoint and CA pin are authoritative. */
 export declare function enrollLocalBorgServerArtifact(artifact: InvitationArtifact, deps?: {
+    invitation?: string;
     confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
+    loadTrustFromPresentedChain?: typeof loadBorgServerTrustFromPresentedChain;
+    prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
+    activateEnrollment?: typeof activatePendingServerEnrollment;
+    clearPendingEnrollment?: typeof clearPendingServerEnrollment;
+    loadCredentialRecord?: typeof getServerCredentialRecord;
+    hasCredentialForOrigin?: typeof hasServerCredentialForOrigin;
 }): Promise<NewServerEnrollment>;
 /** Load verified trust and resume a prior ambiguous enrollment before prompting. */
 export declare function resumeLocalBorgServerEnrollment(origin: string, deps?: {

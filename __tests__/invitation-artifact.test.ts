@@ -7,11 +7,13 @@ import {
 import {
   COMPATIBILITY_INVITATION_ERROR,
   FORMAT_INVITATION_ERROR,
+  RECOVERY_INVITATION_ERROR,
   TRANSPORT_INVITATION_ERROR,
   TRUST_INVITATION_ERROR,
   InvitationArtifactCompatibilityError,
   InvitationArtifactLegacyError,
   InvitationArtifactFormatError,
+  InvitationArtifactRecoveryError,
   InvitationArtifactTransportError,
   decodeAndVerifyInvitationArtifact,
 } from '../src/invitation-artifact';
@@ -58,5 +60,13 @@ describe('invitation artifact trust bootstrap input', () => {
     expect(new InvitationArtifactFormatError().message).toBe(FORMAT_INVITATION_ERROR);
     expect(new InvitationArtifactTransportError().message).toBe(TRANSPORT_INVITATION_ERROR);
     expect(TRUST_INVITATION_ERROR).toContain('could not verify');
+  });
+
+  it('routes split-path recovery to the real command and a fresh invitation', () => {
+    expect(new InvitationArtifactRecoveryError().message).toBe(RECOVERY_INVITATION_ERROR);
+    expect(RECOVERY_INVITATION_ERROR).toContain('`borg recover-enrollment`');
+    expect(RECOVERY_INVITATION_ERROR).toContain('only this server enrollment transaction');
+    expect(RECOVERY_INVITATION_ERROR).toContain('invitation used for this attempt has been consumed');
+    expect(RECOVERY_INVITATION_ERROR).toContain('fresh invitation');
   });
 });

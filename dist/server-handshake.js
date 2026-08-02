@@ -1,4 +1,4 @@
-import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, REPOSITORY_CUBE_ASSOCIATION_PATH, REPOSITORY_CUBE_RESOLVE_PATH, createAttachRequestEnvelope, createProtocolEnvelope, decodeAssociateRepositoryCubeRequest, decodeAssociateRepositoryCubeResponseEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, decodeResolveRepositoryCubeRequest, decodeResolveRepositoryCubeResponseEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
+import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, REPOSITORY_CUBE_ASSOCIATION_PATH, REPOSITORY_CUBE_RESOLVE_PATH, createAttachRequestEnvelope, createProtocolEnvelope, encodeInvitationArtifact, decodeAssociateRepositoryCubeRequest, decodeAssociateRepositoryCubeResponseEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, decodeResolveRepositoryCubeRequest, decodeResolveRepositoryCubeResponseEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
 import { createHash, randomUUID } from 'node:crypto';
 import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, } from './seats.js';
@@ -721,10 +721,15 @@ export async function enrollLocalBorgServer(origin, invitation, deps = {}) {
 }
 /** Enroll from a verified v2 artifact whose endpoint and CA pin are authoritative. */
 export async function enrollLocalBorgServerArtifact(artifact, deps = {}) {
-    const verifiedArtifact = decodeAndVerifyInvitationArtifact(artifact);
+    // Preserve the byte-exact opaque artifact from the operator's prompt. The
+    // decoded object is enough to inspect the endpoint/pin, but it is not the
+    // enrollment protocol's invitation material: replacing it with
+    // `verifiedArtifact.secret` silently degrades v2 composite artifacts.
+    const opaqueArtifact = deps.invitation ?? encodeInvitationArtifact(artifact);
+    const verifiedArtifact = decodeAndVerifyInvitationArtifact(opaqueArtifact);
     let trust;
     try {
-        trust = await loadBorgServerTrustFromPresentedChain(verifiedArtifact.endpoint, verifiedArtifact.ca_spki_sha256);
+        trust = await (deps.loadTrustFromPresentedChain ?? loadBorgServerTrustFromPresentedChain)(verifiedArtifact.endpoint, verifiedArtifact.ca_spki_sha256);
     }
     catch (error) {
         if (error instanceof InvitationArtifactCompatibilityError)
@@ -737,10 +742,15 @@ export async function enrollLocalBorgServerArtifact(artifact, deps = {}) {
             throw error;
         throw new InvitationArtifactTransportError();
     }
-    return enrollBorgServer(verifiedArtifact.endpoint, trust.identity, verifiedArtifact.secret, {
+    return enrollBorgServer(verifiedArtifact.endpoint, trust.identity, opaqueArtifact, {
         fetchImpl: trust.fetchImpl,
         ...(deps.confirmReplacement === undefined ? {} : { confirmReplacement: deps.confirmReplacement }),
         ...(deps.clientName === undefined ? {} : { clientName: deps.clientName }),
+        ...(deps.prepareEnrollment === undefined ? {} : { prepareEnrollment: deps.prepareEnrollment }),
+        ...(deps.activateEnrollment === undefined ? {} : { activateEnrollment: deps.activateEnrollment }),
+        ...(deps.clearPendingEnrollment === undefined ? {} : { clearPendingEnrollment: deps.clearPendingEnrollment }),
+        ...(deps.loadCredentialRecord === undefined ? {} : { loadCredentialRecord: deps.loadCredentialRecord }),
+        ...(deps.hasCredentialForOrigin === undefined ? {} : { hasCredentialForOrigin: deps.hasCredentialForOrigin }),
         expectedAuthority: verifiedArtifact.authority,
         commitTrust: trust.commitTrust,
         discardTrust: trust.discardTrust,

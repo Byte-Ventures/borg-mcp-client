@@ -307,6 +307,9 @@ export interface AssimilateDeps {
     trustIdentity: string;
     serverCapabilities?: readonly string[];
   } | null>;
+  /** Read-only pending-artifact peek used to validate an explicit host before
+   * the normal resume path performs trust/credential work. */
+  peekPendingServerEnrollment?: () => Promise<{ origin: string; invitation: string } | null>;
   resumePendingServerEnrollment?: (
     onPending?: () => void,
   ) => Promise<{
@@ -731,23 +734,85 @@ export async function runAssimilate(
     trustIdentity: string;
     serverCapabilities?: readonly string[];
   } | null = null;
-  if (args.flags.enroll && args.flags.server !== undefined && deps.isTTY()) {
-    try {
-      const preResumeOrigin = normalizeServerEndpoint(args.flags.server);
-      preResumeAttempted = true;
-      preResumedEnrollment = await deps.resumeServerEnrollment(preResumeOrigin, () => {
-        deps.stderr(
-          `Resuming the pending enrollment for \`${preResumeOrigin}\`; ` +
-          'do not enter another invitation unless the server certificate was reissued; ' +
-          'if it was, request a current invitation and rerun this command.\n',
-        );
-      });
-    } catch {
-      preResumeAttempted = false;
-    }
-  }
+
   let prefetchedInvitation: string | undefined;
   let prefetchedArtifact: InvitationArtifact | undefined;
+
+  // An explicit --host plus a new invitation must be rejected on the pure
+  // input path. In particular, do not let the old pre-resume attempt read
+  // trust/credentials or touch the private root before we compare the signed
+  // artifact endpoint with the selected host. A real pending transaction is
+  // the one exception: validate its persisted artifact first, then preserve
+  // the published no-prompt resume behavior until client#267 lands.
+  if (args.flags.enroll && args.flags.server !== undefined && deps.isTTY()) {
+    let preResumeOrigin: string;
+    try {
+      preResumeOrigin = normalizeServerEndpoint(args.flags.server);
+    } catch (error) {
+      deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+
+    let pendingForHost = false;
+    if (deps.peekPendingServerEnrollment !== undefined) {
+      let pending: { origin: string; invitation: string } | null = null;
+      try {
+        pending = await deps.peekPendingServerEnrollment();
+      } catch {
+        pending = null;
+      }
+      if (pending?.origin === preResumeOrigin) {
+        try {
+          const pendingArtifact = decodeAndVerifyInvitationArtifact(pending.invitation);
+          if (pendingArtifact.endpoint !== preResumeOrigin) {
+            throw new InvitationArtifactEndpointMismatchError(
+              preResumeOrigin,
+              pendingArtifact.endpoint,
+            );
+          }
+          pendingForHost = true;
+        } catch (error) {
+          deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
+          return 1;
+        }
+      }
+    }
+
+    if (!pendingForHost) {
+      prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
+      if (!prefetchedInvitation) {
+        deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
+        return 1;
+      }
+      try {
+        prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
+        if (prefetchedArtifact.endpoint !== preResumeOrigin) {
+          throw new InvitationArtifactEndpointMismatchError(
+            preResumeOrigin,
+            prefetchedArtifact.endpoint,
+          );
+        }
+      } catch (error) {
+        deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
+        prefetchedInvitation = undefined;
+        prefetchedArtifact = undefined;
+        return 1;
+      }
+    } else {
+      try {
+        preResumeAttempted = true;
+        preResumedEnrollment = await deps.resumeServerEnrollment(preResumeOrigin, () => {
+          deps.stderr(
+            `Resuming the pending enrollment for \`${preResumeOrigin}\`; ` +
+            'do not enter another invitation unless the server certificate was reissued; ' +
+            'if it was, request a current invitation and rerun this command.\n',
+          );
+        });
+      } catch {
+        preResumeAttempted = false;
+      }
+    }
+  }
   if (artifactOnlyEnrollment ||
       preResumeAttempted && preResumedEnrollment === null) {
     if (artifactOnlyEnrollment && deps.resumePendingServerEnrollment) {
