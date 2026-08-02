@@ -6,7 +6,7 @@ import { BorgServerError, BorgServerTrustError, BorgServerUnreachableError, Cube
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { loadBorgServerTrust, loadBorgServerTrustFromPresentedChain, } from './server-trust.js';
-import { InvitationArtifactCompatibilityError, InvitationArtifactTransportError, InvitationArtifactTrustError, decodeAndVerifyInvitationArtifact, } from './invitation-artifact.js';
+import { InvitationArtifactCompatibilityError, InvitationArtifactStorageError, InvitationArtifactTransportError, InvitationArtifactTrustError, decodeAndVerifyInvitationArtifact, } from './invitation-artifact.js';
 const HANDSHAKE_BODY_LIMIT = 64 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -267,7 +267,14 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
     // Credential-free tag preflight FIRST (CR fb4d6eba): after pinned TLS, an
     // incompatible server must be rejected before any credential is created or
     // persisted and before any invitation/secret-bearing request is sent.
-    const protocol = await preflightBorgServerTag(origin, fetchImpl);
+    let protocol;
+    try {
+        protocol = await preflightBorgServerTag(origin, fetchImpl);
+    }
+    catch (error) {
+        await deps.discardTrust?.();
+        throw error;
+    }
     const existingCredential = await (deps.loadCredentialRecord ?? getServerCredentialRecord)(origin, trustIdentity);
     const existingOriginCredential = existingCredential !== null || await (deps.hasCredentialForOrigin ?? hasServerCredentialForOrigin)(origin);
     let replacementConfirmed = false;
@@ -276,6 +283,7 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
             ? await deps.confirmReplacement()
             : false;
         if (!confirmed) {
+            await deps.discardTrust?.();
             throw new BorgServerError('LOCAL_CREDENTIAL_EXISTS', 'a local enrollment already exists for this server and was not replaced');
         }
         replacementConfirmed = true;
@@ -711,10 +719,13 @@ export async function enrollLocalBorgServerArtifact(artifact, deps = {}) {
         trust = await loadBorgServerTrustFromPresentedChain(verifiedArtifact.endpoint, verifiedArtifact.ca_spki_sha256);
     }
     catch (error) {
-        if (error instanceof Error && /did not present/i.test(error.message)) {
-            throw new InvitationArtifactCompatibilityError();
-        }
+        if (error instanceof InvitationArtifactCompatibilityError)
+            throw error;
         if (error instanceof InvitationArtifactTransportError)
+            throw error;
+        if (error instanceof InvitationArtifactTrustError)
+            throw error;
+        if (error instanceof InvitationArtifactStorageError)
             throw error;
         throw new InvitationArtifactTransportError();
     }

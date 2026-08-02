@@ -62,6 +62,7 @@ import {
   InvitationArtifactEndpointMismatchError,
   InvitationArtifactFormatError,
   InvitationArtifactLegacyError,
+  InvitationArtifactStorageError,
   InvitationArtifactTransportError,
   InvitationArtifactTrustError,
 } from './invitation-artifact.js';
@@ -560,6 +561,10 @@ function reportServerFailure(
     deps.stderr(`${error.message}\n`);
     return 1;
   }
+  if (error instanceof InvitationArtifactStorageError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
   if (error instanceof InvitationArtifactTrustError) {
     deps.stderr(`${error.message}\n`);
     return 1;
@@ -838,7 +843,7 @@ export async function runAssimilate(
           try {
             const artifact = prefetchedArtifact ?? decodeAndVerifyInvitationArtifact(invitation);
             if (args.flags.server !== undefined && authority.apiUrl !== artifact.endpoint) {
-              throw new InvitationArtifactEndpointMismatchError();
+              throw new InvitationArtifactEndpointMismatchError(authority.apiUrl, artifact.endpoint);
             }
             authority = { kind: 'server', apiUrl: artifact.endpoint };
             serverAuth = await deps.connectServer(authority.apiUrl, {

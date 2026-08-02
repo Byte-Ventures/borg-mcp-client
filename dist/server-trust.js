@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { BorgServerTrustError } from './server-errors.js';
-import { InvitationArtifactTransportError } from './invitation-artifact.js';
+import { InvitationArtifactCompatibilityError, InvitationArtifactStorageError, InvitationArtifactTransportError, InvitationArtifactTrustError, } from './invitation-artifact.js';
 // CR5 TLS LATTICE: OpenSSL/Node TLS certificate-verification error codes. A raw
 // CA / cert-chain / SAN failure from the pinned transport is a potential MITM and
 // MUST be a TERMINAL trust-mismatch verdict — never a transient 'restart' blip.
@@ -316,8 +316,8 @@ export async function loadBorgServerTrustFromPresentedChain(origin, caSpkiSha256
         }
     }
     if (!sawCa)
-        throw new Error('Borg server did not present the required certificate chain');
-    throw new Error('Borg server presented a certificate chain with the wrong pinned identity');
+        throw new InvitationArtifactCompatibilityError();
+    throw new InvitationArtifactTrustError();
 }
 export async function stageBorgServerTrust(origin, certificate, identity) {
     const directory = remoteTrustDirectory(origin);
@@ -327,10 +327,15 @@ export async function stageBorgServerTrust(origin, certificate, identity) {
     const temporaryConfig = join(directory, `.server.json.${suffix}.tmp`);
     const finalCertificate = join(directory, 'ca.crt');
     const finalConfig = join(directory, 'server.json');
-    await Promise.all([
-        writeFile(temporaryCertificate, certificate, { mode: 0o600, flag: 'wx' }),
-        writeFile(temporaryConfig, JSON.stringify({ ca_spki_sha256: identity.replace(/^spki-sha256:/, '') }), { mode: 0o600, flag: 'wx' }),
-    ]);
+    try {
+        await Promise.all([
+            writeFile(temporaryCertificate, certificate, { mode: 0o600, flag: 'wx' }),
+            writeFile(temporaryConfig, JSON.stringify({ ca_spki_sha256: identity.replace(/^spki-sha256:/, '') }), { mode: 0o600, flag: 'wx' }),
+        ]);
+    }
+    catch {
+        throw new InvitationArtifactStorageError();
+    }
     let committed = false;
     return {
         identity,

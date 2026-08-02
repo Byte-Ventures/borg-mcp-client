@@ -73,6 +73,7 @@ import {
 } from './server-trust.js';
 import {
   InvitationArtifactCompatibilityError,
+  InvitationArtifactStorageError,
   InvitationArtifactTransportError,
   InvitationArtifactTrustError,
   decodeAndVerifyInvitationArtifact,
@@ -1115,10 +1116,10 @@ export async function enrollLocalBorgServerArtifact(
       verifiedArtifact.ca_spki_sha256,
     );
   } catch (error) {
-    if (error instanceof Error && /did not present/i.test(error.message)) {
-      throw new InvitationArtifactCompatibilityError();
-    }
+    if (error instanceof InvitationArtifactCompatibilityError) throw error;
     if (error instanceof InvitationArtifactTransportError) throw error;
+    if (error instanceof InvitationArtifactTrustError) throw error;
+    if (error instanceof InvitationArtifactStorageError) throw error;
     throw new InvitationArtifactTransportError();
   }
   return enrollBorgServer(verifiedArtifact.endpoint, trust.identity, verifiedArtifact.secret, {

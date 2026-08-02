@@ -508,7 +508,7 @@ test('release documentation describes the activated minimal publication lane', a
   ]) assert.ok(releasing.includes(evidence), `Missing immutable release evidence: ${evidence}`);
   assert.match(releasing, /failed before package\s+creation or npm publication/);
   assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
-  assert.match(extraction, /coupled `borgmcp-server@0\.8\.0` candidate/);
+  assert.match(extraction, /coupled server candidate/);
   assert.doesNotMatch(extraction, /sha512-OSnBBcdZOM88Dokr7WICcTmF19c\+Nr0TOl7NXy8DSUeCpBttiKKx\+KuFvGbaXAWikFkm0UUBUca5cLZAOWw4Xw==/);
   assert.ok(extraction.includes(`reviewed \`v${manifest.version}\` source`));
   assert.doesNotMatch(`${readme}\n${security}\n${releasing}`, /publication is deferred|not yet published/);

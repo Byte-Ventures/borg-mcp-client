@@ -18,6 +18,9 @@ export const FORMAT_INVITATION_ERROR =
 export const TRANSPORT_INVITATION_ERROR =
   'Borg could not reach the server named by this invitation. No invitation or credential was sent and no local trust or credential state was changed. Check that the server is running and that this machine can reach the invitation endpoint, then retry.';
 
+export const STORAGE_INVITATION_ERROR =
+  'Borg could not prepare local trust state for this invitation. No invitation or credential was sent and no local trust or credential state was changed. Check that Borg can write its private local state, then retry.';
+
 export class InvitationArtifactCompatibilityError extends Error {
   constructor(message = COMPATIBILITY_INVITATION_ERROR) {
     super(message);
@@ -42,11 +45,18 @@ export class InvitationArtifactFormatError extends Error {
 }
 
 export class InvitationArtifactEndpointMismatchError extends Error {
-  constructor() {
+  constructor(selectedEndpoint: string, invitationEndpoint: string) {
     super(
-      'The enrollment invitation endpoint does not match the selected `--host`. No invitation or credential was sent and no local trust or credential state was changed. Omit `--host` or select the exact endpoint named by the invitation, then retry.',
+      `The enrollment invitation endpoint (${invitationEndpoint}) does not match the selected \`--host\` (${selectedEndpoint}). No invitation or credential was sent and no local trust or credential state was changed. Omit \`--host\` or select the exact invitation endpoint, then retry.`,
     );
     this.name = 'InvitationArtifactEndpointMismatchError';
+  }
+}
+
+export class InvitationArtifactStorageError extends Error {
+  constructor(message = STORAGE_INVITATION_ERROR) {
+    super(message);
+    this.name = 'InvitationArtifactStorageError';
   }
 }
 
