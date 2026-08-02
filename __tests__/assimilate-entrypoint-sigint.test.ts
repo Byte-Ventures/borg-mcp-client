@@ -38,6 +38,7 @@ const CLEAN_PATH_ARTIFACT = encodeInvitationArtifact({
     .update(getInvitationArtifactIntegrityInput(CLEAN_PATH_ARTIFACT_BASE))
     .digest('base64url'),
 });
+const POSITIONAL_INVITATION_SENTINEL = 'A'.repeat(80);
 
 function makeEntryDeps(question: PromptQuestion) {
   const stderr = vi.fn();
@@ -224,6 +225,52 @@ describe.each(cleanPathEntrypoints)('clean-machine enrollment through $entry', (
         artifact: expect.objectContaining({ endpoint: 'https://127.0.0.1:7091' }),
       }),
     );
+  });
+});
+
+describe.each(['borg assimilate', 'borg server cube init'] as const)('positional enrollment input through $entry', (entry) => {
+  it('rejects before orchestration without echoing the invitation-shaped input', async () => {
+    const state = makeEntryDeps(async () => '1');
+    const ensureLocalServerInstalled = vi.fn(async () => 'present' as const);
+    state.deps.ensureLocalServerInstalled = ensureLocalServerInstalled;
+    const writeStdout = vi.fn();
+    const writeStderr = vi.fn();
+    const spawn = vi.fn(() => { throw new Error('server process must not start'); });
+    const processDeps: ServerFacadeProcessDeps = {
+      spawn,
+      addSignalListener: vi.fn(),
+      removeSignalListener: vi.fn(),
+    };
+    const processStderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = entry === 'borg assimilate'
+        ? await runAssimilateEntry(
+          ['--enroll', POSITIONAL_INVITATION_SENTINEL],
+          () => state.deps,
+        )
+        : await runEarlyServerFacade(
+          ['node', 'borg', 'server', 'cube', 'init', '--enroll', POSITIONAL_INVITATION_SENTINEL],
+          processDeps,
+          { writeStdout, writeStderr },
+          buildDefaultServerFacadeClientDeps(() => state.deps),
+        );
+
+      expect(code).toBe(1);
+      const output = [
+        ...processStderr.mock.calls.map(([text]) => String(text)),
+        ...writeStdout.mock.calls.map(([text]) => String(text)),
+        ...writeStderr.mock.calls.map(([text]) => String(text)),
+      ].join('');
+      expect(output).toContain('Enrollment invitations must be entered at the hidden prompt');
+      expect(output).not.toContain(POSITIONAL_INVITATION_SENTINEL);
+      expect(state.deps.promptSecret).not.toHaveBeenCalled();
+      expect(state.deps.connectServer).not.toHaveBeenCalled();
+      expect(state.deps.preparePrivateRoot).not.toHaveBeenCalled();
+      expect(ensureLocalServerInstalled).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      processStderr.mockRestore();
+    }
   });
 });
 

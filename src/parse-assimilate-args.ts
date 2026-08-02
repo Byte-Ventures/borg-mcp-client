@@ -1,4 +1,8 @@
 import type { AssimilateFlags } from './assimilate-cmd.js';
+import { validateName } from './name-validator.js';
+
+const ENROLLMENT_POSITIONAL_INPUT_ERROR =
+  'Enrollment invitations must be entered at the hidden prompt; do not pass an invitation as a command-line argument.';
 
 export interface ParseAssimilateResult {
   ok: true;
@@ -18,6 +22,7 @@ export type ParseResult =
 export function parseAssimilateArgs(rawArgs: string[]): ParseResult {
   let role: string | undefined;
   const flags: AssimilateFlags = {};
+  const enrollmentRequested = rawArgs.includes('--enroll');
 
   for (let i = 0; i < rawArgs.length; i += 1) {
     const arg = rawArgs[i];
@@ -105,7 +110,13 @@ export function parseAssimilateArgs(rawArgs: string[]): ParseResult {
       };
     } else {
       if (role !== undefined) {
+        if (enrollmentRequested) {
+          return { ok: false, error: ENROLLMENT_POSITIONAL_INPUT_ERROR };
+        }
         return { ok: false, error: `unexpected extra argument: ${arg} (already have role "${role}")` };
+      }
+      if (enrollmentRequested && !validateName(arg).ok) {
+        return { ok: false, error: ENROLLMENT_POSITIONAL_INPUT_ERROR };
       }
       role = arg;
     }

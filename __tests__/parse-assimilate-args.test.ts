@@ -93,6 +93,24 @@ describe('parseAssimilateArgs', () => {
     });
   });
 
+  it('keeps valid role selection but rejects invalid enrollment positionals without echoing them', () => {
+    expect(parseAssimilateArgs(['--enroll', 'builder'])).toEqual({
+      ok: true,
+      role: 'builder',
+      flags: { enroll: true },
+    });
+
+    const sentinel = 'A'.repeat(80);
+    for (const args of [['--enroll', sentinel], [sentinel, '--enroll']]) {
+      const result = parseAssimilateArgs(args);
+      expect(result).toEqual({
+        ok: false,
+        error: 'Enrollment invitations must be entered at the hidden prompt; do not pass an invitation as a command-line argument.',
+      });
+      if (!result.ok) expect(result.error).not.toContain(sentinel);
+    }
+  });
+
   it('rejects the retired --reset-local-seat flag (reset moved to `borg reset-local-seat`)', () => {
     const result = parseAssimilateArgs(['--host', 'localhost:7091', '--here', '--reset-local-seat']);
     expect(result.ok).toBe(false);
