@@ -1,37 +1,37 @@
 [
   {
     "file": "src/cli-help.ts",
-    "lineNumber": 160,
+    "lineNumber": 162,
     "line": "`  dashboard   View the running local server dashboard.\\n` +"
   },
   {
     "file": "src/server-facade.ts",
-    "lineNumber": 8,
-    "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'cert-reissue', 'dashboard'] as const;"
+    "lineNumber": 18,
+    "line": "'dashboard',"
   },
   {
     "file": "src/server-facade.ts",
-    "lineNumber": 165,
-    "line": "`Available commands: setup, start, stop, status, update, invite, cert-reissue, dashboard, cube init.\\n` +"
+    "lineNumber": 176,
+    "line": "`Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
   },
   {
     "file": "dist/cli-help.js",
-    "lineNumber": 130,
+    "lineNumber": 132,
     "line": "`  dashboard   View the running local server dashboard.\\n` +"
   },
   {
     "file": "dist/server-facade.d.ts",
     "lineNumber": 2,
-    "line": "export declare const SERVER_LIFECYCLE_COMMANDS: readonly [\"setup\", \"start\", \"stop\", \"status\", \"update\", \"invite\", \"cert-reissue\", \"dashboard\"];"
+    "line": "export declare const SERVER_LIFECYCLE_COMMANDS: readonly [\"setup\", \"start\", \"stop\", \"status\", \"update\", \"invite\", \"cert-reissue\", \"client-list\", \"client-grant\", \"dashboard\"];"
   },
   {
     "file": "dist/server-facade.js",
-    "lineNumber": 7,
-    "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'cert-reissue', 'dashboard'];"
+    "lineNumber": 17,
+    "line": "'dashboard',"
   },
   {
     "file": "dist/server-facade.js",
-    "lineNumber": 96,
-    "line": "`Available commands: setup, start, stop, status, update, invite, cert-reissue, dashboard, cube init.\\n` +"
+    "lineNumber": 107,
+    "line": "`Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
   }
 ]

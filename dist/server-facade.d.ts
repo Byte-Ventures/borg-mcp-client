@@ -1,5 +1,5 @@
 import { type SpawnOptions } from 'node:child_process';
-export declare const SERVER_LIFECYCLE_COMMANDS: readonly ["setup", "start", "stop", "status", "update", "invite", "cert-reissue", "dashboard"];
+export declare const SERVER_LIFECYCLE_COMMANDS: readonly ["setup", "start", "stop", "status", "update", "invite", "cert-reissue", "client-list", "client-grant", "dashboard"];
 export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
 export type ParsedServerFacadeArgs = {
     kind: 'help';
