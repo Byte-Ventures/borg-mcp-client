@@ -468,7 +468,7 @@ export async function enrollBorgServer(
     confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
     expectedAuthority?: InvitationArtifact['authority'];
-    commitTrust?: () => Promise<void>;
+    commitTrust?: (activate: () => Promise<void>) => Promise<void>;
     discardTrust?: () => Promise<void>;
   } = {},
 ): Promise<NewServerEnrollment> {
@@ -585,8 +585,7 @@ export async function enrollBorgServer(
     }
   }
 
-  await deps.commitTrust?.();
-  await (deps.activateEnrollment ?? activatePendingServerEnrollment)({
+  const activate = () => (deps.activateEnrollment ?? activatePendingServerEnrollment)({
     origin,
     trustIdentity,
     retryKey: pending.retryKey,
@@ -595,6 +594,8 @@ export async function enrollBorgServer(
     serverCapabilities: decoded.payload.server_capabilities,
     ...(replacementConfirmed ? { allowReplacement: true } : {}),
   });
+  if (deps.commitTrust) await deps.commitTrust(activate);
+  else await activate();
   return {
     token: pending.credential,
     trustIdentity,

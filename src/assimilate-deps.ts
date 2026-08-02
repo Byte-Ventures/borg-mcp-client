@@ -63,6 +63,7 @@ import {
   setCodexWakeTarget,
 } from './cubes.js';
 import { addProjectSessionStartHook } from './config-utils.js';
+import { findPendingServerEnrollment } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
@@ -262,6 +263,15 @@ export function buildDefaultAssimilateDeps(
       resumeLocalBorgServerEnrollment(apiUrl, {
         ...(onPending === undefined ? {} : { onPending }),
       }),
+    resumePendingServerEnrollment: async (onPending) =>
+      (async () => {
+        const pending = await findPendingServerEnrollment();
+        if (!pending) return null;
+        const result = await resumeLocalBorgServerEnrollment(pending.origin, {
+          ...(onPending === undefined ? {} : { onPending }),
+        });
+        return result ? { ...result, apiUrl: pending.origin } : null;
+      })(),
 
     resolveRepositoryCube: async (apiUrl, token, input, serverTrustIdentity) => {
       if (serverTrustIdentity === undefined) {

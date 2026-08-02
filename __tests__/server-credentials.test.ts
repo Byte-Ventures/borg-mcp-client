@@ -80,6 +80,47 @@ describe('self-hosted server credential storage', () => {
     await expect(getServerCredential(origin, 'sha256:server-b')).resolves.toBe('d'.repeat(43));
   });
 
+  it('requires writer-bound consent before replacing the exact origin and identity', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    await storeServerCredential({ origin, trustIdentity, credential });
+
+    await expect(storeServerCredential({
+      origin,
+      trustIdentity,
+      credential: 'd'.repeat(43),
+    })).rejects.toThrow(/replacement was not confirmed/i);
+    await expect(getServerCredential(origin, trustIdentity)).resolves.toBe(credential);
+  });
+
+  it('preserves the old credential when a confirmed replacement write fails', async () => {
+    const { values } = memoryBackend();
+    const stable = 'o'.repeat(43);
+    const replacement = 'n'.repeat(43);
+    let failWrites = false;
+    const backend: TokenBackend = {
+      name: 'file',
+      entries: async () => Object.fromEntries(values),
+      get: async (account) => values.get(account) ?? null,
+      set: async (account, value) => {
+        if (failWrites) throw new Error('injected replacement write failure');
+        values.set(account, value);
+      },
+      delete: async (account) => { values.delete(account); },
+    };
+    __setServerCredentialBackendForTest(backend);
+    await storeServerCredential({ origin, trustIdentity, credential: stable });
+    const account = [...values.keys()][0]!;
+    failWrites = true;
+
+    await expect(storeServerCredential({
+      origin,
+      trustIdentity,
+      credential: replacement,
+    }, { allowReplacement: true })).rejects.toThrow(/injected replacement/i);
+    expect(values.get(account)).toContain(stable);
+  });
+
   it('fails closed on a corrupt stored record and supports explicit removal', async () => {
     const { backend, values } = memoryBackend();
     __setServerCredentialBackendForTest(backend);

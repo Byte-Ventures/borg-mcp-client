@@ -40,7 +40,7 @@ contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
 resolves to the audited registry `borgmcp-shared@0.8.0` with integrity
 `sha512-0p/ZC03Y6G4N6bfBjMD5b+WcQXcLalhU/3QqGjSWYCFKa3q2/183O53w6Tu6y8h2DkhTw5prnamsOozmVpXZew==`.
-The client/server 0.8.0 release remains a coupled server candidate pending publication. The
+The coupled server candidate for the client 2.9.x line remains pending publication. The
 already-published server 0.8.0 release retains its immutable older shared
 dependency pin and is not the server artifact for this client contract. Client `borgmcp@2.8.0` is published. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next

@@ -27,6 +27,7 @@ import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError, CubeCreationConfirmationError } from './server-errors.js';
 import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
 import { addProjectSessionStartHook } from './config-utils.js';
+import { findPendingServerEnrollment } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
@@ -192,6 +193,15 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         resumeServerEnrollment: async (apiUrl, onPending) => resumeLocalBorgServerEnrollment(apiUrl, {
             ...(onPending === undefined ? {} : { onPending }),
         }),
+        resumePendingServerEnrollment: async (onPending) => (async () => {
+            const pending = await findPendingServerEnrollment();
+            if (!pending)
+                return null;
+            const result = await resumeLocalBorgServerEnrollment(pending.origin, {
+                ...(onPending === undefined ? {} : { onPending }),
+            });
+            return result ? { ...result, apiUrl: pending.origin } : null;
+        })(),
         resolveRepositoryCube: async (apiUrl, token, input, serverTrustIdentity) => {
             if (serverTrustIdentity === undefined) {
                 throw new Error('Selected Borg server authority state is missing or unreadable');

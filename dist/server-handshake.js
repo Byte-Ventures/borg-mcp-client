@@ -1,6 +1,6 @@
 import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, REPOSITORY_CUBE_ASSOCIATION_PATH, REPOSITORY_CUBE_RESOLVE_PATH, createAttachRequestEnvelope, createProtocolEnvelope, decodeAssociateRepositoryCubeRequest, decodeAssociateRepositoryCubeResponseEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, decodeResolveRepositoryCubeRequest, decodeResolveRepositoryCubeResponseEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
 import { createHash, randomUUID } from 'node:crypto';
-import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, } from './config.js';
+import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, findPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, } from './seats.js';
 import { BorgServerError, BorgServerTrustError, BorgServerUnreachableError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
@@ -355,8 +355,7 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
             throw new InvitationArtifactTrustError();
         }
     }
-    await deps.commitTrust?.();
-    await (deps.activateEnrollment ?? activatePendingServerEnrollment)({
+    const activate = () => (deps.activateEnrollment ?? activatePendingServerEnrollment)({
         origin,
         trustIdentity,
         retryKey: pending.retryKey,
@@ -365,6 +364,10 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
         serverCapabilities: decoded.payload.server_capabilities,
         ...(replacementConfirmed ? { allowReplacement: true } : {}),
     });
+    if (deps.commitTrust)
+        await deps.commitTrust(activate);
+    else
+        await activate();
     return {
         token: pending.credential,
         trustIdentity,
@@ -756,6 +759,13 @@ export async function resumeLocalBorgServerEnrollment(origin, deps = {}) {
             : { loadPendingEnrollment: deps.loadPendingEnrollment }),
         ...(deps.onPending === undefined ? {} : { onPending: deps.onPending }),
     });
+}
+/** Resume the only pending enrollment when artifact-only mode has no endpoint argument. */
+export async function resumeAnyLocalBorgServerEnrollment(deps = {}) {
+    const pending = await findPendingServerEnrollment();
+    if (!pending)
+        return null;
+    return resumeLocalBorgServerEnrollment(pending.origin, { onPending: deps.onPending });
 }
 /** Advisory discovery that still verifies the server-owned CA. */
 export async function probeLocalBorgServer(origin) {

@@ -63,6 +63,7 @@ export function makeFileBackend(filePath, storeOptions = {}) {
     return {
         name: 'file',
         entries: load,
+        replaceAccounts: save,
         async get(account) {
             const accounts = await load();
             return Object.prototype.hasOwnProperty.call(accounts, account) ? accounts[account] : null;

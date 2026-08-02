@@ -164,6 +164,12 @@ export interface AssimilateDeps {
         trustIdentity: string;
         serverCapabilities?: readonly string[];
     } | null>;
+    resumePendingServerEnrollment?: (onPending?: () => void) => Promise<{
+        token: string;
+        apiUrl?: string;
+        trustIdentity: string;
+        serverCapabilities?: readonly string[];
+    } | null>;
     resolveRepositoryCube: (apiUrl: string, token: string, input: {
         workingRepoName: string;
         repository: CreateCubeRepository;

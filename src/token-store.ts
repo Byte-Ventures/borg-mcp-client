@@ -21,6 +21,8 @@ export interface TokenBackend {
   readonly name: TokenBackendName;
   get(account: string): Promise<string | null>;
   readonly entries?: () => Promise<Record<string, string>>;
+  /** Replace the complete account map in one backend transaction when available. */
+  readonly replaceAccounts?: (accounts: Record<string, string>) => Promise<void>;
   set(account: string, value: string): Promise<void>;
   delete(account: string): Promise<void>;
 }
@@ -89,6 +91,7 @@ export function makeFileBackend(
   return {
     name: 'file',
     entries: load,
+    replaceAccounts: save,
     async get(account) {
       const accounts = await load();
       return Object.prototype.hasOwnProperty.call(accounts, account) ? accounts[account] : null;

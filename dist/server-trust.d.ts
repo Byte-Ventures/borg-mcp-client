@@ -4,7 +4,7 @@ export interface BorgServerTrust {
     fetchImpl: ServerFetch;
 }
 export interface StagedBorgServerTrust extends BorgServerTrust {
-    commitTrust: () => Promise<void>;
+    commitTrust: (activate: () => Promise<void>) => Promise<void>;
     discardTrust: () => Promise<void>;
 }
 /**

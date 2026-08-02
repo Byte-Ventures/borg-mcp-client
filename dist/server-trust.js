@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, open, rename, unlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import { homedir } from 'node:os';
@@ -321,39 +321,54 @@ export async function loadBorgServerTrustFromPresentedChain(origin, caSpkiSha256
 }
 export async function stageBorgServerTrust(origin, certificate, identity) {
     const directory = remoteTrustDirectory(origin);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const parent = resolve(directory, '..');
+    await mkdir(parent, { recursive: true, mode: 0o700 });
     const suffix = `${process.pid}-${Date.now()}`;
-    const temporaryCertificate = join(directory, `.ca.crt.${suffix}.tmp`);
-    const temporaryConfig = join(directory, `.server.json.${suffix}.tmp`);
-    const finalCertificate = join(directory, 'ca.crt');
-    const finalConfig = join(directory, 'server.json');
+    const temporaryDirectory = `${directory}.tmp-${suffix}`;
+    const temporaryCertificate = join(temporaryDirectory, 'ca.crt');
+    const temporaryConfig = join(temporaryDirectory, 'server.json');
     try {
+        await mkdir(temporaryDirectory, { recursive: false, mode: 0o700 });
         await Promise.all([
             writeFile(temporaryCertificate, certificate, { mode: 0o600, flag: 'wx' }),
             writeFile(temporaryConfig, JSON.stringify({ ca_spki_sha256: identity.replace(/^spki-sha256:/, '') }), { mode: 0o600, flag: 'wx' }),
         ]);
     }
     catch {
+        await rm(temporaryDirectory, { recursive: true, force: true });
         throw new InvitationArtifactStorageError();
     }
     let committed = false;
     return {
         identity,
         fetchImpl: createPinnedServerFetch(origin, certificate),
-        commitTrust: async () => {
+        commitTrust: async (activate) => {
             if (committed)
                 return;
-            await rename(temporaryCertificate, finalCertificate);
-            await rename(temporaryConfig, finalConfig);
-            committed = true;
+            const backupDirectory = `${directory}.backup-${suffix}`;
+            let backedUp = false;
+            try {
+                await rename(directory, backupDirectory).then(() => { backedUp = true; }).catch((error) => {
+                    if (error.code !== 'ENOENT')
+                        throw error;
+                });
+                await rename(temporaryDirectory, directory);
+                await activate();
+                committed = true;
+                await rm(backupDirectory, { recursive: true, force: true }).catch(() => undefined);
+            }
+            catch (error) {
+                await rm(directory, { recursive: true, force: true });
+                await rm(temporaryDirectory, { recursive: true, force: true });
+                if (backedUp)
+                    await rename(backupDirectory, directory).catch(() => undefined);
+                throw new InvitationArtifactStorageError();
+            }
         },
         discardTrust: async () => {
             if (committed)
                 return;
-            await Promise.all([
-                unlink(temporaryCertificate).catch(() => undefined),
-                unlink(temporaryConfig).catch(() => undefined),
-            ]);
+            await rm(temporaryDirectory, { recursive: true, force: true });
         },
     };
 }

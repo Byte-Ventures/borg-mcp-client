@@ -128,7 +128,7 @@ export declare function enrollBorgServer(origin: string, trustIdentity: string, 
     confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
     expectedAuthority?: InvitationArtifact['authority'];
-    commitTrust?: () => Promise<void>;
+    commitTrust?: (activate: () => Promise<void>) => Promise<void>;
     discardTrust?: () => Promise<void>;
 }): Promise<NewServerEnrollment>;
 /** Resume an exact durable enrollment tuple without asking for the invitation again. */
@@ -235,6 +235,10 @@ export declare function enrollLocalBorgServerArtifact(artifact: InvitationArtifa
 export declare function resumeLocalBorgServerEnrollment(origin: string, deps?: {
     loadTrust?: typeof loadBorgServerTrust;
     loadPendingEnrollment?: typeof getPendingServerEnrollment;
+    onPending?: () => void;
+}): Promise<NewServerEnrollment | null>;
+/** Resume the only pending enrollment when artifact-only mode has no endpoint argument. */
+export declare function resumeAnyLocalBorgServerEnrollment(deps?: {
     onPending?: () => void;
 }): Promise<NewServerEnrollment | null>;
 /** Advisory discovery that still verifies the server-owned CA. */

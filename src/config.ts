@@ -252,10 +252,14 @@ async function writeServerCredentialRecord(
     validateUuid(record.clientId, 'client identity');
   }
   const serverCapabilities = validateServerCapabilities(record.serverCapabilities ?? []);
+  const targetAccount = serverCredentialAccount(record.origin, record.trustIdentity);
+  const exactExisting = await backend.get(targetAccount);
+  if (exactExisting !== null && !allowReplacement) {
+    throw new Error('local Borg server enrollment already exists for this origin and replacement was not confirmed');
+  }
   if (backend.entries) {
     const accounts = await backend.entries();
     const conflicts = Object.entries(accounts).filter(([account, value]) => {
-      if (account === serverCredentialAccount(record.origin, record.trustIdentity)) return false;
       try {
         const parsed = JSON.parse(value) as { version?: unknown; origin?: unknown };
         return parsed.version === SERVER_CREDENTIAL_RECORD_VERSION && parsed.origin === record.origin;
@@ -266,8 +270,29 @@ async function writeServerCredentialRecord(
     if (conflicts.length > 0 && !allowReplacement) {
       throw new Error('local Borg server enrollment already exists for this origin and replacement was not confirmed');
     }
-    if (allowReplacement) {
-      for (const [account] of conflicts) await backend.delete(account);
+    if (allowReplacement && conflicts.length > 0) {
+      const target = targetAccount;
+      const value = JSON.stringify({
+        version: SERVER_CREDENTIAL_RECORD_VERSION,
+        origin: record.origin,
+        trustIdentity: record.trustIdentity,
+        credential: record.credential,
+        clientId: record.clientId ?? null,
+        serverCapabilities,
+      });
+      if (backend.replaceAccounts) {
+        const next = { ...accounts };
+        for (const [account] of conflicts) delete next[account];
+        next[target] = value;
+        await backend.replaceAccounts(next);
+        return;
+      }
+      // Set first so an injected write failure cannot remove the prior record.
+      await backend.set(target, value);
+      for (const [account] of conflicts) {
+        if (account !== target) await backend.delete(account);
+      }
+      return;
     }
   }
   await backend.set(
@@ -414,6 +439,30 @@ export async function getPendingServerEnrollment(
     } catch {
       throw new Error('pending Borg server enrollment is corrupt');
     }
+  });
+}
+
+/** Find the sole pending enrollment so artifact-only retries need no invitation. */
+export async function findPendingServerEnrollment(): Promise<PendingServerEnrollmentRecord | null> {
+  const backend = await getServerCredentialBackend();
+  if (!backend.entries) return null;
+  return withCredentialStoreLock(async () => {
+    const matches: PendingServerEnrollmentRecord[] = [];
+    for (const value of Object.values(await backend.entries!())) {
+      try {
+        const raw = JSON.parse(value) as Partial<PendingServerEnrollmentRecord> & {
+          version?: unknown;
+          state?: unknown;
+        };
+        if (raw.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION || raw.state !== 'pending') continue;
+        if (typeof raw.origin !== 'string' || typeof raw.trustIdentity !== 'string') continue;
+        matches.push(decodePendingServerEnrollment(value, raw.origin, raw.trustIdentity));
+      } catch {
+        // Ignore unrelated or corrupt records; the keyed resume path remains fail-closed.
+      }
+    }
+    if (matches.length > 1) throw new Error('multiple pending Borg server enrollments require an explicit server endpoint');
+    return matches[0] ?? null;
   });
 }
 

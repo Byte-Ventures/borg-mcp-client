@@ -1,19 +1,22 @@
 import { createHash, X509Certificate } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { rootCertificates } from 'node:tls';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   __clearServerTrustCacheForTest,
   createPinnedServerFetch,
   loadBorgServerTrust,
+  stageBorgServerTrust,
 } from '../src/server-trust.js';
 import { BorgServerTrustError } from '../src/server-errors.js';
+import { InvitationArtifactStorageError } from '../src/invitation-artifact.js';
 
 const tempDirectories: string[] = [];
 
@@ -50,6 +53,24 @@ async function trustDirectory(fingerprint: string, certificate: string): Promise
 }
 
 describe('same-user Borg server trust', () => {
+  it('rolls back the coherent trust directory when enrollment activation fails', async () => {
+    const ca = testCa();
+    const origin = 'https://atomic-trust-rollback.invalid:7091';
+    const directory = join(
+      homedir(),
+      '.borg',
+      'server-trust',
+      createHash('sha256').update(origin).digest('hex'),
+    );
+    await rm(directory, { recursive: true, force: true });
+    const staged = await stageBorgServerTrust(origin, ca.certificate, `spki-sha256:${ca.fingerprint}`);
+    await expect(staged.commitTrust(async () => {
+      throw new Error('injected activation failure');
+    })).rejects.toBeInstanceOf(InvitationArtifactStorageError);
+    await expect(access(join(directory, 'ca.crt'))).rejects.toThrow();
+    await rm(directory, { recursive: true, force: true });
+  });
+
   it('binds the explicit TLS transport to the verified CA SPKI identity', async () => {
     const ca = testCa();
     const directory = await trustDirectory(ca.fingerprint, ca.certificate);

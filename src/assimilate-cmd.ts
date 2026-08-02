@@ -306,6 +306,14 @@ export interface AssimilateDeps {
     trustIdentity: string;
     serverCapabilities?: readonly string[];
   } | null>;
+  resumePendingServerEnrollment?: (
+    onPending?: () => void,
+  ) => Promise<{
+    token: string;
+    apiUrl?: string;
+    trustIdentity: string;
+    serverCapabilities?: readonly string[];
+  } | null>;
 
   resolveRepositoryCube: (
     apiUrl: string,
@@ -735,19 +743,28 @@ export async function runAssimilate(
   }
   let prefetchedInvitation: string | undefined;
   let prefetchedArtifact: InvitationArtifact | undefined;
-  if (artifactOnlyEnrollment && !(await deps.hasPersistedActiveCube()) ||
+  if (artifactOnlyEnrollment ||
       preResumeAttempted && preResumedEnrollment === null) {
-    prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
-    if (!prefetchedInvitation) {
-      deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
-      return 1;
+    if (artifactOnlyEnrollment && deps.resumePendingServerEnrollment) {
+      preResumedEnrollment = await deps.resumePendingServerEnrollment(() => {
+        deps.stderr('Resuming the pending enrollment; no new invitation is required.\n');
+      });
     }
-    try {
-      prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
-    } catch (error) {
-      deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
-      prefetchedInvitation = undefined;
-      return 1;
+    if (artifactOnlyEnrollment && preResumedEnrollment) {
+      // The exact pending tuple was already redeemed or is being resumed.
+    } else {
+      prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
+      if (!prefetchedInvitation) {
+        deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
+        return 1;
+      }
+      try {
+        prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
+      } catch (error) {
+        deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
+        prefetchedInvitation = undefined;
+        return 1;
+      }
     }
   }
   if (!artifactOnlyEnrollment && args.flags.server === undefined && deps.defaultAuthority === undefined) {
@@ -812,20 +829,20 @@ export async function runAssimilate(
           );
           return 1;
         }
-        const resumed = prefetchedArtifact !== undefined
-          ? null
-          : preResumeAttempted
-            ? preResumedEnrollment
-            : artifactOnlyEnrollment
-              ? null
-          : await deps.resumeServerEnrollment(authority.apiUrl, () => {
+        let resumed = preResumedEnrollment;
+        if (!resumed && prefetchedArtifact === undefined && !preResumeAttempted && !artifactOnlyEnrollment) {
+          resumed = await deps.resumeServerEnrollment(authority.apiUrl, () => {
             deps.stderr(
               `Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
               'do not enter another invitation unless the server certificate was reissued; ' +
               'if it was, request a current invitation and rerun this command.\n',
             );
           });
+        }
         if (resumed) {
+          if ('apiUrl' in resumed && typeof resumed.apiUrl === 'string') {
+            authority = { kind: 'server', apiUrl: resumed.apiUrl };
+          }
           serverAuth = resumed;
         } else {
           let invitation = prefetchedInvitation ?? await deps.promptSecret(
