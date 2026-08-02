@@ -188,8 +188,15 @@ Never move, replace, reuse, or rerun that tag or workflow. The annotated `v2.10.
 `c5d3d2cbe85644d402dfd82ce108dceca3a913a1`. Workflow run `30764262636`, attempt 1,
 successfully published that exact source as `borgmcp@2.10.0`; the same-run artifact report records integrity
 `sha512-YUVxWevAToQYwu/MDV2r9TrKnaZxpYiEitmLtr7OekfyE0+XZnkyHmL1gSk04JAiYquzv6ZyTRDYMnjQzS5GxA==`.
-Never move, replace, reuse, or rerun that tag or workflow. The next candidate
-uses the unused `v2.10.1` identity from a fresh reviewed protected-main commit
+Never move, replace, reuse, or rerun that tag or workflow. FAILED-SUPERSEDED release record: The annotated `v2.10.1` tag object
+`afee30802629d0f838b2446efd2241ff01964af2` peels to protected-main commit
+`fcecd75211107994ccd0df0bf4093240f83de9b2`. Workflow run `30766475027`, attempt 1, concluded `failure`
+during verification before artifact creation or publication. Verify job `91545993819` records the release
+artifact build, verification, exercise, and upload steps as skipped; publish job `91546125556` was skipped.
+Registry verification found no published `borgmcp@2.10.1` package, so no published npm artifact or SRI
+exists for that version as of this check.
+Never delete, move, replace, reuse, or rerun that tag, version, or workflow. The next candidate
+uses the unused `v2.10.2` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
