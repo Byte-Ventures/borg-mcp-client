@@ -9,7 +9,9 @@ import {
 import { BorgServerError, LegacySessionCredentialCollisionError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
 import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { encodeInvitationArtifact, getInvitationArtifactIntegrityInput } from 'borgmcp-shared/protocol';
 
 const createHashDigest = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -26,6 +28,31 @@ const mcpConfigMocks = vi.hoisted(() => ({
   ensureCliMcpConfigured: vi.fn(),
 }));
 const SERVER_TRUST_IDENTITY = 'spki-sha256:test-server';
+const TEST_ARTIFACT_SECRET = 'i'.repeat(43);
+const TEST_ARTIFACT_BASE = {
+  version: 2 as const,
+  endpoint: 'https://localhost:8787',
+  ca_spki_sha256: '0'.repeat(64),
+  authority: 'client' as const,
+  secret: TEST_ARTIFACT_SECRET,
+  integrity: 'p'.repeat(43),
+};
+const TEST_ARTIFACT = encodeInvitationArtifact({
+  ...TEST_ARTIFACT_BASE,
+  integrity: createHmac('sha256', TEST_ARTIFACT_SECRET)
+    .update(getInvitationArtifactIntegrityInput(TEST_ARTIFACT_BASE))
+    .digest('base64url'),
+});
+
+function artifactForEndpoint(endpoint: string): string {
+  const base = { ...TEST_ARTIFACT_BASE, endpoint };
+  return encodeInvitationArtifact({
+    ...base,
+    integrity: createHmac('sha256', TEST_ARTIFACT_SECRET)
+      .update(getInvitationArtifactIntegrityInput(base))
+      .digest('base64url'),
+  });
+}
 
 vi.mock('../src/opencode-drone.js', () => openCodeDroneMocks);
 vi.mock('../src/opencode-plugin.js', () => ({ installBorgPlugin: vi.fn() }));
@@ -50,7 +77,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     stdout: vi.fn(),
     prompt: vi.fn(async (message: string) =>
       message.startsWith('Cube name') ? '' : message.startsWith('Create cube ') ? 'y' : '1'),
-    promptSecret: vi.fn(async () => 'i'.repeat(43)),
+    promptSecret: vi.fn(async () => TEST_ARTIFACT),
     isTTY: () => true,
     ensureLocalServerInstalled: vi.fn(async () => 'present'),
     chdir: vi.fn(),
@@ -91,6 +118,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       serverCapabilities: ['create_cube'],
     })),
     resumeServerEnrollment: vi.fn(async () => null),
+    peekPendingServerEnrollment: vi.fn(async () => null),
     resolveRepositoryCube: vi.fn(async () => serverRepositoryResolution),
     associateRepositoryCube: vi.fn(async (_apiUrl, _token, input) => {
       serverRepositoryResolution = {
@@ -3200,7 +3228,7 @@ describe('runAssimilate: #1015 authority selection', () => {
   });
 
   it('reads an explicitly requested enrollment invitation through the hidden-input seam', async () => {
-    const invitation = 'i'.repeat(43);
+    const invitation = TEST_ARTIFACT;
     const prompt = vi.fn(async () => 'must-not-prompt');
     const promptSecret = vi.fn(async () => invitation);
     const connectServer = vi.fn(async () => ({
@@ -3216,11 +3244,11 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(0);
 
     expect(promptSecret).toHaveBeenCalledWith(
-      'Enrollment invitation for `https://localhost:8787` (single-use; hidden input):',
+      'Enrollment invitation (single-use; hidden input):',
     );
     expect(connectServer).toHaveBeenCalledWith(
       'https://localhost:8787',
-      { invitation, confirmReplacement: expect.any(Function) },
+      { invitation, artifact: expect.any(Object), confirmReplacement: expect.any(Function) },
     );
     const confirmReplacement = connectServer.mock.calls[0][1].confirmReplacement;
     prompt.mockResolvedValueOnce('');
@@ -3234,8 +3262,48 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(prompt).toHaveBeenCalledTimes(2);
   });
 
+  it('rejects an explicit-host artifact contradiction before private state, trust, credentials, or network', async () => {
+    const stderr = vi.fn();
+    const preparePrivateRoot = vi.fn(async () => {});
+    const getActiveCube = vi.fn(async () => null);
+    const hasPersistedActiveCube = vi.fn(async () => false);
+    const resumeServerEnrollment = vi.fn(async () => null);
+    const connectServer = vi.fn(async () => ({
+      token: 'server-token',
+      trustIdentity: SERVER_TRUST_IDENTITY,
+    }));
+    const promptSecret = vi.fn(async () => artifactForEndpoint('https://server.example.com'));
+    const peekPendingServerEnrollment = vi.fn(async () => null);
+    const deps = makeStubDeps({
+      stderr,
+      preparePrivateRoot,
+      getActiveCube,
+      hasPersistedActiveCube,
+      resumeServerEnrollment,
+      connectServer,
+      promptSecret,
+      peekPendingServerEnrollment,
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787', enroll: true, yes: true },
+    }, deps)).toBe(1);
+
+    expect(stderr.mock.calls.flat().join('')).toContain(
+      'does not match the selected `--host`',
+    );
+    expect(promptSecret).toHaveBeenCalledTimes(1);
+    expect(peekPendingServerEnrollment).not.toHaveBeenCalled();
+    expect(preparePrivateRoot).not.toHaveBeenCalled();
+    expect(getActiveCube).not.toHaveBeenCalled();
+    expect(hasPersistedActiveCube).not.toHaveBeenCalled();
+    expect(resumeServerEnrollment).not.toHaveBeenCalled();
+    expect(connectServer).not.toHaveBeenCalled();
+  });
+
   it('gives an ordinary enrolled client a distinct next step without owner wording', async () => {
-    const invitation = 'i'.repeat(43);
+    const invitation = TEST_ARTIFACT;
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
@@ -3270,8 +3338,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
   });
 
-  it('resumes a durable pending enrollment before prompting for another invitation', async () => {
-    const promptSecret = vi.fn(async () => 'must-not-prompt');
+  it('validates the explicit-host invitation before resuming a durable pending enrollment', async () => {
+    const promptSecret = vi.fn(async () => TEST_ARTIFACT);
     const connectServer = vi.fn(async () => {
       throw new Error('must not start a new enrollment');
     });
@@ -3287,6 +3355,10 @@ describe('runAssimilate: #1015 authority selection', () => {
       promptSecret,
       connectServer,
       resumeServerEnrollment,
+      peekPendingServerEnrollment: vi.fn(async () => ({
+        origin: 'https://localhost:8787',
+        invitation: TEST_ARTIFACT,
+      })),
     });
 
     expect(await runAssimilate({
@@ -3298,10 +3370,10 @@ describe('runAssimilate: #1015 authority selection', () => {
       'https://localhost:8787',
       expect.any(Function),
     );
-    expect(promptSecret).not.toHaveBeenCalled();
+    expect(promptSecret).toHaveBeenCalledWith('Enrollment invitation (single-use; hidden input):');
     expect(connectServer).not.toHaveBeenCalled();
     expect(deps.stderr).toHaveBeenCalledWith(
-      'Resuming the pending enrollment for `https://localhost:8787`; do not enter another invitation.\n',
+      'Resuming the pending enrollment for `https://localhost:8787`; do not enter another invitation unless the server certificate was reissued; if it was, request a current invitation and rerun this command.\n',
     );
     expect(deps.createCube).toHaveBeenCalledWith(
       'https://localhost:8787',
@@ -3709,7 +3781,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
-      promptSecret: vi.fn(async () => 'i'.repeat(43)),
+      promptSecret: vi.fn(async () => TEST_ARTIFACT),
       connectServer: vi.fn(async () => {
         throw new BorgServerError('INVITATION_REJECTED', 'invitation rejected');
       }),
@@ -3893,7 +3965,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
-  it('non-TTY --yes without --host/--server emits recovery and makes zero server calls', async () => {
+  it('non-TTY --yes --enroll without --host/--server remains fail-closed with zero server calls', async () => {
     const stderr = vi.fn();
     const connectServer = vi.fn();
     const listCubes = vi.fn();
@@ -3905,7 +3977,7 @@ describe('runAssimilate: #1015 authority selection', () => {
       isTTY: () => false,
     });
 
-    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, enroll: true } }, deps)).toBe(1);
 
     expect(connectServer).not.toHaveBeenCalled();
     expect(listCubes).not.toHaveBeenCalled();

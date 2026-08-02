@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
+import {
+  encodeInvitationArtifact,
+  getInvitationArtifactIntegrityInput,
+} from 'borgmcp-shared/protocol';
 import type { AssimilateDeps } from '../src/assimilate-cmd.js';
 import { buildDefaultAssimilateDeps, type PromptQuestion } from '../src/assimilate-deps.js';
 import { runAssimilateEntry } from '../src/claude.js';
@@ -19,6 +24,21 @@ import {
 vi.mock('../src/ensure-mcp-config.js', () => ({ ensureCliMcpConfigured: vi.fn() }));
 
 const SERVER_TRUST_IDENTITY = 'spki-sha256:test-server';
+const CLEAN_PATH_ARTIFACT_BASE = {
+  version: 2 as const,
+  endpoint: 'https://127.0.0.1:7091',
+  ca_spki_sha256: '0'.repeat(64),
+  authority: 'client' as const,
+  secret: 's'.repeat(43),
+  integrity: 'p'.repeat(43),
+};
+const CLEAN_PATH_ARTIFACT = encodeInvitationArtifact({
+  ...CLEAN_PATH_ARTIFACT_BASE,
+  integrity: createHmac('sha256', CLEAN_PATH_ARTIFACT_BASE.secret)
+    .update(getInvitationArtifactIntegrityInput(CLEAN_PATH_ARTIFACT_BASE))
+    .digest('base64url'),
+});
+const POSITIONAL_INVITATION_SENTINEL = 'A'.repeat(80);
 
 function makeEntryDeps(question: PromptQuestion) {
   const stderr = vi.fn();
@@ -165,6 +185,97 @@ const entrypoints = [
     ),
   },
 ] as const;
+
+const cleanPathEntrypoints = [
+  {
+    entry: 'borg assimilate',
+    run: (deps: AssimilateDeps) => runAssimilateEntry(
+      ['--enroll'],
+      () => deps,
+    ),
+  },
+  {
+    entry: 'borg server cube init',
+    run: (deps: AssimilateDeps) => runEarlyServerFacade(
+      ['node', 'borg', 'server', 'cube', 'init', '--enroll'],
+      noServerProcess,
+      { writeStdout: vi.fn(), writeStderr: vi.fn() },
+      buildDefaultServerFacadeClientDeps(() => deps),
+    ),
+  },
+] as const;
+
+describe.each(cleanPathEntrypoints)('clean-machine enrollment through $entry', ({ run }) => {
+  it('reaches the hidden invitation prompt without accepting an argv secret', async () => {
+    const state = makeEntryDeps(async () => '1');
+    const promptSecret = vi.fn(async () => CLEAN_PATH_ARTIFACT);
+    const connectServer = vi.fn(async () => {
+      throw new BorgServerError('INVITATION_REJECTED', 'test rejection');
+    });
+    state.deps.promptSecret = promptSecret;
+    state.deps.connectServer = connectServer;
+
+    await expect(run(state.deps)).resolves.toBe(1);
+
+    expect(promptSecret).toHaveBeenCalledWith('Enrollment invitation (single-use; hidden input):');
+    expect(connectServer).toHaveBeenCalledWith(
+      'https://127.0.0.1:7091',
+      expect.objectContaining({
+        invitation: CLEAN_PATH_ARTIFACT,
+        artifact: expect.objectContaining({ endpoint: 'https://127.0.0.1:7091' }),
+      }),
+    );
+  });
+});
+
+describe.each(['borg assimilate', 'borg server cube init'] as const)('positional enrollment input through $entry', (entry) => {
+  it('rejects before orchestration without echoing the invitation-shaped input', async () => {
+    const state = makeEntryDeps(async () => '1');
+    const ensureLocalServerInstalled = vi.fn(async () => 'present' as const);
+    state.deps.ensureLocalServerInstalled = ensureLocalServerInstalled;
+    const writeStdout = vi.fn();
+    const writeStderr = vi.fn();
+    const spawn = vi.fn(() => { throw new Error('server process must not start'); });
+    const processDeps: ServerFacadeProcessDeps = {
+      spawn,
+      addSignalListener: vi.fn(),
+      removeSignalListener: vi.fn(),
+    };
+    const processStderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const code = entry === 'borg assimilate'
+        ? await runAssimilateEntry(
+          ['--enroll', POSITIONAL_INVITATION_SENTINEL],
+          () => state.deps,
+        )
+        : await runEarlyServerFacade(
+          ['node', 'borg', 'server', 'cube', 'init', '--enroll', POSITIONAL_INVITATION_SENTINEL],
+          processDeps,
+          { writeStdout, writeStderr },
+          buildDefaultServerFacadeClientDeps(() => state.deps),
+        );
+
+      expect(code).toBe(1);
+      const output = [
+        ...processStderr.mock.calls.map(([text]) => String(text)),
+        ...writeStdout.mock.calls.map(([text]) => String(text)),
+        ...writeStderr.mock.calls.map(([text]) => String(text)),
+      ].join('');
+      expect(output).toContain('That argument was not accepted.');
+      expect(output).toContain('If you meant a role name, use lowercase letters, digits, hyphens, or underscores, up to 48 characters.');
+      expect(output).toContain('If you meant an enrollment invitation, it must be entered at the hidden prompt — re-run the same command without it.');
+      expect(output).not.toContain('borg assimilate --enroll');
+      expect(output).not.toContain(POSITIONAL_INVITATION_SENTINEL);
+      expect(state.deps.promptSecret).not.toHaveBeenCalled();
+      expect(state.deps.connectServer).not.toHaveBeenCalled();
+      expect(state.deps.preparePrivateRoot).not.toHaveBeenCalled();
+      expect(ensureLocalServerInstalled).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      processStderr.mockRestore();
+    }
+  });
+});
 
 describe.each(entrypoints)('production prompt interruption through $entry', ({ run }) => {
   it.each([

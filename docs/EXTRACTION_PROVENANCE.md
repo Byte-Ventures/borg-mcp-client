@@ -38,11 +38,11 @@ artifact reaches no hosted authority.
 Local enrollment now uses the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
-resolves to the audited registry `borgmcp-shared@0.7.1` with integrity
-`sha512-d4GE7ezGyoFN0uwA62gvRPUMfMdJ1kxhTunqU8dW3Qhy1n2SlNXZWr1Nthm6Goo0bAgvax8KEywyReodA6FyQA==`.
-The matching `borgmcp-server@0.8.0` release is published with integrity
-`sha512-OSnBBcdZOM88Dokr7WICcTmF19c+Nr0TOl7NXy8DSUeCpBttiKKx+KuFvGbaXAWikFkm0UUBUca5cLZAOWw4Xw==`
-and pins the same `borgmcp-shared@0.7.1` contract. Client `borgmcp@2.8.0` is published. The immutable `v2.0.7`
+resolves to the audited registry `borgmcp-shared@0.8.0` with integrity
+`sha512-0p/ZC03Y6G4N6bfBjMD5b+WcQXcLalhU/3QqGjSWYCFKa3q2/183O53w6Tu6y8h2DkhTw5prnamsOozmVpXZew==`.
+The coupled server candidate for the client 2.9.x line remains pending publication. The
+already-published server 0.8.0 release retains its immutable older shared
+dependency pin and is not the server artifact for this client contract. Client `borgmcp@2.8.0` is published. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next
 candidate remains gated by reviewed `v2.9.0` source, a fresh annotated tag, and
 the exact-artifact and protected-publication gates.

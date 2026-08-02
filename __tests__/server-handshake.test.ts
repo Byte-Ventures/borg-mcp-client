@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import {
   DEFAULT_LOCAL_SERVER_ORIGIN,
   associateBorgServerRepositoryCube,
@@ -7,11 +7,13 @@ import {
   connectEnrolledBorgServer,
   createBorgServerCube,
   enrollBorgServer,
+  enrollLocalBorgServerArtifact,
   probeBorgServer,
   preflightBorgServerTag,
   resolveBorgServerRepositoryCube,
   resumeBorgServerEnrollment,
 } from '../src/server-handshake.js';
+import { encodeInvitationArtifact, getInvitationArtifactIntegrityInput } from 'borgmcp-shared/protocol';
 import {
   __setServerCredentialBackendForTest,
 } from '../src/config.js';
@@ -98,6 +100,68 @@ describe('self-hosted server handshake', () => {
     expect(init).toMatchObject({ method: 'GET', redirect: 'error' });
     // Credential-free: no bearer/cookie/authorization leaves the client.
     expect(init?.headers).not.toHaveProperty('Authorization');
+  });
+
+  it('sends the byte-exact opaque v2 artifact through the production adapter', async () => {
+    const artifactBase = {
+      version: 2 as const,
+      endpoint: 'https://server.example.com',
+      ca_spki_sha256: 'a'.repeat(64),
+      authority: 'client' as const,
+      secret: 'i'.repeat(43),
+      integrity: 'p'.repeat(43),
+    };
+    const invitation = encodeInvitationArtifact({
+      ...artifactBase,
+      integrity: createHmac('sha256', artifactBase.secret)
+        .update(getInvitationArtifactIntegrityInput(artifactBase))
+        .digest('base64url'),
+    });
+    const credential = 'c'.repeat(43);
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(tagPreflightBody())
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        protocol_version: '7',
+        request_id: 'artifact-adapter-test',
+        payload: {
+          purpose: 'client',
+          client_id: '66666666-6666-4666-8666-666666666666',
+          server_capabilities: [],
+        },
+      }), { status: 201 }));
+    const prepareEnrollment = vi.fn(async (input: {
+      origin: string;
+      trustIdentity: string;
+      invitation: string;
+      clientName?: string;
+      replacementCapability?: string;
+    }) => ({
+      ...input,
+      retryKey: '55555555-5555-4555-8555-555555555555',
+      credential,
+    }));
+    const activateEnrollment = vi.fn(async () => {});
+    const commitTrust = vi.fn(async (activate: () => Promise<void>) => activate());
+    const discardTrust = vi.fn(async () => {});
+
+    await expect(enrollLocalBorgServerArtifact(artifactBase, {
+      invitation,
+      loadTrustFromPresentedChain: vi.fn(async () => ({
+        identity: 'spki-sha256:server-a',
+        fetchImpl: fetchImpl as typeof fetch,
+        commitTrust,
+        discardTrust,
+      })),
+      prepareEnrollment,
+      activateEnrollment,
+      loadCredentialRecord: vi.fn(async () => null),
+      hasCredentialForOrigin: vi.fn(async () => false),
+    })).resolves.toMatchObject({ token: credential });
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[1][1]?.body));
+    expect(body.payload.invitation).toBe(invitation);
+    expect(body.payload.invitation).not.toBe(artifactBase.secret);
+    expect(activateEnrollment).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed on a mismatched tag or any extra field before attach', async () => {

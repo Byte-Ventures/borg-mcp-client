@@ -34,6 +34,7 @@ import {
   connectLocalBorgServer,
   createLocalBorgServerCube,
   enrollLocalBorgServer,
+  enrollLocalBorgServerArtifact,
   probeLocalBorgServer,
   resolveLocalBorgServerRepositoryCube,
   resumeLocalBorgServerEnrollment,
@@ -62,6 +63,7 @@ import {
   setCodexWakeTarget,
 } from './cubes.js';
 import { addProjectSessionStartHook } from './config-utils.js';
+import { findPendingServerEnrollment } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
@@ -240,6 +242,15 @@ export function buildDefaultAssimilateDeps(
         : null,
     connectServer: async (apiUrl, enrollment) => {
       if (enrollment) {
+        if (enrollment.artifact) {
+          return enrollLocalBorgServerArtifact(enrollment.artifact, {
+            invitation: enrollment.invitation,
+            ...(enrollment.confirmReplacement === undefined
+              ? {}
+              : { confirmReplacement: enrollment.confirmReplacement }),
+            clientName: osHostname(),
+          });
+        }
         return enrollLocalBorgServer(apiUrl, enrollment.invitation, {
           ...(enrollment.confirmReplacement === undefined
             ? {}
@@ -253,6 +264,21 @@ export function buildDefaultAssimilateDeps(
       resumeLocalBorgServerEnrollment(apiUrl, {
         ...(onPending === undefined ? {} : { onPending }),
       }),
+    peekPendingServerEnrollment: async () => {
+      const pending = await findPendingServerEnrollment();
+      return pending === null
+        ? null
+        : { origin: pending.origin, invitation: pending.invitation };
+    },
+    resumePendingServerEnrollment: async (onPending) =>
+      (async () => {
+        const pending = await findPendingServerEnrollment();
+        if (!pending) return null;
+        const result = await resumeLocalBorgServerEnrollment(pending.origin, {
+          ...(onPending === undefined ? {} : { onPending }),
+        });
+        return result ? { ...result, apiUrl: pending.origin } : null;
+      })(),
 
     resolveRepositoryCube: async (apiUrl, token, input, serverTrustIdentity) => {
       if (serverTrustIdentity === undefined) {

@@ -48,6 +48,7 @@ export interface PendingServerEnrollmentRecord {
   retryKey: string;
   credential: string;
   clientName?: string;
+  replacementCapability?: string;
 }
 
 export interface PendingServerCubeCreationRecord {
@@ -244,6 +245,7 @@ export function __setServerCredentialBackendForTest(backend: TokenBackend | null
 async function writeServerCredentialRecord(
   backend: TokenBackend,
   record: ServerCredentialRecord,
+  allowReplacement = false,
 ): Promise<void> {
   validateServerCredentialBinding(record.origin, record.trustIdentity);
   validateEnrollmentCredential(record.credential);
@@ -251,6 +253,49 @@ async function writeServerCredentialRecord(
     validateUuid(record.clientId, 'client identity');
   }
   const serverCapabilities = validateServerCapabilities(record.serverCapabilities ?? []);
+  const targetAccount = serverCredentialAccount(record.origin, record.trustIdentity);
+  const exactExisting = await backend.get(targetAccount);
+  if (exactExisting !== null && !allowReplacement) {
+    throw new Error('local Borg server enrollment already exists for this origin and replacement was not confirmed');
+  }
+  if (backend.entries) {
+    const accounts = await backend.entries();
+    const conflicts = Object.entries(accounts).filter(([account, value]) => {
+      try {
+        const parsed = JSON.parse(value) as { version?: unknown; origin?: unknown };
+        return parsed.version === SERVER_CREDENTIAL_RECORD_VERSION && parsed.origin === record.origin;
+      } catch {
+        return false;
+      }
+    });
+    if (conflicts.length > 0 && !allowReplacement) {
+      throw new Error('local Borg server enrollment already exists for this origin and replacement was not confirmed');
+    }
+    if (allowReplacement && conflicts.length > 0) {
+      const target = targetAccount;
+      const value = JSON.stringify({
+        version: SERVER_CREDENTIAL_RECORD_VERSION,
+        origin: record.origin,
+        trustIdentity: record.trustIdentity,
+        credential: record.credential,
+        clientId: record.clientId ?? null,
+        serverCapabilities,
+      });
+      if (backend.replaceAccounts) {
+        const next = { ...accounts };
+        for (const [account] of conflicts) delete next[account];
+        next[target] = value;
+        await backend.replaceAccounts(next);
+        return;
+      }
+      // Set first so an injected write failure cannot remove the prior record.
+      await backend.set(target, value);
+      for (const [account] of conflicts) {
+        if (account !== target) await backend.delete(account);
+      }
+      return;
+    }
+  }
   await backend.set(
     serverCredentialAccount(record.origin, record.trustIdentity),
     JSON.stringify({
@@ -264,6 +309,17 @@ async function writeServerCredentialRecord(
   );
 }
 
+function encodeServerCredentialRecord(record: ServerCredentialRecord, serverCapabilities: ServerCapability[]): string {
+  return JSON.stringify({
+    version: SERVER_CREDENTIAL_RECORD_VERSION,
+    origin: record.origin,
+    trustIdentity: record.trustIdentity,
+    credential: record.credential,
+    clientId: record.clientId ?? null,
+    serverCapabilities,
+  });
+}
+
 /**
  * Persist one self-hosted server credential in the dedicated 0600 credential store.
  *
@@ -274,9 +330,12 @@ async function writeServerCredentialRecord(
  * not credential sources. CR3b: the load→set→rename runs inside ONE hold of the
  * single store lock so a concurrent writer cannot lose an unrelated account.
  */
-export async function storeServerCredential(record: ServerCredentialRecord): Promise<void> {
+export async function storeServerCredential(
+  record: ServerCredentialRecord,
+  options: { allowReplacement?: boolean } = {},
+): Promise<void> {
   const backend = await getServerCredentialBackend();
-  await withCredentialStoreLock(() => writeServerCredentialRecord(backend, record));
+  await withCredentialStoreLock(() => writeServerCredentialRecord(backend, record, options.allowReplacement === true));
 }
 
 /** Read an authority-bound active client record, failing closed on corruption. */
@@ -329,6 +388,20 @@ export async function getServerCredential(
   return (await getServerCredentialRecord(origin, trustIdentity))?.credential ?? null;
 }
 
+export async function hasServerCredentialForOrigin(origin: string): Promise<boolean> {
+  const backend = await getServerCredentialBackend();
+  if (!backend.entries) return false;
+  const accounts = await backend.entries();
+  return Object.values(accounts).some((value) => {
+    try {
+      const record = JSON.parse(value) as { version?: unknown; origin?: unknown };
+      return record.version === SERVER_CREDENTIAL_RECORD_VERSION && record.origin === origin;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function decodePendingServerEnrollment(
   stored: string,
   origin: string,
@@ -347,6 +420,7 @@ function decodePendingServerEnrollment(
     typeof record.retryKey !== 'string' || !UUID_RE.test(record.retryKey) ||
     typeof record.credential !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(record.credential) ||
     (record.clientName !== undefined && typeof record.clientName !== 'string')
+    || (record.replacementCapability !== undefined && !UUID_RE.test(record.replacementCapability))
   ) {
     throw new Error('invalid');
   }
@@ -359,6 +433,7 @@ function decodePendingServerEnrollment(
     retryKey: record.retryKey,
     credential: record.credential,
     ...(record.clientName === undefined ? {} : { clientName: record.clientName }),
+    ...(record.replacementCapability === undefined ? {} : { replacementCapability: record.replacementCapability }),
   };
 }
 
@@ -381,6 +456,30 @@ export async function getPendingServerEnrollment(
   });
 }
 
+/** Find the sole pending enrollment so artifact-only retries need no invitation. */
+export async function findPendingServerEnrollment(): Promise<PendingServerEnrollmentRecord | null> {
+  const backend = await getServerCredentialBackend();
+  if (!backend.entries) return null;
+  return withCredentialStoreLock(async () => {
+    const matches: PendingServerEnrollmentRecord[] = [];
+    for (const value of Object.values(await backend.entries!())) {
+      try {
+        const raw = JSON.parse(value) as Partial<PendingServerEnrollmentRecord> & {
+          version?: unknown;
+          state?: unknown;
+        };
+        if (raw.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION || raw.state !== 'pending') continue;
+        if (typeof raw.origin !== 'string' || typeof raw.trustIdentity !== 'string') continue;
+        matches.push(decodePendingServerEnrollment(value, raw.origin, raw.trustIdentity));
+      } catch {
+        // Ignore unrelated or corrupt records; the keyed resume path remains fail-closed.
+      }
+    }
+    if (matches.length > 1) throw new Error('multiple pending Borg server enrollments require an explicit server endpoint');
+    return matches[0] ?? null;
+  });
+}
+
 /**
  * Generate and persist an exact enrollment tuple before network I/O. A
  * pre-existing PENDING tuple must match the invitation and presentation name;
@@ -392,11 +491,13 @@ export async function getOrCreatePendingServerEnrollment(
     trustIdentity: string;
     invitation: string;
     clientName?: string;
+    replacementCapability?: string;
   },
 ): Promise<PendingServerEnrollmentRecord> {
   validateServerCredentialBinding(input.origin, input.trustIdentity);
   validateInvitation(input.invitation);
   validateClientName(input.clientName);
+  if (input.replacementCapability !== undefined) validateUuid(input.replacementCapability, 'replacement capability');
   const backend = await getServerCredentialBackend();
   const account = serverPendingEnrollmentAccount(input.origin, input.trustIdentity);
   return withCredentialStoreLock(async () => {
@@ -411,6 +512,7 @@ export async function getOrCreatePendingServerEnrollment(
         if (
           record.invitation !== input.invitation ||
           record.clientName !== input.clientName
+          || record.replacementCapability !== input.replacementCapability
         ) {
           throw new Error('mismatch');
         }
@@ -427,6 +529,7 @@ export async function getOrCreatePendingServerEnrollment(
       retryKey: randomUUID(),
       credential: randomBytes(32).toString('base64url'),
       ...(input.clientName === undefined ? {} : { clientName: input.clientName }),
+      ...(input.replacementCapability === undefined ? {} : { replacementCapability: input.replacementCapability }),
     };
     validateEnrollmentCredential(record.credential);
     await backend.set(account, JSON.stringify({
@@ -448,6 +551,7 @@ export async function activatePendingServerEnrollment(
     clientId: string;
     serverCapabilities: ServerCapability[];
     allowReplacement?: boolean;
+    replacementCapability?: string;
   },
 ): Promise<void> {
   validateServerCredentialBinding(input.origin, input.trustIdentity);
@@ -466,25 +570,56 @@ export async function activatePendingServerEnrollment(
         input.origin,
         input.trustIdentity,
       );
-      if (pending.retryKey !== input.retryKey || pending.credential !== input.credential) {
+      if (pending.retryKey !== input.retryKey || pending.credential !== input.credential ||
+          pending.replacementCapability !== input.replacementCapability) {
         throw new Error('mismatch');
       }
     } catch {
       throw new Error('pending Borg server enrollment does not match the verified response');
     }
-    if (!input.allowReplacement && await backend.get(serverCredentialAccount(input.origin, input.trustIdentity))) {
-      throw new Error('local Borg server enrollment already exists');
+    if (!input.allowReplacement) {
+      const existing = backend.entries
+        ? Object.values(await backend.entries()).some((value) => {
+          try {
+            const record = JSON.parse(value) as { version?: unknown; origin?: unknown };
+            return record.version === SERVER_CREDENTIAL_RECORD_VERSION && record.origin === input.origin;
+          } catch {
+            return false;
+          }
+        })
+        : await backend.get(serverCredentialAccount(input.origin, input.trustIdentity)) !== null;
+      if (existing) throw new Error('local Borg server enrollment already exists');
     }
-    // Already inside the single store lock — use the UNLOCKED write body so we do
-    // not re-acquire (and self-deadlock on) CREDENTIALS_LOCK (CR3b).
-    await writeServerCredentialRecord(backend, {
+    const activeRecord: ServerCredentialRecord = {
       origin: input.origin,
       trustIdentity: input.trustIdentity,
       credential: input.credential,
       clientId: input.clientId,
       serverCapabilities,
-    });
-    await backend.delete(pendingAccount);
+    };
+    // Replace the active record and retire the pending tuple in one account-map
+    // write. A failed map write therefore preserves the old active + pending state.
+    if (backend.entries && backend.replaceAccounts) {
+      const accounts = await backend.entries();
+      const target = serverCredentialAccount(input.origin, input.trustIdentity);
+      const next = { ...accounts };
+      for (const [account, value] of Object.entries(accounts)) {
+        try {
+          const parsed = JSON.parse(value) as { version?: unknown; origin?: unknown };
+          if (parsed.version === SERVER_CREDENTIAL_RECORD_VERSION && parsed.origin === input.origin) {
+            delete next[account];
+          }
+        } catch {
+          // Preserve unrelated malformed records; the backend's normal validation remains fail-closed.
+        }
+      }
+      next[target] = encodeServerCredentialRecord(activeRecord, serverCapabilities);
+      delete next[pendingAccount];
+      await backend.replaceAccounts(next);
+    } else {
+      await writeServerCredentialRecord(backend, activeRecord, input.allowReplacement === true);
+      await backend.delete(pendingAccount);
+    }
   });
 }
 
@@ -639,5 +774,25 @@ export async function clearServerCredential(origin: string, trustIdentity: strin
   await withCredentialStoreLock(async () => {
     await backend.delete(serverCredentialAccount(origin, trustIdentity));
     await backend.delete(pendingAccount);
+  });
+}
+
+/** Clear only the failed enrollment transaction for one origin/identity. */
+export async function clearEnrollmentTransaction(origin: string, trustIdentity: string): Promise<void> {
+  validateServerCredentialBinding(origin, trustIdentity);
+  const backend = await getServerCredentialBackend();
+  const pendingAccount = serverPendingEnrollmentAccount(origin, trustIdentity);
+  const credentialAccount = serverCredentialAccount(origin, trustIdentity);
+  await withCredentialStoreLock(async () => {
+    if (backend.entries && backend.replaceAccounts) {
+      const accounts = await backend.entries();
+      const next = { ...accounts };
+      delete next[pendingAccount];
+      delete next[credentialAccount];
+      await backend.replaceAccounts(next);
+      return;
+    }
+    await backend.delete(pendingAccount);
+    await backend.delete(credentialAccount);
   });
 }

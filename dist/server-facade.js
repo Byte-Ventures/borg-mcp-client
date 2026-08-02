@@ -4,7 +4,7 @@ import chalk from 'chalk';
 import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
 import { consolePrefix } from './console-prefix.js';
 import { getPackageVersion } from './version.js';
-export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'];
+export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'cert-reissue', 'dashboard'];
 export function isClientOwnedCubeInitArgv(argv) {
     return argv[2] === 'server' && argv[3] === 'cube' && argv[4] === 'init';
 }
@@ -93,7 +93,7 @@ function inertCommand(command) {
 }
 export function unknownServerCommandText(command) {
     return (`Unknown server command: ${inertCommand(command)}.\n` +
-        `Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\n` +
+        `Available commands: setup, start, stop, status, update, invite, cert-reissue, dashboard, cube init.\n` +
         `Next: run borg server --help.\n`);
 }
 export function serverLifecycleHelpText(command) {

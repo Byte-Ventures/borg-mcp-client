@@ -152,6 +152,7 @@ export interface AssimilateDeps {
     detectLocalServer: () => Promise<string | null>;
     connectServer: (apiUrl: string, enrollment?: {
         invitation: string;
+        artifact?: import('borgmcp-shared/protocol').InvitationArtifact;
         confirmReplacement?: () => Promise<boolean>;
     }) => Promise<{
         token: string;
@@ -160,6 +161,18 @@ export interface AssimilateDeps {
     }>;
     resumeServerEnrollment: (apiUrl: string, onPending?: () => void) => Promise<{
         token: string;
+        trustIdentity: string;
+        serverCapabilities?: readonly string[];
+    } | null>;
+    /** Read-only pending-artifact peek used to validate an explicit host before
+     * the normal resume path performs trust/credential work. */
+    peekPendingServerEnrollment?: () => Promise<{
+        origin: string;
+        invitation: string;
+    } | null>;
+    resumePendingServerEnrollment?: (onPending?: () => void) => Promise<{
+        token: string;
+        apiUrl?: string;
         trustIdentity: string;
         serverCapabilities?: readonly string[];
     } | null>;

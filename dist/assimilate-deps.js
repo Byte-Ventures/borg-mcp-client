@@ -19,7 +19,7 @@ import { buildRuntimeMetadataReport } from './runtime-metadata.js';
 import { inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 import { buildDefaultFirstRunServerInstallDeps, offerFirstRunServerInstall, } from './first-run-server.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, } from './remote-client.js';
-import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
+import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, enrollLocalBorgServerArtifact, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
 import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
 import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
@@ -27,6 +27,7 @@ import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError, CubeCreationConfirmationError } from './server-errors.js';
 import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
 import { addProjectSessionStartHook } from './config-utils.js';
+import { findPendingServerEnrollment } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
@@ -172,6 +173,15 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
             : null,
         connectServer: async (apiUrl, enrollment) => {
             if (enrollment) {
+                if (enrollment.artifact) {
+                    return enrollLocalBorgServerArtifact(enrollment.artifact, {
+                        invitation: enrollment.invitation,
+                        ...(enrollment.confirmReplacement === undefined
+                            ? {}
+                            : { confirmReplacement: enrollment.confirmReplacement }),
+                        clientName: osHostname(),
+                    });
+                }
                 return enrollLocalBorgServer(apiUrl, enrollment.invitation, {
                     ...(enrollment.confirmReplacement === undefined
                         ? {}
@@ -184,6 +194,21 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         resumeServerEnrollment: async (apiUrl, onPending) => resumeLocalBorgServerEnrollment(apiUrl, {
             ...(onPending === undefined ? {} : { onPending }),
         }),
+        peekPendingServerEnrollment: async () => {
+            const pending = await findPendingServerEnrollment();
+            return pending === null
+                ? null
+                : { origin: pending.origin, invitation: pending.invitation };
+        },
+        resumePendingServerEnrollment: async (onPending) => (async () => {
+            const pending = await findPendingServerEnrollment();
+            if (!pending)
+                return null;
+            const result = await resumeLocalBorgServerEnrollment(pending.origin, {
+                ...(onPending === undefined ? {} : { onPending }),
+            });
+            return result ? { ...result, apiUrl: pending.origin } : null;
+        })(),
         resolveRepositoryCube: async (apiUrl, token, input, serverTrustIdentity) => {
             if (serverTrustIdentity === undefined) {
                 throw new Error('Selected Borg server authority state is missing or unreadable');

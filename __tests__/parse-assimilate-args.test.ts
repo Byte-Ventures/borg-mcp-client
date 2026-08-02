@@ -85,11 +85,37 @@ describe('parseAssimilateArgs', () => {
     if (!emptyEquals.ok) expect(emptyEquals.error).toContain('--host requires');
   });
 
-  it('requires --host when --enroll is present', () => {
+  it('parses hostless --enroll for the interactive hidden-prompt path', () => {
     expect(parseAssimilateArgs(['--enroll'])).toEqual({
-      ok: false,
-      error: '--enroll requires --host <host>',
+      ok: true,
+      role: undefined,
+      flags: { enroll: true },
     });
+  });
+
+  it('keeps valid role selection but rejects invalid enrollment positionals without echoing them', () => {
+    expect(parseAssimilateArgs(['--enroll', 'builder'])).toEqual({
+      ok: true,
+      role: 'builder',
+      flags: { enroll: true },
+    });
+
+    const expectedError =
+      'That argument was not accepted. If you meant a role name, use lowercase letters, digits, hyphens, or underscores, up to 48 characters. If you meant an enrollment invitation, it must be entered at the hidden prompt — re-run the same command without it.';
+    expect(parseAssimilateArgs(['--enroll', 'Builder'])).toEqual({
+      ok: false,
+      error: expectedError,
+    });
+
+    const sentinel = 'A'.repeat(80);
+    for (const args of [['--enroll', sentinel], [sentinel, '--enroll']]) {
+      const result = parseAssimilateArgs(args);
+      expect(result).toEqual({
+        ok: false,
+        error: expectedError,
+      });
+      if (!result.ok) expect(result.error).not.toContain(sentinel);
+    }
   });
 
   it('rejects the retired --reset-local-seat flag (reset moved to `borg reset-local-seat`)', () => {

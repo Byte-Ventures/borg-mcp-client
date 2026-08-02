@@ -43,6 +43,7 @@ import {
 } from './reset-local-seat-cmd.js';
 import { parseLaunchAllArgs } from './parse-launch-all-args.js';
 import { unknownSubcommand } from './unknown-subcommand.js';
+import { parseRecoverEnrollmentArgs, runRecoverEnrollment } from './recover-enrollment-cmd.js';
 import { runLaunchAll } from './launch-all-cmd.js';
 import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
 import { discoverDroneCandidates } from './launch-all-discovery.js';
@@ -171,6 +172,27 @@ async function main() {
       process.exit(1);
     }
     const code = await runResetLocalSeat(parsed.flags, buildDefaultResetLocalSeatDeps());
+    process.exit(code);
+  }
+  if (process.argv[2] === 'recover-enrollment') {
+    const parsed = parseRecoverEnrollmentArgs(process.argv.slice(3));
+    if (!parsed.ok) {
+      if (parsed.error === 'help') {
+        process.stdout.write(clientSubcommandHelpText('recover-enrollment', [], getPackageVersion()) ?? '');
+        process.exit(0);
+      }
+      process.stderr.write(chalk.red(`${consolePrefix()}◼ borg recover-enrollment: ${parsed.error}\n`));
+      process.exit(1);
+    }
+    const prompt = async (message: string): Promise<string> => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try { return await rl.question(message); } finally { rl.close(); }
+    };
+    const code = await runRecoverEnrollment(parsed.flags, {
+      prompt,
+      stderr: (line) => process.stderr.write(line),
+      stdout: (line) => process.stdout.write(line),
+    });
     process.exit(code);
   }
   if (process.argv[2] === 'spawn') {

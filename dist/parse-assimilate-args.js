@@ -1,3 +1,5 @@
+import { validateName } from './name-validator.js';
+const ENROLLMENT_POSITIONAL_INPUT_ERROR = 'That argument was not accepted. If you meant a role name, use lowercase letters, digits, hyphens, or underscores, up to 48 characters. If you meant an enrollment invitation, it must be entered at the hidden prompt — re-run the same command without it.';
 /**
  * Parse argv for `borg assimilate [role] [--worktree <n>] [--template <n>]
  * [--no-template] [--cube-name <n>] [--host <host>] [--enroll] [--here] [--force] [--yes]`. The `assimilate`
@@ -6,6 +8,7 @@
 export function parseAssimilateArgs(rawArgs) {
     let role;
     const flags = {};
+    const enrollmentRequested = rawArgs.includes('--enroll');
     for (let i = 0; i < rawArgs.length; i += 1) {
         const arg = rawArgs[i];
         if (arg === '--worktree') {
@@ -107,7 +110,13 @@ export function parseAssimilateArgs(rawArgs) {
         }
         else {
             if (role !== undefined) {
+                if (enrollmentRequested) {
+                    return { ok: false, error: ENROLLMENT_POSITIONAL_INPUT_ERROR };
+                }
                 return { ok: false, error: `unexpected extra argument: ${arg} (already have role "${role}")` };
+            }
+            if (enrollmentRequested && !validateName(arg).ok) {
+                return { ok: false, error: ENROLLMENT_POSITIONAL_INPUT_ERROR };
             }
             role = arg;
         }
@@ -119,9 +128,6 @@ export function parseAssimilateArgs(rawArgs) {
     // worktree-spawn work.
     if (flags.template !== undefined && flags.noTemplate) {
         return { ok: false, error: '--template and --no-template are mutually exclusive' };
-    }
-    if (flags.enroll && flags.server === undefined) {
-        return { ok: false, error: '--enroll requires --host <host>' };
     }
     return { ok: true, role, flags };
 }

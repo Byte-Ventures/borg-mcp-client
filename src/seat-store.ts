@@ -238,6 +238,12 @@ export async function atomicWrite0600(
       await assertSecureFile(filePath);
     }
     await rename(tmp, filePath);
+    const parent = await open(dirname(filePath), 'r');
+    try {
+      await parent.sync();
+    } finally {
+      await parent.close();
+    }
   } catch (err) {
     await unlink(tmp).catch(() => {});
     throw err;

@@ -1,12 +1,14 @@
 import { Buffer } from 'node:buffer';
 import { createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { access, mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
+import { connect as tlsConnect } from 'node:tls';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { BorgServerTrustError } from './server-errors.js';
+import { InvitationArtifactCompatibilityError, InvitationArtifactRecoveryError, InvitationArtifactStorageError, InvitationArtifactTransportError, InvitationArtifactTrustError, } from './invitation-artifact.js';
 // CR5 TLS LATTICE: OpenSSL/Node TLS certificate-verification error codes. A raw
 // CA / cert-chain / SAN failure from the pinned transport is a potential MITM and
 // MUST be a TERMINAL trust-mismatch verdict — never a transient 'restart' blip.
@@ -41,6 +43,19 @@ const trustCache = new Map();
 function serverDataDirectory() {
     return resolve(process.env.BORG_SERVER_DATA_DIR ?? join(homedir(), '.borg', 'server'));
 }
+function remoteTrustDirectory(origin) {
+    const key = createHash('sha256').update(origin).digest('hex');
+    return join(homedir(), '.borg', 'server-trust', key);
+}
+async function trustFilesExist(directory) {
+    try {
+        await Promise.all([access(join(directory, 'ca.crt')), access(join(directory, 'server.json'))]);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 async function readTrustFile(path) {
     let handle;
     try {
@@ -61,6 +76,15 @@ async function readTrustFile(path) {
             throw new Error('Borg server trust files must be owned by the current user');
         }
         return await handle.readFile('utf8');
+    }
+    finally {
+        await handle.close();
+    }
+}
+async function syncPath(path) {
+    const handle = await open(path, 'r');
+    try {
+        await handle.sync();
     }
     finally {
         await handle.close();
@@ -208,14 +232,21 @@ export function createPinnedServerFetch(origin, caCertificate) {
         });
     });
 }
-export async function loadBorgServerTrust(origin, dataDirectory = serverDataDirectory()) {
-    const key = `${dataDirectory}\0${origin}`;
+export async function loadBorgServerTrust(origin, dataDirectory) {
+    const requestedDirectory = dataDirectory ?? serverDataDirectory();
+    const key = `${requestedDirectory}\0${origin}`;
     let pending = trustCache.get(key);
     if (!pending) {
         pending = (async () => {
+            const remoteDirectory = remoteTrustDirectory(origin);
+            const directory = dataDirectory === undefined && await trustFilesExist(remoteDirectory)
+                ? remoteDirectory
+                : dataDirectory === undefined && !(await trustFilesExist(requestedDirectory))
+                    ? remoteDirectory
+                    : requestedDirectory;
             const [certificate, configText] = await Promise.all([
-                readTrustFile(join(dataDirectory, 'ca.crt')),
-                readTrustFile(join(dataDirectory, 'server.json')),
+                readTrustFile(join(directory, 'ca.crt')),
+                readTrustFile(join(directory, 'server.json')),
             ]);
             const config = decodeTrustConfig(configText);
             const identity = verifyCaIdentity(certificate, config.ca_spki_sha256);
@@ -229,7 +260,136 @@ export async function loadBorgServerTrust(origin, dataDirectory = serverDataDire
     }
     return pending;
 }
+function pemCertificate(raw) {
+    const body = raw.toString('base64').match(/.{1,64}/g)?.join('\n') ?? '';
+    return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
+}
+function chainCertificates(socket) {
+    const result = [];
+    const seen = new Set();
+    let current = socket.getPeerCertificate(true);
+    while (current?.raw instanceof Buffer) {
+        const key = current.raw.toString('base64');
+        if (seen.has(key))
+            break;
+        seen.add(key);
+        result.push(current.raw);
+        current = current.issuerCertificate;
+    }
+    return result;
+}
+async function fetchPresentedChain(origin) {
+    const url = new URL(origin);
+    return new Promise((resolveChain, rejectChain) => {
+        const socket = tlsConnect({
+            host: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+            port: url.port === '' ? 443 : Number(url.port),
+            rejectUnauthorized: false,
+            servername: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+        });
+        const timeout = setTimeout(() => {
+            socket.destroy();
+            rejectChain(new InvitationArtifactTransportError());
+        }, 5_000);
+        socket.once('secureConnect', () => {
+            clearTimeout(timeout);
+            const chain = chainCertificates(socket);
+            socket.destroy();
+            resolveChain(chain);
+        });
+        socket.once('error', () => {
+            clearTimeout(timeout);
+            rejectChain(new InvitationArtifactTransportError());
+        });
+    });
+}
+/** Bootstrap a remote pinned transport from the CA chain presented by the server. */
+export async function loadBorgServerTrustFromPresentedChain(origin, caSpkiSha256) {
+    const chain = await fetchPresentedChain(origin);
+    let sawCa = false;
+    for (const raw of chain) {
+        try {
+            const certificate = new X509Certificate(raw);
+            if (!certificate.ca)
+                continue;
+            sawCa = true;
+            const actual = createHash('sha256')
+                .update(certificate.publicKey.export({ type: 'spki', format: 'der' }))
+                .digest('hex');
+            if (actual !== caSpkiSha256)
+                continue;
+            return stageBorgServerTrust(origin, pemCertificate(raw), `spki-sha256:${actual}`);
+        }
+        catch {
+            // Ignore malformed chain members; the typed compatibility failure below is safer.
+        }
+    }
+    if (!sawCa)
+        throw new InvitationArtifactCompatibilityError();
+    throw new InvitationArtifactTrustError();
+}
+export async function stageBorgServerTrust(origin, certificate, identity) {
+    const directory = remoteTrustDirectory(origin);
+    const parent = resolve(directory, '..');
+    await mkdir(parent, { recursive: true, mode: 0o700 });
+    const suffix = `${process.pid}-${Date.now()}`;
+    const temporaryDirectory = `${directory}.tmp-${suffix}`;
+    const temporaryCertificate = join(temporaryDirectory, 'ca.crt');
+    const temporaryConfig = join(temporaryDirectory, 'server.json');
+    try {
+        await mkdir(temporaryDirectory, { recursive: false, mode: 0o700 });
+        await Promise.all([
+            writeFile(temporaryCertificate, certificate, { mode: 0o600, flag: 'wx' }),
+            writeFile(temporaryConfig, JSON.stringify({ ca_spki_sha256: identity.replace(/^spki-sha256:/, '') }), { mode: 0o600, flag: 'wx' }),
+        ]);
+        await Promise.all([syncPath(temporaryCertificate), syncPath(temporaryConfig), syncPath(temporaryDirectory)]);
+    }
+    catch {
+        await rm(temporaryDirectory, { recursive: true, force: true });
+        throw new InvitationArtifactStorageError();
+    }
+    let committed = false;
+    return {
+        identity,
+        fetchImpl: createPinnedServerFetch(origin, certificate),
+        commitTrust: async (activate) => {
+            if (committed)
+                return;
+            const backupDirectory = `${directory}.backup-${suffix}`;
+            let backedUp = false;
+            try {
+                await rename(directory, backupDirectory).then(() => { backedUp = true; }).catch((error) => {
+                    if (error.code !== 'ENOENT')
+                        throw error;
+                });
+                await rename(temporaryDirectory, directory);
+                await syncPath(resolve(directory, '..'));
+                await activate();
+                committed = true;
+                await rm(backupDirectory, { recursive: true, force: true }).catch(() => undefined);
+            }
+            catch (error) {
+                await rm(directory, { recursive: true, force: true });
+                await rm(temporaryDirectory, { recursive: true, force: true });
+                if (backedUp) {
+                    await rename(backupDirectory, directory);
+                    await syncPath(resolve(directory, '..'));
+                }
+                throw new InvitationArtifactRecoveryError();
+            }
+        },
+        discardTrust: async () => {
+            if (committed)
+                return;
+            await rm(temporaryDirectory, { recursive: true, force: true });
+        },
+    };
+}
 export function __clearServerTrustCacheForTest() {
     trustCache.clear();
+}
+export async function clearBorgServerTrust(origin) {
+    await rm(remoteTrustDirectory(origin), { recursive: true, force: true });
+    trustCache.delete(`${serverDataDirectory()}\0${origin}`);
 }
 //# sourceMappingURL=server-trust.js.map

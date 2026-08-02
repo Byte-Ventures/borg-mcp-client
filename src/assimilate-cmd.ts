@@ -56,6 +56,17 @@ import {
   RepositoryAssociationOutcomeUnknownError,
   RepositoryAssociationResolutionError,
 } from './server-errors.js';
+import {
+  decodeAndVerifyInvitationArtifact,
+  InvitationArtifactCompatibilityError,
+  InvitationArtifactEndpointMismatchError,
+  InvitationArtifactFormatError,
+  InvitationArtifactLegacyError,
+  InvitationArtifactRecoveryError,
+  InvitationArtifactStorageError,
+  InvitationArtifactTransportError,
+  InvitationArtifactTrustError,
+} from './invitation-artifact.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { ServerSessionOperation } from './config.js';
 import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } from './cubes.js';
@@ -67,6 +78,7 @@ import type {
   AssociateRepositoryCubeResponse,
   CreateCubeRepository,
   CubeTemplate,
+  InvitationArtifact,
 } from 'borgmcp-shared/protocol';
 import {
   initializeRepositoryCube,
@@ -277,7 +289,11 @@ export interface AssimilateDeps {
   detectLocalServer: () => Promise<string | null>;
   connectServer: (
     apiUrl: string,
-    enrollment?: { invitation: string; confirmReplacement?: () => Promise<boolean> },
+    enrollment?: {
+      invitation: string;
+      artifact?: import('borgmcp-shared/protocol').InvitationArtifact;
+      confirmReplacement?: () => Promise<boolean>;
+    },
   ) => Promise<{
     token: string;
     trustIdentity: string;
@@ -288,6 +304,17 @@ export interface AssimilateDeps {
     onPending?: () => void,
   ) => Promise<{
     token: string;
+    trustIdentity: string;
+    serverCapabilities?: readonly string[];
+  } | null>;
+  /** Read-only pending-artifact peek used to validate an explicit host before
+   * the normal resume path performs trust/credential work. */
+  peekPendingServerEnrollment?: () => Promise<{ origin: string; invitation: string } | null>;
+  resumePendingServerEnrollment?: (
+    onPending?: () => void,
+  ) => Promise<{
+    token: string;
+    apiUrl?: string;
     trustIdentity: string;
     serverCapabilities?: readonly string[];
   } | null>;
@@ -382,6 +409,11 @@ async function selectAssimilationAuthority(
 
   // Only a local self-hosted server authority exists. Non-TTY and --yes must
   // NOT infer an authority — fail closed with actionable guidance.
+  if (flags.enroll && deps.isTTY()) {
+    // The v2 enrollment artifact is itself the authority selector. Use the
+    // local origin only as a placeholder until the hidden artifact is decoded.
+    return { kind: 'server', apiUrl: DEFAULT_LOCAL_SERVER_ORIGIN };
+  }
   if (!deps.isTTY() || flags.yes) {
     if (deps.defaultAuthority) return deps.defaultAuthority;
     const command = mode === 'cube-init'
@@ -519,6 +551,38 @@ function reportServerFailure(
         'client run `borg-mcp-server client-invite`. Then rerun ' +
         `${localAssimilateCommand(apiUrl, true, mode)}.\n`,
     );
+    return 1;
+  }
+  if (error instanceof InvitationArtifactCompatibilityError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
+  if (error instanceof InvitationArtifactLegacyError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
+  if (error instanceof InvitationArtifactFormatError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
+  if (error instanceof InvitationArtifactEndpointMismatchError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
+  if (error instanceof InvitationArtifactTransportError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
+  if (error instanceof InvitationArtifactStorageError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
+  if (error instanceof InvitationArtifactRecoveryError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
+  if (error instanceof InvitationArtifactTrustError) {
+    deps.stderr(`${error.message}\n`);
     return 1;
   }
   if (/HTTP 40[13]|auth(?:entication|orization)|credential.*(?:invalid|rejected)/i.test(message)) {
@@ -662,7 +726,117 @@ export async function runAssimilate(
     return 1;
   }
 
-  if (args.flags.server === undefined && deps.defaultAuthority === undefined) {
+  const artifactOnlyEnrollment = args.flags.enroll === true &&
+    args.flags.server === undefined && deps.defaultAuthority === undefined && deps.isTTY();
+  let preResumeAttempted = false;
+  let preResumedEnrollment: {
+    token: string;
+    trustIdentity: string;
+    serverCapabilities?: readonly string[];
+  } | null = null;
+
+  let prefetchedInvitation: string | undefined;
+  let prefetchedArtifact: InvitationArtifact | undefined;
+
+  // An explicit --host plus a new invitation must be rejected on the pure
+  // input path. Decode and compare the operator-presented artifact before any
+  // pending-enrollment lookup: the lookup enumerates the credential backend,
+  // so it must not precede this contradiction check. A matching artifact may
+  // then take the published pending-resume path until client#267 lands.
+  if (args.flags.enroll && args.flags.server !== undefined && deps.isTTY()) {
+    let preResumeOrigin: string;
+    try {
+      preResumeOrigin = normalizeServerEndpoint(args.flags.server);
+    } catch (error) {
+      deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+
+    prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
+    if (!prefetchedInvitation) {
+      deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
+      return 1;
+    }
+    try {
+      prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
+      if (prefetchedArtifact.endpoint !== preResumeOrigin) {
+        throw new InvitationArtifactEndpointMismatchError(
+          preResumeOrigin,
+          prefetchedArtifact.endpoint,
+        );
+      }
+    } catch (error) {
+      deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
+      prefetchedInvitation = undefined;
+      prefetchedArtifact = undefined;
+      return 1;
+    }
+
+    let pendingForHost = false;
+    if (deps.peekPendingServerEnrollment !== undefined) {
+      let pending: { origin: string; invitation: string } | null = null;
+      try {
+        pending = await deps.peekPendingServerEnrollment();
+      } catch {
+        pending = null;
+      }
+      if (pending?.origin === preResumeOrigin) {
+        try {
+          const pendingArtifact = decodeAndVerifyInvitationArtifact(pending.invitation);
+          if (pendingArtifact.endpoint !== preResumeOrigin) {
+            throw new InvitationArtifactEndpointMismatchError(
+              preResumeOrigin,
+              pendingArtifact.endpoint,
+            );
+          }
+          pendingForHost = true;
+        } catch (error) {
+          deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
+          return 1;
+        }
+      }
+    }
+
+    if (pendingForHost) {
+      try {
+        preResumeAttempted = true;
+        preResumedEnrollment = await deps.resumeServerEnrollment(preResumeOrigin, () => {
+          deps.stderr(
+            `Resuming the pending enrollment for \`${preResumeOrigin}\`; ` +
+            'do not enter another invitation unless the server certificate was reissued; ' +
+            'if it was, request a current invitation and rerun this command.\n',
+          );
+        });
+      } catch {
+        preResumeAttempted = false;
+      }
+    }
+  }
+  if (artifactOnlyEnrollment ||
+      preResumeAttempted && preResumedEnrollment === null) {
+    if (artifactOnlyEnrollment && deps.resumePendingServerEnrollment) {
+      preResumedEnrollment = await deps.resumePendingServerEnrollment(() => {
+        deps.stderr('Resuming the pending enrollment; no new invitation is required.\n');
+      });
+    }
+    if (artifactOnlyEnrollment && preResumedEnrollment) {
+      // The exact pending tuple was already redeemed or is being resumed.
+    } else {
+      prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
+      if (!prefetchedInvitation) {
+        deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
+        return 1;
+      }
+      try {
+        prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
+      } catch (error) {
+        deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
+        prefetchedInvitation = undefined;
+        return 1;
+      }
+    }
+  }
+  if (!artifactOnlyEnrollment && args.flags.server === undefined && deps.defaultAuthority === undefined) {
     const connectCommand = mode === 'cube-init'
       ? 'borg server cube init --host <host>'
       : 'borg assimilate --host <host>';
@@ -699,8 +873,9 @@ export async function runAssimilate(
   }
 
   // ----- Step 1: Select and authenticate the local server -----
-  const authority = await selectAssimilationAuthority(args.flags, deps, mode);
-  if (!authority) return 1;
+  const selectedAuthority = await selectAssimilationAuthority(args.flags, deps, mode);
+  if (!selectedAuthority) return 1;
+  let authority: AssimilationAuthority = selectedAuthority;
   if (localSeatReadError !== undefined) {
     return reportServerFailure(deps, authority.apiUrl, localSeatReadError, false, mode);
   }
@@ -723,33 +898,48 @@ export async function runAssimilate(
           );
           return 1;
         }
-        const resumed = await deps.resumeServerEnrollment(authority.apiUrl, () => {
-          deps.stderr(
-            `Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
-              'do not enter another invitation.\n',
-          );
-        });
+        let resumed = preResumedEnrollment;
+        if (!resumed && prefetchedArtifact === undefined && !preResumeAttempted && !artifactOnlyEnrollment) {
+          resumed = await deps.resumeServerEnrollment(authority.apiUrl, () => {
+            deps.stderr(
+              `Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
+              'do not enter another invitation unless the server certificate was reissued; ' +
+              'if it was, request a current invitation and rerun this command.\n',
+            );
+          });
+        }
         if (resumed) {
+          if ('apiUrl' in resumed && typeof resumed.apiUrl === 'string') {
+            authority = { kind: 'server', apiUrl: resumed.apiUrl };
+          }
           serverAuth = resumed;
         } else {
-          let invitation = await deps.promptSecret(
-            `Enrollment invitation for \`${authority.apiUrl}\` (single-use; hidden input):`,
+          let invitation = prefetchedInvitation ?? await deps.promptSecret(
+            artifactOnlyEnrollment
+              ? 'Enrollment invitation (single-use; hidden input):'
+              : `Enrollment invitation for \`${authority.apiUrl}\` (single-use; hidden input):`,
           );
           if (!invitation) {
-            deps.stderr(
-              `No enrollment invitation was entered for ${authority.apiUrl}. ` +
-                `Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true, mode)}.\n`,
-            );
+            deps.stderr(artifactOnlyEnrollment
+              ? 'No enrollment invitation was entered. Ask the server operator for one, then rerun `borg assimilate --enroll`.\n'
+              : `No enrollment invitation was entered for ${authority.apiUrl}. ` +
+                `Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true, mode)}.\n`);
             return 1;
           }
-           try {
-             serverAuth = await deps.connectServer(authority.apiUrl, {
-               invitation,
-               confirmReplacement: async () => strictAffirmative(await deps.prompt(
-                 `A local enrollment for ${authority.apiUrl} already exists. Replacing it will orphan ` +
-                   'the first enrolled client. Replace it? [y/N]: ',
-               )),
-             });
+          try {
+            const artifact = prefetchedArtifact ?? decodeAndVerifyInvitationArtifact(invitation);
+            if (args.flags.server !== undefined && authority.apiUrl !== artifact.endpoint) {
+              throw new InvitationArtifactEndpointMismatchError(authority.apiUrl, artifact.endpoint);
+            }
+            authority = { kind: 'server', apiUrl: artifact.endpoint };
+            serverAuth = await deps.connectServer(authority.apiUrl, {
+              invitation,
+              artifact,
+              confirmReplacement: async () => strictAffirmative(await deps.prompt(
+                  `A local enrollment for ${authority.apiUrl} already exists. Replacing it will orphan ` +
+                    'the first enrolled client. Replace it? [y/N]: ',
+              )),
+            });
           } finally {
             // Strings cannot be zeroized in JavaScript, but drop this command's
             // reference immediately after the exchange instead of retaining the
@@ -777,6 +967,11 @@ export async function runAssimilate(
         serverTrustIdentity: serverAuth.trustIdentity,
         serverCapabilities: serverAuth.serverCapabilities ?? [],
       };
+      if (args.flags.enroll) {
+        deps.stderr(
+          `This machine (${deps.getHostname()}) is enrolled with Borg server \`${authority.apiUrl}\`.\n`,
+        );
+      }
     } catch (error) {
       return reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true, mode);
     }

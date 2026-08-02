@@ -21,6 +21,7 @@ export interface PendingServerEnrollmentRecord {
     retryKey: string;
     credential: string;
     clientName?: string;
+    replacementCapability?: string;
 }
 export interface PendingServerCubeCreationRecord {
     origin: string;
@@ -68,13 +69,18 @@ export declare function __setServerCredentialBackendForTest(backend: TokenBacken
  * not credential sources. CR3b: the load→set→rename runs inside ONE hold of the
  * single store lock so a concurrent writer cannot lose an unrelated account.
  */
-export declare function storeServerCredential(record: ServerCredentialRecord): Promise<void>;
+export declare function storeServerCredential(record: ServerCredentialRecord, options?: {
+    allowReplacement?: boolean;
+}): Promise<void>;
 /** Read an authority-bound active client record, failing closed on corruption. */
 export declare function getServerCredentialRecord(origin: string, trustIdentity: string): Promise<ActiveServerCredentialRecord | null>;
 /** Read only the bearer for existing call sites that do not need capability metadata. */
 export declare function getServerCredential(origin: string, trustIdentity: string): Promise<string | null>;
+export declare function hasServerCredentialForOrigin(origin: string): Promise<boolean>;
 /** Load an exact durable PENDING tuple so a new process can resume it. */
 export declare function getPendingServerEnrollment(origin: string, trustIdentity: string): Promise<PendingServerEnrollmentRecord | null>;
+/** Find the sole pending enrollment so artifact-only retries need no invitation. */
+export declare function findPendingServerEnrollment(): Promise<PendingServerEnrollmentRecord | null>;
 /**
  * Generate and persist an exact enrollment tuple before network I/O. A
  * pre-existing PENDING tuple must match the invitation and presentation name;
@@ -85,6 +91,7 @@ export declare function getOrCreatePendingServerEnrollment(input: {
     trustIdentity: string;
     invitation: string;
     clientName?: string;
+    replacementCapability?: string;
 }): Promise<PendingServerEnrollmentRecord>;
 /** Activate the exact pending tuple only after a verified server response. */
 export declare function activatePendingServerEnrollment(input: {
@@ -95,6 +102,7 @@ export declare function activatePendingServerEnrollment(input: {
     clientId: string;
     serverCapabilities: ServerCapability[];
     allowReplacement?: boolean;
+    replacementCapability?: string;
 }): Promise<void>;
 /** Delete only the exact definitively rejected pending attempt. */
 export declare function clearPendingServerEnrollment(origin: string, trustIdentity: string, retryKey: string): Promise<void>;
@@ -110,4 +118,6 @@ export declare function getOrCreatePendingServerCubeCreation(input: {
 }): Promise<PendingServerCubeCreationRecord>;
 export declare function clearPendingServerCubeCreation(record: PendingServerCubeCreationRecord): Promise<void>;
 export declare function clearServerCredential(origin: string, trustIdentity: string): Promise<void>;
+/** Clear only the failed enrollment transaction for one origin/identity. */
+export declare function clearEnrollmentTransaction(origin: string, trustIdentity: string): Promise<void>;
 //# sourceMappingURL=config.d.ts.map

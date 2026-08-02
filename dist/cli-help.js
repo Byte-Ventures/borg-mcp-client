@@ -48,6 +48,7 @@ export function clientSubcommandHelpText(command, args, version) {
         case 'setup': return setupHelpText(version);
         case 'assimilate': return assimilateHelpText(version);
         case 'reset-local-seat': return resetLocalSeatHelpText(version);
+        case 'recover-enrollment': return recoverEnrollmentHelpText(version);
         case 'sync': return syncHelpText(version);
         case 'cleanup': return cleanupHelpText(version);
         case 'launch-all': return launchAllHelpText(version);
@@ -80,6 +81,7 @@ export function topLevelHelpText(version) {
         `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
         `  borg server cube init    Initialize this repository's cube without creating a drone\n` +
         `  borg reset-local-seat    Clear ONLY this worktree's saved local seat (offline; after a rejection)\n` +
+        `  borg recover-enrollment  Clear ONLY one failed server enrollment transaction\n` +
         `  borg sync [--prune]      Sync this worktree's branch to origin/main\n` +
         `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
         `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
@@ -89,6 +91,14 @@ export function topLevelHelpText(version) {
         `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
         `  borg --version           Show installed version\n\n` +
         `All other arguments are passed through to the selected agent CLI.\n`);
+}
+export function recoverEnrollmentHelpText(version) {
+    return (`borg recover-enrollment (borgmcp ${version}) — clear one failed server enrollment\n\n` +
+        `Usage:\n` +
+        `  borg recover-enrollment [--host <host>] [--yes]\n` +
+        `  borg recover-enrollment --help\n\n` +
+        `This operation clears only the failed enrollment transaction for one server.\n` +
+        `It does not touch other server enrollments or accounts. It never requires manual file editing.\n`);
 }
 /** Help for the whole-product, npm-owned update journey. */
 export function updateHelpText(version) {
@@ -116,6 +126,7 @@ export function serverHelpText() {
         `  status   Report verified runtime evidence.\n` +
         `  update   Verify and activate a local server artifact.\n` +
         `  invite   Create a single-use invitation in an interactive terminal.\n` +
+        `  cert-reissue  Widen the server certificate to cover another address without replacing the CA.\n` +
         `  dashboard   View the running local server dashboard.\n` +
         `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
         `Run borg server <command> --help for server command options.\n`);
