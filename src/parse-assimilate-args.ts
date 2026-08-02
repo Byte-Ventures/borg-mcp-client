@@ -119,9 +119,5 @@ export function parseAssimilateArgs(rawArgs: string[]): ParseResult {
   if (flags.template !== undefined && flags.noTemplate) {
     return { ok: false, error: '--template and --no-template are mutually exclusive' };
   }
-  if (flags.enroll && flags.server === undefined) {
-    return { ok: false, error: '--enroll requires --host <host>' };
-  }
-
   return { ok: true, role, flags };
 }

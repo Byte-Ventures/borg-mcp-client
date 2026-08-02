@@ -3965,7 +3965,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     );
   });
 
-  it('non-TTY --yes without --host/--server emits recovery and makes zero server calls', async () => {
+  it('non-TTY --yes --enroll without --host/--server remains fail-closed with zero server calls', async () => {
     const stderr = vi.fn();
     const connectServer = vi.fn();
     const listCubes = vi.fn();
@@ -3977,7 +3977,7 @@ describe('runAssimilate: #1015 authority selection', () => {
       isTTY: () => false,
     });
 
-    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
+    expect(await runAssimilate({ role: undefined, flags: { yes: true, enroll: true } }, deps)).toBe(1);
 
     expect(connectServer).not.toHaveBeenCalled();
     expect(listCubes).not.toHaveBeenCalled();

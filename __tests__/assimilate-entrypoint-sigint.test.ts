@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
+import {
+  encodeInvitationArtifact,
+  getInvitationArtifactIntegrityInput,
+} from 'borgmcp-shared/protocol';
 import type { AssimilateDeps } from '../src/assimilate-cmd.js';
 import { buildDefaultAssimilateDeps, type PromptQuestion } from '../src/assimilate-deps.js';
 import { runAssimilateEntry } from '../src/claude.js';
@@ -19,6 +24,20 @@ import {
 vi.mock('../src/ensure-mcp-config.js', () => ({ ensureCliMcpConfigured: vi.fn() }));
 
 const SERVER_TRUST_IDENTITY = 'spki-sha256:test-server';
+const CLEAN_PATH_ARTIFACT_BASE = {
+  version: 2 as const,
+  endpoint: 'https://127.0.0.1:7091',
+  ca_spki_sha256: '0'.repeat(64),
+  authority: 'client' as const,
+  secret: 's'.repeat(43),
+  integrity: 'p'.repeat(43),
+};
+const CLEAN_PATH_ARTIFACT = encodeInvitationArtifact({
+  ...CLEAN_PATH_ARTIFACT_BASE,
+  integrity: createHmac('sha256', CLEAN_PATH_ARTIFACT_BASE.secret)
+    .update(getInvitationArtifactIntegrityInput(CLEAN_PATH_ARTIFACT_BASE))
+    .digest('base64url'),
+});
 
 function makeEntryDeps(question: PromptQuestion) {
   const stderr = vi.fn();
@@ -165,6 +184,48 @@ const entrypoints = [
     ),
   },
 ] as const;
+
+const cleanPathEntrypoints = [
+  {
+    entry: 'borg assimilate',
+    run: (deps: AssimilateDeps) => runAssimilateEntry(
+      ['--enroll'],
+      () => deps,
+    ),
+  },
+  {
+    entry: 'borg server cube init',
+    run: (deps: AssimilateDeps) => runEarlyServerFacade(
+      ['node', 'borg', 'server', 'cube', 'init', '--enroll'],
+      noServerProcess,
+      { writeStdout: vi.fn(), writeStderr: vi.fn() },
+      buildDefaultServerFacadeClientDeps(() => deps),
+    ),
+  },
+] as const;
+
+describe.each(cleanPathEntrypoints)('clean-machine enrollment through $entry', ({ run }) => {
+  it('reaches the hidden invitation prompt without accepting an argv secret', async () => {
+    const state = makeEntryDeps(async () => '1');
+    const promptSecret = vi.fn(async () => CLEAN_PATH_ARTIFACT);
+    const connectServer = vi.fn(async () => {
+      throw new BorgServerError('INVITATION_REJECTED', 'test rejection');
+    });
+    state.deps.promptSecret = promptSecret;
+    state.deps.connectServer = connectServer;
+
+    await expect(run(state.deps)).resolves.toBe(1);
+
+    expect(promptSecret).toHaveBeenCalledWith('Enrollment invitation (single-use; hidden input):');
+    expect(connectServer).toHaveBeenCalledWith(
+      'https://127.0.0.1:7091',
+      expect.objectContaining({
+        invitation: CLEAN_PATH_ARTIFACT,
+        artifact: expect.objectContaining({ endpoint: 'https://127.0.0.1:7091' }),
+      }),
+    );
+  });
+});
 
 describe.each(entrypoints)('production prompt interruption through $entry', ({ run }) => {
   it.each([

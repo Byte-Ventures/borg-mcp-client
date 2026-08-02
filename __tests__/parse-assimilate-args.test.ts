@@ -85,10 +85,11 @@ describe('parseAssimilateArgs', () => {
     if (!emptyEquals.ok) expect(emptyEquals.error).toContain('--host requires');
   });
 
-  it('requires --host when --enroll is present', () => {
+  it('parses hostless --enroll for the interactive hidden-prompt path', () => {
     expect(parseAssimilateArgs(['--enroll'])).toEqual({
-      ok: false,
-      error: '--enroll requires --host <host>',
+      ok: true,
+      role: undefined,
+      flags: { enroll: true },
     });
   });
 
