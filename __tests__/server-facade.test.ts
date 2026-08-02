@@ -75,7 +75,18 @@ describe('parseServerFacadeArgs', () => {
     });
   });
 
-  it.each(['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'] as const)(
+  it.each([
+    'setup',
+    'start',
+    'stop',
+    'status',
+    'update',
+    'invite',
+    'cert-reissue',
+    'client-list',
+    'client-grant',
+    'dashboard',
+  ] as const)(
     'accepts %s and preserves server-owned arguments verbatim',
     (command) => {
       expect(parseServerFacadeArgs([command, '--lan', '127.0.0.1'])).toEqual({
@@ -220,6 +231,8 @@ describe('runEarlyServerFacade', () => {
         `  update   Verify and activate a local server artifact.\n` +
         `  invite   Create a single-use invitation in an interactive terminal.\n` +
         `  cert-reissue  Widen the server certificate to cover another address without replacing the CA.\n` +
+        `  client-list   List enrolled clients, states, and cube grants while the server is stopped.\n` +
+        `  client-grant  Grant a client read, write, or manage access to a cube while the server is stopped.\n` +
         `  dashboard   View the running local server dashboard.\n` +
         `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
         `Run borg server <command> --help for server command options.\n`,
@@ -268,7 +281,7 @@ describe('runEarlyServerFacade', () => {
     expect(output.stdout()).toBe('');
     expect(output.stderr()).toBe(
       `Unknown server command: bad??[31m.\n` +
-      `Available commands: setup, start, stop, status, update, invite, cert-reissue, dashboard, cube init.\n` +
+      `Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     expect(output.stderr()).not.toContain('--secret');
@@ -288,7 +301,7 @@ describe('runEarlyServerFacade', () => {
     )).resolves.toBe(1);
     expect(output.stderr()).toBe(
       `Unknown server command: ${'😀'.repeat(77)}....\n` +
-      `Available commands: setup, start, stop, status, update, invite, cert-reissue, dashboard, cube init.\n` +
+      `Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     const renderedToken = output.stderr().split('\n', 1)[0]
@@ -327,6 +340,30 @@ describe('runEarlyServerFacade', () => {
     expect(deps.spawn).toHaveBeenCalledWith(
       'borg-mcp-server',
       ['invite', '--future-server-option'],
+      { shell: false, stdio: 'inherit' },
+    );
+    child.emit('exit', 0, null);
+    await expect(pending).resolves.toBe(0);
+    expect(output.stdout()).toBe('');
+    expect(output.stderr()).toBe('');
+  });
+
+  it.each([
+    ['client-list', []],
+    ['client-grant', ['client-handle', 'cube-id', 'manage']],
+  ] as const)('forwards %s and its server-owned arguments unchanged', async (command, args) => {
+    const child = new FakeChild();
+    const { deps } = processDeps(child);
+    const output = outputDeps();
+    const pending = runEarlyServerFacade(
+      ['node', 'borg', 'server', command, ...args],
+      deps,
+      output.output,
+    );
+
+    expect(deps.spawn).toHaveBeenCalledWith(
+      'borg-mcp-server',
+      [command, ...args],
       { shell: false, stdio: 'inherit' },
     );
     child.emit('exit', 0, null);
@@ -454,7 +491,7 @@ describe('approved server facade copy', () => {
   it('renders the exact bounded unknown-command text', () => {
     expect(unknownServerCommandText('daemonize')).toBe(
       `Unknown server command: daemonize.\n` +
-      `Available commands: setup, start, stop, status, update, invite, cert-reissue, dashboard, cube init.\n` +
+      `Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
   });
