@@ -72,6 +72,72 @@ test('prepare generates exactly the client identity surfaces and verifies their 
   assert.equal(verified.tree, git(fixture.root, ['rev-parse', 'HEAD^{tree}']));
 });
 
+test('failed-superseded prep verifies the burned attempt and falls back to the last published anchor', async (t) => {
+  const fixture = await createFixture(t, { failedSuperseded: true });
+  const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
+  assert.equal(prepared.record.outcome, 'failed-superseded');
+  assert.equal(prepared.record.workflow_conclusion, 'failure');
+  assert.equal(prepared.record.artifact_integrity, null);
+  assert.equal(prepared.provenanceAnchor.outcome, 'published');
+  assert.equal(prepared.provenanceAnchor.version, fixture.anchorRecord.version);
+  assert.deepEqual(new Set(fixture.artifactRequests), new Set([fixture.anchorRecord.version]));
+
+  const releasing = await readFile(join(fixture.root, 'docs', 'RELEASING.md'), 'utf8');
+  const extraction = await readFile(join(fixture.root, 'docs', 'EXTRACTION_PROVENANCE.md'), 'utf8');
+  assert.match(releasing, /concluded `failure`/);
+  assert.match(releasing, /FAILED-SUPERSEDED release record/);
+  assert.match(releasing, /No release artifact or SRI exists/);
+  assert.match(releasing, new RegExp(`borgmcp@${oldVersion.replaceAll('.', '\\.')}.*was not published`, 's'));
+  assert.match(extraction, new RegExp(
+    'Client `borgmcp@' + fixture.anchorRecord.version.replaceAll('.', '\\.') + '` is published\\.',
+  ));
+  assert.doesNotMatch(extraction, new RegExp(
+    'Client `borgmcp@' + oldVersion.replaceAll('.', '\\.') + '` is published\\.',
+  ));
+
+  const candidate = commitAll(fixture.root, 'prepare recovery release');
+  const verified = verifyReleaseIdentity(fixture.root, fixture.base, candidate, fixture.authorities);
+  assert.equal(verified.oldVersion, oldVersion);
+  assert.equal(verified.newVersion, newVersion);
+  assert.deepEqual(new Set(fixture.artifactRequests), new Set([fixture.anchorRecord.version]));
+});
+
+test('failed-superseded records reject an SRI and published records require one', async (t) => {
+  const failed = await createFixture(t, { failedSuperseded: true });
+  await assert.rejects(
+    prepareRelease(failed.root, newVersion, {
+      ...failed.evidence,
+      artifactIntegrity: integrity,
+    }, failed.authorities),
+    /invalid or non-canonical shape/,
+  );
+
+  const published = await createFixture(t);
+  await assert.rejects(
+    prepareRelease(published.root, newVersion, {
+      ...published.evidence,
+      artifactIntegrity: undefined,
+    }, published.authorities),
+    /invalid or non-canonical shape/,
+  );
+});
+
+test('failed-superseded records require an exact failed workflow authority', async (t) => {
+  const fixture = await createFixture(t, { failedSuperseded: true });
+  const githubRun = fixture.authorities.githubRun;
+  const authorities = {
+    ...fixture.authorities,
+    githubRun: (fixtureRoot, runId, attempt) => ({
+      ...githubRun(fixtureRoot, runId, attempt),
+      conclusion: 'success',
+    }),
+  };
+  await assert.rejects(
+    prepareRelease(fixture.root, newVersion, fixture.evidence, authorities),
+    /does not match the tag workflow authority/,
+  );
+});
+
 test('trusted-base classification is green on the transform and red on a self-bypassing candidate', async (t) => {
   const fixture = await preparedFixture(t);
   git(fixture.root, ['checkout', '--detach', '-q', fixture.base]);
@@ -189,9 +255,27 @@ async function preparedFixture(t) {
   return { ...fixture, candidate, record: prepared.record };
 }
 
-async function createFixture(t) {
+async function createFixture(t, { failedSuperseded = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'borg-client-release-identity-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
+  git(directory, ['init', '-q']);
+  git(directory, ['config', 'user.name', 'Release Test']);
+  git(directory, ['config', 'user.email', 'release-test@example.invalid']);
+  await writeFixture(directory, 'published-anchor.txt', 'published anchor\n');
+  const anchorCommit = commitAll(directory, 'published anchor');
+  const anchorVersion = '1.0.0';
+  git(directory, ['tag', '-a', `v${anchorVersion}`, '-m', `release ${anchorVersion}`]);
+  const anchorRecord = {
+    outcome: 'published',
+    version: anchorVersion,
+    tag: `v${anchorVersion}`,
+    tag_object: git(directory, ['rev-parse', `v${anchorVersion}^{tag}`]),
+    commit: anchorCommit,
+    workflow_run_id: 122,
+    workflow_run_attempt: 1,
+    workflow_conclusion: 'success',
+    artifact_integrity: integrity,
+  };
   await writeFixture(directory, allowlistPath, `${JSON.stringify({
     stablePaths: [stablePath],
     versionPins: [releaseTestPath],
@@ -217,9 +301,9 @@ async function createFixture(t) {
   }, null, 2)}\n`);
   await writeFixture(directory, 'docs/EXTRACTION_PROVENANCE.md',
     `Published successors were published, so the next candidate identity is \`${oldVersion}\`.\n` +
-    `Client \`borgmcp@2.1.1\` is published. Publication remains gated by reviewed \`v${oldVersion}\` source.\n`);
+    `Client \`borgmcp@${anchorVersion}\` is published. Publication remains gated by reviewed \`v${oldVersion}\` source.\n`);
   await writeFixture(directory, 'docs/RELEASING.md',
-    `# Releasing\n\nThe next candidate\n` +
+    `# Releasing\n\n${releaseParagraph(anchorRecord)} The next candidate\n` +
     `uses the unused \`v${oldVersion}\` identity from a fresh reviewed protected-main commit\n` +
     `and requires the complete release gate again.\n`);
   await writeFixture(directory, releaseTestPath,
@@ -227,27 +311,42 @@ async function createFixture(t) {
     `for (const evidence of [\n    'v${oldVersion}',\n  ]) assert.ok(evidence);\n`);
   await writeFixture(directory, '.github/workflows/release-identity.yml', '# trusted fixture workflow\n');
   await writeFixture(directory, 'scripts/release-identity.mjs', '// trusted fixture verifier\n');
-  git(directory, ['init', '-q']);
-  git(directory, ['config', 'user.name', 'Release Test']);
-  git(directory, ['config', 'user.email', 'release-test@example.invalid']);
   commitAll(directory, 'base');
   git(directory, ['tag', '-a', `v${oldVersion}`, '-m', `release ${oldVersion}`]);
   const base = git(directory, ['rev-parse', 'HEAD']);
-  const evidence = { workflowRunId: 123, workflowRunAttempt: 1, artifactIntegrity: integrity };
+  const evidence = failedSuperseded
+    ? { workflowRunId: 123, workflowRunAttempt: 1, workflowConclusion: 'failure' }
+    : {
+        workflowRunId: 123,
+        workflowRunAttempt: 1,
+        workflowConclusion: 'success',
+        artifactIntegrity: integrity,
+      };
+  const artifactRequests = [];
   const authorities = {
-    githubRun: () => ({
-      id: 123,
+    githubRun: (_root, runId) => ({
+      id: runId,
       run_attempt: 1,
-      head_sha: base,
-      head_branch: `v${oldVersion}`,
+      head_sha: runId === 122 ? anchorCommit : base,
+      head_branch: runId === 122 ? `v${anchorVersion}` : `v${oldVersion}`,
       event: 'push',
       status: 'completed',
-      conclusion: 'success',
+      conclusion: runId === 122 || !failedSuperseded ? 'success' : 'failure',
       path: '.github/workflows/publish.yml',
     }),
-    artifactIntegrity: () => integrity,
+    artifactIntegrity: (_root, version) => {
+      artifactRequests.push(version);
+      return integrity;
+    },
   };
-  return { root: directory, base, evidence, authorities };
+  return {
+    root: directory,
+    base,
+    evidence,
+    authorities,
+    anchorRecord,
+    artifactRequests,
+  };
 }
 
 function classificationInput(fixture, candidate) {
@@ -261,6 +360,16 @@ function classificationInput(fixture, candidate) {
 }
 
 function releaseParagraph(record) {
+  if (record.outcome === 'failed-superseded') {
+    return (
+      `FAILED-SUPERSEDED release record: The annotated \`${record.tag}\` tag object\n` +
+      `\`${record.tag_object}\` peels to protected-main commit\n` +
+      `\`${record.commit}\`. Workflow run \`${record.workflow_run_id}\`, attempt ${record.workflow_run_attempt}, concluded \`failure\`\n` +
+      `during verification before artifact creation or publication. No release artifact or SRI exists,\n` +
+      `and \`borgmcp@${record.version}\` was not published.\n` +
+      'Never delete, move, replace, reuse, or rerun that tag, version, or workflow.'
+    );
+  }
   return (
     `The annotated \`${record.tag}\` tag object\n` +
     `\`${record.tag_object}\` peels to protected-main commit\n` +
