@@ -40,9 +40,13 @@ contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The contract now
 resolves to the audited registry `borgmcp-shared@0.8.0` with integrity
 `sha512-0p/ZC03Y6G4N6bfBjMD5b+WcQXcLalhU/3QqGjSWYCFKa3q2/183O53w6Tu6y8h2DkhTw5prnamsOozmVpXZew==`.
-The coupled server candidate for the client 2.9.x line remains pending publication. The
-already-published server 0.8.0 release retains its immutable older shared
-dependency pin and is not the server artifact for this client contract. Client `borgmcp@2.8.0` is published. The immutable `v2.0.7`
+The coupled `borgmcp-server@0.9.0` release was published on 2026-08-02 for the
+client `borgmcp@2.10.0` line. Its annotated tag object
+`7021a2e1f551aa0c1716c9e3f29f7b8bc4b0ccb0` peels to protected-main commit
+`734051375d77013f8fd5b396af12feb53d5af96d`; the same-run artifact integrity is
+`sha512-lOxIPg3WcjSBte46iTM7SAFVN6Y0b2oizOKAJ9Q1EijBdOlmsh/cQlpUIaa8F2UJPaTDFsXy3M64gpGs6XgKzA==`
+in the `borgmcp-server-0.9.0-release` registry decision. Both releases pin the
+audited `borgmcp-shared@0.8.0` dependency above. Client `borgmcp@2.8.0` is published. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next
 candidate remains gated by reviewed `v2.9.0` source, a fresh annotated tag, and
 the exact-artifact and protected-publication gates.

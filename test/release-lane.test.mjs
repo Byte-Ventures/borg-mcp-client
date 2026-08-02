@@ -508,7 +508,12 @@ test('release documentation describes the activated minimal publication lane', a
   ]) assert.ok(releasing.includes(evidence), `Missing immutable release evidence: ${evidence}`);
   assert.match(releasing, /failed before package\s+creation or npm publication/);
   assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
-  assert.match(extraction, /coupled server candidate for the client 2\.9\.x line/);
+  assert.match(extraction, /The coupled `borgmcp-server@0\.9\.0` release was published on 2026-08-02 for the\s+client `borgmcp@2\.10\.0` line\./);
+  assert.match(extraction, /7021a2e1f551aa0c1716c9e3f29f7b8bc4b0ccb0/);
+  assert.match(extraction, /734051375d77013f8fd5b396af12feb53d5af96d/);
+  assert.match(extraction, /sha512-lOxIPg3WcjSBte46iTM7SAFVN6Y0b2oizOKAJ9Q1EijBdOlmsh\/cQlpUIaa8F2UJPaTDFsXy3M64gpGs6XgKzA==/);
+  assert.match(extraction, /borgmcp-server-0\.9\.0-release/);
+  assert.doesNotMatch(extraction, /coupled server candidate for the client 2\.9\.x line remains pending publication/);
   assert.doesNotMatch(extraction, /sha512-OSnBBcdZOM88Dokr7WICcTmF19c\+Nr0TOl7NXy8DSUeCpBttiKKx\+KuFvGbaXAWikFkm0UUBUca5cLZAOWw4Xw==/);
   assert.ok(extraction.includes(`reviewed \`v${manifest.version}\` source`));
   assert.doesNotMatch(`${readme}\n${security}\n${releasing}`, /publication is deferred|not yet published/);
