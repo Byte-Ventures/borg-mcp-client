@@ -2,7 +2,7 @@ import type { AssimilateFlags } from './assimilate-cmd.js';
 import { validateName } from './name-validator.js';
 
 const ENROLLMENT_POSITIONAL_INPUT_ERROR =
-  'Enrollment invitations must be entered at the hidden prompt; do not pass an invitation as a command-line argument.';
+  'That argument is not a valid role name. Role names use lowercase letters, digits, hyphens, or underscores, up to 48 characters. If you meant to supply an enrollment invitation, it must be entered at the hidden prompt — re-run `borg assimilate --enroll` without it.';
 
 export interface ParseAssimilateResult {
   ok: true;

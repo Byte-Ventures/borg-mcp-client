@@ -261,7 +261,8 @@ describe.each(['borg assimilate', 'borg server cube init'] as const)('positional
         ...writeStdout.mock.calls.map(([text]) => String(text)),
         ...writeStderr.mock.calls.map(([text]) => String(text)),
       ].join('');
-      expect(output).toContain('Enrollment invitations must be entered at the hidden prompt');
+      expect(output).toContain('That argument is not a valid role name.');
+      expect(output).toContain('re-run `borg assimilate --enroll` without it.');
       expect(output).not.toContain(POSITIONAL_INVITATION_SENTINEL);
       expect(state.deps.promptSecret).not.toHaveBeenCalled();
       expect(state.deps.connectServer).not.toHaveBeenCalled();

@@ -100,12 +100,19 @@ describe('parseAssimilateArgs', () => {
       flags: { enroll: true },
     });
 
+    const expectedError =
+      'That argument is not a valid role name. Role names use lowercase letters, digits, hyphens, or underscores, up to 48 characters. If you meant to supply an enrollment invitation, it must be entered at the hidden prompt — re-run `borg assimilate --enroll` without it.';
+    expect(parseAssimilateArgs(['--enroll', 'Builder'])).toEqual({
+      ok: false,
+      error: expectedError,
+    });
+
     const sentinel = 'A'.repeat(80);
     for (const args of [['--enroll', sentinel], [sentinel, '--enroll']]) {
       const result = parseAssimilateArgs(args);
       expect(result).toEqual({
         ok: false,
-        error: 'Enrollment invitations must be entered at the hidden prompt; do not pass an invitation as a command-line argument.',
+        error: expectedError,
       });
       if (!result.ok) expect(result.error).not.toContain(sentinel);
     }
