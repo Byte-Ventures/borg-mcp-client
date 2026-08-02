@@ -71,6 +71,7 @@ import {
 } from './server-trust.js';
 import {
   InvitationArtifactCompatibilityError,
+  InvitationArtifactTransportError,
   InvitationArtifactTrustError,
   decodeAndVerifyInvitationArtifact,
 } from './invitation-artifact.js';
@@ -1094,7 +1095,8 @@ export async function enrollLocalBorgServerArtifact(
     if (error instanceof Error && /did not present/i.test(error.message)) {
       throw new InvitationArtifactCompatibilityError();
     }
-    throw new InvitationArtifactTrustError();
+    if (error instanceof InvitationArtifactTransportError) throw error;
+    throw new InvitationArtifactTransportError();
   }
   return enrollBorgServer(verifiedArtifact.endpoint, trust.identity, verifiedArtifact.secret, {
     fetchImpl: trust.fetchImpl,

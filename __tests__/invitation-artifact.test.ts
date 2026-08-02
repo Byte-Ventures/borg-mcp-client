@@ -6,10 +6,13 @@ import {
 } from 'borgmcp-shared/protocol';
 import {
   COMPATIBILITY_INVITATION_ERROR,
+  FORMAT_INVITATION_ERROR,
+  TRANSPORT_INVITATION_ERROR,
   TRUST_INVITATION_ERROR,
   InvitationArtifactCompatibilityError,
   InvitationArtifactLegacyError,
-  InvitationArtifactTrustError,
+  InvitationArtifactFormatError,
+  InvitationArtifactTransportError,
   decodeAndVerifyInvitationArtifact,
 } from '../src/invitation-artifact';
 
@@ -42,8 +45,8 @@ describe('invitation artifact trust bootstrap input', () => {
   it('rejects a tampered artifact before any transport can use it', () => {
     const token = artifact();
     const tampered = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`;
-    expect(() => decodeAndVerifyInvitationArtifact(tampered)).toThrow(InvitationArtifactTrustError);
-    expect(() => decodeAndVerifyInvitationArtifact(tampered)).toThrow(TRUST_INVITATION_ERROR);
+    expect(() => decodeAndVerifyInvitationArtifact(tampered)).toThrow(InvitationArtifactFormatError);
+    expect(() => decodeAndVerifyInvitationArtifact(tampered)).toThrow(FORMAT_INVITATION_ERROR);
   });
 
   it('gives old-format invitations their own reissue remedy', () => {
@@ -52,6 +55,8 @@ describe('invitation artifact trust bootstrap input', () => {
 
   it('keeps the chain-compatibility and identity failure strings distinct', () => {
     expect(new InvitationArtifactCompatibilityError().message).toBe(COMPATIBILITY_INVITATION_ERROR);
-    expect(new InvitationArtifactTrustError().message).toBe(TRUST_INVITATION_ERROR);
+    expect(new InvitationArtifactFormatError().message).toBe(FORMAT_INVITATION_ERROR);
+    expect(new InvitationArtifactTransportError().message).toBe(TRANSPORT_INVITATION_ERROR);
+    expect(TRUST_INVITATION_ERROR).toContain('could not verify');
   });
 });

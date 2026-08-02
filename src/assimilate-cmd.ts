@@ -59,7 +59,9 @@ import {
 import {
   decodeAndVerifyInvitationArtifact,
   InvitationArtifactCompatibilityError,
+  InvitationArtifactFormatError,
   InvitationArtifactLegacyError,
+  InvitationArtifactTransportError,
   InvitationArtifactTrustError,
 } from './invitation-artifact.js';
 import type { SeatStatus } from './seat-probe.js';
@@ -544,6 +546,14 @@ function reportServerFailure(
     deps.stderr(`${error.message}\n`);
     return 1;
   }
+  if (error instanceof InvitationArtifactFormatError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
+  if (error instanceof InvitationArtifactTransportError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
   if (error instanceof InvitationArtifactTrustError) {
     deps.stderr(`${error.message}\n`);
     return 1;
@@ -767,14 +777,14 @@ export async function runAssimilate(
         } else {
           let invitation = await deps.promptSecret(
             artifactOnlyEnrollment
-              ? 'Enrollment artifact (single-use; hidden input):'
-              : `Enrollment artifact for \`${authority.apiUrl}\` (single-use; hidden input):`,
+              ? 'Enrollment invitation (single-use; hidden input):'
+              : `Enrollment invitation for \`${authority.apiUrl}\` (single-use; hidden input):`,
           );
           if (!invitation) {
-            deps.stderr(
-              `No enrollment artifact was entered for ${authority.apiUrl}. ` +
-                `Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true, mode)}.\n`,
-            );
+            deps.stderr(artifactOnlyEnrollment
+              ? 'No enrollment invitation was entered. Ask the server operator for one, then rerun `borg assimilate --enroll`.\n'
+              : `No enrollment invitation was entered for ${authority.apiUrl}. ` +
+                `Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true, mode)}.\n`);
             return 1;
           }
           try {

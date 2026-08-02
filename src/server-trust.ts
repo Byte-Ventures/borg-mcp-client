@@ -3,11 +3,12 @@ import { createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
-import type { IncomingMessage } from 'node:http';
+import { connect as tlsConnect } from 'node:tls';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { BorgServerTrustError } from './server-errors.js';
+import { InvitationArtifactTransportError } from './invitation-artifact.js';
 
 // CR5 TLS LATTICE: OpenSSL/Node TLS certificate-verification error codes. A raw
 // CA / cert-chain / SAN failure from the pinned transport is a potential MITM and
@@ -274,30 +275,26 @@ function chainCertificates(socket: { getPeerCertificate(detailed: true): any }):
 async function fetchPresentedChain(origin: string): Promise<Buffer[]> {
   const url = new URL(origin);
   return new Promise((resolveChain, rejectChain) => {
-    const request = httpsRequest({
-      protocol: 'https:',
-      hostname: url.hostname.replace(/^\[(.*)\]$/, '$1'),
-      port: url.port || 443,
-      path: '/healthz',
-      method: 'GET',
+    const socket = tlsConnect({
+      host: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+      port: url.port === '' ? 443 : Number(url.port),
       rejectUnauthorized: false,
       servername: url.hostname.replace(/^\[(.*)\]$/, '$1'),
-    }, (response: IncomingMessage) => {
-      const socket = response.socket as (typeof response.socket & {
-        getPeerCertificate?: (detailed: true) => any;
-      }) | null;
-      response.resume();
-      response.once('end', () => {
-        const chain = socket?.getPeerCertificate === undefined
-          ? []
-          : chainCertificates(socket as { getPeerCertificate(detailed: true): any });
-        resolveChain(chain);
-      });
     });
-    const timeout = setTimeout(() => request.destroy(new Error('Borg server trust bootstrap timed out')), 5_000);
-    request.once('error', rejectChain);
-    request.once('close', () => clearTimeout(timeout));
-    request.end();
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      rejectChain(new InvitationArtifactTransportError());
+    }, 5_000);
+    socket.once('secureConnect', () => {
+      clearTimeout(timeout);
+      const chain = chainCertificates(socket);
+      socket.destroy();
+      resolveChain(chain);
+    });
+    socket.once('error', () => {
+      clearTimeout(timeout);
+      rejectChain(new InvitationArtifactTransportError());
+    });
   });
 }
 

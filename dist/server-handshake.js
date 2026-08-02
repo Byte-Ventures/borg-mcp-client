@@ -6,7 +6,7 @@ import { BorgServerError, BorgServerTrustError, BorgServerUnreachableError, Cube
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { loadBorgServerTrust, loadBorgServerTrustFromPresentedChain, } from './server-trust.js';
-import { InvitationArtifactCompatibilityError, InvitationArtifactTrustError, decodeAndVerifyInvitationArtifact, } from './invitation-artifact.js';
+import { InvitationArtifactCompatibilityError, InvitationArtifactTransportError, InvitationArtifactTrustError, decodeAndVerifyInvitationArtifact, } from './invitation-artifact.js';
 const HANDSHAKE_BODY_LIMIT = 64 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -706,7 +706,9 @@ export async function enrollLocalBorgServerArtifact(artifact, deps = {}) {
         if (error instanceof Error && /did not present/i.test(error.message)) {
             throw new InvitationArtifactCompatibilityError();
         }
-        throw new InvitationArtifactTrustError();
+        if (error instanceof InvitationArtifactTransportError)
+            throw error;
+        throw new InvitationArtifactTransportError();
     }
     return enrollBorgServer(verifiedArtifact.endpoint, trust.identity, verifiedArtifact.secret, {
         fetchImpl: trust.fetchImpl,

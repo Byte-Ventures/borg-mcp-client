@@ -22,7 +22,7 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
 import { BorgServerError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, LegacySessionCredentialCollisionError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
-import { decodeAndVerifyInvitationArtifact, InvitationArtifactCompatibilityError, InvitationArtifactLegacyError, InvitationArtifactTrustError, } from './invitation-artifact.js';
+import { decodeAndVerifyInvitationArtifact, InvitationArtifactCompatibilityError, InvitationArtifactFormatError, InvitationArtifactLegacyError, InvitationArtifactTransportError, InvitationArtifactTrustError, } from './invitation-artifact.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
 import { resolveWorkingRepo } from './working-repo.js';
@@ -175,6 +175,14 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
         return 1;
     }
     if (error instanceof InvitationArtifactLegacyError) {
+        deps.stderr(`${error.message}\n`);
+        return 1;
+    }
+    if (error instanceof InvitationArtifactFormatError) {
+        deps.stderr(`${error.message}\n`);
+        return 1;
+    }
+    if (error instanceof InvitationArtifactTransportError) {
         deps.stderr(`${error.message}\n`);
         return 1;
     }
@@ -359,11 +367,13 @@ export async function runAssimilate(args, deps) {
                 }
                 else {
                     let invitation = await deps.promptSecret(artifactOnlyEnrollment
-                        ? 'Enrollment artifact (single-use; hidden input):'
-                        : `Enrollment artifact for \`${authority.apiUrl}\` (single-use; hidden input):`);
+                        ? 'Enrollment invitation (single-use; hidden input):'
+                        : `Enrollment invitation for \`${authority.apiUrl}\` (single-use; hidden input):`);
                     if (!invitation) {
-                        deps.stderr(`No enrollment artifact was entered for ${authority.apiUrl}. ` +
-                            `Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true, mode)}.\n`);
+                        deps.stderr(artifactOnlyEnrollment
+                            ? 'No enrollment invitation was entered. Ask the server operator for one, then rerun `borg assimilate --enroll`.\n'
+                            : `No enrollment invitation was entered for ${authority.apiUrl}. ` +
+                                `Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true, mode)}.\n`);
                         return 1;
                     }
                     try {
