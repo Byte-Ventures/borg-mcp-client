@@ -239,6 +239,28 @@ anything. It then deterministically updates only the manifest version, the two
 root lockfile version fields, the extraction ledger, this document's immutable
 release record, and the release-lane current-version/evidence assertions.
 
+When the superseded tag's attempt failed before artifact creation or publication,
+prepare the fresh recovery identity with `--workflow-conclusion failure` and omit
+`--artifact-integrity` entirely. The preparer verifies the annotated tag and exact
+failed workflow attempt, writes a canonical failed-superseded record stating that
+the artifact build, verification, exercise, upload, and publish phases were all
+skipped, and separately re-verifies the last published release as the artifact
+provenance anchor. It also reads the authoritative registry version list before
+writing the time-bounded fact that no published npm artifact or SRI exists for
+the failed version. This recovery-time absence check is required before preparing
+the replacement identity; it is not the prohibited post-publication readback of
+the newly published release. A failed record carrying an SRI, a failed run whose
+artifact or publish phase ran, a failed version present in the registry, or a
+successful record without an SRI is invalid. Failed tags and workflow attempts
+stay immutable and must never be moved, reused, or rerun.
+
+```sh
+npm run release:prepare -- 2.10.2 \
+  --workflow-run-id 30766475027 \
+  --workflow-run-attempt 1 \
+  --workflow-conclusion failure
+```
+
 Release branches use the `release/` prefix and enter protected `main` through a
 pull request. A direct push only updates the staging branch; it does
 not produce a release-identity verdict and grants no review skip, merge
