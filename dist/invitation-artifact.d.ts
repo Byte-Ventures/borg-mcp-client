@@ -1,0 +1,14 @@
+import { type InvitationArtifact } from 'borgmcp-shared/protocol';
+export declare const COMPATIBILITY_INVITATION_ERROR = "This server did not present the certificate chain required for cross-machine enrollment. Update the Borg server on that machine and restart it, then run this command again. No invitation or credential was sent and no local trust or credential state was changed.";
+export declare const TRUST_INVITATION_ERROR = "Borg could not verify the server identity named by this invitation. No invitation or credential was sent and no local trust or credential state was changed. Ask the server operator for a current invitation, then retry.";
+export declare class InvitationArtifactCompatibilityError extends Error {
+    constructor(message?: string);
+}
+export declare class InvitationArtifactLegacyError extends Error {
+    constructor();
+}
+export declare class InvitationArtifactTrustError extends Error {
+    constructor(message?: string);
+}
+export declare function decodeAndVerifyInvitationArtifact(value: unknown): InvitationArtifact;
+//# sourceMappingURL=invitation-artifact.d.ts.map

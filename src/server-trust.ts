@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
+import type { IncomingMessage } from 'node:http';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
@@ -249,6 +250,83 @@ export async function loadBorgServerTrust(
     pending.catch(() => trustCache.delete(key));
   }
   return pending;
+}
+
+function pemCertificate(raw: Buffer): string {
+  const body = raw.toString('base64').match(/.{1,64}/g)?.join('\n') ?? '';
+  return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
+}
+
+function chainCertificates(socket: { getPeerCertificate(detailed: true): any }): Buffer[] {
+  const result: Buffer[] = [];
+  const seen = new Set<string>();
+  let current = socket.getPeerCertificate(true);
+  while (current?.raw instanceof Buffer) {
+    const key = current.raw.toString('base64');
+    if (seen.has(key)) break;
+    seen.add(key);
+    result.push(current.raw);
+    current = current.issuerCertificate;
+  }
+  return result;
+}
+
+async function fetchPresentedChain(origin: string): Promise<Buffer[]> {
+  const url = new URL(origin);
+  return new Promise((resolveChain, rejectChain) => {
+    const request = httpsRequest({
+      protocol: 'https:',
+      hostname: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+      port: url.port || 443,
+      path: '/healthz',
+      method: 'GET',
+      rejectUnauthorized: false,
+      servername: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+    }, (response: IncomingMessage) => {
+      const socket = response.socket as (typeof response.socket & {
+        getPeerCertificate?: (detailed: true) => any;
+      }) | null;
+      response.resume();
+      response.once('end', () => {
+        const chain = socket?.getPeerCertificate === undefined
+          ? []
+          : chainCertificates(socket as { getPeerCertificate(detailed: true): any });
+        resolveChain(chain);
+      });
+    });
+    const timeout = setTimeout(() => request.destroy(new Error('Borg server trust bootstrap timed out')), 5_000);
+    request.once('error', rejectChain);
+    request.once('close', () => clearTimeout(timeout));
+    request.end();
+  });
+}
+
+/** Bootstrap a remote pinned transport from the CA chain presented by the server. */
+export async function loadBorgServerTrustFromPresentedChain(
+  origin: string,
+  caSpkiSha256: string,
+): Promise<BorgServerTrust> {
+  const chain = await fetchPresentedChain(origin);
+  let sawCa = false;
+  for (const raw of chain) {
+    try {
+      const certificate = new X509Certificate(raw);
+      if (!certificate.ca) continue;
+      sawCa = true;
+      const actual = createHash('sha256')
+        .update(certificate.publicKey.export({ type: 'spki', format: 'der' }))
+        .digest('hex');
+      if (actual !== caSpkiSha256) continue;
+      return {
+        identity: `spki-sha256:${actual}`,
+        fetchImpl: createPinnedServerFetch(origin, pemCertificate(raw)),
+      };
+    } catch {
+      // Ignore malformed chain members; the typed compatibility failure below is safer.
+    }
+  }
+  if (!sawCa) throw new Error('Borg server did not present the required certificate chain');
+  throw new Error('Borg server presented a certificate chain with the wrong pinned identity');
 }
 
 export function __clearServerTrustCacheForTest(): void {

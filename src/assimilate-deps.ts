@@ -34,6 +34,7 @@ import {
   connectLocalBorgServer,
   createLocalBorgServerCube,
   enrollLocalBorgServer,
+  enrollLocalBorgServerArtifact,
   probeLocalBorgServer,
   resolveLocalBorgServerRepositoryCube,
   resumeLocalBorgServerEnrollment,
@@ -240,6 +241,14 @@ export function buildDefaultAssimilateDeps(
         : null,
     connectServer: async (apiUrl, enrollment) => {
       if (enrollment) {
+        if (enrollment.artifact) {
+          return enrollLocalBorgServerArtifact(enrollment.artifact, {
+            ...(enrollment.confirmReplacement === undefined
+              ? {}
+              : { confirmReplacement: enrollment.confirmReplacement }),
+            clientName: osHostname(),
+          });
+        }
         return enrollLocalBorgServer(apiUrl, enrollment.invitation, {
           ...(enrollment.confirmReplacement === undefined
             ? {}

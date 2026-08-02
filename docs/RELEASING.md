@@ -191,12 +191,12 @@ Before creating the release tag, independently verify all of these conditions:
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- the exact audited registry dependency `borgmcp-shared@0.7.1` remains locked to
+- the exact audited registry dependency `borgmcp-shared@0.8.0` remains locked to
   its canonical tarball and integrity
-  `sha512-d4GE7ezGyoFN0uwA62gvRPUMfMdJ1kxhTunqU8dW3Qhy1n2SlNXZWr1Nthm6Goo0bAgvax8KEywyReodA6FyQA==`;
+  `sha512-0p/ZC03Y6G4N6bfBjMD5b+WcQXcLalhU/3QqGjSWYCFKa3q2/183O53w6Tu6y8h2DkhTw5prnamsOozmVpXZew==`;
 - the client and matching published `borgmcp-server@0.8.0`, integrity
   `sha512-OSnBBcdZOM88Dokr7WICcTmF19c+Nr0TOl7NXy8DSUeCpBttiKKx+KuFvGbaXAWikFkm0UUBUca5cLZAOWw4Xw==`, which pins
-  `borgmcp-shared@0.7.1`, pass the complete local dogfood gate;
+  `borgmcp-shared@0.8.0`, pass the complete local dogfood gate;
 - the selected stable client version is unused and the exact release commit is
   on protected `main`;
 - the repository and protected npm environment settings pass an operator audit;

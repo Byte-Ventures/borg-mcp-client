@@ -1,37 +1,37 @@
 [
   {
     "file": "src/cli-help.ts",
-    "lineNumber": 146,
+    "lineNumber": 147,
     "line": "`  dashboard   View the running local server dashboard.\\n` +"
   },
   {
     "file": "src/server-facade.ts",
     "lineNumber": 8,
-    "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'] as const;"
+    "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'cert-reissue', 'dashboard'] as const;"
   },
   {
     "file": "src/server-facade.ts",
     "lineNumber": 165,
-    "line": "`Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\\n` +"
+    "line": "`Available commands: setup, start, stop, status, update, invite, cert-reissue, dashboard, cube init.\\n` +"
   },
   {
     "file": "dist/cli-help.js",
-    "lineNumber": 119,
+    "lineNumber": 120,
     "line": "`  dashboard   View the running local server dashboard.\\n` +"
   },
   {
     "file": "dist/server-facade.d.ts",
     "lineNumber": 2,
-    "line": "export declare const SERVER_LIFECYCLE_COMMANDS: readonly [\"setup\", \"start\", \"stop\", \"status\", \"update\", \"invite\", \"dashboard\"];"
+    "line": "export declare const SERVER_LIFECYCLE_COMMANDS: readonly [\"setup\", \"start\", \"stop\", \"status\", \"update\", \"invite\", \"cert-reissue\", \"dashboard\"];"
   },
   {
     "file": "dist/server-facade.js",
     "lineNumber": 7,
-    "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'];"
+    "line": "export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'cert-reissue', 'dashboard'];"
   },
   {
     "file": "dist/server-facade.js",
     "lineNumber": 96,
-    "line": "`Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\\n` +"
+    "line": "`Available commands: setup, start, stop, status, update, invite, cert-reissue, dashboard, cube init.\\n` +"
   }
 ]

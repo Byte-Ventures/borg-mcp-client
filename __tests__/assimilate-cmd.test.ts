@@ -9,7 +9,9 @@ import {
 import { BorgServerError, LegacySessionCredentialCollisionError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
 import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { encodeInvitationArtifact, getInvitationArtifactIntegrityInput } from 'borgmcp-shared/protocol';
 
 const createHashDigest = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -26,6 +28,21 @@ const mcpConfigMocks = vi.hoisted(() => ({
   ensureCliMcpConfigured: vi.fn(),
 }));
 const SERVER_TRUST_IDENTITY = 'spki-sha256:test-server';
+const TEST_ARTIFACT_SECRET = 'i'.repeat(43);
+const TEST_ARTIFACT_BASE = {
+  version: 2 as const,
+  endpoint: 'https://localhost:8787',
+  ca_spki_sha256: '0'.repeat(64),
+  authority: 'client' as const,
+  secret: TEST_ARTIFACT_SECRET,
+  integrity: 'p'.repeat(43),
+};
+const TEST_ARTIFACT = encodeInvitationArtifact({
+  ...TEST_ARTIFACT_BASE,
+  integrity: createHmac('sha256', TEST_ARTIFACT_SECRET)
+    .update(getInvitationArtifactIntegrityInput(TEST_ARTIFACT_BASE))
+    .digest('base64url'),
+});
 
 vi.mock('../src/opencode-drone.js', () => openCodeDroneMocks);
 vi.mock('../src/opencode-plugin.js', () => ({ installBorgPlugin: vi.fn() }));
@@ -50,7 +67,7 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     stdout: vi.fn(),
     prompt: vi.fn(async (message: string) =>
       message.startsWith('Cube name') ? '' : message.startsWith('Create cube ') ? 'y' : '1'),
-    promptSecret: vi.fn(async () => 'i'.repeat(43)),
+    promptSecret: vi.fn(async () => TEST_ARTIFACT),
     isTTY: () => true,
     ensureLocalServerInstalled: vi.fn(async () => 'present'),
     chdir: vi.fn(),
@@ -3200,7 +3217,7 @@ describe('runAssimilate: #1015 authority selection', () => {
   });
 
   it('reads an explicitly requested enrollment invitation through the hidden-input seam', async () => {
-    const invitation = 'i'.repeat(43);
+    const invitation = TEST_ARTIFACT;
     const prompt = vi.fn(async () => 'must-not-prompt');
     const promptSecret = vi.fn(async () => invitation);
     const connectServer = vi.fn(async () => ({
@@ -3216,11 +3233,11 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(0);
 
     expect(promptSecret).toHaveBeenCalledWith(
-      'Enrollment invitation for `https://localhost:8787` (single-use; hidden input):',
+      'Enrollment artifact for `https://localhost:8787` (single-use; hidden input):',
     );
     expect(connectServer).toHaveBeenCalledWith(
       'https://localhost:8787',
-      { invitation, confirmReplacement: expect.any(Function) },
+      { invitation, artifact: expect.any(Object), confirmReplacement: expect.any(Function) },
     );
     const confirmReplacement = connectServer.mock.calls[0][1].confirmReplacement;
     prompt.mockResolvedValueOnce('');
@@ -3235,7 +3252,7 @@ describe('runAssimilate: #1015 authority selection', () => {
   });
 
   it('gives an ordinary enrolled client a distinct next step without owner wording', async () => {
-    const invitation = 'i'.repeat(43);
+    const invitation = TEST_ARTIFACT;
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
@@ -3301,7 +3318,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(promptSecret).not.toHaveBeenCalled();
     expect(connectServer).not.toHaveBeenCalled();
     expect(deps.stderr).toHaveBeenCalledWith(
-      'Resuming the pending enrollment for `https://localhost:8787`; do not enter another invitation.\n',
+      'Resuming the pending enrollment for `https://localhost:8787`; do not enter another invitation unless the server certificate was reissued; if it was, request a current invitation and rerun this command.\n',
     );
     expect(deps.createCube).toHaveBeenCalledWith(
       'https://localhost:8787',
@@ -3709,7 +3726,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
-      promptSecret: vi.fn(async () => 'i'.repeat(43)),
+      promptSecret: vi.fn(async () => TEST_ARTIFACT),
       connectServer: vi.fn(async () => {
         throw new BorgServerError('INVITATION_REJECTED', 'invitation rejected');
       }),

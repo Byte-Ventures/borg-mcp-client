@@ -22,6 +22,7 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
 import { BorgServerError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, LegacySessionCredentialCollisionError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
+import { decodeAndVerifyInvitationArtifact, InvitationArtifactCompatibilityError, InvitationArtifactLegacyError, InvitationArtifactTrustError, } from './invitation-artifact.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
 import { resolveWorkingRepo } from './working-repo.js';
@@ -51,6 +52,11 @@ async function selectAssimilationAuthority(flags, deps, mode) {
     }
     // Only a local self-hosted server authority exists. Non-TTY and --yes must
     // NOT infer an authority — fail closed with actionable guidance.
+    if (flags.enroll && deps.isTTY()) {
+        // The v2 enrollment artifact is itself the authority selector. Use the
+        // local origin only as a placeholder until the hidden artifact is decoded.
+        return { kind: 'server', apiUrl: DEFAULT_LOCAL_SERVER_ORIGIN };
+    }
     if (!deps.isTTY() || flags.yes) {
         if (deps.defaultAuthority)
             return deps.defaultAuthority;
@@ -164,6 +170,18 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
             `${localAssimilateCommand(apiUrl, true, mode)}.\n`);
         return 1;
     }
+    if (error instanceof InvitationArtifactCompatibilityError) {
+        deps.stderr(`${error.message}\n`);
+        return 1;
+    }
+    if (error instanceof InvitationArtifactLegacyError) {
+        deps.stderr(`${error.message}\n`);
+        return 1;
+    }
+    if (error instanceof InvitationArtifactTrustError) {
+        deps.stderr(`${error.message}\n`);
+        return 1;
+    }
     if (/HTTP 40[13]|auth(?:entication|orization)|credential.*(?:invalid|rejected)/i.test(message)) {
         deps.stderr(`The saved enrollment for ${apiUrl} was rejected. Re-run ` +
             `${localAssimilateCommand(apiUrl, true, mode)} from the operator’s terminal.\n`);
@@ -273,7 +291,9 @@ export async function runAssimilate(args, deps) {
             'Run this command inside a Git repository.\n');
         return 1;
     }
-    if (args.flags.server === undefined && deps.defaultAuthority === undefined) {
+    const artifactOnlyEnrollment = args.flags.enroll === true &&
+        args.flags.server === undefined && deps.defaultAuthority === undefined && deps.isTTY();
+    if (!artifactOnlyEnrollment && args.flags.server === undefined && deps.defaultAuthority === undefined) {
         const connectCommand = mode === 'cube-init'
             ? 'borg server cube init --host <host>'
             : 'borg assimilate --host <host>';
@@ -309,9 +329,10 @@ export async function runAssimilate(args, deps) {
         localSeatReadError = error;
     }
     // ----- Step 1: Select and authenticate the local server -----
-    const authority = await selectAssimilationAuthority(args.flags, deps, mode);
-    if (!authority)
+    const selectedAuthority = await selectAssimilationAuthority(args.flags, deps, mode);
+    if (!selectedAuthority)
         return 1;
+    let authority = selectedAuthority;
     if (localSeatReadError !== undefined) {
         return reportServerFailure(deps, authority.apiUrl, localSeatReadError, false, mode);
     }
@@ -326,23 +347,31 @@ export async function runAssimilate(args, deps) {
                         `Re-run ${localAssimilateCommand(authority.apiUrl, true, mode)} from the operator’s terminal.\n`);
                     return 1;
                 }
-                const resumed = await deps.resumeServerEnrollment(authority.apiUrl, () => {
-                    deps.stderr(`Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
-                        'do not enter another invitation.\n');
-                });
+                const resumed = artifactOnlyEnrollment
+                    ? null
+                    : await deps.resumeServerEnrollment(authority.apiUrl, () => {
+                        deps.stderr(`Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
+                            'do not enter another invitation unless the server certificate was reissued; ' +
+                            'if it was, request a current invitation and rerun this command.\n');
+                    });
                 if (resumed) {
                     serverAuth = resumed;
                 }
                 else {
-                    let invitation = await deps.promptSecret(`Enrollment invitation for \`${authority.apiUrl}\` (single-use; hidden input):`);
+                    let invitation = await deps.promptSecret(artifactOnlyEnrollment
+                        ? 'Enrollment artifact (single-use; hidden input):'
+                        : `Enrollment artifact for \`${authority.apiUrl}\` (single-use; hidden input):`);
                     if (!invitation) {
-                        deps.stderr(`No enrollment invitation was entered for ${authority.apiUrl}. ` +
+                        deps.stderr(`No enrollment artifact was entered for ${authority.apiUrl}. ` +
                             `Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true, mode)}.\n`);
                         return 1;
                     }
                     try {
+                        const artifact = decodeAndVerifyInvitationArtifact(invitation);
+                        authority = { kind: 'server', apiUrl: artifact.endpoint };
                         serverAuth = await deps.connectServer(authority.apiUrl, {
                             invitation,
+                            artifact,
                             confirmReplacement: async () => strictAffirmative(await deps.prompt(`A local enrollment for ${authority.apiUrl} already exists. Replacing it will orphan ` +
                                 'the first enrolled client. Replace it? [y/N]: ')),
                         });
@@ -372,6 +401,9 @@ export async function runAssimilate(args, deps) {
                 serverTrustIdentity: serverAuth.trustIdentity,
                 serverCapabilities: serverAuth.serverCapabilities ?? [],
             };
+            if (args.flags.enroll) {
+                deps.stderr(`This machine (${deps.getHostname()}) is enrolled with Borg server \`${authority.apiUrl}\`.\n`);
+            }
         }
         catch (error) {
             return reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true, mode);

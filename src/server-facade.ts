@@ -5,7 +5,7 @@ import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
 import { consolePrefix } from './console-prefix.js';
 import { getPackageVersion } from './version.js';
 
-export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'dashboard'] as const;
+export const SERVER_LIFECYCLE_COMMANDS = ['setup', 'start', 'stop', 'status', 'update', 'invite', 'cert-reissue', 'dashboard'] as const;
 export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
 
 export type ParsedServerFacadeArgs =
@@ -162,7 +162,7 @@ function inertCommand(command: string): string {
 export function unknownServerCommandText(command: string): string {
   return (
     `Unknown server command: ${inertCommand(command)}.\n` +
-    `Available commands: setup, start, stop, status, update, invite, dashboard, cube init.\n` +
+    `Available commands: setup, start, stop, status, update, invite, cert-reissue, dashboard, cube init.\n` +
     `Next: run borg server --help.\n`
   );
 }

@@ -10,5 +10,7 @@ export interface BorgServerTrust {
  */
 export declare function createPinnedServerFetch(origin: string, caCertificate: string): ServerFetch;
 export declare function loadBorgServerTrust(origin: string, dataDirectory?: string): Promise<BorgServerTrust>;
+/** Bootstrap a remote pinned transport from the CA chain presented by the server. */
+export declare function loadBorgServerTrustFromPresentedChain(origin: string, caSpkiSha256: string): Promise<BorgServerTrust>;
 export declare function __clearServerTrustCacheForTest(): void;
 //# sourceMappingURL=server-trust.d.ts.map

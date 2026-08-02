@@ -5,7 +5,8 @@ import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatR
 import { BorgServerError, BorgServerTrustError, BorgServerUnreachableError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { loadBorgServerTrust, } from './server-trust.js';
+import { loadBorgServerTrust, loadBorgServerTrustFromPresentedChain, } from './server-trust.js';
+import { InvitationArtifactCompatibilityError, InvitationArtifactTrustError, decodeAndVerifyInvitationArtifact, } from './invitation-artifact.js';
 const HANDSHAKE_BODY_LIMIT = 64 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -331,6 +332,13 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
         if (error instanceof Error && error.message.includes('response limit'))
             throw error;
         throw new Error('Borg server returned an invalid enrollment envelope');
+    }
+    if (deps.expectedAuthority !== undefined) {
+        const owner = decoded.payload.server_capabilities.length > 0;
+        if ((deps.expectedAuthority === 'owner') !== owner) {
+            await (deps.clearPendingEnrollment ?? clearPendingServerEnrollment)(origin, trustIdentity, pending.retryKey);
+            throw new InvitationArtifactTrustError();
+        }
     }
     await (deps.activateEnrollment ?? activatePendingServerEnrollment)({
         origin,
@@ -685,6 +693,26 @@ export async function enrollLocalBorgServer(origin, invitation, deps = {}) {
             ? {}
             : { confirmReplacement: deps.confirmReplacement }),
         ...(deps.clientName === undefined ? {} : { clientName: deps.clientName }),
+    });
+}
+/** Enroll from a verified v2 artifact whose endpoint and CA pin are authoritative. */
+export async function enrollLocalBorgServerArtifact(artifact, deps = {}) {
+    const verifiedArtifact = decodeAndVerifyInvitationArtifact(artifact);
+    let trust;
+    try {
+        trust = await loadBorgServerTrustFromPresentedChain(verifiedArtifact.endpoint, verifiedArtifact.ca_spki_sha256);
+    }
+    catch (error) {
+        if (error instanceof Error && /did not present/i.test(error.message)) {
+            throw new InvitationArtifactCompatibilityError();
+        }
+        throw new InvitationArtifactTrustError();
+    }
+    return enrollBorgServer(verifiedArtifact.endpoint, trust.identity, verifiedArtifact.secret, {
+        fetchImpl: trust.fetchImpl,
+        ...(deps.confirmReplacement === undefined ? {} : { confirmReplacement: deps.confirmReplacement }),
+        ...(deps.clientName === undefined ? {} : { clientName: deps.clientName }),
+        expectedAuthority: verifiedArtifact.authority,
     });
 }
 /** Load verified trust and resume a prior ambiguous enrollment before prompting. */

@@ -19,7 +19,7 @@ import { buildRuntimeMetadataReport } from './runtime-metadata.js';
 import { inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 import { buildDefaultFirstRunServerInstallDeps, offerFirstRunServerInstall, } from './first-run-server.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, } from './remote-client.js';
-import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
+import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, enrollLocalBorgServerArtifact, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
 import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
 import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
@@ -172,6 +172,14 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
             : null,
         connectServer: async (apiUrl, enrollment) => {
             if (enrollment) {
+                if (enrollment.artifact) {
+                    return enrollLocalBorgServerArtifact(enrollment.artifact, {
+                        ...(enrollment.confirmReplacement === undefined
+                            ? {}
+                            : { confirmReplacement: enrollment.confirmReplacement }),
+                        clientName: osHostname(),
+                    });
+                }
                 return enrollLocalBorgServer(apiUrl, enrollment.invitation, {
                     ...(enrollment.confirmReplacement === undefined
                         ? {}
