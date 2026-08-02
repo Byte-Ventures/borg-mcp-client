@@ -14,7 +14,14 @@ const LOCK_PATH = 'package-lock.json';
 const EXTRACTION_PATH = 'docs/EXTRACTION_PROVENANCE.md';
 const RELEASING_PATH = 'docs/RELEASING.md';
 const RELEASE_TEST_PATH = 'test/release-lane.test.mjs';
+const FAILED_RELEASE_SKIPPED_STEPS = Object.freeze([
+  Object.freeze({ number: 17, name: 'Build exact release tarball' }),
+  Object.freeze({ number: 18, name: 'Verify exact release tarball' }),
+  Object.freeze({ number: 19, name: 'Install and exercise the exact packed client' }),
+  Object.freeze({ number: 20, name: 'Upload same-run release artifact' }),
+]);
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const registryVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const shaPattern = /^[0-9a-f]{40}$/u;
 const sriPattern = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const releaseHeadPattern = /^release\/[A-Za-z0-9._/-]+$/u;
@@ -122,12 +129,19 @@ function decodeRecord(record) {
     workflow_run_id: record.workflow_run_id,
     workflow_run_attempt: record.workflow_run_attempt,
     workflow_conclusion: record.workflow_conclusion,
+    verify_job_id: record.verify_job_id,
+    publish_job_id: record.publish_job_id,
     artifact_integrity: record.artifact_integrity,
   };
   const published = decoded.outcome === 'published' &&
-    decoded.workflow_conclusion === 'success' && sriPattern.test(decoded.artifact_integrity);
+    decoded.workflow_conclusion === 'success' &&
+    decoded.verify_job_id === null && decoded.publish_job_id === null &&
+    sriPattern.test(decoded.artifact_integrity);
   const failedSuperseded = decoded.outcome === 'failed-superseded' &&
-    decoded.workflow_conclusion === 'failure' && decoded.artifact_integrity === null;
+    decoded.workflow_conclusion === 'failure' &&
+    Number.isSafeInteger(decoded.verify_job_id) && decoded.verify_job_id > 0 &&
+    Number.isSafeInteger(decoded.publish_job_id) && decoded.publish_job_id > 0 &&
+    decoded.artifact_integrity === null;
   if ((!published && !failedSuperseded) ||
       typeof decoded.version !== 'string' ||
       !stableVersionPattern.test(decoded.version) ||
@@ -169,6 +183,13 @@ export const systemAuthorities = Object.freeze({
     ], { cwd: root });
     return parseJson(response, 'GitHub Actions run');
   },
+  githubRunJobs(root, runId, attempt) {
+    const response = command('gh', [
+      'api',
+      `repos/${REPOSITORY}/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100`,
+    ], { cwd: root });
+    return parseJson(response, 'GitHub Actions run jobs');
+  },
   artifactIntegrity(root, version) {
     const response = command('npm', [
       'view',
@@ -179,7 +200,66 @@ export const systemAuthorities = Object.freeze({
     ], { cwd: root });
     return parseJson(response, 'npm artifact integrity');
   },
+  publishedVersions(root) {
+    const response = command('npm', [
+      'view',
+      PACKAGE_NAME,
+      'versions',
+      '--json',
+      '--registry=https://registry.npmjs.org',
+    ], { cwd: root });
+    return parseJson(response, 'npm published versions');
+  },
 });
+
+function decodePublishedVersions(input) {
+  const versions = typeof input === 'string' ? [input] : input;
+  if (!Array.isArray(versions) || versions.some((version) =>
+    typeof version !== 'string' || !registryVersionPattern.test(version)) ||
+    new Set(versions).size !== versions.length) {
+    fail('npm published-version authority returned an invalid response.');
+  }
+  return versions;
+}
+
+function failedPhaseEvidence(root, record, authorities, requireRecordedIds = true) {
+  const response = authorities.githubRunJobs(
+    root,
+    record.workflow_run_id,
+    record.workflow_run_attempt,
+  );
+  if (response === null || typeof response !== 'object' || !Array.isArray(response.jobs)) {
+    fail('Failed-superseded release job authority returned an invalid response.');
+  }
+  const verifyJobs = response.jobs.filter((job) => job?.name === 'verify');
+  const publishJobs = response.jobs.filter((job) => job?.name === 'publish');
+  if (verifyJobs.length !== 1 || publishJobs.length !== 1) {
+    fail('Failed-superseded release requires exactly one verify and one publish job.');
+  }
+  const [verifyJob] = verifyJobs;
+  const [publishJob] = publishJobs;
+  const commonJobShape = (job) => job.run_id === record.workflow_run_id &&
+    job.run_attempt === record.workflow_run_attempt && job.head_sha === record.commit &&
+    job.status === 'completed';
+  if (!commonJobShape(verifyJob) ||
+      (requireRecordedIds && verifyJob.id !== record.verify_job_id) ||
+      verifyJob.conclusion !== 'failure' || !Array.isArray(verifyJob.steps) ||
+      !commonJobShape(publishJob) ||
+      (requireRecordedIds && publishJob.id !== record.publish_job_id) ||
+      publishJob.conclusion !== 'skipped' || !Array.isArray(publishJob.steps) ||
+      publishJob.steps.length !== 0) {
+    fail('Failed-superseded release does not match authoritative pre-publication job evidence.');
+  }
+  for (const expected of FAILED_RELEASE_SKIPPED_STEPS) {
+    const matches = verifyJob.steps.filter((step) =>
+      step?.name === expected.name && step.number === expected.number);
+    if (matches.length !== 1 || matches[0].status !== 'completed' ||
+        matches[0].conclusion !== 'skipped') {
+      fail(`Failed-superseded release step was not skipped: ${expected.name}`);
+    }
+  }
+  return Object.freeze({ verifyJobId: verifyJob.id, publishJobId: publishJob.id });
+}
 
 export function verifyReleaseProvenance(root, recordInput, authorities = systemAuthorities) {
   const record = decodeRecord(recordInput);
@@ -200,6 +280,12 @@ export function verifyReleaseProvenance(root, recordInput, authorities = systemA
       run.path !== WORKFLOW_PATH) {
     fail('Release record does not match the tag workflow authority.');
   }
+  if (record.outcome === 'failed-superseded') {
+    failedPhaseEvidence(root, record, authorities);
+    if (decodePublishedVersions(authorities.publishedVersions(root)).includes(record.version)) {
+      fail('Failed-superseded release version exists in the npm registry.');
+    }
+  }
   if (record.outcome === 'published' &&
       authorities.artifactIntegrity(root, record.version) !== record.artifact_integrity) {
     fail('Release record integrity does not match the npm artifact authority.');
@@ -210,12 +296,20 @@ export function verifyReleaseProvenance(root, recordInput, authorities = systemA
 export function createReleaseRecord(root, input, authorities = systemAuthorities) {
   const provenance = deriveGitProvenance(root, input.version);
   const workflowConclusion = input.workflowConclusion ?? 'success';
-  return verifyReleaseProvenance(root, {
-    outcome: workflowConclusion === 'failure' ? 'failed-superseded' : 'published',
+  const baseRecord = {
     ...provenance,
     workflow_run_id: input.workflowRunId,
     workflow_run_attempt: input.workflowRunAttempt,
     workflow_conclusion: workflowConclusion,
+  };
+  const jobEvidence = workflowConclusion === 'failure'
+    ? failedPhaseEvidence(root, baseRecord, authorities, false)
+    : { verifyJobId: null, publishJobId: null };
+  return verifyReleaseProvenance(root, {
+    outcome: workflowConclusion === 'failure' ? 'failed-superseded' : 'published',
+    ...baseRecord,
+    verify_job_id: jobEvidence.verifyJobId,
+    publish_job_id: jobEvidence.publishJobId,
     artifact_integrity: input.artifactIntegrity ?? null,
   }, authorities);
 }
@@ -280,8 +374,10 @@ function releaseParagraph(record) {
       `FAILED-SUPERSEDED release record: The annotated \`${record.tag}\` tag object\n` +
       `\`${record.tag_object}\` peels to protected-main commit\n` +
       `\`${record.commit}\`. Workflow run \`${record.workflow_run_id}\`, attempt ${record.workflow_run_attempt}, concluded \`failure\`\n` +
-      `during verification before artifact creation or publication. No release artifact or SRI exists,\n` +
-      `and \`${PACKAGE_NAME}@${record.version}\` was not published.\n` +
+      `during verification before artifact creation or publication. Verify job \`${record.verify_job_id}\` records the release\n` +
+      `artifact build, verification, exercise, and upload steps as skipped; publish job \`${record.publish_job_id}\` was skipped.\n` +
+      `Registry verification found no published \`${PACKAGE_NAME}@${record.version}\` package, so no published npm artifact or SRI\n` +
+      `exists for that version as of this check.\n` +
       `Never delete, move, replace, reuse, or rerun that tag, version, or workflow.`
     );
   }
@@ -330,8 +426,10 @@ function transformReleaseTest(raw, oldVersion, newVersion, record) {
         ? `    '${record.artifact_integrity}',\n`
         : "    'FAILED-SUPERSEDED release record',\n" +
           "    'concluded `failure`',\n" +
-          "    'No release artifact or SRI exists',\n" +
-          "    'was not published',\n") +
+          `    '${record.verify_job_id}',\n` +
+          `    '${record.publish_job_id}',\n` +
+          "    'artifact build, verification, exercise, and upload steps as skipped',\n" +
+          "    'no published npm artifact or SRI',\n") +
       `    'v${newVersion}',\n  ])`,
     );
 }
@@ -409,8 +507,10 @@ function extractReleaseRecord(raw, version) {
     `FAILED-SUPERSEDED release record: The annotated ${tick}v${escaped}${tick} tag object\\n` +
       `${tick}([0-9a-f]{40})${tick} peels to protected-main commit\\n` +
       `${tick}([0-9a-f]{40})${tick}\\. Workflow run ${tick}([0-9]+)${tick}, attempt ([0-9]+), concluded ${tick}(failure)${tick}\\n` +
-      `during verification before artifact creation or publication\\. No release artifact or SRI exists,\\n` +
-      `and ${tick}${PACKAGE_NAME}@${escaped}${tick} was not published\\.`,
+      `during verification before artifact creation or publication\\. Verify job ${tick}([0-9]+)${tick} records the release\\n` +
+      `artifact build, verification, exercise, and upload steps as skipped; publish job ${tick}([0-9]+)${tick} was skipped\\.\\n` +
+      `Registry verification found no published ${tick}${PACKAGE_NAME}@${escaped}${tick} package, so no published npm artifact or SRI\\n` +
+      `exists for that version as of this check\\.`,
     'u',
   );
   const publishedMatches = [...raw.matchAll(new RegExp(publishedPattern.source, 'gu'))];
@@ -430,6 +530,8 @@ function extractReleaseRecord(raw, version) {
     workflow_run_id: Number(runId),
     workflow_run_attempt: Number(attempt),
     workflow_conclusion: published === undefined ? failed[5] : 'success',
+    verify_job_id: published === undefined ? Number(failed[6]) : null,
+    publish_job_id: published === undefined ? Number(failed[7]) : null,
     artifact_integrity: published === undefined ? null : published[5],
   });
 }

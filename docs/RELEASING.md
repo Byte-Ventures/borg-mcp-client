@@ -243,10 +243,16 @@ When the superseded tag's attempt failed before artifact creation or publication
 prepare the fresh recovery identity with `--workflow-conclusion failure` and omit
 `--artifact-integrity` entirely. The preparer verifies the annotated tag and exact
 failed workflow attempt, writes a canonical failed-superseded record stating that
-no release artifact or SRI exists, and separately re-verifies the last published
-release as the artifact provenance anchor. A failed record carrying an SRI, or a
-successful record without one, is invalid. Failed tags and workflow attempts stay
-immutable and must never be moved, reused, or rerun.
+the artifact build, verification, exercise, upload, and publish phases were all
+skipped, and separately re-verifies the last published release as the artifact
+provenance anchor. It also reads the authoritative registry version list before
+writing the time-bounded fact that no published npm artifact or SRI exists for
+the failed version. This recovery-time absence check is required before preparing
+the replacement identity; it is not the prohibited post-publication readback of
+the newly published release. A failed record carrying an SRI, a failed run whose
+artifact or publish phase ran, a failed version present in the registry, or a
+successful record without an SRI is invalid. Failed tags and workflow attempts
+stay immutable and must never be moved, reused, or rerun.
 
 ```sh
 npm run release:prepare -- 2.10.2 \
