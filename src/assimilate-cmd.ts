@@ -739,17 +739,36 @@ export async function runAssimilate(
   let prefetchedArtifact: InvitationArtifact | undefined;
 
   // An explicit --host plus a new invitation must be rejected on the pure
-  // input path. In particular, do not let the old pre-resume attempt read
-  // trust/credentials or touch the private root before we compare the signed
-  // artifact endpoint with the selected host. A real pending transaction is
-  // the one exception: validate its persisted artifact first, then preserve
-  // the published no-prompt resume behavior until client#267 lands.
+  // input path. Decode and compare the operator-presented artifact before any
+  // pending-enrollment lookup: the lookup enumerates the credential backend,
+  // so it must not precede this contradiction check. A matching artifact may
+  // then take the published pending-resume path until client#267 lands.
   if (args.flags.enroll && args.flags.server !== undefined && deps.isTTY()) {
     let preResumeOrigin: string;
     try {
       preResumeOrigin = normalizeServerEndpoint(args.flags.server);
     } catch (error) {
       deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+
+    prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
+    if (!prefetchedInvitation) {
+      deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
+      return 1;
+    }
+    try {
+      prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
+      if (prefetchedArtifact.endpoint !== preResumeOrigin) {
+        throw new InvitationArtifactEndpointMismatchError(
+          preResumeOrigin,
+          prefetchedArtifact.endpoint,
+        );
+      }
+    } catch (error) {
+      deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
+      prefetchedInvitation = undefined;
+      prefetchedArtifact = undefined;
       return 1;
     }
 
@@ -778,27 +797,7 @@ export async function runAssimilate(
       }
     }
 
-    if (!pendingForHost) {
-      prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
-      if (!prefetchedInvitation) {
-        deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
-        return 1;
-      }
-      try {
-        prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
-        if (prefetchedArtifact.endpoint !== preResumeOrigin) {
-          throw new InvitationArtifactEndpointMismatchError(
-            preResumeOrigin,
-            prefetchedArtifact.endpoint,
-          );
-        }
-      } catch (error) {
-        deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
-        prefetchedInvitation = undefined;
-        prefetchedArtifact = undefined;
-        return 1;
-      }
-    } else {
+    if (pendingForHost) {
       try {
         preResumeAttempted = true;
         preResumedEnrollment = await deps.resumeServerEnrollment(preResumeOrigin, () => {

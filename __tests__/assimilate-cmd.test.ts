@@ -3272,6 +3272,8 @@ describe('runAssimilate: #1015 authority selection', () => {
       token: 'server-token',
       trustIdentity: SERVER_TRUST_IDENTITY,
     }));
+    const promptSecret = vi.fn(async () => artifactForEndpoint('https://server.example.com'));
+    const peekPendingServerEnrollment = vi.fn(async () => null);
     const deps = makeStubDeps({
       stderr,
       preparePrivateRoot,
@@ -3279,8 +3281,8 @@ describe('runAssimilate: #1015 authority selection', () => {
       hasPersistedActiveCube,
       resumeServerEnrollment,
       connectServer,
-      promptSecret: vi.fn(async () => artifactForEndpoint('https://server.example.com')),
-      peekPendingServerEnrollment: vi.fn(async () => null),
+      promptSecret,
+      peekPendingServerEnrollment,
     });
 
     expect(await runAssimilate({
@@ -3291,6 +3293,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(stderr.mock.calls.flat().join('')).toContain(
       'does not match the selected `--host`',
     );
+    expect(promptSecret).toHaveBeenCalledTimes(1);
+    expect(peekPendingServerEnrollment).not.toHaveBeenCalled();
     expect(preparePrivateRoot).not.toHaveBeenCalled();
     expect(getActiveCube).not.toHaveBeenCalled();
     expect(hasPersistedActiveCube).not.toHaveBeenCalled();
@@ -3334,8 +3338,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(output).not.toMatch(/borgmcp\.ai|Cloud/i);
   });
 
-  it('resumes a durable pending enrollment before prompting for another invitation', async () => {
-    const promptSecret = vi.fn(async () => 'must-not-prompt');
+  it('validates the explicit-host invitation before resuming a durable pending enrollment', async () => {
+    const promptSecret = vi.fn(async () => TEST_ARTIFACT);
     const connectServer = vi.fn(async () => {
       throw new Error('must not start a new enrollment');
     });
@@ -3366,7 +3370,7 @@ describe('runAssimilate: #1015 authority selection', () => {
       'https://localhost:8787',
       expect.any(Function),
     );
-    expect(promptSecret).not.toHaveBeenCalled();
+    expect(promptSecret).toHaveBeenCalledWith('Enrollment invitation (single-use; hidden input):');
     expect(connectServer).not.toHaveBeenCalled();
     expect(deps.stderr).toHaveBeenCalledWith(
       'Resuming the pending enrollment for `https://localhost:8787`; do not enter another invitation unless the server certificate was reissued; if it was, request a current invitation and rerun this command.\n',

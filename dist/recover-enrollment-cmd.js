@@ -48,7 +48,7 @@ export async function runRecoverEnrollment(flags, deps) {
         }
     }
     if (!flags.yes) {
-        const answer = await deps.prompt(`Recover and clear only the failed enrollment for ${origin}? Other server enrollments and accounts will not be touched. [y/N]: `);
+        const answer = await deps.prompt(`Clear only the failed enrollment for ${origin}? Other server enrollments and accounts will not be touched. [y/N]: `);
         if (!/^y(?:es)?$/i.test(answer.trim())) {
             deps.stderr('Enrollment recovery was not confirmed. No state was changed.\n');
             return 1;

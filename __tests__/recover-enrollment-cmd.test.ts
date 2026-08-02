@@ -21,15 +21,18 @@ describe('recover-enrollment', () => {
       .toEqual({ ok: true, flags: { host: 'server.example.com:7091', yes: true } });
   });
 
-  it('requires confirmation and reports transaction-only scope on success', async () => {
+  it('requires clear-only confirmation and reports transaction-only scope on success', async () => {
     const stderr: string[] = [];
     const stdout: string[] = [];
+    const prompt: string[] = [];
     await expect(runRecoverEnrollment({ yes: false }, {
-      prompt: async () => 'y',
+      prompt: async (message) => { prompt.push(message); return 'y'; },
       stderr: (line) => stderr.push(line),
       stdout: (line) => stdout.push(line),
     })).resolves.toBe(0);
     expect(stderr).toEqual([]);
+    expect(prompt.join('')).toMatch(/Clear only the failed enrollment/);
+    expect(prompt.join('')).not.toMatch(/Recover and clear/);
     expect(stdout.join('')).toMatch(/failed enrollment transaction/);
     expect(stdout.join('')).toMatch(/other server enrollments and accounts were left unchanged/);
   });

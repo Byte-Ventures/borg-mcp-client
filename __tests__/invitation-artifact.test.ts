@@ -66,6 +66,7 @@ describe('invitation artifact trust bootstrap input', () => {
     expect(new InvitationArtifactRecoveryError().message).toBe(RECOVERY_INVITATION_ERROR);
     expect(RECOVERY_INVITATION_ERROR).toContain('`borg recover-enrollment`');
     expect(RECOVERY_INVITATION_ERROR).toContain('only this server enrollment transaction');
+    expect(RECOVERY_INVITATION_ERROR).not.toContain('recover or clear');
     expect(RECOVERY_INVITATION_ERROR).toContain('invitation used for this attempt has been consumed');
     expect(RECOVERY_INVITATION_ERROR).toContain('fresh invitation');
   });

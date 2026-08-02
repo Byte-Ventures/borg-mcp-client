@@ -129,10 +129,14 @@ describe('self-hosted server handshake', () => {
           server_capabilities: [],
         },
       }), { status: 201 }));
-    const prepareEnrollment = vi.fn(async () => ({
-      origin: artifactBase.endpoint,
-      trustIdentity: 'spki-sha256:server-a',
-      invitation,
+    const prepareEnrollment = vi.fn(async (input: {
+      origin: string;
+      trustIdentity: string;
+      invitation: string;
+      clientName?: string;
+      replacementCapability?: string;
+    }) => ({
+      ...input,
       retryKey: '55555555-5555-4555-8555-555555555555',
       credential,
     }));

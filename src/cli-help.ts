@@ -102,7 +102,7 @@ export function topLevelHelpText(version: string): string {
     `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
     `  borg server cube init    Initialize this repository's cube without creating a drone\n` +
     `  borg reset-local-seat    Clear ONLY this worktree's saved local seat (offline; after a rejection)\n` +
-    `  borg recover-enrollment  Recover or clear ONLY one failed server enrollment transaction\n` +
+    `  borg recover-enrollment  Clear ONLY one failed server enrollment transaction\n` +
     `  borg sync [--prune]      Sync this worktree's branch to origin/main\n` +
     `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
     `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
@@ -117,11 +117,11 @@ export function topLevelHelpText(version: string): string {
 
 export function recoverEnrollmentHelpText(version: string): string {
   return (
-    `borg recover-enrollment (borgmcp ${version}) — recover or clear one failed server enrollment\n\n` +
+    `borg recover-enrollment (borgmcp ${version}) — clear one failed server enrollment\n\n` +
     `Usage:\n` +
     `  borg recover-enrollment [--host <host>] [--yes]\n` +
     `  borg recover-enrollment --help\n\n` +
-    `This operation restores or clears only the failed enrollment transaction for one server.\n` +
+    `This operation clears only the failed enrollment transaction for one server.\n` +
     `It does not touch other server enrollments or accounts. It never requires manual file editing.\n`
   );
 }
