@@ -22,7 +22,7 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
 import { BorgServerError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, LegacySessionCredentialCollisionError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
-import { decodeAndVerifyInvitationArtifact, InvitationArtifactCompatibilityError, InvitationArtifactEndpointMismatchError, InvitationArtifactFormatError, InvitationArtifactLegacyError, InvitationArtifactStorageError, InvitationArtifactTransportError, InvitationArtifactTrustError, } from './invitation-artifact.js';
+import { decodeAndVerifyInvitationArtifact, InvitationArtifactCompatibilityError, InvitationArtifactEndpointMismatchError, InvitationArtifactFormatError, InvitationArtifactLegacyError, InvitationArtifactRecoveryError, InvitationArtifactStorageError, InvitationArtifactTransportError, InvitationArtifactTrustError, } from './invitation-artifact.js';
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
 import { resolveWorkingRepo } from './working-repo.js';
@@ -191,6 +191,10 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
         return 1;
     }
     if (error instanceof InvitationArtifactStorageError) {
+        deps.stderr(`${error.message}\n`);
+        return 1;
+    }
+    if (error instanceof InvitationArtifactRecoveryError) {
         deps.stderr(`${error.message}\n`);
         return 1;
     }

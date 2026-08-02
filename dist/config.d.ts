@@ -21,6 +21,7 @@ export interface PendingServerEnrollmentRecord {
     retryKey: string;
     credential: string;
     clientName?: string;
+    replacementCapability?: string;
 }
 export interface PendingServerCubeCreationRecord {
     origin: string;
@@ -90,6 +91,7 @@ export declare function getOrCreatePendingServerEnrollment(input: {
     trustIdentity: string;
     invitation: string;
     clientName?: string;
+    replacementCapability?: string;
 }): Promise<PendingServerEnrollmentRecord>;
 /** Activate the exact pending tuple only after a verified server response. */
 export declare function activatePendingServerEnrollment(input: {
@@ -100,6 +102,7 @@ export declare function activatePendingServerEnrollment(input: {
     clientId: string;
     serverCapabilities: ServerCapability[];
     allowReplacement?: boolean;
+    replacementCapability?: string;
 }): Promise<void>;
 /** Delete only the exact definitively rejected pending attempt. */
 export declare function clearPendingServerEnrollment(origin: string, trustIdentity: string, retryKey: string): Promise<void>;
@@ -115,4 +118,6 @@ export declare function getOrCreatePendingServerCubeCreation(input: {
 }): Promise<PendingServerCubeCreationRecord>;
 export declare function clearPendingServerCubeCreation(record: PendingServerCubeCreationRecord): Promise<void>;
 export declare function clearServerCredential(origin: string, trustIdentity: string): Promise<void>;
+/** Clear only the failed enrollment transaction for one origin/identity. */
+export declare function clearEnrollmentTransaction(origin: string, trustIdentity: string): Promise<void>;
 //# sourceMappingURL=config.d.ts.map

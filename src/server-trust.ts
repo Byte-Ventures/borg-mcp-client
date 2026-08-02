@@ -10,6 +10,7 @@ import { Readable } from 'node:stream';
 import { BorgServerTrustError } from './server-errors.js';
 import {
   InvitationArtifactCompatibilityError,
+  InvitationArtifactRecoveryError,
   InvitationArtifactStorageError,
   InvitationArtifactTransportError,
   InvitationArtifactTrustError,
@@ -103,6 +104,15 @@ async function readTrustFile(path: string): Promise<string> {
       throw new Error('Borg server trust files must be owned by the current user');
     }
     return await handle.readFile('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncPath(path: string): Promise<void> {
+  const handle = await open(path, 'r');
+  try {
+    await handle.sync();
   } finally {
     await handle.close();
   }
@@ -372,6 +382,7 @@ export async function stageBorgServerTrust(
       writeFile(temporaryCertificate, certificate, { mode: 0o600, flag: 'wx' }),
       writeFile(temporaryConfig, JSON.stringify({ ca_spki_sha256: identity.replace(/^spki-sha256:/, '') }), { mode: 0o600, flag: 'wx' }),
     ]);
+    await Promise.all([syncPath(temporaryCertificate), syncPath(temporaryConfig), syncPath(temporaryDirectory)]);
   } catch {
     await rm(temporaryDirectory, { recursive: true, force: true });
     throw new InvitationArtifactStorageError();
@@ -389,14 +400,18 @@ export async function stageBorgServerTrust(
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         });
         await rename(temporaryDirectory, directory);
+        await syncPath(resolve(directory, '..'));
         await activate();
         committed = true;
         await rm(backupDirectory, { recursive: true, force: true }).catch(() => undefined);
       } catch (error) {
         await rm(directory, { recursive: true, force: true });
         await rm(temporaryDirectory, { recursive: true, force: true });
-        if (backedUp) await rename(backupDirectory, directory).catch(() => undefined);
-        throw new InvitationArtifactStorageError();
+        if (backedUp) {
+          await rename(backupDirectory, directory);
+          await syncPath(resolve(directory, '..'));
+        }
+        throw new InvitationArtifactRecoveryError();
       }
     },
     discardTrust: async () => {
@@ -408,4 +423,9 @@ export async function stageBorgServerTrust(
 
 export function __clearServerTrustCacheForTest(): void {
   trustCache.clear();
+}
+
+export async function clearBorgServerTrust(origin: string): Promise<void> {
+  await rm(remoteTrustDirectory(origin), { recursive: true, force: true });
+  trustCache.delete(`${serverDataDirectory()}\0${origin}`);
 }

@@ -62,6 +62,7 @@ import {
   InvitationArtifactEndpointMismatchError,
   InvitationArtifactFormatError,
   InvitationArtifactLegacyError,
+  InvitationArtifactRecoveryError,
   InvitationArtifactStorageError,
   InvitationArtifactTransportError,
   InvitationArtifactTrustError,
@@ -570,6 +571,10 @@ function reportServerFailure(
     return 1;
   }
   if (error instanceof InvitationArtifactStorageError) {
+    deps.stderr(`${error.message}\n`);
+    return 1;
+  }
+  if (error instanceof InvitationArtifactRecoveryError) {
     deps.stderr(`${error.message}\n`);
     return 1;
   }

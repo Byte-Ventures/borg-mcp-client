@@ -16,7 +16,7 @@ import {
   stageBorgServerTrust,
 } from '../src/server-trust.js';
 import { BorgServerTrustError } from '../src/server-errors.js';
-import { InvitationArtifactStorageError } from '../src/invitation-artifact.js';
+import { InvitationArtifactRecoveryError } from '../src/invitation-artifact.js';
 
 const tempDirectories: string[] = [];
 
@@ -66,7 +66,7 @@ describe('same-user Borg server trust', () => {
     const staged = await stageBorgServerTrust(origin, ca.certificate, `spki-sha256:${ca.fingerprint}`);
     await expect(staged.commitTrust(async () => {
       throw new Error('injected activation failure');
-    })).rejects.toBeInstanceOf(InvitationArtifactStorageError);
+    })).rejects.toBeInstanceOf(InvitationArtifactRecoveryError);
     await expect(access(join(directory, 'ca.crt'))).rejects.toThrow();
     await rm(directory, { recursive: true, force: true });
   });

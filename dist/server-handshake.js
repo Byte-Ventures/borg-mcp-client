@@ -1,6 +1,6 @@
 import { ATTACH_PATH, CUBES_PATH, ENROLLMENT_EXCHANGE_PATH, HEALTH_PATH, PROTOCOL_INFO_PATH, REPOSITORY_CUBE_ASSOCIATION_PATH, REPOSITORY_CUBE_RESOLVE_PATH, createAttachRequestEnvelope, createProtocolEnvelope, decodeAssociateRepositoryCubeRequest, decodeAssociateRepositoryCubeResponseEnvelope, decodeAttachResponseEnvelope, decodeCreateCubeRequest, decodeCreateCubeResponseEnvelope, decodeEnrollmentExchangeRequest, decodeEnrollmentExchangeResponseEnvelope, decodeProtocolErrorEnvelope, decodeProtocolTagPreflight, decodeResolveRepositoryCubeRequest, decodeResolveRepositoryCubeResponseEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';
 import { createHash, randomUUID } from 'node:crypto';
-import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, findPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, } from './config.js';
+import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, } from './seats.js';
 import { BorgServerError, BorgServerTrustError, BorgServerUnreachableError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, RepositoryAssociationOperationError, RepositoryAssociationOutcomeUnknownError, RepositoryAssociationResolutionError, } from './server-errors.js';
 import { DroneEvictedError, DRONE_EVICTED_CODE } from './drone-lifecycle.js';
@@ -278,6 +278,7 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
     const existingCredential = await (deps.loadCredentialRecord ?? getServerCredentialRecord)(origin, trustIdentity);
     const existingOriginCredential = existingCredential !== null || await (deps.hasCredentialForOrigin ?? hasServerCredentialForOrigin)(origin);
     let replacementConfirmed = false;
+    let replacementCapability;
     if (existingOriginCredential) {
         const confirmed = deps.confirmReplacement !== undefined
             ? await deps.confirmReplacement()
@@ -287,12 +288,14 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
             throw new BorgServerError('LOCAL_CREDENTIAL_EXISTS', 'a local enrollment already exists for this server and was not replaced');
         }
         replacementConfirmed = true;
+        replacementCapability = randomUUID();
     }
     const pending = await (deps.prepareEnrollment ?? getOrCreatePendingServerEnrollment)({
         origin,
         trustIdentity,
         invitation,
         ...(deps.clientName ? { clientName: deps.clientName } : {}),
+        ...(replacementCapability === undefined ? {} : { replacementCapability }),
     });
     const request = decodeEnrollmentExchangeRequest({
         invitation: pending.invitation,
@@ -362,7 +365,9 @@ export async function enrollBorgServer(origin, trustIdentity, invitation, deps =
         credential: pending.credential,
         clientId: decoded.payload.client_id,
         serverCapabilities: decoded.payload.server_capabilities,
-        ...(replacementConfirmed ? { allowReplacement: true } : {}),
+        ...(replacementConfirmed || pending.replacementCapability !== undefined
+            ? { allowReplacement: true, ...(pending.replacementCapability === undefined ? {} : { replacementCapability: pending.replacementCapability }) }
+            : {}),
     });
     if (deps.commitTrust)
         await deps.commitTrust(activate);
@@ -759,13 +764,6 @@ export async function resumeLocalBorgServerEnrollment(origin, deps = {}) {
             : { loadPendingEnrollment: deps.loadPendingEnrollment }),
         ...(deps.onPending === undefined ? {} : { onPending: deps.onPending }),
     });
-}
-/** Resume the only pending enrollment when artifact-only mode has no endpoint argument. */
-export async function resumeAnyLocalBorgServerEnrollment(deps = {}) {
-    const pending = await findPendingServerEnrollment();
-    if (!pending)
-        return null;
-    return resumeLocalBorgServerEnrollment(pending.origin, { onPending: deps.onPending });
 }
 /** Advisory discovery that still verifies the server-owned CA. */
 export async function probeLocalBorgServer(origin) {

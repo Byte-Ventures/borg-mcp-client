@@ -21,6 +21,9 @@ export const TRANSPORT_INVITATION_ERROR =
 export const STORAGE_INVITATION_ERROR =
   'Borg could not prepare local trust state for this invitation. No invitation or credential was sent and no local trust or credential state was changed. Check that Borg can write its private local state, then retry.';
 
+export const RECOVERY_INVITATION_ERROR =
+  'Borg could not complete or undo the enrollment change. Prior local access may be unavailable. Run the transaction-scoped Borg enrollment recovery operation, which affects only this server enrollment, then retry.';
+
 export class InvitationArtifactCompatibilityError extends Error {
   constructor(message = COMPATIBILITY_INVITATION_ERROR) {
     super(message);
@@ -57,6 +60,13 @@ export class InvitationArtifactStorageError extends Error {
   constructor(message = STORAGE_INVITATION_ERROR) {
     super(message);
     this.name = 'InvitationArtifactStorageError';
+  }
+}
+
+export class InvitationArtifactRecoveryError extends Error {
+  constructor(message = RECOVERY_INVITATION_ERROR) {
+    super(message);
+    this.name = 'InvitationArtifactRecoveryError';
   }
 }
 

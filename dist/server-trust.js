@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { BorgServerTrustError } from './server-errors.js';
-import { InvitationArtifactCompatibilityError, InvitationArtifactStorageError, InvitationArtifactTransportError, InvitationArtifactTrustError, } from './invitation-artifact.js';
+import { InvitationArtifactCompatibilityError, InvitationArtifactRecoveryError, InvitationArtifactStorageError, InvitationArtifactTransportError, InvitationArtifactTrustError, } from './invitation-artifact.js';
 // CR5 TLS LATTICE: OpenSSL/Node TLS certificate-verification error codes. A raw
 // CA / cert-chain / SAN failure from the pinned transport is a potential MITM and
 // MUST be a TERMINAL trust-mismatch verdict — never a transient 'restart' blip.
@@ -76,6 +76,15 @@ async function readTrustFile(path) {
             throw new Error('Borg server trust files must be owned by the current user');
         }
         return await handle.readFile('utf8');
+    }
+    finally {
+        await handle.close();
+    }
+}
+async function syncPath(path) {
+    const handle = await open(path, 'r');
+    try {
+        await handle.sync();
     }
     finally {
         await handle.close();
@@ -333,6 +342,7 @@ export async function stageBorgServerTrust(origin, certificate, identity) {
             writeFile(temporaryCertificate, certificate, { mode: 0o600, flag: 'wx' }),
             writeFile(temporaryConfig, JSON.stringify({ ca_spki_sha256: identity.replace(/^spki-sha256:/, '') }), { mode: 0o600, flag: 'wx' }),
         ]);
+        await Promise.all([syncPath(temporaryCertificate), syncPath(temporaryConfig), syncPath(temporaryDirectory)]);
     }
     catch {
         await rm(temporaryDirectory, { recursive: true, force: true });
@@ -353,6 +363,7 @@ export async function stageBorgServerTrust(origin, certificate, identity) {
                         throw error;
                 });
                 await rename(temporaryDirectory, directory);
+                await syncPath(resolve(directory, '..'));
                 await activate();
                 committed = true;
                 await rm(backupDirectory, { recursive: true, force: true }).catch(() => undefined);
@@ -360,9 +371,11 @@ export async function stageBorgServerTrust(origin, certificate, identity) {
             catch (error) {
                 await rm(directory, { recursive: true, force: true });
                 await rm(temporaryDirectory, { recursive: true, force: true });
-                if (backedUp)
-                    await rename(backupDirectory, directory).catch(() => undefined);
-                throw new InvitationArtifactStorageError();
+                if (backedUp) {
+                    await rename(backupDirectory, directory);
+                    await syncPath(resolve(directory, '..'));
+                }
+                throw new InvitationArtifactRecoveryError();
             }
         },
         discardTrust: async () => {
@@ -374,5 +387,9 @@ export async function stageBorgServerTrust(origin, certificate, identity) {
 }
 export function __clearServerTrustCacheForTest() {
     trustCache.clear();
+}
+export async function clearBorgServerTrust(origin) {
+    await rm(remoteTrustDirectory(origin), { recursive: true, force: true });
+    trustCache.delete(`${serverDataDirectory()}\0${origin}`);
 }
 //# sourceMappingURL=server-trust.js.map

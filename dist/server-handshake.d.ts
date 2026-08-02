@@ -237,10 +237,6 @@ export declare function resumeLocalBorgServerEnrollment(origin: string, deps?: {
     loadPendingEnrollment?: typeof getPendingServerEnrollment;
     onPending?: () => void;
 }): Promise<NewServerEnrollment | null>;
-/** Resume the only pending enrollment when artifact-only mode has no endpoint argument. */
-export declare function resumeAnyLocalBorgServerEnrollment(deps?: {
-    onPending?: () => void;
-}): Promise<NewServerEnrollment | null>;
 /** Advisory discovery that still verifies the server-owned CA. */
 export declare function probeLocalBorgServer(origin: string): Promise<boolean>;
 export {};

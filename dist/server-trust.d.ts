@@ -18,4 +18,5 @@ export declare function loadBorgServerTrust(origin: string, dataDirectory?: stri
 export declare function loadBorgServerTrustFromPresentedChain(origin: string, caSpkiSha256: string): Promise<StagedBorgServerTrust>;
 export declare function stageBorgServerTrust(origin: string, certificate: string, identity: string): Promise<StagedBorgServerTrust>;
 export declare function __clearServerTrustCacheForTest(): void;
+export declare function clearBorgServerTrust(origin: string): Promise<void>;
 //# sourceMappingURL=server-trust.d.ts.map

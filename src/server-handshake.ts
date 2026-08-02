@@ -492,6 +492,7 @@ export async function enrollBorgServer(
     deps.hasCredentialForOrigin ?? hasServerCredentialForOrigin
   )(origin);
   let replacementConfirmed = false;
+  let replacementCapability: string | undefined;
   if (existingOriginCredential) {
     const confirmed = deps.confirmReplacement !== undefined
       ? await deps.confirmReplacement()
@@ -504,6 +505,7 @@ export async function enrollBorgServer(
       );
     }
     replacementConfirmed = true;
+    replacementCapability = randomUUID();
   }
 
   const pending = await (deps.prepareEnrollment ?? getOrCreatePendingServerEnrollment)({
@@ -511,6 +513,7 @@ export async function enrollBorgServer(
     trustIdentity,
     invitation,
     ...(deps.clientName ? { clientName: deps.clientName } : {}),
+    ...(replacementCapability === undefined ? {} : { replacementCapability }),
   });
   const request = decodeEnrollmentExchangeRequest({
     invitation: pending.invitation,
@@ -592,7 +595,9 @@ export async function enrollBorgServer(
     credential: pending.credential,
     clientId: decoded.payload.client_id,
     serverCapabilities: decoded.payload.server_capabilities,
-    ...(replacementConfirmed ? { allowReplacement: true } : {}),
+     ...(replacementConfirmed || pending.replacementCapability !== undefined
+       ? { allowReplacement: true, ...(pending.replacementCapability === undefined ? {} : { replacementCapability: pending.replacementCapability }) }
+       : {}),
   });
   if (deps.commitTrust) await deps.commitTrust(activate);
   else await activate();
