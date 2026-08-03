@@ -262,33 +262,48 @@ describe('OpenCode Borg coordination approvals', () => {
   });
 });
 
-describe('launch consent', () => {
+describe('launch approval', () => {
   it('keeps Claude unchanged', async () => {
     const deps = io({ readCodexConfig: vi.fn(() => { throw new Error('unused'); }) });
     expect(await resolveLaunchBorgApprovals('claude', deps)).toEqual({ codexArgs: [] });
     expect(deps.confirm).not.toHaveBeenCalled();
   });
 
-  it('applies a launch-only Codex fix only after explicit TTY consent', async () => {
+  it('automatically applies a launch-only Codex fix in a TTY', async () => {
     const deps = io({
       readCodexConfig: (approvalArgs = []) =>
         approvalArgs.length > 0 ? codexEffective('auto') : codexEffective('approve'),
     });
     const result = await resolveLaunchBorgApprovals('codex', deps);
     expect(result.codexArgs).toHaveLength(2);
-    expect(deps.confirm).toHaveBeenCalledOnce();
-    expect(deps.confirm).toHaveBeenCalledWith(expect.stringContaining(
+    expect(deps.confirm).not.toHaveBeenCalled();
+    expect(result.warning).toContain(
       'approving the dispatcher also approves any Borg operation invoked through it'
-    ));
+    );
+    expect(result.warning).toContain('--no-borg-approval-override');
   });
 
-  it('does not prompt or override in a non-TTY and emits exact repair copy', async () => {
+  it('automatically applies a launch-only Codex fix in a non-TTY', async () => {
     const deps = io({
       isTTY: () => false,
-      readCodexConfig: () => '[mcp_servers.borg]\ndefault_tools_approval_mode = "approve"',
+      readCodexConfig: (approvalArgs = []) => approvalArgs.length > 0
+        ? codexEffective('auto')
+        : '[mcp_servers.borg]\ndefault_tools_approval_mode = "approve"',
     });
     const result = await resolveLaunchBorgApprovals('codex', deps);
+    expect(result.codexArgs).toHaveLength(2);
+    expect(result.warning).toContain('Applied a launch-only approval override');
+    expect(result.warning).toContain('approves any Borg operation invoked through it');
+    expect(deps.confirm).not.toHaveBeenCalled();
+  });
+
+  it('opts out without prompting or overriding and emits exact repair copy', async () => {
+    const deps = io({
+      readCodexConfig: () => '[mcp_servers.borg]\ndefault_tools_approval_mode = "approve"',
+    });
+    const result = await resolveLaunchBorgApprovals('codex', deps, { skipOverride: true });
     expect(result.codexArgs).toEqual([]);
+    expect(result.warning).toContain('--no-borg-approval-override');
     expect(result.warning).toContain('[mcp_servers.borg.tools."borg:regen"]');
     expect(result.warning).toContain('approves any Borg operation invoked through it');
     expect(deps.confirm).not.toHaveBeenCalled();
@@ -301,12 +316,11 @@ describe('launch consent', () => {
     expect(result.warning).toContain('managed policy prevents');
   });
 
-  it('decline leaves policy unchanged and never broadens other OpenCode permissions', async () => {
+  it('opt-out leaves policy unchanged and never broadens other OpenCode permissions', async () => {
     const deps = io({
       readOpenCodeConfig: () => ({ permission: { '*': 'ask', bash: 'deny' } }),
-      confirm: vi.fn(async () => 'no'),
     });
-    const result = await resolveLaunchBorgApprovals('opencode', deps);
+    const result = await resolveLaunchBorgApprovals('opencode', deps, { skipOverride: true });
     expect(result.openCodePermission).toBeUndefined();
     expect(result.warning).toContain('"borg_borg_regen": "allow"');
     expect(result.warning).toContain('"bash": "deny"');

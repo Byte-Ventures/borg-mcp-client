@@ -108,6 +108,7 @@ export interface AssimilateFlags {
   server?: string;
   enroll?: boolean;
   force?: boolean;
+  noBorgApprovalOverride?: boolean;
 }
 
 export interface AssimilateArgs {
@@ -205,8 +206,12 @@ export interface AssimilateDeps {
   ensureLocalServerInstalled: (connectCommand: string) => Promise<
     'present' | 'installed' | 'declined' | 'non-interactive' | 'failed'
   >;
-  /** Selected-harness approval inspection/consent (client#20). */
-  resolveCliApprovals?: (cli: BorgCli, cwd: string) => Promise<LaunchApprovalDecision>;
+  /** Selected-harness approval inspection and launch override (client#20). */
+  resolveCliApprovals?: (
+    cli: BorgCli,
+    cwd: string,
+    options?: { skipOverride?: boolean }
+  ) => Promise<LaunchApprovalDecision>;
 
   // CR-PD-F1 (drone-2 Phase D review 2026-05-18T04:13Z) — gh#104
   // captured os.hostname() at assimilate-time as load-bearing for
@@ -2064,7 +2069,9 @@ export async function runAssimilate(
   let codexSocketPath: string | null = null;
   let codexServerCleanup: (() => void) | null = null;
   const launchApproval = deps.resolveCliApprovals
-    ? await deps.resolveCliApprovals(cli, agentCwd)
+    ? await deps.resolveCliApprovals(cli, agentCwd, {
+      skipOverride: args.flags.noBorgApprovalOverride,
+    })
     : { codexArgs: [] };
   if (launchApproval.warning) deps.stderr(`warning: ${launchApproval.warning}\n`);
 

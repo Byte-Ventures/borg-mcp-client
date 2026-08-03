@@ -346,8 +346,8 @@ async function main() {
   }
 
   // client#20: inspect only the SELECTED harness after the one-shot launch
-  // menu choice. Explicit consent enables a narrow per-process override;
-  // Borg never rewrites the user's approval policy here.
+  // menu choice. A narrow per-process override is applied by default; Borg
+  // never rewrites the user's approval policy here.
   const approvalCwd = cli === 'codex'
     ? resolveCodexLaunchCwd(parsedCli.rest, process.cwd())
     : process.cwd();
@@ -357,7 +357,8 @@ async function main() {
       cwd: approvalCwd,
       env: process.env,
       codexArgs: parsedCli.rest,
-    })
+    }),
+    { skipOverride: parsedCli.noBorgApprovalOverride }
   );
   if (launchApproval.warning) {
     console.error(`${consolePrefix()}${chalk.yellow(`warning: ${launchApproval.warning}`)}`);

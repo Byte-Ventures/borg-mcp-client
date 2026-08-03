@@ -23,6 +23,7 @@ export interface AssimilateFlags {
     server?: string;
     enroll?: boolean;
     force?: boolean;
+    noBorgApprovalOverride?: boolean;
 }
 export interface AssimilateArgs {
     role: string | undefined;
@@ -91,8 +92,10 @@ export interface AssimilateDeps {
     promptSecret: (message: string) => Promise<string>;
     isTTY: () => boolean;
     ensureLocalServerInstalled: (connectCommand: string) => Promise<'present' | 'installed' | 'declined' | 'non-interactive' | 'failed'>;
-    /** Selected-harness approval inspection/consent (client#20). */
-    resolveCliApprovals?: (cli: BorgCli, cwd: string) => Promise<LaunchApprovalDecision>;
+    /** Selected-harness approval inspection and launch override (client#20). */
+    resolveCliApprovals?: (cli: BorgCli, cwd: string, options?: {
+        skipOverride?: boolean;
+    }) => Promise<LaunchApprovalDecision>;
     getHostname: () => string;
     setTerminalTitle: (label: string, cubeName: string) => void;
     getActiveCube: () => Promise<ActiveCube | null>;

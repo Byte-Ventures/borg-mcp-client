@@ -81,6 +81,7 @@ export function parseCliFlag(args) {
     const rest = [];
     let cli;
     let force = false;
+    let noBorgApprovalOverride = false;
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === '--cli') {
@@ -101,10 +102,18 @@ export function parseCliFlag(args) {
         else if (arg === '--force') {
             force = true;
         }
+        else if (arg === '--no-borg-approval-override') {
+            noBorgApprovalOverride = true;
+        }
         else {
             rest.push(arg);
         }
     }
-    return { ...(cli ? { cli } : {}), ...(force ? { force: true } : {}), rest };
+    return {
+        ...(cli ? { cli } : {}),
+        ...(force ? { force: true } : {}),
+        ...(noBorgApprovalOverride ? { noBorgApprovalOverride: true } : {}),
+        rest,
+    };
 }
 //# sourceMappingURL=cli-platform.js.map

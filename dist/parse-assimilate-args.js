@@ -2,7 +2,7 @@ import { validateName } from './name-validator.js';
 const ENROLLMENT_POSITIONAL_INPUT_ERROR = 'That argument was not accepted. If you meant a role name, use lowercase letters, digits, hyphens, or underscores, up to 48 characters. If you meant an enrollment invitation, it must be entered at the hidden prompt — re-run the same command without it.';
 /**
  * Parse argv for `borg assimilate [role] [--worktree <n>] [--template <n>]
- * [--no-template] [--cube-name <n>] [--host <host>] [--enroll] [--here] [--force] [--yes]`. The `assimilate`
+ * [--no-template] [--cube-name <n>] [--host <host>] [--enroll] [--here] [--force] [--yes] [--no-borg-approval-override]`. The `assimilate`
  * subcommand token must already be stripped by the caller.
  */
 export function parseAssimilateArgs(rawArgs) {
@@ -43,6 +43,9 @@ export function parseAssimilateArgs(rawArgs) {
         }
         else if (arg === '--force') {
             flags.force = true;
+        }
+        else if (arg === '--no-borg-approval-override') {
+            flags.noBorgApprovalOverride = true;
         }
         else if (arg === '--host') {
             const next = rawArgs[i + 1];
@@ -105,7 +108,7 @@ export function parseAssimilateArgs(rawArgs) {
         else if (arg.startsWith('--')) {
             return {
                 ok: false,
-                error: `unknown flag: ${arg}. Supported: --worktree, --template, --no-template, --cube-name, --host, --enroll, --here, --force, --yes, --cli, --model`,
+                error: `unknown flag: ${arg}. Supported: --worktree, --template, --no-template, --cube-name, --host, --enroll, --here, --force, --yes, --cli, --model, --no-borg-approval-override`,
             };
         }
         else {

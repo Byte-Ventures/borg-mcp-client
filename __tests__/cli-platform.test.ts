@@ -33,6 +33,13 @@ describe('parseCliFlag', () => {
       rest: ['--resume', 'abc'],
     });
   });
+
+  it('consumes the launch approval opt-out instead of forwarding it', () => {
+    expect(parseCliFlag(['--no-borg-approval-override', '--resume', 'abc'])).toEqual({
+      noBorgApprovalOverride: true,
+      rest: ['--resume', 'abc'],
+    });
+  });
 });
 
 describe('resolveCliChoice', () => {
