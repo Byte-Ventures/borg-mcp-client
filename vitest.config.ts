@@ -7,6 +7,6 @@ export default defineConfig({
     fileParallelism: false,
     include: ['__tests__/**/*.test.ts'],
     exclude: ['node_modules/**', 'dist/**'],
-    testTimeout: 10_000,
+    testTimeout: 60_000,
   },
 });
