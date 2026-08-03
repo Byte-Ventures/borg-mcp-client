@@ -43,7 +43,7 @@ export async function runRecoverEnrollment(flags, deps) {
     const transaction = await findEnrollmentRecoveryTransaction(selectedOrigin);
     if (!transaction) {
         if (selectedOrigin !== undefined && await findEnrollmentRecoveryTransaction()) {
-            deps.stderr('The recovery host does not match the failed enrollment transaction. No state was changed.\n');
+            deps.stderr('The recovery host does not match the failed enrollment transaction. No state was changed. Re-run without `--host` to review the current transaction.\n');
             return 1;
         }
         deps.stderr('No recoverable Borg enrollment transaction was found. No state was changed.\n');
@@ -52,7 +52,7 @@ export async function runRecoverEnrollment(flags, deps) {
     const enrollment = transaction.kind === 'accepted' ? transaction.marker : transaction.pending;
     const origin = enrollment.origin;
     if (!flags.yes) {
-        const answer = await deps.prompt(`Restore or clear only the failed enrollment for ${origin}? Other server enrollments and accounts will not be touched. [y/N]: `);
+        const answer = await deps.prompt(`${transaction.kind === 'accepted' ? 'Restore the prior enrollment' : 'Clear the failed enrollment transaction'} for ${origin}? Other server enrollments and accounts will not be touched. [y/N]: `);
         if (!/^y(?:es)?$/i.test(answer.trim())) {
             deps.stderr('Enrollment recovery was not confirmed. No state was changed.\n');
             return 1;
