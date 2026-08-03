@@ -14,6 +14,7 @@ import {
   clearServerCredential,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
+  findEnrollmentRecoveryTransaction,
   getPendingServerEnrollment,
   getServerCredential,
   getServerCredentialRecord,
@@ -279,6 +280,95 @@ describe('self-hosted server credential storage', () => {
       serverCapabilities: [...input.serverCapabilities],
       replacementCapabilityToken: pending.replacementCapability!.token,
     })).rejects.toThrow(/pending.*missing/i);
+  });
+
+  it.each([
+    ['corrupts the active record', () => '{not-json'],
+    ['substitutes a different valid bearer', () => JSON.stringify({
+      version: 2,
+      origin,
+      trustIdentity,
+      credential: 'n'.repeat(43),
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+    })],
+  ])('retains the accepted journal when finalization %s', async (_label, replacement) => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const pending = await getOrCreatePendingServerEnrollment({
+      origin, trustIdentity, invitation: 'i'.repeat(43), artifactBinding,
+    });
+    await activatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      retryKey: pending.retryKey,
+      credential: pending.credential,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+      generationId: artifactBinding.stagedGenerationId,
+      previousPointer: null,
+    });
+    const marker = await getAcceptedEnrollmentMarker(origin);
+    expect(marker).not.toBeNull();
+    const markerAccount = [...values.keys()].find((account) =>
+      account.startsWith('borg-server-enrollment-accepted:'))!;
+    const activeAccount = [...values.entries()].find(([, value]) => {
+      try { return JSON.parse(value).version === 2; } catch { return false; }
+    })![0];
+    values.set(activeAccount, replacement());
+
+    await expect(finalizeAcceptedEnrollment(origin, trustIdentity, artifactBinding.stagedGenerationId))
+      .rejects.toThrow(/active credential/i);
+    expect(values.has(markerAccount)).toBe(true);
+    expect(values.has(marker!.rollbackAccount)).toBe(true);
+  });
+
+  it('rejects a pending journal stored under a different enrollment account without changing it', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    await getOrCreatePendingServerEnrollment({ origin, trustIdentity, invitation: 'i'.repeat(43) });
+    const actualAccount = [...values.keys()].find((account) =>
+      account.startsWith('borg-server-enrollment-pending:'))!;
+    const value = values.get(actualAccount)!;
+    values.delete(actualAccount);
+    const misplacedAccount = `borg-server-enrollment-pending:${'e'.repeat(64)}`;
+    values.set(misplacedAccount, value);
+
+    await expect(findEnrollmentRecoveryTransaction()).rejects.toMatchObject({
+      name: 'InvitationArtifactRecoveryError',
+      message: expect.stringContaining('where it does not belong'),
+    });
+    expect(values.get(misplacedAccount)).toBe(value);
+  });
+
+  it('rejects an accepted journal stored under a different enrollment account without changing it', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const pending = await getOrCreatePendingServerEnrollment({
+      origin, trustIdentity, invitation: 'i'.repeat(43), artifactBinding,
+    });
+    await activatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      retryKey: pending.retryKey,
+      credential: pending.credential,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+      generationId: artifactBinding.stagedGenerationId,
+      previousPointer: null,
+    });
+    const actualAccount = [...values.keys()].find((account) =>
+      account.startsWith('borg-server-enrollment-accepted:'))!;
+    const value = values.get(actualAccount)!;
+    values.delete(actualAccount);
+    const misplacedAccount = `borg-server-enrollment-accepted:${'e'.repeat(64)}`;
+    values.set(misplacedAccount, value);
+
+    await expect(findEnrollmentRecoveryTransaction()).rejects.toMatchObject({
+      name: 'InvitationArtifactRecoveryError',
+      message: expect.stringContaining('where it does not belong'),
+    });
+    expect(values.get(misplacedAccount)).toBe(value);
   });
 
   it('restores the old account plus exact pending tuple from a validated rollback snapshot', async () => {

@@ -144,5 +144,5 @@ export declare function getOrCreatePendingServerCubeCreation(input: {
 export declare function clearPendingServerCubeCreation(record: PendingServerCubeCreationRecord): Promise<void>;
 export declare function clearServerCredential(origin: string, trustIdentity: string): Promise<void>;
 /** Clear only the failed enrollment transaction for one origin/identity. */
-export declare function clearEnrollmentTransaction(origin: string, trustIdentity: string): Promise<void>;
+export declare function clearEnrollmentTransaction(origin: string, trustIdentity: string): Promise<boolean>;
 //# sourceMappingURL=config.d.ts.map

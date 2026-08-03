@@ -1,5 +1,6 @@
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { clearEnrollmentTransaction, findEnrollmentRecoveryTransaction } from './config.js';
+import { InvitationArtifactRecoveryError } from './invitation-artifact.js';
 import { clearStagedBorgServerTrust, restoreBorgServerEnrollment } from './server-trust.js';
 export function parseRecoverEnrollmentArgs(argv) {
     let host;
@@ -57,11 +58,15 @@ export async function runRecoverEnrollment(flags, deps) {
         }
     }
     if (transaction.kind === 'accepted') {
-        await restoreBorgServerEnrollment(origin);
+        if (!await restoreBorgServerEnrollment(origin)) {
+            throw new InvitationArtifactRecoveryError();
+        }
         deps.stdout(`Restored the prior enrollment state for ${origin}; other server enrollments and accounts were left unchanged.\n`);
     }
     else {
-        await clearEnrollmentTransaction(origin, transaction.pending.trustIdentity);
+        if (!await clearEnrollmentTransaction(origin, transaction.pending.trustIdentity)) {
+            throw new InvitationArtifactRecoveryError();
+        }
         await clearStagedBorgServerTrust(origin, transaction.pending.artifactBinding?.stagedGenerationId);
         deps.stdout(`Cleared the failed enrollment transaction for ${origin}; other server enrollments and accounts were left unchanged.\n`);
     }

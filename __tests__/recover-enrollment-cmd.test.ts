@@ -11,7 +11,7 @@ vi.mock('../src/config.js', () => ({
       retryKey: '11111111-1111-4111-8111-111111111111',
       credential: 'c'.repeat(43),
     } })),
-  clearEnrollmentTransaction: vi.fn(async () => {}),
+  clearEnrollmentTransaction: vi.fn(async () => true),
 }));
 vi.mock('../src/server-trust.js', () => ({
   clearStagedBorgServerTrust: vi.fn(async () => {}),
@@ -50,6 +50,7 @@ describe('recover-enrollment', () => {
         trustIdentity: 'spki-sha256:server-a',
         generationId: 'a'.repeat(64),
         previousPointer: null,
+        activeDigest: 'd'.repeat(64),
         rollbackAccount: `borg-server-enrollment-rollback:${'b'.repeat(64)}`,
         rollbackDigest: 'c'.repeat(64),
       },
@@ -64,5 +65,39 @@ describe('recover-enrollment', () => {
     expect(config.clearEnrollmentTransaction).not.toHaveBeenCalled();
     expect(stdout.join('')).toMatch(/Restored the prior enrollment state/);
     expect(stdout.join('')).toMatch(/other server enrollments and accounts were left unchanged/);
+  });
+
+  it('does not report success when the pending transaction was already absent', async () => {
+    vi.clearAllMocks();
+    vi.mocked(config.clearEnrollmentTransaction).mockResolvedValueOnce(false);
+    await expect(runRecoverEnrollment({ yes: true }, {
+      prompt: vi.fn(),
+      stderr: vi.fn(),
+      stdout: vi.fn(),
+    })).rejects.toThrow(/complete or undo the enrollment change/i);
+  });
+
+  it('does not report success when accepted recovery changed nothing', async () => {
+    vi.clearAllMocks();
+    vi.mocked(config.findEnrollmentRecoveryTransaction).mockResolvedValueOnce({
+      kind: 'accepted',
+      marker: {
+        version: 1,
+        state: 'accepted',
+        origin: 'https://server.example.com:7091',
+        trustIdentity: 'spki-sha256:server-a',
+        generationId: 'a'.repeat(64),
+        previousPointer: null,
+        activeDigest: 'd'.repeat(64),
+        rollbackAccount: `borg-server-enrollment-rollback:${'b'.repeat(64)}`,
+        rollbackDigest: 'c'.repeat(64),
+      },
+    });
+    vi.mocked(trust.restoreBorgServerEnrollment).mockResolvedValueOnce(false);
+    await expect(runRecoverEnrollment({ yes: true }, {
+      prompt: vi.fn(),
+      stderr: vi.fn(),
+      stdout: vi.fn(),
+    })).rejects.toThrow(/complete or undo the enrollment change/i);
   });
 });

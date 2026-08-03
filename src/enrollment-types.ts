@@ -45,6 +45,7 @@ export interface AcceptedEnrollmentMarker {
   trustIdentity: string;
   generationId: string;
   previousPointer: EnrollmentTrustPointer | null;
+  activeDigest: string;
   rollbackAccount: string;
   rollbackDigest: string;
 }
