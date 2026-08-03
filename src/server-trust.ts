@@ -22,7 +22,11 @@ import {
   getAcceptedEnrollmentMarker,
   restoreAcceptedEnrollmentAccounts,
 } from './config.js';
-import type { EnrollmentArtifactBinding, EnrollmentTrustPointer } from './enrollment-types.js';
+import type {
+  AcceptedEnrollmentMarker,
+  EnrollmentArtifactBinding,
+  EnrollmentTrustPointer,
+} from './enrollment-types.js';
 
 // CR5 TLS LATTICE: OpenSSL/Node TLS certificate-verification error codes. A raw
 // CA / cert-chain / SAN failure from the pinned transport is a potential MITM and
@@ -705,13 +709,13 @@ export async function loadStagedBorgServerTrust(
   });
 }
 
-/** Explicit operator recovery restores a validated accepted journal. */
-export async function restoreBorgServerEnrollment(origin: string): Promise<boolean> {
-  return withEnrollmentOriginLock(origin, async () => {
-    const marker = await getAcceptedEnrollmentMarker(origin);
-    if (!marker) return false;
-    await restoreEnrollmentPointer(marker);
-    await restoreAcceptedEnrollmentAccounts(marker);
+/** Explicit operator recovery restores the exact accepted journal that was reviewed. */
+export async function restoreBorgServerEnrollment(expected: AcceptedEnrollmentMarker): Promise<boolean> {
+  return withEnrollmentOriginLock(expected.origin, async () => {
+    const marker = await getAcceptedEnrollmentMarker(expected.origin);
+    if (!marker || JSON.stringify(marker) !== JSON.stringify(expected)) return false;
+    await restoreEnrollmentPointer(expected);
+    await restoreAcceptedEnrollmentAccounts(expected);
     return true;
   });
 }

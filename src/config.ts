@@ -1199,25 +1199,43 @@ export async function clearServerCredential(origin: string, trustIdentity: strin
   }), { processShared: processSharedEnrollmentLock() });
 }
 
-/** Clear only the failed enrollment transaction for one origin/identity. */
-export async function clearEnrollmentTransaction(origin: string, trustIdentity: string): Promise<boolean> {
-  validateServerCredentialBinding(origin, trustIdentity);
+/** Clear only the exact failed enrollment transaction that the operator reviewed. */
+export async function clearEnrollmentTransaction(
+  expected: PendingServerEnrollmentRecord,
+): Promise<boolean> {
+  validateServerCredentialBinding(expected.origin, expected.trustIdentity);
   const backend = await getServerCredentialBackend();
-  const pendingAccount = serverPendingEnrollmentAccount(origin, trustIdentity);
-  return withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
-    if (await markerForOriginUnlocked(backend, origin)) {
+  const pendingAccount = serverPendingEnrollmentAccount(expected.origin, expected.trustIdentity);
+  return withEnrollmentOriginLock(expected.origin, () => withCredentialStoreLock(async () => {
+    if (await markerForOriginUnlocked(backend, expected.origin)) {
       throw new InvitationArtifactRecoveryError();
     }
     if (backend.entries && backend.replaceAccounts) {
       const accounts = await backend.entries();
-      if (!Object.prototype.hasOwnProperty.call(accounts, pendingAccount)) return false;
+      const stored = accounts[pendingAccount];
+      if (!stored) return false;
+      let current: PendingServerEnrollmentRecord;
+      try {
+        current = decodePendingServerEnrollment(stored, expected.origin, expected.trustIdentity);
+      } catch {
+        return false;
+      }
+      if (JSON.stringify(current) !== JSON.stringify(expected)) return false;
       const next = { ...accounts };
       delete next[pendingAccount];
       await backend.replaceAccounts(next);
-      return true;
+      return (await backend.get(pendingAccount)) === null;
     }
-    if (await backend.get(pendingAccount) === null) return false;
+    const stored = await backend.get(pendingAccount);
+    if (!stored) return false;
+    let current: PendingServerEnrollmentRecord;
+    try {
+      current = decodePendingServerEnrollment(stored, expected.origin, expected.trustIdentity);
+    } catch {
+      return false;
+    }
+    if (JSON.stringify(current) !== JSON.stringify(expected)) return false;
     await backend.delete(pendingAccount);
-    return true;
+    return (await backend.get(pendingAccount)) === null;
   }), { processShared: processSharedEnrollmentLock() });
 }

@@ -8,6 +8,7 @@ import {
   COMPATIBILITY_INVITATION_ERROR,
   FORMAT_INVITATION_ERROR,
   RECOVERY_INVITATION_ERROR,
+  RECOVERY_TRANSACTION_CHANGED_ERROR,
   TRANSPORT_INVITATION_ERROR,
   TRUST_INVITATION_ERROR,
   InvitationArtifactCompatibilityError,
@@ -70,5 +71,12 @@ describe('invitation artifact trust bootstrap input', () => {
     expect(RECOVERY_INVITATION_ERROR).toContain('does not change unrelated server enrollments or accounts');
     expect(RECOVERY_INVITATION_ERROR).toContain('invitation used for this attempt has been consumed');
     expect(RECOVERY_INVITATION_ERROR).toContain('fresh invitation');
+  });
+
+  it('describes a stale confirmation without exposing state or inventing a support route', () => {
+    expect(RECOVERY_TRANSACTION_CHANGED_ERROR).toBe(
+      'The failed enrollment transaction you reviewed is no longer present. No state was changed. Re-run `borg recover-enrollment` to review the current transaction.',
+    );
+    expect(RECOVERY_TRANSACTION_CHANGED_ERROR).not.toMatch(/credential|invitation|digest|private|support/i);
   });
 });

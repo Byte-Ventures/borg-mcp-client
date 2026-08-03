@@ -61,7 +61,10 @@ describe('recover-enrollment', () => {
       stderr: vi.fn(),
       stdout: (line) => stdout.push(line),
     })).resolves.toBe(0);
-    expect(trust.restoreBorgServerEnrollment).toHaveBeenCalledWith('https://server.example.com:7091');
+    expect(trust.restoreBorgServerEnrollment).toHaveBeenCalledWith(expect.objectContaining({
+      origin: 'https://server.example.com:7091',
+      generationId: 'a'.repeat(64),
+    }));
     expect(config.clearEnrollmentTransaction).not.toHaveBeenCalled();
     expect(stdout.join('')).toMatch(/Restored the prior enrollment state/);
     expect(stdout.join('')).toMatch(/other server enrollments and accounts were left unchanged/);
@@ -74,7 +77,7 @@ describe('recover-enrollment', () => {
       prompt: vi.fn(),
       stderr: vi.fn(),
       stdout: vi.fn(),
-    })).rejects.toThrow(/complete or undo the enrollment change/i);
+    })).rejects.toThrow(/transaction you reviewed is no longer present/i);
   });
 
   it('does not report success when accepted recovery changed nothing', async () => {
@@ -98,6 +101,6 @@ describe('recover-enrollment', () => {
       prompt: vi.fn(),
       stderr: vi.fn(),
       stdout: vi.fn(),
-    })).rejects.toThrow(/complete or undo the enrollment change/i);
+    })).rejects.toThrow(/transaction you reviewed is no longer present/i);
   });
 });

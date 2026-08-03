@@ -27,6 +27,9 @@ export const RECOVERY_INVITATION_ERROR =
 export const MISKEYED_RECOVERY_ERROR =
   'Borg found a failed enrollment record where it does not belong. No state was changed. This release has no supported way to recover that record; keep it intact.';
 
+export const RECOVERY_TRANSACTION_CHANGED_ERROR =
+  'The failed enrollment transaction you reviewed is no longer present. No state was changed. Re-run `borg recover-enrollment` to review the current transaction.';
+
 export class InvitationArtifactCompatibilityError extends Error {
   constructor(message = COMPATIBILITY_INVITATION_ERROR) {
     super(message);

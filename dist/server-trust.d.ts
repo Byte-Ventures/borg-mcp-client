@@ -1,4 +1,4 @@
-import type { EnrollmentArtifactBinding, EnrollmentTrustPointer } from './enrollment-types.js';
+import type { AcceptedEnrollmentMarker, EnrollmentArtifactBinding, EnrollmentTrustPointer } from './enrollment-types.js';
 export type ServerFetch = typeof fetch;
 export interface BorgServerTrust {
     identity: string;
@@ -25,8 +25,8 @@ export declare function loadBorgServerTrustFromPresentedChain(origin: string, ca
 export declare function stageBorgServerTrust(origin: string, certificate: string, identity: string): Promise<StagedBorgServerTrust>;
 /** Verify the exact persisted artifact binding before any resumed network I/O. */
 export declare function loadStagedBorgServerTrust(origin: string, binding: EnrollmentArtifactBinding): Promise<StagedBorgServerTrust>;
-/** Explicit operator recovery restores a validated accepted journal. */
-export declare function restoreBorgServerEnrollment(origin: string): Promise<boolean>;
+/** Explicit operator recovery restores the exact accepted journal that was reviewed. */
+export declare function restoreBorgServerEnrollment(expected: AcceptedEnrollmentMarker): Promise<boolean>;
 export declare function clearStagedBorgServerTrust(origin: string, generationId: string | undefined): Promise<void>;
 export declare function __clearServerTrustCacheForTest(): void;
 export declare function __setEnrollmentTrustFaultForTest(points: EnrollmentTrustFaultPoint | EnrollmentTrustFaultPoint[] | null): void;

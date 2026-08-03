@@ -143,6 +143,6 @@ export declare function getOrCreatePendingServerCubeCreation(input: {
 }): Promise<PendingServerCubeCreationRecord>;
 export declare function clearPendingServerCubeCreation(record: PendingServerCubeCreationRecord): Promise<void>;
 export declare function clearServerCredential(origin: string, trustIdentity: string): Promise<void>;
-/** Clear only the failed enrollment transaction for one origin/identity. */
-export declare function clearEnrollmentTransaction(origin: string, trustIdentity: string): Promise<boolean>;
+/** Clear only the exact failed enrollment transaction that the operator reviewed. */
+export declare function clearEnrollmentTransaction(expected: PendingServerEnrollmentRecord): Promise<boolean>;
 //# sourceMappingURL=config.d.ts.map

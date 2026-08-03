@@ -1,6 +1,7 @@
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { clearEnrollmentTransaction, findEnrollmentRecoveryTransaction } from './config.js';
-import { InvitationArtifactRecoveryError } from './invitation-artifact.js';
+import { InvitationArtifactRecoveryError, RECOVERY_TRANSACTION_CHANGED_ERROR, } from './invitation-artifact.js';
+import { withEnrollmentOriginLock } from './enrollment-lock.js';
 import { clearStagedBorgServerTrust, restoreBorgServerEnrollment } from './server-trust.js';
 export function parseRecoverEnrollmentArgs(argv) {
     let host;
@@ -57,17 +58,22 @@ export async function runRecoverEnrollment(flags, deps) {
             return 1;
         }
     }
-    if (transaction.kind === 'accepted') {
-        if (!await restoreBorgServerEnrollment(origin)) {
-            throw new InvitationArtifactRecoveryError();
+    await withEnrollmentOriginLock(origin, async () => {
+        if (transaction.kind === 'accepted') {
+            if (!await restoreBorgServerEnrollment(transaction.marker)) {
+                throw new InvitationArtifactRecoveryError(RECOVERY_TRANSACTION_CHANGED_ERROR);
+            }
+            return;
         }
+        if (!await clearEnrollmentTransaction(transaction.pending)) {
+            throw new InvitationArtifactRecoveryError(RECOVERY_TRANSACTION_CHANGED_ERROR);
+        }
+        await clearStagedBorgServerTrust(origin, transaction.pending.artifactBinding?.stagedGenerationId);
+    });
+    if (transaction.kind === 'accepted') {
         deps.stdout(`Restored the prior enrollment state for ${origin}; other server enrollments and accounts were left unchanged.\n`);
     }
     else {
-        if (!await clearEnrollmentTransaction(origin, transaction.pending.trustIdentity)) {
-            throw new InvitationArtifactRecoveryError();
-        }
-        await clearStagedBorgServerTrust(origin, transaction.pending.artifactBinding?.stagedGenerationId);
         deps.stdout(`Cleared the failed enrollment transaction for ${origin}; other server enrollments and accounts were left unchanged.\n`);
     }
     return 0;

@@ -650,14 +650,14 @@ export async function loadStagedBorgServerTrust(origin, binding) {
         return stagedTrustFromGeneration(origin, binding.stagedGenerationId, generation.identity, generation.certificate);
     });
 }
-/** Explicit operator recovery restores a validated accepted journal. */
-export async function restoreBorgServerEnrollment(origin) {
-    return withEnrollmentOriginLock(origin, async () => {
-        const marker = await getAcceptedEnrollmentMarker(origin);
-        if (!marker)
+/** Explicit operator recovery restores the exact accepted journal that was reviewed. */
+export async function restoreBorgServerEnrollment(expected) {
+    return withEnrollmentOriginLock(expected.origin, async () => {
+        const marker = await getAcceptedEnrollmentMarker(expected.origin);
+        if (!marker || JSON.stringify(marker) !== JSON.stringify(expected))
             return false;
-        await restoreEnrollmentPointer(marker);
-        await restoreAcceptedEnrollmentAccounts(marker);
+        await restoreEnrollmentPointer(expected);
+        await restoreAcceptedEnrollmentAccounts(expected);
         return true;
     });
 }
