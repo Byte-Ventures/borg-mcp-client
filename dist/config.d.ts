@@ -1,5 +1,6 @@
 import type { CreateCubeRepository, CubeTemplate, ServerCapability } from 'borgmcp-shared/protocol';
 import { type TokenBackend } from './token-store.js';
+import type { AcceptedEnrollmentMarker, EnrollmentArtifactBinding, EnrollmentReplacementCapability, EnrollmentTrustPointer } from './enrollment-types.js';
 export interface ServerCredentialRecord {
     origin: string;
     trustIdentity: string;
@@ -21,7 +22,8 @@ export interface PendingServerEnrollmentRecord {
     retryKey: string;
     credential: string;
     clientName?: string;
-    replacementCapability?: string;
+    artifactBinding?: EnrollmentArtifactBinding;
+    replacementCapability?: EnrollmentReplacementCapability;
 }
 export interface PendingServerCubeCreationRecord {
     origin: string;
@@ -69,9 +71,7 @@ export declare function __setServerCredentialBackendForTest(backend: TokenBacken
  * not credential sources. CR3b: the load→set→rename runs inside ONE hold of the
  * single store lock so a concurrent writer cannot lose an unrelated account.
  */
-export declare function storeServerCredential(record: ServerCredentialRecord, options?: {
-    allowReplacement?: boolean;
-}): Promise<void>;
+export declare function storeServerCredential(record: ServerCredentialRecord): Promise<void>;
 /** Read an authority-bound active client record, failing closed on corruption. */
 export declare function getServerCredentialRecord(origin: string, trustIdentity: string): Promise<ActiveServerCredentialRecord | null>;
 /** Read only the bearer for existing call sites that do not need capability metadata. */
@@ -91,7 +91,18 @@ export declare function getOrCreatePendingServerEnrollment(input: {
     trustIdentity: string;
     invitation: string;
     clientName?: string;
-    replacementCapability?: string;
+    artifactBinding?: EnrollmentArtifactBinding;
+}): Promise<PendingServerEnrollmentRecord>;
+/**
+ * Mint replacement consent only for the fresh interactive confirmation path.
+ * Resume can load and consume the resulting capability, but has no mint API.
+ */
+export declare function createPendingServerEnrollmentWithReplacementConsent(input: {
+    origin: string;
+    trustIdentity: string;
+    invitation: string;
+    clientName?: string;
+    artifactBinding: EnrollmentArtifactBinding;
 }): Promise<PendingServerEnrollmentRecord>;
 /** Activate the exact pending tuple only after a verified server response. */
 export declare function activatePendingServerEnrollment(input: {
@@ -101,9 +112,23 @@ export declare function activatePendingServerEnrollment(input: {
     credential: string;
     clientId: string;
     serverCapabilities: ServerCapability[];
-    allowReplacement?: boolean;
-    replacementCapability?: string;
+    generationId?: string;
+    previousPointer?: EnrollmentTrustPointer | null;
+    replacementCapabilityToken?: string;
 }): Promise<void>;
+export declare function getAcceptedEnrollmentMarker(origin: string): Promise<AcceptedEnrollmentMarker | null>;
+/** Remove the gate only after the pointer and active account have been verified together. */
+export declare function finalizeAcceptedEnrollment(origin: string, trustIdentity: string, generationId: string): Promise<void>;
+/** Restore the complete pre-commit account snapshot after pointer restoration. */
+export declare function restoreAcceptedEnrollmentAccounts(marker: AcceptedEnrollmentMarker): Promise<void>;
+export type EnrollmentRecoveryTransaction = {
+    kind: 'accepted';
+    marker: AcceptedEnrollmentMarker;
+} | {
+    kind: 'pending';
+    pending: PendingServerEnrollmentRecord;
+};
+export declare function findEnrollmentRecoveryTransaction(selectedOrigin?: string): Promise<EnrollmentRecoveryTransaction | null>;
 /** Delete only the exact definitively rejected pending attempt. */
 export declare function clearPendingServerEnrollment(origin: string, trustIdentity: string, retryKey: string): Promise<void>;
 /** Persist one repository-scoped cube-create idempotency key in the 0600 credential store. */
@@ -118,6 +143,6 @@ export declare function getOrCreatePendingServerCubeCreation(input: {
 }): Promise<PendingServerCubeCreationRecord>;
 export declare function clearPendingServerCubeCreation(record: PendingServerCubeCreationRecord): Promise<void>;
 export declare function clearServerCredential(origin: string, trustIdentity: string): Promise<void>;
-/** Clear only the failed enrollment transaction for one origin/identity. */
-export declare function clearEnrollmentTransaction(origin: string, trustIdentity: string): Promise<void>;
+/** Clear only the exact failed enrollment transaction that the operator reviewed. */
+export declare function clearEnrollmentTransaction(expected: PendingServerEnrollmentRecord): Promise<boolean>;
 //# sourceMappingURL=config.d.ts.map

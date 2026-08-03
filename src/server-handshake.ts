@@ -32,6 +32,7 @@ import {
   type ServerCapability,
 } from 'borgmcp-shared/protocol';
 import { createHash, randomUUID } from 'node:crypto';
+import { withEnrollmentOriginLock } from './enrollment-lock.js';
 import {
   activatePendingServerEnrollment,
   clearPendingServerCubeCreation,
@@ -40,9 +41,12 @@ import {
   getServerCredentialRecord,
   hasServerCredentialForOrigin,
   getPendingServerEnrollment,
+  findPendingServerEnrollment,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
+  createPendingServerEnrollmentWithReplacementConsent,
   type PendingServerCubeCreationRecord,
+  type PendingServerEnrollmentRecord,
 } from './config.js';
 import {
   activateAndBindSeat,
@@ -69,6 +73,7 @@ import { readBoundedResponseBody } from './server-response.js';
 import {
   loadBorgServerTrust,
   loadBorgServerTrustFromPresentedChain,
+  loadStagedBorgServerTrust,
   type BorgServerTrust,
   type StagedBorgServerTrust,
 } from './server-trust.js';
@@ -79,6 +84,7 @@ import {
   InvitationArtifactTrustError,
   decodeAndVerifyInvitationArtifact,
 } from './invitation-artifact.js';
+import type { EnrollmentArtifactBinding } from './enrollment-types.js';
 
 const HANDSHAKE_BODY_LIMIT = 64 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
@@ -462,6 +468,7 @@ export async function enrollBorgServer(
   deps: {
     fetchImpl?: FetchLike;
     prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
+    prepareReplacementEnrollment?: typeof createPendingServerEnrollmentWithReplacementConsent;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     loadCredentialRecord?: typeof getServerCredentialRecord;
@@ -469,8 +476,10 @@ export async function enrollBorgServer(
     confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
     expectedAuthority?: InvitationArtifact['authority'];
-    commitTrust?: (activate: () => Promise<void>) => Promise<void>;
+    artifactBinding?: EnrollmentArtifactBinding;
+    commitTrust?: StagedBorgServerTrust['commitTrust'];
     discardTrust?: () => Promise<void>;
+    resumePending?: PendingServerEnrollmentRecord;
   } = {},
 ): Promise<NewServerEnrollment> {
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -485,15 +494,13 @@ export async function enrollBorgServer(
     throw error;
   }
 
-  const existingCredential = await (deps.loadCredentialRecord ?? getServerCredentialRecord)(
-    origin,
-    trustIdentity,
-  );
-  const existingOriginCredential = existingCredential !== null || await (
+  const existingCredential = deps.resumePending ? null : await (
+    deps.loadCredentialRecord ?? getServerCredentialRecord
+  )(origin, trustIdentity);
+  const existingOriginCredential = deps.resumePending ? false : existingCredential !== null || await (
     deps.hasCredentialForOrigin ?? hasServerCredentialForOrigin
   )(origin);
   let replacementConfirmed = false;
-  let replacementCapability: string | undefined;
   if (existingOriginCredential) {
     const confirmed = deps.confirmReplacement !== undefined
       ? await deps.confirmReplacement()
@@ -506,16 +513,33 @@ export async function enrollBorgServer(
       );
     }
     replacementConfirmed = true;
-    replacementCapability = randomUUID();
   }
 
-  const pending = await (deps.prepareEnrollment ?? getOrCreatePendingServerEnrollment)({
-    origin,
-    trustIdentity,
-    invitation,
-    ...(deps.clientName ? { clientName: deps.clientName } : {}),
-    ...(replacementCapability === undefined ? {} : { replacementCapability }),
-  });
+  if (replacementConfirmed && deps.artifactBinding === undefined) {
+    await deps.discardTrust?.();
+    throw new BorgServerError(
+      'LOCAL_CREDENTIAL_EXISTS',
+      'replacement requires a current verified enrollment invitation',
+    );
+  }
+  let pending = deps.resumePending;
+  if (!pending) {
+    const common = {
+      origin,
+      trustIdentity,
+      invitation,
+      ...(deps.clientName ? { clientName: deps.clientName } : {}),
+    };
+    pending = replacementConfirmed
+      ? await (deps.prepareReplacementEnrollment ?? createPendingServerEnrollmentWithReplacementConsent)({
+          ...common,
+          artifactBinding: deps.artifactBinding!,
+        })
+      : await (deps.prepareEnrollment ?? getOrCreatePendingServerEnrollment)({
+          ...common,
+          ...(deps.artifactBinding === undefined ? {} : { artifactBinding: deps.artifactBinding }),
+        });
+  }
   const request = decodeEnrollmentExchangeRequest({
     invitation: pending.invitation,
     retry_key: pending.retryKey,
@@ -545,7 +569,6 @@ export async function enrollBorgServer(
     }
   }
   if (!response) {
-    await deps.discardTrust?.();
     throw lastTransportError;
   }
 
@@ -562,7 +585,6 @@ export async function enrollBorgServer(
     );
   }
   if (response.status !== 201) {
-    await deps.discardTrust?.();
     throw new Error(`Borg server enrollment failed (HTTP ${response.status})`);
   }
   let decoded: ReturnType<typeof decodeEnrollmentExchangeResponseEnvelope>;
@@ -571,7 +593,6 @@ export async function enrollBorgServer(
       JSON.parse(await readHandshakeBodyWithTimeout(response)),
     );
   } catch (error) {
-    await deps.discardTrust?.();
     if (error instanceof Error && error.message.includes('response limit')) throw error;
     throw new Error('Borg server returned an invalid enrollment envelope');
   }
@@ -589,16 +610,18 @@ export async function enrollBorgServer(
     }
   }
 
-  const activate = () => (deps.activateEnrollment ?? activatePendingServerEnrollment)({
+  const activate = (context?: { generationId: string; previousPointer: import('./enrollment-types.js').EnrollmentTrustPointer | null }) =>
+    (deps.activateEnrollment ?? activatePendingServerEnrollment)({
     origin,
     trustIdentity,
     retryKey: pending.retryKey,
     credential: pending.credential,
     clientId: decoded.payload.client_id,
     serverCapabilities: decoded.payload.server_capabilities,
-     ...(replacementConfirmed || pending.replacementCapability !== undefined
-       ? { allowReplacement: true, ...(pending.replacementCapability === undefined ? {} : { replacementCapability: pending.replacementCapability }) }
-       : {}),
+    ...(context === undefined ? {} : context),
+    ...(pending.replacementCapability === undefined
+      ? {}
+      : { replacementCapabilityToken: pending.replacementCapability.token }),
   });
   if (deps.commitTrust) await deps.commitTrust(activate);
   else await activate();
@@ -621,6 +644,8 @@ export async function resumeBorgServerEnrollment(
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     onPending?: () => void;
+    commitTrust?: StagedBorgServerTrust['commitTrust'];
+    discardTrust?: () => Promise<void>;
   } = {},
 ): Promise<NewServerEnrollment | null> {
   const pending = await (deps.loadPendingEnrollment ?? getPendingServerEnrollment)(
@@ -628,10 +653,21 @@ export async function resumeBorgServerEnrollment(
     trustIdentity,
   );
   if (!pending) return null;
+  if (pending.artifactBinding) {
+    const verified = decodeAndVerifyInvitationArtifact(pending.invitation);
+    const digest = createHash('sha256').update(pending.invitation).digest('hex');
+    if (
+      digest !== pending.artifactBinding.artifactDigest ||
+      verified.version !== pending.artifactBinding.artifactFormatVersion ||
+      verified.endpoint !== pending.artifactBinding.endpoint ||
+      verified.ca_spki_sha256 !== pending.artifactBinding.caSpkiSha256 ||
+      verified.authority !== pending.artifactBinding.expectedAuthority
+    ) throw new InvitationArtifactTrustError();
+  }
   deps.onPending?.();
   return enrollBorgServer(origin, trustIdentity, pending.invitation, {
     ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
-    prepareEnrollment: async () => pending,
+    resumePending: pending,
     ...(deps.activateEnrollment === undefined
       ? {}
       : { activateEnrollment: deps.activateEnrollment }),
@@ -639,6 +675,14 @@ export async function resumeBorgServerEnrollment(
       ? {}
       : { clearPendingEnrollment: deps.clearPendingEnrollment }),
     ...(pending.clientName === undefined ? {} : { clientName: pending.clientName }),
+    ...(pending.artifactBinding === undefined
+      ? {}
+      : {
+          artifactBinding: pending.artifactBinding,
+          expectedAuthority: pending.artifactBinding.expectedAuthority,
+        }),
+    ...(deps.commitTrust === undefined ? {} : { commitTrust: deps.commitTrust }),
+    ...(deps.discardTrust === undefined ? {} : { discardTrust: deps.discardTrust }),
   });
 }
 
@@ -1037,23 +1081,25 @@ export async function resolveBorgServerAuthority(
     loadCredentialRecord?: typeof getServerCredentialRecord;
   } = {},
 ): Promise<ResolvedServerAuthority> {
-  const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
-  const active = deps.loadCredentialRecord
-    ? await deps.loadCredentialRecord(origin, trust.identity)
-    : deps.loadCredential
-      ? null
-      : await getServerCredentialRecord(origin, trust.identity);
-  const token = active?.credential ?? await (deps.loadCredential ?? getServerCredential)(
-    origin,
-    trust.identity,
-  );
-  if (!token) {
-    throw new BorgServerError(
-      'NOT_ENROLLED',
-      'no enrolled credential is stored for this Borg server identity',
+  return withEnrollmentOriginLock(origin, async () => {
+    const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+    const active = deps.loadCredentialRecord
+      ? await deps.loadCredentialRecord(origin, trust.identity)
+      : deps.loadCredential
+        ? null
+        : await getServerCredentialRecord(origin, trust.identity);
+    const token = active?.credential ?? await (deps.loadCredential ?? getServerCredential)(
+      origin,
+      trust.identity,
     );
-  }
-  return { ...trust, token };
+    if (!token) {
+      throw new BorgServerError(
+        'NOT_ENROLLED',
+        'no enrolled credential is stored for this Borg server identity',
+      );
+    }
+    return { ...trust, token };
+  });
 }
 
 /** Load pinned trust, then prove the stored credential against /api/protocol. */
@@ -1065,13 +1111,15 @@ export async function connectLocalBorgServer(
     loadCredentialRecord?: typeof getServerCredentialRecord;
   } = {},
 ): Promise<EnrolledServerConnection> {
-  const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
-  return connectEnrolledBorgServer(origin, trust.identity, {
-    fetchImpl: trust.fetchImpl,
-    ...(deps.loadCredential === undefined ? {} : { loadCredential: deps.loadCredential }),
-    ...(deps.loadCredentialRecord === undefined
-      ? {}
-      : { loadCredentialRecord: deps.loadCredentialRecord }),
+  return withEnrollmentOriginLock(origin, async () => {
+    const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+    return connectEnrolledBorgServer(origin, trust.identity, {
+      fetchImpl: trust.fetchImpl,
+      ...(deps.loadCredential === undefined ? {} : { loadCredential: deps.loadCredential }),
+      ...(deps.loadCredentialRecord === undefined
+        ? {}
+        : { loadCredentialRecord: deps.loadCredentialRecord }),
+    });
   });
 }
 
@@ -1116,6 +1164,7 @@ export async function enrollLocalBorgServerArtifact(
     clientName?: string;
     loadTrustFromPresentedChain?: typeof loadBorgServerTrustFromPresentedChain;
     prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
+    prepareReplacementEnrollment?: typeof createPendingServerEnrollmentWithReplacementConsent;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     loadCredentialRecord?: typeof getServerCredentialRecord;
@@ -1141,16 +1190,29 @@ export async function enrollLocalBorgServerArtifact(
     if (error instanceof InvitationArtifactStorageError) throw error;
     throw new InvitationArtifactTransportError();
   }
+  const artifactBinding: EnrollmentArtifactBinding = {
+    artifactFormatVersion: verifiedArtifact.version,
+    artifactDigest: createHash('sha256').update(opaqueArtifact).digest('hex'),
+    endpoint: verifiedArtifact.endpoint,
+    caSpkiSha256: verifiedArtifact.ca_spki_sha256,
+    trustIdentity: trust.identity,
+    expectedAuthority: verifiedArtifact.authority,
+    stagedGenerationId: trust.generationId,
+  };
   return enrollBorgServer(verifiedArtifact.endpoint, trust.identity, opaqueArtifact, {
     fetchImpl: trust.fetchImpl,
     ...(deps.confirmReplacement === undefined ? {} : { confirmReplacement: deps.confirmReplacement }),
     ...(deps.clientName === undefined ? {} : { clientName: deps.clientName }),
     ...(deps.prepareEnrollment === undefined ? {} : { prepareEnrollment: deps.prepareEnrollment }),
+    ...(deps.prepareReplacementEnrollment === undefined
+      ? {}
+      : { prepareReplacementEnrollment: deps.prepareReplacementEnrollment }),
     ...(deps.activateEnrollment === undefined ? {} : { activateEnrollment: deps.activateEnrollment }),
     ...(deps.clearPendingEnrollment === undefined ? {} : { clearPendingEnrollment: deps.clearPendingEnrollment }),
     ...(deps.loadCredentialRecord === undefined ? {} : { loadCredentialRecord: deps.loadCredentialRecord }),
     ...(deps.hasCredentialForOrigin === undefined ? {} : { hasCredentialForOrigin: deps.hasCredentialForOrigin }),
     expectedAuthority: verifiedArtifact.authority,
+    artifactBinding,
     commitTrust: trust.commitTrust,
     discardTrust: trust.discardTrust,
   });
@@ -1161,24 +1223,40 @@ export async function resumeLocalBorgServerEnrollment(
   origin: string,
   deps: {
     loadTrust?: typeof loadBorgServerTrust;
+    loadStagedTrust?: typeof loadStagedBorgServerTrust;
     loadPendingEnrollment?: typeof getPendingServerEnrollment;
     onPending?: () => void;
   } = {},
 ): Promise<NewServerEnrollment | null> {
-  let trust: BorgServerTrust;
+  const discovered = await findPendingServerEnrollment();
+  const pending = discovered?.origin === origin
+    ? await (deps.loadPendingEnrollment ?? getPendingServerEnrollment)(
+        origin,
+        discovered.trustIdentity,
+      )
+    : null;
+  if (!pending) return null;
+  let trust: BorgServerTrust | StagedBorgServerTrust;
   try {
-    trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
+    trust = pending.artifactBinding
+      ? await (deps.loadStagedTrust ?? loadStagedBorgServerTrust)(origin, pending.artifactBinding)
+      : await (deps.loadTrust ?? loadBorgServerTrust)(origin);
   } catch (error) {
-    if (error instanceof Error && /trust files were not found|trust metadata/i.test(error.message)) return null;
     throw error;
   }
   return resumeBorgServerEnrollment(origin, trust.identity, {
     fetchImpl: trust.fetchImpl,
-    ...(deps.loadPendingEnrollment === undefined
-      ? {}
-      : { loadPendingEnrollment: deps.loadPendingEnrollment }),
+    loadPendingEnrollment: async () => pending,
     ...(deps.onPending === undefined ? {} : { onPending: deps.onPending }),
+    ...(isStagedTrust(trust) ? {
+      commitTrust: trust.commitTrust,
+      discardTrust: trust.discardTrust,
+    } : {}),
   });
+}
+
+function isStagedTrust(trust: BorgServerTrust | StagedBorgServerTrust): trust is StagedBorgServerTrust {
+  return 'generationId' in trust && 'commitTrust' in trust && 'discardTrust' in trust;
 }
 
 /** Advisory discovery that still verifies the server-owned CA. */

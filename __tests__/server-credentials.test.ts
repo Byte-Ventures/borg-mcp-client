@@ -7,14 +7,19 @@ import { makeFileBackend } from '../src/token-store.js';
 import {
   __setServerCredentialBackendForTest,
   activatePendingServerEnrollment,
+  createPendingServerEnrollmentWithReplacementConsent,
+  finalizeAcceptedEnrollment,
+  getAcceptedEnrollmentMarker,
   clearPendingServerCubeCreation,
   clearServerCredential,
   getOrCreatePendingServerCubeCreation,
   getOrCreatePendingServerEnrollment,
+  findEnrollmentRecoveryTransaction,
   getPendingServerEnrollment,
   getServerCredential,
   getServerCredentialRecord,
   storeServerCredential,
+  restoreAcceptedEnrollmentAccounts,
 } from '../src/config.js';
 import type { TokenBackend } from '../src/token-store.js';
 
@@ -25,6 +30,10 @@ function memoryBackend(): { backend: TokenBackend; values: Map<string, string> }
     backend: {
       name: 'file',
       entries: async () => Object.fromEntries(values),
+      replaceAccounts: async (accounts) => {
+        values.clear();
+        for (const [account, value] of Object.entries(accounts)) values.set(account, value);
+      },
       get: async (account) => values.get(account) ?? null,
       set: async (account, value) => { values.set(account, value); },
       delete: async (account) => { values.delete(account); },
@@ -38,6 +47,15 @@ describe('self-hosted server credential storage', () => {
   const origin = 'https://localhost:8787';
   const trustIdentity = 'sha256:server-a';
   const credential = 'c'.repeat(43);
+  const artifactBinding = {
+    artifactFormatVersion: 2,
+    artifactDigest: createHash('sha256').update('i'.repeat(43)).digest('hex'),
+    endpoint: origin,
+    caSpkiSha256: 'b'.repeat(64),
+    trustIdentity,
+    expectedAuthority: 'owner' as const,
+    stagedGenerationId: 'c'.repeat(64),
+  };
 
   it('round-trips only for the same canonical origin and verified identity', async () => {
     const { backend } = memoryBackend();
@@ -71,13 +89,11 @@ describe('self-hosted server credential storage', () => {
       trustIdentity: 'sha256:server-b',
       credential: 'd'.repeat(43),
     })).rejects.toThrow(/replacement was not confirmed/i);
-    await storeServerCredential({
+    await expect(storeServerCredential({
       origin,
       trustIdentity: 'sha256:server-b',
       credential: 'd'.repeat(43),
-    }, { allowReplacement: true });
-    await expect(getServerCredential(origin, trustIdentity)).resolves.toBeNull();
-    await expect(getServerCredential(origin, 'sha256:server-b')).resolves.toBe('d'.repeat(43));
+    })).rejects.toThrow(/replacement was not confirmed/i);
   });
 
   it('requires writer-bound consent before replacing the exact origin and identity', async () => {
@@ -93,14 +109,13 @@ describe('self-hosted server credential storage', () => {
     await expect(getServerCredential(origin, trustIdentity)).resolves.toBe(credential);
   });
 
-  it('preserves the old credential when a confirmed replacement write fails', async () => {
+  it('keeps the exact writer replacement guard load-bearing without account enumeration', async () => {
     const { values } = memoryBackend();
     const stable = 'o'.repeat(43);
     const replacement = 'n'.repeat(43);
     let failWrites = false;
     const backend: TokenBackend = {
       name: 'file',
-      entries: async () => Object.fromEntries(values),
       get: async (account) => values.get(account) ?? null,
       set: async (account, value) => {
         if (failWrites) throw new Error('injected replacement write failure');
@@ -117,7 +132,7 @@ describe('self-hosted server credential storage', () => {
       origin,
       trustIdentity,
       credential: replacement,
-    }, { allowReplacement: true })).rejects.toThrow(/injected replacement/i);
+    })).rejects.toThrow(/replacement was not confirmed/i);
     expect(values.get(account)).toContain(stable);
   });
 
@@ -211,6 +226,78 @@ describe('self-hosted server credential storage', () => {
     await expect(getServerCredential(origin, trustIdentity)).resolves.toBe('o'.repeat(43));
     await expect(getPendingServerEnrollment(origin, trustIdentity)).resolves.toEqual(pending);
 
+    await expect(getServerCredentialRecord(origin, trustIdentity)).resolves.toMatchObject({
+      credential: 'o'.repeat(43),
+    });
+    expect([...values.keys()].some((key) => key.includes('enrollment-pending'))).toBe(true);
+  });
+
+  it('consumes one exact replacement capability in the marker-gated account transaction', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    await storeServerCredential({ origin, trustIdentity, credential: 'o'.repeat(43) });
+    const pending = await createPendingServerEnrollmentWithReplacementConsent({
+      origin,
+      trustIdentity,
+      invitation: 'i'.repeat(43),
+      artifactBinding,
+    });
+    const input = {
+      origin,
+      trustIdentity,
+      retryKey: pending.retryKey,
+      credential: pending.credential,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'] as const,
+      generationId: artifactBinding.stagedGenerationId,
+      previousPointer: null,
+    };
+
+    await expect(activatePendingServerEnrollment({
+      ...input,
+      serverCapabilities: [...input.serverCapabilities],
+      replacementCapabilityToken: '99999999-9999-4999-8999-999999999999',
+    })).rejects.toThrow(/consent is missing/i);
+    await expect(getServerCredential(origin, trustIdentity)).resolves.toBe('o'.repeat(43));
+
+    await activatePendingServerEnrollment({
+      ...input,
+      serverCapabilities: [...input.serverCapabilities],
+      replacementCapabilityToken: pending.replacementCapability!.token,
+    });
+    await expect(getServerCredential(origin, trustIdentity))
+      .rejects.toThrow(/complete or undo the enrollment change/i);
+    const marker = await getAcceptedEnrollmentMarker(origin);
+    expect(marker).not.toBeNull();
+    const markerValue = [...values.values()].find((value) => value.includes('"state":"accepted"'))!;
+    expect(markerValue).not.toContain(pending.invitation);
+    expect(markerValue).not.toContain(pending.credential);
+
+    await finalizeAcceptedEnrollment(origin, trustIdentity, artifactBinding.stagedGenerationId);
+    await expect(getServerCredential(origin, trustIdentity)).resolves.toBe(pending.credential);
+    await expect(activatePendingServerEnrollment({
+      ...input,
+      serverCapabilities: [...input.serverCapabilities],
+      replacementCapabilityToken: pending.replacementCapability!.token,
+    })).rejects.toThrow(/pending.*missing/i);
+  });
+
+  it.each([
+    ['corrupts the active record', () => '{not-json'],
+    ['substitutes a different valid bearer', () => JSON.stringify({
+      version: 2,
+      origin,
+      trustIdentity,
+      credential: 'n'.repeat(43),
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+    })],
+  ])('retains the accepted journal when finalization %s', async (_label, replacement) => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const pending = await getOrCreatePendingServerEnrollment({
+      origin, trustIdentity, invitation: 'i'.repeat(43), artifactBinding,
+    });
     await activatePendingServerEnrollment({
       origin,
       trustIdentity,
@@ -218,14 +305,166 @@ describe('self-hosted server credential storage', () => {
       credential: pending.credential,
       clientId: '11111111-1111-4111-8111-111111111111',
       serverCapabilities: ['create_cube'],
-      allowReplacement: true,
+      generationId: artifactBinding.stagedGenerationId,
+      previousPointer: null,
     });
-    await expect(getServerCredentialRecord(origin, trustIdentity)).resolves.toMatchObject({
+    const marker = await getAcceptedEnrollmentMarker(origin);
+    expect(marker).not.toBeNull();
+    const markerAccount = [...values.keys()].find((account) =>
+      account.startsWith('borg-server-enrollment-accepted:'))!;
+    const activeAccount = [...values.entries()].find(([, value]) => {
+      try { return JSON.parse(value).version === 2; } catch { return false; }
+    })![0];
+    values.set(activeAccount, replacement());
+
+    await expect(finalizeAcceptedEnrollment(origin, trustIdentity, artifactBinding.stagedGenerationId))
+      .rejects.toThrow(/active credential/i);
+    expect(values.has(markerAccount)).toBe(true);
+    expect(values.has(marker!.rollbackAccount)).toBe(true);
+  });
+
+  it('rejects a pending journal stored under a different enrollment account without changing it', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    await getOrCreatePendingServerEnrollment({ origin, trustIdentity, invitation: 'i'.repeat(43) });
+    const actualAccount = [...values.keys()].find((account) =>
+      account.startsWith('borg-server-enrollment-pending:'))!;
+    const value = values.get(actualAccount)!;
+    values.delete(actualAccount);
+    const misplacedAccount = `borg-server-enrollment-pending:${'e'.repeat(64)}`;
+    values.set(misplacedAccount, value);
+
+    await expect(findEnrollmentRecoveryTransaction()).rejects.toMatchObject({
+      name: 'InvitationArtifactRecoveryError',
+      message: expect.stringContaining('where it does not belong'),
+    });
+    expect(values.get(misplacedAccount)).toBe(value);
+  });
+
+  it('rejects an accepted journal stored under a different enrollment account without changing it', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const pending = await getOrCreatePendingServerEnrollment({
+      origin, trustIdentity, invitation: 'i'.repeat(43), artifactBinding,
+    });
+    await activatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      retryKey: pending.retryKey,
       credential: pending.credential,
       clientId: '11111111-1111-4111-8111-111111111111',
       serverCapabilities: ['create_cube'],
+      generationId: artifactBinding.stagedGenerationId,
+      previousPointer: null,
     });
-    expect([...values.keys()].some((key) => key.includes('enrollment-pending'))).toBe(false);
+    const actualAccount = [...values.keys()].find((account) =>
+      account.startsWith('borg-server-enrollment-accepted:'))!;
+    const value = values.get(actualAccount)!;
+    values.delete(actualAccount);
+    const misplacedAccount = `borg-server-enrollment-accepted:${'e'.repeat(64)}`;
+    values.set(misplacedAccount, value);
+
+    await expect(findEnrollmentRecoveryTransaction()).rejects.toMatchObject({
+      name: 'InvitationArtifactRecoveryError',
+      message: expect.stringContaining('where it does not belong'),
+    });
+    expect(values.get(misplacedAccount)).toBe(value);
+  });
+
+  it('restores the old account plus exact pending tuple from a validated rollback snapshot', async () => {
+    const { backend } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    await storeServerCredential({ origin, trustIdentity, credential: 'o'.repeat(43) });
+    const pending = await createPendingServerEnrollmentWithReplacementConsent({
+      origin, trustIdentity, invitation: 'i'.repeat(43), artifactBinding,
+    });
+    await activatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      retryKey: pending.retryKey,
+      credential: pending.credential,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+      generationId: artifactBinding.stagedGenerationId,
+      previousPointer: null,
+      replacementCapabilityToken: pending.replacementCapability!.token,
+    });
+    const marker = await getAcceptedEnrollmentMarker(origin);
+    expect(marker).not.toBeNull();
+    await restoreAcceptedEnrollmentAccounts(marker!);
+    await expect(getServerCredential(origin, trustIdentity)).resolves.toBe('o'.repeat(43));
+    await expect(getPendingServerEnrollment(origin, trustIdentity)).resolves.toEqual(pending);
+  });
+
+  it('retains the marker and blocks readers when account rollback fails', async () => {
+    const { backend: base, values } = memoryBackend();
+    let failRestore = false;
+    const backend: TokenBackend = {
+      ...base,
+      replaceAccounts: async (accounts) => {
+        if (failRestore) throw new Error('injected account rollback failure');
+        values.clear();
+        for (const [account, value] of Object.entries(accounts)) values.set(account, value);
+      },
+    };
+    __setServerCredentialBackendForTest(backend);
+    await storeServerCredential({ origin, trustIdentity, credential: 'o'.repeat(43) });
+    const pending = await createPendingServerEnrollmentWithReplacementConsent({
+      origin, trustIdentity, invitation: 'i'.repeat(43), artifactBinding,
+    });
+    await activatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      retryKey: pending.retryKey,
+      credential: pending.credential,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+      generationId: artifactBinding.stagedGenerationId,
+      previousPointer: null,
+      replacementCapabilityToken: pending.replacementCapability!.token,
+    });
+    const marker = await getAcceptedEnrollmentMarker(origin);
+    failRestore = true;
+    await expect(restoreAcceptedEnrollmentAccounts(marker!))
+      .rejects.toThrow(/account rollback failure/i);
+    failRestore = false;
+    await expect(getAcceptedEnrollmentMarker(origin)).resolves.toEqual(marker);
+    await expect(getServerCredential(origin, trustIdentity))
+      .rejects.toThrow(/complete or undo the enrollment change/i);
+  });
+
+  it('keeps old active plus pending state when the single account-map activation write fails', async () => {
+    const { backend: base, values } = memoryBackend();
+    let failReplace = false;
+    const backend: TokenBackend = {
+      ...base,
+      replaceAccounts: async (accounts) => {
+        if (failReplace) throw new Error('injected account-map activation failure');
+        values.clear();
+        for (const [account, value] of Object.entries(accounts)) values.set(account, value);
+      },
+    };
+    __setServerCredentialBackendForTest(backend);
+    await storeServerCredential({ origin, trustIdentity, credential: 'o'.repeat(43) });
+    const pending = await createPendingServerEnrollmentWithReplacementConsent({
+      origin, trustIdentity, invitation: 'i'.repeat(43), artifactBinding,
+    });
+    failReplace = true;
+    await expect(activatePendingServerEnrollment({
+      origin,
+      trustIdentity,
+      retryKey: pending.retryKey,
+      credential: pending.credential,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      serverCapabilities: ['create_cube'],
+      generationId: artifactBinding.stagedGenerationId,
+      previousPointer: null,
+      replacementCapabilityToken: pending.replacementCapability!.token,
+    })).rejects.toThrow(/injected account-map/i);
+    failReplace = false;
+    await expect(getServerCredential(origin, trustIdentity)).resolves.toBe('o'.repeat(43));
+    await expect(getPendingServerEnrollment(origin, trustIdentity)).resolves.toEqual(pending);
+    await expect(getAcceptedEnrollmentMarker(origin)).resolves.toBeNull();
   });
 
   it('serializes N concurrent enrollment and cube-create tuple initializations', async () => {

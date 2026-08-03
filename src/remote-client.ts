@@ -45,6 +45,7 @@ import type { FragmentView, NonClobberSyncResult } from './sync-roles-render.js'
 import type { WorkingRepo } from './working-repo.js';
 import { buildRuntimeMetadataPatch } from './runtime-metadata.js';
 import { loadBorgServerTrust, type ServerFetch } from './server-trust.js';
+import { withEnrollmentOriginLock } from './enrollment-lock.js';
 import {
   BorgServerError,
   BorgServerHttpError,
@@ -633,7 +634,13 @@ async function authedFetch(
   let requestFetch: ServerFetch;
   let token: string;
   {
-    const trust = await loadBorgServerTrust(baseUrl);
+    const pair = droneSession === undefined && authToken === undefined
+      ? await withEnrollmentOriginLock(baseUrl, async () => ({
+          trust: await loadBorgServerTrust(baseUrl),
+          stored: await getServerCredential(baseUrl, serverTrustIdentity),
+        }))
+      : { trust: await loadBorgServerTrust(baseUrl), stored: null };
+    const trust = pair.trust;
     if (trust.identity !== serverTrustIdentity) {
       // CR5: a TYPED terminal trust verdict — never inferred from error text.
       throw new BorgServerTrustError('Borg server trust identity changed; refusing the connection');
@@ -646,7 +653,7 @@ async function authedFetch(
     } else if (authToken !== undefined) {
       token = authToken;
     } else {
-      const stored = await getServerCredential(baseUrl, serverTrustIdentity);
+      const stored = pair.stored;
       if (!stored) {
         throw new Error('No credential is stored for the selected Borg server identity');
       }

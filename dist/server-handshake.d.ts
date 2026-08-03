@@ -1,7 +1,8 @@
 import { type InvitationArtifact, type AssociateRepositoryCubeResponse, type CreateCubeRepository, type CreateCubeResponse, type CubeTemplate, type DroneRuntimeMetadata, type ProtocolTagPreflight, type ResolveRepositoryCubeResponse, type ServerCapability } from 'borgmcp-shared/protocol';
-import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment } from './config.js';
+import { activatePendingServerEnrollment, clearPendingServerCubeCreation, clearPendingServerEnrollment, getServerCredential, getServerCredentialRecord, hasServerCredentialForOrigin, getPendingServerEnrollment, getOrCreatePendingServerCubeCreation, getOrCreatePendingServerEnrollment, createPendingServerEnrollmentWithReplacementConsent, type PendingServerEnrollmentRecord } from './config.js';
 import { activateAndBindSeat, bindPendingSeatToWorktree, scrubPendingSeat, seatRef, type ActivateSeatOutcome, type BindPendingSeatOutcome, type SeatBinding, type SeatOperation as ServerSessionOperation } from './seats.js';
-import { loadBorgServerTrust, loadBorgServerTrustFromPresentedChain, type BorgServerTrust } from './server-trust.js';
+import { loadBorgServerTrust, loadBorgServerTrustFromPresentedChain, loadStagedBorgServerTrust, type BorgServerTrust, type StagedBorgServerTrust } from './server-trust.js';
+import type { EnrollmentArtifactBinding } from './enrollment-types.js';
 export declare const DEFAULT_LOCAL_SERVER_ORIGIN: "https://127.0.0.1:7091";
 type FetchLike = typeof fetch;
 /** Bodyless, non-identifying liveness probe from the shared contract. */
@@ -121,6 +122,7 @@ export declare function sendBorgServerAttach(origin: string, trustIdentity: stri
 export declare function enrollBorgServer(origin: string, trustIdentity: string, invitation: string, deps?: {
     fetchImpl?: FetchLike;
     prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
+    prepareReplacementEnrollment?: typeof createPendingServerEnrollmentWithReplacementConsent;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     loadCredentialRecord?: typeof getServerCredentialRecord;
@@ -128,8 +130,10 @@ export declare function enrollBorgServer(origin: string, trustIdentity: string, 
     confirmReplacement?: () => Promise<boolean>;
     clientName?: string;
     expectedAuthority?: InvitationArtifact['authority'];
-    commitTrust?: (activate: () => Promise<void>) => Promise<void>;
+    artifactBinding?: EnrollmentArtifactBinding;
+    commitTrust?: StagedBorgServerTrust['commitTrust'];
     discardTrust?: () => Promise<void>;
+    resumePending?: PendingServerEnrollmentRecord;
 }): Promise<NewServerEnrollment>;
 /** Resume an exact durable enrollment tuple without asking for the invitation again. */
 export declare function resumeBorgServerEnrollment(origin: string, trustIdentity: string, deps?: {
@@ -138,6 +142,8 @@ export declare function resumeBorgServerEnrollment(origin: string, trustIdentity
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     onPending?: () => void;
+    commitTrust?: StagedBorgServerTrust['commitTrust'];
+    discardTrust?: () => Promise<void>;
 }): Promise<NewServerEnrollment | null>;
 /** Resolve one client-scoped repository association without mutation. */
 export declare function resolveBorgServerRepositoryCube(origin: string, trustIdentity: string, parentCredential: string, input: {
@@ -233,6 +239,7 @@ export declare function enrollLocalBorgServerArtifact(artifact: InvitationArtifa
     clientName?: string;
     loadTrustFromPresentedChain?: typeof loadBorgServerTrustFromPresentedChain;
     prepareEnrollment?: typeof getOrCreatePendingServerEnrollment;
+    prepareReplacementEnrollment?: typeof createPendingServerEnrollmentWithReplacementConsent;
     activateEnrollment?: typeof activatePendingServerEnrollment;
     clearPendingEnrollment?: typeof clearPendingServerEnrollment;
     loadCredentialRecord?: typeof getServerCredentialRecord;
@@ -241,6 +248,7 @@ export declare function enrollLocalBorgServerArtifact(artifact: InvitationArtifa
 /** Load verified trust and resume a prior ambiguous enrollment before prompting. */
 export declare function resumeLocalBorgServerEnrollment(origin: string, deps?: {
     loadTrust?: typeof loadBorgServerTrust;
+    loadStagedTrust?: typeof loadStagedBorgServerTrust;
     loadPendingEnrollment?: typeof getPendingServerEnrollment;
     onPending?: () => void;
 }): Promise<NewServerEnrollment | null>;
