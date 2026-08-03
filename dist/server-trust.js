@@ -351,6 +351,10 @@ export function createPinnedServerFetch(origin, caCertificate) {
                 headers: Object.fromEntries(headers.entries()),
                 ca: caCertificate,
                 rejectUnauthorized: true,
+                // The pinned CA is the authority boundary. OpenSSL still validates
+                // the complete chain; only the leaf's address SAN check is skipped
+                // so a DHCP change does not require reissuing the leaf certificate.
+                checkServerIdentity: () => undefined,
                 minVersion: 'TLSv1.3',
             }, (incoming) => {
                 const status = incoming.statusCode ?? 500;
