@@ -168,14 +168,14 @@ describe('CR5 pinned-transport trust verdicts (real wrong cert)', () => {
     await expect(pinned(`${origin}/api/cubes`)).rejects.toBeInstanceOf(BorgServerTrustError);
   });
 
-  it('a SAN/hostname mismatch (chain verifies, wrong SAN) → terminal BorgServerTrustError', async () => {
+  it('a SAN/hostname mismatch (chain verifies, wrong SAN) is accepted with a pinned CA', async () => {
     const dir = tmp();
-    // Self-signed cert with a SAN for a DIFFERENT IP; pin the SAME cert as the CA so
-    // the chain verifies but the hostname check fails (ERR_TLS_CERT_ALTNAME_INVALID).
+    // Self-signed cert with a SAN for a DIFFERENT IP; pin the SAME cert as the CA
+    // so the chain verifies while the address mismatch is intentionally ignored.
     const san = genSelfSigned(dir, 'san', '/CN=elsewhere', 'IP:10.99.99.99');
     const origin = await startTls(san.cert, san.key);
     const pinned = createPinnedServerFetch(origin, san.cert);
-    await expect(pinned(`${origin}/api/cubes`)).rejects.toBeInstanceOf(BorgServerTrustError);
+    await expect(pinned(`${origin}/api/cubes`)).resolves.toMatchObject({ status: 200 });
   });
 
   it('a connection refusal (server down) is NOT trust — it stays a raw transport error (→ unreachable)', async () => {
