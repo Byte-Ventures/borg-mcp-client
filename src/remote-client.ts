@@ -55,6 +55,7 @@ import {
   CubeDeletionConfirmationError,
   LocalManageCredentialUnavailableError,
   LocalManageRequiredError,
+  LocalUnsupportedError,
 } from './server-errors.js';
 import { getActiveCube, type ActiveCube } from './cubes.js';
 import { markSeatRejected } from './seats.js';
@@ -191,7 +192,7 @@ async function localAuthorityContext(
 }
 
 function localUnsupported(capability: string): never {
-  throw new Error(`Local Borg server does not support ${capability}`);
+  throw new LocalUnsupportedError(capability);
 }
 
 function waitForLocalRequest<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -1275,8 +1276,9 @@ export async function createCube(
 }
 
 /**
- * Update a cube's name and/or cube_directive. Both fields are optional;
- * pass only what changes.
+ * Update a cube's directive and/or message taxonomy. Rename is not supported
+ * by the local server API and remains an explicit typed failure for callers
+ * that bypass the public tool schema.
  */
 export async function updateCube(
   cubeId: string,

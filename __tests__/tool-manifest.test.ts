@@ -101,6 +101,18 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(tool?.inputSchema.properties).toHaveProperty('decision_id');
   });
 
+  it('keeps cube tool schemas aligned with supported name contracts', () => {
+    const create = TOOL_MANIFEST.find((entry) => entry.name === 'borg_create-cube');
+    expect(create?.inputSchema.properties.name).toMatchObject({
+      pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]*$',
+      maxLength: 120,
+    });
+
+    const update = TOOL_MANIFEST.find((entry) => entry.name === 'borg_update-cube');
+    expect(update?.description).not.toMatch(/name/i);
+    expect(update?.inputSchema.properties).not.toHaveProperty('name');
+  });
+
   it('role tools do not advertise retired model selection (gh#1019)', () => {
     for (const toolName of ['borg_create-role', 'borg_update-role']) {
       const tool = TOOL_MANIFEST.find((entry) => entry.name === toolName);

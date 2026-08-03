@@ -290,8 +290,9 @@ export declare function createCube(name: string | undefined, cubeDirective: stri
     [k: string]: any;
 }>;
 /**
- * Update a cube's name and/or cube_directive. Both fields are optional;
- * pass only what changes.
+ * Update a cube's directive and/or message taxonomy. Rename is not supported
+ * by the local server API and remains an explicit typed failure for callers
+ * that bypass the public tool schema.
  */
 export declare function updateCube(cubeId: string, updates: {
     name?: string;

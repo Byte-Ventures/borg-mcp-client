@@ -348,9 +348,9 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
             properties: {
               name: {
                 type: 'string',
-                description: 'Cube name (lowercase letters, digits, hyphens; max 64 chars).',
-                pattern: '^[a-z0-9-]+$',
-                maxLength: 64,
+                description: 'Cube name (starts with a letter or digit; letters, digits, spaces, dots, underscores, or hyphens; max 120 UTF-8 bytes).',
+                pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]*$',
+                maxLength: 120,
               },
               cube_directive: { type: 'string', description: 'Project-specific Markdown shown to every drone when it refreshes cube context.' },
               template: {
@@ -363,17 +363,11 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         },
         {
           name: 'borg_update-cube',
-          description: 'Update a cube\'s name, cube_directive, and/or message_taxonomy. Pass only what changes.',
+          description: 'Update a cube\'s cube_directive and/or message_taxonomy. Pass only what changes.',
           inputSchema: {
             type: 'object',
             properties: {
               cube_id: { type: 'string', description: 'UUID of the cube to update.' },
-              name: {
-                type: 'string',
-                description: 'New name (optional). Lowercase letters, digits, hyphens; max 64 chars.',
-                pattern: '^[a-z0-9-]+$',
-                maxLength: 64,
-              },
               cube_directive: { type: 'string', description: 'New cube directive markdown (optional).' },
               message_taxonomy: {
                 type: 'array',
