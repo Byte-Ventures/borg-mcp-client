@@ -9,9 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *  - listDecisions reads the registry with PUT /api/cubes/:cubeId/decisions
  *    (the local protocol uses PUT for the read) and filters by topic
  *    CLIENT-side — there is no ?topic= query param on the local wire.
- *  - removeDecision is not carried by the local server: it fails closed with
- *    a "does not support" error BEFORE any network call (egress-safe). The old
- *    decision-removal route is not exposed by the local server.
+ *  - removeDecision DELETEs the exactly-one topic/decision_id selector to the
+ *    local manage-scoped decisions route.
  */
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
@@ -106,11 +105,32 @@ describe('decision registry request shapes (local path)', () => {
     expect(out.decisions).toEqual([{ id: 'd1', topic: 'release cadence', status: 'active' }]);
   });
 
-  it('removeDecision fails closed on the local path before any network call', async () => {
-    fetchSpy = vi.fn(async () => new Response(null, { status: 204 }));
+  it('removeDecision DELETEs a topic selector to the local decisions route', async () => {
+    fetchSpy = vi.fn(async () => new Response(
+      JSON.stringify(localEnvelope({ decision: { id: 'd1', topic: 'release-cadence', status: 'removed' } })),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
     const { removeDecision } = await import('../src/remote-client.js');
-    await expect(removeDecision(SESSION, ORIGIN, { topic: 'release-cadence' }))
-      .rejects.toThrow(/Local Borg server does not support/);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    const out = await removeDecision(SESSION, ORIGIN, { topic: 'release-cadence' });
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(new URL(String(url)).pathname).toBe(`/api/cubes/${CUBE_ID}/decisions`);
+    expect(init!.method).toBe('DELETE');
+    expect(JSON.parse(String(init!.body)).payload).toEqual({ topic: 'release-cadence' });
+    expect(out.decision).toMatchObject({ id: 'd1', status: 'removed' });
+  });
+
+  it('removeDecision DELETEs a decision_id selector to the local decisions route', async () => {
+    fetchSpy = vi.fn(async () => new Response(
+      JSON.stringify(localEnvelope({ decision: { id: 'd2', topic: 'release-cadence', status: 'removed' } })),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    const { removeDecision } = await import('../src/remote-client.js');
+    await removeDecision(SESSION, ORIGIN, { decision_id: '22222222-2222-4222-8222-222222222222' });
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(new URL(String(url)).pathname).toBe(`/api/cubes/${CUBE_ID}/decisions`);
+    expect(init!.method).toBe('DELETE');
+    expect(JSON.parse(String(init!.body)).payload).toEqual({
+      decision_id: '22222222-2222-4222-8222-222222222222',
+    });
   });
 });

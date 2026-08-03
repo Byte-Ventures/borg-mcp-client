@@ -703,11 +703,15 @@ export async function listDecisions(sessionToken, apiUrl, topic, serverTrustIden
 }
 /** Remove one active ratified decision. The worker enforces the seat gate. */
 export async function removeDecision(sessionToken, apiUrl, selector, serverTrustIdentity) {
-    void sessionToken;
-    void apiUrl;
-    void selector;
-    void serverTrustIdentity;
-    localUnsupported('decision removal');
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+    const payload = await localManageRequest(local, `/api/cubes/${local.cubeId}/decisions`, 'DELETE', {
+        operation: `remove a decision from cube ${manageCopyValue(local.name)}`,
+        cubeName: local.name,
+        noMutation: 'No decision was removed.',
+    }, selector);
+    if (!payload)
+        throw new Error('Local Borg server returned an empty decision removal response');
+    return payload;
 }
 /**
  * Regen: one-shot composite of everything a drone needs to be oriented.

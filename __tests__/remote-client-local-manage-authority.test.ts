@@ -281,7 +281,6 @@ describe('local manage-request authority', () => {
     const remote = await import('../src/remote-client.js');
     const unsupported = [
       () => remote.deleteRole(ROLE_ID),
-      () => remote.removeDecision(SESSION, ORIGIN, { topic: 'topology' }, TRUST_IDENTITY),
     ];
 
     for (const call of unsupported) {
