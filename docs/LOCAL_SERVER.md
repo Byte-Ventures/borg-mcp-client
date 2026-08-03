@@ -235,7 +235,7 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 
 ## Release status
 
-This client candidate pins published `borgmcp-shared@0.8.0` and requires the
+This client candidate pins published `borgmcp-shared@0.8.1` and requires the
 matching coupled client/server release for protocol v7 repository resolve,
 association, and cube deletion. The already-published server 0.8.0 retains its
 immutable older shared dependency pin and is not that coupled artifact. The server owner-enrollment, repository resolve/association,
