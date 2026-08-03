@@ -195,8 +195,13 @@ during verification before artifact creation or publication. Verify job `9154599
 artifact build, verification, exercise, and upload steps as skipped; publish job `91546125556` was skipped.
 Registry verification found no published `borgmcp@2.10.1` package, so no published npm artifact or SRI
 exists for that version as of this check.
-Never delete, move, replace, reuse, or rerun that tag, version, or workflow. The next candidate
-uses the unused `v2.10.2` identity from a fresh reviewed protected-main commit
+Never delete, move, replace, reuse, or rerun that tag, version, or workflow. The annotated `v2.10.2` tag object
+`3655b212c12617aa08cf76747a3b65a73b78e5cc` peels to protected-main commit
+`bb8ff57162efdc777bb92f5e1f9d31aaf293d3c6`. Workflow run `30768860612`, attempt 1,
+successfully published that exact source as `borgmcp@2.10.2`; the same-run artifact report records integrity
+`sha512-uNeDidPLxZDe0E/RnQ35zaAMZwHcBbdpHrk+McQuV4lyBxoMSdf+MlBDHv7usijCtOBAUf+exlR/l4F9wVtvZg==`.
+Never move, replace, reuse, or rerun that tag or workflow. The next candidate
+uses the unused `v2.11.0` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
