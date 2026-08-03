@@ -30,6 +30,10 @@ export declare class LocalManageCredentialUnavailableError extends Error {
     readonly noMutation: string;
     constructor(operation: string, cubeName: string, noMutation: string);
 }
+export declare class LocalUnsupportedError extends Error {
+    readonly capability: string;
+    constructor(capability: string);
+}
 /**
  * CR5: a STABLE TYPED terminal trust verdict — the pinned server identity no longer
  * matches. This is a security boundary: it must be classified from the error TYPE,

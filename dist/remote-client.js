@@ -20,7 +20,7 @@ import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { buildRuntimeMetadataPatch } from './runtime-metadata.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { withEnrollmentOriginLock } from './enrollment-lock.js';
-import { BorgServerError, BorgServerHttpError, BorgProtocolMismatchError, BorgServerTrustError, BorgServerUnreachableError, CubeDeletionConfirmationError, LocalManageCredentialUnavailableError, LocalManageRequiredError, } from './server-errors.js';
+import { BorgServerError, BorgServerHttpError, BorgProtocolMismatchError, BorgServerTrustError, BorgServerUnreachableError, CubeDeletionConfirmationError, LocalManageCredentialUnavailableError, LocalManageRequiredError, LocalUnsupportedError, } from './server-errors.js';
 import { getActiveCube } from './cubes.js';
 import { markSeatRejected } from './seats.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
@@ -115,7 +115,7 @@ async function localAuthorityContext(sessionToken, apiUrl, expectedServerTrustId
     return matched;
 }
 function localUnsupported(capability) {
-    throw new Error(`Local Borg server does not support ${capability}`);
+    throw new LocalUnsupportedError(capability);
 }
 function waitForLocalRequest(promise, signal) {
     if (signal.aborted)
@@ -872,8 +872,9 @@ export async function createCube(name, cubeDirective, opts, connection) {
     return getCube(created.cube_id, resolved);
 }
 /**
- * Update a cube's name and/or cube_directive. Both fields are optional;
- * pass only what changes.
+ * Update a cube's directive and/or message taxonomy. Rename is not supported
+ * by the local server API and remains an explicit typed failure for callers
+ * that bypass the public tool schema.
  */
 export async function updateCube(cubeId, updates, activeOverride, connectionOverride) {
     assertUuidShape(cubeId, 'cube_id');

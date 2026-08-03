@@ -78,6 +78,13 @@ export class LocalManageCredentialUnavailableError extends Error {
   }
 }
 
+export class LocalUnsupportedError extends Error {
+  constructor(public readonly capability: string) {
+    super(`Local Borg server does not support ${capability}`);
+    this.name = 'LocalUnsupportedError';
+  }
+}
+
 /**
  * CR5: a STABLE TYPED terminal trust verdict — the pinned server identity no longer
  * matches. This is a security boundary: it must be classified from the error TYPE,
