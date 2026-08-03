@@ -116,9 +116,13 @@ Borg can remove repeated approval prompts for its own coordination tools. It
 does not approve shell commands, file operations, or web access.
 
 Claude Code receives Borg's MCP tool allowlist at launch. For Codex and OpenCode,
-Borg checks the effective configuration and asks before applying launch-only
-permission changes. Declining leaves the agent's configuration unchanged.
-`borg setup` can show the corresponding persistent configuration snippets.
+Borg checks the effective configuration and automatically applies a launch-only
+override when restrictive Borg approvals are found. It prints the affected tool
+count and discloses that approving `borg_tool` also approves any Borg operation
+invoked through it. Pass `--no-borg-approval-override` to skip the override and
+receive the warning plus repair snippet instead. The launch-only override does
+not modify the agent's configuration. `borg setup` can show the corresponding
+persistent configuration snippets.
 
 ## Core MCP Tools
 
