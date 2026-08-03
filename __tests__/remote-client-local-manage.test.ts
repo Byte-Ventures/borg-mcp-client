@@ -123,7 +123,11 @@ describe('local-adapter management writes (client#39)', () => {
   it('rejects a local cube rename (no server route) before any network call', async () => {
     const { updateCube } = await import('../src/remote-client.js');
     await expect(updateCube(CUBE_ID, { name: 'Renamed' }))
-      .rejects.toThrow(/Local Borg server does not support/);
+      .rejects.toMatchObject({
+        name: 'LocalUnsupportedError',
+        capability: 'cube rename',
+        message: 'Local Borg server does not support cube rename',
+      });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

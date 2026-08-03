@@ -1017,7 +1017,7 @@ export async function main() {
           if (typeof args?.name === 'string') updates.name = args.name as string;
           if (typeof args?.cube_directive === 'string') updates.cube_directive = args.cube_directive as string;
           if (Array.isArray(args?.message_taxonomy)) updates.message_taxonomy = args.message_taxonomy as MessageTaxonomy;
-          if (Object.keys(updates).length === 0) throw new Error('Pass at least one of: name, cube_directive, message_taxonomy.');
+          if (Object.keys(updates).length === 0) throw new Error('Pass at least one of: cube_directive, message_taxonomy.');
           const { cube } = await updateCube(cubeId, updates);
           return { content: [{ type: 'text', text: `Updated cube **${cube.name}** (id: ${cube.id}).` }] };
         }
