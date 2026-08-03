@@ -25,7 +25,7 @@ export const RECOVERY_INVITATION_ERROR =
   'Borg could not complete or undo the enrollment change. Prior local access may be unavailable. Run `borg recover-enrollment` to restore or clear only this server enrollment transaction; it does not change unrelated server enrollments or accounts. The invitation used for this attempt has been consumed; after recovery, ask the server operator for a fresh invitation and retry.';
 
 export const MISKEYED_RECOVERY_ERROR =
-  'Borg found a failed enrollment record where it does not belong. No state was changed. This release has no supported way to recover that record; keep it intact and contact Borg support.';
+  'Borg found a failed enrollment record where it does not belong. No state was changed. This release has no supported way to recover that record; keep it intact.';
 
 export class InvitationArtifactCompatibilityError extends Error {
   constructor(message = COMPATIBILITY_INVITATION_ERROR) {

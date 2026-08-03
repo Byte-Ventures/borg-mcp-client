@@ -6,7 +6,7 @@ export const FORMAT_INVITATION_ERROR = 'This enrollment invitation is invalid or
 export const TRANSPORT_INVITATION_ERROR = 'Borg could not reach the server named by this invitation. No invitation or credential was sent and no local trust or credential state was changed. Check that the server is running and that this machine can reach the invitation endpoint, then retry.';
 export const STORAGE_INVITATION_ERROR = 'Borg could not prepare local trust state for this invitation. No invitation or credential was sent and no local trust or credential state was changed. Check that Borg can write its private local state, then retry.';
 export const RECOVERY_INVITATION_ERROR = 'Borg could not complete or undo the enrollment change. Prior local access may be unavailable. Run `borg recover-enrollment` to restore or clear only this server enrollment transaction; it does not change unrelated server enrollments or accounts. The invitation used for this attempt has been consumed; after recovery, ask the server operator for a fresh invitation and retry.';
-export const MISKEYED_RECOVERY_ERROR = 'Borg found a failed enrollment record where it does not belong. No state was changed. This release has no supported way to recover that record; keep it intact and contact Borg support.';
+export const MISKEYED_RECOVERY_ERROR = 'Borg found a failed enrollment record where it does not belong. No state was changed. This release has no supported way to recover that record; keep it intact.';
 export class InvitationArtifactCompatibilityError extends Error {
     constructor(message = COMPATIBILITY_INVITATION_ERROR) {
         super(message);
