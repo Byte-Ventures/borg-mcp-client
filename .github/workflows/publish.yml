@@ -62,7 +62,7 @@ jobs:
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
         run: |
           set -euo pipefail
-          test "$(node --version)" = "v22.22.2"
+          test "$(node --version)" = "v$(cat .nvmrc)"
           test "$(npm --version)" = "11.18.0"
           test "${REPOSITORY_PRIVATE}" = "false"
           node scripts/verify-release-trigger.mjs
