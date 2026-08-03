@@ -38,7 +38,7 @@ jobs:
       - name: Set up exact Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 22.22.2
+          node-version: 24.19.0
 
       - name: Fetch candidate as Git data
         shell: bash

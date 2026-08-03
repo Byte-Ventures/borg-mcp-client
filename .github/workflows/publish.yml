@@ -35,7 +35,7 @@ jobs:
       - name: Set up exact Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 22.22.2
+          node-version: 24.19.0
 
       - name: Set up exact npm
         shell: bash
@@ -158,7 +158,7 @@ jobs:
       - name: Set up exact Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 22.22.2
+          node-version: 24.19.0
 
       - name: Set up Trusted Publishing npm
         shell: bash

@@ -80,7 +80,7 @@ export function verifyManifest(manifest) {
     manifest.publishConfig?.access === 'public' && Object.keys(manifest.publishConfig).length === 1,
     'publishConfig must contain only access=public; registry redirects are forbidden.',
   );
-  assert(manifest.engines?.node === '>=20', 'package.json must require Node.js >=20.');
+  assert(manifest.engines?.node === '>=22.12.0', 'package.json must require Node.js >=22.12.0.');
   assert(manifest.bin?.borg === './dist/claude.js', 'package.json borg bin must be ./dist/claude.js.');
   assert(manifest.bin?.['borg-mcp'] === './dist/index.js', 'package.json borg-mcp bin must be ./dist/index.js.');
   assert(manifest.main === './dist/index.js', 'package.json main must be ./dist/index.js.');
