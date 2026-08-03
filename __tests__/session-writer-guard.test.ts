@@ -66,7 +66,7 @@ describe('seat single-store writer guard (SR#5)', () => {
     // store; command and handshake modules still cannot open stores directly.
     expect(filesReferencing('withStore<', ['seat-store.ts', 'seats.ts'])).toEqual([]);
     expect(filesReferencing('atomicWrite0600', [
-      'seat-store.ts', 'token-store.ts', 'repository-identity.ts',
+      'seat-store.ts', 'token-store.ts', 'repository-identity.ts', 'server-trust.ts',
     ])).toEqual([]);
   });
 

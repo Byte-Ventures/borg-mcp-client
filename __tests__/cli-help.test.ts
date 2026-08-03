@@ -16,6 +16,7 @@ import {
   isHelpFlag,
   launchAllHelpText,
   resetLocalSeatHelpText,
+  recoverEnrollmentHelpText,
   serverHelpText,
   setupHelpText,
   setupNextStepsText,
@@ -64,6 +65,7 @@ describe('client subcommand help', () => {
     ['setup', setupHelpText],
     ['assimilate', assimilateHelpText],
     ['reset-local-seat', resetLocalSeatHelpText],
+    ['recover-enrollment', recoverEnrollmentHelpText],
     ['sync', syncHelpText],
     ['cleanup', cleanupHelpText],
     ['launch-all', launchAllHelpText],
@@ -79,6 +81,16 @@ describe('client subcommand help', () => {
       '--mode', '--only', '--dry-run', '--cli', '--no-attach', '--yes', '--force',
       '--launch-delay', '--help',
     ]) expect(text).toContain(flag);
+  });
+
+  it('describes journal-aware enrollment recovery and its exact scope', () => {
+    const text = recoverEnrollmentHelpText('9.9.9');
+    expect(text).toContain('restore or clear one failed server enrollment');
+    expect(text).toContain('restores or clears only the failed enrollment transaction');
+    expect(text).toContain('does not touch other server enrollments or accounts');
+    expect(topLevelHelpText('9.9.9')).toContain(
+      'borg recover-enrollment  Restore or clear ONLY one failed server enrollment transaction',
+    );
   });
 });
 

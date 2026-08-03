@@ -16,7 +16,6 @@ import {
   stageBorgServerTrust,
 } from '../src/server-trust.js';
 import { BorgServerTrustError } from '../src/server-errors.js';
-import { InvitationArtifactRecoveryError } from '../src/invitation-artifact.js';
 
 const tempDirectories: string[] = [];
 
@@ -53,7 +52,7 @@ async function trustDirectory(fingerprint: string, certificate: string): Promise
 }
 
 describe('same-user Borg server trust', () => {
-  it('rolls back the coherent trust directory when enrollment activation fails', async () => {
+  it('leaves committed trust untouched when enrollment activation fails before the journal gate', async () => {
     const ca = testCa();
     const origin = 'https://atomic-trust-rollback.invalid:7091';
     const directory = join(
@@ -66,7 +65,7 @@ describe('same-user Borg server trust', () => {
     const staged = await stageBorgServerTrust(origin, ca.certificate, `spki-sha256:${ca.fingerprint}`);
     await expect(staged.commitTrust(async () => {
       throw new Error('injected activation failure');
-    })).rejects.toBeInstanceOf(InvitationArtifactRecoveryError);
+    })).rejects.toThrow(/injected activation failure/);
     await expect(access(join(directory, 'ca.crt'))).rejects.toThrow();
     await rm(directory, { recursive: true, force: true });
   });

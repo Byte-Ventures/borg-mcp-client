@@ -1,6 +1,6 @@
 import { normalizeServerEndpoint } from './server-endpoint.js';
-import { clearEnrollmentTransaction, findPendingServerEnrollment } from './config.js';
-import { clearBorgServerTrust } from './server-trust.js';
+import { clearEnrollmentTransaction, findEnrollmentRecoveryTransaction } from './config.js';
+import { clearStagedBorgServerTrust, restoreBorgServerEnrollment } from './server-trust.js';
 export function parseRecoverEnrollmentArgs(argv) {
     let host;
     let yes = false;
@@ -28,35 +28,43 @@ export function parseRecoverEnrollmentArgs(argv) {
     return { ok: true, flags: { ...(host === undefined ? {} : { host }), yes } };
 }
 export async function runRecoverEnrollment(flags, deps) {
-    const pending = await findPendingServerEnrollment();
-    if (!pending) {
-        deps.stderr('No recoverable Borg enrollment transaction was found. No state was changed.\n');
-        return 1;
-    }
-    let origin = pending.origin;
+    let selectedOrigin;
     if (flags.host !== undefined) {
         try {
-            origin = normalizeServerEndpoint(flags.host);
+            selectedOrigin = normalizeServerEndpoint(flags.host);
         }
         catch (error) {
             deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
             return 1;
         }
-        if (origin !== pending.origin) {
+    }
+    const transaction = await findEnrollmentRecoveryTransaction(selectedOrigin);
+    if (!transaction) {
+        if (selectedOrigin !== undefined && await findEnrollmentRecoveryTransaction()) {
             deps.stderr('The recovery host does not match the failed enrollment transaction. No state was changed.\n');
             return 1;
         }
+        deps.stderr('No recoverable Borg enrollment transaction was found. No state was changed.\n');
+        return 1;
     }
+    const enrollment = transaction.kind === 'accepted' ? transaction.marker : transaction.pending;
+    const origin = enrollment.origin;
     if (!flags.yes) {
-        const answer = await deps.prompt(`Clear only the failed enrollment for ${origin}? Other server enrollments and accounts will not be touched. [y/N]: `);
+        const answer = await deps.prompt(`Restore or clear only the failed enrollment for ${origin}? Other server enrollments and accounts will not be touched. [y/N]: `);
         if (!/^y(?:es)?$/i.test(answer.trim())) {
             deps.stderr('Enrollment recovery was not confirmed. No state was changed.\n');
             return 1;
         }
     }
-    await clearEnrollmentTransaction(origin, pending.trustIdentity);
-    await clearBorgServerTrust(origin);
-    deps.stdout(`Cleared the failed enrollment transaction for ${origin}; other server enrollments and accounts were left unchanged.\n`);
+    if (transaction.kind === 'accepted') {
+        await restoreBorgServerEnrollment(origin);
+        deps.stdout(`Restored the prior enrollment state for ${origin}; other server enrollments and accounts were left unchanged.\n`);
+    }
+    else {
+        await clearEnrollmentTransaction(origin, transaction.pending.trustIdentity);
+        await clearStagedBorgServerTrust(origin, transaction.pending.artifactBinding?.stagedGenerationId);
+        deps.stdout(`Cleared the failed enrollment transaction for ${origin}; other server enrollments and accounts were left unchanged.\n`);
+    }
     return 0;
 }
 //# sourceMappingURL=recover-enrollment-cmd.js.map

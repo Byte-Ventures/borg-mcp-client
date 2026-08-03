@@ -141,13 +141,16 @@ describe('self-hosted server handshake', () => {
       credential,
     }));
     const activateEnrollment = vi.fn(async () => {});
-    const commitTrust = vi.fn(async (activate: () => Promise<void>) => activate());
+    const commitTrust = vi.fn(async (activate: (context: any) => Promise<void>) => activate({
+      generationId: 'c'.repeat(64), previousPointer: null,
+    }));
     const discardTrust = vi.fn(async () => {});
 
     await expect(enrollLocalBorgServerArtifact(artifactBase, {
       invitation,
       loadTrustFromPresentedChain: vi.fn(async () => ({
         identity: 'spki-sha256:server-a',
+        generationId: 'c'.repeat(64),
         fetchImpl: fetchImpl as typeof fetch,
         commitTrust,
         discardTrust,
@@ -241,7 +244,6 @@ describe('self-hosted server handshake', () => {
       clientName: 'operator-laptop',
     }));
     const activateEnrollment = vi.fn(async () => {});
-
     await expect(enrollBorgServer(
       'https://server.example.com',
       'sha256:server-a',
@@ -337,6 +339,24 @@ describe('self-hosted server handshake', () => {
         payload: { purpose: 'owner', client_id: clientId, server_capabilities: ['create_cube'] },
       }), { status: 201 }));
     const activateEnrollment = vi.fn(async () => {});
+    const artifactBinding = {
+      artifactFormatVersion: 2,
+      artifactDigest: createHash('sha256').update(invitation).digest('hex'),
+      endpoint: 'https://server.example.com',
+      caSpkiSha256: 'b'.repeat(64),
+      trustIdentity: 'sha256:server-a',
+      expectedAuthority: 'owner' as const,
+      stagedGenerationId: 'c'.repeat(64),
+    };
+    const replacementCapability = {
+      token: '77777777-7777-4777-8777-777777777777',
+      priorAccountsDigest: 'd'.repeat(64),
+      endpoint: 'https://server.example.com',
+      caSpkiSha256: 'b'.repeat(64),
+      trustIdentity: 'sha256:server-a',
+      retryKey,
+      artifactDigest: createHash('sha256').update(invitation).digest('hex'),
+    };
 
     await expect(enrollBorgServer(
       'https://server.example.com',
@@ -352,16 +372,17 @@ describe('self-hosted server handshake', () => {
           serverCapabilities: [],
         })),
         confirmReplacement: vi.fn(async () => true),
-        prepareEnrollment: vi.fn(async () => ({
+        artifactBinding,
+        prepareReplacementEnrollment: vi.fn(async () => ({
           origin: 'https://server.example.com', trustIdentity: 'sha256:server-a',
-          invitation, retryKey, credential,
+          invitation, retryKey, credential, artifactBinding, replacementCapability,
         })),
         activateEnrollment,
       },
     )).resolves.toMatchObject({ token: credential });
 
     expect(activateEnrollment).toHaveBeenCalledWith(expect.objectContaining({
-      allowReplacement: true,
+      replacementCapabilityToken: replacementCapability.token,
     }));
   });
 

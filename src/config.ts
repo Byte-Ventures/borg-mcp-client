@@ -14,9 +14,20 @@ import {
   type TokenBackend,
 } from './token-store.js';
 import { BORG_USER_ROOT, SERVER_CREDENTIALS_FILE } from './credential-paths.js';
+import { withEnrollmentOriginLock } from './enrollment-lock.js';
+import { InvitationArtifactRecoveryError } from './invitation-artifact.js';
+import type {
+  AcceptedEnrollmentMarker,
+  EnrollmentArtifactBinding,
+  EnrollmentReplacementCapability,
+  EnrollmentRollbackRecord,
+  EnrollmentTrustPointer,
+} from './enrollment-types.js';
 
 const SERVER_CREDENTIAL_RECORD_VERSION = 2 as const;
-const SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 1 as const;
+const SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 3 as const;
+const LEGACY_SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 1 as const;
+const SERVER_ACCEPTED_ENROLLMENT_MARKER_VERSION = 1 as const;
 const SERVER_CUBE_RETRY_RECORD_VERSION = 2 as const;
 // The 0600 credential store (Queen rescope: replaces the OS keychain). A single
 // file holds every parent credential/enrollment record; a single flock
@@ -48,7 +59,8 @@ export interface PendingServerEnrollmentRecord {
   retryKey: string;
   credential: string;
   clientName?: string;
-  replacementCapability?: string;
+  artifactBinding?: EnrollmentArtifactBinding;
+  replacementCapability?: EnrollmentReplacementCapability;
 }
 
 export interface PendingServerCubeCreationRecord {
@@ -131,6 +143,57 @@ function serverPendingEnrollmentAccount(origin: string, trustIdentity: string): 
     .update(trustIdentity)
     .digest('hex');
   return `borg-server-enrollment-pending:${binding}`;
+}
+
+function serverAcceptedEnrollmentAccount(origin: string): string {
+  const binding = createHash('sha256').update(origin).digest('hex');
+  return `borg-server-enrollment-accepted:${binding}`;
+}
+
+function serverEnrollmentRollbackAccount(origin: string, retryKey: string): string {
+  const binding = createHash('sha256').update(origin).update('\0').update(retryKey).digest('hex');
+  return `borg-server-enrollment-rollback:${binding}`;
+}
+
+function digestAccountSnapshot(accounts: Record<string, string>, origin: string): string {
+  const selected = Object.entries(accounts)
+    .filter(([, value]) => {
+      try {
+        const parsed = JSON.parse(value) as { version?: unknown; origin?: unknown };
+        return parsed.version === SERVER_CREDENTIAL_RECORD_VERSION && parsed.origin === origin;
+      } catch {
+        return false;
+      }
+    })
+    .sort(([left], [right]) => left.localeCompare(right));
+  return createHash('sha256').update(JSON.stringify(selected)).digest('hex');
+}
+
+function validateArtifactBinding(binding: EnrollmentArtifactBinding | undefined): void {
+  if (binding === undefined) return;
+  validateServerCredentialBinding(binding.endpoint, binding.trustIdentity);
+  if (
+    !Number.isSafeInteger(binding.artifactFormatVersion) || binding.artifactFormatVersion < 1 ||
+    !/^[a-f0-9]{64}$/.test(binding.artifactDigest) ||
+    !/^[a-f0-9]{64}$/.test(binding.caSpkiSha256) ||
+    !/^[a-f0-9]{64}$/.test(binding.stagedGenerationId) ||
+    binding.endpoint.length < 1 ||
+    binding.expectedAuthority !== 'owner' && binding.expectedAuthority !== 'client'
+  ) throw new Error('invalid Borg enrollment artifact binding');
+}
+
+function validateReplacementCapability(
+  capability: EnrollmentReplacementCapability | undefined,
+): void {
+  if (capability === undefined) return;
+  validateUuid(capability.token, 'replacement capability');
+  validateServerCredentialBinding(capability.endpoint, capability.trustIdentity);
+  if (
+    !/^[a-f0-9]{64}$/.test(capability.priorAccountsDigest) ||
+    !/^[a-f0-9]{64}$/.test(capability.caSpkiSha256) ||
+    !/^[a-f0-9]{64}$/.test(capability.artifactDigest)
+  ) throw new Error('invalid Borg enrollment replacement capability');
+  validateUuid(capability.retryKey, 'enrollment retry key');
 }
 
 function validateUuid(value: string, label: string): void {
@@ -320,6 +383,93 @@ function encodeServerCredentialRecord(record: ServerCredentialRecord, serverCapa
   });
 }
 
+function decodeAcceptedEnrollmentMarker(value: string): AcceptedEnrollmentMarker {
+  const marker = JSON.parse(value) as Partial<AcceptedEnrollmentMarker>;
+  if (
+    marker.version !== SERVER_ACCEPTED_ENROLLMENT_MARKER_VERSION ||
+    marker.state !== 'accepted' ||
+    typeof marker.origin !== 'string' ||
+    typeof marker.trustIdentity !== 'string' ||
+    typeof marker.generationId !== 'string' || !/^[a-f0-9]{64}$/.test(marker.generationId) ||
+    (marker.previousPointer !== null && typeof marker.previousPointer !== 'object') ||
+    typeof marker.rollbackAccount !== 'string' ||
+    typeof marker.rollbackDigest !== 'string' || !/^[a-f0-9]{64}$/.test(marker.rollbackDigest)
+  ) throw new Error('invalid Borg enrollment recovery marker');
+  validateServerCredentialBinding(marker.origin, marker.trustIdentity);
+  if (marker.previousPointer !== null) {
+    const pointer = marker.previousPointer as Partial<EnrollmentTrustPointer>;
+    if (
+      pointer.version !== 1 || pointer.origin !== marker.origin ||
+      typeof pointer.generationId !== 'string' || !/^[a-f0-9]{64}$/.test(pointer.generationId) ||
+      typeof pointer.trustIdentity !== 'string'
+    ) throw new Error('invalid Borg enrollment recovery marker');
+    validateServerCredentialBinding(pointer.origin, pointer.trustIdentity);
+  }
+  return marker as AcceptedEnrollmentMarker;
+}
+
+function decodeRollbackRecord(
+  value: string,
+  marker: AcceptedEnrollmentMarker,
+): EnrollmentRollbackRecord {
+  if (createHash('sha256').update(value).digest('hex') !== marker.rollbackDigest) {
+    throw new Error('Borg enrollment rollback snapshot digest is invalid');
+  }
+  const record = JSON.parse(value) as Partial<EnrollmentRollbackRecord>;
+  if (
+    record.version !== 1 || record.state !== 'rollback-snapshot' || record.origin !== marker.origin ||
+    typeof record.snapshot !== 'object' || record.snapshot === null ||
+    typeof record.snapshot.pendingAccount !== 'string' ||
+    typeof record.snapshot.pendingValue !== 'string' ||
+    typeof record.snapshot.activeAccounts !== 'object' || record.snapshot.activeAccounts === null
+  ) throw new Error('invalid Borg enrollment rollback snapshot');
+  for (const [account, stored] of Object.entries(record.snapshot.activeAccounts)) {
+    if (typeof account !== 'string' || typeof stored !== 'string') {
+      throw new Error('invalid Borg enrollment rollback snapshot');
+    }
+    let active: Partial<ActiveServerCredentialRecord> & { version?: unknown };
+    try { active = JSON.parse(stored) as typeof active; } catch {
+      throw new Error('invalid Borg enrollment rollback snapshot');
+    }
+    if (
+      active.version !== SERVER_CREDENTIAL_RECORD_VERSION || active.origin !== marker.origin ||
+      typeof active.trustIdentity !== 'string' ||
+      account !== serverCredentialAccount(marker.origin, active.trustIdentity)
+    ) throw new Error('invalid Borg enrollment rollback snapshot');
+  }
+  let pendingRaw: { origin?: unknown; trustIdentity?: unknown };
+  try { pendingRaw = JSON.parse(record.snapshot.pendingValue) as typeof pendingRaw; } catch {
+    throw new Error('invalid Borg enrollment rollback snapshot');
+  }
+  if (typeof pendingRaw.origin !== 'string' || typeof pendingRaw.trustIdentity !== 'string') {
+    throw new Error('invalid Borg enrollment rollback snapshot');
+  }
+  const pending = decodePendingServerEnrollment(
+    record.snapshot.pendingValue,
+    pendingRaw.origin,
+    pendingRaw.trustIdentity,
+  );
+  if (
+    pending.origin !== marker.origin || pending.trustIdentity !== marker.trustIdentity ||
+    record.snapshot.pendingAccount !== serverPendingEnrollmentAccount(marker.origin, marker.trustIdentity) ||
+    marker.rollbackAccount !== serverEnrollmentRollbackAccount(marker.origin, pending.retryKey)
+  ) throw new Error('invalid Borg enrollment rollback snapshot');
+  return record as EnrollmentRollbackRecord;
+}
+
+async function markerForOriginUnlocked(
+  backend: TokenBackend,
+  origin: string,
+): Promise<AcceptedEnrollmentMarker | null> {
+  const stored = await backend.get(serverAcceptedEnrollmentAccount(origin));
+  if (!stored) return null;
+  return decodeAcceptedEnrollmentMarker(stored);
+}
+
+function processSharedEnrollmentLock(): boolean {
+  return !testBackendInjected;
+}
+
 /**
  * Persist one self-hosted server credential in the dedicated 0600 credential store.
  *
@@ -332,10 +482,12 @@ function encodeServerCredentialRecord(record: ServerCredentialRecord, serverCapa
  */
 export async function storeServerCredential(
   record: ServerCredentialRecord,
-  options: { allowReplacement?: boolean } = {},
 ): Promise<void> {
   const backend = await getServerCredentialBackend();
-  await withCredentialStoreLock(() => writeServerCredentialRecord(backend, record, options.allowReplacement === true));
+  await withEnrollmentOriginLock(record.origin, () =>
+    withCredentialStoreLock(() => writeServerCredentialRecord(backend, record, false)), {
+    processShared: processSharedEnrollmentLock(),
+  });
 }
 
 /** Read an authority-bound active client record, failing closed on corruption. */
@@ -344,9 +496,11 @@ export async function getServerCredentialRecord(
   trustIdentity: string,
 ): Promise<ActiveServerCredentialRecord | null> {
   const backend = await getServerCredentialBackend();
-  const stored = await backend.get(serverCredentialAccount(origin, trustIdentity));
-  if (!stored) return null;
-  try {
+  return withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
+    if (await markerForOriginUnlocked(backend, origin)) throw new InvitationArtifactRecoveryError();
+    const stored = await backend.get(serverCredentialAccount(origin, trustIdentity));
+    if (!stored) return null;
+    try {
     const record = JSON.parse(stored) as Partial<ActiveServerCredentialRecord> & {
       version?: unknown;
     };
@@ -368,16 +522,17 @@ export async function getServerCredentialRecord(
     } catch {
       return null;
     }
-    return {
+      return {
       origin,
       trustIdentity,
       credential: record.credential,
       clientId: record.clientId,
       serverCapabilities,
-    };
-  } catch {
-    return null;
-  }
+      };
+    } catch {
+      return null;
+    }
+  }), { processShared: processSharedEnrollmentLock() });
 }
 
 /** Read only the bearer for existing call sites that do not need capability metadata. */
@@ -391,15 +546,18 @@ export async function getServerCredential(
 export async function hasServerCredentialForOrigin(origin: string): Promise<boolean> {
   const backend = await getServerCredentialBackend();
   if (!backend.entries) return false;
-  const accounts = await backend.entries();
-  return Object.values(accounts).some((value) => {
-    try {
-      const record = JSON.parse(value) as { version?: unknown; origin?: unknown };
-      return record.version === SERVER_CREDENTIAL_RECORD_VERSION && record.origin === origin;
-    } catch {
-      return false;
-    }
-  });
+  return withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
+    if (await markerForOriginUnlocked(backend, origin)) throw new InvitationArtifactRecoveryError();
+    const accounts = await backend.entries!();
+    return Object.values(accounts).some((value) => {
+      try {
+        const record = JSON.parse(value) as { version?: unknown; origin?: unknown };
+        return record.version === SERVER_CREDENTIAL_RECORD_VERSION && record.origin === origin;
+      } catch {
+        return false;
+      }
+    });
+  }), { processShared: processSharedEnrollmentLock() });
 }
 
 function decodePendingServerEnrollment(
@@ -412,7 +570,8 @@ function decodePendingServerEnrollment(
     state?: unknown;
   };
   if (
-    record.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION ||
+    record.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION &&
+      record.version !== LEGACY_SERVER_PENDING_ENROLLMENT_RECORD_VERSION ||
     record.state !== 'pending' ||
     record.origin !== origin ||
     record.trustIdentity !== trustIdentity ||
@@ -420,12 +579,24 @@ function decodePendingServerEnrollment(
     typeof record.retryKey !== 'string' || !UUID_RE.test(record.retryKey) ||
     typeof record.credential !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(record.credential) ||
     (record.clientName !== undefined && typeof record.clientName !== 'string')
-    || (record.replacementCapability !== undefined && !UUID_RE.test(record.replacementCapability))
   ) {
     throw new Error('invalid');
   }
   validateInvitation(record.invitation);
   validateClientName(record.clientName);
+  validateArtifactBinding(record.artifactBinding);
+  validateReplacementCapability(record.replacementCapability);
+  if (record.artifactBinding && (
+    record.artifactBinding.endpoint !== origin ||
+    record.artifactBinding.trustIdentity !== trustIdentity ||
+    record.replacementCapability && (
+      record.replacementCapability.endpoint !== origin ||
+      record.replacementCapability.trustIdentity !== trustIdentity ||
+      record.replacementCapability.retryKey !== record.retryKey ||
+      record.replacementCapability.artifactDigest !== record.artifactBinding.artifactDigest ||
+      record.replacementCapability.caSpkiSha256 !== record.artifactBinding.caSpkiSha256
+    )
+  )) throw new Error('invalid');
   return {
     origin,
     trustIdentity,
@@ -433,6 +604,7 @@ function decodePendingServerEnrollment(
     retryKey: record.retryKey,
     credential: record.credential,
     ...(record.clientName === undefined ? {} : { clientName: record.clientName }),
+    ...(record.artifactBinding === undefined ? {} : { artifactBinding: record.artifactBinding }),
     ...(record.replacementCapability === undefined ? {} : { replacementCapability: record.replacementCapability }),
   };
 }
@@ -445,7 +617,8 @@ export async function getPendingServerEnrollment(
   validateServerCredentialBinding(origin, trustIdentity);
   const backend = await getServerCredentialBackend();
   const account = serverPendingEnrollmentAccount(origin, trustIdentity);
-  return withCredentialStoreLock(async () => {
+  return withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
+    if (await markerForOriginUnlocked(backend, origin)) throw new InvitationArtifactRecoveryError();
     const stored = await backend.get(account);
     if (!stored) return null;
     try {
@@ -453,7 +626,7 @@ export async function getPendingServerEnrollment(
     } catch {
       throw new Error('pending Borg server enrollment is corrupt');
     }
-  });
+  }), { processShared: processSharedEnrollmentLock() });
 }
 
 /** Find the sole pending enrollment so artifact-only retries need no invitation. */
@@ -462,16 +635,29 @@ export async function findPendingServerEnrollment(): Promise<PendingServerEnroll
   if (!backend.entries) return null;
   return withCredentialStoreLock(async () => {
     const matches: PendingServerEnrollmentRecord[] = [];
-    for (const value of Object.values(await backend.entries!())) {
+    for (const [account, value] of Object.entries(await backend.entries!())) {
       try {
         const raw = JSON.parse(value) as Partial<PendingServerEnrollmentRecord> & {
           version?: unknown;
           state?: unknown;
         };
-        if (raw.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION || raw.state !== 'pending') continue;
+        if (raw.version === SERVER_ACCEPTED_ENROLLMENT_MARKER_VERSION && raw.state === 'accepted') {
+          decodeAcceptedEnrollmentMarker(value);
+          throw new InvitationArtifactRecoveryError();
+        }
+        if (
+          raw.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION &&
+          raw.version !== LEGACY_SERVER_PENDING_ENROLLMENT_RECORD_VERSION ||
+          raw.state !== 'pending'
+        ) continue;
         if (typeof raw.origin !== 'string' || typeof raw.trustIdentity !== 'string') continue;
         matches.push(decodePendingServerEnrollment(value, raw.origin, raw.trustIdentity));
-      } catch {
+      } catch (error) {
+        if (error instanceof InvitationArtifactRecoveryError) throw error;
+        if (
+          account.startsWith('borg-server-enrollment-pending:') ||
+          account.startsWith('borg-server-enrollment-accepted:')
+        ) throw new InvitationArtifactRecoveryError();
         // Ignore unrelated or corrupt records; the keyed resume path remains fail-closed.
       }
     }
@@ -491,16 +677,52 @@ export async function getOrCreatePendingServerEnrollment(
     trustIdentity: string;
     invitation: string;
     clientName?: string;
-    replacementCapability?: string;
+    artifactBinding?: EnrollmentArtifactBinding;
   },
+): Promise<PendingServerEnrollmentRecord> {
+  return getOrCreatePendingServerEnrollmentInternal(input, false);
+}
+
+/**
+ * Mint replacement consent only for the fresh interactive confirmation path.
+ * Resume can load and consume the resulting capability, but has no mint API.
+ */
+export async function createPendingServerEnrollmentWithReplacementConsent(
+  input: {
+    origin: string;
+    trustIdentity: string;
+    invitation: string;
+    clientName?: string;
+    artifactBinding: EnrollmentArtifactBinding;
+  },
+): Promise<PendingServerEnrollmentRecord> {
+  return getOrCreatePendingServerEnrollmentInternal(input, true);
+}
+
+async function getOrCreatePendingServerEnrollmentInternal(
+  input: {
+    origin: string;
+    trustIdentity: string;
+    invitation: string;
+    clientName?: string;
+    artifactBinding?: EnrollmentArtifactBinding;
+  },
+  mintReplacementConsent: boolean,
 ): Promise<PendingServerEnrollmentRecord> {
   validateServerCredentialBinding(input.origin, input.trustIdentity);
   validateInvitation(input.invitation);
   validateClientName(input.clientName);
-  if (input.replacementCapability !== undefined) validateUuid(input.replacementCapability, 'replacement capability');
+  validateArtifactBinding(input.artifactBinding);
+  if (
+    input.artifactBinding !== undefined &&
+    createHash('sha256').update(input.invitation).digest('hex') !== input.artifactBinding.artifactDigest
+  ) throw new Error('enrollment invitation does not match its verified artifact binding');
+  if (mintReplacementConsent && input.artifactBinding === undefined) {
+    throw new Error('replacement consent requires a verified invitation artifact binding');
+  }
   const backend = await getServerCredentialBackend();
   const account = serverPendingEnrollmentAccount(input.origin, input.trustIdentity);
-  return withCredentialStoreLock(async () => {
+  return withEnrollmentOriginLock(input.origin, () => withCredentialStoreLock(async () => {
     const stored = await backend.get(account);
     if (stored) {
       try {
@@ -512,7 +734,8 @@ export async function getOrCreatePendingServerEnrollment(
         if (
           record.invitation !== input.invitation ||
           record.clientName !== input.clientName
-          || record.replacementCapability !== input.replacementCapability
+          || JSON.stringify(record.artifactBinding) !== JSON.stringify(input.artifactBinding)
+          || mintReplacementConsent && record.replacementCapability === undefined
         ) {
           throw new Error('mismatch');
         }
@@ -522,14 +745,26 @@ export async function getOrCreatePendingServerEnrollment(
       }
     }
 
+    const retryKey = randomUUID();
+    const accounts = backend.entries ? await backend.entries() : {};
+    const replacementCapability = mintReplacementConsent ? {
+      token: randomUUID(),
+      priorAccountsDigest: digestAccountSnapshot(accounts, input.origin),
+      endpoint: input.origin,
+      caSpkiSha256: input.artifactBinding!.caSpkiSha256,
+      trustIdentity: input.trustIdentity,
+      retryKey,
+      artifactDigest: input.artifactBinding!.artifactDigest,
+    } satisfies EnrollmentReplacementCapability : undefined;
     const record: PendingServerEnrollmentRecord = {
       origin: input.origin,
       trustIdentity: input.trustIdentity,
       invitation: input.invitation,
-      retryKey: randomUUID(),
+      retryKey,
       credential: randomBytes(32).toString('base64url'),
       ...(input.clientName === undefined ? {} : { clientName: input.clientName }),
-      ...(input.replacementCapability === undefined ? {} : { replacementCapability: input.replacementCapability }),
+      ...(input.artifactBinding === undefined ? {} : { artifactBinding: input.artifactBinding }),
+      ...(replacementCapability === undefined ? {} : { replacementCapability }),
     };
     validateEnrollmentCredential(record.credential);
     await backend.set(account, JSON.stringify({
@@ -538,7 +773,7 @@ export async function getOrCreatePendingServerEnrollment(
       ...record,
     }));
     return record;
-  });
+  }), { processShared: processSharedEnrollmentLock() });
 }
 
 /** Activate the exact pending tuple only after a verified server response. */
@@ -550,8 +785,9 @@ export async function activatePendingServerEnrollment(
     credential: string;
     clientId: string;
     serverCapabilities: ServerCapability[];
-    allowReplacement?: boolean;
-    replacementCapability?: string;
+    generationId?: string;
+    previousPointer?: EnrollmentTrustPointer | null;
+    replacementCapabilityToken?: string;
   },
 ): Promise<void> {
   validateServerCredentialBinding(input.origin, input.trustIdentity);
@@ -561,7 +797,10 @@ export async function activatePendingServerEnrollment(
   const serverCapabilities = validateServerCapabilities(input.serverCapabilities);
   const backend = await getServerCredentialBackend();
   const pendingAccount = serverPendingEnrollmentAccount(input.origin, input.trustIdentity);
-  await withCredentialStoreLock(async () => {
+  await withEnrollmentOriginLock(input.origin, () => withCredentialStoreLock(async () => {
+    if (!backend.entries || !backend.replaceAccounts) {
+      throw new Error('Borg credential store does not support atomic enrollment activation');
+    }
     const stored = await backend.get(pendingAccount);
     if (!stored) throw new Error('pending Borg server enrollment is missing');
     try {
@@ -570,25 +809,42 @@ export async function activatePendingServerEnrollment(
         input.origin,
         input.trustIdentity,
       );
-      if (pending.retryKey !== input.retryKey || pending.credential !== input.credential ||
-          pending.replacementCapability !== input.replacementCapability) {
+      if (pending.retryKey !== input.retryKey || pending.credential !== input.credential) {
         throw new Error('mismatch');
       }
     } catch {
       throw new Error('pending Borg server enrollment does not match the verified response');
     }
-    if (!input.allowReplacement) {
-      const existing = backend.entries
-        ? Object.values(await backend.entries()).some((value) => {
-          try {
-            const record = JSON.parse(value) as { version?: unknown; origin?: unknown };
-            return record.version === SERVER_CREDENTIAL_RECORD_VERSION && record.origin === input.origin;
-          } catch {
-            return false;
-          }
-        })
-        : await backend.get(serverCredentialAccount(input.origin, input.trustIdentity)) !== null;
-      if (existing) throw new Error('local Borg server enrollment already exists');
+    const pending = decodePendingServerEnrollment(stored, input.origin, input.trustIdentity);
+    const accounts = await backend.entries();
+    const activeAccounts = Object.fromEntries(Object.entries(accounts).filter(([, value]) => {
+      try {
+        const record = JSON.parse(value) as { version?: unknown; origin?: unknown };
+        return record.version === SERVER_CREDENTIAL_RECORD_VERSION && record.origin === input.origin;
+      } catch {
+        return false;
+      }
+    }));
+    if (Object.keys(activeAccounts).length > 0) {
+      const capability = pending.replacementCapability;
+      if (!capability || capability.token !== input.replacementCapabilityToken) {
+        throw new Error('local Borg server enrollment already exists and replacement consent is missing');
+      }
+      validateReplacementCapability(capability);
+      if (
+        capability.priorAccountsDigest !== digestAccountSnapshot(accounts, input.origin) ||
+        capability.endpoint !== input.origin ||
+        capability.trustIdentity !== input.trustIdentity ||
+        capability.retryKey !== input.retryKey ||
+        capability.artifactDigest !== pending.artifactBinding?.artifactDigest ||
+        capability.caSpkiSha256 !== pending.artifactBinding?.caSpkiSha256
+      ) throw new Error('Borg enrollment replacement consent does not match this transaction');
+    } else if (input.replacementCapabilityToken !== undefined) {
+      throw new Error('Borg enrollment replacement consent does not match this transaction');
+    }
+    const generationId = input.generationId ?? pending.artifactBinding?.stagedGenerationId;
+    if (pending.artifactBinding && generationId !== pending.artifactBinding.stagedGenerationId) {
+      throw new Error('pending Borg server enrollment generation does not match the verified response');
     }
     const activeRecord: ServerCredentialRecord = {
       origin: input.origin,
@@ -597,13 +853,9 @@ export async function activatePendingServerEnrollment(
       clientId: input.clientId,
       serverCapabilities,
     };
-    // Replace the active record and retire the pending tuple in one account-map
-    // write. A failed map write therefore preserves the old active + pending state.
-    if (backend.entries && backend.replaceAccounts) {
-      const accounts = await backend.entries();
-      const target = serverCredentialAccount(input.origin, input.trustIdentity);
-      const next = { ...accounts };
-      for (const [account, value] of Object.entries(accounts)) {
+    const target = serverCredentialAccount(input.origin, input.trustIdentity);
+    const next = { ...accounts };
+    for (const [account, value] of Object.entries(accounts)) {
         try {
           const parsed = JSON.parse(value) as { version?: unknown; origin?: unknown };
           if (parsed.version === SERVER_CREDENTIAL_RECORD_VERSION && parsed.origin === input.origin) {
@@ -612,14 +864,156 @@ export async function activatePendingServerEnrollment(
         } catch {
           // Preserve unrelated malformed records; the backend's normal validation remains fail-closed.
         }
-      }
-      next[target] = encodeServerCredentialRecord(activeRecord, serverCapabilities);
-      delete next[pendingAccount];
-      await backend.replaceAccounts(next);
-    } else {
-      await writeServerCredentialRecord(backend, activeRecord, input.allowReplacement === true);
-      await backend.delete(pendingAccount);
     }
+    next[target] = encodeServerCredentialRecord(activeRecord, serverCapabilities);
+    delete next[pendingAccount];
+    if (generationId !== undefined) {
+      const rollbackAccount = serverEnrollmentRollbackAccount(input.origin, input.retryKey);
+      const rollbackRecord: EnrollmentRollbackRecord = {
+        version: 1,
+        state: 'rollback-snapshot',
+        origin: input.origin,
+        snapshot: { activeAccounts, pendingAccount, pendingValue: stored },
+      };
+      const rollbackValue = JSON.stringify(rollbackRecord);
+      const marker: AcceptedEnrollmentMarker = {
+        version: SERVER_ACCEPTED_ENROLLMENT_MARKER_VERSION,
+        state: 'accepted',
+        origin: input.origin,
+        trustIdentity: input.trustIdentity,
+        generationId,
+        previousPointer: input.previousPointer ?? null,
+        rollbackAccount,
+        rollbackDigest: createHash('sha256').update(rollbackValue).digest('hex'),
+      };
+      next[rollbackAccount] = rollbackValue;
+      next[serverAcceptedEnrollmentAccount(input.origin)] = JSON.stringify(marker);
+    }
+    await backend.replaceAccounts(next);
+  }), { processShared: processSharedEnrollmentLock() });
+}
+
+export async function getAcceptedEnrollmentMarker(
+  origin: string,
+): Promise<AcceptedEnrollmentMarker | null> {
+  const backend = await getServerCredentialBackend();
+  return withEnrollmentOriginLock(origin, () => withCredentialStoreLock(
+    () => markerForOriginUnlocked(backend, origin),
+  ), { processShared: processSharedEnrollmentLock() });
+}
+
+/** Remove the gate only after the pointer and active account have been verified together. */
+export async function finalizeAcceptedEnrollment(
+  origin: string,
+  trustIdentity: string,
+  generationId: string,
+): Promise<void> {
+  const backend = await getServerCredentialBackend();
+  await withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
+    if (!backend.entries || !backend.replaceAccounts) {
+      throw new Error('Borg credential store does not support atomic enrollment finalization');
+    }
+    const accounts = await backend.entries();
+    const markerValue = accounts[serverAcceptedEnrollmentAccount(origin)];
+    if (!markerValue) return;
+    const marker = decodeAcceptedEnrollmentMarker(markerValue);
+    if (marker.trustIdentity !== trustIdentity || marker.generationId !== generationId) {
+      throw new Error('Borg enrollment recovery marker does not match committed trust');
+    }
+    const active = accounts[serverCredentialAccount(origin, trustIdentity)];
+    if (!active) throw new Error('Borg enrollment recovery marker has no matching active credential');
+    const next = { ...accounts };
+    delete next[serverAcceptedEnrollmentAccount(origin)];
+    delete next[marker.rollbackAccount];
+    await backend.replaceAccounts(next);
+  }), { processShared: processSharedEnrollmentLock() });
+}
+
+/** Restore the complete pre-commit account snapshot after pointer restoration. */
+export async function restoreAcceptedEnrollmentAccounts(
+  marker: AcceptedEnrollmentMarker,
+): Promise<void> {
+  const backend = await getServerCredentialBackend();
+  await withEnrollmentOriginLock(marker.origin, () => withCredentialStoreLock(async () => {
+    if (!backend.entries || !backend.replaceAccounts) {
+      throw new Error('Borg credential store does not support atomic enrollment rollback');
+    }
+    const accounts = await backend.entries();
+    const current = accounts[serverAcceptedEnrollmentAccount(marker.origin)];
+    if (!current || JSON.stringify(decodeAcceptedEnrollmentMarker(current)) !== JSON.stringify(marker)) {
+      throw new Error('Borg enrollment recovery marker changed during rollback');
+    }
+    const rollbackValue = accounts[marker.rollbackAccount];
+    if (!rollbackValue) throw new Error('Borg enrollment rollback snapshot is missing');
+    const rollback = decodeRollbackRecord(rollbackValue, marker).snapshot;
+    const next = { ...accounts };
+    for (const [account, value] of Object.entries(accounts)) {
+      try {
+        const parsed = JSON.parse(value) as { version?: unknown; origin?: unknown };
+        if (parsed.version === SERVER_CREDENTIAL_RECORD_VERSION && parsed.origin === marker.origin) {
+          delete next[account];
+        }
+      } catch {
+        // Preserve unrelated malformed entries for the backend's fail-closed reader.
+      }
+    }
+    Object.assign(next, rollback.activeAccounts);
+    next[rollback.pendingAccount] = rollback.pendingValue;
+    delete next[serverAcceptedEnrollmentAccount(marker.origin)];
+    delete next[marker.rollbackAccount];
+    await backend.replaceAccounts(next);
+  }), { processShared: processSharedEnrollmentLock() });
+}
+
+export type EnrollmentRecoveryTransaction =
+  | { kind: 'accepted'; marker: AcceptedEnrollmentMarker }
+  | { kind: 'pending'; pending: PendingServerEnrollmentRecord };
+
+export async function findEnrollmentRecoveryTransaction(
+  selectedOrigin?: string,
+): Promise<EnrollmentRecoveryTransaction | null> {
+  if (selectedOrigin !== undefined) {
+    let parsed: URL;
+    try { parsed = new URL(selectedOrigin); } catch { throw new Error('invalid Borg server credential origin'); }
+    if (parsed.origin !== selectedOrigin || parsed.protocol !== 'https:') {
+      throw new Error('Borg server credentials require a canonical HTTPS origin');
+    }
+  }
+  const backend = await getServerCredentialBackend();
+  if (!backend.entries) return null;
+  return withCredentialStoreLock(async () => {
+    const accepted: AcceptedEnrollmentMarker[] = [];
+    const pending: PendingServerEnrollmentRecord[] = [];
+    for (const [account, value] of Object.entries(await backend.entries!())) {
+      try {
+        const raw = JSON.parse(value) as { version?: unknown; state?: unknown; origin?: unknown; trustIdentity?: unknown };
+        if (raw.version === SERVER_ACCEPTED_ENROLLMENT_MARKER_VERSION && raw.state === 'accepted') {
+          const marker = decodeAcceptedEnrollmentMarker(value);
+          if (selectedOrigin === undefined || marker.origin === selectedOrigin) accepted.push(marker);
+        } else if (
+          (raw.version === SERVER_PENDING_ENROLLMENT_RECORD_VERSION ||
+            raw.version === LEGACY_SERVER_PENDING_ENROLLMENT_RECORD_VERSION) &&
+          raw.state === 'pending' &&
+          typeof raw.origin === 'string' && typeof raw.trustIdentity === 'string'
+        ) {
+          const record = decodePendingServerEnrollment(value, raw.origin, raw.trustIdentity);
+          if (selectedOrigin === undefined || record.origin === selectedOrigin) pending.push(record);
+        }
+      } catch (error) {
+        if (
+          account.startsWith('borg-server-enrollment-accepted:') ||
+          account.startsWith('borg-server-enrollment-pending:') ||
+          account.startsWith('borg-server-enrollment-rollback:')
+        ) throw new InvitationArtifactRecoveryError();
+        // Unrelated corrupt entries are preserved for their owning reader.
+      }
+    }
+    if (accepted.length + pending.length > 1) {
+      throw new Error('multiple Borg enrollment transactions require an explicit server endpoint');
+    }
+    if (accepted[0]) return { kind: 'accepted', marker: accepted[0] };
+    if (pending[0]) return { kind: 'pending', pending: pending[0] };
+    return null;
   });
 }
 
@@ -632,7 +1026,7 @@ export async function clearPendingServerEnrollment(
   validateUuid(retryKey, 'enrollment retry key');
   const backend = await getServerCredentialBackend();
   const account = serverPendingEnrollmentAccount(origin, trustIdentity);
-  await withCredentialStoreLock(async () => {
+  await withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
     const stored = await backend.get(account);
     if (!stored) return;
     try {
@@ -642,7 +1036,7 @@ export async function clearPendingServerEnrollment(
       return;
     }
     await backend.delete(account);
-  });
+  }), { processShared: processSharedEnrollmentLock() });
 }
 
 /** Persist one repository-scoped cube-create idempotency key in the 0600 credential store. */
@@ -771,10 +1165,10 @@ export async function clearPendingServerCubeCreation(
 export async function clearServerCredential(origin: string, trustIdentity: string): Promise<void> {
   const backend = await getServerCredentialBackend();
   const pendingAccount = serverPendingEnrollmentAccount(origin, trustIdentity);
-  await withCredentialStoreLock(async () => {
+  await withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
     await backend.delete(serverCredentialAccount(origin, trustIdentity));
     await backend.delete(pendingAccount);
-  });
+  }), { processShared: processSharedEnrollmentLock() });
 }
 
 /** Clear only the failed enrollment transaction for one origin/identity. */
@@ -782,17 +1176,17 @@ export async function clearEnrollmentTransaction(origin: string, trustIdentity: 
   validateServerCredentialBinding(origin, trustIdentity);
   const backend = await getServerCredentialBackend();
   const pendingAccount = serverPendingEnrollmentAccount(origin, trustIdentity);
-  const credentialAccount = serverCredentialAccount(origin, trustIdentity);
-  await withCredentialStoreLock(async () => {
+  await withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
+    if (await markerForOriginUnlocked(backend, origin)) {
+      throw new InvitationArtifactRecoveryError();
+    }
     if (backend.entries && backend.replaceAccounts) {
       const accounts = await backend.entries();
       const next = { ...accounts };
       delete next[pendingAccount];
-      delete next[credentialAccount];
       await backend.replaceAccounts(next);
       return;
     }
     await backend.delete(pendingAccount);
-    await backend.delete(credentialAccount);
-  });
+  }), { processShared: processSharedEnrollmentLock() });
 }

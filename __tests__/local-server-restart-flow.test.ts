@@ -42,6 +42,11 @@ describe('local owner enrollment to restart flow', () => {
     const keychain = new Map<string, string>();
     const backend = {
       name: 'file' as const,
+      entries: async () => Object.fromEntries(keychain),
+      replaceAccounts: async (accounts: Record<string, string>) => {
+        keychain.clear();
+        for (const [account, value] of Object.entries(accounts)) keychain.set(account, value);
+      },
       get: async (account: string) => keychain.get(account) ?? null,
       set: async (account: string, value: string) => { keychain.set(account, value); },
       delete: async (account: string) => { keychain.delete(account); },
