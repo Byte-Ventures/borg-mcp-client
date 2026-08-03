@@ -1020,17 +1020,25 @@ export async function removeDecision(
   serverTrustIdentity?: string,
 ): Promise<{ decision: any }> {
   const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-  const payload = await localManageRequest<{ decision: any }>(
-    local,
-    `/api/cubes/${local.cubeId}/decisions`,
-    'DELETE',
-    {
-      operation: `remove a decision from cube ${manageCopyValue(local.name)}`,
-      cubeName: local.name,
-      noMutation: 'No decision was removed.',
-    },
-    selector,
-  );
+  let payload: { decision: any } | null;
+  try {
+    payload = await localManageRequest<{ decision: any }>(
+      local,
+      `/api/cubes/${local.cubeId}/decisions`,
+      'DELETE',
+      {
+        operation: `remove a decision from cube ${manageCopyValue(local.name)}`,
+        cubeName: local.name,
+        noMutation: 'No decision was removed.',
+      },
+      selector,
+    );
+  } catch (error) {
+    if (error instanceof BorgServerHttpError && error.status === 404) {
+      localUnsupported('decision removal');
+    }
+    throw error;
+  }
   if (!payload) throw new Error('Local Borg server returned an empty decision removal response');
   return payload;
 }

@@ -133,4 +133,11 @@ describe('decision registry request shapes (local path)', () => {
       decision_id: '22222222-2222-4222-8222-222222222222',
     });
   });
+
+  it('reports unsupported capability when an older server lacks the route', async () => {
+    fetchSpy = vi.fn(async () => new Response(null, { status: 404 }));
+    const { removeDecision } = await import('../src/remote-client.js');
+    await expect(removeDecision(SESSION, ORIGIN, { topic: 'release-cadence' }))
+      .rejects.toThrow('Local Borg server does not support decision removal');
+  });
 });
