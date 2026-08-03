@@ -160,7 +160,7 @@ export function buildDefaultAssimilateDeps(
         buildDefaultFirstRunServerInstallDeps(),
         connectCommand,
       )).kind,
-    resolveCliApprovals: (cli, cwd) => resolveLaunchBorgApprovals(
+    resolveCliApprovals: (cli, cwd, options) => resolveLaunchBorgApprovals(
       cli,
       defaultApprovalIo(
         async (message) => {
@@ -173,7 +173,8 @@ export function buildDefaultAssimilateDeps(
         },
         () => process.stdin.isTTY === true,
         { cwd, env: process.env, codexArgs: [] }
-      )
+      ),
+      options
     ),
 
     getHostname: () => osHostname(),

@@ -18,6 +18,7 @@ export declare function defaultCliChoiceDeps(prompt: (message: string) => Promis
 export declare function parseCliFlag(args: string[]): {
     cli?: BorgCli;
     force?: boolean;
+    noBorgApprovalOverride?: boolean;
     rest: string[];
     error?: string;
 };

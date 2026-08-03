@@ -465,10 +465,7 @@ export function defaultApprovalIo(confirm, isTTY, options = {}) {
         confirm,
     };
 }
-function accepted(answer) {
-    return /^(?:y|yes)$/i.test(answer.trim());
-}
-export async function resolveLaunchBorgApprovals(cli, io) {
+export async function resolveLaunchBorgApprovals(cli, io, options = {}) {
     if (cli === 'claude')
         return { codexArgs: [] };
     let inspection;
@@ -492,17 +489,10 @@ export async function resolveLaunchBorgApprovals(cli, io) {
         return { codexArgs: [] };
     const intro = `${cli === 'codex' ? 'Codex' : 'OpenCode'} requires approval for ${inspection.restrictiveTools.length} Borg tool${inspection.restrictiveTools.length === 1 ? '' : 's'}. ` +
         BORG_DISPATCHER_APPROVAL_DISCLOSURE;
-    if (!io.isTTY()) {
+    if (options.skipOverride) {
         return {
             codexArgs: [],
-            warning: `${intro} Re-run in a terminal to approve a launch-only fix, or add:\n${inspection.repairSnippet}`,
-        };
-    }
-    const answer = await io.confirm(`${intro} Apply this launch-only Borg approval set? [y/N] `);
-    if (!accepted(answer)) {
-        return {
-            codexArgs: [],
-            warning: `${intro} Continuing without the launch-only fix. To repair it globally, add:\n${inspection.repairSnippet}`,
+            warning: `${intro} Continuing without the launch-only fix because --no-borg-approval-override was supplied. To repair it globally, add:\n${inspection.repairSnippet}`,
         };
     }
     if (cli === 'codex') {
@@ -523,7 +513,10 @@ export async function resolveLaunchBorgApprovals(cli, io) {
                 warning: `Codex managed policy prevents the launch-only Borg approval override. Ask your Codex administrator to allow these tools:\n${effectiveWithOverride.repairSnippet}`,
             };
         }
-        return { codexArgs };
+        return {
+            codexArgs,
+            warning: `${intro} Applied a launch-only approval override. Pass --no-borg-approval-override to opt out.`,
+        };
     }
     const openCodePermission = JSON.stringify(mergeOpenCodePermission(openCodeConfig && typeof openCodeConfig === 'object'
         ? openCodeConfig.permission
@@ -547,6 +540,7 @@ export async function resolveLaunchBorgApprovals(cli, io) {
     return {
         codexArgs: [],
         openCodePermission,
+        warning: `${intro} Applied a launch-only approval override. Pass --no-borg-approval-override to opt out.`,
     };
 }
 export function buildOpenCodeLaunchArgs(cwd, port, prompt, passthroughArgs = []) {

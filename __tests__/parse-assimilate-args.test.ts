@@ -28,6 +28,7 @@ describe('parseAssimilateArgs', () => {
       '--enroll',
       '--here',
       '--force',
+      '--no-borg-approval-override',
       '--yes',
     ]);
     expect(r.ok).toBe(true);
@@ -42,6 +43,7 @@ describe('parseAssimilateArgs', () => {
         enroll: true,
         here: true,
         force: true,
+        noBorgApprovalOverride: true,
         yes: true,
       });
     }

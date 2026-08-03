@@ -101,10 +101,17 @@ export function defaultCliChoiceDeps(prompt: (message: string) => Promise<string
 
 const VALID_CLIS: readonly BorgCli[] = ['claude', 'codex', 'opencode'];
 
-export function parseCliFlag(args: string[]): { cli?: BorgCli; force?: boolean; rest: string[]; error?: string } {
+export function parseCliFlag(args: string[]): {
+  cli?: BorgCli;
+  force?: boolean;
+  noBorgApprovalOverride?: boolean;
+  rest: string[];
+  error?: string;
+} {
   const rest: string[] = [];
   let cli: BorgCli | undefined;
   let force = false;
+  let noBorgApprovalOverride = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--cli') {
@@ -122,9 +129,16 @@ export function parseCliFlag(args: string[]): { cli?: BorgCli; force?: boolean; 
       cli = value as BorgCli;
     } else if (arg === '--force') {
       force = true;
+    } else if (arg === '--no-borg-approval-override') {
+      noBorgApprovalOverride = true;
     } else {
       rest.push(arg);
     }
   }
-  return { ...(cli ? { cli } : {}), ...(force ? { force: true } : {}), rest };
+  return {
+    ...(cli ? { cli } : {}),
+    ...(force ? { force: true } : {}),
+    ...(noBorgApprovalOverride ? { noBorgApprovalOverride: true } : {}),
+    rest,
+  };
 }

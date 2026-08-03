@@ -102,7 +102,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         },
         isTTY: () => process.stdin.isTTY === true,
         ensureLocalServerInstalled: async (connectCommand) => (await offerFirstRunServerInstall(buildDefaultFirstRunServerInstallDeps(), connectCommand)).kind,
-        resolveCliApprovals: (cli, cwd) => resolveLaunchBorgApprovals(cli, defaultApprovalIo(async (message) => {
+        resolveCliApprovals: (cli, cwd, options) => resolveLaunchBorgApprovals(cli, defaultApprovalIo(async (message) => {
             const rl = createInterface({ input: process.stdin, output: process.stdout });
             try {
                 return await rl.question(message);
@@ -110,7 +110,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
             finally {
                 rl.close();
             }
-        }, () => process.stdin.isTTY === true, { cwd, env: process.env, codexArgs: [] })),
+        }, () => process.stdin.isTTY === true, { cwd, env: process.env, codexArgs: [] }), options),
         getHostname: () => osHostname(),
         setTerminalTitle: (label, cubeName) => {
             setTitle({ label, cubeName }, cubeName);

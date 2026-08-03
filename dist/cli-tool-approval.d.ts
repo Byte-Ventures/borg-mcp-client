@@ -74,7 +74,9 @@ export declare function composeCodexProfileConfig(snapshot: CodexConfigSnapshot,
 export declare function readCodexEffectiveConfig(args: string[], cwd: string, env: NodeJS.ProcessEnv, runtime?: CodexEffectiveConfigRuntime): Promise<unknown>;
 export declare function readOpenCodeEffectiveConfig(cwd: string, env: NodeJS.ProcessEnv): unknown;
 export declare function defaultApprovalIo(confirm: (message: string) => Promise<string>, isTTY: () => boolean, options?: Partial<EffectiveConfigOptions>): ApprovalIo;
-export declare function resolveLaunchBorgApprovals(cli: BorgCli, io: ApprovalIo): Promise<LaunchApprovalDecision>;
+export declare function resolveLaunchBorgApprovals(cli: BorgCli, io: ApprovalIo, options?: {
+    skipOverride?: boolean;
+}): Promise<LaunchApprovalDecision>;
 export declare function buildOpenCodeLaunchArgs(cwd: string, port: number, prompt: string, passthroughArgs?: string[]): string[];
 export declare function setupApprovalWarnings(deps: Pick<ApprovalIo, 'readCodexConfig' | 'readOpenCodeConfig'>, selected?: {
     codex?: boolean;
