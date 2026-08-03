@@ -1,6 +1,6 @@
 {
   "name": "borgmcp",
-  "version": "2.12.0",
+  "version": "2.12.1",
   "description": "Coordinate AI coding agents in shared cubes. Works with Claude Code, Codex, and OpenCode.",
   "type": "module",
   "main": "./dist/index.js",

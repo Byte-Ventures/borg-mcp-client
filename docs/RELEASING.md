@@ -201,7 +201,7 @@ Never delete, move, replace, reuse, or rerun that tag, version, or workflow. The
 successfully published that exact source as `borgmcp@2.10.2`; the same-run artifact report records integrity
 `sha512-uNeDidPLxZDe0E/RnQ35zaAMZwHcBbdpHrk+McQuV4lyBxoMSdf+MlBDHv7usijCtOBAUf+exlR/l4F9wVtvZg==`.
 Never move, replace, reuse, or rerun that tag or workflow. The next candidate
-uses the unused `v2.12.0` identity from a fresh reviewed protected-main commit
+uses the unused `v2.12.1` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
