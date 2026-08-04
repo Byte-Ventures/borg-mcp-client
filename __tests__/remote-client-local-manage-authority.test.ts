@@ -19,7 +19,7 @@ function errorEnvelope(code: string, message = 'server detail must not be surfac
   return {
     protocol_version: '7',
     request_id: 'local-error-1',
-    error: { code, message },
+    error: { code, ...(message === undefined ? {} : { message }) },
   };
 }
 
@@ -27,7 +27,7 @@ describe('local manage-request authority', () => {
   const getServerCredential = vi.fn(async () => PARENT as string | null);
   let localFetch: ReturnType<typeof vi.fn>;
   let hostedFetch: ReturnType<typeof vi.fn>;
-  let failure: { status: number; code: string } | null;
+  let failure: { status: number; code: string; message?: string; body?: string } | null;
 
   beforeEach(() => {
     vi.resetModules();
@@ -41,7 +41,7 @@ describe('local manage-request authority', () => {
       const url = new URL(input.toString());
       const method = init?.method ?? 'GET';
       if (failure) {
-        return new Response(JSON.stringify(errorEnvelope(failure.code)), {
+        return new Response(failure.body ?? JSON.stringify(errorEnvelope(failure.code, failure.message)), {
           status: failure.status,
         });
       }
@@ -214,6 +214,51 @@ describe('local manage-request authority', () => {
       name: 'BorgServerHttpError',
       status,
       code,
+    });
+  });
+
+  it('surfaces the bounded server message while retaining HTTP status and code', async () => {
+    failure = {
+      status: 507,
+      code: 'CAPACITY_EXCEEDED',
+      message: 'Decision budget exceeded: current total is 16000 bytes; remove or relocate a decision before retrying.',
+    };
+    const { recordDecision } = await import('../src/remote-client.js');
+
+    await expect(recordDecision(
+      SESSION,
+      ORIGIN,
+      { topic: 'topology', decision: 'public repos' },
+      TRUST_IDENTITY,
+    )).rejects.toMatchObject({
+      name: 'BorgServerHttpError',
+      status: 507,
+      code: 'CAPACITY_EXCEEDED',
+      message: expect.stringContaining('Decision budget exceeded: current total is 16000 bytes'),
+    });
+  });
+
+  it.each([
+    ['message-less envelope', JSON.stringify({
+      protocol_version: '7',
+      request_id: 'local-error-1',
+      error: { code: 'INVALID_INPUT' },
+    })],
+    ['non-JSON body', 'not-json'],
+  ])('keeps the bare status fallback for a %s', async (_kind, body) => {
+    failure = { status: 507, code: 'CAPACITY_EXCEEDED', body };
+    const { recordDecision } = await import('../src/remote-client.js');
+
+    await expect(recordDecision(
+      SESSION,
+      ORIGIN,
+      { topic: 'topology', decision: 'public repos' },
+      TRUST_IDENTITY,
+    )).rejects.toMatchObject({
+      name: 'BorgServerHttpError',
+      status: 507,
+      code: undefined,
+      message: 'Borg server request failed (HTTP 507)',
     });
   });
 
