@@ -1,9 +1,9 @@
 import { getActiveCube, getCodexWakeTarget, setCodexWakeTarget, type ActiveCube } from './cubes.js';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { checkCodexBridgeHealthy } from './codex-remote.js';
-export declare const CODEX_WAKE_PROMPT = "New Borg cube-log activity arrived.";
+export declare const CODEX_WAKE_PROMPT = "Borg cube activity arrived while you were busy. Reading cube messages does not end your current task. Drain `borg_read-log unread_only=true` until caught up, handle actionable entries, then RESUME the interrupted work.";
 export declare function formatCodexWakePrompt(inboxLine: string): string;
-export declare const CODEX_CATCHUP_PROMPT = "Borg cube activity arrived while you were busy. Wake triage: run `borg_read-log unread_only=true` and DRAIN \u2014 repeat until the returned page is under the limit and behind_by is 0 \u2014 so no entries are skipped. Then handle actionable entries; if none, resume the prior interrupted work.";
+export declare const CODEX_CATCHUP_PROMPT: string;
 export declare function isCodexRemoteWakeEnabled(env?: NodeJS.ProcessEnv): boolean;
 export { resolveSessionAgentKind } from './agent-runtime.js';
 export interface CodexWakeTarget {

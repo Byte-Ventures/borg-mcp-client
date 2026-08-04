@@ -34,6 +34,7 @@ import { loadBorgServerTrust } from './server-trust.js';
 import { advanceLocalServerCursor, clearLocalServerCursor, encodeLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, EVICTED_RESULT_MARKER, errorCodeFromBody, } from './drone-lifecycle.js';
 import { CODEX_HEARTBEAT_CADENCE_MS, fireCodexHeartbeatTick, formatCodexWakePrompt, startCodexHeartbeat, wakeCodexViaAppServer, } from './codex-app-wake.js';
+import { formatCubeActivityWakeMessage } from './cube-activity-wake-copy.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { BorgServerError } from './server-errors.js';
 import { markSeatRejected } from './seats.js';
@@ -635,14 +636,14 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         if (alreadyPersisted) {
             // Replay still re-enters the OpenCode delivery queue with the same entry
             // ID. The queue confirms/deduplicates it by the unique persisted entry text.
-            await injectOpenCode(line, ev.id, false);
+            await injectOpenCode(formatCubeActivityWakeMessage(line), ev.id, false);
             markEventPersisted(ev.id, ev.data?.created_at ?? '');
             return 'persisted-skip';
         }
         // The inbox append is the durable record. OpenCode injection is only the
         // wake attempt and may return before the agent finishes processing.
         await appendLine(active.cubeId, active.droneId, line);
-        if (!(await injectOpenCode(line, ev.id, true))) {
+        if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), ev.id, true))) {
             wakeCodex(formatCodexWakePrompt(line));
         }
         return 'written';

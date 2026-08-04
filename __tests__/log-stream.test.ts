@@ -410,11 +410,13 @@ describe('streamOnce', () => {
       order.push('append');
     });
     const injectOpenCode = vi.fn(async (
-      _line: string,
+      line: string,
       entryId: string,
       allowSubmit: boolean,
     ) => {
       expect(order).toEqual(['append']);
+      expect(line).toContain('Reading cube messages does not end your current task');
+      expect(line).toContain('RESUME the interrupted work');
       expect(entryId).toBe('e-durable');
       expect(allowSubmit).toBe(true);
       order.push('inject');
@@ -748,7 +750,7 @@ describe('streamOnce', () => {
 
     expect(appendLine).toHaveBeenCalledTimes(1);
     expect(wakeCodex).toHaveBeenCalledTimes(1);
-    expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('New Borg cube-log activity arrived'));
+    expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('Reading cube messages does not end your current task'));
     expect(wakeCodex).not.toHaveBeenCalledWith(expect.stringContaining('borg_regen'));
     expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('drone-other'));
     expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('hello'));

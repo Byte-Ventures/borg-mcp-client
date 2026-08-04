@@ -35,6 +35,7 @@ import { chmodSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, 
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { formatCubeActivityWakeMessage } from './cube-activity-wake-copy.js';
 const ENTRY_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\S*)\s+(\S+)\s+\(([^)]+)\):\s*(.*)$/;
 export const RECENT_EMITTED_LINE_CAP = 1024;
 export class RecentLineDeduper {
@@ -81,11 +82,13 @@ export function formatEventLine(inboxLine) {
     const summary = body.trim();
     return `${label} (${role}): ${summary}`;
 }
-export function formatFreshEventLine(inboxLine, deduper) {
+export function formatFreshEventLine(inboxLine, deduper, includeWakeMessage = false) {
     const pretty = formatEventLine(inboxLine);
     if (pretty === null)
         return null;
-    return deduper.remember(inboxLine) ? pretty : null;
+    return deduper.remember(inboxLine)
+        ? includeWakeMessage ? formatCubeActivityWakeMessage(pretty) : pretty
+        : null;
 }
 export function seedDeduperFromInboxTail(inboxPath, deduper, maxLines = 512) {
     if (!Number.isInteger(maxLines) || maxLines < 1) {
@@ -763,7 +766,7 @@ function main() {
         }
         const rl = createInterface({ input: tail.stdout, crlfDelay: Infinity });
         rl.on('line', (line) => {
-            const pretty = formatFreshEventLine(line, deduper);
+            const pretty = formatFreshEventLine(line, deduper, true);
             if (pretty !== null) {
                 console.log(pretty);
                 // Delivered → the tail is current; re-anchor the offset to the live

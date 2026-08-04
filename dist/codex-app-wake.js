@@ -4,9 +4,10 @@ import { checkCodexBridgeHealthy } from './codex-remote.js';
 import { hasPendingWakeActivity } from './remote-client.js';
 import { BORG_CODEX_REMOTE_WAKE_ENV, resolveSessionAgentKind, } from './agent-runtime.js';
 import { codexAppServerSocketFromEnv, pickFreshThread, wakeTargetChanged, wakeRetryBackoffMs, wakeRetryExpired, WAKE_RETRY_MAX_ATTEMPTS, shouldFireHeartbeat, } from './codex-wake-resolve.js';
-export const CODEX_WAKE_PROMPT = 'New Borg cube-log activity arrived.';
+import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE, formatCubeActivityWakeMessage, } from './cube-activity-wake-copy.js';
+export const CODEX_WAKE_PROMPT = CUBE_ACTIVITY_RESUME_WAKE_MESSAGE;
 export function formatCodexWakePrompt(inboxLine) {
-    return `New Borg cube-log activity arrived:\n${inboxLine}`;
+    return formatCubeActivityWakeMessage(inboxLine);
 }
 // gh#708: STATIC catch-up/drain prompt (zero interpolation — no token/secret/PII/
 // cube-content; the entry bodies are fetched by codex itself via the
@@ -14,7 +15,8 @@ export function formatCodexWakePrompt(inboxLine) {
 // once after a wake is deferred (mid-turn thread) or retried (transient miss), to
 // fire the already-shipped drain so no entry is skipped. gh#857 WI-2 reuses it as
 // the periodic heartbeat prompt.
-export const CODEX_CATCHUP_PROMPT = 'Borg cube activity arrived while you were busy. Wake triage: run `borg_read-log unread_only=true` and DRAIN — repeat until the returned page is under the limit and behind_by is 0 — so no entries are skipped. Then handle actionable entries; if none, resume the prior interrupted work.';
+export const CODEX_CATCHUP_PROMPT = `${formatCubeActivityWakeMessage('Wake triage: repeat the drain until the returned page is under the limit and behind_by is 0 so no entries are skipped.')} ` +
+    'If there are no actionable entries, resume the prior interrupted work.';
 export function isCodexRemoteWakeEnabled(env = process.env) {
     return env[BORG_CODEX_REMOTE_WAKE_ENV] === '1';
 }
