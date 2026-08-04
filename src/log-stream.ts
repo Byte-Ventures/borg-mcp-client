@@ -739,7 +739,10 @@ export async function streamOnce(
   // Local mirror of the resume cursor, updated AFTER each successful
   // disk write (or dedup-recognized replay). Heartbeat-hwm comparison
   // reads this value.
-  let lastPersistedEventId: string | null = lastEventId;
+  // Seed it from the persisted cursor as well as the in-memory Last-Event-ID:
+  // a reconnect after process restart must not treat the cursor's durable
+  // horizon as unknown while catchup is being replayed.
+  let lastPersistedEventId: string | null = cursor?.id ?? lastEventId;
   let lastBroadcastHwm: BroadcastHwm | null = null;
   let pendingHwmDivergence:
     | { hwm: BroadcastHwm; timer: NodeJS.Timeout }
@@ -769,7 +772,9 @@ export async function streamOnce(
   // a created_at would itself widen the next reconnect's window (the very
   // storm this fixes). Proven older-or-equal events are still recorded in
   // recentIds for dedup but do not move the cursor or re-fire onEventId.
-  let lastPersistedHwm: BroadcastHwm | null = null;
+  let lastPersistedHwm: BroadcastHwm | null = cursor
+    ? { id: cursor.id, created_at: cursor.created_at }
+    : null;
   const markEventPersisted = (id: string, createdAt: string) => {
     const next: BroadcastHwm = { id, created_at: createdAt };
     if (
@@ -842,16 +847,36 @@ export async function streamOnce(
     const line = formatInboxLine(withSseEventId(ev.data, ev.id));
     const deliveryId = ev.wake_nonce ?? ev.id;
     const isReping = ev.wake_nonce !== undefined;
-    const alreadyPersisted = (ev.wake_nonce !== undefined || isCatchingUp) && (
-      // gh#441: pass the rendered line so the dedup can also recognize LEGACY
-      // (no-entry_id-prefix) on-disk lines, not just the [entry_id:] marker.
+    const eventHwm = ev.data?.created_at
+      ? { id: ev.id, created_at: ev.data.created_at }
+      : null;
+    const atOrBeforeResumeCursor = Boolean(
+      isCatchingUp &&
+      lastPersistedHwm &&
+      eventHwm &&
+      compareBroadcastHwm(eventHwm, lastPersistedHwm) <= 0
+    );
+    // The persisted stream cursor is the authoritative catchup horizon. Only
+    // fall back to file-content inspection when there is no comparable cursor
+    // (legacy/no-cursor sessions), or for a nonce reping whose durable line is
+    // intentionally reused while its wake identity is delivered again.
+    const consultInboxFile = ev.wake_nonce !== undefined ||
+      (isCatchingUp && lastPersistedHwm === null);
+    const alreadyPersisted = atOrBeforeResumeCursor || (
+      consultInboxFile &&
+      // gh#441: pass the rendered line so the fallback dedup can also
+      // recognize LEGACY (no-entry_id-prefix) on-disk lines, not just the
+      // [entry_id:] marker.
       await hasInboxEntryId(active.cubeId, active.droneId, ev.id, line)
     );
     if (alreadyPersisted) {
-      // Replay still re-enters the OpenCode delivery queue. Ordinary entries
-      // correlate by canonical inbox text; re-pings add a stable nonce marker
-      // to the injected text so each distinct nonce submits exactly once.
-      await injectOpenCode(formatOpenCodeWakePrompt(line, ev.wake_nonce), deliveryId, isReping);
+      // An ordinary entry at/before the persisted cursor is already delivered
+      // and must not re-enter the OpenCode queue. Re-pings are the explicit
+      // exception: each wake nonce is a new delivery identity even when the
+      // underlying inbox line is already durable.
+      if (isReping) {
+        await injectOpenCode(formatOpenCodeWakePrompt(line, ev.wake_nonce), deliveryId, true);
+      }
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
     }

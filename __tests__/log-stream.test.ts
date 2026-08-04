@@ -458,7 +458,7 @@ describe('streamOnce', () => {
     expect(wakeCodex).not.toHaveBeenCalled();
   });
 
-  it('replays a durable catchup entry through OpenCode without appending it twice', async () => {
+  it('does not re-inject a durable catchup entry without appending it twice', async () => {
     const appendLine = vi.fn().mockResolvedValue(undefined);
     const injectOpenCode = vi.fn().mockResolvedValue(true);
     const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
@@ -472,11 +472,7 @@ describe('streamOnce', () => {
     });
 
     expect(appendLine).not.toHaveBeenCalled();
-    expect(injectOpenCode).toHaveBeenCalledWith(
-      expect.stringContaining('[entry_id: e-replay]'),
-      'e-replay',
-      false,
-    );
+    expect(injectOpenCode).not.toHaveBeenCalled();
   });
 
   it('re-pings with wake_nonce identity and submits despite the existing inbox line', async () => {
@@ -996,7 +992,7 @@ describe('streamOnce', () => {
   it('uses the persisted stream cursor to dedup catchup after process restart', async () => {
     const cursor = {
       id: '11111111-1111-4111-8111-111111111111',
-      created_at: '2026-05-11T12:00:00.000Z',
+      created_at: '2026-05-11T12:00:02.000Z',
     };
     const appendLine = vi.fn().mockResolvedValue(undefined);
     const hasInboxEntryId = vi.fn().mockResolvedValue(true);
@@ -1013,14 +1009,31 @@ describe('streamOnce', () => {
       wakeCodex,
     });
 
-    expect(hasInboxEntryId).toHaveBeenCalledWith(
-      ACTIVE_CUBE.cubeId,
-      ACTIVE_CUBE.droneId,
-      'e_A',
-      expect.stringContaining('[entry_id: e_A]'),
-    );
+    expect(hasInboxEntryId).not.toHaveBeenCalled();
     expect(appendLine).not.toHaveBeenCalled();
     expect(wakeCodex).not.toHaveBeenCalled();
+  });
+
+  it('does not let retained file content suppress a catchup entry newer than the cursor', async () => {
+    const cursor = {
+      id: '11111111-1111-4111-8111-111111111111',
+      created_at: '2026-05-11T12:00:00.000Z',
+    };
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const hasInboxEntryId = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e_after\ndata: {"id":"e_after","drone_label":"drone-2","role_name":"Reviewer","message":"after cursor","created_at":"2026-05-11T12:00:01Z"}\n\n',
+      'event: bookmark\ndata: {"as_of":"2026-05-11T12:00:02Z"}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      getCursor: vi.fn(async () => cursor),
+      hasInboxEntryId,
+    });
+
+    expect(hasInboxEntryId).not.toHaveBeenCalled();
+    expect(appendLine).toHaveBeenCalledTimes(1);
   });
 
   it('writes reconnect catchup entries that are not already in the inbox file', async () => {

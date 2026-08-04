@@ -9,7 +9,7 @@
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -23,7 +23,9 @@ import {
   formatEventLine,
   formatFreshEventLine,
   heartbeatPathFor,
+  INBOX_ARM_TIMESTAMP_SKEW_MS,
   isEntryInvocation,
+  isInboxLineAtOrAfterArm,
   legacyMonitorArtifactState,
   legacyPidfilePathFor,
   monitorStateRootForWorktree,
@@ -637,6 +639,24 @@ describe('formatFreshEventLine — tail -F re-read dedup (gh#643)', () => {
     expect(formatFreshEventLine(second, deduper)).not.toBeNull();
     expect(formatFreshEventLine(third, deduper)).not.toBeNull();
   });
+
+  it('drops entries timestamped before monitor arm while allowing live entries', () => {
+    const deduper = new RecentLineDeduper();
+    const armTimeMs = Date.parse('2026-05-17T13:35:00.000Z');
+    const historical =
+      '2026-05-17T13:34:00.000Z drone-1 (Coordinator): historical trim';
+    const skewed =
+      '2026-05-17T13:34:59.000Z drone-1 (Coordinator): small clock skew';
+    const live =
+      '2026-05-17T13:35:00.001Z drone-1 (Coordinator): live entry';
+
+    expect(isInboxLineAtOrAfterArm(historical, armTimeMs)).toBe(false);
+    expect(isInboxLineAtOrAfterArm(skewed, armTimeMs)).toBe(true);
+    expect(isInboxLineAtOrAfterArm(historical, armTimeMs, 0)).toBe(false);
+    expect(formatFreshEventLine(historical, deduper, false, armTimeMs)).toBeNull();
+    expect(formatFreshEventLine(live, deduper, false, armTimeMs)).not.toBeNull();
+    expect(INBOX_ARM_TIMESTAMP_SKEW_MS).toBeGreaterThan(0);
+  });
 });
 
 describe('seedDeduperFromInboxTail — cold-start trim burst guard (gh#643)', () => {
@@ -930,6 +950,70 @@ distDescribe('borg-inbox-monitor — end-to-end symlink spawn (gh#114)', () => {
       });
       owner.kill('SIGTERM');
       await ownerExited;
+    }
+  });
+
+  it('does not emit pre-arm history re-materialized by a trim rename', async () => {
+    const dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-monitor-e2e-trim-rename-'));
+    tmpDirs.push(dir);
+    const inboxFile = path.join(dir, 'config-inboxes', 'inbox.log');
+    const worktree = path.join(dir, 'worktree');
+    mkdirSync(worktree);
+    const stateRoot = monitorStateRootForWorktree(worktree);
+    ensureInboxDir(inboxFile);
+    writeFileSync(inboxFile, '');
+
+    const proc = spawn(process.execPath, [DIST_BIN, '--state-root', stateRoot, inboxFile], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
+    proc.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
+    const pidfile = pidfilePathFor(inboxFile, stateRoot);
+    const claimed = await new Promise<boolean>((resolve) => {
+      const deadline = Date.now() + 2_000;
+      const poll = () => {
+        if (existsSync(pidfile)) return resolve(true);
+        if (proc.exitCode !== null || Date.now() >= deadline) return resolve(false);
+        setTimeout(poll, 10);
+      };
+      poll();
+    });
+
+    try {
+      expect(claimed, stderr).toBe(true);
+      const trimmed = path.join(dir, 'trimmed-inbox.log');
+      writeFileSync(
+        trimmed,
+        '2020-01-01T00:00:00.000Z drone-1 (Coordinator): historical trim\n',
+      );
+      renameSync(trimmed, inboxFile);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      writeFileSync(
+        inboxFile,
+        `${new Date().toISOString()} drone-1 (Coordinator): live after trim\n`,
+        { flag: 'a' },
+      );
+      const deadline = Date.now() + 2_000;
+      while (!stdout.includes('live after trim') && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(stdout).not.toContain('historical trim');
+      expect(stdout).toContain('live after trim');
+      const unexpectedStderr = stderr
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line !== '')
+        .filter((line) => !/^tail: .* (?:has been replaced|has appeared);\s+following new file$/.test(line));
+      expect(unexpectedStderr).toEqual([]);
+    } finally {
+      const exited = new Promise<void>((resolve) => {
+        if (proc.exitCode !== null) return resolve();
+        proc.once('exit', () => resolve());
+      });
+      proc.kill('SIGTERM');
+      await exited;
     }
   });
 
