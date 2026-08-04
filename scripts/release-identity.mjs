@@ -362,7 +362,10 @@ function transformExtraction(raw, oldVersion, newVersion, record) {
   }
   return raw
     .replace(currentIdentity, nextIdentity)
-    .replace(currentGate, `reviewed \`v${newVersion}\` source`);
+    .replace(
+      currentGate,
+      `current release identity and publication gate remain governed by the reviewed \`v${newVersion}\` source`,
+    );
 }
 
 function releaseParagraph(record) {

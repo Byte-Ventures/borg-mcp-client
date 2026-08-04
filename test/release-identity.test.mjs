@@ -242,6 +242,24 @@ test('release preparation rejects old false next-candidate ledger conventions', 
   }
 });
 
+test('release identity transforms preserve the publication-gate convention across chained versions', async (t) => {
+  const fixture = await createFixture(t, { failedSuperseded: true });
+  const baseFiles = await readTransformFiles(fixture.root);
+  const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
+  const first = buildReleaseTransform(baseFiles, oldVersion, newVersion, prepared.record);
+  const chainedRecord = { ...prepared.record, version: newVersion, tag: `v${newVersion}` };
+  const firstExtraction = first.get('docs/EXTRACTION_PROVENANCE.md');
+  const gate = `current release identity and publication gate remain governed by the reviewed \`v${newVersion}\` source`;
+  assert.match(firstExtraction, new RegExp(gate.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')));
+
+  assert.doesNotThrow(() => buildReleaseTransform(
+    first,
+    newVersion,
+    `${Number(newVersion.split('.')[0]) + 1}.0.0`,
+    chainedRecord,
+  ));
+});
+
 test('published release preparation rejects an earlier published-version marker', async (t) => {
   const fixture = await createFixture(t);
   const baseFiles = await readTransformFiles(fixture.root);
