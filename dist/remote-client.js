@@ -33,6 +33,7 @@ import { RoleSectionConflictError } from './local-manage-tool-result.js';
 // retryAfter can't wedge the call.
 const RATE_LIMIT_MAX_RETRIES = 3;
 const RATE_LIMIT_MAX_WAIT_MS = 60_000; // cap a single Retry-After honor
+const UNREAD_CURSOR_MAX_TRANSPORT_RETRIES = 1;
 export const LOCAL_SERVER_RESPONSE_LIMIT_BYTES = 32 * 1024 * 1024;
 // A typed auth-error envelope is tiny; anything larger is hostile and the
 // bounded read throws → the 401 fails closed to non-destructive CREDENTIAL_REJECTED.
@@ -104,6 +105,22 @@ export async function retryOn429(initialResponse, doRequest, opts) {
         response = await doRequest();
     }
     return response;
+}
+function isConnectionReset(error) {
+    let candidate = error;
+    for (let depth = 0; depth < 2; depth += 1) {
+        if (candidate === null || typeof candidate !== 'object')
+            return false;
+        const typed = candidate;
+        if (typed.code === 'ECONNRESET')
+            return true;
+        candidate = typed.cause;
+    }
+    return false;
+}
+function unreadLogTransportFailure(cause) {
+    return new BorgServerUnreachableError('Borg could not complete the unread log read after one automatic retry. ' +
+        'The request may have reached the server; repeat `borg_read-log unread_only=true` until caught up.', { cause });
 }
 async function localAuthorityContext(sessionToken, apiUrl, expectedServerTrustIdentity) {
     const active = await getActiveCube();
@@ -177,7 +194,7 @@ async function decodeLocalProtocolResponse(request, allowNoContent, decodePayloa
         clearTimeout(timeout);
     }
 }
-async function localServerRequest(active, path, method, payload) {
+async function localServerRequest(active, path, method, payload, options = {}) {
     return decodeLocalProtocolResponse((signal) => authedFetch(path, {
         method,
         signal,
@@ -192,6 +209,7 @@ async function localServerRequest(active, path, method, payload) {
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
                 body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
             }),
+        retryMode: options.retryMode,
     }), true);
 }
 function manageCopyValue(value) {
@@ -334,7 +352,7 @@ async function localReadLogPage(active, opts = {}) {
     const payload = await localServerRequest(active, `/api/cubes/${active.cubeId}/logs`, 'PUT', {
         cursor: opts.cursor ?? null,
         ...(opts.limit === undefined ? {} : { limit: opts.limit }),
-    });
+    }, { retryMode: opts.retryMode });
     if (!payload)
         throw new Error('Local Borg server returned an empty log response');
     return payload;
@@ -424,7 +442,7 @@ function sleep(ms) {
  * what BORG_API_URL was set to when this process started.
  */
 async function authedFetch(path, init = {}) {
-    const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, localSessionCredentialRef, headers, ...rest } = init;
+    const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, localSessionCredentialRef, retryMode, headers, ...rest } = init;
     if (apiUrl === undefined) {
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
@@ -483,7 +501,39 @@ async function authedFetch(path, init = {}) {
         debugLog(`← ${res.status} ${method} ${path}`);
         return res;
     };
-    const response = await buildRequest(token);
+    let transportRetriesRemaining = retryMode === 'unread-cursor'
+        ? UNREAD_CURSOR_MAX_TRANSPORT_RETRIES
+        : 0;
+    const requestWithRetry = async () => {
+        try {
+            return await buildRequest(token);
+        }
+        catch (error) {
+            if (retryMode !== 'unread-cursor' || !isConnectionReset(error))
+                throw error;
+            if (transportRetriesRemaining === 0)
+                throw unreadLogTransportFailure(error);
+            transportRetriesRemaining -= 1;
+            debugLog('↻ retrying unread log read after ECONNRESET');
+            try {
+                return await buildRequest(token);
+            }
+            catch (retryError) {
+                if (isConnectionReset(retryError))
+                    throw unreadLogTransportFailure(retryError);
+                throw retryError;
+            }
+        }
+    };
+    let response = await requestWithRetry();
+    let rateLimitRetryExhausted = false;
+    if (retryMode === 'unread-cursor') {
+        response = await retryOn429(response, requestWithRetry, {
+            sleep,
+            log: debugLog,
+        });
+        rateLimitRetryExhausted = response.status === 429;
+    }
     if (response.status === 401) {
         // Reached only after pinned-TLS trust is verified (localAuthorityContext
         // fails closed otherwise). The DESTRUCTIVE worktree-seat reset is permitted
@@ -574,9 +624,12 @@ async function authedFetch(path, init = {}) {
                 markSeatRejected(localSessionCredentialRef);
             throw new CubeDeletedError();
         }
+        const retryGuidance = rateLimitRetryExhausted
+            ? ' Repeat `borg_read-log unread_only=true` until caught up.'
+            : '';
         throw new BorgServerHttpError(response.status, serverMessage
-            ? `Borg server request failed (HTTP ${response.status}): ${serverMessage}`
-            : `Borg server request failed (HTTP ${response.status})`, code);
+            ? `Borg server request failed (HTTP ${response.status}): ${serverMessage}${retryGuidance}`
+            : `Borg server request failed (HTTP ${response.status})${retryGuidance}`, code);
     }
     return response;
 }
@@ -674,7 +727,13 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
         cursor = await getLocalServerCursor(localCursorBinding(local));
     if (opts.since !== undefined)
         cursor = await resolveLocalLogCursor(local, opts.since);
-    const page = await localReadLogPage(local, { cursor, limit: opts.limit });
+    const page = await localReadLogPage(local, {
+        cursor,
+        limit: opts.limit,
+        // Keep the cursor payload stable across a lost response; do not re-read or
+        // advance local state until one response has been decoded successfully.
+        ...(opts.unreadOnly && opts.since === undefined ? { retryMode: 'unread-cursor' } : {}),
+    });
     if (opts.unreadOnly && page.cursor) {
         await advanceLocalServerCursor(localCursorBinding(local), page.cursor);
     }
