@@ -365,11 +365,14 @@ async function deliverOpenCodeEntry(owner, delivery) {
                 log(`entry ${delivery.entryId} target unavailable: ${err}`);
                 continue;
             }
-            if (!target)
+            if (!target) {
+                log(`entry ${delivery.entryId} target unavailable: no bound session`);
                 return 'failed';
+            }
         }
         try {
             if (await findInjectedMessage(target.id, delivery.text)) {
+                log(`entry ${delivery.entryId} already present in session ${target.id}`);
                 return 'delivered';
             }
         }
@@ -508,14 +511,17 @@ export async function injectInitialKickoff(launch) {
 }
 /**
  * Queue one durable inbox entry for delivery into the bound OpenCode session.
- * The durable inbox text identifies the OpenCode-generated user message, so
- * retries and replay can confirm an earlier ambiguous submission without
- * supplying an ordering-breaking caller message ID or running it twice.
+ * The injected text identifies the OpenCode-generated user message, so retries
+ * and replay can confirm an earlier ambiguous submission without supplying an
+ * ordering-breaking caller message ID or running it twice. Normal delivery uses
+ * canonical inbox text; wake re-pings include their stable nonce marker.
  */
 export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(text).digest('hex'), allowSubmit = true) {
     const owner = state;
-    if (!owner?.connected)
+    if (!owner?.connected) {
+        log(`entry ${entryId} rejected: OpenCode is not connected`);
         return Promise.resolve(false);
+    }
     const deliveredText = owner.deliveredEntries.get(entryId);
     if (deliveredText !== undefined) {
         if (deliveredText !== text) {
@@ -523,6 +529,7 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
             rememberBounded(owner.failedEntries, entryId, text);
             return Promise.resolve(false);
         }
+        log(`entry ${entryId} replay already delivered`);
         return Promise.resolve(true);
     }
     const unconfirmedText = owner.unconfirmedEntries.get(entryId);
@@ -532,6 +539,7 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
             rememberBounded(owner.failedEntries, entryId, text);
             return Promise.resolve(false);
         }
+        log(`entry ${entryId} replay remains unconfirmed`);
         return Promise.resolve(false);
     }
     const active = owner.activeDeliveries.get(entryId);
@@ -541,6 +549,7 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
             rememberBounded(owner.failedEntries, entryId, text);
             return Promise.resolve(false);
         }
+        log(`entry ${entryId} replay joined active delivery`);
         return active.promise;
     }
     let resolveDelivery;

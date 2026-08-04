@@ -49,7 +49,7 @@ export interface CodexWakeDeps {
     isStreamOwner?: () => boolean;
     onAppServerSocketDead?: () => void;
 }
-export declare function wakeCodexViaAppServer(reason?: string, env?: NodeJS.ProcessEnv, deps?: CodexWakeDeps): void;
+export declare function wakeCodexViaAppServer(reason?: string, env?: NodeJS.ProcessEnv, deps?: CodexWakeDeps, deliveryIdentity?: string): void;
 /**
  * gh#857 WI-2: codex /loop-equivalent heartbeat cadence. Codex retains this
  * independent 20-minute drain because it has no Claude-style per-entry inbox

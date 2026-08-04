@@ -485,11 +485,15 @@ async function deliverOpenCodeEntry(
         log(`entry ${delivery.entryId} target unavailable: ${err}`);
         continue;
       }
-      if (!target) return 'failed';
+      if (!target) {
+        log(`entry ${delivery.entryId} target unavailable: no bound session`);
+        return 'failed';
+      }
     }
 
     try {
       if (await findInjectedMessage(target.id, delivery.text)) {
+        log(`entry ${delivery.entryId} already present in session ${target.id}`);
         return 'delivered';
       }
     } catch (err) {
@@ -631,9 +635,10 @@ export async function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promi
 
 /**
  * Queue one durable inbox entry for delivery into the bound OpenCode session.
- * The durable inbox text identifies the OpenCode-generated user message, so
- * retries and replay can confirm an earlier ambiguous submission without
- * supplying an ordering-breaking caller message ID or running it twice.
+ * The injected text identifies the OpenCode-generated user message, so retries
+ * and replay can confirm an earlier ambiguous submission without supplying an
+ * ordering-breaking caller message ID or running it twice. Normal delivery uses
+ * canonical inbox text; wake re-pings include their stable nonce marker.
  */
 export function injectOpenCodeEntry(
   text: string,
@@ -641,7 +646,10 @@ export function injectOpenCodeEntry(
   allowSubmit: boolean = true,
 ): Promise<boolean> {
   const owner = state;
-  if (!owner?.connected) return Promise.resolve(false);
+  if (!owner?.connected) {
+    log(`entry ${entryId} rejected: OpenCode is not connected`);
+    return Promise.resolve(false);
+  }
 
   const deliveredText = owner.deliveredEntries.get(entryId);
   if (deliveredText !== undefined) {
@@ -650,6 +658,7 @@ export function injectOpenCodeEntry(
       rememberBounded(owner.failedEntries, entryId, text);
       return Promise.resolve(false);
     }
+    log(`entry ${entryId} replay already delivered`);
     return Promise.resolve(true);
   }
 
@@ -660,6 +669,7 @@ export function injectOpenCodeEntry(
       rememberBounded(owner.failedEntries, entryId, text);
       return Promise.resolve(false);
     }
+    log(`entry ${entryId} replay remains unconfirmed`);
     return Promise.resolve(false);
   }
 
@@ -670,6 +680,7 @@ export function injectOpenCodeEntry(
       rememberBounded(owner.failedEntries, entryId, text);
       return Promise.resolve(false);
     }
+    log(`entry ${entryId} replay joined active delivery`);
     return active.promise;
   }
 

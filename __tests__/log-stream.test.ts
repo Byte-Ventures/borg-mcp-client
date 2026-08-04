@@ -271,6 +271,20 @@ describe('parseSSE', () => {
     expect(events[0]).toMatchObject({ type: 'log', id: 'e1' });
   });
 
+  it('parses an additive entry wake_nonce without changing the SSE event id', async () => {
+    const events: any[] = [];
+    const body = makeSSEResponse([
+      'event: log\nid: real-entry-1\ndata: {"entry":{"id":"real-entry-1","message":"retry me","wake_nonce":"wake-1"}}\n\n',
+    ]).body!;
+    for await (const event of parseSSE(body)) events.push(event);
+    expect(events).toEqual([{
+      type: 'log',
+      id: 'real-entry-1',
+      data: { id: 'real-entry-1', message: 'retry me', wake_nonce: 'wake-1' },
+      wake_nonce: 'wake-1',
+    }]);
+  });
+
   // gh#877 Path-A: terminal eviction control frame.
   it('parses an eviction event into a typed eviction ParsedEvent', async () => {
     const blocks = [
@@ -463,6 +477,129 @@ describe('streamOnce', () => {
       'e-replay',
       false,
     );
+  });
+
+  it('re-pings with wake_nonce identity and submits despite the existing inbox line', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-reping\ndata: {"entry":{"id":"e-reping","message":"retry me","wake_nonce":"wake-1"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, 'older-entry', vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      hasInboxEntryId: vi.fn().mockResolvedValue(true),
+      injectOpenCode,
+    });
+
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).toHaveBeenCalledWith(
+      expect.stringContaining('<!-- borg-wake-nonce:wake-1 -->'),
+      'wake-1',
+      true,
+    );
+  });
+
+  it('re-pings a same-stream recent event without appending a second inbox line', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-same\ndata: {"entry":{"id":"e-same","message":"original"}}\n\n',
+      'event: log\nid: e-same\ndata: {"entry":{"id":"e-same","message":"original","wake_nonce":"wake-same"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      injectOpenCode,
+    });
+
+    expect(appendLine).toHaveBeenCalledTimes(1);
+    expect(injectOpenCode).toHaveBeenCalledTimes(2);
+    expect(injectOpenCode).toHaveBeenLastCalledWith(
+      expect.stringContaining('<!-- borg-wake-nonce:wake-same -->'),
+      'wake-same',
+      true,
+    );
+  });
+
+  it('does not wake an unaddressed direct recipient on a nonce replay', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      `event: log\nid: e-other\ndata: {"id":"e-other","visibility":"direct","recipient_drone_ids":["other-drone"],"message":"not for this seat"}\n\n`,
+      `event: log\nid: e-other\ndata: {"id":"e-other","visibility":"direct","recipient_drone_ids":["other-drone"],"message":"not for this seat","wake_nonce":"wake-other"}\n\n`,
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      injectOpenCode,
+    });
+
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).not.toHaveBeenCalled();
+  });
+
+  it('does not wake a self-authored direct entry on a nonce replay', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      `event: log\nid: e-self\ndata: {"id":"e-self","visibility":"direct","recipient_drone_ids":["${ACTIVE_CUBE.droneId}"],"drone_id":"${ACTIVE_CUBE.droneId}","message":"my directed post"}\n\n`,
+      `event: log\nid: e-self\ndata: {"id":"e-self","visibility":"direct","recipient_drone_ids":["${ACTIVE_CUBE.droneId}"],"drone_id":"${ACTIVE_CUBE.droneId}","message":"my directed post","wake_nonce":"wake-self"}\n\n`,
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      injectOpenCode,
+    });
+
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).not.toHaveBeenCalled();
+  });
+
+  it('consults inbox dedup for a nonce re-ping after a resume bookmark', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const hasInboxEntryId = vi.fn().mockResolvedValue(true);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: bookmark\ndata: {"as_of":"2026-05-11T12:00:00Z"}\n\n',
+      'event: log\nid: e-live\ndata: {"entry":{"id":"e-live","message":"original","wake_nonce":"wake-live"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      hasInboxEntryId,
+      injectOpenCode,
+    });
+
+    expect(hasInboxEntryId).toHaveBeenCalledWith(
+      ACTIVE_CUBE.cubeId,
+      ACTIVE_CUBE.droneId,
+      'e-live',
+      expect.any(String),
+    );
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).toHaveBeenCalledWith(
+      expect.stringContaining('<!-- borg-wake-nonce:wake-live -->'),
+      'wake-live',
+      true,
+    );
+  });
+
+  it('passes wake_nonce as the Codex delivery identity on fallback wake', async () => {
+    const wakeCodex = vi.fn();
+    const injectOpenCode = vi.fn().mockResolvedValue(false);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-codex-reping\ndata: {"entry":{"id":"e-codex-reping","message":"retry me","wake_nonce":"wake-codex-1"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl),
+      injectOpenCode,
+      wakeCodex,
+    });
+
+    expect(wakeCodex).toHaveBeenCalledWith(expect.any(String), 'wake-codex-1');
+    expect(wakeCodex.mock.calls[0]?.[0]).not.toContain('borg-wake-nonce');
   });
 
   it('does not suppress fallback wake handling for an unconfirmed OpenCode delivery', async () => {
