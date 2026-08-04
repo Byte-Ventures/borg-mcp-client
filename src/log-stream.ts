@@ -834,7 +834,7 @@ export async function streamOnce(
     const line = formatInboxLine(withSseEventId(ev.data, ev.id));
     const deliveryId = ev.wake_nonce ?? ev.id;
     const isReping = ev.wake_nonce !== undefined;
-    const alreadyPersisted = isCatchingUp && (
+    const alreadyPersisted = (ev.wake_nonce !== undefined || isCatchingUp) && (
       // gh#441: pass the rendered line so the dedup can also recognize LEGACY
       // (no-entry_id-prefix) on-disk lines, not just the [entry_id:] marker.
       await hasInboxEntryId(active.cubeId, active.droneId, ev.id, line)
@@ -1079,6 +1079,13 @@ export async function streamOnce(
         // id we've actually got persisted). UUIDs are not ordinally
         // comparable with created_at, so set membership is the check.
         if (recentIds.has(event.id)) {
+          if (event.wake_nonce !== undefined) {
+            const line = formatInboxLine(withSseEventId(event.data, event.id));
+            if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), event.wake_nonce, true))) {
+              if (event.wake_nonce === undefined) wakeCodex(formatCodexWakePrompt(line));
+              else wakeCodex(formatCodexWakePrompt(line), event.wake_nonce);
+            }
+          }
           markEventPersisted(event.id, event.data?.created_at ?? '');
           markBroadcastPersisted(broadcastHwmFromLogEvent(event));
           continue;

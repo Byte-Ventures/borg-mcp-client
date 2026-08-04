@@ -500,6 +500,49 @@ describe('streamOnce', () => {
     );
   });
 
+  it('re-pings a same-stream recent event without appending a second inbox line', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-same\ndata: {"entry":{"id":"e-same","message":"original"}}\n\n',
+      'event: log\nid: e-same\ndata: {"entry":{"id":"e-same","message":"original","wake_nonce":"wake-same"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      injectOpenCode,
+    });
+
+    expect(appendLine).toHaveBeenCalledTimes(1);
+    expect(injectOpenCode).toHaveBeenCalledTimes(2);
+    expect(injectOpenCode).toHaveBeenLastCalledWith(expect.any(String), 'wake-same', true);
+  });
+
+  it('consults inbox dedup for a nonce re-ping after a resume bookmark', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const hasInboxEntryId = vi.fn().mockResolvedValue(true);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: bookmark\ndata: {"as_of":"2026-05-11T12:00:00Z"}\n\n',
+      'event: log\nid: e-live\ndata: {"entry":{"id":"e-live","message":"original","wake_nonce":"wake-live"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      hasInboxEntryId,
+      injectOpenCode,
+    });
+
+    expect(hasInboxEntryId).toHaveBeenCalledWith(
+      ACTIVE_CUBE.cubeId,
+      ACTIVE_CUBE.droneId,
+      'e-live',
+      expect.any(String),
+    );
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).toHaveBeenCalledWith(expect.any(String), 'wake-live', true);
+  });
+
   it('passes wake_nonce as the Codex delivery identity on fallback wake', async () => {
     const wakeCodex = vi.fn();
     const injectOpenCode = vi.fn().mockResolvedValue(false);
