@@ -98,6 +98,14 @@ function sanitizeServerMessage(message: string): string {
     .replace(/\\u(?:000[0-9a-f]|001[0-9a-f]|007f|008[0-9a-f]|009[0-9a-f])/gi, '');
 }
 
+export const SERVER_ADVISORY_MAX_CHARS = 512;
+
+export function sanitizeServerAdvisory(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const sanitized = sanitizeServerMessage(value).trim();
+  return sanitized.length > 0 ? sanitized.slice(0, SERVER_ADVISORY_MAX_CHARS) : undefined;
+}
+
 /**
  * Parse a `Retry-After` header (delta-seconds form, which the worker
  * emits — mcp-server.ts:382/583) into milliseconds. Returns null when
@@ -1321,7 +1329,7 @@ export async function updateCube(
   updates: { name?: string; cube_directive?: string; message_taxonomy?: MessageTaxonomy | null },
   activeOverride?: ActiveCube,
   connectionOverride?: RemoteConnection,
-): Promise<{ cube: any }> {
+): Promise<{ cube: any; advisory?: unknown }> {
   assertUuidShape(cubeId, 'cube_id');
   const active = activeOverride ?? await getActiveCube();
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
@@ -1457,7 +1465,7 @@ export async function updateRole(
   targetCubeId?: string,
   activeOverride?: ActiveCube,
   connectionOverride?: RemoteConnection,
-): Promise<{ role: any }> {
+): Promise<{ role: any; advisory?: unknown }> {
   assertUuidShape(roleId, 'role_id');
   const active = activeOverride ?? await getActiveCube();
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
@@ -1533,7 +1541,7 @@ export async function patchRoleSection(
   targetCubeId?: string,
   activeOverride?: ActiveCube,
   connectionOverride?: RemoteConnection,
-): Promise<{ role: any }> {
+): Promise<{ role: any; advisory?: unknown }> {
   assertUuidShape(roleId, 'role_id');
   const active = activeOverride ?? await getActiveCube();
   if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');

@@ -14,7 +14,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
 import { CubeDeletionConfirmationError } from './server-errors.js';
-import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
+import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, getActiveCubeForWorktree, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, pinMcpSeatIdentity, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
@@ -92,6 +92,27 @@ async function requireActiveCube() {
         throw new Error('Not assimilated to a cube. Use borg_assimilate <cube-name> first.');
     }
     return active;
+}
+export function appendServerAdvisory(text, advisory) {
+    const sanitized = sanitizeServerAdvisory(advisory);
+    return sanitized === undefined ? text : `${text}\n\nAdvisory: ${sanitized}`;
+}
+export function formatUpdatedCubeResult(cube, advisory) {
+    return appendServerAdvisory(`Updated cube **${cube.name}** (id: ${cube.id}).`, advisory);
+}
+export function formatUpdatedRoleResult(role, advisory) {
+    const tags = [
+        role.role_class === 'queen' ? 'Queen' : null,
+        role.is_human_seat ? 'human-seat' : null,
+        role.is_default ? 'default' : null,
+        role.is_mandatory ? 'mandatory' : null,
+    ].filter(Boolean).join(', ');
+    const tag = tags ? ` (${tags})` : '';
+    return appendServerAdvisory(`Updated role **${role.name}**${tag} (id: ${role.id}).`, advisory);
+}
+export function formatPatchedRoleSectionResult(action, heading, role, advisory) {
+    const verb = action === 'replace' ? 'Replaced' : action === 'insert' ? 'Inserted' : 'Deleted';
+    return appendServerAdvisory(`${verb} section **${heading}** in role **${role.name}** (id: ${role.id}).`, advisory);
 }
 export async function connectOpenCodeRuntime(active, env = process.env, deps = {}) {
     const configuredPort = configuredOpenCodePort(env);
@@ -830,8 +851,8 @@ export async function main() {
                         updates.message_taxonomy = args.message_taxonomy;
                     if (Object.keys(updates).length === 0)
                         throw new Error('Pass at least one of: cube_directive, message_taxonomy.');
-                    const { cube } = await updateCube(cubeId, updates);
-                    return { content: [{ type: 'text', text: `Updated cube **${cube.name}** (id: ${cube.id}).` }] };
+                    const { cube, advisory } = await updateCube(cubeId, updates);
+                    return { content: [{ type: 'text', text: formatUpdatedCubeResult(cube, advisory) }] };
                 }
                 case 'borg_patch-taxonomy-class': {
                     const cubeId = args?.cube_id;
@@ -935,15 +956,8 @@ export async function main() {
                         updates.default_model = args.default_model;
                     if (Object.keys(updates).length === 0)
                         throw new Error('Pass at least one of: name, short_description, detailed_description, is_default, is_mandatory, is_human_seat, can_broadcast, receives_all_direct.');
-                    const { role } = await updateRole(roleId, updates);
-                    const tags = [
-                        role.role_class === 'queen' ? 'Queen' : null,
-                        role.is_human_seat ? 'human-seat' : null,
-                        role.is_default ? 'default' : null,
-                        role.is_mandatory ? 'mandatory' : null,
-                    ].filter(Boolean).join(', ');
-                    const tag = tags ? ` (${tags})` : '';
-                    return { content: [{ type: 'text', text: `Updated role **${role.name}**${tag} (id: ${role.id}).` }] };
+                    const { role, advisory } = await updateRole(roleId, updates);
+                    return { content: [{ type: 'text', text: formatUpdatedRoleResult(role, advisory) }] };
                 }
                 case 'borg_patch-role-section': {
                     const roleId = args?.role_id;
@@ -957,8 +971,9 @@ export async function main() {
                     if (!heading)
                         throw new Error('heading is required');
                     let role;
+                    let advisory;
                     if (action === 'delete') {
-                        ({ role } = await patchRoleSection(roleId, { action, heading }));
+                        ({ role, advisory } = await patchRoleSection(roleId, { action, heading }));
                     }
                     else {
                         const body = args?.body;
@@ -967,14 +982,13 @@ export async function main() {
                         }
                         if (action === 'insert') {
                             const after = (typeof args?.after === 'string' ? args.after : null);
-                            ({ role } = await patchRoleSection(roleId, { action, heading, body, after }));
+                            ({ role, advisory } = await patchRoleSection(roleId, { action, heading, body, after }));
                         }
                         else {
-                            ({ role } = await patchRoleSection(roleId, { action, heading, body }));
+                            ({ role, advisory } = await patchRoleSection(roleId, { action, heading, body }));
                         }
                     }
-                    const verb = action === 'replace' ? 'Replaced' : action === 'insert' ? 'Inserted' : 'Deleted';
-                    return { content: [{ type: 'text', text: `${verb} section **${heading}** in role **${role.name}** (id: ${role.id}).` }] };
+                    return { content: [{ type: 'text', text: formatPatchedRoleSectionResult(action, heading, role, advisory) }] };
                 }
                 case 'borg_delete-role': {
                     const roleId = args?.role_id;
