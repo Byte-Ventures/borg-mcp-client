@@ -47,7 +47,6 @@ client `borgmcp@2.10.0` line. Its annotated tag object
 `sha512-lOxIPg3WcjSBte46iTM7SAFVN6Y0b2oizOKAJ9Q1EijBdOlmsh/cQlpUIaa8F2UJPaTDFsXy3M64gpGs6XgKzA==`
 in the `borgmcp-server-0.9.0-release` registry decision. That server and its
 client line pin historical `borgmcp-shared` version `0.8.1` and remain
-immutable. Client `borgmcp@2.13.0` is published. The immutable `v2.0.7`
-attempt failed before publication and remains preserved. Publication of the next
-candidate remains gated by reviewed `v2.14.0` source, a fresh annotated tag, and
+immutable. Client `borgmcp@2.14.0` is published. The immutable `v2.0.7`
+attempt failed before publication and remains preserved. The current release identity and publication gate remain governed by the reviewed `v2.14.0` source, a fresh annotated tag, and
 the exact-artifact and protected-publication gates.

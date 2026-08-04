@@ -348,7 +348,7 @@ function transformExtraction(raw, oldVersion, newVersion, record) {
   const nextIdentity = `current release identity is \`${newVersion}\``;
   const publishedVersion = currentPublishedVersion(raw);
   const currentPublished = `Client \`borgmcp@${publishedVersion}\` is published.`;
-  const currentGate = `reviewed \`v${oldVersion}\` source`;
+  const currentGate = `current release identity and publication gate remain governed by the reviewed \`v${oldVersion}\` source`;
   if (countLiteral(raw, currentIdentity) !== 1 ||
       countLiteral(raw, currentPublished) !== 1 ||
       countLiteral(raw, currentGate) !== 1) {

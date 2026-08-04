@@ -216,19 +216,30 @@ test('failed-superseded records require an exact failed workflow authority', asy
   );
 });
 
-test('release preparation rejects the old false next-candidate ledger convention', async (t) => {
-  const fixture = await createFixture(t);
-  const baseFiles = await readTransformFiles(fixture.root);
-  const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
-  baseFiles.set('docs/EXTRACTION_PROVENANCE.md', baseFiles.get('docs/EXTRACTION_PROVENANCE.md').replace(
-    `current release identity is \`${oldVersion}\``,
-    `so the next candidate identity is \`${oldVersion}\``,
-  ));
+test('release preparation rejects old false next-candidate ledger conventions', async (t) => {
+  for (const [name, mutate] of [
+    ['next candidate identity', (raw) => raw.replace(
+      `current release identity is \`${oldVersion}\``,
+      `so the next candidate identity is \`${oldVersion}\``,
+    )],
+    ['next candidate publication gate', (raw) => raw.replace(
+      `current release identity and publication gate remain governed by the reviewed \`v${oldVersion}\` source`,
+      `Publication of the next candidate remains gated by reviewed \`v${oldVersion}\` source`,
+    )],
+  ]) {
+    const fixture = await createFixture(t);
+    const baseFiles = await readTransformFiles(fixture.root);
+    const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
+    baseFiles.set('docs/EXTRACTION_PROVENANCE.md', mutate(
+      baseFiles.get('docs/EXTRACTION_PROVENANCE.md'),
+    ));
 
-  assert.throws(
-    () => buildReleaseTransform(baseFiles, oldVersion, newVersion, prepared.record),
-    /expected current release ledger/,
-  );
+    assert.throws(
+      () => buildReleaseTransform(baseFiles, oldVersion, newVersion, prepared.record),
+      /expected current release ledger/,
+      name,
+    );
+  }
 });
 
 test('published release preparation rejects an earlier published-version marker', async (t) => {
@@ -426,7 +437,7 @@ async function createFixture(t, { failedSuperseded = false } = {}) {
   }, null, 2)}\n`);
   await writeFixture(directory, 'docs/EXTRACTION_PROVENANCE.md',
     `The current release identity is \`${oldVersion}\`.\n` +
-    `Client \`borgmcp@${failedSuperseded ? anchorVersion : oldVersion}\` is published. Publication remains gated by reviewed \`v${oldVersion}\` source.\n`);
+    `Client \`borgmcp@${failedSuperseded ? anchorVersion : oldVersion}\` is published. The current release identity and publication gate remain governed by the reviewed \`v${oldVersion}\` source.\n`);
   await writeFixture(directory, 'docs/RELEASING.md',
     `# Releasing\n\n${releaseParagraph(anchorRecord)} The next candidate\n` +
     `uses the unused \`v${oldVersion}\` identity from a fresh reviewed protected-main commit\n` +
