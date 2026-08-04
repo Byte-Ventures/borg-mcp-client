@@ -38,6 +38,12 @@ import { fileURLToPath } from 'node:url';
 import { formatCubeActivityWakeMessage } from './cube-activity-wake-copy.js';
 const ENTRY_LINE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\S*)\s+(\S+)\s+\(([^)]+)\):\s*(.*)$/;
 export const RECENT_EMITTED_LINE_CAP = 1024;
+/**
+ * Allow a small amount of server/host clock skew at monitor arm. Lines older
+ * than this boundary are historical materialized inbox content, not live
+ * activity for this monitor instance.
+ */
+export const INBOX_ARM_TIMESTAMP_SKEW_MS = 5_000;
 export class RecentLineDeduper {
     cap;
     seen = new Set();
@@ -82,10 +88,26 @@ export function formatEventLine(inboxLine) {
     const summary = body.trim();
     return `${label} (${role}): ${summary}`;
 }
-export function formatFreshEventLine(inboxLine, deduper, includeWakeMessage = false) {
+/**
+ * Return whether an inbox entry is fresh enough to have been produced after
+ * this monitor armed. A malformed timestamp fails closed when this guard is
+ * active; callers without an arm boundary retain the legacy parser behavior.
+ */
+export function isInboxLineAtOrAfterArm(inboxLine, armTimeMs, skewMs = INBOX_ARM_TIMESTAMP_SKEW_MS) {
+    const match = ENTRY_LINE_RE.exec(inboxLine);
+    if (!match || !Number.isFinite(armTimeMs) || !Number.isFinite(skewMs) || skewMs < 0) {
+        return false;
+    }
+    const timestampMs = Date.parse(match[1]);
+    return Number.isFinite(timestampMs) && timestampMs >= armTimeMs - skewMs;
+}
+export function formatFreshEventLine(inboxLine, deduper, includeWakeMessage = false, armTimeMs) {
     const pretty = formatEventLine(inboxLine);
     if (pretty === null)
         return null;
+    if (armTimeMs !== undefined && !isInboxLineAtOrAfterArm(inboxLine, armTimeMs)) {
+        return null;
+    }
     return deduper.remember(inboxLine)
         ? includeWakeMessage ? formatCubeActivityWakeMessage(pretty) : pretty
         : null;
@@ -739,6 +761,7 @@ function main() {
     // wire behavior is identical — only the per-line projection changes.
     // `-n 0` skips backfilling history so fresh sessions don't replay
     // old entries on every restart.
+    const monitorArmTimeMs = Date.now();
     const deduper = new RecentLineDeduper();
     seedDeduperFromInboxTail(inboxPath, deduper);
     // gh#822: stat-anchored offset — seed to the inbox SIZE at arm (EOF, matching
@@ -766,7 +789,7 @@ function main() {
         }
         const rl = createInterface({ input: tail.stdout, crlfDelay: Infinity });
         rl.on('line', (line) => {
-            const pretty = formatFreshEventLine(line, deduper, true);
+            const pretty = formatFreshEventLine(line, deduper, true, monitorArmTimeMs);
             if (pretty !== null) {
                 console.log(pretty);
                 // Delivered → the tail is current; re-anchor the offset to the live

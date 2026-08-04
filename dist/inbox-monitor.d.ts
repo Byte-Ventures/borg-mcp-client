@@ -30,6 +30,12 @@
  * inbox-adjacent sidecars for compatibility while fleets transition.
  */
 export declare const RECENT_EMITTED_LINE_CAP = 1024;
+/**
+ * Allow a small amount of server/host clock skew at monitor arm. Lines older
+ * than this boundary are historical materialized inbox content, not live
+ * activity for this monitor instance.
+ */
+export declare const INBOX_ARM_TIMESTAMP_SKEW_MS = 5000;
 export declare class RecentLineDeduper {
     private readonly cap;
     private readonly seen;
@@ -51,7 +57,13 @@ export declare class RecentLineDeduper {
  * Exported so tests can exercise the parsing without spawning tail.
  */
 export declare function formatEventLine(inboxLine: string): string | null;
-export declare function formatFreshEventLine(inboxLine: string, deduper: RecentLineDeduper, includeWakeMessage?: boolean): string | null;
+/**
+ * Return whether an inbox entry is fresh enough to have been produced after
+ * this monitor armed. A malformed timestamp fails closed when this guard is
+ * active; callers without an arm boundary retain the legacy parser behavior.
+ */
+export declare function isInboxLineAtOrAfterArm(inboxLine: string, armTimeMs: number, skewMs?: number): boolean;
+export declare function formatFreshEventLine(inboxLine: string, deduper: RecentLineDeduper, includeWakeMessage?: boolean, armTimeMs?: number): string | null;
 export declare function seedDeduperFromInboxTail(inboxPath: string, deduper: RecentLineDeduper, maxLines?: number): void;
 /** Holder-tracked stall state. `lastEmittedOffset` is stat-anchored. */
 export interface TailStallState {

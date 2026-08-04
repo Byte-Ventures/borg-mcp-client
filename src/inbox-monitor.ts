@@ -42,6 +42,12 @@ const ENTRY_LINE_RE =
   /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\S*)\s+(\S+)\s+\(([^)]+)\):\s*(.*)$/;
 
 export const RECENT_EMITTED_LINE_CAP = 1024;
+/**
+ * Allow a small amount of server/host clock skew at monitor arm. Lines older
+ * than this boundary are historical materialized inbox content, not live
+ * activity for this monitor instance.
+ */
+export const INBOX_ARM_TIMESTAMP_SKEW_MS = 5_000;
 
 export class RecentLineDeduper {
   private readonly seen = new Set<string>();
@@ -86,13 +92,35 @@ export function formatEventLine(inboxLine: string): string | null {
   return `${label} (${role}): ${summary}`;
 }
 
+/**
+ * Return whether an inbox entry is fresh enough to have been produced after
+ * this monitor armed. A malformed timestamp fails closed when this guard is
+ * active; callers without an arm boundary retain the legacy parser behavior.
+ */
+export function isInboxLineAtOrAfterArm(
+  inboxLine: string,
+  armTimeMs: number,
+  skewMs = INBOX_ARM_TIMESTAMP_SKEW_MS,
+): boolean {
+  const match = ENTRY_LINE_RE.exec(inboxLine);
+  if (!match || !Number.isFinite(armTimeMs) || !Number.isFinite(skewMs) || skewMs < 0) {
+    return false;
+  }
+  const timestampMs = Date.parse(match[1]);
+  return Number.isFinite(timestampMs) && timestampMs >= armTimeMs - skewMs;
+}
+
 export function formatFreshEventLine(
   inboxLine: string,
   deduper: RecentLineDeduper,
   includeWakeMessage = false,
+  armTimeMs?: number,
 ): string | null {
   const pretty = formatEventLine(inboxLine);
   if (pretty === null) return null;
+  if (armTimeMs !== undefined && !isInboxLineAtOrAfterArm(inboxLine, armTimeMs)) {
+    return null;
+  }
   return deduper.remember(inboxLine)
     ? includeWakeMessage ? formatCubeActivityWakeMessage(pretty) : pretty
     : null;
@@ -887,6 +915,7 @@ function main(): void {
   // wire behavior is identical — only the per-line projection changes.
   // `-n 0` skips backfilling history so fresh sessions don't replay
   // old entries on every restart.
+  const monitorArmTimeMs = Date.now();
   const deduper = new RecentLineDeduper();
   seedDeduperFromInboxTail(inboxPath, deduper);
 
@@ -918,7 +947,7 @@ function main(): void {
 
     const rl = createInterface({ input: tail.stdout, crlfDelay: Infinity });
     rl.on('line', (line) => {
-      const pretty = formatFreshEventLine(line, deduper, true);
+      const pretty = formatFreshEventLine(line, deduper, true, monitorArmTimeMs);
       if (pretty !== null) {
         console.log(pretty);
         // Delivered → the tail is current; re-anchor the offset to the live
