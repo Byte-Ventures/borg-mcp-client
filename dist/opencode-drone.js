@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { createHash, randomUUID } from 'crypto';
+import { createServer } from 'node:net';
 import { join } from 'path';
 import { tmpdir } from 'os';
 const LOG_FILE = join(tmpdir(), 'borg-opencode-drone.log');
@@ -608,6 +609,51 @@ export function computeOpenCodePort(droneId, base = 14096) {
         hash |= 0;
     }
     return base + (Math.abs(hash) % 1024);
+}
+/**
+ * Ask the OS for an available loopback port. The old deterministic hash is
+ * retained above only for compatibility fixtures; launch paths must not use a
+ * bounded shared port space where two drones can collide.
+ */
+async function canBindOpenCodePort(port) {
+    return new Promise((resolve) => {
+        const probe = createServer();
+        probe.once('error', () => resolve(false));
+        probe.listen(port, '127.0.0.1', () => {
+            probe.close(() => resolve(true));
+        });
+    });
+}
+export function configuredOpenCodePort(env = process.env) {
+    const port = Number(env.BORG_OPENCODE_PORT);
+    return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
+}
+export const OPEN_CODE_PORT_MISSING_DIAGNOSTIC = 'OpenCode launch port is missing; skipping OpenCode entry injection. Relaunch through borg.';
+export function openCodeLaunchBinding(port) {
+    const value = String(port);
+    return { cliPort: value, envPort: value, serverUrl: `http://127.0.0.1:${value}` };
+}
+export async function allocateOpenCodePort(isPortAvailable = canBindOpenCodePort) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+        const port = await new Promise((resolve, reject) => {
+            const probe = createServer();
+            const fail = (error) => {
+                probe.close(() => reject(error));
+            };
+            probe.once('error', fail);
+            probe.listen(0, '127.0.0.1', () => {
+                const address = probe.address();
+                if (address === null || typeof address === 'string') {
+                    fail(new Error('OpenCode port allocation returned no TCP address'));
+                    return;
+                }
+                probe.close((error) => error ? reject(error) : resolve(address.port));
+            });
+        });
+        if (await isPortAvailable(port))
+            return port;
+    }
+    throw new Error('OpenCode port allocation could not claim an available loopback port');
 }
 /** Test-only cleanup for module state and the local cross-process binding. */
 export function __resetOpenCodeDroneForTests() {

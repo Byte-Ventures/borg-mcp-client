@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
+  allocateOpenCodePort,
+  configuredOpenCodePort,
+  computeOpenCodePort,
   connectOpenCodeDrone,
   createOpenCodeLaunchKickoff,
   disconnectOpenCodeDrone,
   getOpenCodeConnectionState,
   injectInitialKickoff,
   injectOpenCodeEntry,
+  OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 
 const DIRECTORY = '/repo';
@@ -129,6 +133,38 @@ describe('OpenCode wake target binding', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     __resetOpenCodeDroneForTests();
+  });
+
+  it('allocates distinct OS ports for IDs that collide under the old hash', async () => {
+    const firstId = '00000000-0000-4000-8000-000000000000';
+    const secondId = '00000000-0000-4000-8000-000000000121';
+    expect(computeOpenCodePort(firstId)).toBe(computeOpenCodePort(secondId));
+
+    const [firstPort, secondPort] = await Promise.all([
+      allocateOpenCodePort(),
+      allocateOpenCodePort(),
+    ]);
+    expect(firstPort).toBeGreaterThan(0);
+    expect(secondPort).toBeGreaterThan(0);
+    expect(firstPort).not.toBe(secondPort);
+  });
+
+  it('retries a candidate reported occupied during allocation', async () => {
+    const availability = vi.fn(async () => availability.mock.calls.length > 1);
+    const port = await allocateOpenCodePort(availability);
+
+    expect(availability).toHaveBeenCalledTimes(2);
+    expect(port).toBeGreaterThan(0);
+  });
+
+  it('resolves the launch-scoped child port from the propagated environment', () => {
+    expect(configuredOpenCodePort({ BORG_OPENCODE_PORT: '15555' })).toBe(15555);
+    expect(configuredOpenCodePort({ BORG_OPENCODE_PORT: '0' })).toBeNull();
+  });
+
+  it('provides a fail-closed diagnostic when no launch port was propagated', () => {
+    expect(configuredOpenCodePort({})).toBeNull();
+    expect(OPEN_CODE_PORT_MISSING_DIAGNOSTIC).toContain('Relaunch through borg');
   });
 
   it('adds a unique launch nonce without changing the shared kickoff text', () => {

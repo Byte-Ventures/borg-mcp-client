@@ -17,7 +17,7 @@ import { resolveLaunchEnv } from './model-presets.js';
 import { unlinkSync } from 'node:fs';
 import { gcOrphanInboxesForCube, defaultListInboxLogs, defaultInboxLivenessDeps, isInboxLive, ORPHAN_INBOX_STALE_MS, } from './gc-orphan-inboxes.js';
 import { installBorgPlugin } from './opencode-plugin.js';
-import { computeOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
+import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
@@ -1556,9 +1556,10 @@ export async function runAssimilate(args, deps) {
     else if (cli === 'opencode') {
         // OpenCode assimilate launch: start TUI with the kickoff passed via
         // --prompt (auto-submits it as the first message). BORG_SESSION is
-        // pinned in opencode.json. A unique port is assigned so the MCP child
-        // can connect to OpenCode's local HTTP API for durable entry injection.
-        dronePort = computeOpenCodePort(result.drone_id);
+        // pinned in opencode.json. An OS-selected launch-scoped port is shared
+        // with the MCP child for local HTTP entry injection.
+        dronePort = await allocateOpenCodePort();
+        childEnv.BORG_OPENCODE_PORT = String(dronePort);
         installBorgPlugin();
         const cwd = agentCwd;
         openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
@@ -1585,6 +1586,9 @@ export async function runAssimilate(args, deps) {
     // HTTP API after the TUI auto-submits --prompt. Best-effort.
     if (cli === 'opencode' && openCodeKickoff) {
         const launchKickoff = openCodeKickoff;
+        // The port is checked before spawn but cannot be reserved through
+        // OpenCode's own bind. The residual allocation-to-spawn race is tracked
+        // in client#298; this slice only establishes deterministic rendezvous.
         const serverUrl = `http://127.0.0.1:${dronePort}`;
         connectOpenCodeDrone({
             serverUrl,

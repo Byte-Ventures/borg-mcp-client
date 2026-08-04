@@ -17,6 +17,7 @@ const createHashDigest = (s: string): string => createHash('sha256').update(s).d
 
 const openCodeDroneMocks = vi.hoisted(() => ({
   computeOpenCodePort: vi.fn(() => 15555),
+  allocateOpenCodePort: vi.fn(async () => 15555),
   connectOpenCodeDrone: vi.fn(async () => {}),
   createOpenCodeLaunchKickoff: vi.fn((kickoff: string) => ({
     prompt: `${kickoff}\n\n<!-- borg-opencode-correlation:nonce-for-test -->`,
@@ -719,6 +720,10 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     }));
     const promptIndex = launchArgs.indexOf('--prompt');
     const openCodePrompt = launchArgs[promptIndex + 1];
+    const portIndex = launchArgs.indexOf('--port');
+    expect(portIndex).toBeGreaterThanOrEqual(0);
+    expect(launchArgs[portIndex + 1]).toBe('15555');
+    expect(exec.mock.calls[0][3]).toEqual(expect.objectContaining({ BORG_OPENCODE_PORT: '15555' }));
     expect(openCodePrompt).toContain('Call borg_regen and follow the playbook');
     expect(openCodePrompt).toContain('<!-- borg-opencode-correlation:nonce-for-test -->');
     expect(openCodeDroneMocks.createOpenCodeLaunchKickoff).toHaveBeenCalledWith(

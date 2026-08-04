@@ -55,10 +55,36 @@ import { codexBorgSessionConfigArgs } from './launch-gate.js';
 import { addCodexSessionStartHook, addCodexUserPromptSubmitHook, addProjectSessionStartHook, addUserPromptSubmitHook, removeSessionStartHook, } from './config-utils.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { installBorgPlugin } from './opencode-plugin.js';
-import { connectOpenCodeDrone, computeOpenCodePort, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
+import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff, openCodeLaunchBinding } from './opencode-drone.js';
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { isClientOwnedCubeInitArgv, runEarlyServerFacade } from './server-facade.js';
 import { runEarlyUpdate } from './update-cmd.js';
+export function createOpenCodeLaunchPlan(cwd, port, prompt, passthroughArgs = []) {
+    const binding = openCodeLaunchBinding(port);
+    return {
+        launchArgs: buildOpenCodeLaunchArgs(cwd, Number(binding.cliPort), prompt, passthroughArgs),
+        envPort: binding.envPort,
+        serverUrl: binding.serverUrl,
+    };
+}
+export function launchOpenCodeProcess(options) {
+    const plan = createOpenCodeLaunchPlan(options.cwd, options.port, options.prompt, options.passthroughArgs);
+    const launchEnv = { ...options.env, BORG_OPENCODE_PORT: plan.envPort };
+    const child = (options.spawnProcess ?? spawn)('opencode', plan.launchArgs, {
+        stdio: 'inherit',
+        shell: false,
+        env: launchEnv,
+    });
+    (options.connect ?? connectOpenCodeDrone)({
+        serverUrl: plan.serverUrl,
+        directory: options.cwd,
+        droneLabel: options.droneLabel,
+        cubeName: options.cubeName,
+    })
+        .then(() => injectInitialKickoff(options.kickoff))
+        .catch(() => { });
+    return { launchArgs: plan.launchArgs, launchEnv, process: child };
+}
 export async function runAssimilateEntry(args, buildDeps = buildDefaultAssimilateDeps) {
     const parsed = parseAssimilateArgs([...args]);
     if (!parsed.ok) {
@@ -381,6 +407,7 @@ async function main() {
     // their existing launch prompts. OpenCode records this nonce-bearing copy
     // and later uses the nonce to bind its separately spawned MCP child.
     let openCodeKickoff = null;
+    let openCodePort;
     let launchArgs;
     if (cli === 'codex') {
         // gh#673 P1-codex: codex MCP children only see the pinned
@@ -403,14 +430,12 @@ async function main() {
     else if (cli === 'opencode') {
         // OpenCode launch: start TUI with the kickoff passed via --prompt
         // (auto-submits it as the first message). BORG_SESSION is pinned in
-        // opencode.json. A unique port is assigned so the MCP child can connect
-        // to OpenCode's local HTTP API for durable entry injection.
-        const dronePort = active
-            ? computeOpenCodePort(active.droneId)
-            : 14096;
+        // opencode.json. The OS-selected loopback port lets the MCP child connect
+        // to OpenCode's local HTTP API without a shared deterministic collision space.
+        openCodePort = await allocateOpenCodePort();
         installBorgPlugin();
         openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
-        launchArgs = buildOpenCodeLaunchArgs(process.cwd(), dronePort, openCodeKickoff.prompt, passthroughArgs);
+        launchArgs = [];
     }
     else {
         // gh#702: borg-launched claude drones auto-allow ONLY mcp__borg__* so they
@@ -419,25 +444,18 @@ async function main() {
     }
     const cliDisplayName = cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex' : 'OpenCode';
     console.error(`${consolePrefix()}${chalk.blue(`◼ Launching ${cliDisplayName}…`)}`);
-    const agentProcess = spawn(cli, launchArgs, {
-        stdio: 'inherit',
-        shell: false,
-        env: launchEnv,
-    });
-    // gh#opencode: find the opened session after launch. The kickoff was already
-    // submitted via --prompt, so we just discover the session ID for inbox
-    // entry injection. Fire-and-forget; never delay the launch.
-    if (cli === 'opencode' && openCodeKickoff) {
-        const launchKickoff = openCodeKickoff;
-        const dronePort = active
-            ? computeOpenCodePort(active.droneId)
-            : 14096;
-        const serverUrl = `http://127.0.0.1:${dronePort}`;
-        // Fire-and-forget; never delay the launch or crash on failure.
-        connectOpenCodeDrone({ serverUrl, directory: process.cwd(), droneLabel: active?.droneLabel ?? 'opencode', cubeName: active?.name ?? 'borg' })
-            .then(() => injectInitialKickoff(launchKickoff))
-            .catch(() => { });
-    }
+    const agentProcess = cli === 'opencode' && openCodeKickoff && openCodePort !== undefined
+        ? launchOpenCodeProcess({
+            cwd: process.cwd(),
+            port: openCodePort,
+            prompt: openCodeKickoff.prompt,
+            passthroughArgs,
+            env: launchEnv,
+            droneLabel: active?.droneLabel ?? 'opencode',
+            cubeName: active?.name ?? 'borg',
+            kickoff: openCodeKickoff,
+        }).process
+        : spawn(cli, launchArgs, { stdio: 'inherit', shell: false, env: launchEnv });
     // gh#857 WI-2: wake-target recording is codex-only (app-server bridge).
     // OpenCode uses HTTP entry injection; Claude uses the inbox Monitor.
     if (cli === 'codex' && active && codexSocketPath) {
