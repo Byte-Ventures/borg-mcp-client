@@ -862,6 +862,17 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                 // comparable with created_at, so set membership is the check.
                 if (recentIds.has(event.id)) {
                     if (event.wake_nonce !== undefined) {
+                        // Re-pings must not bypass direct-recipient routing merely because
+                        // the original frame is already in recentIds.
+                        if (event.data?.visibility === 'direct') {
+                            const recipients = Array.isArray(event.data.recipient_drone_ids)
+                                ? event.data.recipient_drone_ids.filter((recipient) => typeof recipient === 'string')
+                                : [];
+                            if (!recipients.includes(active.droneId)) {
+                                await recordSeen(event);
+                                continue;
+                            }
+                        }
                         const line = formatInboxLine(withSseEventId(event.data, event.id));
                         if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), event.wake_nonce, true))) {
                             if (event.wake_nonce === undefined)

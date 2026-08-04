@@ -518,6 +518,23 @@ describe('streamOnce', () => {
     expect(injectOpenCode).toHaveBeenLastCalledWith(expect.any(String), 'wake-same', true);
   });
 
+  it('does not wake an unaddressed direct recipient on a nonce replay', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      `event: log\nid: e-other\ndata: {"id":"e-other","visibility":"direct","recipient_drone_ids":["other-drone"],"message":"not for this seat"}\n\n`,
+      `event: log\nid: e-other\ndata: {"id":"e-other","visibility":"direct","recipient_drone_ids":["other-drone"],"message":"not for this seat","wake_nonce":"wake-other"}\n\n`,
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      injectOpenCode,
+    });
+
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).not.toHaveBeenCalled();
+  });
+
   it('consults inbox dedup for a nonce re-ping after a resume bookmark', async () => {
     const appendLine = vi.fn().mockResolvedValue(undefined);
     const hasInboxEntryId = vi.fn().mockResolvedValue(true);
