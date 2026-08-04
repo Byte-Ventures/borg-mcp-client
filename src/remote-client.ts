@@ -85,9 +85,18 @@ export const LOCAL_SERVER_RESPONSE_LIMIT_BYTES = 32 * 1024 * 1024;
 // bounded read throws → the 401 fails closed to non-destructive CREDENTIAL_REJECTED.
 const AUTH_ERROR_ENVELOPE_LIMIT_BYTES = 64 * 1024;
 const ROLE_SECTION_CONFLICT_CODE = 'ROLE_SECTION_CONFLICT';
+const CAPACITY_EXCEEDED_CODE = 'CAPACITY_EXCEEDED';
 export const LOCAL_SERVER_REQUEST_TIMEOUT_MS = 5_000;
 const LOCAL_SERVER_RESPONSE_LIMIT_MESSAGE =
   'Local Borg server response exceeded the response limit';
+
+function sanitizeServerMessage(message: string): string {
+  return message
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+    .replace(/\\u(?:000[0-9a-f]|001[0-9a-f]|007f|008[0-9a-f]|009[0-9a-f])/gi, '');
+}
 
 /**
  * Parse a `Retry-After` header (delta-seconds form, which the worker
@@ -725,11 +734,11 @@ async function authedFetch(
   }
 
   if (!response.ok) {
-    // Do not copy a server response body into errors or debug output: a malicious or
-    // misconfigured server could reflect bearer/invitation material or inject
-    // terminal controls. Decode only the bounded protocol error code for typed
-    // branching; never surface the server-provided message or details.
+    // Decode only the bounded protocol error envelope. Its message is the
+    // server's operator-facing action guidance; details and unrecognized bodies
+    // remain excluded from the client error.
     let code: ErrorCode | undefined;
+    let serverMessage: string | undefined;
     let protocolMismatch = false;
     try {
       const body = await readBoundedResponseBody(
@@ -739,7 +748,11 @@ async function authedFetch(
       );
       const parsed = JSON.parse(body);
       try {
-        code = decodeProtocolErrorEnvelope(parsed).error.code;
+        const decoded = decodeProtocolErrorEnvelope(parsed);
+        code = decoded.error.code;
+        serverMessage = response.status === 404
+          ? undefined
+          : sanitizeServerMessage(decoded.error.message);
       } catch (error) {
         if (
           error instanceof ProtocolContractError &&
@@ -750,21 +763,25 @@ async function authedFetch(
         if (
           parsed !== null && typeof parsed === 'object' &&
           parsed.error !== null && typeof parsed.error === 'object' &&
-          parsed.error.code === ROLE_SECTION_CONFLICT_CODE
+          (parsed.error.code === ROLE_SECTION_CONFLICT_CODE
+            || parsed.error.code === CAPACITY_EXCEEDED_CODE)
         ) {
           // The shared protocol intentionally omits this server-local code. Re-validate the whole
           // envelope through the strict shared decoder with only the recognized
-          // code substituted; no server-provided diagnostic is ever surfaced.
-          decodeProtocolErrorEnvelope({
+          // code substituted. The original message remains in place so the
+          // shared decoder validates its length and diagnostic shape.
+          const decoded = decodeProtocolErrorEnvelope({
             ...parsed,
             error: {
               ...parsed.error,
               code: ErrorCode.INVALID_INPUT,
-              message: 'Role section conflict.',
               ...(Object.hasOwn(parsed.error, 'details') ? { details: 'Redacted.' } : {}),
             },
           });
-          code = ROLE_SECTION_CONFLICT_CODE as ErrorCode;
+          code = parsed.error.code as ErrorCode;
+          serverMessage = response.status === 404
+            ? undefined
+            : sanitizeServerMessage(decoded.error.message);
         }
       }
     } catch {
@@ -782,7 +799,9 @@ async function authedFetch(
     }
     throw new BorgServerHttpError(
       response.status,
-      `Borg server request failed (HTTP ${response.status})`,
+      serverMessage
+        ? `Borg server request failed (HTTP ${response.status}): ${serverMessage}`
+        : `Borg server request failed (HTTP ${response.status})`,
       code,
     );
   }

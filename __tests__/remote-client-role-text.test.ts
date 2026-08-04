@@ -149,15 +149,17 @@ describe('MCP role-text proxy policy (local path)', () => {
     sectionErrorCode = 'INVALID_INPUT';
     const { patchRoleSection } = await import('../src/remote-client.js');
 
-    await expect(patchRoleSection(ROLE_ID, {
+    const error = await patchRoleSection(ROLE_ID, {
       action: 'replace',
       heading: 'Workflow',
       body: 'New text.',
-    })).rejects.toMatchObject({
+    }).then(() => null, (caught) => caught);
+    expect(error).toMatchObject({
       name: 'BorgServerHttpError',
       status: 409,
       code: 'INVALID_INPUT',
-      message: 'Borg server request failed (HTTP 409)',
+      message: expect.stringContaining('HOSTILE-SERVER-MESSAGE'),
     });
+    expect(error.message).not.toContain('\u001b');
   });
 });
