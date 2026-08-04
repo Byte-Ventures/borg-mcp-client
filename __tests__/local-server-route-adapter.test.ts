@@ -10,19 +10,30 @@ const LOG_ID = '44444444-4444-4444-8444-444444444444';
 const ORIGIN = 'https://localhost:8787';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
+const INITIAL_CURSOR = {
+  id: '77777777-7777-4777-8777-777777777777',
+  created_at: '2026-07-14T13:00:00.000Z',
+};
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
   return { protocol_version: '7', request_id: requestId, payload };
 }
 
+function connectionReset(): Error & { code: string } {
+  return Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+}
+
 describe('local server route adapter', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
   const getServerCredential = vi.fn(async () => 'parent-enrollment-token');
+  const getCursor = vi.fn(async (): Promise<typeof INITIAL_CURSOR | null> => null);
   const advanceCursor = vi.fn(async () => {});
 
   beforeEach(() => {
     vi.resetModules();
     getServerCredential.mockClear();
+    getCursor.mockClear();
+    getCursor.mockResolvedValue(null);
     advanceCursor.mockClear();
 
     fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -143,7 +154,7 @@ describe('local server route adapter', () => {
       })),
     }));
     vi.doMock('../src/local-server-cursor.js', () => ({
-      getLocalServerCursor: vi.fn(async () => null),
+      getLocalServerCursor: getCursor,
       advanceLocalServerCursor: advanceCursor,
     }));
   });
@@ -205,6 +216,137 @@ describe('local server route adapter', () => {
     expect(calls.every(({ url }) => url.startsWith(`${ORIGIN}/api/cubes`))).toBe(true);
     expect(calls.every(({ headers }) => headers.get('Authorization') === `Bearer ${SESSION}`)).toBe(true);
     expect(calls.every(({ headers }) => !headers.has('X-Drone-Session'))).toBe(true);
+  });
+
+  it.each([
+    ['before server processing', false],
+    ['after server processing', true],
+  ])('retries an unread-cursor read after a connection reset %s without re-reading the cursor', async (_timing, processedBeforeFailure) => {
+    const remote = await import('../src/remote-client.js');
+    let serverProcessedCursor: typeof INITIAL_CURSOR | null = null;
+    getCursor
+      .mockResolvedValueOnce(INITIAL_CURSOR)
+      .mockResolvedValue({
+        id: '88888888-8888-4888-8888-888888888888',
+        created_at: '2026-07-14T13:30:00.000Z',
+      });
+    fetchSpy.mockImplementationOnce(async (input, init) => {
+      expect(new URL(String(input)).pathname).toBe(`/api/cubes/${CUBE_ID}/logs`);
+      expect(init?.method).toBe('PUT');
+      // The after-processing case records the cursor before dropping the
+      // response, modeling a server that completed the read but lost delivery.
+      if (processedBeforeFailure) serverProcessedCursor = INITIAL_CURSOR;
+      throw connectionReset();
+    });
+
+    await expect(remote.readLog(SESSION, ORIGIN, { unreadOnly: true, limit: 20 }))
+      .resolves.toMatchObject({ entries: [{ id: LOG_ID }] });
+
+    const logCalls = fetchSpy.mock.calls.filter(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` && init?.method === 'PUT'
+    );
+    expect(serverProcessedCursor).toEqual(processedBeforeFailure ? INITIAL_CURSOR : null);
+    expect(logCalls).toHaveLength(2);
+    expect(getCursor).toHaveBeenCalledOnce();
+    const firstPayload = JSON.parse(String(logCalls[0][1]?.body)).payload;
+    const retryPayload = JSON.parse(String(logCalls[1][1]?.body)).payload;
+    expect(firstPayload.cursor).toEqual(INITIAL_CURSOR);
+    expect(retryPayload.cursor).toEqual(INITIAL_CURSOR);
+    expect(advanceCursor).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces unread-log recovery guidance after the bounded reset retry is exhausted', async () => {
+    const remote = await import('../src/remote-client.js');
+    fetchSpy.mockImplementation(async (input, init) => {
+      expect(new URL(String(input)).pathname).toBe(`/api/cubes/${CUBE_ID}/logs`);
+      expect(init?.method).toBe('PUT');
+      throw connectionReset();
+    });
+
+    await expect(remote.readLog(SESSION, ORIGIN, { unreadOnly: true, limit: 20 }))
+      .rejects.toMatchObject({
+        name: 'BorgServerUnreachableError',
+        message: expect.stringMatching(/unread log read|borg_read-log unread_only=true|may have reached/i),
+      });
+
+    const logCalls = fetchSpy.mock.calls.filter(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` && init?.method === 'PUT'
+    );
+    expect(logCalls).toHaveLength(2);
+    expect(advanceCursor).not.toHaveBeenCalled();
+  });
+
+  it('routes unread-cursor 429 responses through the Retry-After retry helper', async () => {
+    const remote = await import('../src/remote-client.js');
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      fetchSpy.mockImplementationOnce(async (input, init) => {
+        expect(new URL(String(input)).pathname).toBe(`/api/cubes/${CUBE_ID}/logs`);
+        expect(init?.method).toBe('PUT');
+        return new Response('rate limited', {
+          status: 429,
+          headers: { 'Retry-After': '0' },
+        });
+      });
+
+      await expect(remote.readLog(SESSION, ORIGIN, { unreadOnly: true, limit: 20 }))
+        .resolves.toMatchObject({ entries: [{ id: LOG_ID }] });
+
+      const logCalls = fetchSpy.mock.calls.filter(([input, init]) =>
+        new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` && init?.method === 'PUT'
+      );
+      expect(logCalls).toHaveLength(2);
+      expect(JSON.parse(String(logCalls[0][1]?.body)).payload)
+        .toEqual(JSON.parse(String(logCalls[1][1]?.body)).payload);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('surfaces unread-log recovery guidance after bounded 429 retries are exhausted', async () => {
+    const remote = await import('../src/remote-client.js');
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      fetchSpy.mockImplementation(async (input, init) => {
+        expect(new URL(String(input)).pathname).toBe(`/api/cubes/${CUBE_ID}/logs`);
+        expect(init?.method).toBe('PUT');
+        return new Response('rate limited', {
+          status: 429,
+          headers: { 'Retry-After': '0' },
+        });
+      });
+
+      await expect(remote.readLog(SESSION, ORIGIN, { unreadOnly: true, limit: 20 }))
+        .rejects.toMatchObject({
+          name: 'BorgServerHttpError',
+          status: 429,
+          message: expect.stringContaining('borg_read-log unread_only=true'),
+        });
+
+      const logCalls = fetchSpy.mock.calls.filter(([input, init]) =>
+        new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` && init?.method === 'PUT'
+      );
+      expect(logCalls).toHaveLength(4);
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('does not retry the non-idempotent log append after a connection reset', async () => {
+    const remote = await import('../src/remote-client.js');
+    fetchSpy.mockImplementationOnce(async (input, init) => {
+      expect(new URL(String(input)).pathname).toBe(`/api/cubes/${CUBE_ID}/logs`);
+      expect(init?.method).toBe('POST');
+      throw connectionReset();
+    });
+
+    await expect(remote.appendLog(SESSION, ORIGIN, 'must append once'))
+      .rejects.toThrow('ECONNRESET');
+
+    const postCalls = fetchSpy.mock.calls.filter(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` && init?.method === 'POST'
+    );
+    expect(postCalls).toHaveLength(1);
   });
 
   it('uses the parent credential only for pre-attach cube selection', async () => {
