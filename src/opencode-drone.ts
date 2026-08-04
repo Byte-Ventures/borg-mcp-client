@@ -773,6 +773,15 @@ export function configuredOpenCodePort(env: NodeJS.ProcessEnv = process.env): nu
 export const OPEN_CODE_PORT_MISSING_DIAGNOSTIC =
   'OpenCode launch port is missing; skipping OpenCode entry injection. Relaunch through borg.';
 
+export function openCodeLaunchBinding(port: number): {
+  cliPort: string;
+  envPort: string;
+  serverUrl: string;
+} {
+  const value = String(port);
+  return { cliPort: value, envPort: value, serverUrl: `http://127.0.0.1:${value}` };
+}
+
 export async function allocateOpenCodePort(
   isPortAvailable: (port: number) => Promise<boolean> = canBindOpenCodePort,
 ): Promise<number> {

@@ -55,10 +55,18 @@ import { codexBorgSessionConfigArgs } from './launch-gate.js';
 import { addCodexSessionStartHook, addCodexUserPromptSubmitHook, addProjectSessionStartHook, addUserPromptSubmitHook, removeSessionStartHook, } from './config-utils.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { installBorgPlugin } from './opencode-plugin.js';
-import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
+import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff, openCodeLaunchBinding } from './opencode-drone.js';
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { isClientOwnedCubeInitArgv, runEarlyServerFacade } from './server-facade.js';
 import { runEarlyUpdate } from './update-cmd.js';
+export function createOpenCodeLaunchPlan(cwd, port, prompt, passthroughArgs = []) {
+    const binding = openCodeLaunchBinding(port);
+    return {
+        launchArgs: buildOpenCodeLaunchArgs(cwd, Number(binding.cliPort), prompt, passthroughArgs),
+        envPort: binding.envPort,
+        serverUrl: binding.serverUrl,
+    };
+}
 export async function runAssimilateEntry(args, buildDeps = buildDefaultAssimilateDeps) {
     const parsed = parseAssimilateArgs([...args]);
     if (!parsed.ok) {
@@ -407,10 +415,11 @@ async function main() {
         // opencode.json. The OS-selected loopback port lets the MCP child connect
         // to OpenCode's local HTTP API without a shared deterministic collision space.
         openCodePort = await allocateOpenCodePort();
-        launchEnv.BORG_OPENCODE_PORT = String(openCodePort);
         installBorgPlugin();
         openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
-        launchArgs = buildOpenCodeLaunchArgs(process.cwd(), openCodePort, openCodeKickoff.prompt, passthroughArgs);
+        const boundLaunchPlan = createOpenCodeLaunchPlan(process.cwd(), openCodePort, openCodeKickoff.prompt, passthroughArgs);
+        launchEnv.BORG_OPENCODE_PORT = boundLaunchPlan.envPort;
+        launchArgs = boundLaunchPlan.launchArgs;
     }
     else {
         // gh#702: borg-launched claude drones auto-allow ONLY mcp__borg__* so they
@@ -432,7 +441,7 @@ async function main() {
         // The port is checked before spawn but cannot be reserved through
         // OpenCode's own bind. The residual allocation-to-spawn race is tracked
         // in client#298; this slice only establishes deterministic rendezvous.
-        const serverUrl = `http://127.0.0.1:${openCodePort}`;
+        const serverUrl = openCodeLaunchBinding(openCodePort).serverUrl;
         // Fire-and-forget; never delay the launch or crash on failure.
         connectOpenCodeDrone({ serverUrl, directory: process.cwd(), droneLabel: active?.droneLabel ?? 'opencode', cubeName: active?.name ?? 'borg' })
             .then(() => injectInitialKickoff(launchKickoff))

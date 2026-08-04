@@ -11,6 +11,7 @@
  */
 import { updateCube, getCubeForManagement, applyTemplate, type LocalManageAuthority } from './remote-client.js';
 import { type Template } from 'borgmcp-shared/templates';
+import { connectOpenCodeDrone } from './opencode-drone.js';
 export declare function runApplyTemplateTool(cubeId: string, template: Template, authority: LocalManageAuthority, deps?: {
     applyTemplate?: typeof applyTemplate;
     getCubeForManagement?: typeof getCubeForManagement;
@@ -22,6 +23,13 @@ export declare function runApplyTemplateTool(cubeId: string, template: Template,
     };
     cubeDirectiveNote: string;
 }>;
+export declare function connectOpenCodeRuntime(active: {
+    worktree?: string;
+    droneLabel: string;
+    name: string;
+}, env?: NodeJS.ProcessEnv, deps?: {
+    connect?: typeof connectOpenCodeDrone;
+}): Promise<boolean>;
 /**
  * Main entry point - MCP stdio server
  */

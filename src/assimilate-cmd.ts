@@ -2137,8 +2137,8 @@ export async function runAssimilate(
   } else if (cli === 'opencode') {
     // OpenCode assimilate launch: start TUI with the kickoff passed via
     // --prompt (auto-submits it as the first message). BORG_SESSION is
-    // pinned in opencode.json. A unique port is assigned so the MCP child
-    // can connect to OpenCode's local HTTP API for durable entry injection.
+    // pinned in opencode.json. An OS-selected launch-scoped port is shared
+    // with the MCP child for local HTTP entry injection.
     dronePort = await allocateOpenCodePort();
     childEnv.BORG_OPENCODE_PORT = String(dronePort);
     installBorgPlugin();

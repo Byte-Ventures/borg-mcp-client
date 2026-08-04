@@ -18,5 +18,10 @@
  */
 import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
+export declare function createOpenCodeLaunchPlan(cwd: string, port: number, prompt: string, passthroughArgs?: string[]): {
+    launchArgs: string[];
+    envPort: string;
+    serverUrl: string;
+};
 export declare function runAssimilateEntry(args: readonly string[], buildDeps?: AssimilateDepsBuilder): Promise<number>;
 //# sourceMappingURL=claude.d.ts.map

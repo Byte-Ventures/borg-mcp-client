@@ -43,6 +43,11 @@ export declare function getOpenCodeConnectionState(): OpenCodeConnectionState;
 export declare function computeOpenCodePort(droneId: string, base?: number): number;
 export declare function configuredOpenCodePort(env?: NodeJS.ProcessEnv): number | null;
 export declare const OPEN_CODE_PORT_MISSING_DIAGNOSTIC = "OpenCode launch port is missing; skipping OpenCode entry injection. Relaunch through borg.";
+export declare function openCodeLaunchBinding(port: number): {
+    cliPort: string;
+    envPort: string;
+    serverUrl: string;
+};
 export declare function allocateOpenCodePort(isPortAvailable?: (port: number) => Promise<boolean>): Promise<number>;
 /** Test-only cleanup for module state and the local cross-process binding. */
 export declare function __resetOpenCodeDroneForTests(): void;
