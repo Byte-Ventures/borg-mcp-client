@@ -33,6 +33,7 @@ import {
   __resetCodexHeartbeatForTest,
   type EnrichedEntry,
 } from '../src/log-stream';
+import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
 
 // The only stream transport is the verified local (self-hosted) server; every
 // cube fixture carries a trust identity + local endpoint. The injected fetchImpl
@@ -502,7 +503,11 @@ describe('streamOnce', () => {
     const appendLine = vi.fn(async () => {
       order.push('append');
     });
-    const injectOpenCode = vi.fn(async () => {
+    const injectOpenCode = vi.fn(async (text: string, entryId: string, allowSubmit: boolean) => {
+      expect(text).toContain(CUBE_ACTIVITY_RESUME_WAKE_MESSAGE);
+      expect(text).toContain('[CUBE-EVICTED]');
+      expect(entryId).toBe('eviction-1');
+      expect(allowSubmit).toBe(true);
       order.push('inject');
       return true;
     });

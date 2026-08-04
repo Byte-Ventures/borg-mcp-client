@@ -1008,7 +1008,7 @@ export async function streamOnce(
           const entryId =
             event.id ??
             `control:eviction:${active.cubeId}:${active.droneId}:${event.reason ?? ''}`;
-          await injectOpenCode(line, entryId, true);
+          await injectOpenCode(formatCubeActivityWakeMessage(line), entryId, true);
         } catch {
           // Inbox write failed — the Path-B 410 backstop still tears the drone
           // down on its next authed call. Best-effort wake only.

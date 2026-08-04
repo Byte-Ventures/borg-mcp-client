@@ -791,7 +791,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                     await appendLine(active.cubeId, active.droneId, line);
                     const entryId = event.id ??
                         `control:eviction:${active.cubeId}:${active.droneId}:${event.reason ?? ''}`;
-                    await injectOpenCode(line, entryId, true);
+                    await injectOpenCode(formatCubeActivityWakeMessage(line), entryId, true);
                 }
                 catch {
                     // Inbox write failed — the Path-B 410 backstop still tears the drone
