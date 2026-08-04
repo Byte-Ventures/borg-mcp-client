@@ -176,11 +176,11 @@ async function maybePersistWakeTarget(active, fresh, deps) {
         // best-effort cache write; never break the wake path
     }
 }
-export function wakeCodexViaAppServer(reason = CODEX_WAKE_PROMPT, env = process.env, deps = {}) {
+export function wakeCodexViaAppServer(reason = CODEX_WAKE_PROMPT, env = process.env, deps = {}, deliveryIdentity) {
     const target = resolveCodexWakeTarget(env);
     if (!target.enabled)
         return;
-    pendingWakeRequests.push({ reason, deps });
+    pendingWakeRequests.push({ reason, deliveryIdentity, deps });
     if (wakeInFlight)
         return;
     wakeInFlight = true;
@@ -191,10 +191,10 @@ export function wakeCodexViaAppServer(reason = CODEX_WAKE_PROMPT, env = process.
 async function drainCodexWakeQueue() {
     while (pendingWakeRequests.length > 0) {
         const request = pendingWakeRequests.shift();
-        await wakeCodexTargeted(request.reason, request.deps);
+        await wakeCodexTargeted(request.reason, request.deliveryIdentity, request.deps);
     }
 }
-async function wakeCodexTargeted(reason, deps) {
+async function wakeCodexTargeted(reason, deliveryIdentity, deps) {
     // gh#861 finding 1: another path (heartbeat/retry-drain) is mid-inject into the
     // same thread — defer to the retry-drain so this entry isn't double-injected nor
     // lost (the drain re-syncs the whole burst via the server read-cursor).
@@ -212,7 +212,7 @@ async function wakeCodexTargeted(reason, deps) {
         if (!resolved)
             return;
         const { socketPath, threadId } = resolved;
-        const wakeKey = `${threadId}\0${reason}`;
+        const wakeKey = `${threadId}\0${deliveryIdentity ?? reason}`;
         if (deliveredWakeKeys.has(wakeKey))
             return; // dedup before opening the wake socket
         const client = makeCodexClient(socketPath, deps);

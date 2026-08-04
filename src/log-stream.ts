@@ -141,6 +141,14 @@ export function setModuleInjectOpenCode(
  * ring buffer.
  */
 const RECENT_IDS_CAP = 50;
+
+function formatOpenCodeWakePrompt(line: string, wakeNonce?: string): string {
+  const prompt = formatCubeActivityWakeMessage(line);
+  return wakeNonce === undefined
+    ? prompt
+    : `${prompt}\n\n<!-- borg-wake-nonce:${wakeNonce} -->`;
+}
+
 export const INBOX_TAIL_LINES_CAP = 512;
 export const INBOX_TAIL_TRIM_THRESHOLD_LINES = INBOX_TAIL_LINES_CAP * 2;
 
@@ -383,7 +391,7 @@ export interface StreamDeps {
     renderedLine: string
   ) => Promise<boolean>;
   /** Optional Codex app-server wake sink; tests inject a spy. */
-  wakeCodex?: (reason: string) => void;
+  wakeCodex?: (reason: string, deliveryIdentity?: string) => void;
   /** Override the heartbeat watchdog timeout. */
   heartbeatTimeoutMs?: number;
   /** Override HWM divergence grace for focused tests. */
@@ -408,7 +416,8 @@ const defaultDeps: Required<StreamDeps> = {
   getCursor: getLocalServerCursor,
   appendLine: defaultAppendLine,
   hasInboxEntryId: defaultHasInboxEntryId,
-  wakeCodex: wakeCodexViaAppServer,
+  wakeCodex: (reason, deliveryIdentity) =>
+    wakeCodexViaAppServer(reason, process.env, {}, deliveryIdentity),
   heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
   hwmDivergenceGraceMs: HWM_DIVERGENCE_GRACE_MS,
   abortSignal: new AbortController().signal,
@@ -831,23 +840,27 @@ export async function streamOnce(
     ev: Extract<ParsedEvent, { type: 'log' }>
   ): Promise<'persisted-skip' | 'written'> => {
     const line = formatInboxLine(withSseEventId(ev.data, ev.id));
-    const alreadyPersisted = isCatchingUp && (
+    const deliveryId = ev.wake_nonce ?? ev.id;
+    const isReping = ev.wake_nonce !== undefined;
+    const alreadyPersisted = (ev.wake_nonce !== undefined || isCatchingUp) && (
       // gh#441: pass the rendered line so the dedup can also recognize LEGACY
       // (no-entry_id-prefix) on-disk lines, not just the [entry_id:] marker.
       await hasInboxEntryId(active.cubeId, active.droneId, ev.id, line)
     );
     if (alreadyPersisted) {
-      // Replay still re-enters the OpenCode delivery queue with the same entry
-      // ID. The queue confirms/deduplicates it by the unique persisted entry text.
-      await injectOpenCode(formatCubeActivityWakeMessage(line), ev.id, false);
+      // Replay still re-enters the OpenCode delivery queue. Ordinary entries
+      // correlate by canonical inbox text; re-pings add a stable nonce marker
+      // to the injected text so each distinct nonce submits exactly once.
+      await injectOpenCode(formatOpenCodeWakePrompt(line, ev.wake_nonce), deliveryId, isReping);
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
     }
     // The inbox append is the durable record. OpenCode injection is only the
     // wake attempt and may return before the agent finishes processing.
     await appendLine(active.cubeId, active.droneId, line);
-    if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), ev.id, true))) {
-      wakeCodex(formatCodexWakePrompt(line));
+    if (!(await injectOpenCode(formatOpenCodeWakePrompt(line, ev.wake_nonce), deliveryId, true))) {
+      if (ev.wake_nonce === undefined) wakeCodex(formatCodexWakePrompt(line));
+      else wakeCodex(formatCodexWakePrompt(line), ev.wake_nonce);
     }
     return 'written';
   };
@@ -1065,6 +1078,10 @@ export async function streamOnce(
         continue;
       }
       if (event.type === 'log') {
+        const isHeartbeatPing =
+          typeof event.data?.message === 'string' &&
+          event.data.message.startsWith('[HEARTBEAT-PING]');
+
         // DEDUP per §(3) recent-ids contract: an out-of-order DO
         // broadcast followed by reconnect+catchup can replay an entry
         // we already persisted. The entry IS on disk from an earlier
@@ -1074,10 +1091,14 @@ export async function streamOnce(
         // Last-Event-ID on the next reconnect reflects the highest
         // id we've actually got persisted). UUIDs are not ordinally
         // comparable with created_at, so set membership is the check.
+        const isRecentWakeReplay = recentIds.has(event.id) && event.wake_nonce !== undefined;
         if (recentIds.has(event.id)) {
+          // Nonce replays continue through every ordinary routing filter below;
+          // only their durable append is skipped. Other duplicates retain the
+          // historical fast path.
           markEventPersisted(event.id, event.data?.created_at ?? '');
           markBroadcastPersisted(broadcastHwmFromLogEvent(event));
-          continue;
+          if (!isRecentWakeReplay) continue;
         }
 
         // OWN-DRONE FILTER: restore the silent-self property — parity
@@ -1104,10 +1125,6 @@ export async function streamOnce(
         // drone through the disk-write path; the existing rate-limit
         // in the server heartbeat contract (max 1 ping per drone per ~1h)
         // bounds the silent-self property's relaxation.
-        const isHeartbeatPing =
-          typeof event.data?.message === 'string' &&
-          event.data.message.startsWith('[HEARTBEAT-PING]');
-
         // Sprint 26 ack-fan-out: ack events have `kind: 'ack'` plus an
         // `author_drone_id` field naming the recipient (the author of
         // the entry that got acked). Only the author writes the ack
@@ -1118,6 +1135,10 @@ export async function streamOnce(
         // here BEFORE the legacy own-drone filter so the ack-specific
         // semantic takes precedence.
         if (event.data?.kind === 'ack') {
+          if (isRecentWakeReplay) {
+            await recordSeen(event);
+            continue;
+          }
           if (event.data?.author_drone_id === active.droneId) {
             if ((await writeInboxLine(event)) === 'persisted-skip') continue;
           }
@@ -1149,6 +1170,15 @@ export async function streamOnce(
           // broadcast cursor for an own broadcast — see recordSeen's gh#402
           // (583aed7e) note for why skipping it here would storm.
           await recordSeen(event);
+          continue;
+        }
+
+        if (isRecentWakeReplay) {
+          const line = formatInboxLine(withSseEventId(event.data, event.id));
+          const wakeNonce = event.wake_nonce;
+          if (wakeNonce !== undefined && !(await injectOpenCode(formatOpenCodeWakePrompt(line, wakeNonce), wakeNonce, true))) {
+            wakeCodex(formatCodexWakePrompt(line), wakeNonce);
+          }
           continue;
         }
 
@@ -1207,7 +1237,7 @@ export async function streamOnceIfOwner(
 // ------------------------------------------------------------------
 
 export type ParsedEvent =
-  | { type: 'log'; id: string; data: any; cursor?: LocalServerCursor }
+  | { type: 'log'; id: string; data: any; wake_nonce?: string; cursor?: LocalServerCursor }
   | { type: 'heartbeat'; ts: string | null; hwm: BroadcastHwm | null }
   | { type: 'bookmark'; as_of: string | null }
   // gh#877 Path-A: terminal eviction control frame (wake hint, zero authority).
@@ -1328,10 +1358,12 @@ function parseEventBlock(block: string): ParsedEvent | null {
     const validCursor = cursor &&
       typeof cursor.id === 'string' &&
       typeof cursor.created_at === 'string';
+    const entry = parsed?.entry ?? parsed;
     return {
       type: 'log',
       id,
-      data: parsed?.entry ?? parsed,
+      data: entry,
+      ...(typeof entry?.wake_nonce === 'string' ? { wake_nonce: entry.wake_nonce } : {}),
       ...(validCursor ? { cursor } : {}),
     };
   }

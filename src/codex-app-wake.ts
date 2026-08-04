@@ -97,6 +97,7 @@ export async function probeCodexBridgeArmed(
 let wakeInFlight = false;
 const pendingWakeRequests: Array<{
   reason: string;
+  deliveryIdentity?: string;
   deps: CodexWakeDeps;
 }> = [];
 const deliveredWakeKeys = new Set<string>();
@@ -277,11 +278,12 @@ async function maybePersistWakeTarget(
 export function wakeCodexViaAppServer(
   reason: string = CODEX_WAKE_PROMPT,
   env: NodeJS.ProcessEnv = process.env,
-  deps: CodexWakeDeps = {}
+  deps: CodexWakeDeps = {},
+  deliveryIdentity?: string,
 ): void {
   const target = resolveCodexWakeTarget(env);
   if (!target.enabled) return;
-  pendingWakeRequests.push({ reason, deps });
+  pendingWakeRequests.push({ reason, deliveryIdentity, deps });
   if (wakeInFlight) return;
 
   wakeInFlight = true;
@@ -293,11 +295,11 @@ export function wakeCodexViaAppServer(
 async function drainCodexWakeQueue(): Promise<void> {
   while (pendingWakeRequests.length > 0) {
     const request = pendingWakeRequests.shift()!;
-    await wakeCodexTargeted(request.reason, request.deps);
+    await wakeCodexTargeted(request.reason, request.deliveryIdentity, request.deps);
   }
 }
 
-async function wakeCodexTargeted(reason: string, deps: CodexWakeDeps): Promise<void> {
+async function wakeCodexTargeted(reason: string, deliveryIdentity: string | undefined, deps: CodexWakeDeps): Promise<void> {
   // gh#861 finding 1: another path (heartbeat/retry-drain) is mid-inject into the
   // same thread — defer to the retry-drain so this entry isn't double-injected nor
   // lost (the drain re-syncs the whole burst via the server read-cursor).
@@ -313,7 +315,7 @@ async function wakeCodexTargeted(reason: string, deps: CodexWakeDeps): Promise<v
     const resolved = await resolveFreshCodexWakeTarget(active, deps);
     if (!resolved) return;
     const { socketPath, threadId } = resolved;
-    const wakeKey = `${threadId}\0${reason}`;
+    const wakeKey = `${threadId}\0${deliveryIdentity ?? reason}`;
     if (deliveredWakeKeys.has(wakeKey)) return; // dedup before opening the wake socket
     const client = makeCodexClient(socketPath, deps);
     await client.connect();
