@@ -862,34 +862,15 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                 // Last-Event-ID on the next reconnect reflects the highest
                 // id we've actually got persisted). UUIDs are not ordinally
                 // comparable with created_at, so set membership is the check.
+                const isRecentWakeReplay = recentIds.has(event.id) && event.wake_nonce !== undefined;
                 if (recentIds.has(event.id)) {
-                    if (event.wake_nonce !== undefined) {
-                        // Re-pings must not bypass direct-recipient routing merely because
-                        // the original frame is already in recentIds.
-                        if (event.data?.visibility === 'direct') {
-                            const recipients = Array.isArray(event.data.recipient_drone_ids)
-                                ? event.data.recipient_drone_ids.filter((recipient) => typeof recipient === 'string')
-                                : [];
-                            if (!recipients.includes(active.droneId)) {
-                                await recordSeen(event);
-                                continue;
-                            }
-                        }
-                        if (event.data?.drone_id === active.droneId && !isHeartbeatPing) {
-                            await recordSeen(event);
-                            continue;
-                        }
-                        const line = formatInboxLine(withSseEventId(event.data, event.id));
-                        if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), event.wake_nonce, true))) {
-                            if (event.wake_nonce === undefined)
-                                wakeCodex(formatCodexWakePrompt(line));
-                            else
-                                wakeCodex(formatCodexWakePrompt(line), event.wake_nonce);
-                        }
-                    }
+                    // Nonce replays continue through every ordinary routing filter below;
+                    // only their durable append is skipped. Other duplicates retain the
+                    // historical fast path.
                     markEventPersisted(event.id, event.data?.created_at ?? '');
                     markBroadcastPersisted(broadcastHwmFromLogEvent(event));
-                    continue;
+                    if (!isRecentWakeReplay)
+                        continue;
                 }
                 // OWN-DRONE FILTER: restore the silent-self property — parity
                 // with pre-cutover inbox.ts:87-88. The DO broadcasts every
@@ -925,6 +906,10 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                 // here BEFORE the legacy own-drone filter so the ack-specific
                 // semantic takes precedence.
                 if (event.data?.kind === 'ack') {
+                    if (isRecentWakeReplay) {
+                        await recordSeen(event);
+                        continue;
+                    }
                     if (event.data?.author_drone_id === active.droneId) {
                         if ((await writeInboxLine(event)) === 'persisted-skip')
                             continue;
@@ -953,6 +938,14 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                     // broadcast cursor for an own broadcast — see recordSeen's gh#402
                     // (583aed7e) note for why skipping it here would storm.
                     await recordSeen(event);
+                    continue;
+                }
+                if (isRecentWakeReplay) {
+                    const line = formatInboxLine(withSseEventId(event.data, event.id));
+                    const wakeNonce = event.wake_nonce;
+                    if (wakeNonce !== undefined && !(await injectOpenCode(formatCubeActivityWakeMessage(line), wakeNonce, true))) {
+                        wakeCodex(formatCodexWakePrompt(line), wakeNonce);
+                    }
                     continue;
                 }
                 // Regular inbound entry: write the inbox line (catchup-dedup aware),
