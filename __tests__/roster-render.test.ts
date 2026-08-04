@@ -185,6 +185,29 @@ describe('renderRoster — liveness mode (since provided)', () => {
     expect(bullets).not.toContain('`awake`');
   });
 
+  it.each(['idle', 'pending', 'awake', 'stale'] as const)('renders additive wake_state=%s when present', (wake_state) => {
+    const out = renderRoster({
+      cubeName: 'c',
+      drones: [drone({ label: `drone-${wake_state}`, seen_since: false, wake_state })],
+      roles: roleSet(),
+      resolvedSince: SINCE,
+      humanAgo: fakeHumanAgo,
+    });
+    const bullets = droneLines(out).join('\n');
+    expect(bullets).toContain(`\`${wake_state}\``);
+  });
+
+  it('keeps the prior seen_since rendering when wake_state is absent', () => {
+    const out = renderRoster({
+      cubeName: 'c',
+      drones: [drone({ label: 'legacy-stale', seen_since: false })],
+      roles: roleSet(),
+      resolvedSince: SINCE,
+      humanAgo: fakeHumanAgo,
+    });
+    expect(droneLines(out).join('\n')).toContain('`stale`');
+  });
+
   it('emits the liveness-probe context line so readers know the reference point', () => {
     const out = renderRoster({
       cubeName: 'c',

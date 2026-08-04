@@ -126,7 +126,8 @@ export function renderRoster(inputs) {
             : '';
         const regenCountMarker = typeof d.regen_count === 'number' ? ` · \`regen-count:${d.regen_count}\`` : '';
         if (resolvedSince) {
-            // T2.1 awake/stale column. `seen_since === true` → drone called a
+            // T2.1 awake/stale column. When available, wake_state is the server's
+            // richer state; older servers fall back to seen_since. `seen_since === true` → drone called a
             // tool after the resolved timestamp; treat as awake. False or
             // missing → stale. Missing should not happen when the server
             // echoed a since, but defending against a shape mismatch is
@@ -140,9 +141,8 @@ export function renderRoster(inputs) {
             // probe call — pure redundancy. The per-row `last seen X ago`
             // field carries the diagnostic detail for "how stale is this
             // particular drone."
-            const isAwake = d.seen_since === true;
-            const marker = isAwake ? '`awake`' : '`stale`';
-            lines.push(`- **${d.label}**${addr} (Role: ${roleName}) — last seen ${lastSeen} · ${marker}${regenCountMarker}${wakePathMarker}${wakePathClassMarker}`);
+            const marker = d.wake_state ?? (d.seen_since === true ? 'awake' : 'stale');
+            lines.push(`- **${d.label}**${addr} (Role: ${roleName}) — last seen ${lastSeen} · \`${marker}\`${regenCountMarker}${wakePathMarker}${wakePathClassMarker}`);
         }
         else {
             lines.push(`- **${d.label}**${addr} (Role: ${roleName}) — last seen ${lastSeen}${regenCountMarker}${wakePathMarker}${wakePathClassMarker}`);
