@@ -23,6 +23,23 @@ export declare function runApplyTemplateTool(cubeId: string, template: Template,
     };
     cubeDirectiveNote: string;
 }>;
+export declare function appendServerAdvisory(text: string, advisory: unknown): string;
+export declare function formatUpdatedCubeResult(cube: {
+    name: string;
+    id: string;
+}, advisory?: unknown): string;
+export declare function formatUpdatedRoleResult(role: {
+    name: string;
+    id: string;
+    role_class?: string;
+    is_human_seat?: boolean;
+    is_default?: boolean;
+    is_mandatory?: boolean;
+}, advisory?: unknown): string;
+export declare function formatPatchedRoleSectionResult(action: 'replace' | 'insert' | 'delete', heading: string, role: {
+    name: string;
+    id: string;
+}, advisory?: unknown): string;
 export declare function connectOpenCodeRuntime(active: {
     worktree?: string;
     droneLabel: string;

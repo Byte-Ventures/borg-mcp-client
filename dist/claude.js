@@ -70,6 +70,8 @@ export function createOpenCodeLaunchPlan(cwd, port, prompt, passthroughArgs = []
 export function launchOpenCodeProcess(options) {
     const plan = createOpenCodeLaunchPlan(options.cwd, options.port, options.prompt, options.passthroughArgs);
     const launchEnv = { ...options.env, BORG_OPENCODE_PORT: plan.envPort };
+    // OpenCode's bind can still race this allocation; client#298 tracks the
+    // residual pre-bind window outside this slice.
     const child = (options.spawnProcess ?? spawn)('opencode', plan.launchArgs, {
         stdio: 'inherit',
         shell: false,

@@ -48,6 +48,13 @@ function sanitizeServerMessage(message) {
         .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
         .replace(/\\u(?:000[0-9a-f]|001[0-9a-f]|007f|008[0-9a-f]|009[0-9a-f])/gi, '');
 }
+export const SERVER_ADVISORY_MAX_CHARS = 512;
+export function sanitizeServerAdvisory(value) {
+    if (typeof value !== 'string')
+        return undefined;
+    const sanitized = sanitizeServerMessage(value).trim();
+    return sanitized.length > 0 ? sanitized.slice(0, SERVER_ADVISORY_MAX_CHARS) : undefined;
+}
 /**
  * Parse a `Retry-After` header (delta-seconds form, which the worker
  * emits — mcp-server.ts:382/583) into milliseconds. Returns null when

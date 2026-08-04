@@ -22,6 +22,8 @@ export interface RemoteConnection {
 }
 export declare const LOCAL_SERVER_RESPONSE_LIMIT_BYTES: number;
 export declare const LOCAL_SERVER_REQUEST_TIMEOUT_MS = 5000;
+export declare const SERVER_ADVISORY_MAX_CHARS = 512;
+export declare function sanitizeServerAdvisory(value: unknown): string | undefined;
 /**
  * Parse a `Retry-After` header (delta-seconds form, which the worker
  * emits — mcp-server.ts:382/583) into milliseconds. Returns null when
@@ -300,6 +302,7 @@ export declare function updateCube(cubeId: string, updates: {
     message_taxonomy?: MessageTaxonomy | null;
 }, activeOverride?: ActiveCube, connectionOverride?: RemoteConnection): Promise<{
     cube: any;
+    advisory?: unknown;
 }>;
 /**
  * gh#473 PR1 — granular per-class taxonomy patch. Add / replace-by-name
@@ -358,6 +361,7 @@ export declare function updateRole(roleId: string, updates: {
     role_class?: 'queen' | 'worker';
 }, targetCubeId?: string, activeOverride?: ActiveCube, connectionOverride?: RemoteConnection): Promise<{
     role: any;
+    advisory?: unknown;
 }>;
 /**
  * gh#473 PR1 — granular role-text section patch. Replace / insert /
@@ -380,6 +384,7 @@ export declare function patchRoleSection(roleId: string, op: {
     heading: string;
 }, targetCubeId?: string, activeOverride?: ActiveCube, connectionOverride?: RemoteConnection): Promise<{
     role: any;
+    advisory?: unknown;
 }>;
 /**
  * Delete a role. Worker refuses if any drone is still assigned to it
