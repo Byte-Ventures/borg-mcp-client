@@ -81,7 +81,7 @@ import {
 } from './config-utils.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { installBorgPlugin } from './opencode-plugin.js';
-import { connectOpenCodeDrone, computeOpenCodePort, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
+import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { isClientOwnedCubeInitArgv, runEarlyServerFacade } from './server-facade.js';
 import { runEarlyUpdate } from './update-cmd.js';
@@ -465,6 +465,7 @@ async function main() {
   // their existing launch prompts. OpenCode records this nonce-bearing copy
   // and later uses the nonce to bind its separately spawned MCP child.
   let openCodeKickoff: ReturnType<typeof createOpenCodeLaunchKickoff> | null = null;
+  let openCodePort: number | undefined;
   let launchArgs: string[];
   if (cli === 'codex') {
     // gh#673 P1-codex: codex MCP children only see the pinned
@@ -486,14 +487,12 @@ async function main() {
   } else if (cli === 'opencode') {
     // OpenCode launch: start TUI with the kickoff passed via --prompt
     // (auto-submits it as the first message). BORG_SESSION is pinned in
-    // opencode.json. A unique port is assigned so the MCP child can connect
-    // to OpenCode's local HTTP API for durable entry injection.
-    const dronePort = active
-      ? computeOpenCodePort(active.droneId)
-      : 14096;
+    // opencode.json. The OS-selected loopback port lets the MCP child connect
+    // to OpenCode's local HTTP API without a shared deterministic collision space.
+    openCodePort = await allocateOpenCodePort();
     installBorgPlugin();
     openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
-    launchArgs = buildOpenCodeLaunchArgs(process.cwd(), dronePort, openCodeKickoff.prompt, passthroughArgs);
+    launchArgs = buildOpenCodeLaunchArgs(process.cwd(), openCodePort, openCodeKickoff.prompt, passthroughArgs);
   } else {
     // gh#702: borg-launched claude drones auto-allow ONLY mcp__borg__* so they
     // never prompt on borg coordination calls; Bash/file/web still prompt.
@@ -514,10 +513,7 @@ async function main() {
   // entry injection. Fire-and-forget; never delay the launch.
   if (cli === 'opencode' && openCodeKickoff) {
     const launchKickoff = openCodeKickoff;
-    const dronePort = active
-      ? computeOpenCodePort(active.droneId)
-      : 14096;
-    const serverUrl = `http://127.0.0.1:${dronePort}`;
+    const serverUrl = `http://127.0.0.1:${openCodePort!}`;
     // Fire-and-forget; never delay the launch or crash on failure.
     connectOpenCodeDrone({ serverUrl, directory: process.cwd(), droneLabel: active?.droneLabel ?? 'opencode', cubeName: active?.name ?? 'borg' })
       .then(() => injectInitialKickoff(launchKickoff))

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
+  allocateOpenCodePort,
+  computeOpenCodePort,
   connectOpenCodeDrone,
   createOpenCodeLaunchKickoff,
   disconnectOpenCodeDrone,
@@ -129,6 +131,20 @@ describe('OpenCode wake target binding', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     __resetOpenCodeDroneForTests();
+  });
+
+  it('allocates distinct OS ports for IDs that collide under the old hash', async () => {
+    const firstId = '00000000-0000-4000-8000-000000000000';
+    const secondId = '00000000-0000-4000-8000-000000000121';
+    expect(computeOpenCodePort(firstId)).toBe(computeOpenCodePort(secondId));
+
+    const [firstPort, secondPort] = await Promise.all([
+      allocateOpenCodePort(),
+      allocateOpenCodePort(),
+    ]);
+    expect(firstPort).toBeGreaterThan(0);
+    expect(secondPort).toBeGreaterThan(0);
+    expect(firstPort).not.toBe(secondPort);
   });
 
   it('adds a unique launch nonce without changing the shared kickoff text', () => {

@@ -17,7 +17,7 @@ import { resolveLaunchEnv } from './model-presets.js';
 import { unlinkSync } from 'node:fs';
 import { gcOrphanInboxesForCube, defaultListInboxLogs, defaultInboxLivenessDeps, isInboxLive, ORPHAN_INBOX_STALE_MS, } from './gc-orphan-inboxes.js';
 import { installBorgPlugin } from './opencode-plugin.js';
-import { computeOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
+import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
@@ -1558,7 +1558,7 @@ export async function runAssimilate(args, deps) {
         // --prompt (auto-submits it as the first message). BORG_SESSION is
         // pinned in opencode.json. A unique port is assigned so the MCP child
         // can connect to OpenCode's local HTTP API for durable entry injection.
-        dronePort = computeOpenCodePort(result.drone_id);
+        dronePort = await allocateOpenCodePort();
         installBorgPlugin();
         const cwd = agentCwd;
         openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);

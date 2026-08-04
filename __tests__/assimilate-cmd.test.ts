@@ -17,6 +17,7 @@ const createHashDigest = (s: string): string => createHash('sha256').update(s).d
 
 const openCodeDroneMocks = vi.hoisted(() => ({
   computeOpenCodePort: vi.fn(() => 15555),
+  allocateOpenCodePort: vi.fn(async () => 15555),
   connectOpenCodeDrone: vi.fn(async () => {}),
   createOpenCodeLaunchKickoff: vi.fn((kickoff: string) => ({
     prompt: `${kickoff}\n\n<!-- borg-opencode-correlation:nonce-for-test -->`,
