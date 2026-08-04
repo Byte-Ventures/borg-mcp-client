@@ -48,5 +48,5 @@ client `borgmcp@2.10.0` line. Its annotated tag object
 in the `borgmcp-server-0.9.0-release` registry decision. Both releases pin the
 audited `borgmcp-shared@0.8.1` dependency above. Client `borgmcp@2.10.2` is published. The immutable `v2.0.7`
 attempt failed before publication and remains preserved. Publication of the next
-candidate remains gated by reviewed `v2.12.1` source, a fresh annotated tag, and
+candidate remains gated by reviewed `v2.13.0` source, a fresh annotated tag, and
 the exact-artifact and protected-publication gates.
