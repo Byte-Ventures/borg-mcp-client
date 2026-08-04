@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createOpenCodeLaunchPlan } from '../src/claude';
+import { createOpenCodeLaunchPlan, launchOpenCodeProcess } from '../src/claude';
+import { createOpenCodeLaunchKickoff } from '../src/opencode-drone';
 import { connectOpenCodeRuntime } from '../src/index';
 
 describe('OpenCode production launch wiring', () => {
@@ -15,6 +16,31 @@ describe('OpenCode production launch wiring', () => {
     expect(plan.launchArgs[portIndex + 1]).toBe('15555');
     expect(plan.envPort).toBe('15555');
     expect(plan.serverUrl).toBe('http://127.0.0.1:15555');
+  });
+
+  it('normal launch seam observes the same port at spawn and connect', () => {
+    const spawnProcess = vi.fn(() => ({}) as any);
+    const connect = vi.fn(async () => {});
+    const kickoff = createOpenCodeLaunchKickoff('kickoff');
+
+    launchOpenCodeProcess({
+      cwd: '/repo',
+      port: 15555,
+      prompt: kickoff.prompt,
+      passthroughArgs: [],
+      env: { BORG_SESSION: '1' },
+      droneLabel: 'drone-1',
+      cubeName: 'borg',
+      kickoff,
+      spawnProcess,
+      connect,
+    });
+
+    const [, args, spawnOptions] = spawnProcess.mock.calls[0] as [string, string[], { env: NodeJS.ProcessEnv }];
+    const portIndex = args.indexOf('--port');
+    expect(args[portIndex + 1]).toBe('15555');
+    expect(spawnOptions.env.BORG_OPENCODE_PORT).toBe('15555');
+    expect(connect).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: 'http://127.0.0.1:15555' }));
   });
 
   it('index consumer connects to the propagated launch port', async () => {

@@ -16,12 +16,30 @@
  *                         lifecycle states (see sync.ts, gh#33)
  *   borg server <cmd>   → Forward a lifecycle command to borg-mcp-server
  */
+import { spawn } from 'child_process';
 import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
+import { connectOpenCodeDrone, createOpenCodeLaunchKickoff } from './opencode-drone.js';
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
 export declare function createOpenCodeLaunchPlan(cwd: string, port: number, prompt: string, passthroughArgs?: string[]): {
     launchArgs: string[];
     envPort: string;
     serverUrl: string;
+};
+export declare function launchOpenCodeProcess(options: {
+    cwd: string;
+    port: number;
+    prompt: string;
+    passthroughArgs: string[];
+    env: NodeJS.ProcessEnv;
+    droneLabel: string;
+    cubeName: string;
+    kickoff: ReturnType<typeof createOpenCodeLaunchKickoff>;
+    spawnProcess?: typeof spawn;
+    connect?: typeof connectOpenCodeDrone;
+}): {
+    launchArgs: string[];
+    launchEnv: NodeJS.ProcessEnv;
+    process: ReturnType<typeof spawn>;
 };
 export declare function runAssimilateEntry(args: readonly string[], buildDeps?: AssimilateDepsBuilder): Promise<number>;
 //# sourceMappingURL=claude.d.ts.map
