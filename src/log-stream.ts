@@ -383,7 +383,7 @@ export interface StreamDeps {
     renderedLine: string
   ) => Promise<boolean>;
   /** Optional Codex app-server wake sink; tests inject a spy. */
-  wakeCodex?: (reason: string) => void;
+  wakeCodex?: (reason: string, deliveryIdentity?: string) => void;
   /** Override the heartbeat watchdog timeout. */
   heartbeatTimeoutMs?: number;
   /** Override HWM divergence grace for focused tests. */
@@ -408,7 +408,8 @@ const defaultDeps: Required<StreamDeps> = {
   getCursor: getLocalServerCursor,
   appendLine: defaultAppendLine,
   hasInboxEntryId: defaultHasInboxEntryId,
-  wakeCodex: wakeCodexViaAppServer,
+  wakeCodex: (reason, deliveryIdentity) =>
+    wakeCodexViaAppServer(reason, process.env, {}, deliveryIdentity),
   heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
   hwmDivergenceGraceMs: HWM_DIVERGENCE_GRACE_MS,
   abortSignal: new AbortController().signal,
@@ -831,6 +832,8 @@ export async function streamOnce(
     ev: Extract<ParsedEvent, { type: 'log' }>
   ): Promise<'persisted-skip' | 'written'> => {
     const line = formatInboxLine(withSseEventId(ev.data, ev.id));
+    const deliveryId = ev.wake_nonce ?? ev.id;
+    const isReping = ev.wake_nonce !== undefined;
     const alreadyPersisted = isCatchingUp && (
       // gh#441: pass the rendered line so the dedup can also recognize LEGACY
       // (no-entry_id-prefix) on-disk lines, not just the [entry_id:] marker.
@@ -839,15 +842,16 @@ export async function streamOnce(
     if (alreadyPersisted) {
       // Replay still re-enters the OpenCode delivery queue with the same entry
       // ID. The queue confirms/deduplicates it by the unique persisted entry text.
-      await injectOpenCode(formatCubeActivityWakeMessage(line), ev.id, false);
+      await injectOpenCode(formatCubeActivityWakeMessage(line), deliveryId, isReping);
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
     }
     // The inbox append is the durable record. OpenCode injection is only the
     // wake attempt and may return before the agent finishes processing.
     await appendLine(active.cubeId, active.droneId, line);
-    if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), ev.id, true))) {
-      wakeCodex(formatCodexWakePrompt(line));
+    if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), deliveryId, true))) {
+      if (ev.wake_nonce === undefined) wakeCodex(formatCodexWakePrompt(line));
+      else wakeCodex(formatCodexWakePrompt(line), ev.wake_nonce);
     }
     return 'written';
   };
@@ -1207,7 +1211,7 @@ export async function streamOnceIfOwner(
 // ------------------------------------------------------------------
 
 export type ParsedEvent =
-  | { type: 'log'; id: string; data: any; cursor?: LocalServerCursor }
+  | { type: 'log'; id: string; data: any; wake_nonce?: string; cursor?: LocalServerCursor }
   | { type: 'heartbeat'; ts: string | null; hwm: BroadcastHwm | null }
   | { type: 'bookmark'; as_of: string | null }
   // gh#877 Path-A: terminal eviction control frame (wake hint, zero authority).
@@ -1328,10 +1332,12 @@ function parseEventBlock(block: string): ParsedEvent | null {
     const validCursor = cursor &&
       typeof cursor.id === 'string' &&
       typeof cursor.created_at === 'string';
+    const entry = parsed?.entry ?? parsed;
     return {
       type: 'log',
       id,
-      data: parsed?.entry ?? parsed,
+      data: entry,
+      ...(typeof entry?.wake_nonce === 'string' ? { wake_nonce: entry.wake_nonce } : {}),
       ...(validCursor ? { cursor } : {}),
     };
   }

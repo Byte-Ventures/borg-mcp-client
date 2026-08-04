@@ -271,6 +271,20 @@ describe('parseSSE', () => {
     expect(events[0]).toMatchObject({ type: 'log', id: 'e1' });
   });
 
+  it('parses an additive entry wake_nonce without changing the SSE event id', async () => {
+    const events: any[] = [];
+    const body = makeSSEResponse([
+      'event: log\nid: real-entry-1\ndata: {"entry":{"id":"real-entry-1","message":"retry me","wake_nonce":"wake-1"}}\n\n',
+    ]).body!;
+    for await (const event of parseSSE(body)) events.push(event);
+    expect(events).toEqual([{
+      type: 'log',
+      id: 'real-entry-1',
+      data: { id: 'real-entry-1', message: 'retry me', wake_nonce: 'wake-1' },
+      wake_nonce: 'wake-1',
+    }]);
+  });
+
   // gh#877 Path-A: terminal eviction control frame.
   it('parses an eviction event into a typed eviction ParsedEvent', async () => {
     const blocks = [
@@ -463,6 +477,43 @@ describe('streamOnce', () => {
       'e-replay',
       false,
     );
+  });
+
+  it('re-pings with wake_nonce identity and submits despite the existing inbox line', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-reping\ndata: {"entry":{"id":"e-reping","message":"retry me","wake_nonce":"wake-1"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, 'older-entry', vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      hasInboxEntryId: vi.fn().mockResolvedValue(true),
+      injectOpenCode,
+    });
+
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).toHaveBeenCalledWith(
+      expect.stringContaining('[entry_id: e-reping]'),
+      'wake-1',
+      true,
+    );
+  });
+
+  it('passes wake_nonce as the Codex delivery identity on fallback wake', async () => {
+    const wakeCodex = vi.fn();
+    const injectOpenCode = vi.fn().mockResolvedValue(false);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-codex-reping\ndata: {"entry":{"id":"e-codex-reping","message":"retry me","wake_nonce":"wake-codex-1"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl),
+      injectOpenCode,
+      wakeCodex,
+    });
+
+    expect(wakeCodex).toHaveBeenCalledWith(expect.any(String), 'wake-codex-1');
   });
 
   it('does not suppress fallback wake handling for an unconfirmed OpenCode delivery', async () => {

@@ -121,7 +121,7 @@ export interface StreamDeps {
     /** Override durable inbox-entry dedup (tests avoid real filesystem). */
     hasInboxEntryId?: (cubeId: string, droneId: string, entryId: string, renderedLine: string) => Promise<boolean>;
     /** Optional Codex app-server wake sink; tests inject a spy. */
-    wakeCodex?: (reason: string) => void;
+    wakeCodex?: (reason: string, deliveryIdentity?: string) => void;
     /** Override the heartbeat watchdog timeout. */
     heartbeatTimeoutMs?: number;
     /** Override HWM divergence grace for focused tests. */
@@ -180,6 +180,7 @@ export type ParsedEvent = {
     type: 'log';
     id: string;
     data: any;
+    wake_nonce?: string;
     cursor?: LocalServerCursor;
 } | {
     type: 'heartbeat';

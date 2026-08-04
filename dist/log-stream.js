@@ -294,7 +294,7 @@ const defaultDeps = {
     getCursor: getLocalServerCursor,
     appendLine: defaultAppendLine,
     hasInboxEntryId: defaultHasInboxEntryId,
-    wakeCodex: wakeCodexViaAppServer,
+    wakeCodex: (reason, deliveryIdentity) => wakeCodexViaAppServer(reason, process.env, {}, deliveryIdentity),
     heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
     hwmDivergenceGraceMs: HWM_DIVERGENCE_GRACE_MS,
     abortSignal: new AbortController().signal,
@@ -629,6 +629,8 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     // here, then continues WITHOUT re-recording); 'written' after a fresh append.
     const writeInboxLine = async (ev) => {
         const line = formatInboxLine(withSseEventId(ev.data, ev.id));
+        const deliveryId = ev.wake_nonce ?? ev.id;
+        const isReping = ev.wake_nonce !== undefined;
         const alreadyPersisted = isCatchingUp && (
         // gh#441: pass the rendered line so the dedup can also recognize LEGACY
         // (no-entry_id-prefix) on-disk lines, not just the [entry_id:] marker.
@@ -636,15 +638,18 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         if (alreadyPersisted) {
             // Replay still re-enters the OpenCode delivery queue with the same entry
             // ID. The queue confirms/deduplicates it by the unique persisted entry text.
-            await injectOpenCode(formatCubeActivityWakeMessage(line), ev.id, false);
+            await injectOpenCode(formatCubeActivityWakeMessage(line), deliveryId, isReping);
             markEventPersisted(ev.id, ev.data?.created_at ?? '');
             return 'persisted-skip';
         }
         // The inbox append is the durable record. OpenCode injection is only the
         // wake attempt and may return before the agent finishes processing.
         await appendLine(active.cubeId, active.droneId, line);
-        if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), ev.id, true))) {
-            wakeCodex(formatCodexWakePrompt(line));
+        if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), deliveryId, true))) {
+            if (ev.wake_nonce === undefined)
+                wakeCodex(formatCodexWakePrompt(line));
+            else
+                wakeCodex(formatCodexWakePrompt(line), ev.wake_nonce);
         }
         return 'written';
     };
@@ -1074,10 +1079,12 @@ function parseEventBlock(block) {
         const validCursor = cursor &&
             typeof cursor.id === 'string' &&
             typeof cursor.created_at === 'string';
+        const entry = parsed?.entry ?? parsed;
         return {
             type: 'log',
             id,
-            data: parsed?.entry ?? parsed,
+            data: entry,
+            ...(typeof entry?.wake_nonce === 'string' ? { wake_nonce: entry.wake_nonce } : {}),
             ...(validCursor ? { cursor } : {}),
         };
     }
