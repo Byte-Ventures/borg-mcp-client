@@ -51,7 +51,7 @@ export declare class RecentLineDeduper {
  * Exported so tests can exercise the parsing without spawning tail.
  */
 export declare function formatEventLine(inboxLine: string): string | null;
-export declare function formatFreshEventLine(inboxLine: string, deduper: RecentLineDeduper): string | null;
+export declare function formatFreshEventLine(inboxLine: string, deduper: RecentLineDeduper, includeWakeMessage?: boolean): string | null;
 export declare function seedDeduperFromInboxTail(inboxPath: string, deduper: RecentLineDeduper, maxLines?: number): void;
 /** Holder-tracked stall state. `lastEmittedOffset` is stat-anchored. */
 export interface TailStallState {

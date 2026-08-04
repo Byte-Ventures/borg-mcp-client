@@ -33,6 +33,7 @@ import {
   __resetCodexHeartbeatForTest,
   type EnrichedEntry,
 } from '../src/log-stream';
+import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
 
 // The only stream transport is the verified local (self-hosted) server; every
 // cube fixture carries a trust identity + local endpoint. The injected fetchImpl
@@ -410,11 +411,13 @@ describe('streamOnce', () => {
       order.push('append');
     });
     const injectOpenCode = vi.fn(async (
-      _line: string,
+      line: string,
       entryId: string,
       allowSubmit: boolean,
     ) => {
       expect(order).toEqual(['append']);
+      expect(line).toContain('Reading cube messages does not end your current task');
+      expect(line).toContain('RESUME the interrupted work');
       expect(entryId).toBe('e-durable');
       expect(allowSubmit).toBe(true);
       order.push('inject');
@@ -500,7 +503,11 @@ describe('streamOnce', () => {
     const appendLine = vi.fn(async () => {
       order.push('append');
     });
-    const injectOpenCode = vi.fn(async () => {
+    const injectOpenCode = vi.fn(async (text: string, entryId: string, allowSubmit: boolean) => {
+      expect(text).toContain(CUBE_ACTIVITY_RESUME_WAKE_MESSAGE);
+      expect(text).toContain('[CUBE-EVICTED]');
+      expect(entryId).toBe('eviction-1');
+      expect(allowSubmit).toBe(true);
       order.push('inject');
       return true;
     });
@@ -748,7 +755,7 @@ describe('streamOnce', () => {
 
     expect(appendLine).toHaveBeenCalledTimes(1);
     expect(wakeCodex).toHaveBeenCalledTimes(1);
-    expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('New Borg cube-log activity arrived'));
+    expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('Reading cube messages does not end your current task'));
     expect(wakeCodex).not.toHaveBeenCalledWith(expect.stringContaining('borg_regen'));
     expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('drone-other'));
     expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('hello'));

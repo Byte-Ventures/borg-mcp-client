@@ -36,6 +36,7 @@ import { chmodSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, 
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { formatCubeActivityWakeMessage } from './cube-activity-wake-copy.js';
 
 const ENTRY_LINE_RE =
   /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\S*)\s+(\S+)\s+\(([^)]+)\):\s*(.*)$/;
@@ -87,11 +88,14 @@ export function formatEventLine(inboxLine: string): string | null {
 
 export function formatFreshEventLine(
   inboxLine: string,
-  deduper: RecentLineDeduper
+  deduper: RecentLineDeduper,
+  includeWakeMessage = false,
 ): string | null {
   const pretty = formatEventLine(inboxLine);
   if (pretty === null) return null;
-  return deduper.remember(inboxLine) ? pretty : null;
+  return deduper.remember(inboxLine)
+    ? includeWakeMessage ? formatCubeActivityWakeMessage(pretty) : pretty
+    : null;
 }
 
 export function seedDeduperFromInboxTail(
@@ -914,7 +918,7 @@ function main(): void {
 
     const rl = createInterface({ input: tail.stdout, crlfDelay: Infinity });
     rl.on('line', (line) => {
-      const pretty = formatFreshEventLine(line, deduper);
+      const pretty = formatFreshEventLine(line, deduper, true);
       if (pretty !== null) {
         console.log(pretty);
         // Delivered → the tail is current; re-anchor the offset to the live

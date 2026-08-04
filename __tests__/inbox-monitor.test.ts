@@ -612,6 +612,15 @@ describe('formatFreshEventLine — tail -F re-read dedup (gh#643)', () => {
     expect(formatFreshEventLine(line, deduper)).toBeNull();
   });
 
+  it('renders the canonical resume instruction at the monitor wake boundary', () => {
+    const deduper = new RecentLineDeduper();
+    const line = '2026-05-17T13:34:32.823Z drone-1 (Coordinator): DISPATCH: feat/x';
+    const rendered = formatFreshEventLine(line, deduper, true);
+    expect(rendered).toContain('Reading cube messages does not end your current task');
+    expect(rendered).toContain('RESUME the interrupted work');
+    expect(rendered).toContain('drone-1 (Coordinator): DISPATCH: feat/x');
+  });
+
   it('evicts old raw lines after the configured recent window', () => {
     const deduper = new RecentLineDeduper(2);
     const first =

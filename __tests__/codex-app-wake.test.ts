@@ -67,7 +67,8 @@ describe('codex app-server wake gating', () => {
 
   it('formats a lightweight wake prompt without forcing regen', () => {
     const prompt = formatCodexWakePrompt('2026-05-28T10:00:00.000Z drone-1 (Coordinator): DISPATCH: drone-2');
-    expect(prompt).toContain('New Borg cube-log activity arrived:');
+    expect(prompt).toContain('Reading cube messages does not end your current task');
+    expect(prompt).toContain('RESUME the interrupted work');
     expect(prompt).toContain('drone-1 (Coordinator): DISPATCH: drone-2');
     expect(prompt).not.toContain('Call borg_regen');
     expect(prompt).not.toContain('follow the playbook');
