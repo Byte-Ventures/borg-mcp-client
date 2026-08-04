@@ -494,7 +494,7 @@ describe('streamOnce', () => {
 
     expect(appendLine).not.toHaveBeenCalled();
     expect(injectOpenCode).toHaveBeenCalledWith(
-      expect.stringContaining('[entry_id: e-reping]'),
+      expect.stringContaining('<!-- borg-wake-nonce:wake-1 -->'),
       'wake-1',
       true,
     );
@@ -515,7 +515,11 @@ describe('streamOnce', () => {
 
     expect(appendLine).toHaveBeenCalledTimes(1);
     expect(injectOpenCode).toHaveBeenCalledTimes(2);
-    expect(injectOpenCode).toHaveBeenLastCalledWith(expect.any(String), 'wake-same', true);
+    expect(injectOpenCode).toHaveBeenLastCalledWith(
+      expect.stringContaining('<!-- borg-wake-nonce:wake-same -->'),
+      'wake-same',
+      true,
+    );
   });
 
   it('does not wake an unaddressed direct recipient on a nonce replay', async () => {
@@ -574,7 +578,11 @@ describe('streamOnce', () => {
       expect.any(String),
     );
     expect(appendLine).not.toHaveBeenCalled();
-    expect(injectOpenCode).toHaveBeenCalledWith(expect.any(String), 'wake-live', true);
+    expect(injectOpenCode).toHaveBeenCalledWith(
+      expect.stringContaining('<!-- borg-wake-nonce:wake-live -->'),
+      'wake-live',
+      true,
+    );
   });
 
   it('passes wake_nonce as the Codex delivery identity on fallback wake', async () => {
@@ -591,6 +599,7 @@ describe('streamOnce', () => {
     });
 
     expect(wakeCodex).toHaveBeenCalledWith(expect.any(String), 'wake-codex-1');
+    expect(wakeCodex.mock.calls[0]?.[0]).not.toContain('borg-wake-nonce');
   });
 
   it('does not suppress fallback wake handling for an unconfirmed OpenCode delivery', async () => {

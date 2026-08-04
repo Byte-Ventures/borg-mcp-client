@@ -141,6 +141,14 @@ export function setModuleInjectOpenCode(
  * ring buffer.
  */
 const RECENT_IDS_CAP = 50;
+
+function formatOpenCodeWakePrompt(line: string, wakeNonce?: string): string {
+  const prompt = formatCubeActivityWakeMessage(line);
+  return wakeNonce === undefined
+    ? prompt
+    : `${prompt}\n\n<!-- borg-wake-nonce:${wakeNonce} -->`;
+}
+
 export const INBOX_TAIL_LINES_CAP = 512;
 export const INBOX_TAIL_TRIM_THRESHOLD_LINES = INBOX_TAIL_LINES_CAP * 2;
 
@@ -840,16 +848,17 @@ export async function streamOnce(
       await hasInboxEntryId(active.cubeId, active.droneId, ev.id, line)
     );
     if (alreadyPersisted) {
-      // Replay still re-enters the OpenCode delivery queue with the same entry
-      // ID. The queue confirms/deduplicates it by the unique persisted entry text.
-      await injectOpenCode(formatCubeActivityWakeMessage(line), deliveryId, isReping);
+      // Replay still re-enters the OpenCode delivery queue. Ordinary entries
+      // correlate by canonical inbox text; re-pings add a stable nonce marker
+      // to the injected text so each distinct nonce submits exactly once.
+      await injectOpenCode(formatOpenCodeWakePrompt(line, ev.wake_nonce), deliveryId, isReping);
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
     }
     // The inbox append is the durable record. OpenCode injection is only the
     // wake attempt and may return before the agent finishes processing.
     await appendLine(active.cubeId, active.droneId, line);
-    if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), deliveryId, true))) {
+    if (!(await injectOpenCode(formatOpenCodeWakePrompt(line, ev.wake_nonce), deliveryId, true))) {
       if (ev.wake_nonce === undefined) wakeCodex(formatCodexWakePrompt(line));
       else wakeCodex(formatCodexWakePrompt(line), ev.wake_nonce);
     }
@@ -1167,7 +1176,7 @@ export async function streamOnce(
         if (isRecentWakeReplay) {
           const line = formatInboxLine(withSseEventId(event.data, event.id));
           const wakeNonce = event.wake_nonce;
-          if (wakeNonce !== undefined && !(await injectOpenCode(formatCubeActivityWakeMessage(line), wakeNonce, true))) {
+          if (wakeNonce !== undefined && !(await injectOpenCode(formatOpenCodeWakePrompt(line, wakeNonce), wakeNonce, true))) {
             wakeCodex(formatCodexWakePrompt(line), wakeNonce);
           }
           continue;

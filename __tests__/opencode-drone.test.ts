@@ -12,6 +12,7 @@ import {
   injectOpenCodeEntry,
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
+import { streamOnce } from '../src/log-stream';
 
 const DIRECTORY = '/repo';
 const SERVER_URL = 'http://127.0.0.1:15113';
@@ -37,6 +38,16 @@ function kickoffMessages(kickoff: string, created = Date.now()) {
     info: { role: 'user', time: { created } },
     parts: [{ type: 'text', text: kickoff }],
   }];
+}
+
+function rawSseResponse(blocks: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const block of blocks) controller.enqueue(encoder.encode(block));
+      controller.close();
+    },
+  }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
 function installOpenCodeApi(options: {
@@ -509,6 +520,75 @@ describe('OpenCode wake target binding', () => {
       ((body.parts as Array<{ text: string }>)[0]?.text)
     )).toEqual(['first', 'second', 'third']);
     expect(api.promptBodies.every((body) => !Object.hasOwn(body, 'messageID'))).toBe(true);
+  });
+
+  it('submits once per distinct wake nonce from raw SSE and deduplicates the nonce after reconnect', async () => {
+    const launch = launchKickoff('raw-sse-wake-nonce');
+    const root = session('raw-sse-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+    });
+    const active = {
+      cubeId: '11111111-1111-4111-8111-111111111111',
+      droneId: '22222222-2222-4222-8222-222222222222',
+      sessionToken: 'token-1',
+      apiUrl: 'https://127.0.0.1:8443',
+      serverTrustIdentity: 'trust-1',
+    };
+    const entry = {
+      id: 'entry-raw-sse',
+      drone_id: '33333333-3333-4333-8333-333333333333',
+      drone_label: 'builder-33333333',
+      role_name: 'Builder',
+      message: 'same durable activity text',
+      visibility: 'direct',
+      recipient_drone_ids: [active.droneId],
+      created_at: '2026-08-04T12:00:00.000Z',
+    };
+    const frame = (wakeNonce?: string) =>
+      `event: log\nid: ${entry.id}\ndata: ${JSON.stringify({ entry: {
+        ...entry,
+        ...(wakeNonce === undefined ? {} : { wake_nonce: wakeNonce }),
+      } })}\n\n`;
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(rawSseResponse([
+        frame(),
+        frame('wake-nonce-1'),
+        frame('wake-nonce-2'),
+      ]))
+      .mockResolvedValueOnce(rawSseResponse([frame('wake-nonce-1')]));
+    const appendLine = vi.fn(async () => {});
+    const injectDeps = {
+      fetchImpl: fetchImpl as typeof fetch,
+      getCursor: vi.fn(async () => null),
+      appendLine,
+      hasInboxEntryId: vi.fn(async () => true),
+      injectOpenCode: injectOpenCodeEntry,
+      wakeCodex: vi.fn(),
+      heartbeatTimeoutMs: 500,
+      hwmDivergenceGraceMs: 10,
+    };
+
+    await connect();
+    await injectInitialKickoff(launch);
+    await streamOnce(active, null, vi.fn(), injectDeps);
+
+    // Model an MCP-child restart: in-memory delivery history is gone, while the
+    // launch binding and OpenCode session messages remain durable.
+    disconnectOpenCodeDrone();
+    await connect();
+    await streamOnce(active, entry.id, vi.fn(), injectDeps);
+
+    const submittedTexts = api.promptBodies.map((body) =>
+      ((body.parts as Array<{ text: string }>)[0]?.text)
+    );
+    expect(submittedTexts).toHaveLength(3);
+    expect(submittedTexts[0]).not.toContain('borg-wake-nonce');
+    expect(submittedTexts[1]).toContain('<!-- borg-wake-nonce:wake-nonce-1 -->');
+    expect(submittedTexts[2]).toContain('<!-- borg-wake-nonce:wake-nonce-2 -->');
+    expect(appendLine).toHaveBeenCalledTimes(1);
+    expect(appendLine.mock.calls[0]?.[2]).not.toContain('borg-wake-nonce');
   });
 
   it('exposes delivered-unconfirmed while generated-message confirmation is pending', async () => {
