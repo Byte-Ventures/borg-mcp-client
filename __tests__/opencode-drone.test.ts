@@ -10,6 +10,7 @@ import {
   getOpenCodeConnectionState,
   injectInitialKickoff,
   injectOpenCodeEntry,
+  OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 
 const DIRECTORY = '/repo';
@@ -148,7 +149,7 @@ describe('OpenCode wake target binding', () => {
     expect(firstPort).not.toBe(secondPort);
   });
 
-  it('retries a candidate reported occupied during the handoff check', async () => {
+  it('retries a candidate reported occupied during allocation', async () => {
     const availability = vi.fn(async () => availability.mock.calls.length > 1);
     const port = await allocateOpenCodePort(availability);
 
@@ -159,6 +160,11 @@ describe('OpenCode wake target binding', () => {
   it('resolves the launch-scoped child port from the propagated environment', () => {
     expect(configuredOpenCodePort({ BORG_OPENCODE_PORT: '15555' })).toBe(15555);
     expect(configuredOpenCodePort({ BORG_OPENCODE_PORT: '0' })).toBeNull();
+  });
+
+  it('provides a fail-closed diagnostic when no launch port was propagated', () => {
+    expect(configuredOpenCodePort({})).toBeNull();
+    expect(OPEN_CODE_PORT_MISSING_DIAGNOSTIC).toContain('Relaunch through borg');
   });
 
   it('adds a unique launch nonce without changing the shared kickoff text', () => {

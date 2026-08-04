@@ -770,6 +770,9 @@ export function configuredOpenCodePort(env: NodeJS.ProcessEnv = process.env): nu
   return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
 }
 
+export const OPEN_CODE_PORT_MISSING_DIAGNOSTIC =
+  'OpenCode launch port is missing; skipping OpenCode entry injection. Relaunch through borg.';
+
 export async function allocateOpenCodePort(
   isPortAvailable: (port: number) => Promise<boolean> = canBindOpenCodePort,
 ): Promise<number> {

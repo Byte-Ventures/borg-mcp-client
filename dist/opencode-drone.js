@@ -628,6 +628,7 @@ export function configuredOpenCodePort(env = process.env) {
     const port = Number(env.BORG_OPENCODE_PORT);
     return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
 }
+export const OPEN_CODE_PORT_MISSING_DIAGNOSTIC = 'OpenCode launch port is missing; skipping OpenCode entry injection. Relaunch through borg.';
 export async function allocateOpenCodePort(isPortAvailable = canBindOpenCodePort) {
     for (let attempt = 0; attempt < 8; attempt++) {
         const port = await new Promise((resolve, reject) => {

@@ -1586,6 +1586,9 @@ export async function runAssimilate(args, deps) {
     // HTTP API after the TUI auto-submits --prompt. Best-effort.
     if (cli === 'opencode' && openCodeKickoff) {
         const launchKickoff = openCodeKickoff;
+        // The port is checked before spawn but cannot be reserved through
+        // OpenCode's own bind. The residual allocation-to-spawn race is tracked
+        // in client#298; this slice only establishes deterministic rendezvous.
         const serverUrl = `http://127.0.0.1:${dronePort}`;
         connectOpenCodeDrone({
             serverUrl,

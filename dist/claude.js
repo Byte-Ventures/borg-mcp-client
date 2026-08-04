@@ -429,6 +429,9 @@ async function main() {
     // entry injection. Fire-and-forget; never delay the launch.
     if (cli === 'opencode' && openCodeKickoff) {
         const launchKickoff = openCodeKickoff;
+        // The port is checked before spawn but cannot be reserved through
+        // OpenCode's own bind. The residual allocation-to-spawn race is tracked
+        // in client#298; this slice only establishes deterministic rendezvous.
         const serverUrl = `http://127.0.0.1:${openCodePort}`;
         // Fire-and-forget; never delay the launch or crash on failure.
         connectOpenCodeDrone({ serverUrl, directory: process.cwd(), droneLabel: active?.droneLabel ?? 'opencode', cubeName: active?.name ?? 'borg' })
