@@ -851,6 +851,8 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                 continue;
             }
             if (event.type === 'log') {
+                const isHeartbeatPing = typeof event.data?.message === 'string' &&
+                    event.data.message.startsWith('[HEARTBEAT-PING]');
                 // DEDUP per §(3) recent-ids contract: an out-of-order DO
                 // broadcast followed by reconnect+catchup can replay an entry
                 // we already persisted. The entry IS on disk from an earlier
@@ -872,6 +874,10 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                                 await recordSeen(event);
                                 continue;
                             }
+                        }
+                        if (event.data?.drone_id === active.droneId && !isHeartbeatPing) {
+                            await recordSeen(event);
+                            continue;
                         }
                         const line = formatInboxLine(withSseEventId(event.data, event.id));
                         if (!(await injectOpenCode(formatCubeActivityWakeMessage(line), event.wake_nonce, true))) {
@@ -909,8 +915,6 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                 // drone through the disk-write path; the existing rate-limit
                 // in the server heartbeat contract (max 1 ping per drone per ~1h)
                 // bounds the silent-self property's relaxation.
-                const isHeartbeatPing = typeof event.data?.message === 'string' &&
-                    event.data.message.startsWith('[HEARTBEAT-PING]');
                 // Sprint 26 ack-fan-out: ack events have `kind: 'ack'` plus an
                 // `author_drone_id` field naming the recipient (the author of
                 // the entry that got acked). Only the author writes the ack

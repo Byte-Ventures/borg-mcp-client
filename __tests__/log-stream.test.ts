@@ -535,6 +535,23 @@ describe('streamOnce', () => {
     expect(injectOpenCode).not.toHaveBeenCalled();
   });
 
+  it('does not wake a self-authored direct entry on a nonce replay', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      `event: log\nid: e-self\ndata: {"id":"e-self","visibility":"direct","recipient_drone_ids":["${ACTIVE_CUBE.droneId}"],"drone_id":"${ACTIVE_CUBE.droneId}","message":"my directed post"}\n\n`,
+      `event: log\nid: e-self\ndata: {"id":"e-self","visibility":"direct","recipient_drone_ids":["${ACTIVE_CUBE.droneId}"],"drone_id":"${ACTIVE_CUBE.droneId}","message":"my directed post","wake_nonce":"wake-self"}\n\n`,
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, null, vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      injectOpenCode,
+    });
+
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).not.toHaveBeenCalled();
+  });
+
   it('consults inbox dedup for a nonce re-ping after a resume bookmark', async () => {
     const appendLine = vi.fn().mockResolvedValue(undefined);
     const hasInboxEntryId = vi.fn().mockResolvedValue(true);
