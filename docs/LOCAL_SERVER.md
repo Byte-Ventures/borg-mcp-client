@@ -235,10 +235,6 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 
 ## Release status
 
-This client candidate pins published `borgmcp-shared@0.8.1` and requires the
-matching coupled client/server release for protocol v7 repository resolve,
-association, and cube deletion. The already-published server 0.8.0 retains its
-immutable older shared dependency pin and is not that coupled artifact. The server owner-enrollment, repository resolve/association,
-cube-create, attach, restart, log, and SSE implementation must also pass the full
-process-level local dogfood gate. Until that gate opens the self-hosted path remains preview-only, and the client
-publish is deferred accordingly.
+This client candidate pins published `borgmcp-shared@0.9.0`. Its release remains
+coupled to a server artifact rebuilt against the same shared version, with both
+artifacts required to pass the complete process-level local dogfood gate.

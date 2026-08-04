@@ -200,8 +200,13 @@ Never delete, move, replace, reuse, or rerun that tag, version, or workflow. The
 `bb8ff57162efdc777bb92f5e1f9d31aaf293d3c6`. Workflow run `30768860612`, attempt 1,
 successfully published that exact source as `borgmcp@2.10.2`; the same-run artifact report records integrity
 `sha512-uNeDidPLxZDe0E/RnQ35zaAMZwHcBbdpHrk+McQuV4lyBxoMSdf+MlBDHv7usijCtOBAUf+exlR/l4F9wVtvZg==`.
+Never move, replace, reuse, or rerun that tag or workflow. The annotated `v2.13.0` tag object
+`67a2fd7bf76299dccc94a3260ddfd4b688eacaa1` peels to protected-main commit
+`fc5e4d9299210b70f979c7d39130a9c12ea265ea`. Workflow run `30894287863`, attempt 1,
+successfully published that exact source as `borgmcp@2.13.0`; the same-run artifact report records integrity
+`sha512-YuF3NwY5iBRVKhgdRiK+3GX+6O8O7S/V9g+XYN/1A0so9RLIYoQWpS91qJewqGQ59nyIARjRmk2wKhK8ODxU0Q==`.
 Never move, replace, reuse, or rerun that tag or workflow. The next candidate
-uses the unused `v2.13.0` identity from a fresh reviewed protected-main commit
+uses the unused `v2.14.0` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
@@ -213,13 +218,12 @@ Before creating the release tag, independently verify all of these conditions:
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- the exact audited registry dependency `borgmcp-shared@0.8.1` remains locked to
+- the exact audited registry dependency `borgmcp-shared@0.9.0` remains locked to
   its canonical tarball and integrity
-  `sha512-0+UfSDnAO0mWYIqxzzppekatya1gCF9ntZmuk7VVr2Hnf9QeM1S7uPLP/TWwDSTLtczB4EUoKA71E1WZJH2mbg==`;
+  `sha512-bfZPP9JGgBQrCFoZetabqKHc8HLaUqHVR3GJLb/1F1oon7z/B4el4aeBHVvXlxN9+2G7kU/ymPZ/K25nVQapmQ==`;
 - the coupled client/server release is published only after the server artifact
-  is rebuilt against `borgmcp-shared@0.8.1` and both pass the complete local
-  dogfood gate; the already-published server 0.8.0 remains immutable at its
-  older immutable shared dependency pin;
+  is rebuilt against `borgmcp-shared@0.9.0` and both pass the complete local
+  dogfood gate;
 - the selected stable client version is unused and the exact release commit is
   on protected `main`;
 - the repository and protected npm environment settings pass an operator audit;
