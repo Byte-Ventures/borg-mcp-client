@@ -1060,7 +1060,7 @@ export async function runAssimilate(
     }
     if (error instanceof RepositoryAssociationOperationError) {
       const recovery = error.failure === 'repository-already-associated'
-        ? 'This repository is already associated with another cube. Run the same command again to use the existing managed association, or ask the server operator to correct the repository binding.'
+        ? 'This repository is already associated with another cube. The selected cube grant is valid, but it cannot replace that existing repository binding. Run the same command again to use the existing managed association, or ask the server operator to correct the repository binding.'
         : error.failure === 'cube-already-associated'
           ? 'The selected cube is already associated with another repository. Choose a different cube, or run the command from the repository already linked to that cube.'
           : error.failure === 'access-denied'
