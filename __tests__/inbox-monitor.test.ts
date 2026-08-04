@@ -1001,7 +1001,12 @@ distDescribe('borg-inbox-monitor — end-to-end symlink spawn (gh#114)', () => {
       }
       expect(stdout).not.toContain('historical trim');
       expect(stdout).toContain('live after trim');
-      expect(stderr).toBe('');
+      const unexpectedStderr = stderr
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line !== '')
+        .filter((line) => !/^tail: .* (?:has been replaced|has appeared);\s+following new file$/.test(line));
+      expect(unexpectedStderr).toEqual([]);
     } finally {
       const exited = new Promise<void>((resolve) => {
         if (proc.exitCode !== null) return resolve();
