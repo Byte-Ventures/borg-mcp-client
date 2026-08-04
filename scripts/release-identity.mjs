@@ -344,28 +344,28 @@ function currentPublishedVersion(raw) {
 }
 
 function transformExtraction(raw, oldVersion, newVersion, record) {
-  const candidate = `so the next candidate identity is \`${oldVersion}\``;
-  const nextCandidate = record.outcome === 'published'
-    ? `and \`${oldVersion}\` was subsequently published, so the next candidate identity is \`${newVersion}\``
-    : `and the immutable \`${oldVersion}\` release attempt failed before artifact creation or publication, so the next candidate identity is \`${newVersion}\``;
+  const currentIdentity = `current release identity is \`${oldVersion}\``;
+  const nextIdentity = `current release identity is \`${newVersion}\``;
   const publishedVersion = currentPublishedVersion(raw);
   const currentPublished = `Client \`borgmcp@${publishedVersion}\` is published.`;
-  const currentGate = `reviewed \`v${oldVersion}\` source`;
-  if (countLiteral(raw, candidate) !== 1 ||
+  const currentGate = `current release identity and publication gate remain governed by the reviewed \`v${oldVersion}\` source`;
+  if (countLiteral(raw, currentIdentity) !== 1 ||
       countLiteral(raw, currentPublished) !== 1 ||
       countLiteral(raw, currentGate) !== 1) {
     fail(`${EXTRACTION_PATH} does not contain the expected current release ledger.`);
+  }
+  if (record.outcome === 'published' && publishedVersion !== oldVersion) {
+    fail(`${EXTRACTION_PATH} published release base must identify ${oldVersion} as current.`);
   }
   if (record.outcome === 'failed-superseded' && compareVersions(publishedVersion, oldVersion) >= 0) {
     fail(`${EXTRACTION_PATH} does not identify an earlier published provenance anchor.`);
   }
   return raw
-    .replace(candidate, nextCandidate)
+    .replace(currentIdentity, nextIdentity)
     .replace(
-      currentPublished,
-      `Client \`borgmcp@${record.outcome === 'published' ? oldVersion : publishedVersion}\` is published.`,
-    )
-    .replace(currentGate, `reviewed \`v${newVersion}\` source`);
+      currentGate,
+      `current release identity and publication gate remain governed by the reviewed \`v${newVersion}\` source`,
+    );
 }
 
 function releaseParagraph(record) {
