@@ -45,7 +45,8 @@ function sanitizeServerMessage(message) {
     return message
         .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
         .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
-        .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+        .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+        .replace(/\\u(?:000[0-9a-f]|001[0-9a-f]|007f|008[0-9a-f]|009[0-9a-f])/gi, '');
 }
 /**
  * Parse a `Retry-After` header (delta-seconds form, which the worker
@@ -518,7 +519,9 @@ async function authedFetch(path, init = {}) {
             try {
                 const decoded = decodeProtocolErrorEnvelope(parsed);
                 code = decoded.error.code;
-                serverMessage = sanitizeServerMessage(decoded.error.message);
+                serverMessage = response.status === 404
+                    ? undefined
+                    : sanitizeServerMessage(decoded.error.message);
             }
             catch (error) {
                 if (error instanceof ProtocolContractError &&
@@ -531,23 +534,20 @@ async function authedFetch(path, init = {}) {
                         || parsed.error.code === CAPACITY_EXCEEDED_CODE)) {
                     // The shared protocol intentionally omits this server-local code. Re-validate the whole
                     // envelope through the strict shared decoder with only the recognized
-                    // code substituted. These server-local codes are retained on the
-                    // typed error while the shared decoder validates the envelope.
+                    // code substituted. The original message remains in place so the
+                    // shared decoder validates its length and diagnostic shape.
                     const decoded = decodeProtocolErrorEnvelope({
                         ...parsed,
                         error: {
                             ...parsed.error,
                             code: ErrorCode.INVALID_INPUT,
-                            message: parsed.error.code === ROLE_SECTION_CONFLICT_CODE
-                                ? 'Role section conflict.'
-                                : 'Server capacity exceeded.',
                             ...(Object.hasOwn(parsed.error, 'details') ? { details: 'Redacted.' } : {}),
                         },
                     });
                     code = parsed.error.code;
-                    serverMessage = typeof parsed.error.message === 'string'
-                        ? sanitizeServerMessage(parsed.error.message)
-                        : undefined;
+                    serverMessage = response.status === 404
+                        ? undefined
+                        : sanitizeServerMessage(decoded.error.message);
                 }
             }
         }

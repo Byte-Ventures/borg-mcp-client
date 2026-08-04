@@ -238,6 +238,63 @@ describe('local manage-request authority', () => {
     });
   });
 
+  it('strips C1 terminal controls from the surfaced server message', async () => {
+    failure = {
+      status: 507,
+      code: 'CAPACITY_EXCEEDED',
+      message: 'Decision budget exceeded\u009b31m: remove a decision.',
+    };
+    const { recordDecision } = await import('../src/remote-client.js');
+
+    const error = await recordDecision(
+      SESSION,
+      ORIGIN,
+      { topic: 'topology', decision: 'public repos' },
+      TRUST_IDENTITY,
+    ).then(() => null, (caught) => caught);
+    expect(error.message).toContain('Decision budget exceeded31m: remove a decision.');
+    expect(error.message).not.toContain('\u009b');
+    expect(error.message).not.toContain('\\u009b');
+  });
+
+  it('keeps 404 diagnostics opaque while retaining the typed code', async () => {
+    failure = { status: 404, code: 'NOT_FOUND', message: 'secret route and target exist' };
+    const { recordDecision } = await import('../src/remote-client.js');
+
+    await expect(recordDecision(
+      SESSION,
+      ORIGIN,
+      { topic: 'topology', decision: 'public repos' },
+      TRUST_IDENTITY,
+    )).rejects.toMatchObject({
+      name: 'BorgServerHttpError',
+      status: 404,
+      code: 'NOT_FOUND',
+      message: 'Borg server request failed (HTTP 404)',
+    });
+  });
+
+  it('falls back bare for an overlong server-local message', async () => {
+    failure = {
+      status: 507,
+      code: 'CAPACITY_EXCEEDED',
+      message: 'x'.repeat(513),
+    };
+    const { recordDecision } = await import('../src/remote-client.js');
+
+    await expect(recordDecision(
+      SESSION,
+      ORIGIN,
+      { topic: 'topology', decision: 'public repos' },
+      TRUST_IDENTITY,
+    )).rejects.toMatchObject({
+      name: 'BorgServerHttpError',
+      status: 507,
+      code: undefined,
+      message: 'Borg server request failed (HTTP 507)',
+    });
+  });
+
   it.each([
     ['message-less envelope', JSON.stringify({
       protocol_version: '7',
