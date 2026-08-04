@@ -28,6 +28,8 @@ export interface RosterDrone {
   last_seen: string | Date;
   /** Only present when the request carried `since`. */
   seen_since?: boolean;
+  /** Additive server-side wake state; absent on pre-C3 servers. */
+  wake_state?: 'idle' | 'pending' | 'awake' | 'stale';
   /**
    * gh#370 — which AI agent is running this drone. Null for drones that
    * joined before the column existed or via a launcher path that didn't
@@ -215,7 +217,8 @@ export function renderRoster(inputs: RenderRosterInputs): string {
     const regenCountMarker =
       typeof d.regen_count === 'number' ? ` · \`regen-count:${d.regen_count}\`` : '';
     if (resolvedSince) {
-      // T2.1 awake/stale column. `seen_since === true` → drone called a
+      // T2.1 awake/stale column. When available, wake_state is the server's
+      // richer state; older servers fall back to seen_since. `seen_since === true` → drone called a
       // tool after the resolved timestamp; treat as awake. False or
       // missing → stale. Missing should not happen when the server
       // echoed a since, but defending against a shape mismatch is
@@ -229,10 +232,9 @@ export function renderRoster(inputs: RenderRosterInputs): string {
       // probe call — pure redundancy. The per-row `last seen X ago`
       // field carries the diagnostic detail for "how stale is this
       // particular drone."
-      const isAwake = d.seen_since === true;
-      const marker = isAwake ? '`awake`' : '`stale`';
+      const marker = d.wake_state ?? (d.seen_since === true ? 'awake' : 'stale');
       lines.push(
-        `- **${d.label}**${addr} (Role: ${roleName}) — last seen ${lastSeen} · ${marker}${regenCountMarker}${wakePathMarker}${wakePathClassMarker}`
+        `- **${d.label}**${addr} (Role: ${roleName}) — last seen ${lastSeen} · \`${marker}\`${regenCountMarker}${wakePathMarker}${wakePathClassMarker}`
       );
     } else {
       lines.push(

@@ -43,6 +43,37 @@ function drone(overrides: Partial<RosterDrone> & { label: string }): RosterDrone
   };
 }
 
+const LEGACY_CLASSIC_RENDER = `# Drones in cube: my-cube
+
+_Agent CLI, reported model, and working repository are advisory. They do not determine authority, role, health, activity, wake behavior, or routing._
+
+- **drone-1** \`id:drone-uu\` (Role: Coordinator) — last seen 0s ago
+  - **Agent CLI:** not reported
+  - **Reported model:** not reported
+  - **Working repo:** not reported
+  - **Origin:** not reported
+- **drone-2** \`id:drone-uu\` (Role: Builder) — last seen 0s ago
+  - **Agent CLI:** not reported
+  - **Reported model:** not reported
+  - **Working repo:** not reported
+  - **Origin:** not reported`;
+
+const LEGACY_AWAKE_RENDER = `# Drones in cube: c
+
+_Agent CLI, reported model, and working repository are advisory. They do not determine authority, role, health, activity, wake behavior, or routing._
+
+_Liveness probe since 2026-05-11T18:00:00.000Z (0s ago). \`awake\` = drone posted to the cube log after that point._
+
+- **drone-fresh** \`id:drone-uu\` (Role: Builder) — last seen 0s ago · \`awake\`
+  - **Agent CLI:** not reported
+  - **Reported model:** not reported
+  - **Working repo:** not reported
+  - **Origin:** not reported`;
+
+const LEGACY_STALE_RENDER = LEGACY_AWAKE_RENDER
+  .replace('drone-fresh', 'legacy-stale')
+  .replace('· `awake`', '· `stale`');
+
 describe('renderRoster — classic mode (no since)', () => {
   it('emits one line per drone with label + role + last-seen', () => {
     const out = renderRoster({
@@ -62,6 +93,7 @@ describe('renderRoster — classic mode (no since)', () => {
     expect(out).not.toContain('awake');
     expect(out).not.toContain('stale-since');
     expect(out).not.toContain('Liveness probe');
+    expect(out).toBe(LEGACY_CLASSIC_RENDER);
   });
 
   it('renders regen_count when provided', () => {
@@ -120,6 +152,7 @@ describe('renderRoster — liveness mode (since provided)', () => {
     expect(out).toContain('`awake`');
     expect(out).not.toContain('stale-since');
     expect(out).toContain('Liveness probe since');
+    expect(out).toBe(LEGACY_AWAKE_RENDER);
   });
 
   // Helper: extract only the per-drone bullet lines so assertions don't
@@ -183,6 +216,29 @@ describe('renderRoster — liveness mode (since provided)', () => {
     const bullets = droneLines(out).join('\n');
     expect(bullets).toContain('`stale`');
     expect(bullets).not.toContain('`awake`');
+  });
+
+  it.each(['idle', 'pending', 'awake', 'stale'] as const)('renders additive wake_state=%s when present', (wake_state) => {
+    const out = renderRoster({
+      cubeName: 'c',
+      drones: [drone({ label: `drone-${wake_state}`, seen_since: wake_state === 'stale', wake_state })],
+      roles: roleSet(),
+      resolvedSince: SINCE,
+      humanAgo: fakeHumanAgo,
+    });
+    const bullets = droneLines(out).join('\n');
+    expect(bullets).toContain(`\`${wake_state}\``);
+  });
+
+  it('keeps the prior seen_since rendering when wake_state is absent', () => {
+    const out = renderRoster({
+      cubeName: 'c',
+      drones: [drone({ label: 'legacy-stale', seen_since: false })],
+      roles: roleSet(),
+      resolvedSince: SINCE,
+      humanAgo: fakeHumanAgo,
+    });
+    expect(out).toBe(LEGACY_STALE_RENDER);
   });
 
   it('emits the liveness-probe context line so readers know the reference point', () => {

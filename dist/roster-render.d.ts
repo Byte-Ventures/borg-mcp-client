@@ -22,6 +22,8 @@ export interface RosterDrone {
     last_seen: string | Date;
     /** Only present when the request carried `since`. */
     seen_since?: boolean;
+    /** Additive server-side wake state; absent on pre-C3 servers. */
+    wake_state?: 'idle' | 'pending' | 'awake' | 'stale';
     /**
      * gh#370 — which AI agent is running this drone. Null for drones that
      * joined before the column existed or via a launcher path that didn't
