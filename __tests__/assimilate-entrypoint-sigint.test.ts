@@ -307,7 +307,7 @@ describe.each(entrypoints)('production prompt interruption through $entry', ({ r
   });
 
   it.each([
-    ['repository-already-associated', 'This repository is already associated with another cube. Run the same command again to use the existing managed association, or ask the server operator to correct the repository binding.'],
+    ['repository-already-associated', 'This repository is already associated with another cube. The selected cube grant is valid, but it cannot replace that existing repository binding. Run the same command again to use the existing managed association, or ask the server operator to correct the repository binding.'],
     ['cube-already-associated', 'The selected cube is already associated with another repository. Choose a different cube, or run the command from the repository already linked to that cube.'],
     ['access-denied', 'This enrolled client does not have permission to manage the selected cube. Ask the server operator to grant this client management access, then run the same command again.'],
     ['invalid-cube', 'The selected cube does not have valid authoritative roles. Ask the server operator to repair its role configuration, or choose another cube.'],
