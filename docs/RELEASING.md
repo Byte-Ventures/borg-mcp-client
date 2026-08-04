@@ -205,8 +205,13 @@ Never move, replace, reuse, or rerun that tag or workflow. The annotated `v2.13.
 `fc5e4d9299210b70f979c7d39130a9c12ea265ea`. Workflow run `30894287863`, attempt 1,
 successfully published that exact source as `borgmcp@2.13.0`; the same-run artifact report records integrity
 `sha512-YuF3NwY5iBRVKhgdRiK+3GX+6O8O7S/V9g+XYN/1A0so9RLIYoQWpS91qJewqGQ59nyIARjRmk2wKhK8ODxU0Q==`.
+Never move, replace, reuse, or rerun that tag or workflow. The annotated `v2.14.0` tag object
+`eb9d5cb14b08b1a2eb6d48b2492acbc6cecb7bef` peels to protected-main commit
+`4dd92bcbac26f460a4f137f766992e8f93843576`. Workflow run `30929322201`, attempt 1,
+successfully published that exact source as `borgmcp@2.14.0`; the same-run artifact report records integrity
+`sha512-haKgpQbcbaRya1XqYQaOy7yZiHMxeP8QO3fr7ahHaYDNYrDvlGmXNlW9VMtqnRJ9mtVDC5UTkeuQmCRJMzF/Tg==`.
 Never move, replace, reuse, or rerun that tag or workflow. The next candidate
-uses the unused `v2.14.0` identity from a fresh reviewed protected-main commit
+uses the unused `v2.14.1` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
