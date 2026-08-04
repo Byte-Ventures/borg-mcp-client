@@ -41,12 +41,8 @@ export interface OpenCodeConnectionState {
 }
 export declare function getOpenCodeConnectionState(): OpenCodeConnectionState;
 export declare function computeOpenCodePort(droneId: string, base?: number): number;
-/**
- * Ask the OS for an available loopback port. The old deterministic hash is
- * retained above only for compatibility fixtures; launch paths must not use a
- * bounded shared port space where two drones can collide.
- */
-export declare function allocateOpenCodePort(): Promise<number>;
+export declare function configuredOpenCodePort(env?: NodeJS.ProcessEnv): number | null;
+export declare function allocateOpenCodePort(isPortAvailable?: (port: number) => Promise<boolean>): Promise<number>;
 /** Test-only cleanup for module state and the local cross-process binding. */
 export declare function __resetOpenCodeDroneForTests(): void;
 export {};

@@ -133,6 +133,7 @@ import {
   connectOpenCodeDrone,
   injectOpenCodeEntry,
   allocateOpenCodePort,
+  configuredOpenCodePort,
 } from './opencode-drone.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
@@ -266,7 +267,10 @@ export async function main() {
       installBorgPlugin();
       const active = await getActiveCube();
       if (active && openCodeRuntime) {
-        const port = await allocateOpenCodePort();
+        const configuredPort = configuredOpenCodePort();
+        const port = configuredPort !== null
+          ? configuredPort
+          : await allocateOpenCodePort();
         const serverUrl = `http://127.0.0.1:${port}`;
         await connectOpenCodeDrone({
           serverUrl,

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
   allocateOpenCodePort,
+  configuredOpenCodePort,
   computeOpenCodePort,
   connectOpenCodeDrone,
   createOpenCodeLaunchKickoff,
@@ -145,6 +146,19 @@ describe('OpenCode wake target binding', () => {
     expect(firstPort).toBeGreaterThan(0);
     expect(secondPort).toBeGreaterThan(0);
     expect(firstPort).not.toBe(secondPort);
+  });
+
+  it('retries a candidate reported occupied during the handoff check', async () => {
+    const availability = vi.fn(async () => availability.mock.calls.length > 1);
+    const port = await allocateOpenCodePort(availability);
+
+    expect(availability).toHaveBeenCalledTimes(2);
+    expect(port).toBeGreaterThan(0);
+  });
+
+  it('resolves the launch-scoped child port from the propagated environment', () => {
+    expect(configuredOpenCodePort({ BORG_OPENCODE_PORT: '15555' })).toBe(15555);
+    expect(configuredOpenCodePort({ BORG_OPENCODE_PORT: '0' })).toBeNull();
   });
 
   it('adds a unique launch nonce without changing the shared kickoff text', () => {

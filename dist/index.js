@@ -40,7 +40,7 @@ import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { confirmDisplayIdentity, identityFromRegen, markDisplayIdentityReadFailed, renderDisplayIdentity, seedDisplayIdentity, withRenderedRegenIdentity, } from './display-identity.js';
 import { resolveSessionAgentKind, } from './codex-app-wake.js';
 import { resolveReportableSessionAgentKind } from './agent-runtime.js';
-import { connectOpenCodeDrone, injectOpenCodeEntry, allocateOpenCodePort, } from './opencode-drone.js';
+import { connectOpenCodeDrone, injectOpenCodeEntry, allocateOpenCodePort, configuredOpenCodePort, } from './opencode-drone.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
 import { lifecycleSignalForMessage, recordLifecycleLog, shouldSuppressLifecycleLog, } from './lifecycle-log-guard.js';
@@ -140,7 +140,10 @@ export async function main() {
             installBorgPlugin();
             const active = await getActiveCube();
             if (active && openCodeRuntime) {
-                const port = await allocateOpenCodePort();
+                const configuredPort = configuredOpenCodePort();
+                const port = configuredPort !== null
+                    ? configuredPort
+                    : await allocateOpenCodePort();
                 const serverUrl = `http://127.0.0.1:${port}`;
                 await connectOpenCodeDrone({
                     serverUrl,

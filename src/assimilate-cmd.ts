@@ -2140,6 +2140,7 @@ export async function runAssimilate(
     // pinned in opencode.json. A unique port is assigned so the MCP child
     // can connect to OpenCode's local HTTP API for durable entry injection.
     dronePort = await allocateOpenCodePort();
+    childEnv.BORG_OPENCODE_PORT = String(dronePort);
     installBorgPlugin();
     const cwd = agentCwd;
     openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);

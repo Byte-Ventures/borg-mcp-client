@@ -755,22 +755,43 @@ export function computeOpenCodePort(droneId: string, base: number = 14096): numb
  * retained above only for compatibility fixtures; launch paths must not use a
  * bounded shared port space where two drones can collide.
  */
-export async function allocateOpenCodePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+async function canBindOpenCodePort(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
     const probe = createServer();
-    const fail = (error: Error) => {
-      probe.close(() => reject(error));
-    };
-    probe.once('error', fail);
-    probe.listen(0, '127.0.0.1', () => {
-      const address = probe.address();
-      if (address === null || typeof address === 'string') {
-        fail(new Error('OpenCode port allocation returned no TCP address'));
-        return;
-      }
-      probe.close((error) => error ? reject(error) : resolve(address.port));
+    probe.once('error', () => resolve(false));
+    probe.listen(port, '127.0.0.1', () => {
+      probe.close(() => resolve(true));
     });
   });
+}
+
+export function configuredOpenCodePort(env: NodeJS.ProcessEnv = process.env): number | null {
+  const port = Number(env.BORG_OPENCODE_PORT);
+  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : null;
+}
+
+export async function allocateOpenCodePort(
+  isPortAvailable: (port: number) => Promise<boolean> = canBindOpenCodePort,
+): Promise<number> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const port = await new Promise<number>((resolve, reject) => {
+      const probe = createServer();
+      const fail = (error: Error) => {
+        probe.close(() => reject(error));
+      };
+      probe.once('error', fail);
+      probe.listen(0, '127.0.0.1', () => {
+        const address = probe.address();
+        if (address === null || typeof address === 'string') {
+          fail(new Error('OpenCode port allocation returned no TCP address'));
+          return;
+        }
+        probe.close((error) => error ? reject(error) : resolve(address.port));
+      });
+    });
+    if (await isPortAvailable(port)) return port;
+  }
+  throw new Error('OpenCode port allocation could not claim an available loopback port');
 }
 
 /** Test-only cleanup for module state and the local cross-process binding. */

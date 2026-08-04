@@ -490,6 +490,7 @@ async function main() {
     // opencode.json. The OS-selected loopback port lets the MCP child connect
     // to OpenCode's local HTTP API without a shared deterministic collision space.
     openCodePort = await allocateOpenCodePort();
+    launchEnv.BORG_OPENCODE_PORT = String(openCodePort);
     installBorgPlugin();
     openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
     launchArgs = buildOpenCodeLaunchArgs(process.cwd(), openCodePort, openCodeKickoff.prompt, passthroughArgs);
