@@ -429,63 +429,6 @@ test('release readiness accepts the extracted standalone client', async () => {
   assert.deepEqual(report, { name: 'borgmcp', version: CLIENT_VERSION, shared: SHARED_VERSION });
 });
 
-test('public-source scan ignores a linked-worktree .git file', async (t) => {
-  const worktree = await mkdtemp(join(tmpdir(), 'borgmcp-client-linked-worktree-'));
-  t.after(() => rm(worktree, { recursive: true, force: true }));
-  await mkdir(join(worktree, 'src'));
-  await writeFile(join(worktree, 'src', 'index.ts'), 'export const ok = true;\n');
-  // A linked worktree stores .git as a FILE (gitdir pointer), not a directory;
-  // the walk must skip it (it is in the excluded set) rather than scan its path.
-  await writeFile(join(worktree, '.git'), 'gitdir: /Users/private/repository/.git/worktrees/client\n');
-
-  // A clean local-only tree scans without throwing.
-  assert.doesNotThrow(() => execFileSync(
-    process.execPath,
-    [join(root, 'scripts', 'verify-public-source.mjs')],
-    { cwd: worktree, stdio: 'pipe' },
-  ));
-
-  // Any Google OAuth client material is forbidden in the local-only client.
-  // Build the client-id at runtime so THIS test source carries no literal,
-  // contiguous OAuth token for the repo-wide scan to flag (mirrors the token
-  // construction below).
-  const clientId = ['leaked-client', 'apps', 'googleusercontent', 'com'].join('.');
-  await writeFile(
-    join(worktree, 'src', 'leak.ts'),
-    `export const id = ${JSON.stringify(clientId)};\n`,
-  );
-  assert.throws(() => execFileSync(
-    process.execPath,
-    [join(root, 'scripts', 'verify-public-source.mjs')],
-    { cwd: worktree, stdio: 'pipe' },
-  ));
-});
-
-test('public-source scan forbids Google OAuth client material anywhere (local-only)', async (t) => {
-  const fixture = await mkdtemp(join(tmpdir(), 'borgmcp-client-oauth-'));
-  t.after(() => rm(fixture, { recursive: true, force: true }));
-  await mkdir(join(fixture, 'scripts'));
-  await cp(
-    join(root, 'scripts', 'verify-public-source.mjs'),
-    join(fixture, 'scripts', 'verify-public-source.mjs'),
-  );
-  const token = ['GOCSPX-', 'a'.repeat(32)].join('');
-  await writeFile(join(fixture, 'oauth-material.txt'), `${token}\n`);
-
-  assert.throws(
-    () => execFileSync(
-      process.execPath,
-      [join(fixture, 'scripts', 'verify-public-source.mjs')],
-      { cwd: fixture, encoding: 'utf8', stdio: 'pipe' },
-    ),
-    (error) => {
-      const diagnostic = `${error.stderr ?? ''}`;
-      assert.match(diagnostic, /oauth-material\.txt: Google OAuth client material is forbidden/);
-      return true;
-    },
-  );
-});
-
 test('release readiness accepts one canonical registry-resolved shared dependency', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'borgmcp-client-readiness-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

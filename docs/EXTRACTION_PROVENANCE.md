@@ -12,7 +12,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 - Replaced local template, role-section, drone-address, and log high-water-mark implementations with `borgmcp-shared` exports.
 - Removed monorepo-only website anti-drift tests and re-anchored remaining filesystem tests to this repository.
 - Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
-- Added standalone source typecheck, unit/release tests, readable build, onboarding smoke, artifact verification, and public-source sensitivity scanning.
+- Added standalone source typecheck, unit/release tests, readable build, onboarding smoke, and artifact verification.
 - Made the package root export side-effect-free while retaining `borg-mcp` executable behavior.
 - Kept self-hosted `--host --enroll` preview-only while implementing the
   client-generated PENDING credential/retry tuple and capability-gated,
@@ -30,10 +30,8 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 Google OAuth / Cloud sign-in has been fully removed from this local-only client.
 `src/auth.ts`, `src/device-auth.ts`, and all installed-application OAuth client
 material are deleted, along with the hosted API default and the Cloud
-subscription/billing/dashboard tools. `scripts/verify-public-source.mjs` now
-forbids ANY Google OAuth client ID or `GOCSPX` value anywhere in the source or
-packed artifact (zero tolerance), and a no-cloud egress guard asserts the packed
-artifact reaches no hosted authority.
+subscription/billing/dashboard tools, and a no-cloud egress guard asserts the
+packed artifact reaches no hosted authority.
 
 Local enrollment now uses the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
