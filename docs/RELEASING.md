@@ -340,6 +340,72 @@ Before preparing a candidate, independently verify:
 
 ## Release Workflow
 
+### Clean-environment rig lifecycle
+
+Every clean-environment verification rig has an explicit identity and an
+explicit end-of-life. Keep filesystem workspaces under the seat's disposable
+`~/.borg/scratch/<seat>/` root, and give each workspace a name beginning with
+`borg-rig-` followed by the seat, purpose, and a unique suffix. Before the
+first command that can create files, anchor the rig as its own npm project:
+
+```sh
+BORG_SEAT_LABEL="${BORG_SEAT_LABEL:?set the seat label}"
+BORG_SCRATCH_ROOT="${BORG_SCRATCH_ROOT:-$HOME/.borg/scratch/$BORG_SEAT_LABEL}"
+RIG_NONCE="${RIG_NONCE:-$(date +%Y%m%d%H%M%S)-$$}"
+RIG_ID="borg-rig-${BORG_SEAT_LABEL}-release-${RIG_NONCE}"
+RIG_ROOT="$BORG_SCRATCH_ROOT/$RIG_ID"
+mkdir -p "$RIG_ROOT"
+printf '%s\n' '{"private":true}' > "$RIG_ROOT/package.json"
+```
+
+The manifest anchor is required before any `npm install`, `npm update`, or
+other npm command. Without it, npm can walk up from an empty scratch directory
+and write the operator's `package.json` instead of creating project-local
+state. The committed `release:exercise` follows this rule for its temporary
+consumer; other QA scripts and manual rigs must do the same.
+
+Container-backed rigs use the same `RIG_ID` as the container name and carry
+both labels below. `--rm` is preferred; a runtime without automatic removal
+must remove the exact `RIG_ID` in its cleanup path and retain the labels for a
+bounded sweep:
+
+```sh
+RIG_IMAGE="${RIG_IMAGE:?set the rig image}"
+docker run --rm \
+  --name "$RIG_ID" \
+  --label borg-rig=1 \
+  --label "borg-rig-owner=$BORG_SEAT_LABEL" \
+  "$RIG_IMAGE"
+```
+
+Register the exact-target cleanup before launching the rig:
+
+```sh
+cleanup() {
+  docker container rm --force "$RIG_ID" >/dev/null 2>&1 || true
+  rm -rf -- "$RIG_ROOT"
+}
+trap cleanup EXIT HUP INT TERM
+```
+
+List before starting and after cleanup. The filters distinguish this seat's
+rigs from unrelated containers on a shared host:
+
+```sh
+docker container ls --all \
+  --filter label=borg-rig=1 \
+  --filter "label=borg-rig-owner=${BORG_SEAT_LABEL:?}" \
+  --format '{{.ID}}\t{{.Names}}\t{{.Status}}'
+find "$BORG_SCRATCH_ROOT" -name 'borg-rig-*' -print
+```
+
+Register cleanup before launching any process, run it on success and failure,
+and do not deliver a verdict until both listings show no rig owned by the
+seat. For a non-`--rm` container runtime, remove only the named rig or the
+same owner label; never prune unrelated containers. A completed verification
+therefore implies zero running or stopped rig containers and no rig workspace
+left in the seat scratch root.
+
 ### Pre-tag composed exercise
 
 Before creating a release tag, exercise the packed client against the selected
