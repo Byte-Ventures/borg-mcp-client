@@ -364,6 +364,109 @@ and write the operator's `package.json` instead of creating project-local
 state. The committed `release:exercise` follows this rule for its temporary
 consumer; other QA scripts and manual rigs must do the same.
 
+The system temporary root is shared with the whole machine, so an unbounded
+listing there is not an inspectable cleanup check. Bound that leg by all three
+of the following: directories created during this run, the invoking user, and
+the name prefixes derived from every `mkdtemp` or `mkdtempSync` call in
+`src/`, `scripts/`, `test/`, and `__tests__/` at this revision. Repeated stems
+are listed once below; the dynamic `borg-pending-${mode}-` call is represented
+by `borg-pending-*`. A new call-site prefix is a known coverage gap until it is
+added to this inventory; do not infer ownership from a familiar-looking name.
+Keep both time predicates and the ownership predicate: removing the run-window
+bound turns a populated shared temp root back into an uninspectable listing.
+
+```sh
+TEMP_ROOT="${TMPDIR:-/tmp}"
+TEMP_OWNER="$(id -un)"
+TEMP_SCAN_START="$TEMP_ROOT/.${RIG_ID}-temp-scan-start"
+TEMP_SCAN_END="$TEMP_ROOT/.${RIG_ID}-temp-scan-end"
+
+# Derived from the repository's mkdtemp/mkdtempSync call sites.
+TEMP_RIG_PATTERNS=(
+  'borg-aw-*'
+  'borg-client-release-identity-*'
+  'borg-client-release-index-*'
+  'borg-codex-profile-*'
+  'borg-codex-remote-*'
+  'borg-config-test-*'
+  'borg-cr2-*'
+  'borg-cred-concurrency-*'
+  'borg-credential-ambient-home-*'
+  'borg-credential-compat-*'
+  'borg-credential-paths-*'
+  'borg-credential-state-root-*'
+  'borg-cursor-expired-*'
+  'borg-enrollment-entry-*'
+  'borg-file-backend-*'
+  'borg-hb-*'
+  'borg-inbox-cap-*'
+  'borg-inbox-dedup-*'
+  'borg-inbox-tail-*'
+  'borg-launch-access-*'
+  'borg-local-cursor-*'
+  'borg-local-restart-*'
+  'borg-local-session-*'
+  'borg-pending-*'
+  'borg-prepare-*'
+  'borg-private-root-*'
+  'borg-probe-tls-*'
+  'borg-project-hook-*'
+  'borg-readiness-probe-*'
+  'borg-release-config-snapshot-*'
+  'borg-release-config-symlink-*'
+  'borg-release-config-target-*'
+  'borg-release-launch-snapshot-*'
+  'borg-repository-identity-*'
+  'borg-reset-seat-*'
+  'borg-seat-op-*'
+  'borg-seat-store-*'
+  'borg-seats-*'
+  'borg-seats-symlink-root-*'
+  'borg-server-facade-signal-*'
+  'borg-server-grant-facade-*'
+  'borg-server-trust-*'
+  'borg-sh-seat-*'
+  'borg-sibling-retry-*'
+  'borg-sprint1-*'
+  'borg-sse-cursor-sep-*'
+  'borg-stream-owner-*'
+  'borg-tls-*'
+  'borg-update-npm-context-*'
+  'borg-update-provenance-*'
+  'borg-update-server-json-*'
+  'borgmcp-client-linked-worktree-*'
+  'borgmcp-client-lock-*'
+  'borgmcp-client-lock-path-*'
+  'borgmcp-client-npmrc-*'
+  'borgmcp-client-oauth-*'
+  'borgmcp-client-pack-*'
+  'borgmcp-client-readiness-*'
+  'borgmcp-client-release-test-*'
+  'borgmcp-escaping-bin-*'
+  'borgmcp-local-release-*'
+  'borgmcp-pack-metadata-*'
+  'borgmcp-pack-readme-*'
+  'borgmcp-packed-client-home-*'
+  'borgmcp-release-exercise-*'
+  'borgmcp-server-facade-smoke-*'
+)
+
+list_recent_owned_temp_rigs() {
+  for pattern in "${TEMP_RIG_PATTERNS[@]}"; do
+    for candidate in "$TEMP_ROOT"/$pattern; do
+      [ -d "$candidate" ] || continue
+      find "$candidate" -prune \
+        -user "$TEMP_OWNER" \
+        -newer "$TEMP_SCAN_START" \
+        ! -newer "$TEMP_SCAN_END" \
+        -print
+    done
+  done
+}
+
+touch "$TEMP_SCAN_START"
+```
+
 Container-backed rigs use the same `RIG_ID` as the container name and carry
 both labels below. `--rm` is preferred; a runtime without automatic removal
 must remove the exact `RIG_ID` in its cleanup path and retain the labels for a
@@ -384,6 +487,9 @@ Register the exact-target cleanup before launching the rig:
 cleanup() {
   docker container rm --force "$RIG_ID" >/dev/null 2>&1 || true
   rm -rf -- "$RIG_ROOT"
+  touch "$TEMP_SCAN_END"
+  list_recent_owned_temp_rigs
+  rm -f -- "$TEMP_SCAN_START" "$TEMP_SCAN_END"
 }
 trap cleanup EXIT HUP INT TERM
 ```
@@ -398,21 +504,24 @@ docker container ls --all \
   --format '{{.ID}}\t{{.Names}}\t{{.Status}}'
 find "$BORG_SCRATCH_ROOT" -mindepth 1 -print
 find "$BORG_SCRATCH_ROOT" -name 'borg-rig-*' -print
-find "${TMPDIR:-/tmp}" -mindepth 1 -print
 ```
 
 The unfiltered filesystem listings expose legacy names as well as conforming
-rigs; the temporary-directory listing covers tools that use `mkdtemp` instead
-of the seat scratch root. Inspect those results before cleanup and do not
-remove unrelated temporary files.
+rigs. The bounded temporary-directory function covers tools that use `mkdtemp`
+instead of the seat scratch root. Run the container and scratch listings before
+launch and again from the cleanup path; the temporary-directory function runs
+after cleanup, between the start and end markers. Inspect its results and do
+not remove unrelated temporary files.
 
 Register cleanup before launching any process, run it on success and failure,
-and do not deliver a verdict until the container listing and all filesystem
-listings show no rig owned by the seat. For a non-`--rm` container runtime,
+and do not deliver a verdict until the container listing, both scratch listings,
+and the bounded temporary-directory listing show no rig owned by the seat from
+this run. For a non-`--rm` container runtime,
 remove only the named rig or the same owner label; never prune unrelated
 containers. A completed verification
 therefore implies zero running or stopped rig containers and no rig workspace
-left in either the seat scratch root or the system temporary directory.
+created by this run left in either the seat scratch root or the system temporary
+directory.
 
 ### Pre-tag composed exercise
 
