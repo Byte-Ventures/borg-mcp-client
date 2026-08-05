@@ -1,7 +1,7 @@
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 /**
  * Optional alternate home root for isolated client runs. The value is the
  * replacement home directory, not the `.config/borgmcp` directory itself, so
@@ -9,6 +9,29 @@ import { isAbsolute, join, resolve } from 'node:path';
  * stays under one root.
  */
 export const BORG_STATE_ROOT_ENV = 'BORG_STATE_ROOT';
+function invalidStateRoot() {
+    return new Error(`${BORG_STATE_ROOT_ENV} must be an absolute canonical path`);
+}
+function assertCanonicalStateRoot(root) {
+    let candidate = root;
+    while (true) {
+        try {
+            const metadata = lstatSync(candidate);
+            if (metadata.isSymbolicLink() || realpathSync(candidate) !== candidate) {
+                throw invalidStateRoot();
+            }
+            return;
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT')
+                throw error;
+            const parent = dirname(candidate);
+            if (parent === candidate)
+                throw invalidStateRoot();
+            candidate = parent;
+        }
+    }
+}
 function configuredStateRoot(env = process.env) {
     const configured = env[BORG_STATE_ROOT_ENV];
     if (configured === undefined)
@@ -16,8 +39,9 @@ function configuredStateRoot(env = process.env) {
     if (configured.length === 0 ||
         !isAbsolute(configured) ||
         resolve(configured) !== configured) {
-        throw new Error(`${BORG_STATE_ROOT_ENV} must be an absolute canonical path`);
+        throw invalidStateRoot();
     }
+    assertCanonicalStateRoot(configured);
     return configured;
 }
 /** Resolve the effective home root used by all Borg-owned local state. */

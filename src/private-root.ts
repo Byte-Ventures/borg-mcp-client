@@ -1,7 +1,7 @@
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 /**
  * Optional alternate home root for isolated client runs. The value is the
@@ -11,6 +11,28 @@ import { isAbsolute, join, resolve } from 'node:path';
  */
 export const BORG_STATE_ROOT_ENV = 'BORG_STATE_ROOT';
 
+function invalidStateRoot(): Error {
+  return new Error(`${BORG_STATE_ROOT_ENV} must be an absolute canonical path`);
+}
+
+function assertCanonicalStateRoot(root: string): void {
+  let candidate = root;
+  while (true) {
+    try {
+      const metadata = lstatSync(candidate);
+      if (metadata.isSymbolicLink() || realpathSync(candidate) !== candidate) {
+        throw invalidStateRoot();
+      }
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = dirname(candidate);
+      if (parent === candidate) throw invalidStateRoot();
+      candidate = parent;
+    }
+  }
+}
+
 function configuredStateRoot(env: NodeJS.ProcessEnv = process.env): string | null {
   const configured = env[BORG_STATE_ROOT_ENV];
   if (configured === undefined) return null;
@@ -19,8 +41,9 @@ function configuredStateRoot(env: NodeJS.ProcessEnv = process.env): string | nul
     !isAbsolute(configured) ||
     resolve(configured) !== configured
   ) {
-    throw new Error(`${BORG_STATE_ROOT_ENV} must be an absolute canonical path`);
+    throw invalidStateRoot();
   }
+  assertCanonicalStateRoot(configured);
   return configured;
 }
 

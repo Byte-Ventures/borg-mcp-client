@@ -7,17 +7,20 @@
  * resolves inside it.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 const originalHome = process.env.HOME;
+const originalStateRoot = process.env.BORG_STATE_ROOT;
 const fixtures: string[] = [];
 afterEach(() => {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalStateRoot === undefined) delete process.env.BORG_STATE_ROOT;
+  else process.env.BORG_STATE_ROOT = originalStateRoot;
   for (const f of fixtures.splice(0)) rmSync(f, { recursive: true, force: true });
   vi.resetModules();
 });
@@ -56,6 +59,22 @@ async function activateOk(seats: typeof import('../src/seats.js'), bearer: strin
 }
 
 describe('seats store — one atomic unit (ACTIVE-without-binding unreachable)', () => {
+  it('rejects a symlink-valued state root before minting credentials outside the named root', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'borg-seats-symlink-root-'));
+    fixtures.push(base);
+    const target = join(base, 'target');
+    const link = join(base, 'root-link');
+    mkdirSync(target, { mode: 0o700 });
+    symlinkSync(target, link);
+    process.env.BORG_STATE_ROOT = link;
+    vi.resetModules();
+
+    await expect(import('../src/seats.js')).rejects.toThrow(
+      /BORG_STATE_ROOT must be an absolute canonical path/,
+    );
+    expect(existsSync(join(target, '.config', 'borgmcp', 'seats.json'))).toBe(false);
+  });
+
   it('a PENDING record has NO worktree binding (a pending seat is never a live binding)', async () => {
     const { dir, seats } = await load();
     const rec = await seats.mintPendingSeat({ ...SEAT, credential: 'b'.repeat(43) });

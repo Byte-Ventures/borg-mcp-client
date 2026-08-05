@@ -43,7 +43,7 @@ let tmpConfig: string;
 
 beforeEach(() => {
   execSyncMock.mockReset();
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'borg-config-test-'));
+  tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'borg-config-test-')));
   tmpConfig = path.join(tmpDir, '.claude.json');
 });
 
@@ -210,7 +210,8 @@ describe('isCodexMcpServerConfigured', () => {
 
   it('persists the configured state root for Codex MCP children', () => {
     const previous = process.env.BORG_STATE_ROOT;
-    process.env.BORG_STATE_ROOT = '/tmp/borg state-root';
+    const stateRoot = path.join(fs.realpathSync(os.tmpdir()), 'borg state-root');
+    process.env.BORG_STATE_ROOT = stateRoot;
     try {
       addCodexMcpServer();
       const addCall = execSyncMock.mock.calls.find(([command]) =>
@@ -218,7 +219,7 @@ describe('isCodexMcpServerConfigured', () => {
       );
       expect(addCall).toBeDefined();
       const [command] = addCall! as [string, { env: NodeJS.ProcessEnv }];
-      expect(command).toContain("--env BORG_STATE_ROOT='/tmp/borg state-root'");
+      expect(command).toContain(`--env BORG_STATE_ROOT='${stateRoot}'`);
     } finally {
       if (previous === undefined) delete process.env.BORG_STATE_ROOT;
       else process.env.BORG_STATE_ROOT = previous;
@@ -227,7 +228,8 @@ describe('isCodexMcpServerConfigured', () => {
 
   it('persists the configured state root for OpenCode MCP children', () => {
     const previous = process.env.BORG_STATE_ROOT;
-    process.env.BORG_STATE_ROOT = '/tmp/borg state-root';
+    const stateRoot = path.join(fs.realpathSync(os.tmpdir()), 'borg state-root');
+    process.env.BORG_STATE_ROOT = stateRoot;
     try {
       addOpenCodeMcpServer();
       const addCall = execSyncMock.mock.calls.find(([command]) =>
@@ -235,7 +237,7 @@ describe('isCodexMcpServerConfigured', () => {
       );
       expect(addCall).toBeDefined();
       const [command] = addCall! as [string, { env: NodeJS.ProcessEnv }];
-      expect(command).toContain("--env BORG_STATE_ROOT='/tmp/borg state-root'");
+      expect(command).toContain(`--env BORG_STATE_ROOT='${stateRoot}'`);
     } finally {
       if (previous === undefined) delete process.env.BORG_STATE_ROOT;
       else process.env.BORG_STATE_ROOT = previous;

@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 async function fixture(): Promise<{ base: string; root: string }> {
-  const base = await mkdtemp(join(tmpdir(), 'borg-private-root-'));
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'borg-private-root-')));
   fixtures.push(base);
   return { base, root: join(base, '.config', 'borgmcp') };
 }
@@ -36,6 +36,18 @@ describe('BORG_STATE_ROOT', () => {
   it('rejects a relative or non-canonical override', () => {
     process.env.BORG_STATE_ROOT = 'relative-state-root';
     expect(() => borgHomeRoot()).toThrow(/BORG_STATE_ROOT must be an absolute canonical path/);
+  });
+
+  it('rejects a symlink-valued override before any credential path is resolved', async () => {
+    const { base } = await fixture();
+    const target = join(base, 'target');
+    const link = join(base, 'root-link');
+    await mkdir(target, { recursive: true, mode: 0o700 });
+    await symlink(target, link);
+    process.env.BORG_STATE_ROOT = link;
+
+    expect(() => borgHomeRoot()).toThrow(/BORG_STATE_ROOT must be an absolute canonical path/);
+    expect(() => borgConfigRoot()).toThrow(/BORG_STATE_ROOT must be an absolute canonical path/);
   });
 });
 

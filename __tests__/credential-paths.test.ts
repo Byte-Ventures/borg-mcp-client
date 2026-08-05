@@ -31,8 +31,8 @@ describe('portable credential paths', () => {
   });
 
   it('uses BORG_STATE_ROOT ahead of HOME for isolated credentials', async () => {
-    const stateRoot = mkdtempSync(join(tmpdir(), 'borg-credential-state-root-'));
-    const ambientHome = mkdtempSync(join(tmpdir(), 'borg-credential-ambient-home-'));
+    const stateRoot = realpathSync(mkdtempSync(join(tmpdir(), 'borg-credential-state-root-')));
+    const ambientHome = realpathSync(mkdtempSync(join(tmpdir(), 'borg-credential-ambient-home-')));
     try {
       process.env.BORG_STATE_ROOT = stateRoot;
       process.env.HOME = ambientHome;

@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -216,7 +216,7 @@ export async function smokePackedClient(packageRoot, options = {}) {
     ? manifest.exports['.']
     : manifest.exports?.['.']?.import;
   if (!exportTarget) throw new Error('Installed package does not expose a root import.');
-  const isolatedHome = await mkdtemp(join(tmpdir(), 'borgmcp-packed-client-home-'));
+  const isolatedHome = await realpath(await mkdtemp(join(tmpdir(), 'borgmcp-packed-client-home-')));
   const env = isolatedClientEnv(isolatedHome, options.env ?? process.env);
   try {
     await runImportSmoke(root, exportTarget, timeoutMs, env);
