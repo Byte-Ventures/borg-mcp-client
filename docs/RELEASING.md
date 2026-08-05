@@ -396,15 +396,23 @@ docker container ls --all \
   --filter label=borg-rig=1 \
   --filter "label=borg-rig-owner=${BORG_SEAT_LABEL:?}" \
   --format '{{.ID}}\t{{.Names}}\t{{.Status}}'
+find "$BORG_SCRATCH_ROOT" -mindepth 1 -print
 find "$BORG_SCRATCH_ROOT" -name 'borg-rig-*' -print
+find "${TMPDIR:-/tmp}" -mindepth 1 -print
 ```
 
+The unfiltered filesystem listings expose legacy names as well as conforming
+rigs; the temporary-directory listing covers tools that use `mkdtemp` instead
+of the seat scratch root. Inspect those results before cleanup and do not
+remove unrelated temporary files.
+
 Register cleanup before launching any process, run it on success and failure,
-and do not deliver a verdict until both listings show no rig owned by the
-seat. For a non-`--rm` container runtime, remove only the named rig or the
-same owner label; never prune unrelated containers. A completed verification
+and do not deliver a verdict until the container listing and all filesystem
+listings show no rig owned by the seat. For a non-`--rm` container runtime,
+remove only the named rig or the same owner label; never prune unrelated
+containers. A completed verification
 therefore implies zero running or stopped rig containers and no rig workspace
-left in the seat scratch root.
+left in either the seat scratch root or the system temporary directory.
 
 ### Pre-tag composed exercise
 
