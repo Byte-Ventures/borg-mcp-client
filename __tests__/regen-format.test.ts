@@ -652,6 +652,11 @@ describe('ARRIVAL instruction process state (gh#136)', () => {
     __resetRegenSessionState();
     const initial = getDronePlaybook();
     expect(initial).toContain('ARRIVAL:');
+    expect(initial).toContain(
+      'post one `ARRIVAL: <your-label> (<your-role>) online on <hostname>` (run `hostname`)'
+    );
+    expect(initial).not.toContain('<project-path>');
+    expect(initial).not.toContain('use cwd for the path');
     expect(initial).toContain('an explicit `/mcp` reconnect may show it again');
     expect(initial).not.toContain('skip if already posted this session');
 
