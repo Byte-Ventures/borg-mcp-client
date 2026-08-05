@@ -5,7 +5,7 @@ import {
   shouldSuppressLifecycleLogFromState,
 } from '../src/lifecycle-log-guard';
 
-const arrival = 'ARRIVAL: drone-1 (Builder) online on host at /repo';
+const arrival = 'ARRIVAL: drone-1 (Builder) online on host';
 const ready =
   'READY: drone-1 (Builder) — capacity clean, awaiting next dispatch from drone-1 (Coordinator)';
 
