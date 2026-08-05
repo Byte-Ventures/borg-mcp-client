@@ -106,6 +106,47 @@ describe('OpenCode launch access', () => {
     expect(addOpenCodeLaunchAccess(root, paths)).toBe(false);
     expect(fs.readFileSync(configPath, 'utf8')).toBe(first);
   });
+
+  it('migrates predecessor literal allows without replacing user subtree decisions', () => {
+    const configPath = path.join(root, '.opencode', 'opencode.json');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      permission: {
+        external_directory: {
+          [paths.worktree]: 'allow',
+          [`${paths.worktree}/**`]: 'deny',
+          [`${paths.scratch}/**`]: 'deny',
+        },
+      },
+    }));
+
+    expect(addOpenCodeLaunchAccess(root, paths)).toBe(true);
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(parsed.permission.external_directory).toEqual({
+      [`${paths.worktree}/**`]: 'deny',
+      [`${paths.scratch}/**`]: 'deny',
+    });
+  });
+
+  it('leaves a user-authored exact deny untouched during migration', () => {
+    const configPath = path.join(root, '.opencode', 'opencode.json');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      permission: {
+        external_directory: {
+          [paths.worktree]: 'allow',
+          [paths.scratch]: 'deny',
+        },
+      },
+    }));
+
+    expect(addOpenCodeLaunchAccess(root, paths)).toBe(true);
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    expect(parsed.permission.external_directory).toEqual({
+      [`${paths.worktree}/**`]: 'allow',
+      [paths.scratch]: 'deny',
+    });
+  });
 });
 
 describe('Codex launch hook', () => {

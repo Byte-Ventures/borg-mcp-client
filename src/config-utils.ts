@@ -926,13 +926,18 @@ export function addOpenCodeLaunchAccess(
   for (const directory of [paths.worktree, paths.scratch].map((value) => path.resolve(value))) {
     // OpenCode matches external_directory patterns against the requested path,
     // so a literal directory key does not authorize files below that directory.
-    // Remove the old literal form when upgrading an existing seat config, then
-    // install the documented subtree pattern. Reinsert it last so it wins over
-    // a preserved wildcard rule in OpenCode's ordered permission matching.
-    delete external[directory];
+    // The exact `allow` shape is the literal form written by the predecessor;
+    // migrate only that owned key. Never replace an existing subtree decision
+    // or exact decision supplied by the operator.
     const subtree = `${directory}/**`;
-    delete external[subtree];
-    external[subtree] = 'allow';
+    const hasExact = Object.prototype.hasOwnProperty.call(external, directory);
+    const hasSubtree = Object.prototype.hasOwnProperty.call(external, subtree);
+    if (external[directory] === 'allow') {
+      delete external[directory];
+      if (!hasSubtree) external[subtree] = 'allow';
+    } else if (!hasExact && !hasSubtree) {
+      external[subtree] = 'allow';
+    }
   }
   permissionObject.external_directory = external;
   config.permission = permissionObject;
