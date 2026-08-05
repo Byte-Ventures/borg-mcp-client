@@ -92,7 +92,7 @@ describe('borg_log ARRIVAL instruction ordering', () => {
       params: {
         name: 'borg_log',
         arguments: {
-          message: 'ARRIVAL: builder-test (Builder) online on test-host at /test',
+          message: 'ARRIVAL: builder-test (Builder) online on test-host',
         },
       },
     });
