@@ -335,39 +335,6 @@ function transformLock(raw, oldVersion, newVersion) {
   return canonicalJson(lock);
 }
 
-function currentPublishedVersion(raw) {
-  const matches = [...raw.matchAll(/Client `borgmcp@(\d+\.\d+\.\d+)` is published\./gu)];
-  if (matches.length !== 1) {
-    fail(`${EXTRACTION_PATH} must name exactly one current published client version.`);
-  }
-  return requireStableVersion(matches[0][1], 'Current published client version');
-}
-
-function transformExtraction(raw, oldVersion, newVersion, record) {
-  const currentIdentity = `current release identity is \`${oldVersion}\``;
-  const nextIdentity = `current release identity is \`${newVersion}\``;
-  const publishedVersion = currentPublishedVersion(raw);
-  const currentPublished = `Client \`borgmcp@${publishedVersion}\` is published.`;
-  const currentGate = `current release identity and publication gate remain governed by the reviewed \`v${oldVersion}\` source`;
-  if (countLiteral(raw, currentIdentity) !== 1 ||
-      countLiteral(raw, currentPublished) !== 1 ||
-      countLiteral(raw, currentGate) !== 1) {
-    fail(`${EXTRACTION_PATH} does not contain the expected current release ledger.`);
-  }
-  if (record.outcome === 'published' && publishedVersion !== oldVersion) {
-    fail(`${EXTRACTION_PATH} published release base must identify ${oldVersion} as current.`);
-  }
-  if (record.outcome === 'failed-superseded' && compareVersions(publishedVersion, oldVersion) >= 0) {
-    fail(`${EXTRACTION_PATH} does not identify an earlier published provenance anchor.`);
-  }
-  return raw
-    .replace(currentIdentity, nextIdentity)
-    .replace(
-      currentGate,
-      `current release identity and publication gate remain governed by the reviewed \`v${newVersion}\` source`,
-    );
-}
-
 function releaseParagraph(record) {
   if (record.outcome === 'failed-superseded') {
     return (
@@ -451,16 +418,13 @@ export function buildReleaseTransform(baseFiles, oldVersion, newVersion, recordI
   return new Map([
     [PACKAGE_PATH, transformPackage(requireFile(baseFiles, PACKAGE_PATH), oldVersion, newVersion)],
     [LOCK_PATH, transformLock(requireFile(baseFiles, LOCK_PATH), oldVersion, newVersion)],
-    [EXTRACTION_PATH, transformExtraction(
-      requireFile(baseFiles, EXTRACTION_PATH), oldVersion, newVersion, record,
-    )],
     [RELEASING_PATH, transformReleasing(requireFile(baseFiles, RELEASING_PATH), oldVersion, newVersion, record)],
     [RELEASE_TEST_PATH, transformReleaseTest(requireFile(baseFiles, RELEASE_TEST_PATH), oldVersion, newVersion, record)],
   ]);
 }
 
 function transformPaths() {
-  return [PACKAGE_PATH, LOCK_PATH, EXTRACTION_PATH, RELEASING_PATH, RELEASE_TEST_PATH].sort();
+  return [PACKAGE_PATH, LOCK_PATH, RELEASING_PATH, RELEASE_TEST_PATH].sort();
 }
 
 function allPaths(allowlistRaw) {
@@ -536,23 +500,6 @@ function extractReleaseRecord(raw, version) {
   });
 }
 
-function publishedAnchorForRecord(root, files, version, record, authorities) {
-  if (record.outcome === 'published') return { record, anchor: record };
-  const anchorVersion = currentPublishedVersion(requireFile(files, EXTRACTION_PATH));
-  if (compareVersions(anchorVersion, version) >= 0) {
-    fail('Failed-superseded release requires an earlier published provenance anchor.');
-  }
-  const anchor = verifyReleaseProvenance(
-    root,
-    extractReleaseRecord(requireFile(files, RELEASING_PATH), anchorVersion),
-    authorities,
-  );
-  if (anchor.outcome !== 'published') {
-    fail('Failed-superseded release provenance anchor must be published.');
-  }
-  return { record, anchor };
-}
-
 function verifyIndependentShapes(baseFiles, candidateFiles, oldVersion, newVersion, record) {
   const transformed = buildReleaseTransform(baseFiles, oldVersion, newVersion, record);
   for (const [path, expected] of transformed) {
@@ -582,16 +529,10 @@ export async function prepareRelease(root, targetVersion, evidence, authorities 
     workflowConclusion: evidence.workflowConclusion,
     artifactIntegrity: evidence.artifactIntegrity,
   }, authorities);
-  const { anchor } = publishedAnchorForRecord(root, baseFiles, oldVersion, record, authorities);
-  for (const [description, commit] of [
-    ['Released commit', record.commit],
-    ['Published provenance anchor', anchor.commit],
-  ]) {
-    try {
-      git(root, ['merge-base', '--is-ancestor', commit, 'HEAD']);
-    } catch {
-      fail(`${description} is not an ancestor of the preparation base.`);
-    }
+  try {
+    git(root, ['merge-base', '--is-ancestor', record.commit, 'HEAD']);
+  } catch {
+    fail('Released commit is not an ancestor of the preparation base.');
   }
   const transformed = buildReleaseTransform(baseFiles, oldVersion, targetVersion, record);
   await Promise.all([...transformed].map(([path, raw]) => writeFile(join(root, path), raw)));
@@ -599,12 +540,11 @@ export async function prepareRelease(root, targetVersion, evidence, authorities 
     oldVersion,
     newVersion: targetVersion,
     record,
-    provenanceAnchor: anchor,
     paths: Object.freeze([...transformed.keys()].sort()),
   });
 }
 
-function expectedTree(root, base, transformed) {
+function expectedTree(root, base, candidate, transformed) {
   const directory = mkdtempSync(join(tmpdir(), 'borg-client-release-index-'));
   const indexPath = join(directory, 'index');
   const env = { ...process.env, GIT_INDEX_FILE: indexPath };
@@ -617,6 +557,11 @@ function expectedTree(root, base, transformed) {
       const mode = line.slice(0, line.indexOf(' '));
       git(root, ['update-index', '--cacheinfo', mode, blob, path], { env });
     }
+    const extractionLine = git(root, ['ls-tree', base, '--', EXTRACTION_PATH]);
+    if (extractionLine === '') fail(`Human documentation path is absent from its base: ${EXTRACTION_PATH}`);
+    const extractionMode = extractionLine.slice(0, extractionLine.indexOf(' '));
+    const extractionBlob = git(root, ['rev-parse', `${candidate}:${EXTRACTION_PATH}`]);
+    git(root, ['update-index', '--cacheinfo', extractionMode, extractionBlob, EXTRACTION_PATH], { env });
     return git(root, ['write-tree'], { env });
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -640,25 +585,21 @@ export function verifyReleaseIdentity(root, baseInput, candidateInput, authoriti
     extractReleaseRecord(requireFile(candidateFiles, RELEASING_PATH), oldVersion),
     authorities,
   );
-  const { anchor } = publishedAnchorForRecord(root, candidateFiles, oldVersion, record, authorities);
-  for (const [description, commit] of [
-    ['Recorded release commit', record.commit],
-    ['Published provenance anchor', anchor.commit],
-  ]) {
-    try {
-      git(root, ['merge-base', '--is-ancestor', commit, base]);
-    } catch {
-      fail(`${description} is not an ancestor of the release identity base.`);
-    }
+  try {
+    git(root, ['merge-base', '--is-ancestor', record.commit, base]);
+  } catch {
+    fail('Recorded release commit is not an ancestor of the release identity base.');
   }
   verifyIndependentShapes(baseFiles, candidateFiles, oldVersion, newVersion, record);
   const transformed = buildReleaseTransform(baseFiles, oldVersion, newVersion, record);
   const changed = git(root, ['diff', '--name-only', base, candidate]).split('\n').filter(Boolean).sort();
   const expectedPaths = [...transformed.keys()].sort();
-  if (JSON.stringify(changed) !== JSON.stringify(expectedPaths)) {
+  const allowedPaths = [...new Set([...expectedPaths, EXTRACTION_PATH])].sort();
+  if (changed.some((path) => !allowedPaths.includes(path)) ||
+      JSON.stringify(changed.filter((path) => path !== EXTRACTION_PATH)) !== JSON.stringify(expectedPaths)) {
     fail('Release identity changed files outside the generated transform.');
   }
-  const generatedTree = expectedTree(root, base, transformed);
+  const generatedTree = expectedTree(root, base, candidate, transformed);
   const candidateTree = git(root, ['rev-parse', `${candidate}^{tree}`]);
   if (candidateTree !== generatedTree) fail('Candidate tree is not the deterministic release transform.');
   return Object.freeze({
