@@ -8,6 +8,7 @@ import type { ExpectedBinding, FinalizeServerSeatOutcome, PersistedLocalSeat } f
 import type { SeatBinding } from './seats.js';
 import { type LaunchApprovalDecision } from './cli-tool-approval.js';
 import { type WorkingRepo } from './working-repo.js';
+import { type LaunchAccessPaths } from './launch-access.js';
 import type { AssociateRepositoryCubeResponse, CreateCubeRepository, CubeTemplate } from 'borgmcp-shared/protocol';
 import { type RepositoryCubeCreation, type RepositoryCubeResolution } from './repository-cube-init.js';
 import type { GitRepositoryContext, RepositoryAssociation } from './repository-identity.js';
@@ -149,6 +150,8 @@ export interface AssimilateDeps {
     getRepositoryAssociation: (trustIdentity: string, repository: CreateCubeRepository) => Promise<RepositoryAssociation | null>;
     saveRepositoryAssociation: (trustIdentity: string, repository: CreateCubeRepository, association: RepositoryAssociation) => Promise<void>;
     installProjectSessionHook: (projectRoot: string) => void;
+    /** Pre-authorize only the launched seat's worktree + scratch paths. */
+    provisionLaunchAccess?: (cli: BorgCli, projectRoot: string, paths: LaunchAccessPaths) => void;
     /** gh#27: optional test seam — when set, selectAssimilationAuthority uses
      *  this instead of prompting/failing. Not wired in production. */
     defaultAuthority?: AssimilationAuthority;

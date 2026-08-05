@@ -66,7 +66,9 @@ invitation prompt. Use `borg server invite` explicitly when another client or
 device needs a single-use invitation; its output is owned by the server.
 
 For an isolated verification or disposable local run, set `BORG_STATE_ROOT` to
-an absolute directory. It replaces the effective home root for all
+an absolute canonical directory path whose existing ancestors traverse no
+symlinks. On macOS, use the canonical `/private/tmp/...` spelling rather than
+the `/tmp/...` symlink. It replaces the effective home root for all
 Borg-owned state and agent configuration paths, including credentials, seats,
 worktrees, and hooks. Native agent registration commands also resolve their
 config roots under this directory. Harnesses that invoke a native agent should
@@ -154,6 +156,17 @@ For Claude Code and Codex, `BORG_DISABLE_LAUNCH_REMINDER` is a presence-based
 local opt-out for launch orientation messaging; setting it does not activate
 Borg tools or change server authorization. OpenCode has no launch-reminder
 surface.
+
+Each assimilated seat also receives a disposable scratch root at
+`~/.borg/scratch/<seat>/`. Borg pre-authorizes exactly the launched worktree and
+that seat's scratch root: Claude Code uses the worktree's
+`.claude/settings.local.json`, OpenCode uses the worktree's
+`.opencode/opencode.json`, and Codex receives native `--add-dir` flags at
+launch. Use the scratch root for detached review checkouts, clean-environment
+rigs, unpacked artifacts, and fake-home directories; nothing durable belongs
+there. Claude Code and Codex may also print a non-blocking reminder when a tool
+targets a path outside those two roots. The permission layer remains the
+enforcement mechanism.
 
 ## Updating Borg
 

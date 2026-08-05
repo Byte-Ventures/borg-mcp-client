@@ -40,4 +40,8 @@ export function resolveClearRewakePath() {
 export function resolveLogAuditPath() {
     return resolveSelfBinPath('log-audit.js');
 }
+/** Absolute path to the optional pre-tool foreign-path reminder hook. */
+export function resolveForeignPathReminderPath() {
+    return resolveSelfBinPath('foreign-path-reminder.js');
+}
 //# sourceMappingURL=self-path.js.map
