@@ -365,18 +365,17 @@ state. The committed `release:exercise` follows this rule for its temporary
 consumer; other QA scripts and manual rigs must do the same.
 
 The system temporary root is shared with the whole machine, so an unbounded
-listing there is not an inspectable cleanup check. Bound that leg by all three
-of the following: directories created during this run, the invoking user, and
-the name prefixes derived from every `mkdtemp` or `mkdtempSync` call in
-`src/`, `scripts/`, `test/`, and `__tests__/` at this revision. Repeated stems
-are listed once below; the dynamic `borg-pending-${mode}-` call is represented
-by `borg-pending-*`. A new call-site prefix is a known coverage gap until it is
-added to this inventory; do not infer ownership from a familiar-looking name.
-Keep both time predicates and the ownership predicate: removing the run-window
-bound turns a populated shared temp root back into an uninspectable listing.
-The function below constructs one `find` name expression and prunes after the
-first level; it does not expand historical globs or start one process per
-matching directory.
+listing there is not an inspectable cleanup check. Bound that leg by the
+invoking user and the run-window markers, which select directories whose
+timestamps fall within this run window without requiring a prefix inventory.
+New `mkdtemp` prefixes therefore require no documentation change. Keep both
+time predicates and the ownership predicate: removing the run-window bound
+turns a populated shared temp root back into an uninspectable listing.
+
+Several runs may share one user account, so unrelated same-user temporary
+directories created during the window can appear in the result. Inspect every
+result and remove only paths created by this run; never delete a path merely
+because this listing found it.
 
 ```sh
 TEMP_ROOT="${TMPDIR:-/tmp}"
@@ -384,105 +383,9 @@ TEMP_OWNER="$(id -un)"
 TEMP_SCAN_START="$TEMP_ROOT/.${RIG_ID}-temp-scan-start"
 TEMP_SCAN_END="$TEMP_ROOT/.${RIG_ID}-temp-scan-end"
 
-# Derived from the repository's mkdtemp/mkdtempSync call sites.
-TEMP_RIG_PATTERNS=(
-  'borg-aw-*'
-  'borg-client-release-identity-*'
-  'borg-client-release-index-*'
-  'borg-codex-profile-*'
-  'borg-codex-remote-*'
-  'borg-config-test-*'
-  'borg-cr2-*'
-  'borg-cred-concurrency-*'
-  'borg-credential-ambient-home-*'
-  'borg-credential-compat-*'
-  'borg-credential-paths-*'
-  'borg-credential-state-root-*'
-  'borg-cursor-expired-*'
-  'borg-enrollment-entry-*'
-  'borg-file-backend-*'
-  'borg-hb-*'
-  'borg-inbox-cap-*'
-  'borg-inbox-dedup-*'
-  'borg-inbox-tail-*'
-  'borg-launch-access-*'
-  'borg-local-cursor-*'
-  'borg-local-restart-*'
-  'borg-local-session-*'
-  'borg-pending-*'
-  'borg-prepare-*'
-  'borg-private-root-*'
-  'borg-probe-tls-*'
-  'borg-project-hook-*'
-  'borg-readiness-probe-*'
-  'borg-release-config-snapshot-*'
-  'borg-release-config-symlink-*'
-  'borg-release-config-target-*'
-  'borg-release-launch-snapshot-*'
-  'borg-repository-identity-*'
-  'borg-reset-seat-*'
-  'borg-seat-op-*'
-  'borg-seat-store-*'
-  'borg-seats-*'
-  'borg-seats-symlink-root-*'
-  'borg-server-facade-signal-*'
-  'borg-server-grant-facade-*'
-  'borg-server-trust-*'
-  'borg-sh-seat-*'
-  'borg-sibling-retry-*'
-  'borg-sprint1-*'
-  'borg-sse-cursor-sep-*'
-  'borg-stream-owner-*'
-  'borg-tls-*'
-  'borg-update-npm-context-*'
-  'borg-update-provenance-*'
-  'borg-update-server-json-*'
-  'borgmcp-client-linked-worktree-*'
-  'borgmcp-client-lock-*'
-  'borgmcp-client-lock-path-*'
-  'borgmcp-client-npmrc-*'
-  'borgmcp-client-oauth-*'
-  'borgmcp-client-pack-*'
-  'borgmcp-client-readiness-*'
-  'borgmcp-client-release-test-*'
-  'borgmcp-escaping-bin-*'
-  'borgmcp-local-release-*'
-  'borgmcp-pack-metadata-*'
-  'borgmcp-pack-readme-*'
-  'borgmcp-packed-client-home-*'
-  'borgmcp-release-exercise-*'
-  'borgmcp-server-facade-smoke-*'
-  'inbox-ensure-*'
-  'inbox-monitor-e2e-*'
-  'inbox-monitor-e2e-legacy-veto-*'
-  'inbox-monitor-e2e-live-yield-*'
-  'inbox-monitor-e2e-state-root-*'
-  'inbox-monitor-e2e-trim-rename-*'
-  'inbox-monitor-seed-*'
-  'inbox-monitor-test-*'
-  'monitor-ignore-mode-collision-*'
-  'monitor-owned-ignore-*'
-  'monitor-readonly-inbox-*'
-  'monitor-symlink-final-root-*'
-  'monitor-symlink-root-*'
-  'monitor-tracked-ignore-*'
-  'monitor-unmarked-root-*'
-  'monitor-wedged-root-*'
-  'monitor-worktree-git-*'
-  'monitor-worktree-state-*'
-)
-
 list_recent_owned_temp_rigs() {
-  find_name_args=()
-  for pattern in "${TEMP_RIG_PATTERNS[@]}"; do
-    if [ "${#find_name_args[@]}" -gt 0 ]; then
-      find_name_args+=( -o )
-    fi
-    find_name_args+=( -name "$pattern" )
-  done
   find "$TEMP_ROOT" -mindepth 1 -prune \
     -type d \
-    \( "${find_name_args[@]}" \) \
     -user "$TEMP_OWNER" \
     -newer "$TEMP_SCAN_START" \
     ! -newer "$TEMP_SCAN_END" \
