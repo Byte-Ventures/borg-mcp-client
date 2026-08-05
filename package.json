@@ -34,8 +34,9 @@
     "test:release": "npm run preflight:node && node --test test/release-lane.test.mjs",
     "onboarding:smoke": "node scripts/onboarding-smoke.mjs",
     "release:exercise": "npm run build && node scripts/release-exercise.mjs",
-    "release:check": "npm run verify:release && npm run verify:lock && npm run check && npm test && npm run build && npm run onboarding:smoke && npm run verify:package",
+    "release:check": "npm run verify:public-source && npm run verify:release && npm run verify:lock && npm run check && npm test && npm run build && npm run onboarding:smoke && npm run verify:package",
     "verify:artifact": "node scripts/verify-packed-artifact.mjs",
+    "verify:public-source": "node scripts/verify-public-source.mjs",
     "verify:package": "node scripts/verify-local-package.mjs",
     "verify:release": "node scripts/verify-release-readiness.mjs",
     "verify:lock": "node scripts/verify-lock-registry.mjs"
