@@ -31,6 +31,21 @@ export function borgHomeRoot(): string {
 
 export const borgConfigRoot = (): string => join(borgHomeRoot(), '.config', 'borgmcp');
 
+/**
+ * Environment used when a native agent CLI registers Borg. The CLI must write
+ * its own config under the same effective root that config-utils reads; the
+ * eventual MCP child receives BORG_STATE_ROOT separately via its registration.
+ */
+export function borgAgentConfigEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const root = borgHomeRoot();
+  return {
+    ...env,
+    HOME: root,
+    CODEX_HOME: join(root, '.codex'),
+    XDG_CONFIG_HOME: join(root, '.config'),
+  };
+}
+
 /** Ensure Borg's local state root exists with owner-only directory permissions. */
 export async function ensurePrivateBorgConfigRoot(root = borgConfigRoot()): Promise<void> {
   if (!isAbsolute(root) || resolve(root) !== root) {

@@ -102,6 +102,21 @@ test('operator configuration snapshot detects a watched mutation', async () => {
   }
 });
 
+test('operator configuration snapshot refuses a watched symlink before execution', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-symlink-'));
+  const target = await mkdtemp(join(tmpdir(), 'borg-release-config-target-'));
+  try {
+    await symlink(target, join(home, '.claude'), 'dir');
+    await assert.rejects(
+      () => snapshotOperatorConfig(home),
+      /refuses symlinked watched path/,
+    );
+  } finally {
+    await rm(home, { recursive: true, force: true });
+    await rm(target, { recursive: true, force: true });
+  }
+});
+
 test('release exercise rejects substituted server processes', () => {
   assert.doesNotThrow(() => assertServerProcessArgv(
     ['/node/exact', '/isolated/node_modules/borgmcp-server/dist/main.js', 'start'],

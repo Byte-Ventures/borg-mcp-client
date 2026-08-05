@@ -68,8 +68,9 @@ device needs a single-use invitation; its output is owned by the server.
 For an isolated verification or disposable local run, set `BORG_STATE_ROOT` to
 an absolute directory. It replaces the effective home root for all
 Borg-owned state and agent configuration paths, including credentials, seats,
-worktrees, and hooks. Harnesses that also invoke a native agent should set
-`HOME` to the same directory so the agent itself uses the isolated config.
+worktrees, and hooks. Native agent registration commands also resolve their
+config roots under this directory. Harnesses that invoke a native agent should
+set `HOME` to the same directory so the agent itself uses the isolated config.
 
 Status reports only runtime evidence supplied by the server: running/stopped
 state, exact running artifact and immutable build identity when available,

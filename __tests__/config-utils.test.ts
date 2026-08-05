@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  addMcpServer,
   addCodexMcpServer,
   addOpenCodeMcpServer,
   isCodexHookRegistered,
@@ -238,6 +239,62 @@ describe('isCodexMcpServerConfigured', () => {
     } finally {
       if (previous === undefined) delete process.env.BORG_STATE_ROOT;
       else process.env.BORG_STATE_ROOT = previous;
+    }
+  });
+});
+
+describe('native agent registration roots', () => {
+  it('writes Claude, Codex, and OpenCode registrations under the override', () => {
+    const previous = {
+      BORG_STATE_ROOT: process.env.BORG_STATE_ROOT,
+      HOME: process.env.HOME,
+      CODEX_HOME: process.env.CODEX_HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    };
+    const stateRoot = path.join(tmpDir, 'state-root');
+    const ambientHome = path.join(tmpDir, 'ambient-home');
+    process.env.BORG_STATE_ROOT = stateRoot;
+    process.env.HOME = ambientHome;
+    process.env.CODEX_HOME = path.join(ambientHome, '.codex');
+    process.env.XDG_CONFIG_HOME = path.join(ambientHome, '.config');
+    execSyncMock.mockImplementation((command: string, options?: { env?: NodeJS.ProcessEnv }) => {
+      if (!String(command).includes(' mcp add ')) return;
+      const env = options?.env ?? {};
+      let target: string | undefined;
+      if (String(command).startsWith('claude mcp add')) target = path.join(env.HOME ?? '', '.claude.json');
+      if (String(command).startsWith('codex mcp add')) target = path.join(env.CODEX_HOME ?? '', 'config.toml');
+      if (String(command).startsWith('opencode mcp add')) target = path.join(env.XDG_CONFIG_HOME ?? '', 'opencode', 'opencode.json');
+      if (target) {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, 'registered\n');
+      }
+    });
+    try {
+      addMcpServer();
+      addCodexMcpServer();
+      addOpenCodeMcpServer();
+
+      expect(fs.existsSync(path.join(stateRoot, '.claude.json'))).toBe(true);
+      expect(fs.existsSync(path.join(stateRoot, '.codex', 'config.toml'))).toBe(true);
+      expect(fs.existsSync(path.join(stateRoot, '.config', 'opencode', 'opencode.json'))).toBe(true);
+      expect(fs.existsSync(path.join(ambientHome, '.claude.json'))).toBe(false);
+      expect(fs.existsSync(path.join(ambientHome, '.codex', 'config.toml'))).toBe(false);
+      expect(fs.existsSync(path.join(ambientHome, '.config', 'opencode', 'opencode.json'))).toBe(false);
+
+      const registrationCalls = execSyncMock.mock.calls.filter(([command]) =>
+        /^(claude|codex|opencode) mcp (remove|add)/.test(String(command)),
+      );
+      expect(registrationCalls).toHaveLength(5);
+      for (const [, options] of registrationCalls as Array<[string, { env?: NodeJS.ProcessEnv } | undefined]>) {
+        expect(options?.env?.HOME).toBe(stateRoot);
+        expect(options?.env?.CODEX_HOME).toBe(path.join(stateRoot, '.codex'));
+        expect(options?.env?.XDG_CONFIG_HOME).toBe(path.join(stateRoot, '.config'));
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 });

@@ -11,7 +11,7 @@ import { dirname } from 'path';
 import { BORG_AGENT_KIND_ENV, BORG_CODEX_REMOTE_WAKE_ENV, withAgentRuntimeEnv, } from './agent-runtime.js';
 import { resolveMcpBinaryPath, resolveRegenPath, resolveClearRewakePath, resolveLogAuditPath, } from './self-path.js';
 import { shellEscape } from './shell-escape.js';
-import { BORG_STATE_ROOT_ENV, borgHomeRoot } from './private-root.js';
+import { BORG_STATE_ROOT_ENV, borgAgentConfigEnv, borgHomeRoot } from './private-root.js';
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -579,9 +579,10 @@ export function getBinaryPath() {
  */
 export function addMcpServer() {
     try {
+        const agentConfigEnv = borgAgentConfigEnv(process.env);
         // First, remove any existing borg configuration (ignore errors if not found)
         try {
-            execSync('claude mcp remove --scope user borg', { stdio: 'ignore' });
+            execSync('claude mcp remove --scope user borg', { stdio: 'ignore', env: agentConfigEnv });
         }
         catch {
             // Ignore - server might not exist yet
@@ -593,7 +594,7 @@ export function addMcpServer() {
             stdio: 'inherit', // Show output to user
             // No hosted-URL injection: BORG_API_URL passes through from the
             // environment only when the operator has explicitly set it.
-            env: process.env,
+            env: agentConfigEnv,
         });
     }
     catch (error) {
@@ -605,8 +606,9 @@ export function addMcpServer() {
 }
 export function addCodexMcpServer() {
     try {
+        const codexConfigEnv = withAgentRuntimeEnv(borgAgentConfigEnv(process.env), 'codex');
         try {
-            execSync('codex mcp remove borg', { stdio: 'ignore' });
+            execSync('codex mcp remove borg', { stdio: 'ignore', env: codexConfigEnv });
         }
         catch {
             // Ignore - server might not exist yet.
@@ -618,7 +620,6 @@ export function addCodexMcpServer() {
         // transport capability. Do not persist a transport marker here: a future
         // Codex child may launch without a live --remote socket.
         // gh#client#18: use absolute path to THIS installation's binary.
-        const codexConfigEnv = withAgentRuntimeEnv(process.env, 'codex');
         const apiUrlEnvArg = apiUrl ? ` --env BORG_API_URL=${shellQuote(apiUrl)}` : '';
         const stateRoot = process.env[BORG_STATE_ROOT_ENV];
         const stateRootEnvArg = stateRoot
@@ -764,7 +765,7 @@ export function addOpenCodeMcpServer() {
             ? ` --env ${BORG_STATE_ROOT_ENV}=${shellQuote(stateRoot)}`
             : '';
         // gh#client#18: use absolute path to THIS installation's binary.
-        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg}${stateRootEnvArg} -- ${shellQuote(MCP_BINARY)}`, { stdio: 'inherit' });
+        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg}${stateRootEnvArg} -- ${shellQuote(MCP_BINARY)}`, { stdio: 'inherit', env: borgAgentConfigEnv(process.env) });
     }
     catch (error) {
         if (error.message?.includes('command not found')) {
