@@ -1,7 +1,30 @@
+import { realpathSync } from 'node:fs';
 import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-export const borgConfigRoot = () => join(homedir(), '.config', 'borgmcp');
+/**
+ * Optional alternate home root for isolated client runs. The value is the
+ * replacement home directory, not the `.config/borgmcp` directory itself, so
+ * every client-owned path (credentials, seats, worktrees, and agent config)
+ * stays under one root.
+ */
+export const BORG_STATE_ROOT_ENV = 'BORG_STATE_ROOT';
+function configuredStateRoot() {
+    const configured = process.env[BORG_STATE_ROOT_ENV];
+    if (configured === undefined)
+        return null;
+    if (configured.length === 0 ||
+        !isAbsolute(configured) ||
+        resolve(configured) !== configured) {
+        throw new Error(`${BORG_STATE_ROOT_ENV} must be an absolute canonical path`);
+    }
+    return configured;
+}
+/** Resolve the effective home root used by all Borg-owned local state. */
+export function borgHomeRoot() {
+    return configuredStateRoot() ?? realpathSync(homedir());
+}
+export const borgConfigRoot = () => join(borgHomeRoot(), '.config', 'borgmcp');
 /** Ensure Borg's local state root exists with owner-only directory permissions. */
 export async function ensurePrivateBorgConfigRoot(root = borgConfigRoot()) {
     if (!isAbsolute(root) || resolve(root) !== root) {

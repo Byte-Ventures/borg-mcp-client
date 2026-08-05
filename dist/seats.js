@@ -16,12 +16,12 @@
  * the 0600 file and is never returned past this module except by the sole
  * hydration reader; every other observation is digest-only.
  */
-import os from 'os';
 import path from 'path';
 import { createHash } from 'node:crypto';
 import { readStoreFile, withStore } from './seat-store.js';
 import { LegacySessionCredentialCollisionError } from './server-errors.js';
-export const SEATS_FILE = path.join(os.homedir(), '.config', 'borgmcp', 'seats.json');
+import { borgConfigRoot } from './private-root.js';
+export const SEATS_FILE = path.join(borgConfigRoot(), 'seats.json');
 const SEATS_VERSION = 1;
 const REF_RE = /^borg-server-session:[a-f0-9]{64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

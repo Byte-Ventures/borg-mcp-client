@@ -4,6 +4,7 @@
  * health beat so a relaunch of an existing seat can repair the server-side
  * agent_kind without re-assimilating.
  */
+import { BORG_STATE_ROOT_ENV } from './private-root.js';
 /** Pinned into MCP-child environments by Borg launch paths. */
 export const BORG_AGENT_KIND_ENV = 'BORG_AGENT_KIND';
 /** Transport capability only — never use it as the primary CLI identity. */
@@ -62,6 +63,19 @@ export function codexRemoteWakeConfigArgs(enabled = true) {
     return [
         '-c',
         `mcp_servers.borg.env.${BORG_CODEX_REMOTE_WAKE_ENV}="${enabled ? '1' : '0'}"`,
+    ];
+}
+/**
+ * Codex MCP children do not inherit the wrapper environment. Pin the explicit
+ * Borg state root into the per-launch child environment when one is active.
+ */
+export function codexStateRootConfigArgs(env = process.env) {
+    const stateRoot = env[BORG_STATE_ROOT_ENV];
+    if (stateRoot === undefined)
+        return [];
+    return [
+        '-c',
+        `mcp_servers.borg.env.${BORG_STATE_ROOT_ENV}=${JSON.stringify(stateRoot)}`,
     ];
 }
 //# sourceMappingURL=agent-runtime.js.map

@@ -24,6 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   addCodexMcpServer,
+  addOpenCodeMcpServer,
   isCodexHookRegistered,
   isCodexMcpServerConfigured,
   isCodexSessionStartHookRegistered,
@@ -203,6 +204,40 @@ describe('isCodexMcpServerConfigured', () => {
     } finally {
       if (previous === undefined) delete process.env.BORG_CODEX_REMOTE_WAKE;
       else process.env.BORG_CODEX_REMOTE_WAKE = previous;
+    }
+  });
+
+  it('persists the configured state root for Codex MCP children', () => {
+    const previous = process.env.BORG_STATE_ROOT;
+    process.env.BORG_STATE_ROOT = '/tmp/borg state-root';
+    try {
+      addCodexMcpServer();
+      const addCall = execSyncMock.mock.calls.find(([command]) =>
+        String(command).startsWith('codex mcp add borg ')
+      );
+      expect(addCall).toBeDefined();
+      const [command] = addCall! as [string, { env: NodeJS.ProcessEnv }];
+      expect(command).toContain("--env BORG_STATE_ROOT='/tmp/borg state-root'");
+    } finally {
+      if (previous === undefined) delete process.env.BORG_STATE_ROOT;
+      else process.env.BORG_STATE_ROOT = previous;
+    }
+  });
+
+  it('persists the configured state root for OpenCode MCP children', () => {
+    const previous = process.env.BORG_STATE_ROOT;
+    process.env.BORG_STATE_ROOT = '/tmp/borg state-root';
+    try {
+      addOpenCodeMcpServer();
+      const addCall = execSyncMock.mock.calls.find(([command]) =>
+        String(command).startsWith('opencode mcp add borg ')
+      );
+      expect(addCall).toBeDefined();
+      const [command] = addCall! as [string, { env: NodeJS.ProcessEnv }];
+      expect(command).toContain("--env BORG_STATE_ROOT='/tmp/borg state-root'");
+    } finally {
+      if (previous === undefined) delete process.env.BORG_STATE_ROOT;
+      else process.env.BORG_STATE_ROOT = previous;
     }
   });
 });

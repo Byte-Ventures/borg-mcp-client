@@ -36,4 +36,9 @@ export declare function codexAgentKindConfigArgs(): string[];
  * BORG_CODEX_REMOTE_WAKE="1" as an identity marker.
  */
 export declare function codexRemoteWakeConfigArgs(enabled?: boolean): string[];
+/**
+ * Codex MCP children do not inherit the wrapper environment. Pin the explicit
+ * Borg state root into the per-launch child environment when one is active.
+ */
+export declare function codexStateRootConfigArgs(env?: NodeJS.ProcessEnv): string[];
 //# sourceMappingURL=agent-runtime.d.ts.map

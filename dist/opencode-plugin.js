@@ -1,6 +1,6 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { borgHomeRoot } from './private-root.js';
 /**
  * Plugin source that preserves borg cube context across session compaction.
  * The initial kickoff and ongoing entry injection are handled by the launcher
@@ -21,7 +21,7 @@ export default function () {
 `;
 const PLUGIN_REL_PATH = path.join('.config', 'opencode', 'plugins', 'borg-orient.js');
 export function installBorgPlugin() {
-    const pluginPath = path.join(os.homedir(), PLUGIN_REL_PATH);
+    const pluginPath = path.join(borgHomeRoot(), PLUGIN_REL_PATH);
     try {
         if (fs.existsSync(pluginPath)) {
             const existing = fs.readFileSync(pluginPath, 'utf-8');

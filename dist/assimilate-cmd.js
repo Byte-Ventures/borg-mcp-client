@@ -9,7 +9,7 @@ import { buildAgentKickoffPrompt, buildKickoffWakePathClause, recordCodexWakeTar
 import { perWorktreeBranchName, adoptWorktree, computeWorktreePath, localBranchExists, isMerged } from './worktree-lifecycle.js';
 import { DroneEvictedError } from './drone-lifecycle.js';
 import { codexBorgSessionConfigArgs } from './launch-gate.js';
-import { codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
+import { codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, codexStateRootConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
 import { inboxPathForDrone } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import { formatSeatReattachRefusal, inspectLiveInboxMonitor, } from './seat-reattach-guard.js';
@@ -1549,6 +1549,7 @@ export async function runAssimilate(args, deps) {
             ...codexBorgSessionConfigArgs(),
             ...codexAgentKindConfigArgs(),
             ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
+            ...codexStateRootConfigArgs(),
             ...remoteArgs,
             ...withCodexCwdArg(launchArgs, agentCwd),
         ];

@@ -35,11 +35,11 @@
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { sep, basename, dirname } from 'node:path';
-import { homedir } from 'node:os';
 import chalk from 'chalk';
 import { classifyDirty, isMerged, localBranchExists, perWorktreeBranchName, worktreesHome, } from './worktree-lifecycle.js';
 import { readAllProjectIdentities, } from './cubes.js';
 import { defaultProbeSeat } from './seat-probe.js';
+import { borgHomeRoot } from './private-root.js';
 const DEFAULT_REF = 'origin/main';
 // ------------------------------------------------------------------
 // S4a — gitignored-aware clean gate (DEFAULT-DENY via regenerable allowlist)
@@ -135,7 +135,7 @@ const defaultDeps = {
         const r = spawnSync(cmd, args, { cwd, encoding: 'utf-8' });
         return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     },
-    homeDir: () => homedir(),
+    homeDir: () => borgHomeRoot(),
     cwd: () => process.cwd(),
     listSeats: () => readAllProjectIdentities(),
     probeSeat: defaultProbeSeat,

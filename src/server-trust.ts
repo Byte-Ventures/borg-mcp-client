@@ -4,7 +4,6 @@ import { constants } from 'node:fs';
 import { access, lstat, mkdir, open, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { BorgServerTrustError } from './server-errors.js';
@@ -27,6 +26,7 @@ import type {
   EnrollmentArtifactBinding,
   EnrollmentTrustPointer,
 } from './enrollment-types.js';
+import { borgHomeRoot } from './private-root.js';
 
 // CR5 TLS LATTICE: OpenSSL/Node TLS certificate-verification error codes. A raw
 // CA / cert-chain / SAN failure from the pinned transport is a potential MITM and
@@ -102,12 +102,12 @@ function invalidateOriginTrustCache(origin: string): void {
 }
 
 function serverDataDirectory(): string {
-  return resolve(process.env.BORG_SERVER_DATA_DIR ?? join(homedir(), '.borg', 'server'));
+  return resolve(process.env.BORG_SERVER_DATA_DIR ?? join(borgHomeRoot(), '.borg', 'server'));
 }
 
 function remoteTrustDirectory(origin: string): string {
   const key = createHash('sha256').update(origin).digest('hex');
-  return join(homedir(), '.borg', 'server-trust', key);
+  return join(borgHomeRoot(), '.borg', 'server-trust', key);
 }
 
 function trustGenerationsDirectory(origin: string): string {

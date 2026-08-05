@@ -1,13 +1,13 @@
 import { mkdirSync, chmodSync, readdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { codexBorgSessionConfigArgs, BORG_SESSION_ENV } from './launch-gate.js';
 import { codexAppServerSocketConfigArgs } from './codex-wake-resolve.js';
-import { BORG_AGENT_KIND_ENV, BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, } from './agent-runtime.js';
-export const DEFAULT_CODEX_REMOTE_DIR = join(homedir(), '.config', 'borgmcp', 'codex-remote');
+import { BORG_AGENT_KIND_ENV, BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, codexStateRootConfigArgs, } from './agent-runtime.js';
+import { borgConfigRoot } from './private-root.js';
+export const DEFAULT_CODEX_REMOTE_DIR = join(borgConfigRoot(), 'codex-remote');
 const DEFAULT_CODEX_REMOTE_READY_TIMEOUT_MS = 30_000;
 const MAX_CODEX_APP_SERVER_STDERR_CHARS = 16_384;
 /**
@@ -317,6 +317,7 @@ export function defaultCodexRemoteDeps() {
                 ...codexBorgSessionConfigArgs(),
                 ...codexAgentKindConfigArgs(),
                 ...codexRemoteWakeConfigArgs(),
+                ...codexStateRootConfigArgs(),
                 ...codexAppServerSocketConfigArgs(socketPath),
                 '--listen',
                 `unix://${socketPath}`,

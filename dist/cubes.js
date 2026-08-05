@@ -16,11 +16,11 @@
  */
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
+import { borgConfigRoot } from './private-root.js';
 import { getActiveSeatCredential, getActiveSeatForWorktree, getSeatForWorktree, hasSeatForWorktree, observeSeat, readAllActiveSeats, refreshSeatMetadata, resetSeatForWorktree, seatRef, } from './seats.js';
-const CUBES_DIR = join(homedir(), '.config', 'borgmcp');
+const CUBES_DIR = borgConfigRoot();
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
 const CODEX_WAKE_TARGETS_FILE = join(CUBES_DIR, 'codex-wake-targets.json');
 const INBOX_DIR = join(CUBES_DIR, 'inboxes');

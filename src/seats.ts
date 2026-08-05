@@ -17,13 +17,13 @@
  * hydration reader; every other observation is digest-only.
  */
 
-import os from 'os';
 import path from 'path';
 import { createHash } from 'node:crypto';
 import { readStoreFile, withStore } from './seat-store.js';
 import { LegacySessionCredentialCollisionError } from './server-errors.js';
+import { borgConfigRoot } from './private-root.js';
 
-export const SEATS_FILE = path.join(os.homedir(), '.config', 'borgmcp', 'seats.json');
+export const SEATS_FILE = path.join(borgConfigRoot(), 'seats.json');
 const SEATS_VERSION = 1 as const;
 const REF_RE = /^borg-server-session:[a-f0-9]{64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

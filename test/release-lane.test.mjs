@@ -16,9 +16,11 @@ import {
   assertArtifactIdentity,
   assertJourneyTranscript,
   assertServerProcessArgv,
+  isolatedClientEnv,
   parseReleaseExerciseArgs,
   ptyCommand,
   resolvePackageEntry,
+  snapshotOperatorConfig,
 } from '../scripts/release-exercise.mjs';
 import {
   lockRegistryEntries,
@@ -72,6 +74,32 @@ test('release exercise constructs a real PTY bridge on supported platforms', () 
   assert.equal(linux.command, 'python3');
   assert.deepEqual(linux.args.slice(-3), ['/node path', '--eval', "it's source"]);
   assert.throws(() => ptyCommand('win32', ['node']), /unsupported platform/);
+});
+
+test('packed-client release journeys isolate Borg and native agent state', () => {
+  const env = isolatedClientEnv('/tmp/borg-release-sandbox', {
+    HOME: '/operator/home',
+    BORG_STATE_ROOT: '/operator/state',
+    CODEX_HOME: '/operator/codex',
+    XDG_CONFIG_HOME: '/operator/config',
+  });
+  assert.equal(env.HOME, '/tmp/borg-release-sandbox');
+  assert.equal(env.BORG_STATE_ROOT, '/tmp/borg-release-sandbox');
+  assert.equal(env.CODEX_HOME, '/tmp/borg-release-sandbox/.codex');
+  assert.equal(env.XDG_CONFIG_HOME, '/tmp/borg-release-sandbox/.config');
+});
+
+test('operator configuration snapshot detects a watched mutation', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-config-snapshot-'));
+  try {
+    const before = await snapshotOperatorConfig(home);
+    await mkdir(join(home, '.claude'), { recursive: true });
+    await writeFile(join(home, '.claude', 'settings.json'), '{"hooks":{}}\n');
+    const after = await snapshotOperatorConfig(home);
+    assert.notDeepEqual(after, before);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test('release exercise rejects substituted server processes', () => {

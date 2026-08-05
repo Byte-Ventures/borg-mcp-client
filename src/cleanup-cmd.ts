@@ -36,7 +36,6 @@
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { sep, basename, dirname } from 'node:path';
-import { homedir } from 'node:os';
 import chalk from 'chalk';
 import {
   classifyDirty,
@@ -51,6 +50,7 @@ import {
   type ActiveCube,
 } from './cubes.js';
 import { defaultProbeSeat, type SeatStatus } from './seat-probe.js';
+import { borgHomeRoot } from './private-root.js';
 
 // ------------------------------------------------------------------
 // Types
@@ -208,7 +208,7 @@ const defaultDeps: Required<CleanupDeps> = {
     const r = spawnSync(cmd, args, { cwd, encoding: 'utf-8' });
     return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   },
-  homeDir: () => homedir(),
+  homeDir: () => borgHomeRoot(),
   cwd: () => process.cwd(),
   listSeats: () => readAllProjectIdentities(),
   probeSeat: defaultProbeSeat,

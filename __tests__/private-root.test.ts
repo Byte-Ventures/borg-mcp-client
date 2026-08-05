@@ -3,11 +3,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { ensurePrivateBorgConfigRoot } from '../src/private-root.js';
+import {
+  borgConfigRoot,
+  borgHomeRoot,
+  ensurePrivateBorgConfigRoot,
+} from '../src/private-root.js';
 
 const fixtures: string[] = [];
+const originalStateRoot = process.env.BORG_STATE_ROOT;
 
 afterEach(async () => {
+  if (originalStateRoot === undefined) delete process.env.BORG_STATE_ROOT;
+  else process.env.BORG_STATE_ROOT = originalStateRoot;
   await Promise.all(fixtures.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -16,6 +23,21 @@ async function fixture(): Promise<{ base: string; root: string }> {
   fixtures.push(base);
   return { base, root: join(base, '.config', 'borgmcp') };
 }
+
+describe('BORG_STATE_ROOT', () => {
+  it('replaces the effective home root for all Borg-owned paths', async () => {
+    const { base } = await fixture();
+    process.env.BORG_STATE_ROOT = base;
+
+    expect(borgHomeRoot()).toBe(base);
+    expect(borgConfigRoot()).toBe(join(base, '.config', 'borgmcp'));
+  });
+
+  it('rejects a relative or non-canonical override', () => {
+    process.env.BORG_STATE_ROOT = 'relative-state-root';
+    expect(() => borgHomeRoot()).toThrow(/BORG_STATE_ROOT must be an absolute canonical path/);
+  });
+});
 
 describe('ensurePrivateBorgConfigRoot', () => {
   it('creates an absent Borg root as 0700 under umask 022', async () => {

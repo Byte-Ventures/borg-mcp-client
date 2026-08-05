@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-const STATE_FILE = join(homedir(), '.config', 'borgmcp', 'lifecycle-log-state.json');
+import { borgConfigRoot } from './private-root.js';
+const STATE_FILE = join(borgConfigRoot(), 'lifecycle-log-state.json');
 const ARRIVAL_DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 export function lifecycleSignalForMessage(message) {
     if (message.startsWith('ARRIVAL: '))

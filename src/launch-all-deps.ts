@@ -15,7 +15,6 @@ import {
   statSync,
   readdirSync,
 } from 'node:fs';
-import { homedir as osHomedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import type { ActiveCube } from './cubes.js';
 import {
@@ -26,6 +25,7 @@ import {
 } from './cubes.js';
 import { getRoster, getCube } from './remote-client.js';
 import { defaultProbeSeat, type SeatStatus } from './seat-probe.js';
+import { borgHomeRoot } from './private-root.js';
 
 /** Subprocess runner — sync, returns stdout, THROWS on non-zero exit or ENOENT. */
 export type RunSyncFn = (cmd: string, args: string[]) => string;
@@ -122,7 +122,7 @@ export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
     },
     cwd: () => process.cwd(),
     pathExists: (p) => existsSync(p),
-    homedir: () => osHomedir(),
+    homedir: () => borgHomeRoot(),
     mkdirp: (dir) => {
       mkdirSync(dir, { recursive: true });
     },
