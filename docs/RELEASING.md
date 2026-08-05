@@ -374,6 +374,9 @@ by `borg-pending-*`. A new call-site prefix is a known coverage gap until it is
 added to this inventory; do not infer ownership from a familiar-looking name.
 Keep both time predicates and the ownership predicate: removing the run-window
 bound turns a populated shared temp root back into an uninspectable listing.
+The function below constructs one `find` name expression and prunes after the
+first level; it does not expand historical globs or start one process per
+matching directory.
 
 ```sh
 TEMP_ROOT="${TMPDIR:-/tmp}"
@@ -449,19 +452,41 @@ TEMP_RIG_PATTERNS=(
   'borgmcp-packed-client-home-*'
   'borgmcp-release-exercise-*'
   'borgmcp-server-facade-smoke-*'
+  'inbox-ensure-*'
+  'inbox-monitor-e2e-*'
+  'inbox-monitor-e2e-legacy-veto-*'
+  'inbox-monitor-e2e-live-yield-*'
+  'inbox-monitor-e2e-state-root-*'
+  'inbox-monitor-e2e-trim-rename-*'
+  'inbox-monitor-seed-*'
+  'inbox-monitor-test-*'
+  'monitor-ignore-mode-collision-*'
+  'monitor-owned-ignore-*'
+  'monitor-readonly-inbox-*'
+  'monitor-symlink-final-root-*'
+  'monitor-symlink-root-*'
+  'monitor-tracked-ignore-*'
+  'monitor-unmarked-root-*'
+  'monitor-wedged-root-*'
+  'monitor-worktree-git-*'
+  'monitor-worktree-state-*'
 )
 
 list_recent_owned_temp_rigs() {
+  find_name_args=()
   for pattern in "${TEMP_RIG_PATTERNS[@]}"; do
-    for candidate in "$TEMP_ROOT"/$pattern; do
-      [ -d "$candidate" ] || continue
-      find "$candidate" -prune \
-        -user "$TEMP_OWNER" \
-        -newer "$TEMP_SCAN_START" \
-        ! -newer "$TEMP_SCAN_END" \
-        -print
-    done
+    if [ "${#find_name_args[@]}" -gt 0 ]; then
+      find_name_args+=( -o )
+    fi
+    find_name_args+=( -name "$pattern" )
   done
+  find "$TEMP_ROOT" -mindepth 1 -prune \
+    -type d \
+    \( "${find_name_args[@]}" \) \
+    -user "$TEMP_OWNER" \
+    -newer "$TEMP_SCAN_START" \
+    ! -newer "$TEMP_SCAN_END" \
+    -print
 }
 
 touch "$TEMP_SCAN_START"
@@ -484,14 +509,23 @@ docker run --rm \
 Register the exact-target cleanup before launching the rig:
 
 ```sh
+cleanup_done=0
 cleanup() {
+  [ "$cleanup_done" -eq 0 ] || return
+  cleanup_done=1
+  trap - EXIT HUP INT TERM
   docker container rm --force "$RIG_ID" >/dev/null 2>&1 || true
   rm -rf -- "$RIG_ROOT"
-  touch "$TEMP_SCAN_END"
-  list_recent_owned_temp_rigs
+  if [ -e "$TEMP_SCAN_START" ]; then
+    touch "$TEMP_SCAN_END"
+    list_recent_owned_temp_rigs
+  fi
   rm -f -- "$TEMP_SCAN_START" "$TEMP_SCAN_END"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 ```
 
 List before starting and after cleanup. The filters distinguish this seat's
