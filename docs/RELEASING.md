@@ -407,11 +407,12 @@ of the seat scratch root. Inspect those results before cleanup and do not
 remove unrelated temporary files.
 
 Register cleanup before launching any process, run it on success and failure,
-and do not deliver a verdict until both listings show no rig owned by the
-seat. For a non-`--rm` container runtime, remove only the named rig or the
-same owner label; never prune unrelated containers. A completed verification
+and do not deliver a verdict until the container listing and all filesystem
+listings show no rig owned by the seat. For a non-`--rm` container runtime,
+remove only the named rig or the same owner label; never prune unrelated
+containers. A completed verification
 therefore implies zero running or stopped rig containers and no rig workspace
-left in the seat scratch root.
+left in either the seat scratch root or the system temporary directory.
 
 ### Pre-tag composed exercise
 
