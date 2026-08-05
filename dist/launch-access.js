@@ -4,6 +4,7 @@ import { validateName } from './name-validator.js';
 /** Environment names consumed by the optional foreign-path reminder hooks. */
 export const BORG_LAUNCH_WORKTREE_ENV = 'BORG_LAUNCH_WORKTREE';
 export const BORG_LAUNCH_SCRATCH_ENV = 'BORG_LAUNCH_SCRATCH';
+export const BORG_LAUNCH_CLI_ENV = 'BORG_LAUNCH_CLI';
 /**
  * Resolve the canonical per-seat scratch root.
  *

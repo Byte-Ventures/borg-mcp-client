@@ -9,7 +9,8 @@
  * input so the harness permission layer remains the enforcement point.
  */
 import { isAbsolute, relative, resolve } from 'node:path';
-import { BORG_LAUNCH_SCRATCH_ENV, BORG_LAUNCH_WORKTREE_ENV, } from './launch-access.js';
+import { BORG_LAUNCH_CLI_ENV, BORG_LAUNCH_SCRATCH_ENV, BORG_LAUNCH_WORKTREE_ENV, } from './launch-access.js';
+const REMINDER = 'Reminder: this seat is scoped to its own worktree and scratch root; coordinate before working on a foreign path.';
 const PATH_KEYS = new Set([
     'cwd',
     'workdir',
@@ -100,7 +101,20 @@ async function main() {
     }
     if (!shouldRemind(payload, roots))
         return;
-    process.stdout.write('Reminder: this seat is scoped to its own worktree and scratch root; coordinate before working on a foreign path.\n');
+    // Claude Code consumes both fields: systemMessage displays the advisory and
+    // hookSpecificOutput.additionalContext delivers it to the model. Codex's
+    // PreToolUse parser accepts systemMessage but rejects the Claude-only nested
+    // additionalContext field, so keep that branch deliberately narrower.
+    const output = process.env[BORG_LAUNCH_CLI_ENV] === 'codex'
+        ? { systemMessage: REMINDER }
+        : {
+            systemMessage: REMINDER,
+            hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                additionalContext: REMINDER,
+            },
+        };
+    process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 main().catch(() => {
     // A reminder hook is advisory only and must never block a tool call.

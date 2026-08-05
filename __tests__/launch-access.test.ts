@@ -82,7 +82,7 @@ describe('Claude launch access', () => {
 });
 
 describe('OpenCode launch access', () => {
-  it('writes exact path rules to the seat-local config and preserves global-style settings', () => {
+  it('writes subtree rules to the seat-local config and preserves global-style settings', () => {
     const configPath = path.join(root, '.opencode', 'opencode.json');
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({
@@ -97,8 +97,8 @@ describe('OpenCode launch access', () => {
     expect(parsed.permission.external_directory).toEqual({
       '*': 'ask',
       '/already-approved': 'allow',
-      [paths.worktree]: 'allow',
-      [paths.scratch]: 'allow',
+      [`${paths.worktree}/**`]: 'allow',
+      [`${paths.scratch}/**`]: 'allow',
     });
     expect(fs.existsSync(path.join(root, '.config', 'opencode', 'opencode.json'))).toBe(false);
 
@@ -126,23 +126,40 @@ describe('Codex launch hook', () => {
 });
 
 describe('foreign-path reminder executable', () => {
-  function runHook(payload: unknown): ReturnType<typeof spawnSync> {
+  function runHook(payload: unknown, cli: 'claude' | 'codex' = 'claude'): ReturnType<typeof spawnSync> {
     return spawnSync(process.execPath, ['--import', 'tsx', 'src/foreign-path-reminder.ts'], {
       cwd: process.cwd(),
       env: {
         ...process.env,
         BORG_LAUNCH_WORKTREE: paths.worktree,
         BORG_LAUNCH_SCRATCH: paths.scratch,
+        BORG_LAUNCH_CLI: cli,
       },
       input: JSON.stringify(payload),
       encoding: 'utf8',
     });
   }
 
-  it('reminds on a foreign target without blocking the tool', () => {
+  it('delivers a Claude reminder through the supported hook output shape', () => {
     const result = runHook({ cwd: paths.worktree, tool_input: { file_path: '/other/checkout/file.ts' } });
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Reminder: this seat is scoped');
+    const output = JSON.parse(result.stdout) as {
+      systemMessage?: string;
+      hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
+    };
+    expect(output.systemMessage).toContain('Reminder: this seat is scoped');
+    expect(output.hookSpecificOutput).toEqual({
+      hookEventName: 'PreToolUse',
+      additionalContext: output.systemMessage,
+    });
+  });
+
+  it('delivers a Codex reminder through its supported PreToolUse output shape', () => {
+    const result = runHook({ cwd: paths.worktree, tool_input: { file_path: '/other/checkout/file.ts' } }, 'codex');
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      systemMessage: 'Reminder: this seat is scoped to its own worktree and scratch root; coordinate before working on a foreign path.',
+    });
   });
 
   it('is silent for worktree and scratch targets', () => {
@@ -157,6 +174,6 @@ describe('foreign-path reminder executable', () => {
   it('reminds when the tool working directory itself is foreign', () => {
     const result = runHook({ cwd: '/other/checkout', tool_input: { command: 'pwd' } });
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Reminder: this seat is scoped');
+    expect(JSON.parse(result.stdout).systemMessage).toContain('Reminder: this seat is scoped');
   });
 });

@@ -26,7 +26,7 @@ import { decodeAndVerifyInvitationArtifact, InvitationArtifactCompatibilityError
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
 import { resolveWorkingRepo } from './working-repo.js';
-import { BORG_LAUNCH_SCRATCH_ENV, BORG_LAUNCH_WORKTREE_ENV, codexLaunchDirectoryArgs, scratchRootForSeat, } from './launch-access.js';
+import { BORG_LAUNCH_CLI_ENV, BORG_LAUNCH_SCRATCH_ENV, BORG_LAUNCH_WORKTREE_ENV, codexLaunchDirectoryArgs, scratchRootForSeat, } from './launch-access.js';
 import { initializeRepositoryCube, RepositoryAssociationConfirmationError, RepositoryAssociationSaveError, validRepositoryCubeName, } from './repository-cube-init.js';
 const PRIVATE_STATE_UNAVAILABLE_COPY = [
     'Borg could not safely prepare its private local state.',
@@ -1261,7 +1261,9 @@ export async function runAssimilate(args, deps) {
     const monitorStateRoot = monitorStateRootForWorktree(seatWorktree);
     const scratchRoot = scratchRootForSeat(deps.homedir(), result.drone_label, result.drone_id);
     const launchAccessPaths = {
-        worktree: agentCwd,
+        // Access is granted at the repository root even when the harness starts in
+        // a nested package. The launch cwd remains the operator's chosen subdir.
+        worktree: seatWorktree,
         scratch: scratchRoot,
     };
     // ----- Step 8: persist the binding (narrow rollback — worktree exists if spawned) -----
@@ -1293,7 +1295,7 @@ export async function runAssimilate(args, deps) {
     };
     try {
         deps.mkdirp(scratchRoot);
-        deps.provisionLaunchAccess?.(cli, agentCwd, launchAccessPaths);
+        deps.provisionLaunchAccess?.(cli, seatWorktree, launchAccessPaths);
     }
     catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1519,7 +1521,8 @@ export async function runAssimilate(args, deps) {
         ...withAgentRuntimeEnv(process.env, cli),
         ...modelEnv.set,
         BORG_SESSION: '1',
-        [BORG_LAUNCH_WORKTREE_ENV]: agentCwd,
+        [BORG_LAUNCH_CLI_ENV]: cli,
+        [BORG_LAUNCH_WORKTREE_ENV]: seatWorktree,
         [BORG_LAUNCH_SCRATCH_ENV]: scratchRoot,
     };
     if (cli === 'opencode' && launchApproval.openCodePermission) {

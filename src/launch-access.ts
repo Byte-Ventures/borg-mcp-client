@@ -5,9 +5,10 @@ import { validateName } from './name-validator.js';
 /** Environment names consumed by the optional foreign-path reminder hooks. */
 export const BORG_LAUNCH_WORKTREE_ENV = 'BORG_LAUNCH_WORKTREE';
 export const BORG_LAUNCH_SCRATCH_ENV = 'BORG_LAUNCH_SCRATCH';
+export const BORG_LAUNCH_CLI_ENV = 'BORG_LAUNCH_CLI';
 
 export interface LaunchAccessPaths {
-  /** The exact directory in which the harness is launched. */
+  /** The repository root whose subtree is granted to the launched harness. */
   worktree: string;
   /** The disposable scratch root reserved for this seat. */
   scratch: string;

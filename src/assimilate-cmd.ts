@@ -76,6 +76,7 @@ import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs, type LaunchApprovalDecision } from './cli-tool-approval.js';
 import { resolveWorkingRepo, type WorkingRepo } from './working-repo.js';
 import {
+  BORG_LAUNCH_CLI_ENV,
   BORG_LAUNCH_SCRATCH_ENV,
   BORG_LAUNCH_WORKTREE_ENV,
   codexLaunchDirectoryArgs,
@@ -1831,7 +1832,9 @@ export async function runAssimilate(
   const monitorStateRoot = monitorStateRootForWorktree(seatWorktree);
   const scratchRoot = scratchRootForSeat(deps.homedir(), result.drone_label, result.drone_id);
   const launchAccessPaths: LaunchAccessPaths = {
-    worktree: agentCwd,
+    // Access is granted at the repository root even when the harness starts in
+    // a nested package. The launch cwd remains the operator's chosen subdir.
+    worktree: seatWorktree,
     scratch: scratchRoot,
   };
 
@@ -1866,7 +1869,7 @@ export async function runAssimilate(
 
   try {
     deps.mkdirp(scratchRoot);
-    deps.provisionLaunchAccess?.(cli, agentCwd, launchAccessPaths);
+    deps.provisionLaunchAccess?.(cli, seatWorktree, launchAccessPaths);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     deps.stderr(
@@ -2116,7 +2119,8 @@ export async function runAssimilate(
     ...(withAgentRuntimeEnv(process.env, cli) as Record<string, string>),
     ...modelEnv.set,
     BORG_SESSION: '1',
-    [BORG_LAUNCH_WORKTREE_ENV]: agentCwd,
+    [BORG_LAUNCH_CLI_ENV]: cli,
+    [BORG_LAUNCH_WORKTREE_ENV]: seatWorktree,
     [BORG_LAUNCH_SCRATCH_ENV]: scratchRoot,
   };
   if (cli === 'opencode' && launchApproval.openCodePermission) {

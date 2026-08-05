@@ -870,10 +870,15 @@ export function addOpenCodeLaunchAccess(projectRoot, paths) {
         throw new Error(`OpenCode permission.external_directory in ${configPath} has an unsupported shape`);
     }
     for (const directory of [paths.worktree, paths.scratch].map((value) => path.resolve(value))) {
-        // Reinsert exact paths last so they win over a preserved wildcard rule in
-        // OpenCode's ordered permission matching.
+        // OpenCode matches external_directory patterns against the requested path,
+        // so a literal directory key does not authorize files below that directory.
+        // Remove the old literal form when upgrading an existing seat config, then
+        // install the documented subtree pattern. Reinsert it last so it wins over
+        // a preserved wildcard rule in OpenCode's ordered permission matching.
         delete external[directory];
-        external[directory] = 'allow';
+        const subtree = `${directory}/**`;
+        delete external[subtree];
+        external[subtree] = 'allow';
     }
     permissionObject.external_directory = external;
     config.permission = permissionObject;
