@@ -364,6 +364,39 @@ and write the operator's `package.json` instead of creating project-local
 state. The committed `release:exercise` follows this rule for its temporary
 consumer; other QA scripts and manual rigs must do the same.
 
+The system temporary root is shared with the whole machine, so an unbounded
+listing there is not an inspectable cleanup check. Bound that leg by the
+invoking user and the run-window markers, which select directories whose
+timestamps fall within this run window without requiring a prefix inventory.
+New `mkdtemp` prefixes therefore require no documentation change. Keep both
+time predicates and the ownership predicate: removing the run-window bound
+turns a populated shared temp root back into an uninspectable listing.
+
+On a machine where several runs share one user account, this listing can
+include another run's live workspace. Removal is scoped to paths created by
+this run; anything else in the output is reported, not deleted. Unrelated
+same-user temporary directories created during the window can therefore
+appear in the result, so never remove a path merely because this listing found
+it.
+
+```sh
+TEMP_ROOT="${TMPDIR:-/tmp}"
+TEMP_OWNER="$(id -un)"
+TEMP_SCAN_START="$TEMP_ROOT/.${RIG_ID}-temp-scan-start"
+TEMP_SCAN_END="$TEMP_ROOT/.${RIG_ID}-temp-scan-end"
+
+list_recent_owned_temp_rigs() {
+  find "$TEMP_ROOT" -mindepth 1 -prune \
+    -type d \
+    -user "$TEMP_OWNER" \
+    -newer "$TEMP_SCAN_START" \
+    ! -newer "$TEMP_SCAN_END" \
+    -print
+}
+
+touch "$TEMP_SCAN_START"
+```
+
 Container-backed rigs use the same `RIG_ID` as the container name and carry
 both labels below. `--rm` is preferred; a runtime without automatic removal
 must remove the exact `RIG_ID` in its cleanup path and retain the labels for a
@@ -381,11 +414,23 @@ docker run --rm \
 Register the exact-target cleanup before launching the rig:
 
 ```sh
+cleanup_done=0
 cleanup() {
+  [ "$cleanup_done" -eq 0 ] || return
+  cleanup_done=1
+  trap - EXIT HUP INT TERM
   docker container rm --force "$RIG_ID" >/dev/null 2>&1 || true
   rm -rf -- "$RIG_ROOT"
+  if [ -e "$TEMP_SCAN_START" ]; then
+    touch "$TEMP_SCAN_END"
+    list_recent_owned_temp_rigs
+  fi
+  rm -f -- "$TEMP_SCAN_START" "$TEMP_SCAN_END"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 ```
 
 List before starting and after cleanup. The filters distinguish this seat's
@@ -398,21 +443,24 @@ docker container ls --all \
   --format '{{.ID}}\t{{.Names}}\t{{.Status}}'
 find "$BORG_SCRATCH_ROOT" -mindepth 1 -print
 find "$BORG_SCRATCH_ROOT" -name 'borg-rig-*' -print
-find "${TMPDIR:-/tmp}" -mindepth 1 -print
 ```
 
 The unfiltered filesystem listings expose legacy names as well as conforming
-rigs; the temporary-directory listing covers tools that use `mkdtemp` instead
-of the seat scratch root. Inspect those results before cleanup and do not
-remove unrelated temporary files.
+rigs. The bounded temporary-directory function covers tools that use `mkdtemp`
+instead of the seat scratch root. Run the container and scratch listings before
+launch and again from the cleanup path; the temporary-directory function runs
+after cleanup, between the start and end markers. Inspect its results and do
+not remove unrelated temporary files.
 
 Register cleanup before launching any process, run it on success and failure,
-and do not deliver a verdict until the container listing and all filesystem
-listings show no rig owned by the seat. For a non-`--rm` container runtime,
+and do not deliver a verdict until the container listing, both scratch listings,
+and the bounded temporary-directory listing show no rig owned by the seat from
+this run. For a non-`--rm` container runtime,
 remove only the named rig or the same owner label; never prune unrelated
 containers. A completed verification
 therefore implies zero running or stopped rig containers and no rig workspace
-left in either the seat scratch root or the system temporary directory.
+created by this run left in either the seat scratch root or the system temporary
+directory.
 
 ### Pre-tag composed exercise
 
