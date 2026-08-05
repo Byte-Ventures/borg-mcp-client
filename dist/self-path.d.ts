@@ -24,4 +24,6 @@ export declare function resolveInboxMonitorPath(): string;
 export declare function resolveClearRewakePath(): string;
 /** Absolute path to borg-log-audit (dist/log-audit.js). */
 export declare function resolveLogAuditPath(): string;
+/** Absolute path to the optional pre-tool foreign-path reminder hook. */
+export declare function resolveForeignPathReminderPath(): string;
 //# sourceMappingURL=self-path.d.ts.map

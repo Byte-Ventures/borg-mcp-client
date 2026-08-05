@@ -958,6 +958,7 @@ describe('formatLeanOrientation', () => {
       resolveRegenPath: () => longRegen,
       resolveClearRewakePath: () => longClear,
       resolveLogAuditPath: () => longAudit,
+      resolveForeignPathReminderPath: () => `${longDir}/foreign-path-reminder.js`,
       resolveMcpBinaryPath: () => `${longDir}/index.js`,
       __esModule: true,
     }));

@@ -19,9 +19,11 @@ import {
   resolveRegenPath,
   resolveClearRewakePath,
   resolveLogAuditPath,
+  resolveForeignPathReminderPath,
 } from './self-path.js';
 import { shellEscape } from './shell-escape.js';
 import { BORG_STATE_ROOT_ENV, borgAgentConfigEnv, borgHomeRoot } from './private-root.js';
+import type { LaunchAccessPaths } from './launch-access.js';
 
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -33,6 +35,7 @@ const __dirname = dirname(__filename);
 const HOOK_COMMAND = shellEscape(resolveRegenPath());
 const CLEAR_REWAKE_HOOK_COMMAND = shellEscape(resolveClearRewakePath());
 const AUDIT_HOOK_COMMAND = shellEscape(resolveLogAuditPath());
+const FOREIGN_PATH_REMINDER_HOOK_COMMAND = shellEscape(resolveForeignPathReminderPath());
 const MCP_BINARY = resolveMcpBinaryPath();
 
 /**
@@ -105,6 +108,77 @@ export function addSessionStartHook(): boolean {
  */
 export function addProjectSessionStartHook(projectRoot: string): boolean {
   return addSessionStartHookAt(projectSettingsPath(projectRoot), true);
+}
+
+/**
+ * Pre-authorize the exact worktree + scratch paths for a Claude seat and add
+ * the native PreToolUse reminder. The permission layer remains authoritative;
+ * the reminder is deliberately advisory and cannot veto a tool call.
+ */
+export function addClaudeLaunchAccess(
+  projectRoot: string,
+  paths: LaunchAccessPaths,
+): boolean {
+  const settingsFile = projectSettingsPath(projectRoot);
+  let settings: any;
+  try {
+    settings = readJsonFile(settingsFile);
+  } catch (err: any) {
+    throw new Error(`Could not parse ${settingsFile}: ${err.message}`);
+  }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    throw new Error(`Claude settings ${settingsFile} is not an object`);
+  }
+
+  if (!settings.permissions || typeof settings.permissions !== 'object' || Array.isArray(settings.permissions)) {
+    if (settings.permissions !== undefined) {
+      throw new Error(`Claude settings permissions in ${settingsFile} are not an object`);
+    }
+    settings.permissions = {};
+  }
+  const additionalDirectories = settings.permissions.additionalDirectories;
+  if (additionalDirectories !== undefined && !Array.isArray(additionalDirectories)) {
+    throw new Error(`Claude settings permissions.additionalDirectories in ${settingsFile} is not an array`);
+  }
+
+  const directories = [paths.worktree, paths.scratch].map((value) => path.resolve(value));
+  const existingDirectories: unknown[] = Array.isArray(additionalDirectories)
+    ? additionalDirectories
+    : [];
+  let changed = false;
+  for (const directory of directories) {
+    if (!existingDirectories.includes(directory)) {
+      existingDirectories.push(directory);
+      changed = true;
+    }
+  }
+  if (settings.permissions.additionalDirectories !== existingDirectories) {
+    settings.permissions.additionalDirectories = existingDirectories;
+    changed = true;
+  }
+
+  if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) {
+    if (settings.hooks !== undefined) {
+      throw new Error(`Claude settings hooks in ${settingsFile} are not an object`);
+    }
+    settings.hooks = {};
+  }
+  settings.hooks.PreToolUse ??= [];
+  if (!Array.isArray(settings.hooks.PreToolUse)) {
+    throw new Error(`Claude settings hooks.PreToolUse in ${settingsFile} is not an array`);
+  }
+  const entries = settings.hooks.PreToolUse;
+  changed = migrateAndDedupOwnedHooks(entries) || changed;
+  if (!hasCommandHook(entries, FOREIGN_PATH_REMINDER_HOOK_COMMAND)) {
+    entries.push({
+      matcher: '*',
+      hooks: [{ type: 'command', command: FOREIGN_PATH_REMINDER_HOOK_COMMAND }],
+    });
+    changed = true;
+  }
+
+  if (changed) writeJsonFile(settingsFile, settings);
+  return changed;
 }
 
 /** Peek variant of addProjectSessionStartHook — no mutation. */
@@ -191,12 +265,14 @@ function ownedCanonical(command: string): string | null {
   if (stripped === BARE_BORG_REGEN) return HOOK_COMMAND;
   if (stripped === BARE_CLEAR_REWAKE) return CLEAR_REWAKE_HOOK_COMMAND;
   if (stripped === BARE_LOG_AUDIT) return AUDIT_HOOK_COMMAND;
+  if (stripped === BARE_FOREIGN_PATH_REMINDER) return FOREIGN_PATH_REMINDER_HOOK_COMMAND;
 
   // (b) Exact match of THIS installation's canonical command (raw or escaped)
   // — always owned, no marker check required
   if (command === HOOK_COMMAND || stripped === resolveRegenPath()) return HOOK_COMMAND;
   if (command === CLEAR_REWAKE_HOOK_COMMAND || stripped === resolveClearRewakePath()) return CLEAR_REWAKE_HOOK_COMMAND;
   if (command === AUDIT_HOOK_COMMAND || stripped === resolveLogAuditPath()) return AUDIT_HOOK_COMMAND;
+  if (command === FOREIGN_PATH_REMINDER_HOOK_COMMAND || stripped === resolveForeignPathReminderPath()) return FOREIGN_PATH_REMINDER_HOOK_COMMAND;
 
   // (c) Foreign-install heuristic: absolute path + owned basename + borg marker
   if (stripped.startsWith('/') && (stripped.includes('borgmcp') || stripped.includes('borg-mcp'))) {
@@ -204,6 +280,7 @@ function ownedCanonical(command: string): string | null {
     if (name === 'regen.js') return HOOK_COMMAND;
     if (name === 'clear-rewake.js') return CLEAR_REWAKE_HOOK_COMMAND;
     if (name === 'log-audit.js') return AUDIT_HOOK_COMMAND;
+    if (name === 'foreign-path-reminder.js') return FOREIGN_PATH_REMINDER_HOOK_COMMAND;
   }
 
   return null;
@@ -273,6 +350,7 @@ function isCanonicalCommand(entryCommand: string, canonical: string): boolean {
 const BARE_BORG_REGEN = 'borg-regen';
 const BARE_CLEAR_REWAKE = 'borg-clear-rewake';
 const BARE_LOG_AUDIT = 'borg-log-audit';
+const BARE_FOREIGN_PATH_REMINDER = 'borg-foreign-path-reminder';
 
 function hasCommandHook(entries: any[], command: string): boolean {
   return entries.some((entry: any) =>
@@ -283,7 +361,7 @@ function hasCommandHook(entries: any[], command: string): boolean {
       // maps to the SAME canonical as the target. This correctly distinguishes
       // regen from clear-rewake from audit — a clear-rewake hook does NOT
       // satisfy the dedup check for a regen target, and vice versa.
-      if (command === HOOK_COMMAND || command === CLEAR_REWAKE_HOOK_COMMAND || command === AUDIT_HOOK_COMMAND) {
+      if (command === HOOK_COMMAND || command === CLEAR_REWAKE_HOOK_COMMAND || command === AUDIT_HOOK_COMMAND || command === FOREIGN_PATH_REMINDER_HOOK_COMMAND) {
         return ownedCanonical(h.command) === command;
       }
       return h.command === command;
@@ -684,12 +762,17 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function addCodexHook(eventName: 'SessionStart' | 'UserPromptSubmit', command: string, options: { matcher?: string; timeout?: number } = {}): boolean {
+function addCodexHook(
+  eventName: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse',
+  command: string,
+  options: { matcher?: string; timeout?: number } = {},
+  hooksPath: string = CODEX_HOOKS_PATH,
+): boolean {
   let hooksFile: any;
   try {
-    hooksFile = readJsonFile(CODEX_HOOKS_PATH);
+    hooksFile = readJsonFile(hooksPath);
   } catch (err: any) {
-    console.error(`⚠ Could not parse ${CODEX_HOOKS_PATH}: ${err.message}. Skipping Codex hook registration.`);
+    console.error(`⚠ Could not parse ${hooksPath}: ${err.message}. Skipping Codex hook registration.`);
     return false;
   }
 
@@ -712,7 +795,7 @@ function addCodexHook(eventName: 'SessionStart' | 'UserPromptSubmit', command: s
     entries.push(entry);
     changed = true;
   }
-  if (changed) writeJsonFile(CODEX_HOOKS_PATH, hooksFile);
+  if (changed) writeJsonFile(hooksPath, hooksFile);
   return changed;
 }
 
@@ -724,8 +807,13 @@ export function addCodexUserPromptSubmitHook(): boolean {
   return addCodexHook('UserPromptSubmit', AUDIT_HOOK_COMMAND, { timeout: 10 });
 }
 
+/** Register the advisory foreign-path reminder on Codex's native hook surface. */
+export function addCodexForeignPathReminderHook(hooksPath: string = CODEX_HOOKS_PATH): boolean {
+  return addCodexHook('PreToolUse', FOREIGN_PATH_REMINDER_HOOK_COMMAND, {}, hooksPath);
+}
+
 export function isCodexHookRegistered(
-  eventName: 'SessionStart' | 'UserPromptSubmit' | 'Stop',
+  eventName: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'Stop',
   command: string,
   hooksPath: string = CODEX_HOOKS_PATH
 ): boolean {
@@ -788,6 +876,65 @@ export function isOpenCodeMcpServerConfigured(
   } catch {
     return false;
   }
+}
+
+/**
+ * Pre-authorize the exact worktree + scratch paths in the launch-root
+ * OpenCode config. This intentionally writes only the project-local
+ * `.opencode/opencode.json`; the user-global config is shared by every seat.
+ */
+export function addOpenCodeLaunchAccess(
+  projectRoot: string,
+  paths: LaunchAccessPaths,
+): boolean {
+  const configPath = path.join(projectRoot, '.opencode', 'opencode.json');
+  let config: any;
+  try {
+    config = readJsonFile(configPath);
+  } catch (err: any) {
+    throw new Error(`Could not parse ${configPath}: ${err.message}`);
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error(`OpenCode config ${configPath} is not an object`);
+  }
+
+  const before = JSON.stringify(config);
+  const permission = config.permission;
+  let permissionObject: Record<string, unknown>;
+  if (permission === undefined) {
+    permissionObject = {};
+  } else if (permission === 'allow' || permission === 'ask' || permission === 'deny') {
+    permissionObject = { '*': permission };
+  } else if (permission && typeof permission === 'object' && !Array.isArray(permission)) {
+    permissionObject = { ...(permission as Record<string, unknown>) };
+  } else {
+    throw new Error(`OpenCode permission in ${configPath} has an unsupported shape`);
+  }
+
+  const existingExternal = permissionObject.external_directory;
+  let external: Record<string, unknown>;
+  if (existingExternal === undefined) {
+    external = {};
+  } else if (existingExternal === 'allow' || existingExternal === 'ask' || existingExternal === 'deny') {
+    external = { '*': existingExternal };
+  } else if (existingExternal && typeof existingExternal === 'object' && !Array.isArray(existingExternal)) {
+    external = { ...(existingExternal as Record<string, unknown>) };
+  } else {
+    throw new Error(`OpenCode permission.external_directory in ${configPath} has an unsupported shape`);
+  }
+
+  for (const directory of [paths.worktree, paths.scratch].map((value) => path.resolve(value))) {
+    // Reinsert exact paths last so they win over a preserved wildcard rule in
+    // OpenCode's ordered permission matching.
+    delete external[directory];
+    external[directory] = 'allow';
+  }
+  permissionObject.external_directory = external;
+  config.permission = permissionObject;
+
+  const changed = JSON.stringify(config) !== before;
+  if (changed) writeJsonFile(configPath, config);
+  return changed;
 }
 
 /**

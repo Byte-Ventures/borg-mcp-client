@@ -26,6 +26,7 @@ import { decodeAndVerifyInvitationArtifact, InvitationArtifactCompatibilityError
 import { createHash } from 'node:crypto';
 import { buildOpenCodeLaunchArgs } from './cli-tool-approval.js';
 import { resolveWorkingRepo } from './working-repo.js';
+import { BORG_LAUNCH_SCRATCH_ENV, BORG_LAUNCH_WORKTREE_ENV, codexLaunchDirectoryArgs, scratchRootForSeat, } from './launch-access.js';
 import { initializeRepositoryCube, RepositoryAssociationConfirmationError, RepositoryAssociationSaveError, validRepositoryCubeName, } from './repository-cube-init.js';
 const PRIVATE_STATE_UNAVAILABLE_COPY = [
     'Borg could not safely prepare its private local state.',
@@ -1250,6 +1251,19 @@ export async function runAssimilate(args, deps) {
         deps.stderr(renderWorktreeSteeringNote(candidate, wtBranch, projectRoot));
         spawnedWorktreePath = deps.cwd();
     }
+    // ----- Step 7b: provision launch access before persisting/launching -----
+    // The launched process gets exactly its current worktree plus a stable,
+    // disposable per-seat scratch root. Provision this before FINALIZE so a
+    // failed config write cannot produce a saved seat that launches without
+    // its promised path grants.
+    const agentCwd = deps.cwd(); // post-chdir if step 3 spawned a worktree
+    const seatWorktree = deps.findProjectRoot(agentCwd);
+    const monitorStateRoot = monitorStateRootForWorktree(seatWorktree);
+    const scratchRoot = scratchRootForSeat(deps.homedir(), result.drone_label, result.drone_id);
+    const launchAccessPaths = {
+        worktree: agentCwd,
+        scratch: scratchRoot,
+    };
     // ----- Step 8: persist the binding (narrow rollback — worktree exists if spawned) -----
     const activeCube = {
         cubeId: result.cube_id,
@@ -1277,6 +1291,17 @@ export async function runAssimilate(args, deps) {
                 `(rollback attempt failed: ${safeStderr(rm.stderr).trim() || 'unknown'})\n`);
         }
     };
+    try {
+        deps.mkdirp(scratchRoot);
+        deps.provisionLaunchAccess?.(cli, agentCwd, launchAccessPaths);
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.stderr(`Borg could not pre-authorize the ${cli} launch paths: ${message}. ` +
+            'No agent was launched; correct the local configuration and retry.\n');
+        rollbackWorktree();
+        return 1;
+    }
     // Local-server authority: drive the COMPOSITE cube-owned FINALIZE (Race 2).
     // The cube lock is held OUTER across revalidate → binding-write → activate; the
     // typed expectation is declared HERE at the orchestration layer (reattach =
@@ -1380,12 +1405,6 @@ export async function runAssimilate(args, deps) {
             return 1;
         }
     }
-    // The worktree, not a reminted drone UUID, is the stable local seat identity
-    // for monitor runtime state. Capture it once before the lazy GC and launch
-    // paths so both use the exact same explicit root.
-    const agentCwd = deps.cwd(); // post-chdir if step 3 spawned a worktree
-    const seatWorktree = deps.findProjectRoot(agentCwd);
-    const monitorStateRoot = monitorStateRootForWorktree(seatWorktree);
     // gh#793: best-effort GC of orphaned inbox files (evicted/dead drones) in the
     // cube just joined — lazy-on-assimilate, no cron/new command. NEVER blocks or
     // fails the assimilate (whole call swallowed). Local-only signal (CubeDetail
@@ -1500,6 +1519,8 @@ export async function runAssimilate(args, deps) {
         ...withAgentRuntimeEnv(process.env, cli),
         ...modelEnv.set,
         BORG_SESSION: '1',
+        [BORG_LAUNCH_WORKTREE_ENV]: agentCwd,
+        [BORG_LAUNCH_SCRATCH_ENV]: scratchRoot,
     };
     if (cli === 'opencode' && launchApproval.openCodePermission) {
         childEnv.OPENCODE_PERMISSION = launchApproval.openCodePermission;
@@ -1545,6 +1566,7 @@ export async function runAssimilate(args, deps) {
         // off when no socket is available, overriding legacy static configs that
         // formerly used this transport marker as Codex identity.
         launchArgs = [
+            ...codexLaunchDirectoryArgs(launchAccessPaths),
             ...launchApproval.codexArgs,
             ...codexBorgSessionConfigArgs(),
             ...codexAgentKindConfigArgs(),

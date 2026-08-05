@@ -668,6 +668,34 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     expect(exec).toHaveBeenCalledWith('claude', expect.any(Array), '/work/myrepo', expect.objectContaining({ BORG_SESSION: '1' }));
   });
 
+  it.each(['claude', 'opencode', 'codex'] as const)(
+    'pre-authorizes only the launched %s worktree and per-seat scratch root',
+    async (cli) => {
+      const provisionLaunchAccess = vi.fn();
+      const mkdirp = vi.fn();
+      const exec = vi.fn(async () => 0);
+      const deps = makeStubDeps({ provisionLaunchAccess, mkdirp, exec });
+
+      await expect(runAssimilate({ role: undefined, flags: { yes: true, cli } }, deps)).resolves.toBe(0);
+
+      expect(mkdirp).toHaveBeenCalledWith('/home/test/.borg/scratch/drone-1');
+      expect(provisionLaunchAccess).toHaveBeenCalledWith(cli, '/work/myrepo', {
+        worktree: '/work/myrepo',
+        scratch: '/home/test/.borg/scratch/drone-1',
+      });
+      const [, launchArgs, launchCwd, launchEnv] = exec.mock.calls[0] as [string, string[], string, Record<string, string>];
+      expect(launchCwd).toBe('/work/myrepo');
+      expect(launchEnv.BORG_LAUNCH_WORKTREE).toBe('/work/myrepo');
+      expect(launchEnv.BORG_LAUNCH_SCRATCH).toBe('/home/test/.borg/scratch/drone-1');
+      if (cli === 'codex') {
+        expect(launchArgs).toEqual(expect.arrayContaining([
+          '--add-dir', '/work/myrepo',
+          '--add-dir', '/home/test/.borg/scratch/drone-1',
+        ]));
+      }
+    },
+  );
+
   // CR-PE-F1 regression (drone-2 Phase E review 2026-05-18T04:59Z):
   // kickoff prompt must include the borg-inbox-monitor clause so the
   // new drone wakes on peer log entries during bootstrap. Without
@@ -920,6 +948,8 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     // identity, and transport are all independently present before the TUI
     // remote arguments and kickoff positional.
     expect(kickoffArgs).toEqual(expect.arrayContaining([
+      '--add-dir', '/work/myrepo',
+      '--add-dir', '/home/test/.borg/scratch/drone-1',
       '-c', 'mcp_servers.borg.tools."borg:regen".approval_mode="auto"',
       '-c', 'mcp_servers.borg.env.BORG_SESSION="1"',
       '-c', 'mcp_servers.borg.env.BORG_AGENT_KIND="codex"',

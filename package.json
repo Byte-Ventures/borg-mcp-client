@@ -19,6 +19,7 @@
     "borg-regen": "./dist/regen.js",
     "borg-clear-rewake": "./dist/clear-rewake.js",
     "borg-log-audit": "./dist/log-audit.js",
+    "borg-foreign-path-reminder": "./dist/foreign-path-reminder.js",
     "borg-inbox-monitor": "./dist/inbox-monitor.js"
   },
   "scripts": {

@@ -3,6 +3,7 @@
  *
  * Handles adding borg-mcp to Claude Code via the claude CLI
  */
+import type { LaunchAccessPaths } from './launch-access.js';
 /**
  * Register a Claude Code SessionStart hook that runs `borg-regen` at the
  * start of every session. Idempotent: re-running won't add duplicates.
@@ -23,6 +24,12 @@ export declare function addSessionStartHook(): boolean;
  * settings content; refuses to clobber an unparseable file.
  */
 export declare function addProjectSessionStartHook(projectRoot: string): boolean;
+/**
+ * Pre-authorize the exact worktree + scratch paths for a Claude seat and add
+ * the native PreToolUse reminder. The permission layer remains authoritative;
+ * the reminder is deliberately advisory and cannot veto a tool call.
+ */
+export declare function addClaudeLaunchAccess(projectRoot: string, paths: LaunchAccessPaths): boolean;
 /** Peek variant of addProjectSessionStartHook — no mutation. */
 export declare function isProjectSessionStartHookRegistered(projectRoot: string): boolean;
 /**
@@ -97,7 +104,9 @@ export declare function addMcpServer(): void;
 export declare function addCodexMcpServer(): void;
 export declare function addCodexSessionStartHook(): boolean;
 export declare function addCodexUserPromptSubmitHook(): boolean;
-export declare function isCodexHookRegistered(eventName: 'SessionStart' | 'UserPromptSubmit' | 'Stop', command: string, hooksPath?: string): boolean;
+/** Register the advisory foreign-path reminder on Codex's native hook surface. */
+export declare function addCodexForeignPathReminderHook(hooksPath?: string): boolean;
+export declare function isCodexHookRegistered(eventName: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'Stop', command: string, hooksPath?: string): boolean;
 /**
  * Peek: true iff the Codex SessionStart orientation hook (`borg-regen`) is
  * registered. Non-mutating mirror of addCodexSessionStartHook; used to gate
@@ -117,6 +126,12 @@ export declare function isCodexUserPromptSubmitHookRegistered(hooksPath?: string
  * `type: "local"`. Safe-default: any read error returns `false`.
  */
 export declare function isOpenCodeMcpServerConfigured(configPath?: string): boolean;
+/**
+ * Pre-authorize the exact worktree + scratch paths in the launch-root
+ * OpenCode config. This intentionally writes only the project-local
+ * `.opencode/opencode.json`; the user-global config is shared by every seat.
+ */
+export declare function addOpenCodeLaunchAccess(projectRoot: string, paths: LaunchAccessPaths): boolean;
 /**
  * Add borg MCP server to OpenCode using `opencode mcp add` CLI.
  * Pins BORG_SESSION=1, BORG_AGENT_KIND=opencode, the legacy BORG_OPENCODE=1,

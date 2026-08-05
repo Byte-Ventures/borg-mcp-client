@@ -110,6 +110,7 @@ process.stdin.on('data', (chunk) => {
       resolveInboxMonitorPath: () => shim,
       resolveClearRewakePath: () => shim,
       resolveLogAuditPath: () => shim,
+      resolveForeignPathReminderPath: () => shim,
       __esModule: true,
     }));
 
