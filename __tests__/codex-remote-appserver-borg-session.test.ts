@@ -91,6 +91,21 @@ describe('defaultCodexRemoteDeps().spawnAppServer carries activation, CLI identi
     expect(args).toContain(`unix://${SOCK}`);
   });
 
+  it('pins an active BORG_STATE_ROOT into the app-server child environment', () => {
+    const previous = process.env.BORG_STATE_ROOT;
+    process.env.BORG_STATE_ROOT = '/tmp/borg state-root';
+    try {
+      defaultCodexRemoteDeps().spawnAppServer(SOCK);
+      const [, args] = spawnMock.mock.calls[0] as [string, string[], unknown];
+      const index = args.findIndex((arg, index) => arg === '-c' && args[index + 1]?.includes('BORG_STATE_ROOT'));
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(args[index + 1]).toBe('mcp_servers.borg.env.BORG_STATE_ROOT="/tmp/borg state-root"');
+    } finally {
+      if (previous === undefined) delete process.env.BORG_STATE_ROOT;
+      else process.env.BORG_STATE_ROOT = previous;
+    }
+  });
+
   it('sets matching env markers over inherited env and pipes stderr without enabling a shell', () => {
     defaultCodexRemoteDeps().spawnAppServer(SOCK);
 

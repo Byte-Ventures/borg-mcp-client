@@ -23,7 +23,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  addMcpServer,
   addCodexMcpServer,
+  addOpenCodeMcpServer,
   isCodexHookRegistered,
   isCodexMcpServerConfigured,
   isCodexSessionStartHookRegistered,
@@ -41,7 +43,7 @@ let tmpConfig: string;
 
 beforeEach(() => {
   execSyncMock.mockReset();
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'borg-config-test-'));
+  tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'borg-config-test-')));
   tmpConfig = path.join(tmpDir, '.claude.json');
 });
 
@@ -203,6 +205,131 @@ describe('isCodexMcpServerConfigured', () => {
     } finally {
       if (previous === undefined) delete process.env.BORG_CODEX_REMOTE_WAKE;
       else process.env.BORG_CODEX_REMOTE_WAKE = previous;
+    }
+  });
+
+  it('persists the configured state root for Codex MCP children', () => {
+    const previous = process.env.BORG_STATE_ROOT;
+    const stateRoot = path.join(fs.realpathSync(os.tmpdir()), 'borg state-root');
+    process.env.BORG_STATE_ROOT = stateRoot;
+    try {
+      addCodexMcpServer();
+      const addCall = execSyncMock.mock.calls.find(([command]) =>
+        String(command).startsWith('codex mcp add borg ')
+      );
+      expect(addCall).toBeDefined();
+      const [command] = addCall! as [string, { env: NodeJS.ProcessEnv }];
+      expect(command).toContain(`--env BORG_STATE_ROOT='${stateRoot}'`);
+    } finally {
+      if (previous === undefined) delete process.env.BORG_STATE_ROOT;
+      else process.env.BORG_STATE_ROOT = previous;
+    }
+  });
+
+  it('persists the configured state root for OpenCode MCP children', () => {
+    const previous = process.env.BORG_STATE_ROOT;
+    const stateRoot = path.join(fs.realpathSync(os.tmpdir()), 'borg state-root');
+    process.env.BORG_STATE_ROOT = stateRoot;
+    try {
+      addOpenCodeMcpServer();
+      const addCall = execSyncMock.mock.calls.find(([command]) =>
+        String(command).startsWith('opencode mcp add borg ')
+      );
+      expect(addCall).toBeDefined();
+      const [command] = addCall! as [string, { env: NodeJS.ProcessEnv }];
+      expect(command).toContain(`--env BORG_STATE_ROOT='${stateRoot}'`);
+    } finally {
+      if (previous === undefined) delete process.env.BORG_STATE_ROOT;
+      else process.env.BORG_STATE_ROOT = previous;
+    }
+  });
+});
+
+describe('native agent registration roots', () => {
+  it('preserves native config roots when no Borg override is configured', () => {
+    const previous = {
+      BORG_STATE_ROOT: process.env.BORG_STATE_ROOT,
+      HOME: process.env.HOME,
+      CODEX_HOME: process.env.CODEX_HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    };
+    delete process.env.BORG_STATE_ROOT;
+    process.env.HOME = path.join(tmpDir, 'native-home');
+    process.env.CODEX_HOME = path.join(tmpDir, 'custom-codex');
+    process.env.XDG_CONFIG_HOME = path.join(tmpDir, 'custom-xdg');
+    try {
+      addMcpServer();
+      addCodexMcpServer();
+      addOpenCodeMcpServer();
+
+      const registrationCalls = execSyncMock.mock.calls.filter(([command]) =>
+        /^(claude|codex|opencode) mcp (remove|add)/.test(String(command)),
+      );
+      expect(registrationCalls).toHaveLength(5);
+      for (const [, options] of registrationCalls as Array<[string, { env?: NodeJS.ProcessEnv } | undefined]>) {
+        expect(options?.env?.HOME).toBe(process.env.HOME);
+        expect(options?.env?.CODEX_HOME).toBe(process.env.CODEX_HOME);
+        expect(options?.env?.XDG_CONFIG_HOME).toBe(process.env.XDG_CONFIG_HOME);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('writes Claude, Codex, and OpenCode registrations under the override', () => {
+    const previous = {
+      BORG_STATE_ROOT: process.env.BORG_STATE_ROOT,
+      HOME: process.env.HOME,
+      CODEX_HOME: process.env.CODEX_HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    };
+    const stateRoot = path.join(tmpDir, 'state-root');
+    const ambientHome = path.join(tmpDir, 'ambient-home');
+    process.env.BORG_STATE_ROOT = stateRoot;
+    process.env.HOME = ambientHome;
+    process.env.CODEX_HOME = path.join(ambientHome, '.codex');
+    process.env.XDG_CONFIG_HOME = path.join(ambientHome, '.config');
+    execSyncMock.mockImplementation((command: string, options?: { env?: NodeJS.ProcessEnv }) => {
+      if (!String(command).includes(' mcp add ')) return;
+      const env = options?.env ?? {};
+      let target: string | undefined;
+      if (String(command).startsWith('claude mcp add')) target = path.join(env.HOME ?? '', '.claude.json');
+      if (String(command).startsWith('codex mcp add')) target = path.join(env.CODEX_HOME ?? '', 'config.toml');
+      if (String(command).startsWith('opencode mcp add')) target = path.join(env.XDG_CONFIG_HOME ?? '', 'opencode', 'opencode.json');
+      if (target) {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, 'registered\n');
+      }
+    });
+    try {
+      addMcpServer();
+      addCodexMcpServer();
+      addOpenCodeMcpServer();
+
+      expect(fs.existsSync(path.join(stateRoot, '.claude.json'))).toBe(true);
+      expect(fs.existsSync(path.join(stateRoot, '.codex', 'config.toml'))).toBe(true);
+      expect(fs.existsSync(path.join(stateRoot, '.config', 'opencode', 'opencode.json'))).toBe(true);
+      expect(fs.existsSync(path.join(ambientHome, '.claude.json'))).toBe(false);
+      expect(fs.existsSync(path.join(ambientHome, '.codex', 'config.toml'))).toBe(false);
+      expect(fs.existsSync(path.join(ambientHome, '.config', 'opencode', 'opencode.json'))).toBe(false);
+
+      const registrationCalls = execSyncMock.mock.calls.filter(([command]) =>
+        /^(claude|codex|opencode) mcp (remove|add)/.test(String(command)),
+      );
+      expect(registrationCalls).toHaveLength(5);
+      for (const [, options] of registrationCalls as Array<[string, { env?: NodeJS.ProcessEnv } | undefined]>) {
+        expect(options?.env?.HOME).toBe(stateRoot);
+        expect(options?.env?.CODEX_HOME).toBe(path.join(stateRoot, '.codex'));
+        expect(options?.env?.XDG_CONFIG_HOME).toBe(path.join(stateRoot, '.config'));
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 });

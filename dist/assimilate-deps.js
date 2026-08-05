@@ -10,7 +10,7 @@
 import { spawnSync, spawn as spawnChild } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
-import { hostname as osHostname, homedir as osHomedir } from 'node:os';
+import { hostname as osHostname } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';
 import { readinessProbeEnv } from './readiness-probe.js';
@@ -36,6 +36,7 @@ import { defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approv
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
 import { getOrCreateRepositoryIdentity, getRepositoryAssociation, resolveGitRepositoryContext, saveRepositoryAssociation, } from './repository-identity.js';
 import { PromptInterruptedError } from './repository-cube-init.js';
+import { borgHomeRoot } from './private-root.js';
 async function defaultPromptQuestion(message) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
@@ -74,7 +75,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         // gh#556 Part 1: ~/.borg/worktrees relocation. homedir seams $HOME;
         // mkdirp is a plain recursive create (NO chmod of existing parents — the
         // ~/.borg credentials file's perms stay untouched).
-        homedir: () => osHomedir(),
+        homedir: () => borgHomeRoot(),
         mkdirp: (dir) => mkdirSync(dir, { recursive: true }),
         preparePrivateRoot: () => ensurePrivateBorgConfigRoot(),
         exec: (cmd, args, cwd, env) => new Promise((resolveExit, rejectExit) => {

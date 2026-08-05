@@ -62,6 +62,7 @@ import {
   BORG_CODEX_REMOTE_WAKE_ENV,
   codexAgentKindConfigArgs,
   codexRemoteWakeConfigArgs,
+  codexStateRootConfigArgs,
   withAgentRuntimeEnv,
 } from './agent-runtime.js';
 import { findLoadedCodexThread } from './codex-app-server.js';
@@ -531,6 +532,7 @@ async function main() {
       ...codexBorgSessionConfigArgs(),
       ...codexAgentKindConfigArgs(),
       ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
+      ...codexStateRootConfigArgs(),
       ...remoteArgs,
       ...withCodexCwdArg([...passthroughArgs, kickoff], process.cwd()),
     ];

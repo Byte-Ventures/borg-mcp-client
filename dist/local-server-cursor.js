@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-const CURSOR_FILE = join(homedir(), '.config', 'borgmcp', 'local-server-cursors.json');
+import { borgConfigRoot } from './private-root.js';
+const CURSOR_FILE = join(borgConfigRoot(), 'local-server-cursors.json');
 const CURSOR_LOCK = `${CURSOR_FILE}.lock`;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function cursorKey(binding) {

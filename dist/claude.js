@@ -48,7 +48,7 @@ import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
 import { defaultCliChoiceDeps, detectCliAvailability, installedCliNames, parseCliFlag, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
-import { BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
+import { BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, codexStateRootConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
 import { findLoadedCodexThread } from './codex-app-server.js';
 import { buildAgentKickoffPrompt, buildKickoffWakePathClause, recordCodexWakeTarget, socketPathFromRemoteArgs, } from './codex-launch.js';
 import { codexBorgSessionConfigArgs } from './launch-gate.js';
@@ -425,6 +425,7 @@ async function main() {
             ...codexBorgSessionConfigArgs(),
             ...codexAgentKindConfigArgs(),
             ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
+            ...codexStateRootConfigArgs(),
             ...remoteArgs,
             ...withCodexCwdArg([...passthroughArgs, kickoff], process.cwd()),
         ];

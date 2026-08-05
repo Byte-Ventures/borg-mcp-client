@@ -4,7 +4,7 @@
  * Step-1 of the setup wizard writes the user's GLOBAL agent config
  * (registers the borg MCP server + hooks). Before gh#818 this happened
  * silently on first run. This module adds informed-consent disclosure:
- * it lists WHICH files will be written (well-known `os.homedir()` paths)
+ * it lists WHICH files will be written (well-known home-relative paths)
  * and asks to continue before the first mutation.
  *
  * Pure / dep-injected (mirrors `resolveCliChoice` + `setup-action.ts`) so

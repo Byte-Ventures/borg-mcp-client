@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { borgHomeRoot } from './private-root.js';
 /**
  * Client #20: the narrow coordination surface a borg-launched agent needs
  * without an approval round-trip. Keep the direct-tool list deliberately
@@ -262,7 +263,7 @@ export function composeCodexProfileConfig(snapshot, profileConfig) {
     return { mcp_servers: { borg: mergedBorg } };
 }
 async function withNativeCodexProfileLayer(profile, env, query) {
-    const codexHome = resolve(env.CODEX_HOME || join(homedir(), '.codex'));
+    const codexHome = resolve(env.CODEX_HOME || join(borgHomeRoot(), '.codex'));
     const profilePath = resolve(codexHome, `${profile}.config.toml`);
     if (dirname(profilePath) !== codexHome) {
         throw new Error('Codex profile path was invalid');

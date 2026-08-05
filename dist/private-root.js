@@ -1,7 +1,67 @@
+import { lstatSync, realpathSync } from 'node:fs';
 import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
-export const borgConfigRoot = () => join(homedir(), '.config', 'borgmcp');
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+/**
+ * Optional alternate home root for isolated client runs. The value is the
+ * replacement home directory, not the `.config/borgmcp` directory itself, so
+ * every client-owned path (credentials, seats, worktrees, and agent config)
+ * stays under one root.
+ */
+export const BORG_STATE_ROOT_ENV = 'BORG_STATE_ROOT';
+function invalidStateRoot() {
+    return new Error(`${BORG_STATE_ROOT_ENV} must be an absolute canonical path`);
+}
+/** Return whether a path and every existing ancestor are free of symlinks. */
+export function isCanonicalPath(root) {
+    if (!isAbsolute(root) || resolve(root) !== root)
+        return false;
+    let candidate = root;
+    while (true) {
+        try {
+            const metadata = lstatSync(candidate);
+            return !metadata.isSymbolicLink() && realpathSync(candidate) === candidate;
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT')
+                throw error;
+            const parent = dirname(candidate);
+            if (parent === candidate)
+                return false;
+            candidate = parent;
+        }
+    }
+}
+function configuredStateRoot(env = process.env) {
+    const configured = env[BORG_STATE_ROOT_ENV];
+    if (configured === undefined)
+        return null;
+    if (configured.length === 0 || !isCanonicalPath(configured)) {
+        throw invalidStateRoot();
+    }
+    return configured;
+}
+/** Resolve the effective home root used by all Borg-owned local state. */
+export function borgHomeRoot(env = process.env) {
+    return configuredStateRoot(env) ?? realpathSync(homedir());
+}
+export const borgConfigRoot = () => join(borgHomeRoot(), '.config', 'borgmcp');
+/**
+ * Environment used when a native agent CLI registers Borg. The CLI must write
+ * its own config under the same effective root that config-utils reads; the
+ * eventual MCP child receives BORG_STATE_ROOT separately via its registration.
+ */
+export function borgAgentConfigEnv(env = process.env) {
+    if (env[BORG_STATE_ROOT_ENV] === undefined)
+        return { ...env };
+    const root = borgHomeRoot(env);
+    return {
+        ...env,
+        HOME: root,
+        CODEX_HOME: join(root, '.codex'),
+        XDG_CONFIG_HOME: join(root, '.config'),
+    };
+}
 /** Ensure Borg's local state root exists with owner-only directory permissions. */
 export async function ensurePrivateBorgConfigRoot(root = borgConfigRoot()) {
     if (!isAbsolute(root) || resolve(root) !== root) {

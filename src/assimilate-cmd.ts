@@ -23,6 +23,7 @@ import { codexBorgSessionConfigArgs } from './launch-gate.js';
 import {
   codexAgentKindConfigArgs,
   codexRemoteWakeConfigArgs,
+  codexStateRootConfigArgs,
   withAgentRuntimeEnv,
 } from './agent-runtime.js';
 import type { BorgCli } from './cubes.js';
@@ -2131,6 +2132,7 @@ export async function runAssimilate(
       ...codexBorgSessionConfigArgs(),
       ...codexAgentKindConfigArgs(),
       ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
+      ...codexStateRootConfigArgs(),
       ...remoteArgs,
       ...withCodexCwdArg(launchArgs, agentCwd),
     ];

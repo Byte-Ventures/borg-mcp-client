@@ -6,7 +6,6 @@
 
 import { execSync } from 'child_process';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -22,6 +21,7 @@ import {
   resolveLogAuditPath,
 } from './self-path.js';
 import { shellEscape } from './shell-escape.js';
+import { BORG_STATE_ROOT_ENV, borgAgentConfigEnv, borgHomeRoot } from './private-root.js';
 
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -44,14 +44,15 @@ const MCP_BINARY = resolveMcpBinaryPath();
  * `~/Library/Application Support/Claude/claude_desktop_config.json`,
  * which is the Claude Desktop app's config (different product).
  */
-const CLAUDE_CONFIG_PATH = path.join(os.homedir(), '.claude.json');
-const CODEX_CONFIG_PATH = path.join(os.homedir(), '.codex', 'config.toml');
-const CODEX_HOOKS_PATH = path.join(os.homedir(), '.codex', 'hooks.json');
-const OPENCODE_CONFIG_PATH = path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
+const CONFIG_HOME = borgHomeRoot();
+const CLAUDE_CONFIG_PATH = path.join(CONFIG_HOME, '.claude.json');
+const CODEX_CONFIG_PATH = path.join(CONFIG_HOME, '.codex', 'config.toml');
+const CODEX_HOOKS_PATH = path.join(CONFIG_HOME, '.codex', 'hooks.json');
+const OPENCODE_CONFIG_PATH = path.join(CONFIG_HOME, '.config', 'opencode', 'opencode.json');
 const MCP_SERVER_NAME = 'borg';
 
 function settingsPath(): string {
-  return path.join(os.homedir(), '.claude', 'settings.json');
+  return path.join(CONFIG_HOME, '.claude', 'settings.json');
 }
 
 function readSettings(): any {
@@ -616,9 +617,10 @@ export function getBinaryPath(): string {
  */
 export function addMcpServer(): void {
   try {
+    const agentConfigEnv = borgAgentConfigEnv(process.env);
     // First, remove any existing borg configuration (ignore errors if not found)
     try {
-      execSync('claude mcp remove --scope user borg', { stdio: 'ignore' });
+      execSync('claude mcp remove --scope user borg', { stdio: 'ignore', env: agentConfigEnv });
     } catch {
       // Ignore - server might not exist yet
     }
@@ -631,7 +633,7 @@ export function addMcpServer(): void {
       stdio: 'inherit', // Show output to user
       // No hosted-URL injection: BORG_API_URL passes through from the
       // environment only when the operator has explicitly set it.
-      env: process.env,
+      env: agentConfigEnv,
     });
   } catch (error: any) {
     if (error.message?.includes('command not found')) {
@@ -643,8 +645,9 @@ export function addMcpServer(): void {
 
 export function addCodexMcpServer(): void {
   try {
+    const codexConfigEnv = withAgentRuntimeEnv(borgAgentConfigEnv(process.env), 'codex');
     try {
-      execSync('codex mcp remove borg', { stdio: 'ignore' });
+      execSync('codex mcp remove borg', { stdio: 'ignore', env: codexConfigEnv });
     } catch {
       // Ignore - server might not exist yet.
     }
@@ -656,10 +659,14 @@ export function addCodexMcpServer(): void {
     // transport capability. Do not persist a transport marker here: a future
     // Codex child may launch without a live --remote socket.
     // gh#client#18: use absolute path to THIS installation's binary.
-    const codexConfigEnv = withAgentRuntimeEnv(process.env, 'codex');
     const apiUrlEnvArg = apiUrl ? ` --env BORG_API_URL=${shellQuote(apiUrl)}` : '';
+    const stateRoot = process.env[BORG_STATE_ROOT_ENV];
+    const stateRootEnvArg = stateRoot
+      ? ` --env ${BORG_STATE_ROOT_ENV}=${shellQuote(stateRoot)}`
+      : '';
     execSync('codex mcp add borg' +
       apiUrlEnvArg +
+      stateRootEnvArg +
       ` --env ${BORG_AGENT_KIND_ENV}=codex` +
       ` -- ${shellQuote(MCP_BINARY)}`, {
       stdio: 'inherit',
@@ -797,10 +804,14 @@ export function addOpenCodeMcpServer(): void {
     // No hosted-URL fallback: only forward BORG_API_URL when explicitly set.
     const apiUrl = process.env.BORG_API_URL;
     const apiUrlEnvArg = apiUrl ? ` --env BORG_API_URL=${shellQuote(apiUrl)}` : '';
+    const stateRoot = process.env[BORG_STATE_ROOT_ENV];
+    const stateRootEnvArg = stateRoot
+      ? ` --env ${BORG_STATE_ROOT_ENV}=${shellQuote(stateRoot)}`
+      : '';
     // gh#client#18: use absolute path to THIS installation's binary.
     execSync(
-      `opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg} -- ${shellQuote(MCP_BINARY)}`,
-      { stdio: 'inherit' }
+      `opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg}${stateRootEnvArg} -- ${shellQuote(MCP_BINARY)}`,
+      { stdio: 'inherit', env: borgAgentConfigEnv(process.env) }
     );
   } catch (error: any) {
     if (error.message?.includes('command not found')) {

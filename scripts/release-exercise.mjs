@@ -1,10 +1,21 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import {
+  chmod,
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -95,6 +106,112 @@ export function ptyCommand(platform, argv) {
     return { command: 'python3', args: ['-c', PYTHON_PTY_SOURCE, ...argv] };
   }
   throw new Error(`release:exercise requires a POSIX PTY; unsupported platform ${platform}`);
+}
+
+/**
+ * Build the disposable environment used by packed-client journeys. Borg's
+ * explicit state root covers its own stores; HOME and the native agent config
+ * roots are isolated too so a harness cannot rewrite the operator's files.
+ */
+export function isolatedClientEnv(homeRoot, baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    HOME: homeRoot,
+    BORG_STATE_ROOT: homeRoot,
+    CODEX_HOME: join(homeRoot, '.codex'),
+    XDG_CONFIG_HOME: join(homeRoot, '.config'),
+  };
+}
+
+async function hashProtectedPath(target, excludedPaths) {
+  try {
+    const stat = await lstat(target);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`release exercise refuses symlinked watched path: ${target}`);
+    }
+    if (stat.isFile()) return `file:${await hashFile(target)}`;
+    if (stat.isDirectory()) {
+      const entries = (await readdir(target, { withFileTypes: true }))
+        .sort((left, right) => left.name.localeCompare(right.name));
+      const children = [];
+      for (const entry of entries) {
+        const child = join(target, entry.name);
+        const digest = excludedPaths.has(child)
+          ? 'excluded-payload'
+          : await hashProtectedPath(child, excludedPaths);
+        children.push(`${entry.name}\0${digest}`);
+      }
+      return `directory:${createHash('sha256').update(children.join('\n')).digest('hex')}`;
+    }
+    return `other:${stat.mode}:${stat.size}`;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 'missing';
+    throw error;
+  }
+}
+
+function hashFile(target) {
+  return new Promise((resolveHash, rejectHash) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(target);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.once('error', rejectHash);
+    stream.once('end', () => resolveHash(hash.digest('hex')));
+  });
+}
+
+/** Snapshot operator-owned client and Borg state for the release safety gate. */
+export async function snapshotOperatorConfig(homeRoot = homedir()) {
+  const borgRoot = join(homeRoot, '.borg');
+  const borgConfigRoot = join(homeRoot, '.config', 'borgmcp');
+  // Worktrees, scratch, and live coordination/runtime state are user payload,
+  // not global configuration. Their names and presence remain covered by the
+  // parent hash, while their large or concurrently changing contents are
+  // deliberately excluded from this release-safety snapshot.
+  const excludedPaths = new Set([
+    join(borgRoot, 'scratch'),
+    join(borgRoot, 'worktrees'),
+    join(borgRoot, 'runtime'),
+    join(borgRoot, 'server'),
+    join(borgRoot, 'server-runtime'),
+    join(borgConfigRoot, 'inboxes'),
+    join(borgConfigRoot, 'locks'),
+    join(borgConfigRoot, 'stream-locks'),
+    join(borgConfigRoot, 'codex-wake-targets.json'),
+    join(borgConfigRoot, 'lifecycle-log-state.json'),
+    join(borgConfigRoot, 'local-attach-retries.json'),
+    join(borgConfigRoot, 'local-server-cursors.json'),
+  ]);
+  const paths = [
+    join(homeRoot, '.claude.json'),
+    join(homeRoot, '.claude', 'settings.json'),
+    join(homeRoot, '.codex', 'config.toml'),
+    join(homeRoot, '.codex', 'hooks.json'),
+    join(homeRoot, '.config', 'opencode', 'opencode.json'),
+    join(homeRoot, '.config', 'opencode', 'plugins', 'borg-orient.js'),
+    borgConfigRoot,
+    borgRoot,
+  ];
+  const watchedRoots = [
+    join(homeRoot, '.claude'),
+    join(homeRoot, '.codex'),
+    join(homeRoot, '.config'),
+    join(homeRoot, '.config', 'borgmcp'),
+    join(homeRoot, '.config', 'opencode'),
+    borgRoot,
+  ];
+  for (const target of [...watchedRoots, ...paths]) {
+    try {
+      if ((await lstat(target)).isSymbolicLink()) {
+        throw new Error(`release exercise refuses symlinked watched path: ${target}`);
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  return Object.fromEntries(await Promise.all(
+    paths.map(async (target) => [target, await hashProtectedPath(target, excludedPaths)]),
+  ));
 }
 
 export function assertJourneyTranscript(transcript, expectedFooter, report) {
@@ -334,6 +451,7 @@ async function runPtyJourney({
   shimDirectory,
   tracePath,
   temporary,
+  env,
 }) {
   const reportPath = join(temporary, `${expectedServerCommand}-pty-report.json`);
   const runnerArgv = [
@@ -349,7 +467,7 @@ async function runPtyJourney({
   const child = spawn(pty.command, pty.args, {
     cwd: temporary,
     env: {
-      ...process.env,
+      ...env,
       BORG_SERVER_DATA_DIR: dataDirectory,
       LANG: 'en_US.UTF-8',
       LC_ALL: 'en_US.UTF-8',
@@ -439,7 +557,11 @@ export async function exerciseRelease(options) {
   const npmVersion = runNpm(['--version'], { cwd: root, encoding: 'utf8' }).trim();
   if (npmVersion !== '11.18.0') throw new Error(`release:exercise requires npm 11.18.0, found ${npmVersion}`);
 
+  const operatorConfigBefore = await snapshotOperatorConfig();
   const temporary = await realpath(await mkdtemp(join(tmpdir(), 'borgmcp-release-exercise-')));
+  const isolatedHome = join(temporary, 'home');
+  await mkdir(isolatedHome, { mode: 0o700 });
+  const clientEnv = isolatedClientEnv(isolatedHome);
   let directServer;
   try {
     const packDirectory = join(temporary, 'pack');
@@ -467,7 +589,7 @@ export async function exerciseRelease(options) {
     await bootstrapServerData(installed.bootstrapPath, dashboardData);
     const dashboardPort = await freePort();
     directServer = spawn(process.execPath, [installed.serverEntry, 'start', '--port', String(dashboardPort)], {
-      env: { ...process.env, BORG_SERVER_DATA_DIR: dashboardData, NO_COLOR: '1' },
+      env: { ...clientEnv, BORG_SERVER_DATA_DIR: dashboardData, NO_COLOR: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let directStdout = '';
@@ -497,6 +619,7 @@ export async function exerciseRelease(options) {
       shimDirectory,
       tracePath,
       temporary,
+      env: clientEnv,
     });
     await waitForHealth(dashboardOrigin, dashboardData);
     assert.equal(directServer.exitCode, null, 'dashboard journey stopped the declared server artifact');
@@ -525,6 +648,7 @@ export async function exerciseRelease(options) {
       shimDirectory,
       tracePath,
       temporary,
+      env: clientEnv,
     });
     await assertHealthUnavailable(`https://127.0.0.1:${startPort}`, startData);
 
@@ -559,6 +683,11 @@ export async function exerciseRelease(options) {
   } finally {
     if (directServer) await stopProcess(directServer);
     await rm(temporary, { recursive: true, force: true });
+    assert.deepEqual(
+      await snapshotOperatorConfig(),
+      operatorConfigBefore,
+      'release exercise changed the invoking user\'s global agent or Borg configuration',
+    );
   }
 }
 

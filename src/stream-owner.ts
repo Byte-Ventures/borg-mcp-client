@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
+import { borgConfigRoot } from './private-root.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const STREAM_LOCKS_DIR = path.join(homedir(), '.config', 'borgmcp', 'stream-locks');
+const STREAM_LOCKS_DIR = path.join(borgConfigRoot(), 'stream-locks');
 const OWNER_FILE = 'owner.json';
 const TAKEOVER_FILE = 'takeover.json';
 const SCHEMA_VERSION = 1;

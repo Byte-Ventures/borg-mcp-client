@@ -6,11 +6,11 @@
 // wiring / Phase 4) wires the real-IO production modules.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync, readdirSync, } from 'node:fs';
-import { homedir as osHomedir } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import { readAllProjectIdentities as cubesReadAllProjectIdentities, getProjectCliPreferenceForPath, findProjectRoot, getActiveCube, } from './cubes.js';
 import { getRoster, getCube } from './remote-client.js';
 import { defaultProbeSeat } from './seat-probe.js';
+import { borgHomeRoot } from './private-root.js';
 /** Real-IO factory wiring production modules (spec §10). Test code stubs LaunchAllDeps directly. */
 export function buildDefaultLaunchAllDeps() {
     return {
@@ -29,7 +29,7 @@ export function buildDefaultLaunchAllDeps() {
         },
         cwd: () => process.cwd(),
         pathExists: (p) => existsSync(p),
-        homedir: () => osHomedir(),
+        homedir: () => borgHomeRoot(),
         mkdirp: (dir) => {
             mkdirSync(dir, { recursive: true });
         },

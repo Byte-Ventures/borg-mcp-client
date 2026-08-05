@@ -4,10 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const originalHome = process.env.HOME;
+const originalStateRoot = process.env.BORG_STATE_ROOT;
 
 afterEach(() => {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalStateRoot === undefined) delete process.env.BORG_STATE_ROOT;
+  else process.env.BORG_STATE_ROOT = originalStateRoot;
   vi.resetModules();
 });
 
@@ -24,6 +27,22 @@ describe('portable credential paths', () => {
       expect(paths).not.toHaveProperty('SEATS_FILE');
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('uses BORG_STATE_ROOT ahead of HOME for isolated credentials', async () => {
+    const stateRoot = realpathSync(mkdtempSync(join(tmpdir(), 'borg-credential-state-root-')));
+    const ambientHome = realpathSync(mkdtempSync(join(tmpdir(), 'borg-credential-ambient-home-')));
+    try {
+      process.env.BORG_STATE_ROOT = stateRoot;
+      process.env.HOME = ambientHome;
+      vi.resetModules();
+      const paths = await import('../src/credential-paths.js');
+      expect(paths.BORG_USER_ROOT).toBe(join(stateRoot, '.borg'));
+      expect(paths.SERVER_CREDENTIALS_FILE).toBe(join(stateRoot, '.borg', 'credentials'));
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+      rmSync(ambientHome, { recursive: true, force: true });
     }
   });
 });
