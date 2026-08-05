@@ -9,8 +9,8 @@ import { isAbsolute, join, resolve } from 'node:path';
  * stays under one root.
  */
 export const BORG_STATE_ROOT_ENV = 'BORG_STATE_ROOT';
-function configuredStateRoot() {
-    const configured = process.env[BORG_STATE_ROOT_ENV];
+function configuredStateRoot(env = process.env) {
+    const configured = env[BORG_STATE_ROOT_ENV];
     if (configured === undefined)
         return null;
     if (configured.length === 0 ||
@@ -21,8 +21,8 @@ function configuredStateRoot() {
     return configured;
 }
 /** Resolve the effective home root used by all Borg-owned local state. */
-export function borgHomeRoot() {
-    return configuredStateRoot() ?? realpathSync(homedir());
+export function borgHomeRoot(env = process.env) {
+    return configuredStateRoot(env) ?? realpathSync(homedir());
 }
 export const borgConfigRoot = () => join(borgHomeRoot(), '.config', 'borgmcp');
 /**
@@ -31,7 +31,9 @@ export const borgConfigRoot = () => join(borgHomeRoot(), '.config', 'borgmcp');
  * eventual MCP child receives BORG_STATE_ROOT separately via its registration.
  */
 export function borgAgentConfigEnv(env = process.env) {
-    const root = borgHomeRoot();
+    if (env[BORG_STATE_ROOT_ENV] === undefined)
+        return { ...env };
+    const root = borgHomeRoot(env);
     return {
         ...env,
         HOME: root,

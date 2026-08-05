@@ -102,6 +102,21 @@ test('operator configuration snapshot detects a watched mutation', async () => {
   }
 });
 
+test('operator configuration snapshot detects durable launch preference mutation', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'borg-release-launch-snapshot-'));
+  const launchPath = join(home, '.config', 'borgmcp', 'launch.json');
+  try {
+    await mkdir(join(home, '.config', 'borgmcp'), { recursive: true });
+    await writeFile(launchPath, '{"agent":"claude"}\n');
+    const before = await snapshotOperatorConfig(home);
+    await writeFile(launchPath, '{"agent":"codex"}\n');
+    const after = await snapshotOperatorConfig(home);
+    assert.notDeepEqual(after, before);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test('operator configuration snapshot refuses a watched symlink before execution', async () => {
   const home = await mkdtemp(join(tmpdir(), 'borg-release-config-symlink-'));
   const target = await mkdtemp(join(tmpdir(), 'borg-release-config-target-'));

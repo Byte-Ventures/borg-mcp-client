@@ -178,7 +178,6 @@ export async function snapshotOperatorConfig(homeRoot = homedir()) {
     join(borgConfigRoot, 'locks'),
     join(borgConfigRoot, 'stream-locks'),
     join(borgConfigRoot, 'codex-wake-targets.json'),
-    join(borgConfigRoot, 'launch.json'),
     join(borgConfigRoot, 'lifecycle-log-state.json'),
     join(borgConfigRoot, 'local-attach-retries.json'),
     join(borgConfigRoot, 'local-server-cursors.json'),

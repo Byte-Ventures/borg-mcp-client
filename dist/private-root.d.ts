@@ -6,7 +6,7 @@
  */
 export declare const BORG_STATE_ROOT_ENV = "BORG_STATE_ROOT";
 /** Resolve the effective home root used by all Borg-owned local state. */
-export declare function borgHomeRoot(): string;
+export declare function borgHomeRoot(env?: NodeJS.ProcessEnv): string;
 export declare const borgConfigRoot: () => string;
 /**
  * Environment used when a native agent CLI registers Borg. The CLI must write

@@ -244,6 +244,39 @@ describe('isCodexMcpServerConfigured', () => {
 });
 
 describe('native agent registration roots', () => {
+  it('preserves native config roots when no Borg override is configured', () => {
+    const previous = {
+      BORG_STATE_ROOT: process.env.BORG_STATE_ROOT,
+      HOME: process.env.HOME,
+      CODEX_HOME: process.env.CODEX_HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    };
+    delete process.env.BORG_STATE_ROOT;
+    process.env.HOME = path.join(tmpDir, 'native-home');
+    process.env.CODEX_HOME = path.join(tmpDir, 'custom-codex');
+    process.env.XDG_CONFIG_HOME = path.join(tmpDir, 'custom-xdg');
+    try {
+      addMcpServer();
+      addCodexMcpServer();
+      addOpenCodeMcpServer();
+
+      const registrationCalls = execSyncMock.mock.calls.filter(([command]) =>
+        /^(claude|codex|opencode) mcp (remove|add)/.test(String(command)),
+      );
+      expect(registrationCalls).toHaveLength(5);
+      for (const [, options] of registrationCalls as Array<[string, { env?: NodeJS.ProcessEnv } | undefined]>) {
+        expect(options?.env?.HOME).toBe(process.env.HOME);
+        expect(options?.env?.CODEX_HOME).toBe(process.env.CODEX_HOME);
+        expect(options?.env?.XDG_CONFIG_HOME).toBe(process.env.XDG_CONFIG_HOME);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it('writes Claude, Codex, and OpenCode registrations under the override', () => {
     const previous = {
       BORG_STATE_ROOT: process.env.BORG_STATE_ROOT,
