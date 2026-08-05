@@ -15,19 +15,18 @@ function invalidStateRoot(): Error {
   return new Error(`${BORG_STATE_ROOT_ENV} must be an absolute canonical path`);
 }
 
-function assertCanonicalStateRoot(root: string): void {
+/** Return whether a path and every existing ancestor are free of symlinks. */
+export function isCanonicalPath(root: string): boolean {
+  if (!isAbsolute(root) || resolve(root) !== root) return false;
   let candidate = root;
   while (true) {
     try {
       const metadata = lstatSync(candidate);
-      if (metadata.isSymbolicLink() || realpathSync(candidate) !== candidate) {
-        throw invalidStateRoot();
-      }
-      return;
+      return !metadata.isSymbolicLink() && realpathSync(candidate) === candidate;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       const parent = dirname(candidate);
-      if (parent === candidate) throw invalidStateRoot();
+      if (parent === candidate) return false;
       candidate = parent;
     }
   }
@@ -36,14 +35,9 @@ function assertCanonicalStateRoot(root: string): void {
 function configuredStateRoot(env: NodeJS.ProcessEnv = process.env): string | null {
   const configured = env[BORG_STATE_ROOT_ENV];
   if (configured === undefined) return null;
-  if (
-    configured.length === 0 ||
-    !isAbsolute(configured) ||
-    resolve(configured) !== configured
-  ) {
+  if (configured.length === 0 || !isCanonicalPath(configured)) {
     throw invalidStateRoot();
   }
-  assertCanonicalStateRoot(configured);
   return configured;
 }
 

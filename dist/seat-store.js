@@ -31,16 +31,17 @@
  * callers keeps the raw bearer from leaving the store owner.
  */
 import { constants } from 'node:fs';
-import { open, link, lstat, mkdir, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { open, link, lstat, mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { isCanonicalPath } from './private-root.js';
 const LOCK_WAIT_MS = 10;
 const LOCK_ATTEMPTS = 500;
 function expectedUid() {
     return typeof process.getuid === 'function' ? process.getuid() : null;
 }
 async function assertSecureRoot(root, rootMode = 'private') {
-    if (!isAbsolute(root) || resolve(root) !== root) {
+    if (!isCanonicalPath(root)) {
         throw new Error(`Borg credential store path ${root} is not canonical`);
     }
     let metadata;
@@ -65,7 +66,7 @@ async function assertSecureRoot(root, rootMode = 'private') {
     if (uid !== null && metadata.uid !== uid) {
         throw new Error(`Borg credential store root ${root} is not owned by the current user`);
     }
-    if (await realpath(root) !== root) {
+    if (!isCanonicalPath(root)) {
         throw new Error(`Borg credential store root ${root} is not canonical or contains a symlink`);
     }
 }

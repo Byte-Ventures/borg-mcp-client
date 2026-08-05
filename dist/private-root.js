@@ -12,22 +12,22 @@ export const BORG_STATE_ROOT_ENV = 'BORG_STATE_ROOT';
 function invalidStateRoot() {
     return new Error(`${BORG_STATE_ROOT_ENV} must be an absolute canonical path`);
 }
-function assertCanonicalStateRoot(root) {
+/** Return whether a path and every existing ancestor are free of symlinks. */
+export function isCanonicalPath(root) {
+    if (!isAbsolute(root) || resolve(root) !== root)
+        return false;
     let candidate = root;
     while (true) {
         try {
             const metadata = lstatSync(candidate);
-            if (metadata.isSymbolicLink() || realpathSync(candidate) !== candidate) {
-                throw invalidStateRoot();
-            }
-            return;
+            return !metadata.isSymbolicLink() && realpathSync(candidate) === candidate;
         }
         catch (error) {
             if (error.code !== 'ENOENT')
                 throw error;
             const parent = dirname(candidate);
             if (parent === candidate)
-                throw invalidStateRoot();
+                return false;
             candidate = parent;
         }
     }
@@ -36,12 +36,9 @@ function configuredStateRoot(env = process.env) {
     const configured = env[BORG_STATE_ROOT_ENV];
     if (configured === undefined)
         return null;
-    if (configured.length === 0 ||
-        !isAbsolute(configured) ||
-        resolve(configured) !== configured) {
+    if (configured.length === 0 || !isCanonicalPath(configured)) {
         throw invalidStateRoot();
     }
-    assertCanonicalStateRoot(configured);
     return configured;
 }
 /** Resolve the effective home root used by all Borg-owned local state. */
