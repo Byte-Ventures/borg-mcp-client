@@ -6,7 +6,6 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
-  buildReleaseTransform,
   classifyReleasePullRequest,
   prepareRelease,
   verifyReleaseIdentity,
@@ -62,7 +61,6 @@ test('prepare generates exactly the client identity surfaces and verifies their 
   const fixture = await createFixture(t);
   const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
   assert.deepEqual(prepared.paths, [
-    'docs/EXTRACTION_PROVENANCE.md',
     'docs/RELEASING.md',
     'package-lock.json',
     'package.json',
@@ -74,17 +72,31 @@ test('prepare generates exactly the client identity surfaces and verifies their 
   assert.equal(verified.newVersion, newVersion);
   assert.equal(verified.candidate, candidate);
   assert.equal(verified.tree, git(fixture.root, ['rev-parse', 'HEAD^{tree}']));
-  const extraction = await readFile(join(fixture.root, 'docs', 'EXTRACTION_PROVENANCE.md'), 'utf8');
-  assert.match(extraction, new RegExp(
-    'current release identity is `' + newVersion.replaceAll('.', '\\.') + '`',
-  ));
-  assert.match(extraction, new RegExp(
-    'Client `borgmcp@' + oldVersion.replaceAll('.', '\\.') + '` is published\\.',
-  ));
-  assert.doesNotMatch(extraction, /next candidate identity/);
 });
 
-test('failed-superseded prep verifies the burned attempt and falls back to the last published anchor', async (t) => {
+test('human extraction provenance edits are outside the machine identity transform', async (t) => {
+  const fixture = await createFixture(t);
+  const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
+  await writeFile(
+    join(fixture.root, 'docs', 'EXTRACTION_PROVENANCE.md'),
+    `${await readFile(join(fixture.root, 'docs', 'EXTRACTION_PROVENANCE.md'), 'utf8')}Human release note.\n`,
+  );
+  const candidate = commitAll(fixture.root, 'add human extraction note');
+  assert.doesNotThrow(() => verifyReleaseIdentity(
+    fixture.root,
+    fixture.base,
+    candidate,
+    fixture.authorities,
+  ));
+  assert.deepEqual(prepared.paths, [
+    'docs/RELEASING.md',
+    'package-lock.json',
+    'package.json',
+    releaseTestPath,
+  ]);
+});
+
+test('failed-superseded prep verifies the burned attempt without a prose-ledger anchor', async (t) => {
   const fixture = await createFixture(t, { failedSuperseded: true });
   const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
   assert.equal(prepared.record.outcome, 'failed-superseded');
@@ -92,31 +104,19 @@ test('failed-superseded prep verifies the burned attempt and falls back to the l
   assert.equal(prepared.record.verify_job_id, failedVerifyJobId);
   assert.equal(prepared.record.publish_job_id, failedPublishJobId);
   assert.equal(prepared.record.artifact_integrity, null);
-  assert.equal(prepared.provenanceAnchor.outcome, 'published');
-  assert.equal(prepared.provenanceAnchor.version, fixture.anchorRecord.version);
-  assert.deepEqual(new Set(fixture.artifactRequests), new Set([fixture.anchorRecord.version]));
+  assert.deepEqual(fixture.artifactRequests, []);
 
   const releasing = await readFile(join(fixture.root, 'docs', 'RELEASING.md'), 'utf8');
-  const extraction = await readFile(join(fixture.root, 'docs', 'EXTRACTION_PROVENANCE.md'), 'utf8');
   assert.match(releasing, /concluded `failure`/);
   assert.match(releasing, /FAILED-SUPERSEDED release record/);
   assert.match(releasing, /artifact build, verification, exercise, and upload steps as skipped/);
   assert.match(releasing, /no published npm artifact or SRI/);
-  assert.match(extraction, new RegExp(
-    'Client `borgmcp@' + fixture.anchorRecord.version.replaceAll('.', '\\.') + '` is published\\.',
-  ));
-  assert.doesNotMatch(extraction, new RegExp(
-    'Client `borgmcp@' + oldVersion.replaceAll('.', '\\.') + '` is published\\.',
-  ));
-  assert.match(extraction, new RegExp(
-    'current release identity is `' + newVersion.replaceAll('.', '\\.') + '`',
-  ));
 
   const candidate = commitAll(fixture.root, 'prepare recovery release');
   const verified = verifyReleaseIdentity(fixture.root, fixture.base, candidate, fixture.authorities);
   assert.equal(verified.oldVersion, oldVersion);
   assert.equal(verified.newVersion, newVersion);
-  assert.deepEqual(new Set(fixture.artifactRequests), new Set([fixture.anchorRecord.version]));
+  assert.deepEqual(fixture.artifactRequests, []);
 });
 
 test('failed-superseded records reject reached artifact or publish phases', async (t) => {
@@ -213,80 +213,6 @@ test('failed-superseded records require an exact failed workflow authority', asy
   await assert.rejects(
     prepareRelease(fixture.root, newVersion, fixture.evidence, authorities),
     /does not match the tag workflow authority/,
-  );
-});
-
-test('release preparation rejects old false next-candidate ledger conventions', async (t) => {
-  for (const [name, mutate] of [
-    ['next candidate identity', (raw) => raw.replace(
-      `current release identity is \`${oldVersion}\``,
-      `so the next candidate identity is \`${oldVersion}\``,
-    )],
-    ['next candidate publication gate', (raw) => raw.replace(
-      `current release identity and publication gate remain governed by the reviewed \`v${oldVersion}\` source`,
-      `Publication of the next candidate remains gated by reviewed \`v${oldVersion}\` source`,
-    )],
-  ]) {
-    const fixture = await createFixture(t);
-    const baseFiles = await readTransformFiles(fixture.root);
-    const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
-    baseFiles.set('docs/EXTRACTION_PROVENANCE.md', mutate(
-      baseFiles.get('docs/EXTRACTION_PROVENANCE.md'),
-    ));
-
-    assert.throws(
-      () => buildReleaseTransform(baseFiles, oldVersion, newVersion, prepared.record),
-      /expected current release ledger/,
-      name,
-    );
-  }
-});
-
-test('release identity transforms preserve the publication-gate convention across chained versions', async (t) => {
-  const fixture = await createFixture(t, { failedSuperseded: true });
-  const baseFiles = await readTransformFiles(fixture.root);
-  const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
-  const first = buildReleaseTransform(baseFiles, oldVersion, newVersion, prepared.record);
-  const chainedRecord = { ...prepared.record, version: newVersion, tag: `v${newVersion}` };
-  const firstExtraction = first.get('docs/EXTRACTION_PROVENANCE.md');
-  const gate = `current release identity and publication gate remain governed by the reviewed \`v${newVersion}\` source`;
-  assert.match(firstExtraction, new RegExp(gate.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')));
-
-  assert.doesNotThrow(() => buildReleaseTransform(
-    first,
-    newVersion,
-    `${Number(newVersion.split('.')[0]) + 1}.0.0`,
-    chainedRecord,
-  ));
-});
-
-test('published release preparation rejects an earlier published-version marker', async (t) => {
-  const fixture = await createFixture(t);
-  const baseFiles = await readTransformFiles(fixture.root);
-  const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
-  baseFiles.set('docs/EXTRACTION_PROVENANCE.md', baseFiles.get('docs/EXTRACTION_PROVENANCE.md').replace(
-    `Client \`borgmcp@${oldVersion}\` is published.`,
-    `Client \`borgmcp@${fixture.anchorRecord.version}\` is published.`,
-  ));
-
-  assert.throws(
-    () => buildReleaseTransform(baseFiles, oldVersion, newVersion, prepared.record),
-    /published release base must identify .* as current/,
-  );
-});
-
-test('failed-superseded preparation rejects a non-earlier published anchor', async (t) => {
-  const fixture = await createFixture(t, { failedSuperseded: true });
-  const baseFiles = await readTransformFiles(fixture.root);
-  const prepared = await prepareRelease(fixture.root, newVersion, fixture.evidence, fixture.authorities);
-  baseFiles.set('docs/EXTRACTION_PROVENANCE.md', baseFiles.get('docs/EXTRACTION_PROVENANCE.md').replace(
-    `Client \`borgmcp@${fixture.anchorRecord.version}\` is published.`,
-    `Client \`borgmcp@${oldVersion}\` is published.`,
-  ));
-
-  assert.throws(
-    () => buildReleaseTransform(baseFiles, oldVersion, newVersion, prepared.record),
-    /earlier published provenance anchor/,
   );
 });
 
@@ -575,20 +501,6 @@ function failedRunJobs(commit) {
 async function writeFixture(directory, path, value) {
   await mkdir(dirname(join(directory, path)), { recursive: true });
   await writeFile(join(directory, path), value);
-}
-
-async function readTransformFiles(directory) {
-  const paths = [
-    'package.json',
-    'package-lock.json',
-    'docs/EXTRACTION_PROVENANCE.md',
-    'docs/RELEASING.md',
-    releaseTestPath,
-  ];
-  return new Map(await Promise.all(paths.map(async (path) => [
-    path,
-    await readFile(join(directory, path), 'utf8'),
-  ])));
 }
 
 function commitAll(directory, message) {
