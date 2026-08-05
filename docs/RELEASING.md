@@ -216,7 +216,7 @@ Never move, replace, reuse, or rerun that tag or workflow. The annotated `v2.14.
 successfully published that exact source as `borgmcp@2.14.1`; the same-run artifact report records integrity
 `sha512-VqkOp3jo/KnzgusCk98TFj/U8U7Q/gt8agvIbjiSWrV0lIHnsD+A+7w3C+GMQeyA08KXxRuZDF3No9sDomqMTQ==`.
 Never move, replace, reuse, or rerun that tag or workflow. The next candidate
-uses the unused `v2.14.2` identity from a fresh reviewed protected-main commit
+uses the unused `v2.15.0` identity from a fresh reviewed protected-main commit
 and requires the complete release gate again.
 
 ## Release Prerequisites
