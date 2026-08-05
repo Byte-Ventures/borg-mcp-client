@@ -372,10 +372,12 @@ New `mkdtemp` prefixes therefore require no documentation change. Keep both
 time predicates and the ownership predicate: removing the run-window bound
 turns a populated shared temp root back into an uninspectable listing.
 
-Several runs may share one user account, so unrelated same-user temporary
-directories created during the window can appear in the result. Inspect every
-result and remove only paths created by this run; never delete a path merely
-because this listing found it.
+On a machine where several runs share one user account, this listing can
+include another run's live workspace. Removal is scoped to paths created by
+this run; anything else in the output is reported, not deleted. Unrelated
+same-user temporary directories created during the window can therefore
+appear in the result, so never remove a path merely because this listing found
+it.
 
 ```sh
 TEMP_ROOT="${TMPDIR:-/tmp}"
