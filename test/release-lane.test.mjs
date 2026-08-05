@@ -28,7 +28,7 @@ import {
 } from '../scripts/verify-release-readiness.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const CLIENT_VERSION = '2.14.1';
+const CLIENT_VERSION = '2.14.2';
 const SHARED_VERSION = '0.9.0';
 const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.9.0.tgz';
 const SHARED_INTEGRITY = 'sha512-bfZPP9JGgBQrCFoZetabqKHc8HLaUqHVR3GJLb/1F1oon7z/B4el4aeBHVvXlxN9+2G7kU/ymPZ/K25nVQapmQ==';
@@ -535,6 +535,11 @@ test('release documentation describes the activated minimal publication lane', a
     '30929322201',
     'sha512-haKgpQbcbaRya1XqYQaOy7yZiHMxeP8QO3fr7ahHaYDNYrDvlGmXNlW9VMtqnRJ9mtVDC5UTkeuQmCRJMzF/Tg==',
     'v2.14.1',
+    'c1c8b526dcc31259f6b821f0a6fdd0017a42435c',
+    '3de4cbf2e5adf6883334fe4e9b7aa1f43868daae',
+    '30943397747',
+    'sha512-VqkOp3jo/KnzgusCk98TFj/U8U7Q/gt8agvIbjiSWrV0lIHnsD+A+7w3C+GMQeyA08KXxRuZDF3No9sDomqMTQ==',
+    'v2.14.2',
   ]) assert.ok(releasing.includes(evidence), `Missing immutable release evidence: ${evidence}`);
   assert.match(releasing, /failed before package\s+creation or npm publication/);
   assert.match(releasing, /Never delete, move, replace, reuse, or\s+rerun/);
