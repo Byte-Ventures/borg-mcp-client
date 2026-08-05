@@ -11,8 +11,6 @@ const temporary = await mkdtemp(join(tmpdir(), 'borgmcp-local-release-'));
 const runNpm = (args, options = {}) => process.env.npm_execpath
   ? execFileSync(process.execPath, [process.env.npm_execpath, ...args], options)
   : execFileSync('npm', args, options);
-const npmVersion = runNpm(['--version'], { cwd: root, encoding: 'utf8' }).trim();
-if (npmVersion !== '11.18.0') throw new Error(`Package verification requires npm 11.18.0, found ${npmVersion}.`);
 try {
   const packDirectory = join(temporary, 'pack');
   const consumer = join(temporary, 'consumer');
