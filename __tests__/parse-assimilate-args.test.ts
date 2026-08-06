@@ -11,10 +11,10 @@ describe('parseAssimilateArgs', () => {
     }
   });
 
-  it('parses positional role', () => {
-    const r = parseAssimilateArgs(['builder']);
+  it('preserves displayed-case positional roles for resolver matching', () => {
+    const r = parseAssimilateArgs(['Builder']);
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.role).toBe('builder');
+    if (r.ok) expect(r.role).toBe('Builder');
   });
 
   it('parses all flag forms', () => {
@@ -177,6 +177,17 @@ describe('parseAssimilateArgs', () => {
     const r = parseAssimilateArgs(['a', 'b']);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('extra argument');
+  });
+
+  it('explains how to pass an unquoted multi-word role', () => {
+    const r = parseAssimilateArgs(['Code', 'Reviewer']);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toContain('must be quoted');
+      expect(r.error).toContain('borg assimilate "Code Reviewer"');
+      expect(r.error).toContain('hyphens');
+      expect(r.error).not.toContain('No role matching');
+    }
   });
 
   // CR-PF-F1 regression (drone-2 Phase F review 2026-05-18T05:04Z):

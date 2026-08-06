@@ -2222,7 +2222,7 @@ describe('runAssimilate: step 6 (role resolution)', () => {
     );
   });
 
-  it('explicit role arg matched case-insensitively', async () => {
+  it('explicit displayed role name matches case- and separator-insensitively', async () => {
     const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-cr' }));
     const getCube = vi.fn(async () => ({
       id: 'c', name: 'myrepo',
@@ -2239,11 +2239,35 @@ describe('runAssimilate: step 6 (role resolution)', () => {
       assimilate, getCube, runSync,
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
     });
-    await runAssimilate({ role: 'code-reviewer', flags: { yes: true } }, deps);
+    await runAssimilate({ role: 'Code Reviewer', flags: { yes: true } }, deps);
     expect(assimilate).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
       expect.objectContaining({ role_id: 'r-cr' }),
+      expect.any(String),
+    );
+  });
+
+  it('accepts the capitalized single-word role shown by the product', async () => {
+    const assimilate = vi.fn(async () => ({ cube_id: 'c', drone_id: 'd', drone_label: 'drone-3', result: 'created' as const, local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) }, role_id: 'r-build' }));
+    const getCube = vi.fn(async () => ({
+      id: 'c', name: 'myrepo',
+      roles: [{ id: 'r-build', name: 'Builder', is_default: true, is_human_seat: false }],
+    }));
+    const runSync = vi.fn((cmd: string, args: string[]) =>
+      args[0] === 'remote' ? { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' } : { status: 0, stdout: '', stderr: '' }
+    );
+    const deps = makeStubDeps({
+      assimilate, getCube, runSync,
+      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
+    });
+
+    await runAssimilate({ role: 'Builder', flags: { yes: true } }, deps);
+
+    expect(assimilate).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ role_id: 'r-build' }),
       expect.any(String),
     );
   });
