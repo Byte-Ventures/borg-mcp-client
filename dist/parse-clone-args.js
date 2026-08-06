@@ -1,4 +1,5 @@
 /** Pure argument parsing for `borg clone <repo-url>`. */
+import { redactCloneSecrets } from './clone-security.js';
 function valueFor(rawArgs, index, flag) {
     const value = rawArgs[index + 1];
     if (value === undefined || value.startsWith('--')) {
@@ -35,11 +36,11 @@ export function parseCloneArgs(rawArgs) {
         if (arg.startsWith('-')) {
             return {
                 ok: false,
-                error: `unknown option ${arg}; supported options are --destination, --name, --branch, and --no-launch`,
+                error: `unknown option ${redactCloneSecrets(arg)}; supported options are --destination, --name, --branch, and --no-launch`,
             };
         }
         if (repositoryUrl !== undefined) {
-            return { ok: false, error: `unexpected extra argument: ${arg}` };
+            return { ok: false, error: `unexpected extra argument: ${redactCloneSecrets(arg)}` };
         }
         repositoryUrl = arg;
     }

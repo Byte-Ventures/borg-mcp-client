@@ -10,8 +10,10 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hasCloneCredentials, redactCloneSecrets } from './clone-security.js';
 import { shellEscape } from './shell-escape.js';
 import { validateName } from './name-validator.js';
+export { redactCloneSecrets } from './clone-security.js';
 const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 const URL_SCHEMES = new Set(['file:', 'git:', 'git+ssh:', 'http:', 'https:', 'ssh:']);
 const SCP_REMOTE_RE = /^[^@\s/:]+@[^:\s]+:[^\s]+$/;
@@ -72,11 +74,9 @@ const defaultDeps = {
 function withDefaults(deps) {
     return { ...defaultDeps, ...deps };
 }
-/** Redact URL userinfo and common credential-bearing URL forms. */
-export function redactCloneSecrets(value) {
-    return value.replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s@]+)@/gi, '$1<credentials>@');
-}
 function hasUrlCredentials(value) {
+    if (hasCloneCredentials(value))
+        return true;
     try {
         const parsed = new URL(value);
         // An SSH login name (`ssh://git@host/...`) is transport identity, not a
@@ -137,9 +137,11 @@ export function validateCloneRepositoryUrl(value) {
     return { ok: true };
 }
 function remoteHasCredentials(value) {
+    if (hasUrlCredentials(value))
+        return true;
     try {
         const parsed = new URL(value);
-        return hasUrlCredentials(value) || parsed.search.length > 0 || parsed.hash.length > 0;
+        return parsed.search.length > 0 || parsed.hash.length > 0;
     }
     catch {
         return false;
@@ -151,17 +153,29 @@ function trimGitSuffix(value) {
 function remoteKey(value, baseDir) {
     if (SCP_REMOTE_RE.test(value)) {
         const separator = value.indexOf(':');
-        const host = value.slice(0, separator).split('@').pop().toLowerCase();
-        return `${host}/${trimGitSuffix(value.slice(separator + 1)).toLowerCase().replace(/^\/+/, '')}`;
+        const login = value.slice(0, separator);
+        const host = login.slice(login.lastIndexOf('@') + 1).toLowerCase();
+        const user = login.includes('@') ? login.slice(0, login.lastIndexOf('@')) : '';
+        const path = trimGitSuffix(value.slice(separator + 1)).replace(/^\/+/, '');
+        return `ssh://${user ? `${user}@` : ''}${host}/${path}`;
     }
     try {
         const parsed = new URL(value);
         if (parsed.protocol === 'file:')
             return `file:${resolve(fileURLToPath(parsed))}`;
-        return `${parsed.hostname.toLowerCase()}${trimGitSuffix(parsed.pathname).toLowerCase()}`;
+        const user = parsed.username.length > 0 ? `${parsed.username}@` : '';
+        const port = parsed.port.length > 0 ? `:${parsed.port}` : '';
+        const path = trimGitSuffix(parsed.pathname);
+        return `${parsed.protocol}//${user}${parsed.hostname.toLowerCase()}${port}${path}`;
     }
     catch {
-        return `file:${resolve(baseDir, value)}`;
+        const path = resolve(baseDir, value);
+        try {
+            return `file:${realpathSync(path)}`;
+        }
+        catch {
+            return `file:${path}`;
+        }
     }
 }
 function sourceDisplayName(value) {
@@ -237,35 +251,84 @@ function checkBranchName(deps, branch, cwd) {
     return result.status === 0 ? null : `invalid branch name "${redactCloneSecrets(branch)}"`;
 }
 function safeGitDetail(value) {
-    return redactCloneSecrets(value).replace(/https?:\/\/[^\s)]+/gi, (match) => redactCloneSecrets(match));
+    return redactCloneSecrets(value);
 }
-function rollbackDestination(deps, destination, existed, before) {
+function removeCreatedParents(deps, createdParents) {
+    const removed = [];
+    const remaining = [];
+    for (const parent of createdParents) {
+        if (!deps.pathExists(parent))
+            continue;
+        if (!deps.isDirectory(parent) || deps.readDirectory(parent).length !== 0) {
+            remaining.push(`created parent ${parent}`);
+            continue;
+        }
+        deps.removeTree(parent);
+        if (deps.pathExists(parent))
+            remaining.push(`created parent ${parent}`);
+        else
+            removed.push(`created parent ${parent}`);
+    }
+    return { removed, remaining };
+}
+function rollbackDestination(deps, destination, existed, before, createdParents) {
+    const removed = [];
+    const remaining = [];
     if (!existed) {
-        if (deps.pathExists(destination))
+        if (deps.pathExists(destination)) {
             deps.removeTree(destination);
-        return [`partial checkout ${destination}`];
+            if (deps.pathExists(destination))
+                remaining.push(`partial checkout ${destination}`);
+            else
+                removed.push(`partial checkout ${destination}`);
+        }
+        const parents = removeCreatedParents(deps, createdParents);
+        removed.push(...parents.removed);
+        remaining.push(...parents.remaining);
+        return { removed, remaining };
     }
     const beforeSet = new Set(before);
     for (const entry of deps.readDirectory(destination)) {
-        if (!beforeSet.has(entry))
-            deps.removeTree(join(destination, entry));
+        if (!beforeSet.has(entry)) {
+            const entryPath = join(destination, entry);
+            deps.removeTree(entryPath);
+            if (deps.pathExists(entryPath))
+                remaining.push(`new checkout files in ${destination}`);
+            else
+                removed.push(`new checkout files in ${destination}`);
+        }
     }
-    return [`new checkout files in ${destination}`];
+    const parents = removeCreatedParents(deps, createdParents);
+    removed.push(...parents.removed);
+    remaining.push(...parents.remaining);
+    return { removed, remaining };
 }
-function rollbackWorktree(deps, repository, worktree) {
+function rollbackWorktree(deps, repository, worktree, branch, branchExisted) {
     const removed = [];
+    const remaining = [];
     const listed = readRegisteredWorktrees(deps, repository).some((row) => samePath(row.path, worktree));
     if (listed) {
         const result = deps.runSync('git', ['worktree', 'remove', '--force', worktree], repository);
         if (result.status === 0)
             removed.push(`worktree ${worktree}`);
+        else
+            remaining.push(`registered worktree ${worktree}`);
     }
     if (deps.pathExists(worktree)) {
         deps.removeTree(worktree);
         if (!removed.some((item) => item.includes(worktree)))
             removed.push(`worktree files ${worktree}`);
+        if (deps.pathExists(worktree))
+            remaining.push(`worktree files ${worktree}`);
     }
-    return removed;
+    if (!branchExisted && branchExists(deps, repository, branch)) {
+        const result = deps.runSync('git', ['branch', '-D', branch], repository);
+        if (result.status === 0)
+            removed.push(`branch ${branch}`);
+        else
+            remaining.push(`branch ${branch}`);
+    }
+    return { removed, remaining };
 }
 function chooseCandidate(deps, repository, destination, requestedName, requestedBranch) {
     const registered = readRegisteredWorktrees(deps, repository);
@@ -279,7 +342,7 @@ function chooseCandidate(deps, repository, destination, requestedName, requested
         if (samePath(path, destination))
             continue;
         if (existing) {
-            if (deps.pathExists(path) && (!explicitBranch || existing.branch === branch)) {
+            if (deps.pathExists(path) && existing.branch === branch) {
                 return { candidate: { name, path, branch: existing.branch ?? branch, existing } };
             }
             continue;
@@ -315,10 +378,22 @@ function resolveDestination(deps, invocationCwd, repositoryUrl, explicit) {
         return resolve(invocationCwd);
     return resolve(invocationCwd, sourceDisplayName(repositoryUrl));
 }
-function emitRollbackFailure(deps, error, removed, kept) {
+function missingParentDirectories(deps, parent) {
+    const missing = [];
+    let current = resolve(parent);
+    while (!deps.pathExists(current)) {
+        missing.push(current);
+        const next = dirname(current);
+        if (next === current)
+            break;
+        current = next;
+    }
+    return missing;
+}
+function emitRollbackFailure(deps, error, rollback, kept) {
     deps.stderr(`borg clone: ${safeGitDetail(error)}\n`);
-    deps.stderr(`Rollback: ${removed.length > 0 ? `removed ${removed.join(', ')}` : 'nothing was removed'}; ` +
-        `${kept}.\n` +
+    deps.stderr(`Rollback: ${rollback.removed.length > 0 ? `removed ${safeGitDetail(rollback.removed.join(', '))}` : 'nothing was removed'}; ` +
+        `${rollback.remaining.length > 0 ? `remaining ${safeGitDetail(rollback.remaining.join(', '))}` : safeGitDetail(kept)}.\n` +
         `Recovery: fix the reported problem and rerun borg clone, or inspect the preserved path before retrying.\n`);
 }
 /** Run the clone flow. No Borg authority or seat is consulted. */
@@ -327,14 +402,14 @@ export async function runClone(args, providedDeps = {}) {
     const invocationCwd = resolve(deps.cwd());
     const validSource = validateCloneRepositoryUrl(args.repositoryUrl);
     if (!validSource.ok) {
-        deps.stderr(`borg clone: ${validSource.error}\n`);
+        deps.stderr(`borg clone: ${safeGitDetail(validSource.error)}\n`);
         return 1;
     }
     const requestedName = args.flags.name ?? defaultWorktreeName(sourceDisplayName(args.repositoryUrl));
     if (args.flags.name !== undefined) {
         const validName = validateName(args.flags.name);
         if (!validName.ok) {
-            deps.stderr(`borg clone: ${validName.error}\n`);
+            deps.stderr(`borg clone: ${safeGitDetail(validName.error)}\n`);
             return 1;
         }
     }
@@ -350,30 +425,31 @@ export async function runClone(args, providedDeps = {}) {
     let action = 'reused';
     const before = state.before;
     const destinationExisted = state.existed;
+    const createdParents = state.existed ? [] : missingParentDirectories(deps, dirname(destination));
     if (state.repository) {
         const actualOrigin = readOrigin(deps, destination);
         if (actualOrigin === null) {
-            deps.stderr(`borg clone: existing checkout at ${destination} has no origin remote. ` +
+            deps.stderr(`borg clone: existing checkout at ${safeGitDetail(destination)} has no origin remote. ` +
                 `Choose another --destination or repair that checkout before retrying.\n`);
             return 1;
         }
         if (remoteHasCredentials(actualOrigin)) {
-            deps.stderr(`borg clone: existing checkout at ${destination} has a credential-bearing origin remote. ` +
+            deps.stderr(`borg clone: existing checkout at ${safeGitDetail(destination)} has a credential-bearing origin remote. ` +
                 `Remove the embedded credential or replace the remote with a credential helper before retrying.\n`);
             return 1;
         }
         if (remoteKey(actualOrigin, destination) !== remoteKey(args.repositoryUrl, invocationCwd)) {
-            deps.stderr(`borg clone: remote mismatch at ${destination}.\n` +
+            deps.stderr(`borg clone: remote mismatch at ${safeGitDetail(destination)}.\n` +
                 `  requested: ${safeGitDetail(args.repositoryUrl)}\n` +
                 `  existing:  ${safeGitDetail(actualOrigin)}\n` +
                 `Recovery: choose another --destination, or inspect and repair the existing checkout before retrying.\n`);
             return 1;
         }
-        deps.stdout(`Reusing existing checkout at ${destination} (remote matches).\n`);
+        deps.stdout(`Reusing existing checkout at ${safeGitDetail(destination)} (remote matches).\n`);
     }
     else {
         if (state.existed && (!deps.isDirectory(destination) || before.length > 0)) {
-            deps.stderr(`borg clone: destination ${destination} already exists and is not an empty Git checkout. ` +
+            deps.stderr(`borg clone: destination ${safeGitDetail(destination)} already exists and is not an empty Git checkout. ` +
                 `Choose another --destination.\n`);
             return 1;
         }
@@ -381,18 +457,22 @@ export async function runClone(args, providedDeps = {}) {
         const cloneArgs = ['clone', args.repositoryUrl, destination];
         const cloned = deps.runSync('git', cloneArgs, invocationCwd);
         if (cloned.status !== 0) {
-            const removed = rollbackDestination(deps, destination, destinationExisted, before);
-            emitRollbackFailure(deps, `clone failed: ${cloned.stderr.trim() || cloned.stdout.trim() || 'Git exited unsuccessfully'}`, removed, destinationExisted ? `pre-existing contents in ${destination} were preserved` : 'the destination was removed');
+            const rollback = rollbackDestination(deps, destination, destinationExisted, before, createdParents);
+            emitRollbackFailure(deps, `clone failed: ${cloned.stderr.trim() || cloned.stdout.trim() || 'Git exited unsuccessfully'}`, rollback, destinationExisted
+                ? `pre-existing contents in ${destination} were preserved`
+                : `destination ${destination} was not created`);
             return 1;
         }
         action = 'cloned';
-        deps.stdout(`Cloned ${safeGitDetail(args.repositoryUrl)} into ${destination}.\n`);
+        deps.stdout(`Cloned ${safeGitDetail(args.repositoryUrl)} into ${safeGitDetail(destination)}.\n`);
     }
     const candidateResult = chooseCandidate(deps, destination, destination, requestedName, args.flags.branch);
     if ('error' in candidateResult) {
         if (action === 'cloned') {
-            const removed = rollbackDestination(deps, destination, destinationExisted, before);
-            emitRollbackFailure(deps, candidateResult.error, removed, 'the pre-existing destination was preserved');
+            const rollback = rollbackDestination(deps, destination, destinationExisted, before, createdParents);
+            emitRollbackFailure(deps, candidateResult.error, rollback, destinationExisted
+                ? `pre-existing contents in ${destination} were preserved`
+                : `destination ${destination} was removed if Git created it`);
         }
         else {
             deps.stderr(`borg clone: ${candidateResult.error}\n`);
@@ -412,24 +492,32 @@ export async function runClone(args, providedDeps = {}) {
             : ['worktree', 'add', '-b', candidate.branch, candidate.path, 'HEAD'];
         const added = deps.runSync('git', addArgs, destination);
         if (added.status !== 0) {
-            const removed = rollbackWorktree(deps, destination, candidate.path);
-            if (action === 'cloned')
-                removed.push(...rollbackDestination(deps, destination, destinationExisted, before));
-            emitRollbackFailure(deps, `could not create sibling worktree ${candidate.path}: ${added.stderr.trim() || 'Git exited unsuccessfully'}`, removed, action === 'cloned' ? 'the original pre-existing destination was preserved' : `the existing checkout at ${destination} was preserved`);
+            const worktreeRollback = rollbackWorktree(deps, destination, candidate.path, candidate.branch, branchAlreadyExists);
+            const destinationRollback = action === 'cloned'
+                ? rollbackDestination(deps, destination, destinationExisted, before, createdParents)
+                : { removed: [], remaining: [] };
+            emitRollbackFailure(deps, `could not create sibling worktree ${candidate.path}: ${added.stderr.trim() || 'Git exited unsuccessfully'}`, {
+                removed: [...worktreeRollback.removed, ...destinationRollback.removed],
+                remaining: [...worktreeRollback.remaining, ...destinationRollback.remaining],
+            }, action === 'cloned'
+                ? destinationExisted
+                    ? `pre-existing contents in ${destination} were preserved`
+                    : `destination ${destination} was removed if Git created it`
+                : `the existing checkout at ${destination} was preserved`);
             return 1;
         }
     }
     const branchDisplay = candidate.existing?.branch ?? candidate.branch;
-    deps.stdout(`${candidate.existing === null ? 'Created' : 'Reusing'} sibling worktree at ${candidate.path} on branch ${branchDisplay}.\n`);
+    deps.stdout(`${candidate.existing === null ? 'Created' : 'Reusing'} sibling worktree at ${safeGitDetail(candidate.path)} on branch ${safeGitDetail(branchDisplay)}.\n`);
     if (args.flags.noLaunch) {
-        deps.stdout(`No agent launched. Next: cd ${shellEscape(candidate.path)} && borg\n`);
+        deps.stdout(`No agent launched. Next: cd ${shellEscape(safeGitDetail(candidate.path))} && borg\n`);
         return 0;
     }
-    deps.stdout(`Launching the configured agent in ${candidate.path}.\n`);
+    deps.stdout(`Launching the configured agent in ${safeGitDetail(candidate.path)}.\n`);
     const exitCode = await deps.launch(candidate.path);
     if (exitCode !== 0) {
-        deps.stderr(`borg clone: agent launch exited with status ${exitCode}; the ready worktree remains at ${candidate.path}. ` +
-            `Recovery: cd ${shellEscape(candidate.path)} && borg\n`);
+        deps.stderr(`borg clone: agent launch exited with status ${exitCode}; the ready worktree remains at ${safeGitDetail(candidate.path)}. ` +
+            `Recovery: cd ${shellEscape(safeGitDetail(candidate.path))} && borg\n`);
         return exitCode;
     }
     return 0;

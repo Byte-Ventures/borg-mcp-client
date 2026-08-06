@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -138,6 +139,33 @@ describe('borg clone flow', () => {
     expect(readFileSync(join(destination, 'README.md'), 'utf8')).toBe('A\n');
   });
 
+  it.each([
+    ['SSH user', 'ssh://alice@example.com:8443/Org/Repo.git', 'ssh://bob@example.com:8443/Org/Repo.git'],
+    ['port', 'https://example.com:8443/Org/Repo.git', 'https://example.com/Org/Repo.git'],
+    ['path case', 'https://example.com/Org/Repo.git', 'https://example.com/org/repo.git'],
+  ])('does not reuse a checkout when remote identity differs by %s', async (_reason, actualOrigin, requestedOrigin) => {
+    const root = makeRoot();
+    const destination = join(root, 'checkout');
+    makeSource(root, 'seed');
+    git(['init', '-q', '-b', 'main', destination], root);
+    git(['config', 'user.email', 'borg-test@example.invalid'], destination);
+    git(['config', 'user.name', 'Borg Test'], destination);
+    writeFileSync(join(destination, 'README.md'), 'existing\n');
+    git(['add', 'README.md'], destination);
+    git(['commit', '-q', '-m', 'initial'], destination);
+    git(['remote', 'add', 'origin', actualOrigin], destination);
+
+    const output: string[] = [];
+    const errors: string[] = [];
+    expect(await runClone({
+      repositoryUrl: requestedOrigin,
+      flags: { destination, noLaunch: true },
+    }, realRunner(output, errors, root))).toBe(1);
+    expect(errors.join('')).toContain('remote mismatch');
+    expect(output.join('')).not.toContain('remote matches');
+    expect(readFileSync(join(destination, 'README.md'), 'utf8')).toBe('existing\n');
+  });
+
   it('discloses a collision and chooses a safe sibling name', async () => {
     const root = makeRoot();
     const source = makeSource(root, 'source');
@@ -202,7 +230,24 @@ describe('borg clone flow', () => {
     }, realRunner(output, errors, root))).toBe(1);
     expect(existsSync(destination)).toBe(false);
     expect(errors.join('')).toMatch(/clone failed|rollback/i);
-    expect(errors.join('')).toContain('removed partial checkout');
+    expect(errors.join('')).toContain(`destination ${destination} was not created`);
+    expect(errors.join('')).not.toContain('removed partial checkout');
+  });
+
+  it('removes nested parents it created when a clone fails before creating a destination', async () => {
+    const root = makeRoot();
+    const destination = join(root, 'nested', 'deep', 'checkout');
+    const output: string[] = [];
+    const errors: string[] = [];
+
+    expect(await runClone({
+      repositoryUrl: join(root, 'does-not-exist'),
+      flags: { destination, noLaunch: true },
+    }, realRunner(output, errors, root))).toBe(1);
+    expect(existsSync(destination)).toBe(false);
+    expect(existsSync(join(root, 'nested'))).toBe(false);
+    expect(errors.join('')).toContain('created parent');
+    expect(errors.join('')).toContain(`destination ${destination} was not created`);
   });
 
   it('rolls back a cloned checkout when an injected worktree step fails', async () => {
@@ -225,6 +270,64 @@ describe('borg clone flow', () => {
     expect(errors.join('')).toContain('Rollback:');
   });
 
+  it('removes a branch and registration left by a real failed worktree checkout', async () => {
+    const root = makeRoot();
+    const source = makeSource(root, 'source');
+    const destination = join(root, 'checkout');
+    const worktree = join(root, 'source-worktree');
+    const branch = 'wt-source-worktree';
+    const output: string[] = [];
+    const errors: string[] = [];
+    const base = realRunner(output, errors, root);
+    const runSync = vi.fn((cmd: string, args: string[], cwd?: string): GitRunResult => {
+      const result = base.runSync!(cmd, args, cwd);
+      if (cmd === 'git' && args[0] === 'clone' && result.status === 0) {
+        const hook = join(destination, '.git', 'hooks', 'post-checkout');
+        writeFileSync(hook, '#!/bin/sh\nexit 17\n');
+        chmodSync(hook, 0o755);
+      }
+      return result;
+    });
+
+    expect(await runClone({
+      repositoryUrl: source,
+      flags: { destination, noLaunch: true },
+    }, { ...base, runSync })).toBe(1);
+    expect(existsSync(destination)).toBe(false);
+    expect(existsSync(worktree)).toBe(false);
+    expect(spawnSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], {
+      cwd: root,
+    }).status).not.toBe(0);
+    expect(spawnSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: destination,
+    }).status).not.toBe(0);
+    expect(errors.join('')).toContain(`branch ${branch}`);
+    expect(errors.join('')).toContain('Rollback:');
+  });
+
+  it('does not reuse an unrelated registered worktree branch', async () => {
+    const root = makeRoot();
+    const source = makeSource(root, 'source');
+    const destination = join(root, 'checkout');
+    const firstOutput: string[] = [];
+    const firstErrors: string[] = [];
+    expect(await runClone({
+      repositoryUrl: source,
+      flags: { destination, name: 'worker', branch: 'unrelated', noLaunch: true },
+    }, realRunner(firstOutput, firstErrors, root))).toBe(0);
+
+    const output: string[] = [];
+    const errors: string[] = [];
+    expect(await runClone({
+      repositoryUrl: source,
+      flags: { destination, name: 'worker', noLaunch: true },
+    }, realRunner(output, errors, root))).toBe(0);
+    expect(output.join('')).toContain('using "worker-2" instead');
+    expect(git(['branch', '--show-current'], join(root, 'worker')).trim()).toBe('unrelated');
+    expect(git(['branch', '--show-current'], join(root, 'worker-2')).trim()).toBe('wt-worker-2');
+    expect(errors).toEqual([]);
+  });
+
   it('rejects credentials before argv, logs, or Git metadata can receive them', async () => {
     const root = makeRoot();
     const secret = 'clone-secret-317';
@@ -232,15 +335,6 @@ describe('borg clone flow', () => {
     const output: string[] = [];
     const errors: string[] = [];
     const runSync = vi.fn(() => ({ status: 0, stdout: '', stderr: '' }));
-    const capturedArgv = ['git', 'clone', credentialUrl, join(root, 'checkout')];
-    const capturedLog = `git clone ${credentialUrl}`;
-    const capturedMetadata = { origin: credentialUrl };
-
-    // Positive controls: the instrument detects a planted credential in all
-    // three surfaces before the product absence assertion is made.
-    expect(JSON.stringify(capturedArgv)).toContain(secret);
-    expect(capturedLog).toContain(secret);
-    expect(JSON.stringify(capturedMetadata)).toContain(secret);
 
     expect(await runClone({ repositoryUrl: credentialUrl, flags: { destination: join(root, 'checkout'), noLaunch: true } }, {
       ...realRunner(output, errors, root),
@@ -250,5 +344,74 @@ describe('borg clone flow', () => {
     expect(output.join('')).not.toContain(secret);
     expect(errors.join('')).not.toContain(secret);
     expect(existsSync(join(root, 'checkout'))).toBe(false);
+  });
+
+  it('redacts credentials from a Git-followed URL in the actual diagnostic path', async () => {
+    const root = makeRoot();
+    const secret = 'followed-secret-317';
+    const output: string[] = [];
+    const errors: string[] = [];
+    const capturedArgv: string[][] = [];
+    const runSync = vi.fn((cmd: string, args: string[]): GitRunResult => {
+      capturedArgv.push([cmd, ...args]);
+      if (args[0] === 'clone') {
+        return {
+          status: 128,
+          stdout: '',
+          stderr: `fatal: redirected to https://example.com/org/repo.git?access_token=${secret}`,
+        };
+      }
+      return { status: 1, stdout: '', stderr: '' };
+    });
+
+    expect(await runClone({
+      repositoryUrl: 'https://example.com/org/repo.git',
+      flags: { destination: join(root, 'checkout'), noLaunch: true },
+    }, {
+      ...realRunner(output, errors, root),
+      runSync,
+    })).toBe(1);
+    expect(capturedArgv.find((args) => args[1] === 'clone')).toEqual([
+      'git', 'clone', 'https://example.com/org/repo.git', join(root, 'checkout'),
+    ]);
+    expect(errors.join('')).toContain('<redacted>');
+    expect(errors.join('')).not.toContain(secret);
+  });
+
+  it('validates that argv, output, and Git metadata instruments can each observe a planted value', async () => {
+    const root = makeRoot();
+    const argvSecret = 'argv-secret-317';
+    const argv: string[][] = [];
+    const argvErrors: string[] = [];
+    const argvRunSync = vi.fn((cmd: string, args: string[]): GitRunResult => {
+      argv.push([cmd, ...args]);
+      return { status: 1, stdout: '', stderr: '' };
+    });
+    await runClone({
+      repositoryUrl: join(root, `source-${argvSecret}`),
+      flags: { destination: join(root, 'argv-checkout'), noLaunch: true },
+    }, { ...realRunner([], argvErrors, root), runSync: argvRunSync });
+    expect(argv.flat().join(' ')).toContain(argvSecret);
+
+    const logSecret = 'log-secret-317';
+    const logErrors: string[] = [];
+    const logRunSync = vi.fn((cmd: string, args: string[]): GitRunResult => {
+      if (args[0] === 'clone') return { status: 1, stdout: '', stderr: `fatal: ${logSecret}` };
+      return { status: 1, stdout: '', stderr: '' };
+    });
+    await runClone({
+      repositoryUrl: join(root, 'source-log'),
+      flags: { destination: join(root, 'log-checkout'), noLaunch: true },
+    }, { ...realRunner([], logErrors, root), runSync: logRunSync });
+    expect(logErrors.join('')).toContain(logSecret);
+
+    const metadataSecret = 'metadata-secret-317';
+    const source = makeSource(root, `source-${metadataSecret}`);
+    const metadataDestination = join(root, 'metadata-checkout');
+    expect(await runClone({
+      repositoryUrl: source,
+      flags: { destination: metadataDestination, noLaunch: true },
+    }, realRunner([], [], root))).toBe(0);
+    expect(readFileSync(join(metadataDestination, '.git', 'config'), 'utf8')).toContain(metadataSecret);
   });
 });

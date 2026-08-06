@@ -7,6 +7,7 @@
  * own repository metadata is the only durable state it creates.
  */
 import type { CloneArgs } from './parse-clone-args.js';
+export { redactCloneSecrets } from './clone-security.js';
 export interface GitRunResult {
     status: number | null;
     stdout: string;
@@ -24,8 +25,6 @@ export interface CloneDeps {
     stdout?: (line: string) => void;
     stderr?: (line: string) => void;
 }
-/** Redact URL userinfo and common credential-bearing URL forms. */
-export declare function redactCloneSecrets(value: string): string;
 /** Validate a clone source before it reaches Git's argv or any output. */
 export declare function validateCloneRepositoryUrl(value: string): {
     ok: true;

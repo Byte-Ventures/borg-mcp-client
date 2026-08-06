@@ -33,4 +33,12 @@ describe('borg clone argument parsing', () => {
     expect(parseCloneArgs(['repo', '--destination'])).toMatchObject({ ok: false, error: '--destination requires a value' });
     expect(parseCloneArgs(['repo', '--branch', '--no-launch'])).toMatchObject({ ok: false, error: '--branch requires a value' });
   });
+
+  it('redacts a credential-bearing extra positional from parser diagnostics', () => {
+    const secret = 'parse-secret-317';
+    const result = parseCloneArgs(['safe', `https://alice:${secret}@example.com/org/repo.git`]);
+
+    expect(result).toMatchObject({ ok: false, error: 'unexpected extra argument: https://<credentials>@example.com/org/repo.git' });
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
 });
