@@ -2,7 +2,8 @@ import type { BorgCli } from './cubes.js';
 export interface SetupAgentChoice {
     title: string;
     value: BorgCli;
-    selected: true;
+    selected: boolean;
+    disabled?: boolean;
 }
 export type SetupAgentSelection = {
     kind: 'selected';
@@ -13,7 +14,7 @@ export type SetupAgentSelection = {
     kind: 'cancelled';
 };
 /** Build the first-run choices from the CLIs that are actually installed. */
-export declare function setupAgentChoices(detected: readonly BorgCli[]): SetupAgentChoice[];
+export declare function setupAgentChoices(detected: readonly BorgCli[], alreadyConfigured?: ReadonlySet<BorgCli>): SetupAgentChoice[];
 /**
  * Keep only detected agents and return them in detection order. The selected
  * set is invocation-local; it is deliberately never persisted.

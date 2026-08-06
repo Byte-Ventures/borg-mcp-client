@@ -13,6 +13,13 @@ describe('borg setup agent selection', () => {
     ]);
   });
 
+  it('marks a fully configured CLI as non-actionable in a partial install', () => {
+    expect(setupAgentChoices(['claude', 'codex'], new Set(['claude']))).toEqual([
+      { title: 'Claude Code (already configured)', value: 'claude', selected: false, disabled: true },
+      { title: 'Codex', value: 'codex', selected: true },
+    ]);
+  });
+
   it('preserves detected order while filtering deselected and unknown values', () => {
     expect(normalizeSetupAgentSelection(
       ['claude', 'codex', 'opencode'],

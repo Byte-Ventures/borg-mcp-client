@@ -3,7 +3,8 @@ import type { BorgCli } from './cubes.js';
 export interface SetupAgentChoice {
   title: string;
   value: BorgCli;
-  selected: true;
+  selected: boolean;
+  disabled?: boolean;
 }
 
 export type SetupAgentSelection =
@@ -18,11 +19,17 @@ const CLI_TITLES: Record<BorgCli, string> = {
 };
 
 /** Build the first-run choices from the CLIs that are actually installed. */
-export function setupAgentChoices(detected: readonly BorgCli[]): SetupAgentChoice[] {
+export function setupAgentChoices(
+  detected: readonly BorgCli[],
+  alreadyConfigured: ReadonlySet<BorgCli> = new Set(),
+): SetupAgentChoice[] {
   return [...new Set(detected)].map((cli) => ({
-    title: CLI_TITLES[cli],
+    title: alreadyConfigured.has(cli)
+      ? `${CLI_TITLES[cli]} (already configured)`
+      : CLI_TITLES[cli],
     value: cli,
-    selected: true,
+    selected: !alreadyConfigured.has(cli),
+    ...(alreadyConfigured.has(cli) ? { disabled: true } : {}),
   }));
 }
 

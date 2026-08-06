@@ -4,11 +4,14 @@ const CLI_TITLES = {
     opencode: 'OpenCode',
 };
 /** Build the first-run choices from the CLIs that are actually installed. */
-export function setupAgentChoices(detected) {
+export function setupAgentChoices(detected, alreadyConfigured = new Set()) {
     return [...new Set(detected)].map((cli) => ({
-        title: CLI_TITLES[cli],
+        title: alreadyConfigured.has(cli)
+            ? `${CLI_TITLES[cli]} (already configured)`
+            : CLI_TITLES[cli],
         value: cli,
-        selected: true,
+        selected: !alreadyConfigured.has(cli),
+        ...(alreadyConfigured.has(cli) ? { disabled: true } : {}),
     }));
 }
 /**

@@ -93,6 +93,15 @@ async function main() {
   const claudeUpsHookPending = claudeDetected && !isUserPromptSubmitHookRegistered();
   const codexSessionHookPending = codexDetected && !isCodexSessionStartHookRegistered();
   const codexUpsHookPending = codexDetected && !isCodexUserPromptSubmitHookRegistered();
+  const alreadyConfigured = new Set<BorgCli>([
+    ...(claudeDetected && claudeMcpConfigured && !claudeLegacyHookPending && !claudeUpsHookPending
+      ? ['claude' as const]
+      : []),
+    ...(codexDetected && codexMcpConfigured && !codexSessionHookPending && !codexUpsHookPending
+      ? ['codex' as const]
+      : []),
+    ...(opencodeDetected && opencodeMcpConfigured ? ['opencode' as const] : []),
+  ]);
 
   const allDetectedMutationPending = setupMutationPending({
     claude: claudeDetected,
@@ -114,7 +123,7 @@ async function main() {
         name: 'selected',
         message: 'Which detected agent CLIs should Borg configure?',
         hint: 'Space toggles selection; Enter accepts the checked agents',
-        choices: setupAgentChoices(detectedClis),
+        choices: setupAgentChoices(detectedClis, alreadyConfigured),
         instructions: false,
       },
       {
