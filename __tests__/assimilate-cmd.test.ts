@@ -2483,6 +2483,69 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(stderrPayload).toContain('work created in the primary won\'t reach your wt-branch without manual surgery (cherry-pick/merge)');
   });
 
+  it('rolls back a sibling when saving its CLI preference fails', async () => {
+    const spawnedPath = '/home/test/.borg/worktrees/myrepo/builder';
+    let currentCwd = '/work/myrepo';
+    let spawnedWorktreePresent = false;
+    const runSync = vi.fn((cmd: string, args: string[]) => {
+      if (args[0] === 'remote') return { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'list') return { status: 0, stdout: '/work/myrepo\n', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        spawnedWorktreePresent = true;
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        spawnedWorktreePresent = false;
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--verify' && args[3]?.startsWith('refs/heads/')) {
+        return { status: 1, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: 'head', stderr: '' };
+    });
+    const chdir = vi.fn((path: string) => { currentCwd = path; });
+    const pathExists = vi.fn((path: string) => path === spawnedPath && spawnedWorktreePresent);
+    const stderr = vi.fn();
+    const provisionLaunchAccess = vi.fn();
+    const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
+    const setCliPreferenceForWorktree = vi.fn(async () => {
+      throw new Error('preference write failed');
+    });
+    const deps = makeStubDeps({
+      runSync,
+      chdir,
+      cwd: () => currentCwd,
+      pathExists,
+      stderr,
+      provisionLaunchAccess,
+      finalizeServerSeat,
+      setCliPreferenceForWorktree,
+      getActiveCube: vi.fn(async () => null),
+      findProjectRoot: () => '/work/myrepo',
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [
+        { id: 'role-builder', name: 'Builder', is_default: false, is_human_seat: false },
+      ] })),
+    });
+
+    await expect(runAssimilate({ role: 'builder', flags: { yes: true, worktree: 'builder' } }, deps)).resolves.toBe(1);
+
+    expect(setCliPreferenceForWorktree).toHaveBeenCalledWith('claude', spawnedPath);
+    expect(runSync).toHaveBeenCalledWith(
+      'git',
+      ['worktree', 'remove', '--force', spawnedPath],
+      '/work/myrepo',
+    );
+    expect(spawnedWorktreePresent).toBe(false);
+    expect(pathExists(spawnedPath)).toBe(false);
+    expect(provisionLaunchAccess).not.toHaveBeenCalled();
+    expect(finalizeServerSeat).not.toHaveBeenCalled();
+
+    const output = stderr.mock.calls.map((call) => String(call[0])).join('');
+    expect(output).toContain(`could not save the claude preference for sibling worktree ${spawnedPath}: preference write failed`);
+    expect(output).toContain(`rolled back spawned worktree at ${spawnedPath}`);
+  });
+
   it('uses the common repository namespace and bumps duplicate worktree names across fragmented paths', async () => {
     const stderr = vi.fn();
     const runSync = vi.fn((_cmd: string, args: string[]) => {
