@@ -213,7 +213,12 @@ export declare function readAllProjectIdentities(): Promise<Array<{
     projectPath: string;
     cube: ActiveCube;
 }>>;
-export declare function setProjectCliPreference(cli: BorgCli): Promise<void>;
+/**
+ * Save the CLI preference for the current project, or for an explicitly named
+ * worktree. The explicit path is used when assimilate has just created a
+ * sibling worktree but the process still began in the invoking checkout.
+ */
+export declare function setProjectCliPreference(cli: BorgCli, dir?: string): Promise<void>;
 export declare function setCodexWakeTarget(cubeId: string, droneId: string, target: Omit<CodexWakeTargetRecord, 'updatedAt'>): Promise<void>;
 export declare function getCodexWakeTarget(cubeId: string, droneId: string): Promise<CodexWakeTargetRecord | null>;
 /**

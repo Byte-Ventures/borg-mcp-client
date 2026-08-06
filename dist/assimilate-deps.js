@@ -25,7 +25,7 @@ import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError, CubeCreationConfirmationError } from './server-errors.js';
-import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setCodexWakeTarget, } from './cubes.js';
+import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setProjectCliPreference, setCodexWakeTarget, } from './cubes.js';
 import { addClaudeLaunchAccess, addCodexForeignPathReminderHook, addOpenCodeLaunchAccess, addProjectSessionStartHook, } from './config-utils.js';
 import { findPendingServerEnrollment } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
@@ -473,6 +473,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                 rl.close();
             }
         }, () => process.stdin.isTTY === true)),
+        setCliPreferenceForWorktree: (cli, worktree) => setProjectCliPreference(cli, worktree),
         prepareCodexRemoteLaunch: () => prepareCodexRemoteLaunch(defaultCodexRemoteDeps()),
         setCodexWakeTarget,
         findLoadedCodexThread,

@@ -60,6 +60,7 @@ import {
   hasPersistedActiveCube as cubesHasPersistedActive,
   setActiveCube as cubesSetActive,
   inboxPathForDrone,
+  setProjectCliPreference,
   setCodexWakeTarget,
 } from './cubes.js';
 import {
@@ -575,6 +576,7 @@ export function buildDefaultAssimilateDeps(
         }
       }, () => process.stdin.isTTY === true)
     ),
+    setCliPreferenceForWorktree: (cli, worktree) => setProjectCliPreference(cli, worktree),
     prepareCodexRemoteLaunch: () => prepareCodexRemoteLaunch(defaultCodexRemoteDeps()),
     setCodexWakeTarget,
     findLoadedCodexThread,
