@@ -17,10 +17,9 @@ reviewer, coordinator, or designer.
 
 ## Install
 
-You install Claude Code, Codex, or OpenCode yourself. Borg is the wrapper that
-starts one of those agent CLIs. When the current worktree is the directory
-registered as a drone, Borg attaches that drone's cube connection. Borg is not
-a separate agent service. Use
+You install Claude Code, Codex, or OpenCode yourself. Borg runs the coding agent
+you already installed. When the current worktree is the directory registered as
+a drone, Borg attaches that drone's cube connection. Use
 `borg ...` commands in your terminal, and use `borg_...` MCP tools inside the
 agent session.
 
