@@ -20,7 +20,7 @@ import { initDebugFromArgv } from './debug.js';
 import { defaultApprovalIo, setupApprovalWarnings } from './cli-tool-approval.js';
 import { offerFirstRunServerInstall } from './first-run-server.js';
 import { setupNextStepsText } from './cli-help.js';
-import { resolveSetupAgentSelection, setupAgentChoices, setupRestartInstruction } from './setup-selection.js';
+import { emptySetupOutcome, resolveSetupAgentSelection, setupAgentChoices, setupRestartInstruction, } from './setup-selection.js';
 /**
  * Main setup wizard
  */
@@ -118,7 +118,9 @@ async function main() {
             return;
         }
         if (selection.kind === 'empty') {
-            console.log(chalk.yellow('\n◼ No agent CLIs selected — no agent or local server configuration changes made.\n'));
+            const outcome = emptySetupOutcome();
+            console.log(chalk.yellow(`\n◼ No agent CLIs selected — agent configuration and local-server initialization were skipped. ` +
+                `Run \`${outcome.recovery.command}\` again to choose an agent and continue setup.\n`));
             return;
         }
         selectedClis = selection.agents;

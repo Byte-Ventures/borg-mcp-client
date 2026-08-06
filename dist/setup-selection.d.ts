@@ -13,10 +13,21 @@ export type SetupAgentSelection = {
 } | {
     kind: 'cancelled';
 };
+export interface EmptySetupOutcome {
+    kind: 'empty';
+    agentConfigurationChanged: false;
+    localServerInitializationStarted: false;
+    recovery: {
+        kind: 'rerun-setup';
+        command: 'borg setup';
+    };
+}
 /** Build the first-run choices from the CLIs that are actually installed. */
 export declare function setupAgentChoices(detected: readonly BorgCli[], alreadyConfigured?: ReadonlySet<BorgCli>): SetupAgentChoice[];
 /** The agent names whose newly selected setup needs a restart notice. */
 export declare function setupRestartInstruction(selected: readonly BorgCli[]): string;
+/** Describe the accepted zero-selection result and its recovery path. */
+export declare function emptySetupOutcome(): EmptySetupOutcome;
 /**
  * Keep only detected agents and return them in detection order. The selected
  * set is invocation-local; it is deliberately never persisted.

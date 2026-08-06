@@ -19,6 +19,18 @@ export function setupRestartInstruction(selected) {
     const labels = selected.map((cli) => CLI_TITLES[cli]);
     return `🔄 Restart ${labels.join(' / ')} (or open a new session) for the changes to take effect.`;
 }
+/** Describe the accepted zero-selection result and its recovery path. */
+export function emptySetupOutcome() {
+    return {
+        kind: 'empty',
+        agentConfigurationChanged: false,
+        localServerInitializationStarted: false,
+        recovery: {
+            kind: 'rerun-setup',
+            command: 'borg setup',
+        },
+    };
+}
 /**
  * Keep only detected agents and return them in detection order. The selected
  * set is invocation-local; it is deliberately never persisted.

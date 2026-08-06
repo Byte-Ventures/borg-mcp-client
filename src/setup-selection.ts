@@ -12,6 +12,16 @@ export type SetupAgentSelection =
   | { kind: 'empty' }
   | { kind: 'cancelled' };
 
+export interface EmptySetupOutcome {
+  kind: 'empty';
+  agentConfigurationChanged: false;
+  localServerInitializationStarted: false;
+  recovery: {
+    kind: 'rerun-setup';
+    command: 'borg setup';
+  };
+}
+
 const CLI_TITLES: Record<BorgCli, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
@@ -37,6 +47,19 @@ export function setupAgentChoices(
 export function setupRestartInstruction(selected: readonly BorgCli[]): string {
   const labels = selected.map((cli) => CLI_TITLES[cli]);
   return `🔄 Restart ${labels.join(' / ')} (or open a new session) for the changes to take effect.`;
+}
+
+/** Describe the accepted zero-selection result and its recovery path. */
+export function emptySetupOutcome(): EmptySetupOutcome {
+  return {
+    kind: 'empty',
+    agentConfigurationChanged: false,
+    localServerInitializationStarted: false,
+    recovery: {
+      kind: 'rerun-setup',
+      command: 'borg setup',
+    },
+  };
 }
 
 /**

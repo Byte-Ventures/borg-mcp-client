@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  emptySetupOutcome,
   normalizeSetupAgentSelection,
   resolveSetupAgentSelection,
   setupAgentChoices,
@@ -45,5 +46,17 @@ describe('borg setup agent selection', () => {
     expect(setupRestartInstruction(['codex', 'opencode'])).toBe(
       '🔄 Restart Codex / OpenCode (or open a new session) for the changes to take effect.',
     );
+  });
+
+  it('describes zero selection as a no-write outcome with a rerun recovery path', () => {
+    expect(emptySetupOutcome()).toEqual({
+      kind: 'empty',
+      agentConfigurationChanged: false,
+      localServerInitializationStarted: false,
+      recovery: {
+        kind: 'rerun-setup',
+        command: 'borg setup',
+      },
+    });
   });
 });
