@@ -39,7 +39,7 @@ import { initDebugFromArgv } from './debug.js';
 import { defaultApprovalIo, setupApprovalWarnings } from './cli-tool-approval.js';
 import { offerFirstRunServerInstall } from './first-run-server.js';
 import { setupNextStepsText } from './cli-help.js';
-import { resolveSetupAgentSelection, setupAgentChoices } from './setup-selection.js';
+import { resolveSetupAgentSelection, setupAgentChoices, setupRestartInstruction } from './setup-selection.js';
 import type { BorgCli } from './cubes.js';
 
 /**
@@ -138,7 +138,7 @@ async function main() {
       return;
     }
     if (selection.kind === 'empty') {
-      console.log(chalk.yellow('\n◼ No agent CLIs selected — no agent configuration changes made.\n'));
+      console.log(chalk.yellow('\n◼ No agent CLIs selected — no agent or local server configuration changes made.\n'));
       return;
     }
     selectedClis = selection.agents;
@@ -250,7 +250,7 @@ async function main() {
 
   // Success message
   console.log(chalk.green.bold('\nSetup complete!\n'));
-  console.log(chalk.yellow('🔄 Restart Claude Code / Codex / OpenCode (or open a new session) for the changes to take effect.\n'));
+  console.log(chalk.yellow(`${setupRestartInstruction(selectedClis)}\n`));
   if (!serverInstall.suppressClientNextSteps) {
     console.log(chalk.gray(setupNextStepsText()));
   }

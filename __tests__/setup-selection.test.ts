@@ -3,6 +3,7 @@ import {
   normalizeSetupAgentSelection,
   resolveSetupAgentSelection,
   setupAgentChoices,
+  setupRestartInstruction,
 } from '../src/setup-selection';
 
 describe('borg setup agent selection', () => {
@@ -38,5 +39,11 @@ describe('borg setup agent selection', () => {
 
   it('gives zero selected agents a distinct outcome from cancellation', () => {
     expect(resolveSetupAgentSelection(['claude', 'codex'], [])).toEqual({ kind: 'empty' });
+  });
+
+  it('derives restart guidance from the selected agent set', () => {
+    expect(setupRestartInstruction(['codex', 'opencode'])).toBe(
+      '🔄 Restart Codex / OpenCode (or open a new session) for the changes to take effect.',
+    );
   });
 });

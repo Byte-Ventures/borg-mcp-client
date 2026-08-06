@@ -39,6 +39,23 @@ export interface LaunchMenuInputs {
   hasLaunchAllTargets: boolean;
 }
 
+/**
+ * Resolve and configure the CLI that will actually launch.
+ *
+ * This callback deliberately runs after the one-shot menu choice. A bare
+ * launch may resolve one default CLI first and then launch a different
+ * installed CLI for this invocation; only the final CLI may be self-healed.
+ */
+export function configureSelectedLaunchCli(
+  defaultCli: BorgCli,
+  action: LaunchMenuAction | undefined,
+  configure: (cli: BorgCli) => void,
+): BorgCli {
+  const cli = action?.kind === 'launch' ? action.cli : defaultCli;
+  configure(cli);
+  return cli;
+}
+
 const PRETTY: Record<BorgCli, string> = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
 
 /**

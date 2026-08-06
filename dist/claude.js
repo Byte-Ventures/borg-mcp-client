@@ -42,7 +42,7 @@ import { parseRecoverEnrollmentArgs, runRecoverEnrollment } from './recover-enro
 import { runLaunchAll } from './launch-all-cmd.js';
 import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
 import { discoverDroneCandidates } from './launch-all-discovery.js';
-import { explicitCliLaunchHint, runBareLaunchMenu, shouldResolveExplicitCliLaunchHintTargets, shouldShowLaunchMenu, } from './bare-launch-menu.js';
+import { configureSelectedLaunchCli, explicitCliLaunchHint, runBareLaunchMenu, shouldResolveExplicitCliLaunchHintTargets, shouldShowLaunchMenu, } from './bare-launch-menu.js';
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
@@ -243,7 +243,7 @@ async function main() {
         }
     };
     let cli = await resolveCliChoice(parsedCli.cli, defaultCliChoiceDeps(prompt, () => process.stdin.isTTY === true));
-    ensureResolvedCliConfigured(cli);
+    let launchAction;
     // Active cube for this directory — needed for the launch menu's option-3
     // availability, the terminal title, and the inbox-Monitor clause below.
     const active = await getActiveCube();
@@ -294,8 +294,11 @@ async function main() {
         // option 1 → configured default; option 2 → the other agent, ONE-SHOT
         // (we deliberately do NOT call setProjectCliPreference — the saved
         // preference is changed only via `borg --cli <agent>`).
-        cli = action.cli;
+        launchAction = action;
     }
+    // Configure only the CLI that will actually launch. This must follow the
+    // one-shot menu: the resolved default can differ from the menu selection.
+    cli = configureSelectedLaunchCli(cli, launchAction, ensureResolvedCliConfigured);
     if (active && !parsedCli.force) {
         const inboxPath = inboxPathForDrone(active.cubeId, active.droneId);
         const stateRoot = monitorStateRootForWorktree(findProjectRoot(process.cwd()));

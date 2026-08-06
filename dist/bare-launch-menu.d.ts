@@ -39,6 +39,14 @@ export interface LaunchMenuInputs {
     hasLaunchAllTargets: boolean;
 }
 /**
+ * Resolve and configure the CLI that will actually launch.
+ *
+ * This callback deliberately runs after the one-shot menu choice. A bare
+ * launch may resolve one default CLI first and then launch a different
+ * installed CLI for this invocation; only the final CLI may be self-healed.
+ */
+export declare function configureSelectedLaunchCli(defaultCli: BorgCli, action: LaunchMenuAction | undefined, configure: (cli: BorgCli) => void): BorgCli;
+/**
  * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY. Any explicit
  * subcommand/flag, or a non-TTY (piped/scripted/CI) invocation, falls straight
  * through to the existing default launch — no menu, no behavior change.

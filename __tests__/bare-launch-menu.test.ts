@@ -10,6 +10,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildLaunchMenuOptions,
+  configureSelectedLaunchCli,
   explicitCliLaunchHint,
   resolveLaunchMenuChoice,
   runBareLaunchMenu,
@@ -177,6 +178,20 @@ describe('gh#853 — resolveLaunchMenuChoice (selection → action)', () => {
   it('out-of-range / non-numeric → not ok (caller re-prompts)', () => {
     expect(resolveLaunchMenuChoice(options, '9').ok).toBe(false);
     expect(resolveLaunchMenuChoice(options, 'x').ok).toBe(false);
+  });
+});
+
+describe('gh#326 — launch self-heal follows the final menu selection', () => {
+  it('configures only the one-shot CLI when default Claude launches Codex', () => {
+    const configured: string[] = [];
+    const cli = configureSelectedLaunchCli(
+      'claude',
+      { kind: 'launch', cli: 'codex' },
+      (selected) => configured.push(selected),
+    );
+
+    expect(cli).toBe('codex');
+    expect(configured).toEqual(['codex']);
   });
 });
 

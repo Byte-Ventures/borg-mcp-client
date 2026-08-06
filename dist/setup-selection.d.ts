@@ -15,6 +15,8 @@ export type SetupAgentSelection = {
 };
 /** Build the first-run choices from the CLIs that are actually installed. */
 export declare function setupAgentChoices(detected: readonly BorgCli[], alreadyConfigured?: ReadonlySet<BorgCli>): SetupAgentChoice[];
+/** The agent names whose newly selected setup needs a restart notice. */
+export declare function setupRestartInstruction(selected: readonly BorgCli[]): string;
 /**
  * Keep only detected agents and return them in detection order. The selected
  * set is invocation-local; it is deliberately never persisted.

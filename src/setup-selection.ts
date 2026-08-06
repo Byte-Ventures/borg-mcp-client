@@ -33,6 +33,12 @@ export function setupAgentChoices(
   }));
 }
 
+/** The agent names whose newly selected setup needs a restart notice. */
+export function setupRestartInstruction(selected: readonly BorgCli[]): string {
+  const labels = selected.map((cli) => CLI_TITLES[cli]);
+  return `🔄 Restart ${labels.join(' / ')} (or open a new session) for the changes to take effect.`;
+}
+
 /**
  * Keep only detected agents and return them in detection order. The selected
  * set is invocation-local; it is deliberately never persisted.
