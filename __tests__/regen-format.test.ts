@@ -192,6 +192,22 @@ describe('getDronePlaybook', () => {
     expect(playbook).not.toContain('drone-1');
   });
 
+  it('sets concise non-human-seat console and log discipline while preserving evidence boundaries (gh#341)', () => {
+    const playbook = getDronePlaybook();
+
+    expect(playbook).toContain('**Communication discipline for non-human seats:**');
+    expect(playbook).toContain('write nothing except harness-required output');
+    expect(playbook).toContain('only when blocked and needing unblocking');
+    expect(playbook).toContain('a post must change what another seat does');
+    expect(playbook).toContain('lifecycle signal + SHA and nothing else');
+    expect(playbook).toContain('defect + location/evidence');
+    expect(playbook).toContain('correction to your live claim');
+    expect(playbook).toContain('genuine blocking question');
+    expect(playbook).toContain('method or reasoning');
+    expect(playbook).toContain('state what a verdict did not exercise and any unavailable control');
+    expect(playbook).toContain('The human seat is excluded');
+  });
+
   it('documents the directed-default override discipline (gh#16 / gh#675)', () => {
     const playbook = getDronePlaybook();
     // to:[author] rule — a waited-on recipient must be WOKEN, not left unaware
