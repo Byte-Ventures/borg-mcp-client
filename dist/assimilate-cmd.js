@@ -277,13 +277,10 @@ function diagnoseSessionTermination(deps, apiUrl, outcome, mode = 'assimilate') 
 export async function runAssimilate(args, deps) {
     const mode = args.mode ?? 'assimilate';
     // ----- Input validation (before any subprocess work) -----
-    if (args.role !== undefined) {
-        const v = validateName(args.role);
-        if (!v.ok) {
-            deps.stderr(v.error + '\n');
-            return 1;
-        }
-    }
+    // A role is a lookup key, not a path component. matchRoleByName() below
+    // applies the shared roleSlug() normalization, so displayed names such as
+    // "Builder" and "Code Reviewer" must reach that resolver. Keep the strict
+    // identifier validator for worktree names, which do become path components.
     if (args.flags.worktree !== undefined) {
         const v = validateName(args.flags.worktree);
         if (!v.ok) {

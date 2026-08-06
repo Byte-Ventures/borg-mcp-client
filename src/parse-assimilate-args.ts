@@ -115,7 +115,13 @@ export function parseAssimilateArgs(rawArgs: string[]): ParseResult {
         if (enrollmentRequested) {
           return { ok: false, error: ENROLLMENT_POSITIONAL_INPUT_ERROR };
         }
-        return { ok: false, error: `unexpected extra argument: ${arg} (already have role "${role}")` };
+        return {
+          ok: false,
+          error:
+            `unexpected extra argument: ${arg} (already have role "${role}"). ` +
+            'Multi-word role names must be quoted (for example, `borg assimilate "Code Reviewer"`) ' +
+            'or written with hyphens.',
+        };
       }
       if (enrollmentRequested && !validateName(arg).ok) {
         return { ok: false, error: ENROLLMENT_POSITIONAL_INPUT_ERROR };
