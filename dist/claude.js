@@ -42,7 +42,7 @@ import { parseRecoverEnrollmentArgs, runRecoverEnrollment } from './recover-enro
 import { runLaunchAll } from './launch-all-cmd.js';
 import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
 import { discoverDroneCandidates } from './launch-all-discovery.js';
-import { explicitCliLaunchHint, runBareLaunchMenu, shouldResolveExplicitCliLaunchHintTargets, shouldShowLaunchMenu, } from './bare-launch-menu.js';
+import { configureSelectedLaunchCli, explicitCliLaunchHint, runBareLaunchMenu, shouldResolveExplicitCliLaunchHintTargets, shouldShowLaunchMenu, } from './bare-launch-menu.js';
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
@@ -54,6 +54,7 @@ import { buildAgentKickoffPrompt, buildKickoffWakePathClause, recordCodexWakeTar
 import { codexBorgSessionConfigArgs } from './launch-gate.js';
 import { addCodexSessionStartHook, addCodexUserPromptSubmitHook, addProjectSessionStartHook, addUserPromptSubmitHook, removeSessionStartHook, } from './config-utils.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
+import { configureResolvedCli } from './resolved-cli-config.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff, openCodeLaunchBinding } from './opencode-drone.js';
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
@@ -242,7 +243,7 @@ async function main() {
         }
     };
     let cli = await resolveCliChoice(parsedCli.cli, defaultCliChoiceDeps(prompt, () => process.stdin.isTTY === true));
-    ensureDetectedCliConfigured();
+    let launchAction;
     // Active cube for this directory — needed for the launch menu's option-3
     // availability, the terminal title, and the inbox-Monitor clause below.
     const active = await getActiveCube();
@@ -293,8 +294,11 @@ async function main() {
         // option 1 → configured default; option 2 → the other agent, ONE-SHOT
         // (we deliberately do NOT call setProjectCliPreference — the saved
         // preference is changed only via `borg --cli <agent>`).
-        cli = action.cli;
+        launchAction = action;
     }
+    // Configure only the CLI that will actually launch. This must follow the
+    // one-shot menu: the resolved default can differ from the menu selection.
+    cli = configureSelectedLaunchCli(cli, launchAction, ensureResolvedCliConfigured);
     if (active && !parsedCli.force) {
         const inboxPath = inboxPathForDrone(active.cubeId, active.droneId);
         const stateRoot = monitorStateRootForWorktree(findProjectRoot(process.cwd()));
@@ -508,43 +512,26 @@ async function main() {
         process.exit(code ?? 0);
     });
 }
-function ensureDetectedCliConfigured() {
-    const found = detectCliAvailability();
-    if (found.claude) {
-        try {
-            ensureCliMcpConfigured('claude');
-            // gh#673 P2 (WI-1): the orientation hook lives PROJECT-LOCAL in
-            // <root>/.claude/settings.local.json — ensured on every bare
-            // `borg` launch so pre-P2 worktrees self-heal. The legacy GLOBAL
-            // hook is then removed: safe because this ensure precedes every
-            // borg-launched agent spawn (other projects get their local hook
-            // at their own next launch/assimilate), and P1's BORG_SESSION
-            // gate already no-ops the global hook in non-borg sessions.
-            addProjectSessionStartHook(findProjectRoot(process.cwd()));
-            removeSessionStartHook();
-            addUserPromptSubmitHook();
-        }
-        catch (err) {
-            console.error(`${consolePrefix()}${chalk.yellow(`warning: Claude Code integration check failed: ${err?.message ?? err}`)}`);
-        }
+function ensureResolvedCliConfigured(cli) {
+    const label = cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex' : 'OpenCode';
+    try {
+        configureResolvedCli(cli, {
+            ensureMcp: ensureCliMcpConfigured,
+            addClaudeProjectSessionStartHook: () => {
+                // gh#673 P2 (WI-1): the orientation hook lives PROJECT-LOCAL in
+                // <root>/.claude/settings.local.json — ensured on every bare
+                // `borg` launch so pre-P2 worktrees self-heal. The legacy GLOBAL
+                // hook is then removed after the local hook is in place.
+                addProjectSessionStartHook(findProjectRoot(process.cwd()));
+            },
+            removeClaudeGlobalSessionStartHook: removeSessionStartHook,
+            addClaudeUserPromptSubmitHook: addUserPromptSubmitHook,
+            addCodexSessionStartHook,
+            addCodexUserPromptSubmitHook,
+        });
     }
-    if (found.codex) {
-        try {
-            ensureCliMcpConfigured('codex');
-            addCodexSessionStartHook();
-            addCodexUserPromptSubmitHook();
-        }
-        catch (err) {
-            console.error(`${consolePrefix()}${chalk.yellow(`warning: Codex integration check failed: ${err?.message ?? err}`)}`);
-        }
-    }
-    if (found.opencode) {
-        try {
-            ensureCliMcpConfigured('opencode');
-        }
-        catch (err) {
-            console.error(`${consolePrefix()}${chalk.yellow(`warning: OpenCode integration check failed: ${err?.message ?? err}`)}`);
-        }
+    catch (err) {
+        console.error(`${consolePrefix()}${chalk.yellow(`warning: ${label} integration check failed: ${err?.message ?? err}`)}`);
     }
 }
 function isEntryInvocation() {

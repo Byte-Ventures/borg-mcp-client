@@ -1,3 +1,15 @@
+/**
+ * Resolve and configure the CLI that will actually launch.
+ *
+ * This callback deliberately runs after the one-shot menu choice. A bare
+ * launch may resolve one default CLI first and then launch a different
+ * installed CLI for this invocation; only the final CLI may be self-healed.
+ */
+export function configureSelectedLaunchCli(defaultCli, action, configure) {
+    const cli = action?.kind === 'launch' ? action.cli : defaultCli;
+    configure(cli);
+    return cli;
+}
 const PRETTY = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
 /**
  * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY. Any explicit
