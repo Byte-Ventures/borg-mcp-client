@@ -5,6 +5,6 @@
  * and include a credential under a parameter name we do not know in advance.
  */
 export declare function redactCloneSecrets(value: string): string;
-/** Detect URL userinfo, including malformed Git remote forms. */
+/** Detect URL userinfo and credential-named query parameters. */
 export declare function hasCloneCredentials(value: string): boolean;
 //# sourceMappingURL=clone-security.d.ts.map

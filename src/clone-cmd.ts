@@ -156,9 +156,6 @@ export function validateCloneRepositoryUrl(value: string): { ok: true } | { ok: 
       if (parsed.pathname.length === 0 || parsed.pathname === '/') {
         return { ok: false, error: 'repository URL must include a repository path' };
       }
-      if (parsed.search.length > 0 || parsed.hash.length > 0) {
-        return { ok: false, error: 'repository URLs must not contain query or fragment data' };
-      }
       return { ok: true };
     } catch {
       return { ok: false, error: 'repository URL is not valid' };
@@ -171,13 +168,7 @@ export function validateCloneRepositoryUrl(value: string): { ok: true } | { ok: 
 }
 
 function remoteHasCredentials(value: string): boolean {
-  if (hasUrlCredentials(value)) return true;
-  try {
-    const parsed = new URL(value);
-    return parsed.search.length > 0 || parsed.hash.length > 0;
-  } catch {
-    return hasCloneCredentials(value);
-  }
+  return hasUrlCredentials(value);
 }
 
 function trimGitSuffix(value: string): string {

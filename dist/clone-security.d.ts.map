@@ -1,1 +1,1 @@
-{"version":3,"file":"clone-security.d.ts","sourceRoot":"","sources":["../src/clone-security.ts"],"names":[],"mappings":"AAAA,2EAA2E;AAW3E;;;;GAIG;AACH,wBAAgB,kBAAkB,CAAC,KAAK,EAAE,MAAM,GAAG,MAAM,CAYxD;AAED,iEAAiE;AACjE,wBAAgB,mBAAmB,CAAC,KAAK,EAAE,MAAM,GAAG,OAAO,CAc1D"}
+{"version":3,"file":"clone-security.d.ts","sourceRoot":"","sources":["../src/clone-security.ts"],"names":[],"mappings":"AAAA,2EAA2E;AAY3E;;;;GAIG;AACH,wBAAgB,kBAAkB,CAAC,KAAK,EAAE,MAAM,GAAG,MAAM,CAYxD;AAED,iEAAiE;AACjE,wBAAgB,mBAAmB,CAAC,KAAK,EAAE,MAAM,GAAG,OAAO,CAc1D"}

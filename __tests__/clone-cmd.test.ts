@@ -75,6 +75,41 @@ describe('borg clone flow', () => {
     expect(validateCloneRepositoryUrl('git@github.com:example/project.git')).toEqual({ ok: true });
     expect(validateCloneRepositoryUrl('https://token@example.com/example/project.git')).toMatchObject({ ok: false });
     expect(validateCloneRepositoryUrl('https://example.com/example/project.git?access_token=secret')).toMatchObject({ ok: false });
+    expect(validateCloneRepositoryUrl('https://example.com/example/project.git?foo=1')).toEqual({ ok: true });
+    expect(validateCloneRepositoryUrl('https://example.com/example/project.git#fragment')).toEqual({ ok: true });
+  });
+
+  it('passes ordinary query data to Git without rewriting the clone argument', async () => {
+    const root = makeRoot();
+    const repositoryUrl = 'https://example.com/example/project.git?foo=1';
+    const destination = join(root, 'checkout');
+    const calls: string[][] = [];
+    const runSync = vi.fn((cmd: string, args: string[]): GitRunResult => {
+      calls.push([cmd, ...args]);
+      return { status: 1, stdout: '', stderr: '' };
+    });
+
+    expect(await runClone({
+      repositoryUrl,
+      flags: { destination, noLaunch: true },
+    }, { ...realRunner([], [], root), runSync })).toBe(1);
+    expect(calls).toContainEqual(['git', 'clone', repositoryUrl, destination]);
+  });
+
+  it('does not treat ordinary query data in an existing origin as a credential', async () => {
+    const root = makeRoot();
+    const destination = makeSource(root, 'checkout');
+    const repositoryUrl = 'https://example.com/example/project.git?foo=1';
+    git(['remote', 'add', 'origin', repositoryUrl], destination);
+    const output: string[] = [];
+    const errors: string[] = [];
+
+    expect(await runClone({
+      repositoryUrl,
+      flags: { destination, name: 'worker', noLaunch: true },
+    }, realRunner(output, errors, root))).toBe(0);
+    expect(output.join('')).toContain('remote matches');
+    expect(errors).toEqual([]);
   });
 
   it('fresh-clones, creates a sibling worktree, and leaves it ready with --no-launch', async () => {
