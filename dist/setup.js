@@ -20,6 +20,7 @@ import { initDebugFromArgv } from './debug.js';
 import { defaultApprovalIo, setupApprovalWarnings } from './cli-tool-approval.js';
 import { offerFirstRunServerInstall } from './first-run-server.js';
 import { setupNextStepsText } from './cli-help.js';
+import { resolveSetupAgentSelection, setupAgentChoices } from './setup-selection.js';
 /**
  * Main setup wizard
  */
@@ -58,22 +59,18 @@ async function main() {
         console.error(chalk.gray('  OpenCode: https://opencode.ai\n'));
         process.exit(1);
     }
-    // Resolve the separately published local server before setup writes agent
-    // configuration. Decline/non-interactive/failure paths therefore leave no
-    // partial setup state behind.
-    console.log(chalk.blue('◼ Local Server'));
-    const serverInstall = await offerFirstRunServerInstall(undefined, undefined, { initializeServer: true });
-    if (serverInstall.kind !== 'present' && serverInstall.kind !== 'installed') {
-        process.exit(serverInstall.kind === 'declined' ? 0 : 1);
-    }
-    console.log('');
-    console.log('◼ Local server initialized');
-    // Step 1: Configure every detected agent CLI
+    // Step 1: Choose which detected agent CLIs to configure. The choice is
+    // first-run/invocation-local; it is never persisted as an opt-out.
     console.log(chalk.blue('◼ Agent CLI Integration'));
     const yes = parseYesFlag(process.argv);
     const claudeDetected = claudeCliPath !== null;
     const codexDetected = codexCliPath !== null;
     const opencodeDetected = opencodeCliPath !== null;
+    const detectedClis = [
+        ...(claudeDetected ? ['claude'] : []),
+        ...(codexDetected ? ['codex'] : []),
+        ...(opencodeDetected ? ['opencode'] : []),
+    ];
     const claudeMcpConfigured = isMcpServerConfigured();
     const codexMcpConfigured = isCodexMcpServerConfigured();
     const opencodeMcpConfigured = isOpenCodeMcpServerConfigured();
@@ -81,19 +78,59 @@ async function main() {
     const claudeUpsHookPending = claudeDetected && !isUserPromptSubmitHookRegistered();
     const codexSessionHookPending = codexDetected && !isCodexSessionStartHookRegistered();
     const codexUpsHookPending = codexDetected && !isCodexUserPromptSubmitHookRegistered();
-    const claudeHookPending = claudeLegacyHookPending || claudeUpsHookPending;
-    const codexHookPending = codexSessionHookPending || codexUpsHookPending;
-    if (setupMutationPending({
+    const allDetectedMutationPending = setupMutationPending({
         claude: claudeDetected,
         codex: codexDetected,
         opencode: opencodeDetected,
         claudeMcpConfigured,
         codexMcpConfigured,
         opencodeMcpConfigured,
+        claudeHookPending: claudeLegacyHookPending || claudeUpsHookPending,
+        codexHookPending: codexSessionHookPending || codexUpsHookPending,
+    });
+    let selectedClis = detectedClis;
+    if (allDetectedMutationPending && !yes && process.stdin.isTTY === true) {
+        let cancelled = false;
+        const answer = await prompts({
+            type: 'multiselect',
+            name: 'selected',
+            message: 'Which detected agent CLIs should Borg configure?',
+            hint: 'Space toggles selection; Enter accepts the checked agents',
+            choices: setupAgentChoices(detectedClis),
+            instructions: false,
+        }, {
+            onCancel: () => {
+                cancelled = true;
+            },
+        });
+        const selection = resolveSetupAgentSelection(detectedClis, answer.selected, cancelled);
+        if (selection.kind === 'cancelled') {
+            console.log(chalk.yellow('\n◼ Setup cancelled — no changes made.\n'));
+            return;
+        }
+        if (selection.kind === 'empty') {
+            console.log(chalk.yellow('\n◼ No agent CLIs selected — no agent configuration changes made.\n'));
+            return;
+        }
+        selectedClis = selection.agents;
+    }
+    const selected = new Set(selectedClis);
+    const claudeSelected = selected.has('claude');
+    const codexSelected = selected.has('codex');
+    const opencodeSelected = selected.has('opencode');
+    const claudeHookPending = claudeSelected && (claudeLegacyHookPending || claudeUpsHookPending);
+    const codexHookPending = codexSelected && (codexSessionHookPending || codexUpsHookPending);
+    if (setupMutationPending({
+        claude: claudeSelected,
+        codex: codexSelected,
+        opencode: opencodeSelected,
+        claudeMcpConfigured,
+        codexMcpConfigured,
+        opencodeMcpConfigured,
         claudeHookPending,
         codexHookPending,
     })) {
-        console.log(formatConfigMutationDisclosure(configMutationTargets({ claude: claudeDetected, codex: codexDetected, opencode: opencodeDetected })));
+        console.log(formatConfigMutationDisclosure(configMutationTargets({ claude: claudeSelected, codex: codexSelected, opencode: opencodeSelected })));
         const mutationDecision = await confirmConfigMutation({
             isTTY: process.stdin.isTTY === true,
             yes,
@@ -113,7 +150,18 @@ async function main() {
         }
     }
     console.log('');
-    if (claudeCliPath) {
+    // Resolve the separately published local server only after the complete
+    // agent selection and the existing single config-mutation confirmation.
+    // Esc/zero-selection/decline therefore leave both agent and server setup
+    // untouched.
+    console.log(chalk.blue('◼ Local Server'));
+    const serverInstall = await offerFirstRunServerInstall(undefined, undefined, { initializeServer: true });
+    if (serverInstall.kind !== 'present' && serverInstall.kind !== 'installed') {
+        process.exit(serverInstall.kind === 'declined' ? 0 : 1);
+    }
+    console.log('');
+    console.log('◼ Local server initialized');
+    if (claudeSelected) {
         try {
             ensureCliMcpConfigured('claude');
             if (claudeLegacyHookPending)
@@ -127,7 +175,7 @@ async function main() {
             process.exit(1);
         }
     }
-    if (codexCliPath) {
+    if (codexSelected) {
         try {
             ensureCliMcpConfigured('codex');
             if (codexSessionHookPending)
@@ -141,7 +189,7 @@ async function main() {
             process.exit(1);
         }
     }
-    if (opencodeCliPath) {
+    if (opencodeSelected) {
         try {
             ensureCliMcpConfigured('opencode');
             console.log(chalk.green('◼ borg configured for OpenCode'));
@@ -157,8 +205,8 @@ async function main() {
         codexArgs: [],
     });
     for (const warning of await setupApprovalWarnings(approvalIo, {
-        codex: codexDetected,
-        opencode: opencodeDetected,
+        codex: codexSelected,
+        opencode: opencodeSelected,
     })) {
         console.log(chalk.yellow(`warning: ${warning}`));
     }
