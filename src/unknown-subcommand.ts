@@ -16,6 +16,7 @@ export const KNOWN_SUBCOMMANDS = [
   'setup',
   'update',
   'assimilate',
+  'clone',
   'reset-local-seat',
   'recover-enrollment',
   'spawn',

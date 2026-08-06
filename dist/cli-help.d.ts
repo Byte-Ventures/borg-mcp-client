@@ -42,4 +42,5 @@ export declare function resetLocalSeatHelpText(version: string): string;
  * top-level `borg --help`.
  */
 export declare function setupHelpText(version: string): string;
+export declare function cloneHelpText(version: string): string;
 //# sourceMappingURL=cli-help.d.ts.map

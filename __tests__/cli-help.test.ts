@@ -11,6 +11,7 @@ import { NEW_CUBE_TEMPLATE_PRESENTATIONS } from 'borgmcp-shared/templates';
 import {
   assimilateHelpText,
   cleanupHelpText,
+  cloneHelpText,
   clientSubcommandHelpText,
   cubeInitHelpText,
   isHelpFlag,
@@ -58,6 +59,10 @@ describe('gh#611 — top-level borg --help', () => {
     // The removed Cloud device-code flow must not resurface in help.
     expect(t).not.toContain('--no-browser');
   });
+
+  it('surfaces the guided clone flow', () => {
+    expect(topLevelHelpText('9.9.9')).toContain('borg clone <repo-url>');
+  });
 });
 
 describe('client subcommand help', () => {
@@ -68,6 +73,7 @@ describe('client subcommand help', () => {
     ['recover-enrollment', recoverEnrollmentHelpText],
     ['sync', syncHelpText],
     ['cleanup', cleanupHelpText],
+    ['clone', cloneHelpText],
     ['launch-all', launchAllHelpText],
   ] as const)('routes borg %s --help before command parsing', (command, render) => {
     expect(clientSubcommandHelpText(command, ['--help'], '9.9.9')).toBe(render('9.9.9'));
@@ -81,6 +87,16 @@ describe('client subcommand help', () => {
       '--mode', '--only', '--dry-run', '--cli', '--no-attach', '--yes', '--force',
       '--launch-delay', '--help',
     ]) expect(text).toContain(flag);
+  });
+
+  it('documents every accepted clone option and its safe paths', () => {
+    const text = cloneHelpText('9.9.9');
+    for (const flag of ['--destination', '--name', '--branch', '--no-launch', '--help']) {
+      expect(text).toContain(flag);
+    }
+    expect(text).toMatch(/repeatable/i);
+    expect(text).toMatch(/remote mismatch/i);
+    expect(text).toMatch(/roll back/i);
   });
 
   it('describes journal-aware enrollment recovery and its exact scope', () => {

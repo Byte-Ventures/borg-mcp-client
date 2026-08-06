@@ -35,6 +35,8 @@ import { parseCleanupArgs, runCleanup } from './cleanup-cmd.js';
 import { parseAssimilateArgs } from './parse-assimilate-args.js';
 import { runAssimilate } from './assimilate-cmd.js';
 import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
+import { parseCloneArgs } from './parse-clone-args.js';
+import { runClone } from './clone-cmd.js';
 import { parseResetLocalSeatArgs, runResetLocalSeat, buildDefaultResetLocalSeatDeps, } from './reset-local-seat-cmd.js';
 import { parseLaunchAllArgs } from './parse-launch-all-args.js';
 import { unknownSubcommand } from './unknown-subcommand.js';
@@ -143,6 +145,16 @@ async function main() {
     }
     if (process.argv[2] === 'assimilate') {
         const code = await runAssimilateEntry(process.argv.slice(3));
+        process.exit(code);
+    }
+    if (process.argv[2] === 'clone') {
+        const parsed = parseCloneArgs(process.argv.slice(3));
+        if (!parsed.ok) {
+            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg clone: ${parsed.error}\n`));
+            process.stderr.write(`Run \`borg clone --help\` for usage.\n`);
+            process.exit(1);
+        }
+        const code = await runClone(parsed.args);
         process.exit(code);
     }
     if (process.argv[2] === 'reset-local-seat') {

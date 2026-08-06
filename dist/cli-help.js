@@ -52,7 +52,7 @@ export function clientSubcommandHelpText(command, args, version) {
         case 'sync': return syncHelpText(version);
         case 'cleanup': return cleanupHelpText(version);
         case 'launch-all': return launchAllHelpText(version);
-        default: return null;
+        default: return command === 'clone' ? cloneHelpText(version) : null;
     }
 }
 export function setupNextStepsText() {
@@ -78,7 +78,7 @@ export function topLevelHelpText(version) {
         `  borg update              Update the client and installed local server together\n` +
         `  borg assimilate [role]   Join or create a cube\n` +
         `  borg assimilate --host <host>   Join or create on an explicit server\n` +
-        `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
+        `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n  borg clone <repo-url>               Clone a repository and prepare a sibling worktree\n` +
         `  borg server cube init    Initialize this repository's cube without creating a drone\n` +
         `  borg reset-local-seat    Clear ONLY this worktree's saved local seat (offline; after a rejection)\n` +
         `  borg recover-enrollment  Restore or clear ONLY one failed server enrollment transaction\n` +
@@ -217,5 +217,19 @@ export function setupHelpText(version) {
         `Usage:\n` +
         `  borg setup               Run the interactive setup wizard\n` +
         `  borg setup --help        Show this help\n`);
+}
+export function cloneHelpText(version) {
+    return (`borg clone (borgmcp ${version}) — clone a repository and prepare a sibling worktree\n\n` +
+        `Usage:\n` +
+        `  borg clone <repo-url> [options]\n\n` +
+        `Options:\n` +
+        `  --destination <path>  Checkout location (an empty current directory is used by default)\n` +
+        `  --name <name>         Requested sibling worktree name; collisions get a reported suffix\n` +
+        `  --branch <branch>     Branch for the sibling worktree (default: wt-<worktree-name>)\n` +
+        `  --no-launch           Leave the ready worktree in place and print the next command\n` +
+        `  --help, -h             Show this help\n\n` +
+        `The operation is repeatable: an existing checkout is reused only when its origin matches.\n` +
+        `A remote mismatch fails without changing that checkout. Clone failures roll back only\n` +
+        `the newly created state; an existing checkout is preserved.\n`);
 }
 //# sourceMappingURL=cli-help.js.map
