@@ -411,6 +411,32 @@ describe('borg clone flow', () => {
     expect(errors.join('')).not.toContain(secret);
   });
 
+  it('refuses credential-shaped branches before Git argv validation', async () => {
+    const root = makeRoot();
+    const secret = 'branch-secret-317';
+    const branches = [
+      `https://alice:${secret}@example.com/org/repo.git`,
+      `oauth2:${secret}@host:org/repo.git`,
+      `https://example.com/org/repo.git?access_token=${secret}`,
+    ];
+
+    for (const branch of branches) {
+      const errors: string[] = [];
+      const calls: string[][] = [];
+      const runSync = vi.fn((cmd: string, args: string[]): GitRunResult => {
+        calls.push([cmd, ...args]);
+        return { status: 1, stdout: '', stderr: '' };
+      });
+      expect(await runClone({
+        repositoryUrl: join(root, 'source'),
+        flags: { branch, noLaunch: true },
+      }, { ...realRunner([], errors, root), runSync })).toBe(1);
+      expect(calls.some((call) => call.includes('check-ref-format'))).toBe(false);
+      expect(errors.join('')).toContain('invalid branch name');
+      expect(errors.join('')).not.toContain(secret);
+    }
+  });
+
   it('fails closed on an unparseable credential-shaped existing origin', async () => {
     const root = makeRoot();
     const destination = makeSource(root, 'checkout');

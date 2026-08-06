@@ -250,7 +250,7 @@ function branchExists(deps, repository, branch) {
     return deps.runSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], repository).status === 0;
 }
 function checkBranchName(deps, branch, cwd) {
-    if (branch.length === 0 || branch.startsWith('-') || CONTROL_RE.test(branch)) {
+    if (branch.length === 0 || branch.startsWith('-') || CONTROL_RE.test(branch) || hasCloneCredentials(branch)) {
         return `invalid branch name "${branch}"`;
     }
     const result = deps.runSync('git', ['check-ref-format', '--branch', branch], cwd);

@@ -281,7 +281,7 @@ function branchExists(deps: Required<CloneDeps>, repository: string, branch: str
 }
 
 function checkBranchName(deps: Required<CloneDeps>, branch: string, cwd: string): string | null {
-  if (branch.length === 0 || branch.startsWith('-') || CONTROL_RE.test(branch)) {
+  if (branch.length === 0 || branch.startsWith('-') || CONTROL_RE.test(branch) || hasCloneCredentials(branch)) {
     return `invalid branch name "${branch}"`;
   }
   const result = deps.runSync('git', ['check-ref-format', '--branch', branch], cwd);

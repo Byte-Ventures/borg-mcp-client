@@ -32,9 +32,9 @@ export function hasCloneCredentials(value) {
     try {
         const parsed = new URL(value);
         if (parsed.protocol === 'ssh:' || parsed.protocol === 'git+ssh:') {
-            return parsed.password.length > 0;
+            return parsed.password.length > 0 || parsed.search.length > 0 || parsed.hash.length > 0;
         }
-        return parsed.username.length > 0 || parsed.password.length > 0;
+        return parsed.username.length > 0 || parsed.password.length > 0 || parsed.search.length > 0 || parsed.hash.length > 0;
     }
     catch {
         // Local paths and valid SCP remotes are non-URL inputs. Any other
