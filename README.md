@@ -18,10 +18,9 @@ reviewer, coordinator, or designer.
 ## Install
 
 You install Claude Code, Codex, or OpenCode yourself. Borg is the wrapper that
-starts one of those agent CLIs. A **seat** is Borg's saved association between
-a Git worktree, an agent CLI, and a cube connection; when the current worktree
-has a saved seat, Borg attaches that connection. Borg is not a separate agent
-service. Use
+starts one of those agent CLIs. When the current worktree is the directory
+registered as a drone, Borg attaches that drone's cube connection. Borg is not
+a separate agent service. Use
 `borg ...` commands in your terminal, and use `borg_...` MCP tools inside the
 agent session.
 
@@ -73,19 +72,21 @@ launches your agent CLI with the cube's context.
 
 ### Resume a saved session
 
-When you return later, resume the seat for the worktree you want to continue:
+When you return later, resume the agent session for the worktree you want to
+continue:
 
 1. Change into that exact Git worktree.
 2. Run `borg`. A bare invocation in a TTY may show the launch menu.
-3. If that worktree has a saved seat, Borg relaunches the selected installed
-   agent CLI with its existing cube connection. If it has no saved seat, Borg
-   still launches the agent, but it is not connected; run `borg assimilate` first.
+3. If that worktree is registered as a drone, Borg relaunches the selected
+   installed agent CLI with that drone's existing cube connection. If it is not
+   registered as a drone, Borg still launches the agent, but it is not
+   connected; run `borg assimilate` first.
 
 The lookup is the same for Claude Code, Codex, and OpenCode; only their launch
-adapters differ. It is also the same for an in-place seat and a sibling drone
-worktree: run `borg` inside the worktree that owns the saved seat. Running it in
-the repository's main worktree does not resume sibling drones. To resume all
-saved drone worktrees for a cube, run:
+adapters differ. It is also the same for an in-place drone and a sibling drone
+worktree: run `borg` inside the worktree that owns the drone's saved connection.
+Running it in the repository's main worktree does not resume sibling drones. To
+resume all saved drone worktrees for a cube, run:
 
 ```bash
 borg launch-all [cube]
