@@ -106,7 +106,6 @@ function withDefaults(deps: CloneDeps): Required<CloneDeps> {
   const base = { ...defaultDeps, ...deps };
   return {
     ...base,
-    runSync: (cmd, args, cwd) => base.runSync(cmd, args.map(redactCloneSecrets), cwd),
     stdout: (line) => base.stdout(redactCloneSecrets(line)),
     stderr: (line) => base.stderr(redactCloneSecrets(line)),
   };

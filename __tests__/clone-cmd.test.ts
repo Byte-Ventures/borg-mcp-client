@@ -437,6 +437,21 @@ describe('borg clone flow', () => {
     }
   });
 
+  it('passes an ordinary branch argument to Git byte-identically', async () => {
+    const root = makeRoot();
+    const calls: string[][] = [];
+    const runSync = vi.fn((cmd: string, args: string[]): GitRunResult => {
+      calls.push([cmd, ...args]);
+      return { status: 1, stdout: '', stderr: '' };
+    });
+
+    expect(await runClone({
+      repositoryUrl: join(root, 'source'),
+      flags: { branch: 'feature/reviewer', noLaunch: true },
+    }, { ...realRunner([], [], root), runSync })).toBe(1);
+    expect(calls).toEqual([['git', 'check-ref-format', '--branch', 'feature/reviewer']]);
+  });
+
   it('fails closed on an unparseable credential-shaped existing origin', async () => {
     const root = makeRoot();
     const destination = makeSource(root, 'checkout');
