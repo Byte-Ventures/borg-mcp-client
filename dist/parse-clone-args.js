@@ -12,6 +12,13 @@ function valueFor(rawArgs, index, flag) {
 function parseError(error) {
     return { ok: false, error: redactCloneSecrets(error) };
 }
+function unknownOptionName(arg) {
+    if (arg.startsWith('--')) {
+        const equals = arg.indexOf('=');
+        return equals === -1 ? arg : arg.slice(0, equals);
+    }
+    return arg.length > 2 ? arg.slice(0, 2) : arg;
+}
 /** Parse clone args without touching the filesystem or spawning Git. */
 export function parseCloneArgs(rawArgs) {
     const flags = { noLaunch: false };
@@ -37,7 +44,7 @@ export function parseCloneArgs(rawArgs) {
             continue;
         }
         if (arg.startsWith('-')) {
-            return parseError(`unknown option ${arg}; supported options are --destination, --name, --branch, and --no-launch`);
+            return parseError(`unknown option ${unknownOptionName(arg)}; supported options are --destination, --name, --branch, and --no-launch`);
         }
         if (repositoryUrl !== undefined) {
             return parseError(`unexpected extra argument: ${arg}`);

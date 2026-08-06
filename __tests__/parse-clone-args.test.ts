@@ -46,7 +46,18 @@ describe('borg clone argument parsing', () => {
     const secret = 'option-secret-317';
     const result = parseCloneArgs(['safe', `--password=${secret}`]);
 
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('unknown option --password=<redacted>') });
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('unknown option --password;') });
     expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it('does not echo values attached to arbitrary unknown options', () => {
+    expect(parseCloneArgs(['safe', '--zzz=bare-secret'])).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('unknown option --zzz;'),
+    });
+    expect(parseCloneArgs(['safe', '-pbare-secret'])).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('unknown option -p;'),
+    });
   });
 });
