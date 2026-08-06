@@ -611,9 +611,14 @@ export async function readAllProjectIdentities(): Promise<
   );
 }
 
-export async function setProjectCliPreference(cli: BorgCli): Promise<void> {
+/**
+ * Save the CLI preference for the current project, or for an explicitly named
+ * worktree. The explicit path is used when assimilate has just created a
+ * sibling worktree but the process still began in the invoking checkout.
+ */
+export async function setProjectCliPreference(cli: BorgCli, dir?: string): Promise<void> {
   const existing = (await readLaunchFile()) ?? { projects: {} };
-  existing.projects[findProjectRoot()] = { cli };
+  existing.projects[findProjectRoot(dir)] = { cli };
   await writeLaunchFile(existing);
 }
 

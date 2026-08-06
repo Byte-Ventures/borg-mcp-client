@@ -388,6 +388,8 @@ export interface AssimilateDeps {
   // on healthy hosts; degraded-path surfaces a stderr warning and
   // still launches claude (never blocks).
   probeMcpReady: () => Promise<boolean>;
+  /** Save the resolved CLI for a newly-created sibling worktree. */
+  setCliPreferenceForWorktree: (cli: BorgCli, worktree: string) => Promise<void>;
   resolveCli: (explicit?: BorgCli) => Promise<BorgCli>;
   prepareCodexRemoteLaunch: () => Promise<CodexRemoteLaunch>;
   setCodexWakeTarget: (cubeId: string, droneId: string, target: { threadId: string; socketPath: string }) => Promise<void>;
@@ -1863,6 +1865,24 @@ export async function runAssimilate(
       );
     }
   };
+
+  // CLI resolution happens before the server attach because agent_kind is part
+  // of that request. The resolver therefore saved the preference against the
+  // invoking checkout. Once a sibling exists, save the same choice under its
+  // own project key so a later --here launch in that worktree can read it.
+  if (spawnedWorktreePath) {
+    try {
+      await deps.setCliPreferenceForWorktree(cli, spawnedWorktreePath);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.stderr(
+        `Borg could not save the ${cli} preference for sibling worktree ${spawnedWorktreePath}: ${message}. ` +
+          'The worktree was removed; correct the local configuration and retry.\n',
+      );
+      rollbackWorktree();
+      return 1;
+    }
+  }
 
   try {
     deps.mkdirp(scratchRoot);

@@ -428,9 +428,14 @@ export async function readAllProjectIdentities() {
     })));
     return hydrated.flatMap(({ projectPath, cube }) => cube === null ? [] : [{ projectPath, cube }]);
 }
-export async function setProjectCliPreference(cli) {
+/**
+ * Save the CLI preference for the current project, or for an explicitly named
+ * worktree. The explicit path is used when assimilate has just created a
+ * sibling worktree but the process still began in the invoking checkout.
+ */
+export async function setProjectCliPreference(cli, dir) {
     const existing = (await readLaunchFile()) ?? { projects: {} };
-    existing.projects[findProjectRoot()] = { cli };
+    existing.projects[findProjectRoot(dir)] = { cli };
     await writeLaunchFile(existing);
 }
 export async function setCodexWakeTarget(cubeId, droneId, target) {

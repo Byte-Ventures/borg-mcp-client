@@ -214,6 +214,8 @@ export interface AssimilateDeps {
     }, serverTrustIdentity?: string) => Promise<AssimilateResult>;
     getInboxPath: (cubeId: string, droneId: string) => string;
     probeMcpReady: () => Promise<boolean>;
+    /** Save the resolved CLI for a newly-created sibling worktree. */
+    setCliPreferenceForWorktree: (cli: BorgCli, worktree: string) => Promise<void>;
     resolveCli: (explicit?: BorgCli) => Promise<BorgCli>;
     prepareCodexRemoteLaunch: () => Promise<CodexRemoteLaunch>;
     setCodexWakeTarget: (cubeId: string, droneId: string, target: {

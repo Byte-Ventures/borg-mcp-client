@@ -1290,6 +1290,22 @@ export async function runAssimilate(args, deps) {
                 `(rollback attempt failed: ${safeStderr(rm.stderr).trim() || 'unknown'})\n`);
         }
     };
+    // CLI resolution happens before the server attach because agent_kind is part
+    // of that request. The resolver therefore saved the preference against the
+    // invoking checkout. Once a sibling exists, save the same choice under its
+    // own project key so a later --here launch in that worktree can read it.
+    if (spawnedWorktreePath) {
+        try {
+            await deps.setCliPreferenceForWorktree(cli, spawnedWorktreePath);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            deps.stderr(`Borg could not save the ${cli} preference for sibling worktree ${spawnedWorktreePath}: ${message}. ` +
+                'The worktree was removed; correct the local configuration and retry.\n');
+            rollbackWorktree();
+            return 1;
+        }
+    }
     try {
         deps.mkdirp(scratchRoot);
         deps.provisionLaunchAccess?.(cli, seatWorktree, launchAccessPaths);
