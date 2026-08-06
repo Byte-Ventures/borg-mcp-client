@@ -139,6 +139,25 @@ describe('borg clone flow', () => {
     expect(readFileSync(join(destination, 'README.md'), 'utf8')).toBe('A\n');
   });
 
+  it('explains cwd-repository recovery when the requested remote mismatches', async () => {
+    const root = makeRoot();
+    const current = makeSource(root, 'current', 'current');
+    const requested = makeSource(root, 'requested', 'requested');
+    git(['remote', 'add', 'origin', current], current);
+    const output: string[] = [];
+    const errors: string[] = [];
+
+    expect(await runClone({
+      repositoryUrl: requested,
+      flags: { noLaunch: true },
+    }, realRunner(output, errors, current))).toBe(1);
+    expect(errors.join('')).toContain('used the existing repository in your current directory');
+    expect(errors.join('')).toContain('--destination');
+    expect(errors.join('')).toContain('empty directory');
+    expect(errors.join('')).toContain('left untouched');
+    expect(errors.join('')).not.toContain('inspect and repair');
+  });
+
   it.each([
     ['SSH user', 'ssh://alice@example.com:8443/Org/Repo.git', 'ssh://bob@example.com:8443/Org/Repo.git'],
     ['port', 'https://example.com:8443/Org/Repo.git', 'https://example.com/Org/Repo.git'],
@@ -270,6 +289,36 @@ describe('borg clone flow', () => {
     expect(errors.join('')).toContain('Rollback:');
   });
 
+  it('redacts a credential-bearing Git worktree diagnostic separately from clone failure', async () => {
+    const root = makeRoot();
+    const source = makeSource(root, 'source');
+    const destination = join(root, 'checkout');
+    const secret = 'worktree-secret-317';
+    const output: string[] = [];
+    const errors: string[] = [];
+    const base = realRunner(output, errors, root);
+    let rawDiagnostic = '';
+    const runSync = vi.fn((cmd: string, args: string[], cwd?: string): GitRunResult => {
+      if (cmd === 'git' && args[0] === 'worktree' && args[1] === 'add') {
+        rawDiagnostic = `fatal: redirected to https://example.com/org/repo.git?access_token=${secret}`;
+        return {
+          status: 1,
+          stdout: '',
+          stderr: rawDiagnostic,
+        };
+      }
+      return base.runSync!(cmd, args, cwd);
+    });
+
+    expect(await runClone({
+      repositoryUrl: source,
+      flags: { destination, noLaunch: true },
+    }, { ...base, runSync })).toBe(1);
+    expect(rawDiagnostic).toContain(secret);
+    expect(errors.join('')).toContain('<redacted>');
+    expect(errors.join('')).not.toContain(secret);
+  });
+
   it('removes a branch and registration left by a real failed worktree checkout', async () => {
     const root = makeRoot();
     const source = makeSource(root, 'source');
@@ -346,6 +395,38 @@ describe('borg clone flow', () => {
     expect(existsSync(join(root, 'checkout'))).toBe(false);
   });
 
+  it('redacts credential-shaped invalid names at the clone call site', async () => {
+    const root = makeRoot();
+    const secret = 'name-secret-317';
+    const errors: string[] = [];
+
+    expect(await runClone({
+      repositoryUrl: join(root, 'source'),
+      flags: {
+        name: `https://alice:${secret}@example.com/org/repo.git`,
+        noLaunch: true,
+      },
+    }, { ...realRunner([], errors, root), runSync: vi.fn(() => ({ status: 1, stdout: '', stderr: '' })) })).toBe(1);
+    expect(errors.join('')).toContain('invalid name');
+    expect(errors.join('')).not.toContain(secret);
+  });
+
+  it('fails closed on an unparseable credential-shaped existing origin', async () => {
+    const root = makeRoot();
+    const destination = makeSource(root, 'checkout');
+    const secret = 'malformed-secret-317';
+    const malformedOrigin = `oauth2:${secret}@host:org/repo.git`;
+    git(['remote', 'add', 'origin', malformedOrigin], destination);
+    const errors: string[] = [];
+
+    expect(await runClone({
+      repositoryUrl: 'https://example.com/org/repo.git',
+      flags: { destination, noLaunch: true },
+    }, realRunner([], errors, root))).toBe(1);
+    expect(errors.join('')).toContain('credential-bearing origin remote');
+    expect(errors.join('')).not.toContain(secret);
+  });
+
   it('redacts credentials from a Git-followed URL in the actual diagnostic path', async () => {
     const root = makeRoot();
     const secret = 'followed-secret-317';
@@ -395,15 +476,20 @@ describe('borg clone flow', () => {
 
     const logSecret = 'log-secret-317';
     const logErrors: string[] = [];
+    let rawLog = '';
     const logRunSync = vi.fn((cmd: string, args: string[]): GitRunResult => {
-      if (args[0] === 'clone') return { status: 1, stdout: '', stderr: `fatal: ${logSecret}` };
+      if (args[0] === 'clone') {
+        rawLog = `fatal: redirected to https://example.com/org/repo.git?access_token=${logSecret}`;
+        return { status: 1, stdout: '', stderr: rawLog };
+      }
       return { status: 1, stdout: '', stderr: '' };
     });
     await runClone({
       repositoryUrl: join(root, 'source-log'),
       flags: { destination: join(root, 'log-checkout'), noLaunch: true },
     }, { ...realRunner([], logErrors, root), runSync: logRunSync });
-    expect(logErrors.join('')).toContain(logSecret);
+    expect(rawLog).toContain(logSecret);
+    expect(logErrors.join('')).not.toContain(logSecret);
 
     const metadataSecret = 'metadata-secret-317';
     const source = makeSource(root, `source-${metadataSecret}`);

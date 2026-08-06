@@ -41,4 +41,12 @@ describe('borg clone argument parsing', () => {
     expect(result).toMatchObject({ ok: false, error: 'unexpected extra argument: https://<credentials>@example.com/org/repo.git' });
     expect(JSON.stringify(result)).not.toContain(secret);
   });
+
+  it('redacts a credential-shaped unknown option from parser diagnostics', () => {
+    const secret = 'option-secret-317';
+    const result = parseCloneArgs(['safe', `--password=${secret}`]);
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('unknown option --password=<redacted>') });
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
 });

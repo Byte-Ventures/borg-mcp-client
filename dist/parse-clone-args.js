@@ -9,6 +9,9 @@ function valueFor(rawArgs, index, flag) {
         return { error: `${flag} requires a non-empty value` };
     return { value };
 }
+function parseError(error) {
+    return { ok: false, error: redactCloneSecrets(error) };
+}
 /** Parse clone args without touching the filesystem or spawning Git. */
 export function parseCloneArgs(rawArgs) {
     const flags = { noLaunch: false };
@@ -17,7 +20,7 @@ export function parseCloneArgs(rawArgs) {
         const arg = rawArgs[i];
         if (arg === '--no-launch') {
             if (flags.noLaunch)
-                return { ok: false, error: '--no-launch was provided more than once' };
+                return parseError('--no-launch was provided more than once');
             flags.noLaunch = true;
             continue;
         }
@@ -25,27 +28,24 @@ export function parseCloneArgs(rawArgs) {
         if (valueFlag) {
             const result = valueFor(rawArgs, i, arg);
             if ('error' in result)
-                return { ok: false, error: result.error };
+                return parseError(result.error);
             i++;
             const key = arg.slice(2);
             if (flags[key] !== undefined)
-                return { ok: false, error: `${arg} was provided more than once` };
+                return parseError(`${arg} was provided more than once`);
             flags[key] = result.value;
             continue;
         }
         if (arg.startsWith('-')) {
-            return {
-                ok: false,
-                error: `unknown option ${redactCloneSecrets(arg)}; supported options are --destination, --name, --branch, and --no-launch`,
-            };
+            return parseError(`unknown option ${arg}; supported options are --destination, --name, --branch, and --no-launch`);
         }
         if (repositoryUrl !== undefined) {
-            return { ok: false, error: `unexpected extra argument: ${redactCloneSecrets(arg)}` };
+            return parseError(`unexpected extra argument: ${arg}`);
         }
         repositoryUrl = arg;
     }
     if (repositoryUrl === undefined) {
-        return { ok: false, error: 'a repository URL is required' };
+        return parseError('a repository URL is required');
     }
     return { ok: true, args: { repositoryUrl, flags } };
 }
