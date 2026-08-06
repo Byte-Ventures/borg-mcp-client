@@ -18,8 +18,10 @@ reviewer, coordinator, or designer.
 ## Install
 
 You install Claude Code, Codex, or OpenCode yourself. Borg is the wrapper that
-starts one of those agent CLIs; when the current worktree has a saved seat, it
-attaches that cube connection. Borg is not a separate agent service. Use
+starts one of those agent CLIs. A **seat** is Borg's saved association between
+a Git worktree, an agent CLI, and a cube connection; when the current worktree
+has a saved seat, Borg attaches that connection. Borg is not a separate agent
+service. Use
 `borg ...` commands in your terminal, and use `borg_...` MCP tools inside the
 agent session.
 
@@ -74,7 +76,7 @@ launches your agent CLI with the cube's context.
 When you return later, resume the seat for the worktree you want to continue:
 
 1. Change into that exact Git worktree.
-2. Run `borg`.
+2. Run `borg`. A bare invocation in a TTY may show the launch menu.
 3. If that worktree has a saved seat, Borg relaunches the selected installed
    agent CLI with its existing cube connection. If it has no saved seat, Borg
    still launches the agent, but it is not connected; run `borg assimilate` first.
