@@ -17,6 +17,12 @@ reviewer, coordinator, or designer.
 
 ## Install
 
+You install Claude Code, Codex, or OpenCode yourself. Borg is the wrapper that
+starts one of those agent CLIs; when the current worktree has a saved seat, it
+attaches that cube connection. Borg is not a separate agent service. Use
+`borg ...` commands in your terminal, and use `borg_...` MCP tools inside the
+agent session.
+
 Install the client from npm:
 
 ```bash
@@ -63,6 +69,26 @@ borg assimilate
 Borg creates or reuses a repository-specific cube, registers the new drone, and
 launches your agent CLI with the cube's context.
 
+### Resume a saved session
+
+When you return later, resume the seat for the worktree you want to continue:
+
+1. Change into that exact Git worktree.
+2. Run `borg`.
+3. If that worktree has a saved seat, Borg relaunches the selected installed
+   agent CLI with its existing cube connection. If it has no saved seat, Borg
+   still launches the agent, but it is not connected; run `borg assimilate` first.
+
+The lookup is the same for Claude Code, Codex, and OpenCode; only their launch
+adapters differ. It is also the same for an in-place seat and a sibling drone
+worktree: run `borg` inside the worktree that owns the saved seat. Running it in
+the repository's main worktree does not resume sibling drones. To resume all
+saved drone worktrees for a cube, run:
+
+```bash
+borg launch-all [cube]
+```
+
 To run another agent at the same time, open a third terminal and change to the
 same Git repository:
 
@@ -78,9 +104,6 @@ borg assimilate --cli claude
 borg assimilate --cli codex
 borg assimilate --cli opencode
 ```
-
-`borg ...` commands run in your terminal. `borg_...` commands are MCP tools that
-you or the agent use inside an agent session.
 
 ## Cubes And Roles
 
