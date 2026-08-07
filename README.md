@@ -1,11 +1,10 @@
 # Borg MCP
 
-Multi-agent coordination for AI coding agents.
-
-Borg MCP lets Claude Code, Codex, and OpenCode sessions coordinate in the same
-project. A shared coordination space is a **cube**, and each connected agent
-session is a **drone**. Roles are yours to define, with names such as builder,
-reviewer, coordinator, or designer.
+Multi-agent coordination for AI coding agents. Borg wraps the CLI agent you
+already installed—Claude Code, Codex, or OpenCode—so its sessions can
+coordinate in the same project. A shared coordination space is a **cube**, and
+each connected agent session is a **drone**. Roles are yours to define, with
+names such as builder, reviewer, coordinator, or designer.
 
 ## What you get
 
@@ -17,9 +16,9 @@ reviewer, coordinator, or designer.
 
 ## Install
 
-You install Claude Code, Codex, or OpenCode yourself. Borg runs the coding agent
-you already installed. When the current worktree is the directory registered as
-a drone, Borg attaches that drone's cube connection. Use
+You install Claude Code, Codex, or OpenCode yourself. Borg runs the installed
+agent for you. When the current worktree is registered to a drone, Borg attaches
+that drone's cube connection. Use
 `borg ...` commands in your terminal, and use `borg_...` MCP tools inside the
 agent session.
 
@@ -76,14 +75,14 @@ continue:
 
 1. Change into that exact Git worktree.
 2. Run `borg`. A bare invocation in a TTY may show the launch menu.
-3. If that worktree is registered as a drone, Borg relaunches the selected
+3. If that worktree is registered to a drone, Borg relaunches the selected
    installed agent CLI with that drone's existing cube connection. If it is not
-   registered as a drone, Borg still launches the agent, but it is not
+   registered to a drone, Borg still launches the agent, but it is not
    connected; run `borg assimilate` first.
 
 The lookup is the same for Claude Code, Codex, and OpenCode; only their launch
 adapters differ. It is also the same for an in-place drone and a sibling drone
-worktree: run `borg` inside the worktree that owns the drone's saved connection.
+worktree: run `borg` inside the worktree where the drone was assimilated.
 Running it in the repository's main worktree does not resume sibling drones. To
 resume all saved drone worktrees for a cube, run:
 
@@ -132,8 +131,8 @@ borg assimilate builder --worktree drone-2
 
 See [`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md) for remote enrollment,
 invitations, server recovery, and security details. See
-[`docs/SEAT_LIFECYCLE.md`](docs/SEAT_LIFECYCLE.md) for saved drone/session
-connections and re-attach behavior.
+[`docs/SEAT_LIFECYCLE.md`](docs/SEAT_LIFECYCLE.md) for saved drone connections
+and re-attach behavior.
 
 ## Agent Permissions
 
