@@ -17,13 +17,22 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 - Kept self-hosted `--host --enroll` preview-only while implementing the
   client-generated PENDING credential/retry tuple and capability-gated,
   repository-idempotent cube creation required for local dogfood.
-- Initially set the standalone package identity to `2.0.0`. Its immutable
-  lightweight release tag failed before packaging. The reviewed `2.0.1`
-  recovery, `2.0.2`, `2.0.3`, `2.0.4`, `2.0.5`, and `2.0.6` successors were
-  published and registry-verified. The immutable `2.0.7` workflow failed before
-  package creation or npm publication. The `2.0.8`, `2.0.9`, `2.0.10`, `2.0.11`,
-  `2.1.0`, and `2.1.1` successors were published, and `2.2.0` was subsequently published, and `2.3.0` was subsequently published, and `2.4.0` was subsequently published, and `2.4.1` was subsequently published, and `2.5.0` was subsequently published, and `2.6.0` was subsequently published, and `2.6.1` was subsequently published, and `2.7.0` was subsequently published, and `2.7.1` was subsequently published, and `2.7.2` was subsequently published, and `2.7.3` was subsequently published, and `2.8.0` was subsequently published, and `2.9.0` was subsequently published, and `2.10.0` was subsequently published, and the immutable `2.10.1` release attempt failed before artifact creation or publication. The `2.10.2`, `2.11.0`, `2.12.1`, and `2.13.0` successors were published; the immutable `2.12.0` attempt failed before artifact creation or publication and was superseded by `2.12.1`. The current release identity is `2.16.0`. Extraction and
+- Initially set the standalone package identity to `2.0.0`. Every version since
+  has either published and been registry-verified, or burned its tag without
+  publishing. **The current release identity is `2.16.1`.** Extraction and
   versioning do not authorize publication.
+
+  Spent versions — each burned an immutable tag and published nothing:
+
+  | Version | Failed at |
+  | --- | --- |
+  | `2.0.0` | lightweight release tag, before packaging |
+  | `2.0.7` | before package creation or npm publication |
+  | `2.10.1` | before artifact creation or publication |
+  | `2.12.0` | before artifact creation or publication; superseded by `2.12.1` |
+
+  Every other version in the `2.x` line published. Record spent versions here
+  when they occur; do not append a clause to this entry.
 
 ## Review Holds
 
@@ -47,6 +56,7 @@ client `borgmcp@2.10.0` line. Its annotated tag object
 `sha512-lOxIPg3WcjSBte46iTM7SAFVN6Y0b2oizOKAJ9Q1EijBdOlmsh/cQlpUIaa8F2UJPaTDFsXy3M64gpGs6XgKzA==`
 in the `borgmcp-server-0.9.0-release` registry decision. That server and its
 client line pin historical `borgmcp-shared` version `0.8.1` and remain
-immutable. Client `borgmcp@2.15.0` is published. The immutable `v2.0.7`
-attempt failed before publication and remains preserved. The current release identity and publication gate remain governed by the reviewed `v2.16.0` source, a fresh annotated tag, and
-the exact-artifact and protected-publication gates.
+immutable. The immutable `v2.0.7` attempt failed before publication and remains
+preserved. The current release identity and publication gate remain governed by
+the reviewed `v2.16.1` source, a fresh annotated tag, and the exact-artifact and
+protected-publication gates.
