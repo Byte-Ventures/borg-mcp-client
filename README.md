@@ -16,8 +16,9 @@ names such as builder, reviewer, coordinator, or designer.
 
 ## Install
 
-You install Claude Code, Codex, or OpenCode yourself. When the current worktree
-is registered to a drone, Borg attaches that drone's cube connection. Use
+You install Claude Code, Codex, or OpenCode yourself. Borg runs the installed
+agent for you. When the current worktree is registered to a drone, Borg attaches
+that drone's cube connection. Use
 `borg ...` commands in your terminal, and use `borg_...` MCP tools inside the
 agent session.
 
