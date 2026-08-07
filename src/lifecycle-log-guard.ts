@@ -32,7 +32,9 @@ const UNREADABLE_STATE = Symbol('unreadable-lifecycle-state');
 type LifecycleStateRead = LifecycleStateFile | typeof UNREADABLE_STATE;
 
 function unreadableStateError(): Error {
-  return new Error('Lifecycle log state is unreadable; refusing to overwrite it');
+  return new Error(
+    `Lifecycle log state is unreadable; refusing to overwrite it: ${STATE_FILE}`,
+  );
 }
 
 export function lifecycleSignalForMessage(message: string): LifecycleSignal | null {
@@ -65,8 +67,8 @@ async function readState(): Promise<LifecycleStateRead> {
       return parsed as LifecycleStateFile;
     }
   } catch (err: any) {
-    if (err?.code !== 'ENOENT') throw err;
-    return { entries: {} };
+    if (err?.code === 'ENOENT') return { entries: {} };
+    return UNREADABLE_STATE;
   }
   return UNREADABLE_STATE;
 }

@@ -5,7 +5,7 @@ const STATE_FILE = join(borgConfigRoot(), 'lifecycle-log-state.json');
 const ARRIVAL_DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 const UNREADABLE_STATE = Symbol('unreadable-lifecycle-state');
 function unreadableStateError() {
-    return new Error('Lifecycle log state is unreadable; refusing to overwrite it');
+    return new Error(`Lifecycle log state is unreadable; refusing to overwrite it: ${STATE_FILE}`);
 }
 export function lifecycleSignalForMessage(message) {
     if (message.startsWith('ARRIVAL: '))
@@ -33,9 +33,9 @@ async function readState() {
         }
     }
     catch (err) {
-        if (err?.code !== 'ENOENT')
-            throw err;
-        return { entries: {} };
+        if (err?.code === 'ENOENT')
+            return { entries: {} };
+        return UNREADABLE_STATE;
     }
     return UNREADABLE_STATE;
 }

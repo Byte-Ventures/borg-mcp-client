@@ -20,17 +20,21 @@ describe('lifecycle-log state persistence', () => {
     vi.resetModules();
   });
 
-  it('refuses to overwrite a present-but-unreadable state file', async () => {
+  it.each([
+    ['malformed JSON', '{"entries": ]\n'],
+    ['valid JSON with the wrong shape', '{"entries": []}\n'],
+  ])('refuses to overwrite %s', async (_label, raw) => {
     const { recordLifecycleLog } = await import('../src/lifecycle-log-guard.js');
     const statePath = join(fixture, '.config', 'borgmcp', 'lifecycle-log-state.json');
-    const raw = '{"entries": []}\n';
     mkdirSync(dirname(statePath), { recursive: true });
     writeFileSync(statePath, raw);
 
     await expect(recordLifecycleLog(
       { cubeId: 'cube', droneId: 'drone' },
       'ARRIVAL: drone online',
-    )).rejects.toThrow(/unreadable/i);
+    )).rejects.toThrow(
+      `Lifecycle log state is unreadable; refusing to overwrite it: ${statePath}`,
+    );
     expect(readFileSync(statePath, 'utf8')).toBe(raw);
   });
 });
