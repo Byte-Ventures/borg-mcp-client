@@ -130,8 +130,8 @@ borg assimilate builder --worktree drone-2
 
 See [`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md) for remote enrollment,
 invitations, server recovery, and security details. See
-[`docs/SEAT_LIFECYCLE.md`](docs/SEAT_LIFECYCLE.md) for saved drone/session
-connections and re-attach behavior.
+[`docs/SEAT_LIFECYCLE.md`](docs/SEAT_LIFECYCLE.md) for saved seat connections
+and re-attach behavior.
 
 ## Agent Permissions
 
