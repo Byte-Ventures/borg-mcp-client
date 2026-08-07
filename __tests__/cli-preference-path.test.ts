@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -49,5 +49,39 @@ describe('named CLI preference persistence', () => {
     ) as { projects: Record<string, { cli: string }> };
     expect(launchFile.projects[worktreeA]).toEqual({ cli: 'codex' });
     expect(launchFile.projects[worktreeB]).toEqual({ cli: 'claude' });
+  });
+
+  it.each([
+    ['malformed JSON', '{"projects": ]\n'],
+    ['valid JSON with the wrong shape', '{"projects": []}\n'],
+  ])('refuses to overwrite %s in the launch file', async (_label, raw) => {
+    const { setProjectCliPreference } = await import('../src/cubes.js');
+    const launchPath = join(fixture, '.config', 'borgmcp', 'launch.json');
+    mkdirSync(join(fixture, '.config', 'borgmcp'), { recursive: true });
+    writeFileSync(launchPath, raw);
+
+    await expect(setProjectCliPreference('codex', worktreeA)).rejects.toThrow(
+      `Borg state file is unreadable; refusing to overwrite it: ${launchPath}`,
+    );
+    expect(readFileSync(launchPath, 'utf8')).toBe(raw);
+  });
+
+  it.each([
+    ['malformed JSON', '{"targets": ]\n'],
+    ['valid JSON with the wrong shape', '{"targets": []}\n'],
+  ])('refuses to overwrite %s in the Codex wake-target file', async (_label, raw) => {
+    const { setCodexWakeTarget } = await import('../src/cubes.js');
+    const wakeTargetsPath = join(fixture, '.config', 'borgmcp', 'codex-wake-targets.json');
+    mkdirSync(join(fixture, '.config', 'borgmcp'), { recursive: true });
+    writeFileSync(wakeTargetsPath, raw);
+
+    await expect(setCodexWakeTarget(
+      '12345678-1234-1234-1234-123456789012',
+      '87654321-4321-4321-4321-210987654321',
+      { threadId: 'thread', socketPath: '/tmp/socket' },
+    )).rejects.toThrow(
+      `Borg state file is unreadable; refusing to overwrite it: ${wakeTargetsPath}`,
+    );
+    expect(readFileSync(wakeTargetsPath, 'utf8')).toBe(raw);
   });
 });

@@ -84,6 +84,13 @@ interface LaunchFile {
   projects: Record<string, { cli: BorgCli }>;
 }
 
+const UNREADABLE_STATE = Symbol('unreadable-state-file');
+type StateFileRead<T> = T | null | typeof UNREADABLE_STATE;
+
+function unreadableStateError(filePath: string): Error {
+  return new Error(`Borg state file is unreadable; refusing to overwrite it: ${filePath}`);
+}
+
 export interface CodexWakeTargetRecord {
   threadId: string;
   socketPath: string;
@@ -225,7 +232,7 @@ function isLaunchFile(data: any): data is LaunchFile {
   );
 }
 
-async function readLaunchFile(): Promise<LaunchFile | null> {
+async function readLaunchFile(): Promise<StateFileRead<LaunchFile>> {
   let raw: string;
   try {
     raw = await readFile(LAUNCH_FILE, 'utf8');
@@ -235,9 +242,9 @@ async function readLaunchFile(): Promise<LaunchFile | null> {
   }
   try {
     const parsed = JSON.parse(raw);
-    return isLaunchFile(parsed) ? parsed : null;
+    return isLaunchFile(parsed) ? parsed : UNREADABLE_STATE;
   } catch {
-    return null;
+    return UNREADABLE_STATE;
   }
 }
 
@@ -263,7 +270,7 @@ function isCodexWakeTargetsFile(data: any): data is CodexWakeTargetsFile {
   );
 }
 
-async function readCodexWakeTargetsFile(): Promise<CodexWakeTargetsFile | null> {
+async function readCodexWakeTargetsFile(): Promise<StateFileRead<CodexWakeTargetsFile>> {
   let raw: string;
   try {
     raw = await readFile(CODEX_WAKE_TARGETS_FILE, 'utf8');
@@ -273,9 +280,9 @@ async function readCodexWakeTargetsFile(): Promise<CodexWakeTargetsFile | null> 
   }
   try {
     const parsed = JSON.parse(raw);
-    return isCodexWakeTargetsFile(parsed) ? parsed : null;
+    return isCodexWakeTargetsFile(parsed) ? parsed : UNREADABLE_STATE;
   } catch {
-    return null;
+    return UNREADABLE_STATE;
   }
 }
 
@@ -574,6 +581,7 @@ export async function refreshActiveCubeMetadata(active: ActiveCubeInput): Promis
 
 export async function getProjectCliPreference(): Promise<BorgCli | null> {
   const data = await readLaunchFile();
+  if (data === UNREADABLE_STATE) throw unreadableStateError(LAUNCH_FILE);
   if (!data) return null;
   const entry = data.projects[findProjectRoot()];
   return entry?.cli === 'claude' || entry?.cli === 'codex' || entry?.cli === 'opencode' ? entry.cli : null;
@@ -586,6 +594,7 @@ export async function getProjectCliPreference(): Promise<BorgCli | null> {
  */
 export async function getProjectCliPreferenceForPath(dir: string): Promise<BorgCli | null> {
   const data = await readLaunchFile();
+  if (data === UNREADABLE_STATE) throw unreadableStateError(LAUNCH_FILE);
   if (!data) return null;
   const entry = data.projects[findProjectRoot(dir)];
   return entry?.cli === 'claude' || entry?.cli === 'codex' || entry?.cli === 'opencode' ? entry.cli : null;
@@ -617,9 +626,11 @@ export async function readAllProjectIdentities(): Promise<
  * sibling worktree but the process still began in the invoking checkout.
  */
 export async function setProjectCliPreference(cli: BorgCli, dir?: string): Promise<void> {
-  const existing = (await readLaunchFile()) ?? { projects: {} };
-  existing.projects[findProjectRoot(dir)] = { cli };
-  await writeLaunchFile(existing);
+  const existing = await readLaunchFile();
+  if (existing === UNREADABLE_STATE) throw unreadableStateError(LAUNCH_FILE);
+  const next = existing ?? { projects: {} };
+  next.projects[findProjectRoot(dir)] = { cli };
+  await writeLaunchFile(next);
 }
 
 export async function setCodexWakeTarget(
@@ -627,12 +638,14 @@ export async function setCodexWakeTarget(
   droneId: string,
   target: Omit<CodexWakeTargetRecord, 'updatedAt'>
 ): Promise<void> {
-  const existing = (await readCodexWakeTargetsFile()) ?? { targets: {} };
-  existing.targets[codexWakeTargetKey(cubeId, droneId)] = {
+  const existing = await readCodexWakeTargetsFile();
+  if (existing === UNREADABLE_STATE) throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
+  const next = existing ?? { targets: {} };
+  next.targets[codexWakeTargetKey(cubeId, droneId)] = {
     ...target,
     updatedAt: new Date().toISOString(),
   };
-  await writeCodexWakeTargetsFile(existing);
+  await writeCodexWakeTargetsFile(next);
 }
 
 export async function getCodexWakeTarget(
@@ -640,6 +653,7 @@ export async function getCodexWakeTarget(
   droneId: string
 ): Promise<CodexWakeTargetRecord | null> {
   const existing = await readCodexWakeTargetsFile();
+  if (existing === UNREADABLE_STATE) throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
   if (!existing) return null;
   const target = existing.targets[codexWakeTargetKey(cubeId, droneId)];
   if (!target || typeof target.threadId !== 'string' || typeof target.socketPath !== 'string') {
@@ -661,6 +675,7 @@ export async function pruneDeadCodexWakeTargets(
   socketLiveness: (socketPath: string) => boolean | null
 ): Promise<void> {
   const existing = await readCodexWakeTargetsFile();
+  if (existing === UNREADABLE_STATE) throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
   if (!existing) return;
   const { targets, changed } = pruneDeadWakeTargets(existing.targets, socketLiveness);
   if (changed) await writeCodexWakeTargetsFile({ ...existing, targets });

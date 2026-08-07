@@ -219,6 +219,35 @@ describe('offerFirstRunServerInstall', () => {
       expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
         '`npm install --global --ignore-scripts borgmcp-server@0.6.0`',
       ));
+      const output = d.stderr.mock.calls.map(([text]) => String(text)).join('');
+      expect(output).not.toContain('no agent configuration was written');
+      expect(output).not.toContain('Run `borg setup` again');
+      expect(output).toContain('No server package or server state was changed.\n');
+    },
+  );
+
+  it.each(['no', 'eof', 'interrupted'] as const)(
+    'names the unchanged agent configuration after setup declines with %s',
+    async (decision) => {
+      const d = deps({ confirm: vi.fn(async () => decision) });
+
+      await expect(offerFirstRunServerInstall(
+        d.value,
+        undefined,
+        { initializeServer: true },
+      )).resolves.toEqual({ kind: 'declined' });
+      expect(d.value.installGlobal).not.toHaveBeenCalled();
+      expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+        'no agent configuration was written',
+      ));
+      expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+        'Run `borg setup` again',
+      ));
+      const output = d.stderr.mock.calls.map(([text]) => String(text)).join('');
+      expect(output).toContain(
+        'No server package or server state was changed, and no agent configuration was written. ' +
+        'Run `borg setup` again to configure your agents.\n',
+      );
     },
   );
 

@@ -3,6 +3,10 @@ import { dirname, join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 const STATE_FILE = join(borgConfigRoot(), 'lifecycle-log-state.json');
 const ARRIVAL_DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
+const UNREADABLE_STATE = Symbol('unreadable-lifecycle-state');
+function unreadableStateError() {
+    return new Error(`Lifecycle log state is unreadable; refusing to overwrite it: ${STATE_FILE}`);
+}
 export function lifecycleSignalForMessage(message) {
     if (message.startsWith('ARRIVAL: '))
         return 'arrival';
@@ -29,10 +33,11 @@ async function readState() {
         }
     }
     catch (err) {
-        if (err?.code !== 'ENOENT')
-            throw err;
+        if (err?.code === 'ENOENT')
+            return { entries: {} };
+        return UNREADABLE_STATE;
     }
-    return { entries: {} };
+    return UNREADABLE_STATE;
 }
 async function writeState(state) {
     await mkdir(dirname(STATE_FILE), { recursive: true });
@@ -60,6 +65,8 @@ export function shouldSuppressLifecycleLogFromState(message, state, nowMs = Date
 }
 export async function shouldSuppressLifecycleLog(subject, message) {
     const state = await readState();
+    if (state === UNREADABLE_STATE)
+        throw unreadableStateError();
     return shouldSuppressLifecycleLogFromState(message, state.entries[stateKey(subject)]);
 }
 export function nextLifecycleStateAfterLog(message, current, nowIso = new Date().toISOString()) {
@@ -86,6 +93,8 @@ export function nextLifecycleStateAfterLog(message, current, nowIso = new Date()
 }
 export async function recordLifecycleLog(subject, message) {
     const state = await readState();
+    if (state === UNREADABLE_STATE)
+        throw unreadableStateError();
     const key = stateKey(subject);
     state.entries[key] = nextLifecycleStateAfterLog(message, state.entries[key]);
     await writeState(state);

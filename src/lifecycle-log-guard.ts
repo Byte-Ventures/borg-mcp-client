@@ -28,6 +28,15 @@ interface LifecycleStateFile {
   entries: Record<string, LifecycleStateEntry>;
 }
 
+const UNREADABLE_STATE = Symbol('unreadable-lifecycle-state');
+type LifecycleStateRead = LifecycleStateFile | typeof UNREADABLE_STATE;
+
+function unreadableStateError(): Error {
+  return new Error(
+    `Lifecycle log state is unreadable; refusing to overwrite it: ${STATE_FILE}`,
+  );
+}
+
 export function lifecycleSignalForMessage(message: string): LifecycleSignal | null {
   if (message.startsWith('ARRIVAL: ')) return 'arrival';
   if (
@@ -44,7 +53,7 @@ function stateKey(subject: LifecycleLogSubject): string {
   return `${subject.cubeId}:${subject.droneId}`;
 }
 
-async function readState(): Promise<LifecycleStateFile> {
+async function readState(): Promise<LifecycleStateRead> {
   try {
     const raw = await readFile(STATE_FILE, 'utf8');
     const parsed = JSON.parse(raw);
@@ -58,9 +67,10 @@ async function readState(): Promise<LifecycleStateFile> {
       return parsed as LifecycleStateFile;
     }
   } catch (err: any) {
-    if (err?.code !== 'ENOENT') throw err;
+    if (err?.code === 'ENOENT') return { entries: {} };
+    return UNREADABLE_STATE;
   }
-  return { entries: {} };
+  return UNREADABLE_STATE;
 }
 
 async function writeState(state: LifecycleStateFile): Promise<void> {
@@ -100,6 +110,7 @@ export async function shouldSuppressLifecycleLog(
   message: string
 ): Promise<{ suppress: boolean; signal: LifecycleSignal | null }> {
   const state = await readState();
+  if (state === UNREADABLE_STATE) throw unreadableStateError();
   return shouldSuppressLifecycleLogFromState(
     message,
     state.entries[stateKey(subject)]
@@ -138,6 +149,7 @@ export async function recordLifecycleLog(
   message: string
 ): Promise<void> {
   const state = await readState();
+  if (state === UNREADABLE_STATE) throw unreadableStateError();
   const key = stateKey(subject);
   state.entries[key] = nextLifecycleStateAfterLog(message, state.entries[key]);
   await writeState(state);
