@@ -17,7 +17,7 @@ import {
   BORG_LAUNCH_WORKTREE_ENV,
 } from './launch-access.js';
 
-const REMINDER = 'Reminder: this seat is scoped to its own worktree and scratch root; coordinate before working on a foreign path.';
+const REMINDER = 'Reminder: this drone is scoped to its own worktree and scratch root; coordinate before working on a foreign path.';
 
 const PATH_KEYS = new Set([
   'cwd',

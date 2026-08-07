@@ -55,7 +55,7 @@ describe('runResetLocalSeat', () => {
     expect(await runResetLocalSeat({}, deps)).toBe(0);
     expect(resetLocalSeatBinding).toHaveBeenCalledTimes(1);
     const audit = out(stderr);
-    expect(audit).toContain("this worktree's saved local seat");
+    expect(audit).toContain("this worktree's saved connection");
     expect(audit).toContain('server, trust anchor, cube, and sibling worktrees unchanged');
     expect(audit).not.toMatch(/revoked server-side|server revoked/i);
     expect(out(stdout)).toContain('`borg assimilate --host https://server.test --enroll`');

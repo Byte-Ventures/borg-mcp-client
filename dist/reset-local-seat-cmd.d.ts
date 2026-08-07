@@ -1,5 +1,5 @@
 /**
- * `borg reset-local-seat [--host <host>] [--yes]` — the dedicated LOCAL/OFFLINE
+ * `borg reset-local-connection [--host <host>] [--yes]` — the dedicated LOCAL/OFFLINE
  * seat reset from the ratified client-seat-reset-state-model (Option W).
  *
  * Attach is PURE DIAGNOSIS on a pin-matched SESSION_REJECTED (it mutates
@@ -53,6 +53,6 @@ export type ResetLocalSeatParseResult = {
     ok: false;
     error: string;
 };
-/** Parse args after `borg reset-local-seat`. Supports `--host <h>` / `--host=<h>` / `--yes` / `-y`. */
+/** Parse args after `borg reset-local-connection`. Supports `--host <h>` / `--host=<h>` / `--yes` / `-y`. */
 export declare function parseResetLocalSeatArgs(rawArgs: string[]): ResetLocalSeatParseResult;
 //# sourceMappingURL=reset-local-seat-cmd.d.ts.map

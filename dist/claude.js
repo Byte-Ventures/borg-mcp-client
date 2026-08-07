@@ -145,10 +145,10 @@ async function main() {
         const code = await runAssimilateEntry(process.argv.slice(3));
         process.exit(code);
     }
-    if (process.argv[2] === 'reset-local-seat') {
+    if (process.argv[2] === 'reset-local-connection') {
         const parsed = parseResetLocalSeatArgs(process.argv.slice(3));
         if (!parsed.ok) {
-            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg reset-local-seat: ${parsed.error}\n`));
+            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg reset-local-connection: ${parsed.error}\n`));
             process.stderr.write(`Run \`borg --help\` for usage.\n`);
             process.exit(1);
         }

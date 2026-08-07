@@ -169,7 +169,7 @@ function renderResult(
       `Next: borg assimilate --host ${shellEscape(input.serverOrigin)}`,
     );
   } else {
-    lines.push('Continuing with role and seat setup…');
+    lines.push('Continuing with role and connection setup…');
   }
   resultWriter(`${lines.join('\n')}\n`);
 }

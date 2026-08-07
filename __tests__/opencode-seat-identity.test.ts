@@ -104,10 +104,10 @@ describe('OpenCode session seat identity', () => {
       seat('/work/repo', 'coordinator-1'),
     );
     const rendered = formatOpenCodeSeatIdentityError(error, '/work/repo');
-    expect(rendered).toContain('Borg OpenCode seat identity error [SEAT_WORKTREE_MISMATCH]');
+    expect(rendered).toContain('Borg OpenCode identity error [SEAT_WORKTREE_MISMATCH]');
     expect(rendered).toContain('coordinator-1 (/work/repo)');
     expect(rendered).toContain('were not started');
     expect(rendered).toContain('borg --cli opencode');
-    expect(rendered).toContain('borg reset-local-seat');
+    expect(rendered).toContain('borg reset-local-connection');
   });
 });

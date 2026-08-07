@@ -188,7 +188,7 @@ describe('foreign-path reminder executable', () => {
       systemMessage?: string;
       hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
     };
-    expect(output.systemMessage).toContain('Reminder: this seat is scoped');
+    expect(output.systemMessage).toContain('Reminder: this drone is scoped');
     expect(output.hookSpecificOutput).toEqual({
       hookEventName: 'PreToolUse',
       additionalContext: output.systemMessage,
@@ -199,7 +199,7 @@ describe('foreign-path reminder executable', () => {
     const result = runHook({ cwd: paths.worktree, tool_input: { file_path: '/other/checkout/file.ts' } }, 'codex');
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
-      systemMessage: 'Reminder: this seat is scoped to its own worktree and scratch root; coordinate before working on a foreign path.',
+      systemMessage: 'Reminder: this drone is scoped to its own worktree and scratch root; coordinate before working on a foreign path.',
     });
   });
 
@@ -215,6 +215,6 @@ describe('foreign-path reminder executable', () => {
   it('reminds when the tool working directory itself is foreign', () => {
     const result = runHook({ cwd: '/other/checkout', tool_input: { command: 'pwd' } });
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout).systemMessage).toContain('Reminder: this seat is scoped');
+    expect(JSON.parse(result.stdout).systemMessage).toContain('Reminder: this drone is scoped');
   });
 });

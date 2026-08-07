@@ -53,8 +53,8 @@ export function formatReassignDroneSuccess(input) {
 }
 export function formatEvictDroneSuccess(droneLabel, cubeName) {
     return (`Removed ${droneLabel} from cube ${cubeName}.\n` +
-        'The seat credential is revoked. The session will stop after its next Borg request.\n' +
-        'The worktree and project files were not deleted. Activity history remains attributed to the removed seat.\n' +
+        'The drone\'s credential is revoked. The session will stop after its next Borg request.\n' +
+        'The worktree and project files were not deleted. Activity history remains attributed to the removed drone.\n' +
         'After its work is merged, run `borg cleanup` to review whether the worktree can be pruned.');
 }
 //# sourceMappingURL=evict-drone.js.map

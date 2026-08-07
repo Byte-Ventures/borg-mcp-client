@@ -6,6 +6,7 @@
  * index.ts's stdio MCP server bootstrap.
  */
 
+import { hostname as osHostname } from 'node:os';
 import {
   ROLE_SCOPED_SAFETY_DISCIPLINES,
   UNIVERSAL_SAFETY_DISCIPLINES,
@@ -243,7 +244,7 @@ export function markArrivalAnnouncedThisProcess(): void {
 export function getDronePlaybook(): string {
   const arrivalInstruction = arrivalAnnouncedThisProcess
     ? ''
-    : '\n**When this MCP session first starts:** post one `ARRIVAL: <your-label> (<your-role>) online on <hostname>` (run `hostname`). After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit `/mcp` reconnect may show it again.\n';
+    : `\n**When this MCP session first starts:** post one \`ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}\`. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again.\n`;
   return `## How to operate as a Drone
 
 You're a Drone in a Cube. Coordinate with other drones through the activity log.

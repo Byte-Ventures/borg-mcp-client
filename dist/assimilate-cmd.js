@@ -209,7 +209,7 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
             `${localAssimilateCommand(apiUrl, true, mode)} from the operator’s terminal.\n`);
         return 1;
     }
-    if (/seat store lock file .* is stale/i.test(message)) {
+    if (/(?:private|seat) store lock file .* is stale/i.test(message)) {
         // RULED option (b): a lock whose recorded holder is DEAD (or whose payload is
         // corrupt) is NEVER auto-removed. Surface the fail-closed guidance verbatim —
         // it already names the exact lockfile path and the delete-only-if-no-borg
@@ -218,13 +218,13 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
             `stale lock, rerun ${retryCommand}.\n`);
         return 1;
     }
-    if (/(?:seat|credential) store is busy/i.test(message)) {
-        deps.stderr(`Borg's local seat store is busy for ${apiUrl} because another Borg process is ` +
-            `creating or resuming saved seat state. Wait for it to finish, then rerun ${retryCommand}.\n`);
+    if (/(?:private|seat|credential) store is busy/i.test(message)) {
+        deps.stderr(`Borg's private store is busy for ${apiUrl} because another Borg process is ` +
+            `creating or resuming saved connection state. Wait for it to finish, then rerun ${retryCommand}.\n`);
         return 1;
     }
-    if (/(?:local )?seat store|(?:secure )?credential (?:store|storage)/i.test(message)) {
-        deps.stderr(`Borg could not access its local seat store for ${apiUrl}. ` +
+    if (/(?:(?:local )?(?:private|seat) store|(?:secure )?credential (?:store|storage))/i.test(message)) {
+        deps.stderr(`Borg could not access its private store for ${apiUrl}. ` +
             `Ensure its directory on this machine is readable and writable, then rerun ${retryCommand}.\n`);
         return 1;
     }
@@ -259,7 +259,7 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
     return 1;
 }
 function resetLocalSeatCommand(apiUrl) {
-    return `\`borg reset-local-seat --host ${apiUrl}\``;
+    return `\`borg reset-local-connection --host ${apiUrl}\``;
 }
 // Pin-matched terminal session diagnosis. This is intentionally output-only:
 // only the explicit offline reset command may clear the saved local seat.
@@ -271,7 +271,7 @@ function diagnoseSessionTermination(deps, apiUrl, outcome, mode = 'assimilate') 
         ? localAssimilateCommand(apiUrl, true, mode)
         : `borg assimilate --host ${apiUrl} --enroll`;
     deps.stderr(`${message}\n` +
-        `Next: run borg reset-local-seat, then ${recovery}.\n`);
+        `Next: run borg reset-local-connection, then ${recovery}.\n`);
     return 1;
 }
 export async function runAssimilate(args, deps) {
@@ -785,9 +785,9 @@ export async function runAssimilate(args, deps) {
                 }
             }
             else {
-                deps.stderr(`This worktree has saved seat metadata for ${authority.apiUrl}, but its local session ` +
-                    'credential could not be loaded from the local seat store. No new seat was created. Run ' +
-                    `${resetLocalSeatCommand(authority.apiUrl)} to clear this worktree's saved seat, then ` +
+                deps.stderr(`This worktree has a saved connection to ${authority.apiUrl}, but its local session ` +
+                    'credential could not be loaded from the private store. No drone was created. Run ' +
+                    `${resetLocalSeatCommand(authority.apiUrl)} to clear this worktree's saved connection, then ` +
                     `ask the operator for a new invitation and rerun ${localAssimilateCommand(authority.apiUrl, true)}.\n`);
                 return 1;
             }
@@ -795,8 +795,8 @@ export async function runAssimilate(args, deps) {
         if (existing && args.flags.here &&
             (existing.apiUrl !== auth.apiUrl ||
                 existing.serverTrustIdentity !== auth.serverTrustIdentity)) {
-            deps.stderr(`This worktree's saved seat does not match ${authority.apiUrl}. ` +
-                'No new seat was created. Restore the expected server identity or use a fresh ' +
+            deps.stderr(`This worktree's saved connection does not match ${authority.apiUrl}. ` +
+                'No drone was created. Restore the expected server identity or use a fresh ' +
                 `worktree, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`);
             return 1;
         }
@@ -811,7 +811,7 @@ export async function runAssimilate(args, deps) {
             const status = await deps.probeSeat(existing.sessionToken ?? '', auth.apiUrl, auth.serverTrustIdentity);
             // Canonical rotated/revoked path: a pin-matched 401 on THIS worktree's
             // saved bearer. PURE DIAGNOSIS — attach never mutates local state on a
-            // rejection; it points at the offline `borg reset-local-seat` command.
+            // rejection; it points at the offline `borg reset-local-connection` command.
             // Distinct from unreachable/404/5xx/trust-mismatch, which stay
             // indeterminate below.
             if (status === 'revoked') {
@@ -825,7 +825,7 @@ export async function runAssimilate(args, deps) {
             if (status === 'credential-rejected') {
                 // The saved SESSION bearer was rejected WITHOUT the typed takeover code
                 // (a bare/other 401). Non-destructive: re-enroll, never a seat reset.
-                deps.stderr(`The saved enrollment for ${authority.apiUrl} was rejected. No new seat was created ` +
+                deps.stderr(`The saved enrollment for ${authority.apiUrl} was rejected. No drone was created ` +
                     `and nothing was changed. Re-enroll with ${localAssimilateCommand(authority.apiUrl, true)} ` +
                     'from the operator’s terminal.\n');
                 return 1;
@@ -834,7 +834,7 @@ export async function runAssimilate(args, deps) {
                 // Terminal: the pinned identity changed. Restarting the server does NOT
                 // fix it — verify this is the expected server / re-initialization.
                 deps.stderr(`Borg could not verify the expected server identity for ${authority.apiUrl}. ` +
-                    'No new seat was created. Verify that this is the expected server; if it was ' +
+                    'No drone was created. Verify that this is the expected server; if it was ' +
                     're-initialized, restore the expected identity, then rerun ' +
                     `${localAssimilateCommand(authority.apiUrl)}.\n`);
                 return 1;
@@ -844,7 +844,7 @@ export async function runAssimilate(args, deps) {
                 // client-server VERSION mismatch, not a transient blip. Restarting does not
                 // fix it; align versions. Non-destructive: no seat created, nothing reset.
                 deps.stderr(`Borg reached ${authority.apiUrl} but it did not recognize this worktree's drone ` +
-                    'endpoint — the client and server versions are likely incompatible. No new seat ' +
+                    'endpoint — the client and server versions are likely incompatible. No drone ' +
                     'was created and nothing was changed. Update the Borg client and/or server so ' +
                     `their versions match, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`);
                 return 1;
@@ -853,21 +853,21 @@ export async function runAssimilate(args, deps) {
                 // CR5: a verified server returned 5xx — its own internal error. Transient:
                 // check the server, then retry. Non-destructive.
                 deps.stderr(`Borg reached ${authority.apiUrl} but it returned a server error while verifying ` +
-                    "this worktree's saved seat. No new seat was created. Check the server (its logs / " +
+                    "this worktree's saved connection. No drone was created. Check the server (its logs / " +
                     `\`borg-mcp-server start\`), then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`);
                 return 1;
             }
             if (status === 'unreachable' || status === 'indeterminate') {
                 // CR5: transport failure / timeout (unreachable) or a genuinely ambiguous
                 // failure (indeterminate) — both transient. Start or restart the server.
-                deps.stderr(`Borg could not verify this worktree's saved seat on ${authority.apiUrl}. ` +
-                    'No new seat was created. Start or restart the server with ' +
+                deps.stderr(`Borg could not verify this worktree's saved connection to ${authority.apiUrl}. ` +
+                    'No drone was created. Start or restart the server with ' +
                     `\`borg-mcp-server start\`, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`);
                 return 1;
             }
             if (status === 'live' && !savedLocalRole) {
-                deps.stderr(`Borg verified this worktree's saved seat on ${authority.apiUrl}, but its saved ` +
-                    'role is unavailable. No new seat was created. Ask the server operator to restore ' +
+                deps.stderr(`Borg verified this worktree's saved connection to ${authority.apiUrl}, but its saved ` +
+                    'role is unavailable. No drone was created. Ask the server operator to restore ' +
                     `the role, then rerun ${localAssimilateCommand(authority.apiUrl)}.\n`);
                 return 1;
             }
@@ -877,8 +877,8 @@ export async function runAssimilate(args, deps) {
     }
     else if (existing && args.flags.here) {
         if (existing.serverTrustIdentity !== undefined || existing.apiUrl !== auth.apiUrl) {
-            deps.stderr('This worktree\'s saved seat belongs to a different Borg authority. ' +
-                'No new seat was created; use a fresh worktree.\n');
+            deps.stderr('This worktree\'s saved connection belongs to a different Borg authority. ' +
+                'No drone was created; use a fresh worktree.\n');
             return 1;
         }
         reattachPriorId = existing.droneId;
@@ -1046,7 +1046,7 @@ export async function runAssimilate(args, deps) {
         // "assimilate failed". Only on a reattach attempt (reattachPriorId set);
         // a non-reattach DroneEvictedError falls through to the generic message.
         if (err instanceof DroneEvictedError && reattachPriorId != null) {
-            deps.stderr(`This worktree's saved seat on ${authority.apiUrl} was evicted. ` +
+            deps.stderr(`This worktree's drone on ${authority.apiUrl} was evicted. ` +
                 `Remove this worktree, or from a fresh worktree run ` +
                 `${localAssimilateCommand(authority.apiUrl)}.\n`);
             return 1;
@@ -1055,7 +1055,7 @@ export async function runAssimilate(args, deps) {
         // Reached only after a successful pinned-TLS attach, so it is pin-matched by
         // construction — a pin mismatch throws a distinct trust error and never
         // enters this branch. Attach mutates NOTHING; it recommends the offline
-        // `borg reset-local-seat` command.
+        // `borg reset-local-connection` command.
         if (err instanceof BorgServerError && reattachPriorId != null) {
             if (err.code === 'SESSION_REVOKED') {
                 return diagnoseSessionTermination(deps, authority.apiUrl, 'revoked');
@@ -1076,7 +1076,7 @@ export async function runAssimilate(args, deps) {
         // was minted or sent — this worktree's saved seat changed under us (a
         // concurrent offline reset, or a competing enroll). No FS/network mutation
         // happened; never silently recreate.
-        deps.stderr(`This worktree's saved local seat on ${authority.apiUrl} changed before the attach ` +
+        deps.stderr(`This worktree's saved connection to ${authority.apiUrl} changed before the attach ` +
             '(a concurrent reset or enroll); no credential was created or sent and nothing was ' +
             `changed. Re-run ${localAssimilateCommand(authority.apiUrl)} to attach against the ` +
             'current state.\n');
@@ -1094,14 +1094,14 @@ export async function runAssimilate(args, deps) {
     // displayed role name + worktree slug with what was actually assigned.
     const assignedRole = cubeDetail.roles.find((r) => r.id === result.role_id) ?? resolvedRole;
     if (result.result === 'reused') {
-        // The seat's existing role is authoritative on an idempotent reattach —
+        // The drone's existing role is authoritative on an idempotent reattach —
         // a role difference is expected, not a grant fallback. The bearer is
         // reused, not rotated: no new drone minted.
-        deps.stderr(`re-attached to existing seat ${result.drone_label} (same session, no new drone minted)\n`);
+        deps.stderr(`re-attached as ${result.drone_label} (same session, no new drone minted)\n`);
     }
     else if (assignedRole.id !== resolvedRole.id) {
         deps.stderr(`The requested role "${resolvedRole.name}" was unavailable; ` +
-            `attached to the "${assignedRole.name}" seat instead.\n`);
+            `attached under the "${assignedRole.name}" role instead.\n`);
     }
     // ----- Step 7: Worktree decision (FS state ONLY after API success) -----
     // (`existing` was read at Step 5b; a different-cube --here collision
@@ -1243,7 +1243,7 @@ export async function runAssimilate(args, deps) {
             return 1;
         }
         deps.stderr(`spawned sibling worktree at ${candidate} on branch ${wtBranch} (${startRef}); ` +
-            `the original dir keeps its active drone binding — run \`borg reset-local-seat\` there if that binding is stale.\n`);
+            `the original dir keeps its active drone binding — run \`borg reset-local-connection\` there if that binding is stale.\n`);
         deps.chdir(candidate);
         deps.stderr(renderWorktreeSteeringNote(candidate, wtBranch, projectRoot));
         spawnedWorktreePath = deps.cwd();
@@ -1323,7 +1323,7 @@ export async function runAssimilate(args, deps) {
     // EXACT prior binding with its live-bearer digest; eviction remint = EXACT ref
     // only, bearer intentionally replaced; fresh/sibling = ABSENT).
     if (result.finalize === undefined || deps.finalizeServerSeat === undefined) {
-        deps.stderr('Local Borg server session metadata is incomplete; no seat was saved.\n');
+        deps.stderr('Local Borg server session metadata is incomplete; no connection was saved.\n');
         rollbackWorktree();
         return 1;
     }
@@ -1381,11 +1381,11 @@ export async function runAssimilate(args, deps) {
                 if (bindOutcome === 'bound') {
                     // The worktree now owns a durable locator (the bound-pending record points
                     // here). PRESERVE it. Truthful convergence copy: a rerun FROM here re-sends
-                    // the identical bearer (no duplicate), and `reset-local-seat` from here now
+                    // the identical bearer (no duplicate), and `reset-local-connection` from here now
                     // discovers + clears the bound-pending record.
                     deps.stderr(`This worktree's secure session on ${auth.apiUrl} did not finish activating, but ` +
-                        'its resumable seat state was PRESERVED here. This worktree was NOT removed. From ' +
-                        `here, re-run ${localAssimilateCommand(auth.apiUrl)} to converge (the identical seat ` +
+                        'its resumable connection state was PRESERVED here. This worktree was NOT removed. From ' +
+                        `here, re-run ${localAssimilateCommand(auth.apiUrl)} to converge (the identical connection ` +
                         `is reused — no duplicate is minted), or run ${resetLocalSeatCommand(auth.apiUrl)} to ` +
                         'clear it.\n');
                     return 1;
@@ -1396,16 +1396,16 @@ export async function runAssimilate(args, deps) {
                 // or remove it. State the exact local outcome and do not prescribe a retry
                 // that can silently create a duplicate server seat (#35).
                 const bindFailure = bindOutcome === 'missing'
-                    ? 'the exact pending seat record went missing locally before it could be bound'
+                    ? 'the exact pending connection record went missing locally before it could be bound'
                     : bindOutcome === 'replaced'
-                        ? 'the exact pending seat record was replaced locally before it could be bound; the replacement was left untouched'
+                        ? 'the exact pending connection record was replaced locally before it could be bound; the replacement was left untouched'
                         : bindOutcome === 'threw'
-                            ? 'the local seat store could not be read or written while preserving the pending seat'
-                            : 'this client did not receive a pending-seat preservation handle';
+                            ? 'the private store could not be read or written while preserving the pending connection'
+                            : 'this client did not receive a pending-connection preservation handle';
                 deps.stderr(`This worktree's secure session on ${auth.apiUrl} did not finish activating: ` +
                     `${bindFailure}. The spawned worktree will be removed. No client-only command can ` +
-                    'prove reuse or safely clear the possibly accepted server-side seat; ask the server ' +
-                    'operator to inspect that seat before retrying.\n');
+                    'prove reuse or safely clear the possibly accepted server-side drone; ask the server ' +
+                    'operator to inspect that drone before retrying.\n');
                 rollbackWorktree();
                 return 1;
             }
@@ -1413,8 +1413,8 @@ export async function runAssimilate(args, deps) {
             // saved seat changed under us between PREPARE and FINALIZE — a concurrent
             // reset or enroll). The composite scrubbed only our own pending record — no
             // orphan ACTIVE credential — so a just-spawned worktree is safe to remove.
-            deps.stderr(`This worktree's saved local seat on ${auth.apiUrl} changed during attach ` +
-                '(a concurrent reset or enroll); no seat was created and nothing was overwritten. ' +
+            deps.stderr(`This worktree's saved connection to ${auth.apiUrl} changed during attach ` +
+                '(a concurrent reset or enroll); no drone was created and nothing was overwritten. ' +
                 `Re-run ${localAssimilateCommand(auth.apiUrl)} to attach against the current state.\n`);
             rollbackWorktree();
             return 1;

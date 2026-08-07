@@ -317,7 +317,7 @@ async function localCubeComposition(active) {
     const drone = drones.find((candidate) => candidate.id === active.droneId);
     const role = rolePayload.roles.find((candidate) => candidate.id === drone?.role_id);
     if (!drone || !role)
-        throw new Error('Local Borg server no longer recognizes this drone seat');
+        throw new Error('Local Borg server no longer recognizes this drone');
     return {
         cube: cubePayload.cube,
         roles: rolePayload.roles,

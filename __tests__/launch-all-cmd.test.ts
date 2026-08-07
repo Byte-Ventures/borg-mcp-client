@@ -307,7 +307,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain('drone-b');
-    expect(stderrOf(deps)).toMatch(/seat no longer in cube \(evicted\)/);
+    expect(stderrOf(deps)).toMatch(/drone no longer in cube \(evicted\)/);
     const tokens = (deps.probeSeat as any).mock.calls.map((c: any[]) => c[0]);
     expect(tokens).toContain('tok-a');
     expect(tokens).toContain('tok-b');
@@ -329,7 +329,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain(
       'Local session was superseded by a newer enrollment.\n' +
-        'Next: run borg reset-local-seat, then borg assimilate --host http://api.test --enroll.\n',
+        'Next: run borg reset-local-connection, then borg assimilate --host http://api.test --enroll.\n',
     );
   });
 
@@ -340,7 +340,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain(
       'Local session was revoked.\n' +
-        'Next: run borg reset-local-seat, then borg assimilate --host http://api.test --enroll.\n',
+        'Next: run borg reset-local-connection, then borg assimilate --host http://api.test --enroll.\n',
     );
   });
 

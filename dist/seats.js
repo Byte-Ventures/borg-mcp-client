@@ -195,7 +195,7 @@ async function readStore() {
         return emptyStore();
     const parsed = parseStore(raw);
     if (parsed === null) {
-        throw new Error('Borg seat store is malformed or has an unsupported version; refusing to read it');
+        throw new Error('Borg private store is malformed or has an unsupported version; refusing to read it');
     }
     return parsed;
 }

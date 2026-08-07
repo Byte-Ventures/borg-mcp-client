@@ -938,8 +938,8 @@ distDescribe('borg-inbox-monitor — end-to-end symlink spawn (gh#114)', () => {
 
       expect(exitCode).toBe(0);
       expect(stdout.trim().split('\n')).toEqual([
-        `borg-inbox-monitor: seat inbox ${JSON.stringify(inboxFile)} is already monitored by a live instance ` +
-          `(pid ${owner.pid}); yielding — another session likely holds this seat.`,
+        `borg-inbox-monitor: inbox ${JSON.stringify(inboxFile)} is already monitored by a live instance ` +
+          `(pid ${owner.pid}); yielding — another session likely holds this worktree's connection.`,
       ]);
       expect(stderr).toBe('');
       expect(owner.exitCode).toBeNull();

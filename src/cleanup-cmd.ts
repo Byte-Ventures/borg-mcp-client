@@ -74,7 +74,7 @@ export type CleanupReason =
   | 'SURVIVES-live'
   | 'SURVIVES-self'
   | 'UNKNOWN-indeterminate'
-  | 'UNKNOWN-no-seat'
+  | 'UNKNOWN-no-connection'
   | 'LEGACY-manual-review';
 
 export interface CleanupRow {
@@ -350,7 +350,7 @@ async function classifyWorktree(
     case 'revoked':
       return { reason: 'SURVIVES-revoked', detail: 'session revoked — recoverable via re-enroll, never delete' };
     case 'live':
-      return { reason: 'SURVIVES-live', detail: 'seat resolves (drone alive)' };
+      return { reason: 'SURVIVES-live', detail: 'connection resolves (drone alive)' };
     case 'indeterminate':
     default:
       return {
@@ -431,7 +431,7 @@ export async function buildCleanupReport(
       // sibling → REPORT for manual review, never auto-prune (S5). No seat →
       // an arbitrary user worktree we never touch or list.
       if (seat) {
-        rows.push({ worktreePath: wt, wtBranch: null, reason: 'LEGACY-manual-review', detail: 'borg seat outside worktreesHome (pre-gh#556 sibling)' });
+        rows.push({ worktreePath: wt, wtBranch: null, reason: 'LEGACY-manual-review', detail: 'borg connection outside worktreesHome (pre-gh#556 sibling)' });
       }
       continue;
     }
@@ -439,7 +439,7 @@ export async function buildCleanupReport(
     // Under worktreesHome but no saved seat → not eviction-orphaned
     // (pre-assimilate or hand-made). Report, never auto-prune.
     if (!seat) {
-      rows.push({ worktreePath: wt, wtBranch: null, reason: 'UNKNOWN-no-seat', detail: 'no saved seat — manual review' });
+      rows.push({ worktreePath: wt, wtBranch: null, reason: 'UNKNOWN-no-connection', detail: 'no saved connection — manual review' });
       continue;
     }
 

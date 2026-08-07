@@ -53,7 +53,7 @@ export declare function readStoreFile(filePath: string, options?: SecureStoreOpt
  * release it on EVERY path (finally) by unlinking OUR OWN lock. Acquire is an atomic
  * `open(lockPath,'wx',0o600)`. On EEXIST the lock is held:
  *   - holder PID ALIVE → bounded wait/retry (attempts×waitMs), then throw the truthful
- *     transient 'Borg seat store is busy' error;
+ *     transient 'Borg private store is busy' error;
  *   - holder PID DEAD, or the payload is missing/unparseable → FAIL CLOSED naming the
  *     exact lockfile path + the recorded dead pid/start-time. Borg NEVER auto-deletes
  *     or steals it (no reclaim, no rename-claim). The operator clears it by hand only

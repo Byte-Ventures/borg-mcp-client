@@ -117,4 +117,11 @@ describe('published package artifact', () => {
       rmSync(packDir, { recursive: true, force: true });
     }
   });
+
+  it('states that Borg tools require a borg-launched agent session', () => {
+    const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
+    expect(readme).toMatch(
+      /Borg tools are inactive unless\s+the agent session was launched with `borg`\./,
+    );
+  });
 });

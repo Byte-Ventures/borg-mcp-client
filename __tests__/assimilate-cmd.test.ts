@@ -400,13 +400,13 @@ describe('runAssimilate: exact legacy session credential collision', () => {
   it('keeps pending+replacement in the generic malformed classification without network or special copy', async () => {
     const deps = makeStubDeps({
       getActiveCube: vi.fn(async () => {
-        throw new Error('Borg seat store is malformed or uses an unsupported version');
+        throw new Error('Borg private store is malformed or uses an unsupported version');
       }),
     });
 
     await expect(runAssimilate({ role: undefined, flags: { server: 'server.test' } }, deps)).resolves.toBe(1);
     const output = vi.mocked(deps.stderr).mock.calls.map(([line]) => line).join('');
-    expect(output).toContain('could not access its local seat store');
+    expect(output).toContain('could not access its private store');
     expect(output).not.toContain('Local session credential collision detected');
     expect(deps.detectLocalServer).not.toHaveBeenCalled();
     expect(deps.connectServer).not.toHaveBeenCalled();
@@ -1119,7 +1119,7 @@ describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-u
 describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)', () => {
   // Ratified client-seat-reset-state-model clause 1: attach mutates NOTHING on a
   // rejection — it diagnoses and points at the dedicated OFFLINE
-  // `borg reset-local-seat` command. No setActiveCube / any local write happens
+  // `borg reset-local-connection` command. No setActiveCube / any local write happens
   // on the rejected path (clearActiveCube was DELETED — SR-seven (c)).
   const sameCubeSeat = () => vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone' }));
   const cubeResolves = {
@@ -1150,7 +1150,7 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
     expect(exit).toBe(1);
     expect(stderr).toHaveBeenCalledWith(
       'Local session was superseded by a newer enrollment.\n' +
-        'Next: run borg reset-local-seat, then borg assimilate --host https://server.test --enroll.\n',
+        'Next: run borg reset-local-connection, then borg assimilate --host https://server.test --enroll.\n',
     );
     assertNoMutation(deps);
   });
@@ -1170,7 +1170,7 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
     expect(assimilate).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(
       'Local session was superseded by a newer enrollment.\n' +
-        'Next: run borg reset-local-seat, then borg assimilate --host https://server.test --enroll.\n',
+        'Next: run borg reset-local-connection, then borg assimilate --host https://server.test --enroll.\n',
     );
     assertNoMutation(deps);
   });
@@ -1188,7 +1188,7 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
     expect(exit).toBe(1);
     expect(stderr).toHaveBeenCalledWith(
       'Local session was superseded by a newer enrollment.\n' +
-        'Next: run borg reset-local-seat, then borg assimilate --host https://server.test --enroll.\n',
+        'Next: run borg reset-local-connection, then borg assimilate --host https://server.test --enroll.\n',
     );
     assertNoMutation(deps);
   });
@@ -1205,7 +1205,7 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
     expect(assimilate).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(
       'Local session was revoked.\n' +
-        'Next: run borg reset-local-seat, then borg assimilate --host https://server.test --enroll.\n',
+        'Next: run borg reset-local-connection, then borg assimilate --host https://server.test --enroll.\n',
     );
     assertNoMutation(deps);
   });
@@ -1234,7 +1234,7 @@ describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR
     expect(out).toContain('saved enrollment for https://server.test was rejected');
     expect(out).toContain('--enroll');
     // Distinct from the takeover path AND the transient path.
-    expect(out).not.toContain('borg reset-local-seat');
+    expect(out).not.toContain('borg reset-local-connection');
     expect(out).not.toMatch(/borg-mcp-server start|Start or restart the server/i);
     expect(deps.setActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
@@ -1252,7 +1252,7 @@ describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
     expect(out).toContain('could not verify the expected server identity');
     expect(out).not.toMatch(/borg-mcp-server start|Start or restart the server/i);
-    expect(out).not.toContain('borg reset-local-seat');
+    expect(out).not.toContain('borg reset-local-connection');
   });
 
   it('indeterminate: STILL the transient restart advice (unchanged, distinct from the terminal causes)', async () => {
@@ -1264,7 +1264,7 @@ describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR
     });
     expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toMatch(/could not verify this worktree's saved seat/);
+    expect(out).toMatch(/could not verify this worktree's saved connection/);
     expect(out).toContain('borg-mcp-server start');
   });
 
@@ -1277,9 +1277,9 @@ describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR
     });
     expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toMatch(/could not verify this worktree's saved seat/);
+    expect(out).toMatch(/could not verify this worktree's saved connection/);
     expect(out).toContain('borg-mcp-server start');
-    expect(out).not.toContain('borg reset-local-seat');
+    expect(out).not.toContain('borg reset-local-connection');
   });
 
   it('endpoint-mismatch (404): a version-mismatch copy — NOT restart advice, NOT a reset', async () => {
@@ -1292,7 +1292,7 @@ describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR
     expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
     expect(out).toMatch(/did not recognize this worktree's drone endpoint|versions? (?:are|is) likely incompatible|versions match/i);
-    expect(out).not.toContain('borg reset-local-seat');
+    expect(out).not.toContain('borg reset-local-connection');
   });
 
   it('server-failure (5xx): a distinct server-error copy — non-destructive, no reset', async () => {
@@ -1305,7 +1305,7 @@ describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR
     expect(await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).toBe(1);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
     expect(out).toMatch(/returned a server error/i);
-    expect(out).not.toContain('borg reset-local-seat');
+    expect(out).not.toContain('borg reset-local-connection');
   });
 });
 
@@ -1859,7 +1859,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
       // Truthful FAILURE — never the false-success "converge / identical seat reused" claim.
       expect(recovery).toMatch(new RegExp(outcome, 'i'));
       expect(recovery).toMatch(/no client-only command/i);
-      expect(recovery).not.toMatch(/reset-local-seat|re-run `borg assimilate/i);
+      expect(recovery).not.toMatch(/reset-local-connection|re-run `borg assimilate/i);
       expect(recovery).not.toMatch(/converge|identical seat is reused/i);
     }
   });
@@ -1876,7 +1876,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     expect(await runAssimilate({ role: undefined, flags: { yes: true, worktree: 'drone-2' } }, deps)).toBe(1);
     expect(removedWorktree(calls)).toBe(true);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
-    expect(out).toMatch(/local seat store could not be read or written/i);
+    expect(out).toMatch(/private store could not be read or written/i);
     expect(out).toMatch(/no client-only command/i);
     expect(out).not.toMatch(/converge|identical seat is reused/i);
   });
@@ -2643,7 +2643,7 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       'note: no usable origin; new worktree will start on local HEAD (16c1405)\n',
     );
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toContain(
-      'the original dir keeps its active drone binding — run `borg reset-local-seat` there if that binding is stale.',
+      'the original dir keeps its active drone binding — run `borg reset-local-connection` there if that binding is stale.',
     );
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('active seat');
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('that seat binding');
@@ -3603,7 +3603,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     const deps = makeStubDeps({
       stderr,
       connectServer: vi.fn(async () => {
-        throw new Error('Borg seat store is busy');
+        throw new Error('Borg private store is busy');
       }),
     });
 
@@ -3613,8 +3613,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      "Borg's local seat store is busy for https://localhost:8787 because another Borg process is " +
-        'creating or resuming saved seat state. Wait for it to finish, then rerun ' +
+      "Borg's private store is busy for https://localhost:8787 because another Borg process is " +
+        'creating or resuming saved connection state. Wait for it to finish, then rerun ' +
         '`borg assimilate --host https://localhost:8787`.\n',
     );
     // RQ: a transient store-busy lock exhaustion must render the RETRY copy — never
@@ -3633,7 +3633,7 @@ describe('runAssimilate: #1015 authority selection', () => {
         // RULED option (b): a lock whose recorded holder is DEAD fails closed with a
         // message naming the exact lockfile path and the delete-only-if-no-borg copy.
         throw new Error(
-          `Borg seat store lock file ${lockPath} is stale: its recorded owner process ` +
+          `Borg private store lock file ${lockPath} is stale: its recorded owner process ` +
             '(pid 1073741824, started 2020-01-01T00:00:00.000Z) is no longer running. ' +
             'Borg will NOT remove it automatically. If no borg process is running on this ' +
             `machine, delete ${lockPath} and retry; otherwise wait for the other borg process to finish.`,
@@ -3661,7 +3661,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     const deps = makeStubDeps({
       stderr,
       connectServer: vi.fn(async () => {
-        throw new Error('local seat store is not accessible');
+        throw new Error('local private store is not accessible');
       }),
     });
 
@@ -3671,7 +3671,7 @@ describe('runAssimilate: #1015 authority selection', () => {
     }, deps)).toBe(1);
 
     expect(stderr).toHaveBeenCalledWith(
-      'Borg could not access its local seat store for https://localhost:8787. ' +
+      'Borg could not access its private store for https://localhost:8787. ' +
         'Ensure its directory on this machine is readable and writable, then rerun ' +
         '`borg assimilate --host https://localhost:8787`.\n',
     );
@@ -3939,7 +3939,7 @@ describe('runAssimilate: #1015 authority selection', () => {
 
     expect(stderr).toHaveBeenCalledWith(
       'Local session was superseded by a newer enrollment.\n' +
-        'Next: run borg reset-local-seat, then borg assimilate --host https://server.example.com --enroll.\n',
+        'Next: run borg reset-local-connection, then borg assimilate --host https://server.example.com --enroll.\n',
     );
   });
 
@@ -3976,8 +3976,8 @@ describe('runAssimilate: #1015 authority selection', () => {
     ['saved credential rejected', new BorgServerError('CREDENTIAL_REJECTED', 'credential rejected')],
     ['session revoked', new BorgServerError('SESSION_REVOKED', 'session revoked')],
     ['session rejected takeover', new BorgServerError('SESSION_REJECTED', 'session rejected')],
-    ['local seat store busy', new Error('Borg seat store is busy')],
-    ['local seat store unavailable', new Error('local seat store is not accessible')],
+    ['private store busy', new Error('Borg private store is busy')],
+    ['private store unavailable', new Error('local private store is not accessible')],
     ['trust mismatch', new Error('Borg server CA certificate does not match its pinned identity')],
     ['server unreachable', new Error('connect ECONNREFUSED')],
     ['unexpected protocol', new Error('protocol response shape changed')],

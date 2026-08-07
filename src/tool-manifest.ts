@@ -506,7 +506,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_evict-drone',
           description:
-            'Remove a drone using the selected local client\'s cube-management grant. The seat credential is revoked, project files remain, and activity history keeps the removed seat\'s attribution. Accepts drone_id for the current cube or label with cube_id.',
+            'Remove a drone using the selected local client\'s cube-management grant. The drone\'s credential is revoked, project files remain, and activity history keeps the removed drone\'s attribution. Accepts drone_id for the current cube or label with cube_id.',
           inputSchema: {
             type: 'object',
             properties: {

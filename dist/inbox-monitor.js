@@ -649,8 +649,8 @@ function liveMonitorYieldLine(inboxPath, holderPidfilePath, deps) {
         ? parsed.pid
         : null;
     const holder = livePid === null ? 'another monitor instance' : `a live instance (pid ${livePid})`;
-    return (`borg-inbox-monitor: seat inbox ${JSON.stringify(inboxPath)} is already monitored by ${holder}; ` +
-        'yielding — another session likely holds this seat.');
+    return (`borg-inbox-monitor: inbox ${JSON.stringify(inboxPath)} is already monitored by ${holder}; ` +
+        'yielding — another session likely holds this worktree\'s connection.');
 }
 function main() {
     const invocation = parseMonitorInvocation(process.argv.slice(2));

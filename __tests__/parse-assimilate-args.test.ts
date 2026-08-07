@@ -120,7 +120,7 @@ describe('parseAssimilateArgs', () => {
     }
   });
 
-  it('rejects the retired --reset-local-seat flag (reset moved to `borg reset-local-seat`)', () => {
+  it('rejects the retired --reset-local-seat flag (reset moved to `borg reset-local-connection`)', () => {
     const result = parseAssimilateArgs(['--host', 'localhost:7091', '--here', '--reset-local-seat']);
     expect(result.ok).toBe(false);
     if (!result.ok) {

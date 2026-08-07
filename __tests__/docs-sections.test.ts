@@ -66,7 +66,7 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
 
   it('routes saved-seat lifecycle and recovery topics to the dedicated guide', () => {
     expect(matchDocsSections('seat reattach recovery')[0]?.slug).toBe('seat-lifecycle');
-    expect(matchDocsSections('reset-local-seat').map((s) => s.slug)).toContain('seat-lifecycle');
+    expect(matchDocsSections('reset-local-connection').map((s) => s.slug)).toContain('seat-lifecycle');
     expect(matchDocsSections('duplicate inbox monitor').map((s) => s.slug)).toContain('seat-lifecycle');
     expect(matchDocsSections('evicted seat').map((s) => s.slug)).toContain('seat-lifecycle');
   });

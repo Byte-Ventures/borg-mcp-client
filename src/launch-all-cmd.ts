@@ -53,7 +53,7 @@ async function resolveTargetCube(
     const identities = await deps.readAllProjectIdentities();
     const matches = identities.filter((e) => e.cube.name === args.cubeName);
     if (matches.length === 0) {
-      return { error: `no cube named '${args.cubeName}' found among this machine's saved seats — has any drone assimilated into it?` };
+      return { error: `no cube named '${args.cubeName}' found among this machine's saved connections — has any drone assimilated into it?` };
     }
     // gh#850: distinct cubes can share a name (same name across accounts/
     // environments, or a stale seat). Silently taking matches[0] could launch
@@ -61,13 +61,13 @@ async function resolveTargetCube(
     // cubeId + the project that holds the seat and refuse to guess.
     if (matches.length > 1) {
       const list = matches
-        .map((m) => `  ${m.cube.cubeId}  (seat in ${m.projectPath})`)
+        .map((m) => `  ${m.cube.cubeId}  (drone in ${m.projectPath})`)
         .join('\n');
       return {
         error:
-          `'${args.cubeName}' is ambiguous — ${matches.length} saved seats on this machine share that name:\n${list}\n` +
+          `'${args.cubeName}' is ambiguous — ${matches.length} saved connections on this machine share that name:\n${list}\n` +
           'cd into the intended project and re-run without --cube-name (resolves the active cube), ' +
-          'or clear the stale seat(s) by running `borg reset-local-seat` from the worktree that holds each.',
+          'or clear the stale connection(s) by running `borg reset-local-connection` from the worktree that holds each.',
       };
     }
     return { cubeId: matches[0].cube.cubeId, name: args.cubeName };
@@ -237,7 +237,7 @@ export async function runLaunchAll(
       }
     } else {
       deps.stdout(
-        `No worktrees found for cube '${cubeName}' — have you run \`borg assimilate --worktree\` to create any drone seats?\n`
+        `No worktrees found for cube '${cubeName}' — have you run \`borg assimilate --worktree\` to create any drones?\n`
       );
     }
     return 0;
@@ -290,8 +290,8 @@ export async function runLaunchAll(
     if (status === 'evicted') {
       evictedCount += 1;
       deps.stderr(
-        `skipping ${c.droneLabel} (${c.worktreeDir}): seat no longer in cube (evicted) — ` +
-          `run \`borg cleanup --prune\` to remove the worktree, or \`borg assimilate\` to re-seat fresh.\n`
+        `skipping ${c.droneLabel} (${c.worktreeDir}): drone no longer in cube (evicted) — ` +
+          `run \`borg cleanup --prune\` to remove the worktree, or \`borg assimilate\` to start fresh.\n`
       );
       continue;
     }
@@ -299,7 +299,7 @@ export async function runLaunchAll(
       revokedCount += 1;
       deps.stderr(
         `Local session was revoked.\n` +
-          `Next: run borg reset-local-seat, then borg assimilate --host ${c.apiUrl} --enroll.\n`
+          `Next: run borg reset-local-connection, then borg assimilate --host ${c.apiUrl} --enroll.\n`
       );
       continue;
     }
@@ -307,7 +307,7 @@ export async function runLaunchAll(
       rejectedCount += 1;
       deps.stderr(
         `Local session was superseded by a newer enrollment.\n` +
-          `Next: run borg reset-local-seat, then borg assimilate --host ${c.apiUrl} --enroll.\n`
+          `Next: run borg reset-local-connection, then borg assimilate --host ${c.apiUrl} --enroll.\n`
       );
       continue;
     }
@@ -336,7 +336,7 @@ export async function runLaunchAll(
     // cause-accurate note. Only the authoritative/terminal causes above skip.
     if (status === 'unreachable') {
       deps.stderr(
-        `note: could not reach ${c.droneLabel}'s server to confirm its seat (network/timeout) — launching anyway.\n`
+        `note: could not reach ${c.droneLabel}'s server to confirm that drone (network/timeout) — launching anyway.\n`
       );
     } else if (status === 'endpoint-mismatch') {
       deps.stderr(
@@ -344,11 +344,11 @@ export async function runLaunchAll(
       );
     } else if (status === 'server-failure') {
       deps.stderr(
-        `note: ${c.droneLabel}'s server returned an error while confirming its seat (transient) — launching anyway.\n`
+        `note: ${c.droneLabel}'s server returned an error while confirming that drone (transient) — launching anyway.\n`
       );
     } else if (status === 'indeterminate') {
       deps.stderr(
-        `note: could not confirm ${c.droneLabel}'s seat is live (network/transient) — launching anyway.\n`
+        `note: could not confirm ${c.droneLabel} is live (network/transient) — launching anyway.\n`
       );
     }
     launchable.push(c);

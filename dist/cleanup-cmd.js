@@ -253,7 +253,7 @@ async function classifyWorktree(deps, worktreePath, actualBranch, seat) {
         case 'revoked':
             return { reason: 'SURVIVES-revoked', detail: 'session revoked — recoverable via re-enroll, never delete' };
         case 'live':
-            return { reason: 'SURVIVES-live', detail: 'seat resolves (drone alive)' };
+            return { reason: 'SURVIVES-live', detail: 'connection resolves (drone alive)' };
         case 'indeterminate':
         default:
             return {
@@ -325,14 +325,14 @@ export async function buildCleanupReport(deps) {
             // sibling → REPORT for manual review, never auto-prune (S5). No seat →
             // an arbitrary user worktree we never touch or list.
             if (seat) {
-                rows.push({ worktreePath: wt, wtBranch: null, reason: 'LEGACY-manual-review', detail: 'borg seat outside worktreesHome (pre-gh#556 sibling)' });
+                rows.push({ worktreePath: wt, wtBranch: null, reason: 'LEGACY-manual-review', detail: 'borg connection outside worktreesHome (pre-gh#556 sibling)' });
             }
             continue;
         }
         // Under worktreesHome but no saved seat → not eviction-orphaned
         // (pre-assimilate or hand-made). Report, never auto-prune.
         if (!seat) {
-            rows.push({ worktreePath: wt, wtBranch: null, reason: 'UNKNOWN-no-seat', detail: 'no saved seat — manual review' });
+            rows.push({ worktreePath: wt, wtBranch: null, reason: 'UNKNOWN-no-connection', detail: 'no saved connection — manual review' });
             continue;
         }
         // Use the worktree's ACTUAL checked-out HEAD branch (from porcelain) for

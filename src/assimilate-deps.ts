@@ -474,13 +474,13 @@ export function buildDefaultAssimilateDeps(
           if (params.remint_invalid_prior) {
             if (prepared.result !== 'created' || prepared.drone.id === params.prior_drone_id) {
               await prepared.scrubPending();
-              throw new Error('Borg server did not remint a fresh seat after eviction');
+              throw new Error('Borg server did not remint a fresh drone after eviction');
             }
           } else if (prepared.result !== 'reused' || prepared.drone.id !== params.prior_drone_id) {
             await prepared.scrubPending();
             throw new BorgServerError(
               'ATTACH_CONFLICT',
-              'Borg server did not reattach the saved seat',
+              'Borg server did not reattach the saved connection',
             );
           }
         }

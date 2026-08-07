@@ -59,8 +59,8 @@ describe('tool-result formatters', () => {
   it('EVICTED result matches the terminal recovery contract without harness-specific commands', () => {
     const text = formatEvictedToolResult('borg-mcp');
     expect(text).toBe(
-      `${EVICTED_RESULT_MARKER} This seat was removed from cube borg-mcp.\n\n` +
-      'Borg has stopped listening for activity for this seat. Do not retry this request or restart the loop.\n\n' +
+      `${EVICTED_RESULT_MARKER} This drone was removed from cube borg-mcp.\n\n` +
+      'Borg has stopped listening for activity for this drone. Do not retry this request or restart the loop.\n\n' +
       'Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.\n\n' +
       'To rejoin later, start a new session and use a new invitation from the server operator. Do not re-assimilate from this evicted session.',
     );

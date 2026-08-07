@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { hostname as osHostname } from 'node:os';
 import {
   __resetRegenSessionState,
   formatLogEntryMarkdown,
@@ -669,8 +670,9 @@ describe('ARRIVAL instruction process state (gh#136)', () => {
     const initial = getDronePlaybook();
     expect(initial).toContain('ARRIVAL:');
     expect(initial).toContain(
-      'post one `ARRIVAL: <your-label> (<your-role>) online on <hostname>` (run `hostname`)'
+      `post one \`ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}\`.`
     );
+    expect(initial).not.toContain('(run `hostname`)');
     expect(initial).not.toContain('<project-path>');
     expect(initial).not.toContain('use cwd for the path');
     expect(initial).toContain('an explicit `/mcp` reconnect may show it again');

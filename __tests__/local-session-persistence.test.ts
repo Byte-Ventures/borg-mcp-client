@@ -140,7 +140,7 @@ describe('local ActiveCube session persistence (single store)', () => {
   });
 });
 
-describe('CR#4: reset-local-seat discovers + clears a BOUND-PENDING seat (no false "nothing to reset")', () => {
+describe('CR#4: reset-local-connection discovers + clears a BOUND-PENDING seat (no false "nothing to reset")', () => {
   // Seed a bound-PENDING record (a sibling whose activation failed, bound to THIS
   // worktree) directly through the real seats API, then prove the offline reset
   // snapshot sees it and the exact-delete clears it.

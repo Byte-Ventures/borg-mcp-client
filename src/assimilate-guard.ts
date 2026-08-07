@@ -48,8 +48,8 @@ export function reattachOnlyRefusal(
 ): string {
   if (decision.kind === 'no-identity') {
     return (
-      `◼ This session has no drone seat for this worktree, and in-session borg_assimilate is ` +
-      `re-attach-only (it never creates seats — gh#780). To create a seat for cube ` +
+      `◼ This session has no drone for this worktree, and in-session borg_assimilate is ` +
+      `re-attach-only (it never creates drones — gh#780). To create a drone for cube ` +
       `"${requestedCubeName}", run \`borg assimilate\` in a terminal — it spawns the worktree, ` +
       `persists the identity, and launches the agent in one step.`
     );
@@ -76,9 +76,9 @@ export function reattachFailureMessage(error: {
 }): string {
   const detail = error.message ?? String(error);
   return (
-    `◼ Re-attach failed — this worktree's saved seat is unreachable (likely evicted or its ` +
+    `◼ Re-attach failed — this worktree's saved connection is unreachable (likely evicted or its ` +
     `session was revoked). Server said: ${detail}\n` +
-    `Recover by running \`borg assimilate\` in a terminal to create a fresh seat; ` +
+    `Recover by running \`borg assimilate\` in a terminal to create a fresh drone; ` +
     `in-session borg_assimilate never re-mints (gh#780).`
   );
 }

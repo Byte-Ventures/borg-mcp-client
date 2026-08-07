@@ -132,7 +132,7 @@ export function renderStreamStatus(inputs) {
     else if (ownedByOther) {
         const owner = status.ownership;
         summary = owner.droneLabel && owner.worktree
-            ? `**Stream owned by seat ${owner.droneLabel} in \`${owner.worktree}\`.**`
+            ? `**Stream owned by ${owner.droneLabel} in \`${owner.worktree}\`.**`
             : '**Stream owned by another Borg MCP process.**';
     }
     else if (isNotStarted) {
@@ -200,7 +200,7 @@ export function renderStreamStatus(inputs) {
     }
     if (ownedByOther) {
         const owner = status.ownership;
-        lines.push(`- **stream owner seat**: ${owner.droneLabel ?? '_(unknown)_'}`);
+        lines.push(`- **stream owner**: ${owner.droneLabel ?? '_(unknown)_'}`);
         lines.push(`- **stream owner worktree**: ${owner.worktree ?? '_(unknown)_'}`);
         lines.push(`- **stream owner pid**: ${owner.pid ?? '_(unknown)_'}`);
         lines.push(`- **stream owner cwd**: ${owner.cwd ?? '_(unknown)_'}`);
@@ -208,7 +208,7 @@ export function renderStreamStatus(inputs) {
             ? `${Math.max(0, Math.round(owner.ageMs / 1000))}s`
             : '_(unknown)_'}`);
         lines.push('');
-        lines.push('Continue in the owning seat, or close its duplicate agent session before relaunching from the intended worktree. The live owner releases this lock on exit; a stale lock is reclaimed automatically.');
+        lines.push('Continue as the owning drone, or close its duplicate agent session before relaunching from the intended worktree. The live owner releases this lock on exit; a stale lock is reclaimed automatically.');
     }
     if (wakePath.agentKind === 'opencode' && wakePath.openCode) {
         const delivery = wakePath.openCode.deliveryStates;

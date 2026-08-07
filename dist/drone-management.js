@@ -9,7 +9,7 @@ const defaultDeps = {
     evictDrone,
     refreshActiveCubeMetadata,
 };
-export const STALE_ROLE_DISPLAY_WARNING = 'Local display warning: The server committed this change, but Borg could not refresh this worktree\'s saved seat metadata. Local role details may be stale. Do not retry the reassignment.\n\n' +
+export const STALE_ROLE_DISPLAY_WARNING = 'Local display warning: The server committed this change, but Borg could not refresh this worktree\'s saved connection metadata. Local role details may be stale. Do not retry the reassignment.\n\n' +
     'Run `borg_regen` to refresh the server-authoritative role. If this session still shows the previous role, restart this agent session once. Do not re-assimilate or repeat the management request.';
 function opaqueNotFound() {
     throw new Error('Borg server request failed (HTTP 404)');
