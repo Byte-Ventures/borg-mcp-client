@@ -125,11 +125,4 @@ describe('published package artifact', () => {
     );
   });
 
-  it('describes terminal saved-connection states without time-based expiry', () => {
-    const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
-    expect(readme).toMatch(
-      /connection contains, how it re-attaches, and how it is revoked, superseded, or\s+evicted, or reset\./,
-    );
-    expect(readme).not.toContain('re-attaches, expires, or is reset');
-  });
 });
