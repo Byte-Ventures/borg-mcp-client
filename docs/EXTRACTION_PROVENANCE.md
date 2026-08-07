@@ -18,7 +18,7 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
   client-generated PENDING credential/retry tuple and capability-gated,
   repository-idempotent cube creation required for local dogfood.
 - Initially set the standalone package identity to `2.0.0`. **The current
-  release identity is `2.16.1`.** Extraction and versioning do not authorize
+  release identity is `3.0.0`.** Extraction and versioning do not authorize
   publication.
 
   Spent versions — each burned an immutable tag and published nothing:
@@ -61,5 +61,5 @@ in the `borgmcp-server-0.9.0-release` registry decision. That server and its
 client line pin historical `borgmcp-shared` version `0.8.1` and remain
 immutable. The immutable `v2.0.7` attempt failed before publication and remains
 preserved. The current release identity and publication gate remain governed by
-the reviewed `v2.16.1` source, a fresh annotated tag, and the exact-artifact and
+the reviewed `v3.0.0` source, a fresh annotated tag, and the exact-artifact and
 protected-publication gates.
