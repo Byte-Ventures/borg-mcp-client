@@ -124,4 +124,12 @@ describe('published package artifact', () => {
       /Borg tools are inactive unless\s+the agent session was launched with `borg`\./,
     );
   });
+
+  it('describes terminal saved-connection states without time-based expiry', () => {
+    const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
+    expect(readme).toMatch(
+      /connection contains, how it re-attaches, and how it is revoked, superseded, or\s+reset\./,
+    );
+    expect(readme).not.toContain('re-attaches, expires, or is reset');
+  });
 });
