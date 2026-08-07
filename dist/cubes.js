@@ -34,7 +34,7 @@ let pinnedMcpSeatIdentity = null;
 export class McpSeatIdentityChangedError extends Error {
     code = 'SEAT_IDENTITY_CHANGED';
     constructor() {
-        super('The saved Borg seat changed after this MCP session pinned its identity. Exit this session and relaunch from the intended worktree.');
+        super('This worktree\'s saved connection changed after this MCP session pinned its identity. Exit this session and relaunch from the intended worktree.');
         this.name = 'McpSeatIdentityChangedError';
     }
 }
@@ -298,7 +298,7 @@ export async function snapshotLocalSeat() {
     // CR#4: discover an ACTIVE seat OR a bound-PENDING record (a sibling whose
     // activation failed, bound to THIS worktree by the attach bind-pending step).
     // getActiveSeatForWorktree would MISS the bound-pending record (it requires
-    // state==='active' + a drone id), so `reset-local-seat` would FALSELY report
+    // state==='active' + a drone id), so `reset-local-connection` would FALSELY report
     // "nothing to reset" (exit 0) while a resumable, server-digest-bound bearer
     // persists at rest — a FALSE-SUCCESS revocation failure. getSeatForWorktree sees
     // both, and the offline reset's exact re-check + delete cover the bound-pending

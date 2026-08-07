@@ -32,7 +32,7 @@ export declare function cubeInitHelpText(version: string): string;
  */
 export declare function assimilateHelpText(version: string): string;
 /**
- * Help text for `borg reset-local-seat --help`. The offline, network-free seat
+ * Help text for `borg reset-local-connection --help`. The offline, network-free seat
  * reset recommended by the pin-matched SESSION_REJECTED diagnostic (#1082).
  */
 export declare function resetLocalSeatHelpText(version: string): string;

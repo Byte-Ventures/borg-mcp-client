@@ -242,7 +242,7 @@ async function readStore(): Promise<SeatsFile> {
   const parsed = parseStore(raw);
   if (parsed === null) {
     throw new Error(
-      'Borg seat store is malformed or has an unsupported version; refusing to read it',
+      'Borg private store is malformed or has an unsupported version; refusing to read it',
     );
   }
   return parsed;

@@ -66,7 +66,8 @@ borg assimilate
 ```
 
 Borg creates or reuses a repository-specific cube, registers the new drone, and
-launches your agent CLI with the cube's context.
+launches your agent CLI with the cube's context. Borg tools are inactive unless
+the agent session was launched with `borg`.
 
 ### Resume a saved session
 
@@ -131,8 +132,9 @@ borg assimilate builder --worktree drone-2
 
 See [`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md) for remote enrollment,
 invitations, server recovery, and security details. See
-[`docs/SEAT_LIFECYCLE.md`](docs/SEAT_LIFECYCLE.md) for saved drone connections
-and re-attach behavior.
+[`docs/SEAT_LIFECYCLE.md`](docs/SEAT_LIFECYCLE.md) for what a worktree's saved
+connection contains, how it re-attaches, and how it is revoked,
+superseded, evicted, or reset.
 
 ## Agent Permissions
 

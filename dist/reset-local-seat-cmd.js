@@ -1,5 +1,5 @@
 /**
- * `borg reset-local-seat [--host <host>] [--yes]` — the dedicated LOCAL/OFFLINE
+ * `borg reset-local-connection [--host <host>] [--yes]` — the dedicated LOCAL/OFFLINE
  * seat reset from the ratified client-seat-reset-state-model (Option W).
  *
  * Attach is PURE DIAGNOSIS on a pin-matched SESSION_REJECTED (it mutates
@@ -55,36 +55,36 @@ export async function runResetLocalSeat(flags, deps) {
     // ----- S0: snapshot -----
     const snapshot = await deps.snapshotLocalSeat();
     if (!snapshot) {
-        deps.stdout(`No saved local seat was found for this worktree (${worktree}); nothing to reset.\n`);
+        deps.stdout(`No saved connection was found for this worktree (${worktree}); nothing to reset.\n`);
         return 0;
     }
     // --host normalized-mismatch = honest no-op BEFORE any mutation. This worktree
     // points at a different server than the one named, so it is not the seat the
     // operator asked to reset.
     if (requestedHost !== undefined && requestedHost !== snapshot.apiUrl) {
-        deps.stdout(`This worktree's saved local seat is on ${snapshot.apiUrl}, not ${requestedHost}; ` +
-            `nothing was changed. Re-run \`borg reset-local-seat --host ${snapshot.apiUrl}\` to ` +
-            "reset this worktree's seat.\n");
+        deps.stdout(`This worktree connects to ${snapshot.apiUrl}, not ${requestedHost}; ` +
+            `nothing was changed. Re-run \`borg reset-local-connection --host ${snapshot.apiUrl}\` to ` +
+            "reset this worktree's saved connection.\n");
         return 0;
     }
     const observed = snapshot.observation.state !== 'absent'
         ? `a saved local session credential is present (${snapshot.observation.state})`
         : 'the saved local session credential is already cleared (only the binding remains)';
-    deps.stderr(`This will clear ONLY this worktree's saved local seat on ${snapshot.apiUrl} ` +
+    deps.stderr(`This will clear ONLY this worktree's saved connection to ${snapshot.apiUrl} ` +
         `(worktree ${worktree}) — ${observed}. Server, trust anchor, cube, and sibling ` +
         'worktrees are left untouched. It makes no network call and revokes nothing server-side.\n');
     // ----- S1: consent OUTSIDE any lock -----
     if (deps.isTTY()) {
-        const answer = await deps.prompt(`Reset this worktree's saved local seat now? [y/N]: `);
+        const answer = await deps.prompt(`Reset this worktree's saved connection now? [y/N]: `);
         const normalized = answer.trim().toLowerCase();
         if (normalized !== 'y' && normalized !== 'yes') {
-            deps.stderr("audit: no changes made — this worktree's saved seat was left in place.\n");
+            deps.stderr("audit: no changes made — this worktree's saved connection was left in place.\n");
             return 0;
         }
     }
     else if (flags.yes !== true) {
         deps.stderr('audit: no changes made — stdin is non-interactive and --yes was not passed. Re-run ' +
-            '`borg reset-local-seat --yes` to clear this worktree\'s saved seat without a prompt.\n');
+            '`borg reset-local-connection --yes` to clear this worktree\'s saved connection without a prompt.\n');
         return 1;
     }
     // ----- S2/S3: re-verify under lock, credential-FIRST delete, then binding -----
@@ -93,13 +93,13 @@ export async function runResetLocalSeat(flags, deps) {
         outcome = await deps.resetLocalSeatBinding(snapshot);
     }
     catch {
-        deps.stderr(`audit: no changes made — the local seat reset for ${snapshot.apiUrl} (worktree ` +
+        deps.stderr(`audit: no changes made — the connection reset for ${snapshot.apiUrl} (worktree ` +
             `${worktree}) could not complete (local credential store error). Retry — it is ` +
             'safe to re-run.\n');
         return 1;
     }
     if (outcome.outcome === 'reset') {
-        deps.stderr(`audit: this worktree's saved local seat for ${snapshot.apiUrl} (worktree ${worktree}) ` +
+        deps.stderr(`audit: this worktree's saved connection to ${snapshot.apiUrl} (worktree ${worktree}) ` +
             'was cleared; server, trust anchor, cube, and sibling worktrees unchanged.\n');
         let remaining = null;
         try {
@@ -110,9 +110,9 @@ export async function runResetLocalSeat(flags, deps) {
             // into a false failure; fall back to the universally valid enrollment path.
         }
         if (remaining?.apiUrl === snapshot.apiUrl) {
-            deps.stdout(`Another saved active seat remains for this worktree on ${snapshot.apiUrl}. ` +
+            deps.stdout(`Another saved connection remains for this worktree on ${snapshot.apiUrl}. ` +
                 `Re-attach with ${reattachCommand(snapshot.apiUrl)}; Borg will revalidate that ` +
-                'seat with the server before launch.\n');
+                'it with the server before launch.\n');
         }
         else {
             deps.stdout(recoveryGuidance(snapshot.apiUrl));
@@ -120,13 +120,13 @@ export async function runResetLocalSeat(flags, deps) {
         return 0;
     }
     if (outcome.outcome === 'no-binding') {
-        deps.stdout(`No saved local seat remained for this worktree (${worktree}); nothing to reset.\n`);
+        deps.stdout(`No saved connection remained for this worktree (${worktree}); nothing to reset.\n`);
         return 0;
     }
     // 'changed': the seat drifted between the snapshot and the commit re-check
     // (a concurrent re-enroll wrote a fresh bearer, or another process already
     // reset it). Never clobber a replacement — report the honest no-op.
-    deps.stdout(`This worktree's saved local seat on ${snapshot.apiUrl} changed since it was read ` +
+    deps.stdout(`This worktree's saved connection to ${snapshot.apiUrl} changed since it was read ` +
         "(a concurrent re-enroll or reset); nothing was changed. Re-run to observe the current " +
         'state.\n');
     return 0;
@@ -153,7 +153,7 @@ export function buildDefaultResetLocalSeatDeps() {
         stderr: (line) => process.stderr.write(line),
     };
 }
-/** Parse args after `borg reset-local-seat`. Supports `--host <h>` / `--host=<h>` / `--yes` / `-y`. */
+/** Parse args after `borg reset-local-connection`. Supports `--host <h>` / `--host=<h>` / `--yes` / `-y`. */
 export function parseResetLocalSeatArgs(rawArgs) {
     const flags = {};
     for (let i = 0; i < rawArgs.length; i += 1) {
@@ -179,7 +179,7 @@ export function parseResetLocalSeatArgs(rawArgs) {
         else {
             return {
                 ok: false,
-                error: `unexpected argument: ${arg}. Usage: borg reset-local-seat [--host <host>] [--yes]`,
+                error: `unexpected argument: ${arg}. Usage: borg reset-local-connection [--host <host>] [--yes]`,
             };
         }
     }

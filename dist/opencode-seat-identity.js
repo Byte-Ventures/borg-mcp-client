@@ -44,26 +44,26 @@ export async function resolveOpenCodeSeatIdentity(deps) {
         : sessionWorktree;
     const active = await deps.getActiveCubeForWorktree(identityWorktree);
     if (!active) {
-        throw new OpenCodeSeatIdentityError('SEAT_NOT_FOUND', 'No active Borg seat is bound to the OpenCode session directory.', sessionWorktree);
+        throw new OpenCodeSeatIdentityError('SEAT_NOT_FOUND', 'No Borg drone is bound to the OpenCode session directory.', sessionWorktree);
     }
     if (typeof active.worktree !== 'string' || resolve(active.worktree) !== resolve(sessionWorktree)) {
-        throw new OpenCodeSeatIdentityError('SEAT_WORKTREE_MISMATCH', 'The resolved Borg seat belongs to a different worktree than the OpenCode session.', sessionWorktree, active);
+        throw new OpenCodeSeatIdentityError('SEAT_WORKTREE_MISMATCH', 'The resolved Borg drone belongs to a different worktree than the OpenCode session.', sessionWorktree, active);
     }
     deps.pinSeatIdentity(active);
     return active;
 }
 export function formatOpenCodeSeatIdentityError(error, childCwd) {
     const lines = [
-        `Borg OpenCode seat identity error [${error.code}]`,
+        `Borg OpenCode identity error [${error.code}]`,
         '',
         error.message,
         `- OpenCode session directory: ${error.sessionDirectory ?? 'unavailable'}`,
         `- Borg MCP child cwd: ${childCwd}`,
     ];
     if (error.seat) {
-        lines.push(`- Resolved seat: ${error.seat.droneLabel} (${error.seat.worktree})`);
+        lines.push(`- Resolved drone: ${error.seat.droneLabel} (${error.seat.worktree})`);
     }
-    lines.push('', 'The Borg stream and OpenCode wake injection were not started.', 'Exit this session and run `borg --cli opencode` from the intended worktree. If that worktree’s saved seat is stale, run `borg reset-local-seat` from that exact worktree before assimilating again.');
+    lines.push('', 'The Borg stream and OpenCode wake injection were not started.', 'Exit this session and run `borg --cli opencode` from the intended worktree. If that worktree\'s saved connection is stale, run `borg reset-local-connection` from that exact worktree before assimilating again.');
     return lines.join('\n');
 }
 //# sourceMappingURL=opencode-seat-identity.js.map

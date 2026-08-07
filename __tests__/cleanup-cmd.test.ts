@@ -285,18 +285,18 @@ describe('buildCleanupReport classification', () => {
     expect(await reasonFor({}, 'rejected')).toBe('SURVIVES-superseded');
     expect(await reasonFor({}, 'revoked')).toBe('SURVIVES-revoked');
   });
-  it('SURVIVES-live when the seat resolves', async () => {
+  it('SURVIVES-live when the connection resolves', async () => {
     expect(await reasonFor({}, 'live')).toBe('SURVIVES-live');
   });
   it('UNKNOWN-indeterminate on transient/401/pre-deploy (S3 — never delete)', async () => {
     expect(await reasonFor({}, 'indeterminate')).toBe('UNKNOWN-indeterminate');
   });
 
-  it('UNKNOWN-no-seat for a worktreesHome dir without a saved seat', async () => {
+  it('UNKNOWN-no-connection for a worktreesHome dir without a saved connection', async () => {
     const wt = `${WT_HOME}/repo/noseat`;
     const { deps } = makeDeps([{ path: wt }], [], () => 'evicted');
     const { rows } = await buildCleanupReport({ ...(deps as any) });
-    expect(rows.find((r) => r.worktreePath === wt)?.reason).toBe('UNKNOWN-no-seat');
+    expect(rows.find((r) => r.worktreePath === wt)?.reason).toBe('UNKNOWN-no-connection');
   });
 
   it('LEGACY-manual-review for a seat outside worktreesHome (never pruned)', async () => {
@@ -393,7 +393,7 @@ describe('runCleanup prune behavior', () => {
   it('EXECUTING --prune over a superseded-only fleet removes ZERO rows', async () => {
     // Part (E): a superseded session is SURVIVES-superseded, not
     // PRUNABLE. Even under --prune, no worktree remove / branch delete fires — the
-    // seat is recoverable via `borg reset-local-seat` + re-enroll, never destroyed.
+    // seat is recoverable via `borg reset-local-connection` + re-enroll, never destroyed.
     const rejected1 = `${WT_HOME}/repo/rejected1`;
     const { deps, calls, out } = makeDeps(
       [{ path: rejected1, merged: true }],

@@ -145,7 +145,7 @@ function staleLockError(lockPath, held) {
     const who = held
         ? `its recorded owner process (pid ${held.pid}, started ${held.startTime}) is no longer running`
         : 'its lock file is missing a valid owner identity or is corrupt';
-    return new Error(`Borg seat store lock file ${lockPath} is stale: ${who}. ` +
+    return new Error(`Borg private store lock file ${lockPath} is stale: ${who}. ` +
         'Borg will NOT remove it automatically. If no borg process is running on this ' +
         `machine, delete ${lockPath} and retry; otherwise wait for the other borg process to finish.`);
 }
@@ -237,7 +237,7 @@ export async function atomicWrite0600(filePath, data, options = {}) {
  */
 async function assertSecureStorePerms(filePath, fileMode) {
     if ((fileMode & 0o077) !== 0) {
-        throw new Error(`Borg seat store file ${filePath} has insecure permissions ` +
+        throw new Error(`Borg private store file ${filePath} has insecure permissions ` +
             `(0${(fileMode & 0o777).toString(8)}, expected 0600); refusing to read a credential from it`);
     }
     const dir = dirname(filePath);
@@ -251,7 +251,7 @@ async function assertSecureStorePerms(filePath, fileMode) {
         throw err;
     }
     if ((dirStat.mode & 0o077) !== 0) {
-        throw new Error(`Borg seat store directory ${dir} has insecure permissions ` +
+        throw new Error(`Borg private store directory ${dir} has insecure permissions ` +
             `(0${(dirStat.mode & 0o777).toString(8)}, expected 0700); refusing to read a credential under it`);
     }
 }
@@ -327,7 +327,7 @@ export async function readStoreFile(filePath, options = {}) {
  * release it on EVERY path (finally) by unlinking OUR OWN lock. Acquire is an atomic
  * `open(lockPath,'wx',0o600)`. On EEXIST the lock is held:
  *   - holder PID ALIVE → bounded wait/retry (attempts×waitMs), then throw the truthful
- *     transient 'Borg seat store is busy' error;
+ *     transient 'Borg private store is busy' error;
  *   - holder PID DEAD, or the payload is missing/unparseable → FAIL CLOSED naming the
  *     exact lockfile path + the recorded dead pid/start-time. Borg NEVER auto-deletes
  *     or steals it (no reclaim, no rename-claim). The operator clears it by hand only
@@ -402,7 +402,7 @@ export async function withStoreLock(lockPath, op, opts = {}) {
                 });
             }
         }
-        throw new Error('Borg seat store is busy');
+        throw new Error('Borg private store is busy');
     }
     finally {
         await unlink(tmp).catch(() => { });
@@ -436,7 +436,7 @@ export async function withStore(storePath, emptyState, parse, op, options = {}) 
                 loaded = null;
             }
             if (loaded === null) {
-                throw new Error('Borg seat store is malformed or has an unsupported version; refusing to overwrite it');
+                throw new Error('Borg private store is malformed or has an unsupported version; refusing to overwrite it');
             }
             data = loaded;
         }

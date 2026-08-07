@@ -78,7 +78,7 @@ export const DOCS_SECTIONS: DocsSection[] = [
     url: SEAT_LIFECYCLE_URL,
     page: "docs/SEAT_LIFECYCLE.md",
     summary: "Saved-seat states, re-attach and reset recovery, duplicate-session guards, and deterministic multi-seat selection.",
-    keywords: ["seat", "lifecycle", "reattach", "re-attach", "reset-local-seat", "evicted", "revoked", "superseded", "inbox monitor", "multiple seats", "silent deafness"],
+    keywords: ["seat", "lifecycle", "reattach", "re-attach", "reset-local-connection", "evicted", "revoked", "superseded", "inbox monitor", "multiple seats", "silent deafness"],
   },
   {
     slug: "self-hosting",

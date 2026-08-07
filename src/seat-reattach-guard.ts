@@ -76,7 +76,7 @@ export function formatSeatReattachRefusal(
       ? ''
       : ` Its heartbeat is ${holder.heartbeat}, so the process may be wedged.`;
   return (
-    `This worktree's Borg seat already has a live session (inbox monitor pid ${holder.pid}).${heartbeat}\n` +
+    `This worktree's Borg drone already has a live session (inbox monitor pid ${holder.pid}).${heartbeat}\n` +
     'No agent was launched. Stop the existing session or use a fresh worktree with `borg assimilate --worktree <name>`. ' +
     `If the live monitor is wedged, override once with \`${forcedCommand}\`.\n`
   );

@@ -71,7 +71,7 @@ describe('reattachOnlyRefusal', () => {
 describe('reattachFailureMessage', () => {
   it('surfaces seat-unreachable guidance for every failure, embedding the server detail', () => {
     const authMsg = reattachFailureMessage({ message: 'Authentication required. Run: borg setup' });
-    expect(authMsg).toMatch(/seat/i);
+    expect(authMsg).toMatch(/connection/i);
     expect(authMsg).toMatch(/borg assimilate/);
     expect(authMsg).toContain('Authentication required. Run: borg setup');
 
@@ -79,13 +79,13 @@ describe('reattachFailureMessage', () => {
       name: 'RefreshTransientError',
       message: 'Failed to refresh',
     });
-    expect(transientMsg).toMatch(/seat/i);
+    expect(transientMsg).toMatch(/connection/i);
     expect(transientMsg).toContain('Failed to refresh');
   });
 
   it('non-auth failures surface seat-unreachable guidance without re-minting advice', () => {
     const msg = reattachFailureMessage({ message: 'HTTP 403: drone session not found' });
-    expect(msg).toMatch(/seat/i);
+    expect(msg).toMatch(/connection/i);
     expect(msg).toMatch(/borg assimilate/);
     expect(msg).toMatch(/terminal/i);
     expect(msg).toContain('HTTP 403: drone session not found');

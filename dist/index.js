@@ -407,7 +407,7 @@ export async function main() {
                             `# Re-attached to cube: ${displayIdentity.cubeName}`,
                             ``,
                             `**Drone label:** ${displayIdentity.droneLabel}`,
-                            `**Seat:** existing identity reused — no new drone minted (gh#780)`,
+                            `**Drone:** existing identity reused — no new drone minted (gh#780)`,
                             ``,
                             ``,
                         ].join('\n');

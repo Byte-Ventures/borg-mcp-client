@@ -23,8 +23,8 @@ export function renderAssimilationWelcome(droneLabel, roleName, cubeName, useCol
     return [
         `${check} Attached \`${droneLabel}\` to \`${roleName}\` in cube \`${cubeName}\`.`,
         ``,
-        `In the launched agent, run \`borg_whoami\` and \`borg_roster\` to verify the seat`,
-        `and begin coordinating.`,
+        `In the launched agent, run \`borg_whoami\` and \`borg_roster\``,
+        `to verify the connection and begin coordinating.`,
         `Launch future sessions in this repository with \`borg\`.`,
         ...teammateLines,
         ``,

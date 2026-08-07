@@ -197,9 +197,9 @@ describe('renderStreamStatus — 5-state top-line per drone-4 contract', () => {
     });
 
     expect(out.split('\n')[0]).toBe(
-      '**Stream owned by seat reviewer-1 in `/work/borg-mcp-reviewer`.**'
+      '**Stream owned by reviewer-1 in `/work/borg-mcp-reviewer`.**'
     );
-    expect(out).toContain('- **stream owner seat**: reviewer-1');
+    expect(out).toContain('- **stream owner**: reviewer-1');
     expect(out).toContain('- **stream owner worktree**: /work/borg-mcp-reviewer');
     expect(out).toContain('- **stream owner pid**: 1234');
     expect(out).toContain('- **stream owner cwd**: /work/borg-mcp-codex');

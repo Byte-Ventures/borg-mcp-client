@@ -117,7 +117,7 @@ describe('guided repository cube initialization', () => {
       name: 'Product API', template: 'starter', workingRepoName: 'repo',
     }));
     expect(inputDeps.write).toHaveBeenCalledWith(expect.stringContaining(
-      'Continuing with role and seat setup…',
+      'Continuing with role and connection setup…',
     ));
   });
 

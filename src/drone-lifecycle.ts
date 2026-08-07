@@ -16,7 +16,7 @@ export const CUBE_DELETED_CODE = 'CUBE_DELETED';
 
 export class DroneEvictedError extends Error {
   constructor(
-    message = 'This seat was removed from the cube.'
+    message = 'This drone was removed from the cube.'
   ) {
     super(message);
     this.name = 'DroneEvictedError';
@@ -45,8 +45,8 @@ export const CUBE_DELETED_RESULT_MARKER = '[CUBE-DELETED]';
 export function formatEvictedToolResult(cubeName?: string): string {
   const cube = cubeName ?? 'the selected cube';
   return (
-    `${EVICTED_RESULT_MARKER} This seat was removed from cube ${cube}.\n\n` +
-    'Borg has stopped listening for activity for this seat. Do not retry this request or restart the loop.\n\n' +
+    `${EVICTED_RESULT_MARKER} This drone was removed from cube ${cube}.\n\n` +
+    'Borg has stopped listening for activity for this drone. Do not retry this request or restart the loop.\n\n' +
     'Your worktree and project files are unchanged. Finish any local file safety checks, then end this agent session.\n\n' +
     'To rejoin later, start a new session and use a new invitation from the server operator. Do not re-assimilate from this evicted session.'
   );

@@ -338,7 +338,7 @@ export async function sendBorgServerAttach(
         if (rejectedCode === ErrorCode.SESSION_REJECTED) {
           throw new BorgServerError(
             'SESSION_REJECTED',
-            'Borg server rejected the session: the seat is already bound to another session',
+            'Borg server rejected the session: this worktree\'s connection is already bound to another session',
           );
         }
         if (rejectedCode === ErrorCode.SESSION_REVOKED) {
