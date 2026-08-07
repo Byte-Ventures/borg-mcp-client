@@ -55,7 +55,7 @@ import {
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
-import { defaultCliChoiceDeps, detectCliAvailability, installedCliNames, parseCliFlag, resolveCliChoice } from './cli-platform.js';
+import { configuredCliNames, defaultCliChoiceDeps, detectCliAvailability, detectCliConfiguration, parseCliFlag, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
 import {
   BORG_CODEX_REMOTE_WAKE_ENV,
@@ -357,10 +357,12 @@ async function main() {
       stdoutIsTTY,
     })
   ) {
-    const otherInstalledClis =
-      installedCliNames(detectCliAvailability()).filter((c) => c !== cli);
+    const otherConfiguredClis = configuredCliNames(
+      detectCliAvailability(),
+      detectCliConfiguration(),
+    ).filter((c) => c !== cli);
     const action = await runBareLaunchMenu(
-      { defaultCli: cli, otherInstalledClis, hasLaunchAllTargets: await hasLaunchAllTargets() },
+      { defaultCli: cli, otherConfiguredClis, hasLaunchAllTargets: await hasLaunchAllTargets() },
       prompt
     );
     if (action.kind === 'launch-all') {

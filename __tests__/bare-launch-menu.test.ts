@@ -113,7 +113,7 @@ describe('gh#967 — explicit --cli launch-all hint', () => {
 
 describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
   it('option 1 (launch default) is always present and names the default cli', () => {
-    const opts = buildLaunchMenuOptions({ defaultCli: 'claude', otherInstalledClis: [], hasLaunchAllTargets: false });
+    const opts = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: [], hasLaunchAllTargets: false });
     expect(opts).toHaveLength(1);
     expect(opts[0].key).toBe('1');
     expect(opts[0].action).toEqual({ kind: 'launch', cli: 'claude' });
@@ -121,17 +121,17 @@ describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
   });
 
   it('each installed non-default agent gets its own option; launches it one-shot', () => {
-    const withOther = buildLaunchMenuOptions({ defaultCli: 'claude', otherInstalledClis: ['codex'], hasLaunchAllTargets: false });
+    const withOther = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: ['codex'], hasLaunchAllTargets: false });
     const opt2 = withOther.find((o) => o.action.kind === 'launch' && o.action.cli === 'codex');
     expect(opt2).toBeDefined();
     expect(opt2!.label).toContain('Codex');
     // not shown when the other agent isn't installed
-    const noOther = buildLaunchMenuOptions({ defaultCli: 'claude', otherInstalledClis: [], hasLaunchAllTargets: false });
+    const noOther = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: [], hasLaunchAllTargets: false });
     expect(noOther.some((o) => o.action.kind === 'launch' && o.action.cli === 'codex')).toBe(false);
   });
 
   it('when multiple other agents are installed, each gets a sequential option', () => {
-    const opts = buildLaunchMenuOptions({ defaultCli: 'claude', otherInstalledClis: ['codex', 'opencode'], hasLaunchAllTargets: false });
+    const opts = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: ['codex', 'opencode'], hasLaunchAllTargets: false });
     expect(opts).toHaveLength(3);
     expect(opts[0].key).toBe('1');
     expect(opts[0].action).toEqual({ kind: 'launch', cli: 'claude' });
@@ -142,28 +142,28 @@ describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
   });
 
   it('option shown only when there are launch-all targets', () => {
-    const withTargets = buildLaunchMenuOptions({ defaultCli: 'codex', otherInstalledClis: [], hasLaunchAllTargets: true });
+    const withTargets = buildLaunchMenuOptions({ defaultCli: 'codex', otherConfiguredClis: [], hasLaunchAllTargets: true });
     expect(withTargets.some((o) => o.action.kind === 'launch-all')).toBe(true);
-    const noTargets = buildLaunchMenuOptions({ defaultCli: 'codex', otherInstalledClis: [], hasLaunchAllTargets: false });
+    const noTargets = buildLaunchMenuOptions({ defaultCli: 'codex', otherConfiguredClis: [], hasLaunchAllTargets: false });
     expect(noTargets.some((o) => o.action.kind === 'launch-all')).toBe(false);
   });
 
   it('keys are sequential (no gaps) regardless of which options are hidden', () => {
     // no others, launch-all present → launch-all gets key "2", not "3" (no gap menu).
-    const opts = buildLaunchMenuOptions({ defaultCli: 'claude', otherInstalledClis: [], hasLaunchAllTargets: true });
+    const opts = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: [], hasLaunchAllTargets: true });
     expect(opts.map((o) => o.key)).toEqual(['1', '2']);
     expect(opts[1].action).toEqual({ kind: 'launch-all' });
     // one other + launch-all → 1,2,3
-    const threeOpts = buildLaunchMenuOptions({ defaultCli: 'claude', otherInstalledClis: ['codex'], hasLaunchAllTargets: true });
+    const threeOpts = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: ['codex'], hasLaunchAllTargets: true });
     expect(threeOpts.map((o) => o.key)).toEqual(['1', '2', '3']);
     // two others + launch-all → 1,2,3,4
-    const fourOpts = buildLaunchMenuOptions({ defaultCli: 'claude', otherInstalledClis: ['codex', 'opencode'], hasLaunchAllTargets: true });
+    const fourOpts = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: ['codex', 'opencode'], hasLaunchAllTargets: true });
     expect(fourOpts.map((o) => o.key)).toEqual(['1', '2', '3', '4']);
   });
 });
 
 describe('gh#853 — resolveLaunchMenuChoice (selection → action)', () => {
-  const options = buildLaunchMenuOptions({ defaultCli: 'claude', otherInstalledClis: ['codex'], hasLaunchAllTargets: true });
+  const options = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: ['codex'], hasLaunchAllTargets: true });
 
   it('empty input / Enter → option 1 (default)', () => {
     expect(resolveLaunchMenuChoice(options, '')).toEqual({ ok: true, action: { kind: 'launch', cli: 'claude' } });
@@ -199,7 +199,7 @@ describe('gh#853 — runBareLaunchMenu (orchestration)', () => {
   it('collapses to a direct default launch (NO prompt) when only option 1 applies', async () => {
     const prompt = vi.fn(async () => '');
     const action = await runBareLaunchMenu(
-      { defaultCli: 'claude', otherInstalledClis: [], hasLaunchAllTargets: false },
+      { defaultCli: 'claude', otherConfiguredClis: [], hasLaunchAllTargets: false },
       prompt
     );
     expect(action).toEqual({ kind: 'launch', cli: 'claude' });
@@ -209,7 +209,7 @@ describe('gh#853 — runBareLaunchMenu (orchestration)', () => {
   it('renders + maps the selection when there is a real choice', async () => {
     const prompt = vi.fn(async () => '2');
     const action = await runBareLaunchMenu(
-      { defaultCli: 'claude', otherInstalledClis: ['codex'], hasLaunchAllTargets: true },
+      { defaultCli: 'claude', otherConfiguredClis: ['codex'], hasLaunchAllTargets: true },
       prompt
     );
     expect(prompt).toHaveBeenCalledTimes(1);
@@ -219,7 +219,7 @@ describe('gh#853 — runBareLaunchMenu (orchestration)', () => {
   it('re-prompts on invalid input, then accepts a valid one', async () => {
     const prompt = vi.fn().mockResolvedValueOnce('9').mockResolvedValueOnce('3');
     const action = await runBareLaunchMenu(
-      { defaultCli: 'claude', otherInstalledClis: ['codex'], hasLaunchAllTargets: true },
+      { defaultCli: 'claude', otherConfiguredClis: ['codex'], hasLaunchAllTargets: true },
       prompt
     );
     expect(prompt).toHaveBeenCalledTimes(2);
@@ -229,7 +229,7 @@ describe('gh#853 — runBareLaunchMenu (orchestration)', () => {
   it('exhausting attempts falls back to the safe default (option 1)', async () => {
     const prompt = vi.fn(async () => 'nonsense');
     const action = await runBareLaunchMenu(
-      { defaultCli: 'codex', otherInstalledClis: ['claude'], hasLaunchAllTargets: false },
+      { defaultCli: 'codex', otherConfiguredClis: ['claude'], hasLaunchAllTargets: false },
       prompt,
       { maxAttempts: 2 }
     );
