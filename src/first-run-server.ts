@@ -178,8 +178,8 @@ export async function offerFirstRunServerInstall(
         ? 'Installation was cancelled because confirmation input ended.'
         : 'Installation was declined.';
     const setupRecovery = options.initializeServer
-      ? ' and no agent configuration was written. Run `borg setup` again to configure your agents.'
-      : '';
+      ? ', and no agent configuration was written. Run `borg setup` again to configure your agents.'
+      : '.';
     deps.stderr(
       `${reason} No server package or server state was changed${setupRecovery}\n` +
       `To install it later, run \`${command}\`. Then run \`borg server setup\` and \`borg server start\`.\n`,

@@ -222,6 +222,7 @@ describe('offerFirstRunServerInstall', () => {
       const output = d.stderr.mock.calls.map(([text]) => String(text)).join('');
       expect(output).not.toContain('no agent configuration was written');
       expect(output).not.toContain('Run `borg setup` again');
+      expect(output).toContain('No server package or server state was changed.\n');
     },
   );
 
@@ -242,6 +243,11 @@ describe('offerFirstRunServerInstall', () => {
       expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
         'Run `borg setup` again',
       ));
+      const output = d.stderr.mock.calls.map(([text]) => String(text)).join('');
+      expect(output).toContain(
+        'No server package or server state was changed, and no agent configuration was written. ' +
+        'Run `borg setup` again to configure your agents.\n',
+      );
     },
   );
 
