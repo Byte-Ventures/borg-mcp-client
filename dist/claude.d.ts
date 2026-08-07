@@ -12,8 +12,6 @@
  *   borg setup          → Re-route to the setup wizard
  *   borg spawn <name>   → Create a sibling git worktree + launch a
  *                         fresh drone inside it (see spawn.ts)
- *   borg sync           → Advance the current worktree across the 5
- *                         lifecycle states (see sync.ts, gh#33)
  *   borg server <cmd>   → Forward a lifecycle command to borg-mcp-server
  */
 import { spawn } from 'child_process';

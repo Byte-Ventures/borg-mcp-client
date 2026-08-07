@@ -12,13 +12,6 @@ const DEFAULT_NEW_CUBE_TEMPLATE = NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
 export function isHelpFlag(arg) {
     return arg === '--help' || arg === '-h';
 }
-export function syncHelpText(version) {
-    return (`borg sync (borgmcp ${version}) — update this Borg worktree from origin/main\n\n` +
-        `Usage:\n` +
-        `  borg sync             Update safely; refuse if the worktree is dirty\n` +
-        `  borg sync --prune     Also delete a merged local feature branch\n` +
-        `  borg sync --help      Show this help\n`);
-}
 export function cleanupHelpText(version) {
     return (`borg cleanup (borgmcp ${version}) — review orphaned Borg-managed worktrees\n\n` +
         `Usage:\n` +
@@ -49,7 +42,6 @@ export function clientSubcommandHelpText(command, args, version) {
         case 'assimilate': return assimilateHelpText(version);
         case 'reset-local-connection': return resetLocalSeatHelpText(version);
         case 'recover-enrollment': return recoverEnrollmentHelpText(version);
-        case 'sync': return syncHelpText(version);
         case 'cleanup': return cleanupHelpText(version);
         case 'launch-all': return launchAllHelpText(version);
         default: return null;
@@ -82,7 +74,6 @@ export function topLevelHelpText(version) {
         `  borg server cube init    Initialize this repository's cube without creating a drone\n` +
         `  borg reset-local-connection  Clear ONLY this worktree's saved connection to its cube (offline; after a rejection)\n` +
         `  borg recover-enrollment  Restore or clear ONLY one failed server enrollment transaction\n` +
-        `  borg sync [--prune]      Sync this worktree's branch to origin/main\n` +
         `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
         `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
         `  borg launch-all [cube] --cli claude|codex|opencode\n` +

@@ -15,9 +15,7 @@ import {
   worktreesHome,
   isCleanTree,
   classifyDirty,
-  isFastForward,
   isMerged,
-  syncWorktree,
   adoptWorktree,
   cleanupMerged,
   type RunSync,
@@ -90,61 +88,10 @@ describe('classifyDirty', () => {
   });
 });
 
-describe('isFastForward / isMerged', () => {
-  it('isFastForward true when branch is an ancestor of ref', () => {
-    const { run } = scriptedRun({ 'merge-base --is-ancestor wt-x origin/main': { status: 0 } });
-    expect(isFastForward(run, '/wt', 'wt-x', 'origin/main')).toBe(true);
-  });
-  it('isFastForward false when diverged (is-ancestor non-zero)', () => {
-    const { run } = scriptedRun({ 'merge-base --is-ancestor wt-x origin/main': { status: 1 } });
-    expect(isFastForward(run, '/wt', 'wt-x', 'origin/main')).toBe(false);
-  });
+describe('isMerged', () => {
   it('isMerged true when feature tip is an ancestor of origin/main', () => {
     const { run } = scriptedRun({ 'merge-base --is-ancestor fix/foo origin/main': { status: 0 } });
     expect(isMerged(run, '/wt', 'fix/foo', 'origin/main')).toBe(true);
-  });
-});
-
-describe('syncWorktree (Q2 — ff-only, clean-gated)', () => {
-  it('fast-forwards when clean + behind (ff-possible + ahead)', () => {
-    const { run, calls } = scriptedRun({
-      'status --porcelain': { status: 0, stdout: '' },
-      'merge-base --is-ancestor wt-x origin/main': { status: 0 },
-      'rev-list --count wt-x..origin/main': { status: 0, stdout: '3' },
-    });
-    const res = syncWorktree(run, '/wt', 'wt-x', 'origin/main');
-    expect(res.action).toBe('fast-forwarded');
-    expect(calls).toContainEqual(['merge', '--ff-only', 'origin/main']);
-  });
-
-  it('reports already-current (no merge) when branch tip equals ref', () => {
-    const { run, calls } = scriptedRun({
-      'status --porcelain': { status: 0, stdout: '' },
-      'merge-base --is-ancestor wt-x origin/main': { status: 0 },
-      'rev-list --count wt-x..origin/main': { status: 0, stdout: '0' },
-    });
-    const res = syncWorktree(run, '/wt', 'wt-x', 'origin/main');
-    expect(res.action).toBe('already-current');
-    expect(calls).not.toContainEqual(['merge', '--ff-only', 'origin/main']);
-  });
-
-  it('skips + surfaces when dirty — NO git mutation, never reset/checkout', () => {
-    const { run, calls } = scriptedRun({
-      'status --porcelain': { status: 0, stdout: ' M src/x.ts\n' },
-    });
-    const res = syncWorktree(run, '/wt', 'wt-x', 'origin/main');
-    expect(res.action).toBe('skipped-dirty');
-    expect(calls).not.toContainEqual(['merge', '--ff-only', 'origin/main']);
-    expect(calls.some((a) => a[0] === 'reset')).toBe(false);
-    expect(calls.some((a) => a[0] === 'checkout' && a[1] === '--')).toBe(false);
-  });
-
-  it('skips + warns when diverged (clean but not ff)', () => {
-    const { run } = scriptedRun({
-      'status --porcelain': { status: 0, stdout: '' },
-      'merge-base --is-ancestor wt-x origin/main': { status: 1 },
-    });
-    expect(syncWorktree(run, '/wt', 'wt-x', 'origin/main').action).toBe('skipped-diverged');
   });
 });
 
@@ -277,7 +224,7 @@ describe('NO-TRAVERSAL — both <suffix> sources are provably safe (gh#556 Part 
   });
 });
 
-describe('wt-branch UNAFFECTED by the relocation + spawn↔sync round-trip (gh#556 Part 1)', () => {
+describe('wt-branch UNAFFECTED by the relocation + spawn↔lifecycle round-trip (gh#556 Part 1)', () => {
   it('new basename <suffix> maps to wt-<suffix> (== old <repo>-<suffix> basename)', () => {
     // OLD scheme: basename was `${repo}-${suffix}` → strip prefix → wt-<suffix>.
     expect(perWorktreeBranchName('myrepo-builder', 'myrepo')).toBe('wt-builder');
@@ -289,7 +236,7 @@ describe('wt-branch UNAFFECTED by the relocation + spawn↔sync round-trip (gh#5
     const repo = 'myrepo';
     const suffix = 'review-1';
     const wtPath = computeWorktreePath('/home/test', repo, suffix);
-    // sync.ts re-derives via perWorktreeBranchName(basename(thisDir), basename(mainDir)).
+    // The lifecycle branch derivation uses the same basename rule as the spawn path.
     const leaf = wtPath.split('/').pop()!;
     expect(perWorktreeBranchName(leaf, repo)).toBe(`wt-${suffix}`); // matches the spawn branch
   });

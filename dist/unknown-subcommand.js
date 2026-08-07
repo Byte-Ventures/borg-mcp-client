@@ -18,7 +18,6 @@ export const KNOWN_SUBCOMMANDS = [
     'reset-local-connection',
     'recover-enrollment',
     'spawn',
-    'sync',
     'cleanup',
     'launch-all',
     'server',
