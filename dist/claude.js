@@ -43,7 +43,7 @@ import { configureSelectedLaunchCli, explicitCliLaunchHint, runBareLaunchMenu, s
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
-import { defaultCliChoiceDeps, detectCliAvailability, installedCliNames, parseCliFlag, resolveCliChoice } from './cli-platform.js';
+import { configuredCliNames, defaultCliChoiceDeps, detectCliAvailability, detectCliConfiguration, parseCliFlag, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
 import { BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, codexStateRootConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
 import { findLoadedCodexThread } from './codex-app-server.js';
@@ -271,8 +271,8 @@ async function main() {
         stdinIsTTY,
         stdoutIsTTY,
     })) {
-        const otherInstalledClis = installedCliNames(detectCliAvailability()).filter((c) => c !== cli);
-        const action = await runBareLaunchMenu({ defaultCli: cli, otherInstalledClis, hasLaunchAllTargets: await hasLaunchAllTargets() }, prompt);
+        const otherConfiguredClis = configuredCliNames(detectCliAvailability(), detectCliConfiguration()).filter((c) => c !== cli);
+        const action = await runBareLaunchMenu({ defaultCli: cli, otherConfiguredClis, hasLaunchAllTargets: await hasLaunchAllTargets() }, prompt);
         if (action.kind === 'launch-all') {
             const parsed = parseLaunchAllArgs([]); // empty args → active cube, auto backend
             const code = parsed.ok ? await runLaunchAll(parsed.args, buildDefaultLaunchAllDeps()) : 1;

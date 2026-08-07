@@ -1,6 +1,11 @@
 import which from 'which';
 import type { BorgCli } from './cubes.js';
 import { getProjectCliPreference, setProjectCliPreference } from './cubes.js';
+import {
+  isCodexMcpServerConfigured,
+  isMcpServerConfigured,
+  isOpenCodeMcpServerConfigured,
+} from './config-utils.js';
 
 export interface CliAvailability {
   claude: string | null;
@@ -8,8 +13,11 @@ export interface CliAvailability {
   opencode: string | null;
 }
 
+export type CliConfiguration = Record<BorgCli, boolean>;
+
 export interface CliChoiceDeps {
   detectCli: () => CliAvailability;
+  detectConfigured: () => CliConfiguration;
   getPreference: () => Promise<BorgCli | null>;
   setPreference: (cli: BorgCli) => Promise<void>;
   prompt: (message: string) => Promise<string>;
@@ -40,6 +48,21 @@ export function installedCliNames(availability: CliAvailability): BorgCli[] {
   return out;
 }
 
+export function detectCliConfiguration(): CliConfiguration {
+  return {
+    claude: isMcpServerConfigured(),
+    codex: isCodexMcpServerConfigured(),
+    opencode: isOpenCodeMcpServerConfigured(),
+  };
+}
+
+export function configuredCliNames(
+  availability: CliAvailability,
+  configuration: CliConfiguration,
+): BorgCli[] {
+  return installedCliNames(availability).filter((cli) => configuration[cli]);
+}
+
 async function setPreferenceAndReturn(cli: BorgCli, deps: CliChoiceDeps): Promise<BorgCli> {
   await deps.setPreference(cli);
   return cli;
@@ -59,31 +82,39 @@ export async function resolveCliChoice(
     if (!installed.includes(explicit)) {
       throw new Error(`${explicit} CLI is not installed.`);
     }
+    // An explicit --cli is an intentional request, so the caller may still
+    // configure that installed CLI on demand. Automatic selection below is
+    // restricted to registrations already present in the agent config.
     await deps.setPreference(explicit);
     return explicit;
   }
 
-  const stored = await deps.getPreference();
-  if (stored && installed.includes(stored)) return stored;
+  const configured = configuredCliNames(availability, deps.detectConfigured());
+  if (configured.length === 0) {
+    throw new Error('No supported agent CLI is configured for Borg. Run `borg setup` to configure one, then run `borg` or `borg assimilate` again.');
+  }
 
-  if (installed.length === 1) {
-    await deps.setPreference(installed[0]);
-    return installed[0];
+  const stored = await deps.getPreference();
+  if (stored && configured.includes(stored)) return stored;
+
+  if (configured.length === 1) {
+    await deps.setPreference(configured[0]);
+    return configured[0];
   }
 
   if (!deps.isTTY()) {
-    throw new Error('Multiple agent CLIs detected. Pass --cli claude, --cli codex, or --cli opencode to choose.');
+    throw new Error('Multiple configured agent CLIs detected. Pass --cli claude, --cli codex, or --cli opencode to choose.');
   }
 
-  const promptLines = installed.map((cli, i) => `  ${i + 1}) ${cli}`);
+  const promptLines = configured.map((cli, i) => `  ${i + 1}) ${cli}`);
   const answer = (await deps.prompt(`Use which CLI for this project?\n${promptLines.join('\n')}\n[1]: `)).trim();
-  if (answer === '' || answer === '1') return setPreferenceAndReturn(installed[0], deps);
+  if (answer === '' || answer === '1') return setPreferenceAndReturn(configured[0], deps);
   const num = parseInt(answer, 10);
-  if (!Number.isNaN(num) && num >= 1 && num <= installed.length) {
-    return setPreferenceAndReturn(installed[num - 1], deps);
+  if (!Number.isNaN(num) && num >= 1 && num <= configured.length) {
+    return setPreferenceAndReturn(configured[num - 1], deps);
   }
   const lower = answer.toLowerCase();
-  for (const cli of installed) {
+  for (const cli of configured) {
     if (lower === cli) return setPreferenceAndReturn(cli, deps);
   }
   throw new Error(`invalid CLI choice "${answer}"`);
@@ -92,6 +123,7 @@ export async function resolveCliChoice(
 export function defaultCliChoiceDeps(prompt: (message: string) => Promise<string>, isTTY: () => boolean): CliChoiceDeps {
   return {
     detectCli: detectCliAvailability,
+    detectConfigured: detectCliConfiguration,
     getPreference: getProjectCliPreference,
     setPreference: setProjectCliPreference,
     prompt,

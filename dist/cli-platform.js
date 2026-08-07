@@ -1,5 +1,6 @@
 import which from 'which';
 import { getProjectCliPreference, setProjectCliPreference } from './cubes.js';
+import { isCodexMcpServerConfigured, isMcpServerConfigured, isOpenCodeMcpServerConfigured, } from './config-utils.js';
 export function detectCliAvailability() {
     return {
         claude: findCommand('claude'),
@@ -25,6 +26,16 @@ export function installedCliNames(availability) {
         out.push('opencode');
     return out;
 }
+export function detectCliConfiguration() {
+    return {
+        claude: isMcpServerConfigured(),
+        codex: isCodexMcpServerConfigured(),
+        opencode: isOpenCodeMcpServerConfigured(),
+    };
+}
+export function configuredCliNames(availability, configuration) {
+    return installedCliNames(availability).filter((cli) => configuration[cli]);
+}
 async function setPreferenceAndReturn(cli, deps) {
     await deps.setPreference(cli);
     return cli;
@@ -39,29 +50,36 @@ export async function resolveCliChoice(explicit, deps) {
         if (!installed.includes(explicit)) {
             throw new Error(`${explicit} CLI is not installed.`);
         }
+        // An explicit --cli is an intentional request, so the caller may still
+        // configure that installed CLI on demand. Automatic selection below is
+        // restricted to registrations already present in the agent config.
         await deps.setPreference(explicit);
         return explicit;
     }
+    const configured = configuredCliNames(availability, deps.detectConfigured());
+    if (configured.length === 0) {
+        throw new Error('No supported agent CLI is configured for Borg. Run `borg setup` to configure one, then run `borg` or `borg assimilate` again.');
+    }
     const stored = await deps.getPreference();
-    if (stored && installed.includes(stored))
+    if (stored && configured.includes(stored))
         return stored;
-    if (installed.length === 1) {
-        await deps.setPreference(installed[0]);
-        return installed[0];
+    if (configured.length === 1) {
+        await deps.setPreference(configured[0]);
+        return configured[0];
     }
     if (!deps.isTTY()) {
-        throw new Error('Multiple agent CLIs detected. Pass --cli claude, --cli codex, or --cli opencode to choose.');
+        throw new Error('Multiple configured agent CLIs detected. Pass --cli claude, --cli codex, or --cli opencode to choose.');
     }
-    const promptLines = installed.map((cli, i) => `  ${i + 1}) ${cli}`);
+    const promptLines = configured.map((cli, i) => `  ${i + 1}) ${cli}`);
     const answer = (await deps.prompt(`Use which CLI for this project?\n${promptLines.join('\n')}\n[1]: `)).trim();
     if (answer === '' || answer === '1')
-        return setPreferenceAndReturn(installed[0], deps);
+        return setPreferenceAndReturn(configured[0], deps);
     const num = parseInt(answer, 10);
-    if (!Number.isNaN(num) && num >= 1 && num <= installed.length) {
-        return setPreferenceAndReturn(installed[num - 1], deps);
+    if (!Number.isNaN(num) && num >= 1 && num <= configured.length) {
+        return setPreferenceAndReturn(configured[num - 1], deps);
     }
     const lower = answer.toLowerCase();
-    for (const cli of installed) {
+    for (const cli of configured) {
         if (lower === cli)
             return setPreferenceAndReturn(cli, deps);
     }
@@ -70,6 +88,7 @@ export async function resolveCliChoice(explicit, deps) {
 export function defaultCliChoiceDeps(prompt, isTTY) {
     return {
         detectCli: detectCliAvailability,
+        detectConfigured: detectCliConfiguration,
         getPreference: getProjectCliPreference,
         setPreference: setProjectCliPreference,
         prompt,

@@ -3,7 +3,7 @@
  *
  * This callback deliberately runs after the one-shot menu choice. A bare
  * launch may resolve one default CLI first and then launch a different
- * installed CLI for this invocation; only the final CLI may be self-healed.
+ * configured CLI for this invocation; only the final CLI may be self-healed.
  */
 export function configureSelectedLaunchCli(defaultCli, action, configure) {
     const cli = action?.kind === 'launch' ? action.cli : defaultCli;
@@ -42,7 +42,7 @@ export function buildLaunchMenuOptions(inputs) {
             action: { kind: 'launch', cli: inputs.defaultCli },
         },
     ];
-    for (const cli of inputs.otherInstalledClis) {
+    for (const cli of inputs.otherConfiguredClis) {
         options.push({
             key: String(options.length + 1),
             label: `Launch with ${PRETTY[cli]} (one-shot)`,

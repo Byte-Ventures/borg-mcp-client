@@ -4,13 +4,13 @@
  * When `borg` is run with NO arguments in a TTY, offer a small launch selector
  * instead of launching immediately:
  *   1. Launch (default)             — the configured agent (Enter selects).
- *   2. Launch with <other> instead  — the OTHER installed agent, ONE-SHOT
+ *   2. Launch with <other> instead  — the OTHER configured agent, ONE-SHOT
  *                                      (does NOT persist the preference).
  *   3. Launch all                   — runLaunchAll for the active cube.
  *
  * The option-set, the selection→action mapping, and the show/collapse decision
  * are pure functions so they're unit-testable without a real TTY. claude.ts
- * main() is thin glue: it computes the inputs (default cli, other-installed cli,
+ * main() is thin glue: it computes the inputs (default cli, other-configured cli,
  * launch-all targets), gates on shouldShowLaunchMenu, runs the orchestrator with
  * the real readline prompt, then dispatches the returned action.
  *
@@ -33,8 +33,8 @@ export interface LaunchMenuOption {
 export interface LaunchMenuInputs {
     /** The configured/resolved current agent (option 1). */
     defaultCli: BorgCli;
-    /** All installed agents that are NOT the default, in display order. */
-    otherInstalledClis: BorgCli[];
+    /** All configured agents that are NOT the default, in display order. */
+    otherConfiguredClis: BorgCli[];
     /** True iff there's an active cube with >=1 discoverable drone (option 3). */
     hasLaunchAllTargets: boolean;
 }
@@ -43,7 +43,7 @@ export interface LaunchMenuInputs {
  *
  * This callback deliberately runs after the one-shot menu choice. A bare
  * launch may resolve one default CLI first and then launch a different
- * installed CLI for this invocation; only the final CLI may be self-healed.
+ * configured CLI for this invocation; only the final CLI may be self-healed.
  */
 export declare function configureSelectedLaunchCli(defaultCli: BorgCli, action: LaunchMenuAction | undefined, configure: (cli: BorgCli) => void): BorgCli;
 /**
