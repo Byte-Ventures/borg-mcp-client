@@ -231,8 +231,8 @@ describe('runEarlyServerFacade', () => {
         `  update   Verify and activate a local server artifact.\n` +
         `  invite   Create a single-use invitation in an interactive terminal.\n` +
         `  cert-reissue  Widen the server certificate to cover another address without replacing the CA.\n` +
-        `  client-list   List enrolled clients, states, and cube grants while the server is live; committed changes take effect on the next request and in-flight requests keep their established state.\n` +
-        `  client-grant  Grant a client read, write, or manage access to a cube while the server is live; committed changes take effect on the next request and in-flight requests keep their established state.\n` +
+        `  client-list   List enrolled clients, states, and cube grants while the server is live; committed changes take effect on the next request.\n` +
+        `  client-grant  Grant a client read, write, or manage access to a cube while the server is live; committed changes take effect on the next request.\n` +
         `  dashboard   View the running local server dashboard.\n` +
         `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
         `Run borg server <command> --help for server command options.\n`,
