@@ -113,7 +113,8 @@ export async function offerFirstRunServerInstall(deps = buildDefaultFirstRunServ
             : decision === 'eof'
                 ? 'Installation was cancelled because confirmation input ended.'
                 : 'Installation was declined.';
-        deps.stderr(`${reason} No server package or server state was changed.\n` +
+        deps.stderr(`${reason} No server package or server state was changed, and no agent configuration was written. ` +
+            `Run \`borg setup\` again to configure your agents.\n` +
             `To install it later, run \`${command}\`. Then run \`borg server setup\` and \`borg server start\`.\n`);
         return { kind: 'declined' };
     }

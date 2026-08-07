@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -49,5 +49,31 @@ describe('named CLI preference persistence', () => {
     ) as { projects: Record<string, { cli: string }> };
     expect(launchFile.projects[worktreeA]).toEqual({ cli: 'codex' });
     expect(launchFile.projects[worktreeB]).toEqual({ cli: 'claude' });
+  });
+
+  it('refuses to overwrite a present-but-unreadable launch file', async () => {
+    const { setProjectCliPreference } = await import('../src/cubes.js');
+    const launchPath = join(fixture, '.config', 'borgmcp', 'launch.json');
+    const raw = '{"projects": []}\n';
+    mkdirSync(join(fixture, '.config', 'borgmcp'), { recursive: true });
+    writeFileSync(launchPath, raw);
+
+    await expect(setProjectCliPreference('codex', worktreeA)).rejects.toThrow(/unreadable/i);
+    expect(readFileSync(launchPath, 'utf8')).toBe(raw);
+  });
+
+  it('refuses to overwrite a present-but-unreadable Codex wake-target file', async () => {
+    const { setCodexWakeTarget } = await import('../src/cubes.js');
+    const wakeTargetsPath = join(fixture, '.config', 'borgmcp', 'codex-wake-targets.json');
+    const raw = '{"targets": []}\n';
+    mkdirSync(join(fixture, '.config', 'borgmcp'), { recursive: true });
+    writeFileSync(wakeTargetsPath, raw);
+
+    await expect(setCodexWakeTarget(
+      '12345678-1234-1234-1234-123456789012',
+      '87654321-4321-4321-4321-210987654321',
+      { threadId: 'thread', socketPath: '/tmp/socket' },
+    )).rejects.toThrow(/unreadable/i);
+    expect(readFileSync(wakeTargetsPath, 'utf8')).toBe(raw);
   });
 });

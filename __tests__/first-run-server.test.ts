@@ -219,6 +219,12 @@ describe('offerFirstRunServerInstall', () => {
       expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
         '`npm install --global --ignore-scripts borgmcp-server@0.6.0`',
       ));
+      expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+        'no agent configuration was written',
+      ));
+      expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+        'Run `borg setup` again',
+      ));
     },
   );
 

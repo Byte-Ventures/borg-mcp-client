@@ -24,6 +24,10 @@ const CUBES_DIR = borgConfigRoot();
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
 const CODEX_WAKE_TARGETS_FILE = join(CUBES_DIR, 'codex-wake-targets.json');
 const INBOX_DIR = join(CUBES_DIR, 'inboxes');
+const UNREADABLE_STATE = Symbol('unreadable-state-file');
+function unreadableStateError(filePath) {
+    return new Error(`Borg state file is unreadable; refusing to overwrite it: ${filePath}`);
+}
 /**
  * Walk up from cwd looking for a .git directory. If found, return that
  * directory. If not found by filesystem root, return the original cwd.
@@ -145,10 +149,10 @@ async function readLaunchFile() {
     }
     try {
         const parsed = JSON.parse(raw);
-        return isLaunchFile(parsed) ? parsed : null;
+        return isLaunchFile(parsed) ? parsed : UNREADABLE_STATE;
     }
     catch {
-        return null;
+        return UNREADABLE_STATE;
     }
 }
 async function writeLaunchFile(data) {
@@ -182,10 +186,10 @@ async function readCodexWakeTargetsFile() {
     }
     try {
         const parsed = JSON.parse(raw);
-        return isCodexWakeTargetsFile(parsed) ? parsed : null;
+        return isCodexWakeTargetsFile(parsed) ? parsed : UNREADABLE_STATE;
     }
     catch {
-        return null;
+        return UNREADABLE_STATE;
     }
 }
 async function writeCodexWakeTargetsFile(data) {
@@ -398,6 +402,8 @@ export async function refreshActiveCubeMetadata(active) {
 }
 export async function getProjectCliPreference() {
     const data = await readLaunchFile();
+    if (data === UNREADABLE_STATE)
+        throw unreadableStateError(LAUNCH_FILE);
     if (!data)
         return null;
     const entry = data.projects[findProjectRoot()];
@@ -410,6 +416,8 @@ export async function getProjectCliPreference() {
  */
 export async function getProjectCliPreferenceForPath(dir) {
     const data = await readLaunchFile();
+    if (data === UNREADABLE_STATE)
+        throw unreadableStateError(LAUNCH_FILE);
     if (!data)
         return null;
     const entry = data.projects[findProjectRoot(dir)];
@@ -434,20 +442,28 @@ export async function readAllProjectIdentities() {
  * sibling worktree but the process still began in the invoking checkout.
  */
 export async function setProjectCliPreference(cli, dir) {
-    const existing = (await readLaunchFile()) ?? { projects: {} };
-    existing.projects[findProjectRoot(dir)] = { cli };
-    await writeLaunchFile(existing);
+    const existing = await readLaunchFile();
+    if (existing === UNREADABLE_STATE)
+        throw unreadableStateError(LAUNCH_FILE);
+    const next = existing ?? { projects: {} };
+    next.projects[findProjectRoot(dir)] = { cli };
+    await writeLaunchFile(next);
 }
 export async function setCodexWakeTarget(cubeId, droneId, target) {
-    const existing = (await readCodexWakeTargetsFile()) ?? { targets: {} };
-    existing.targets[codexWakeTargetKey(cubeId, droneId)] = {
+    const existing = await readCodexWakeTargetsFile();
+    if (existing === UNREADABLE_STATE)
+        throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
+    const next = existing ?? { targets: {} };
+    next.targets[codexWakeTargetKey(cubeId, droneId)] = {
         ...target,
         updatedAt: new Date().toISOString(),
     };
-    await writeCodexWakeTargetsFile(existing);
+    await writeCodexWakeTargetsFile(next);
 }
 export async function getCodexWakeTarget(cubeId, droneId) {
     const existing = await readCodexWakeTargetsFile();
+    if (existing === UNREADABLE_STATE)
+        throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
     if (!existing)
         return null;
     const target = existing.targets[codexWakeTargetKey(cubeId, droneId)];
@@ -467,6 +483,8 @@ export async function getCodexWakeTarget(cubeId, droneId) {
  */
 export async function pruneDeadCodexWakeTargets(socketLiveness) {
     const existing = await readCodexWakeTargetsFile();
+    if (existing === UNREADABLE_STATE)
+        throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
     if (!existing)
         return;
     const { targets, changed } = pruneDeadWakeTargets(existing.targets, socketLiveness);
