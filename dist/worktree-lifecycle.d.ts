@@ -9,7 +9,6 @@
  * Design spec: docs/superpowers/specs/2026-05-29-worktree-lifecycle-design.md
  * Q-resolutions baked in (SPEC-APPROVED 3a80412d):
  *   Q1 branch naming  — `wt-<suffix>` prefix-stripped, full-basename fallback.
- *   Q2 idle-sync      — ff-only, clean-gated; never merge/rebase; never over dirty.
  *   Q3 post-merge     — auto-return to wt-<basename>; ANNOUNCE the prunable
  *                       merged branch, prune only when explicitly requested.
  *   Q4 uniform        — no primary-worktree carve-out; main is never a working branch.
@@ -67,23 +66,8 @@ export interface DirtyClassification {
  * blocked `pull --ff-only`, which an unstaged-only check would miss.
  */
 export declare function classifyDirty(runSync: RunSync, cwd: string): DirtyClassification;
-/** True iff `branch` is an ancestor of `ref` — i.e. a clean fast-forward target. */
-export declare function isFastForward(runSync: RunSync, cwd: string, branch: string, ref: string): boolean;
 /** True iff `branch`'s tip is an ancestor of `ref` — i.e. fully merged into it. */
 export declare function isMerged(runSync: RunSync, cwd: string, branch: string, ref: string): boolean;
-export interface SyncResult {
-    action: 'fast-forwarded' | 'already-current' | 'skipped-dirty' | 'skipped-diverged';
-    message?: string;
-}
-/**
- * Idle-sync the current per-worktree branch to `ref` (Q2). NEVER discards
- * work: dirty -> skipped-dirty (no mutation). Only fast-forwards (no
- * merge/rebase): diverged -> skipped-diverged. The caller fetches first.
- *
- * `already-current` when the branch tip already equals `ref` (the common
- * no-op case on every launch).
- */
-export declare function syncWorktree(runSync: RunSync, cwd: string, branch: string, ref: string): SyncResult;
 export interface AdoptResult {
     action: 'adopted' | 'blocked-unmerged' | 'blocked-target-unmerged' | 'skipped-dirty';
     message?: string;

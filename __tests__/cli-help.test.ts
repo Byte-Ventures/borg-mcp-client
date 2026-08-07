@@ -20,7 +20,6 @@ import {
   serverHelpText,
   setupHelpText,
   setupNextStepsText,
-  syncHelpText,
   topLevelHelpText,
   updateHelpText,
 } from '../src/cli-help';
@@ -66,7 +65,6 @@ describe('client subcommand help', () => {
     ['assimilate', assimilateHelpText],
     ['reset-local-connection', resetLocalSeatHelpText],
     ['recover-enrollment', recoverEnrollmentHelpText],
-    ['sync', syncHelpText],
     ['cleanup', cleanupHelpText],
     ['launch-all', launchAllHelpText],
   ] as const)('routes borg %s --help before command parsing', (command, render) => {

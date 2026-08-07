@@ -9,7 +9,6 @@
  * Design spec: docs/superpowers/specs/2026-05-29-worktree-lifecycle-design.md
  * Q-resolutions baked in (SPEC-APPROVED 3a80412d):
  *   Q1 branch naming  — `wt-<suffix>` prefix-stripped, full-basename fallback.
- *   Q2 idle-sync      — ff-only, clean-gated; never merge/rebase; never over dirty.
  *   Q3 post-merge     — auto-return to wt-<basename>; ANNOUNCE the prunable
  *                       merged branch, prune only when explicitly requested.
  *   Q4 uniform        — no primary-worktree carve-out; main is never a working branch.
@@ -119,53 +118,9 @@ export function classifyDirty(runSync: RunSync, cwd: string): DirtyClassificatio
   return out;
 }
 
-/** True iff `branch` is an ancestor of `ref` — i.e. a clean fast-forward target. */
-export function isFastForward(runSync: RunSync, cwd: string, branch: string, ref: string): boolean {
-  return runSync('git', ['merge-base', '--is-ancestor', branch, ref], cwd).status === 0;
-}
-
 /** True iff `branch`'s tip is an ancestor of `ref` — i.e. fully merged into it. */
 export function isMerged(runSync: RunSync, cwd: string, branch: string, ref: string): boolean {
   return runSync('git', ['merge-base', '--is-ancestor', branch, ref], cwd).status === 0;
-}
-
-export interface SyncResult {
-  action: 'fast-forwarded' | 'already-current' | 'skipped-dirty' | 'skipped-diverged';
-  message?: string;
-}
-
-/**
- * Idle-sync the current per-worktree branch to `ref` (Q2). NEVER discards
- * work: dirty -> skipped-dirty (no mutation). Only fast-forwards (no
- * merge/rebase): diverged -> skipped-diverged. The caller fetches first.
- *
- * `already-current` when the branch tip already equals `ref` (the common
- * no-op case on every launch).
- */
-export function syncWorktree(runSync: RunSync, cwd: string, branch: string, ref: string): SyncResult {
-  if (!isCleanTree(runSync, cwd)) {
-    return {
-      action: 'skipped-dirty',
-      message: 'uncommitted changes present; sync skipped (nothing discarded)',
-    };
-  }
-  if (!isFastForward(runSync, cwd, branch, ref)) {
-    return {
-      action: 'skipped-diverged',
-      message: `${branch} has diverged from ${ref}; resolve manually (no auto-merge/rebase)`,
-    };
-  }
-  // Already at ref? merge --ff-only is a no-op but we report it distinctly
-  // so callers can stay quiet on the common case.
-  const ahead = runSync('git', ['rev-list', '--count', `${branch}..${ref}`], cwd);
-  if (ahead.status === 0 && ahead.stdout.trim() === '0') {
-    return { action: 'already-current' };
-  }
-  const ff = runSync('git', ['merge', '--ff-only', ref], cwd);
-  if (ff.status !== 0) {
-    return { action: 'skipped-diverged', message: 'ff-only merge unexpectedly failed' };
-  }
-  return { action: 'fast-forwarded' };
 }
 
 export interface AdoptResult {

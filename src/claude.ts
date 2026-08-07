@@ -12,8 +12,6 @@
  *   borg setup          → Re-route to the setup wizard
  *   borg spawn <name>   → Create a sibling git worktree + launch a
  *                         fresh drone inside it (see spawn.ts)
- *   borg sync           → Advance the current worktree across the 5
- *                         lifecycle states (see sync.ts, gh#33)
  *   borg server <cmd>   → Forward a lifecycle command to borg-mcp-server
  */
 
@@ -31,7 +29,6 @@ import { handleVersionFlag, getPackageVersion } from './version.js';
 import { clientSubcommandHelpText, topLevelHelpText } from './cli-help.js';
 import { runSpawn } from './spawn.js';
 import { buildClaudeLaunchArgs } from './claude-launch-args.js';
-import { parseSyncArgs, runSync } from './sync.js';
 import { parseCleanupArgs, runCleanup } from './cleanup-cmd.js';
 import { parseAssimilateArgs } from './parse-assimilate-args.js';
 import { runAssimilate } from './assimilate-cmd.js';
@@ -252,18 +249,6 @@ async function main() {
   if (process.argv[2] === 'spawn') {
     // Deprecated; the stub prints a redirect message and exits 2.
     const code = await runSpawn();
-    process.exit(code);
-  }
-  if (process.argv[2] === 'sync') {
-    const parsed = parseSyncArgs(process.argv.slice(3));
-    if (!parsed.ok) {
-      process.stderr.write(
-        chalk.red(`${consolePrefix()}◼ borg sync: ${parsed.error}\n`)
-      );
-      process.stderr.write(`Run \`borg --help\` for usage.\n`);
-      process.exit(1);
-    }
-    const code = await runSync({}, parsed.options);
     process.exit(code);
   }
   if (process.argv[2] === 'cleanup') {
