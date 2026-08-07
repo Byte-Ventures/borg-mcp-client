@@ -54,7 +54,7 @@ jobs:
         run: npm run check
 
       - name: Run tests
-        run: npm test
+        run: timeout 5m npm test
 
       - name: Build readable artifacts
         run: npm run build
