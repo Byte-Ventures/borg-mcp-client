@@ -17,22 +17,25 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 - Kept self-hosted `--host --enroll` preview-only while implementing the
   client-generated PENDING credential/retry tuple and capability-gated,
   repository-idempotent cube creation required for local dogfood.
-- Initially set the standalone package identity to `2.0.0`. Every version since
-  has either published and been registry-verified, or burned its tag without
-  publishing. **The current release identity is `2.16.1`.** Extraction and
-  versioning do not authorize publication.
+- Initially set the standalone package identity to `2.0.0`. **The current
+  release identity is `2.16.1`.** Extraction and versioning do not authorize
+  publication.
 
   Spent versions — each burned an immutable tag and published nothing:
 
-  | Version | Failed at |
-  | --- | --- |
-  | `2.0.0` | lightweight release tag, before packaging |
-  | `2.0.7` | before package creation or npm publication |
-  | `2.10.1` | before artifact creation or publication |
-  | `2.12.0` | before artifact creation or publication; superseded by `2.12.1` |
+  | Version | Failed at | Recovered by |
+  | --- | --- | --- |
+  | `2.0.0` | lightweight release tag, before packaging | `2.0.1` |
+  | `2.0.7` | before package creation or npm publication | — |
+  | `2.10.1` | before artifact creation or publication | — |
+  | `2.12.0` | before artifact creation or publication | `2.12.1` |
 
-  Every other version in the `2.x` line published. Record spent versions here
-  when they occur; do not append a clause to this entry.
+  Every other version in the `2.x` line published and was registry-verified.
+  Record spent versions here when they occur; do not append a clause to this
+  entry. To confirm the table is still complete, list the repository's version
+  tags and `npm view borgmcp versions` — a spent version is a tag whose version
+  never reached the registry, and the two sets should differ by exactly these
+  rows.
 
 ## Review Holds
 
