@@ -193,7 +193,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect(stderrOf(deps)).toContain('roster confirmation skipped (token rotated mid-launch)');
   });
 
-  it('--cube-name that matches >1 cube → ambiguity error listing each id, exit 1 (gh#850)', async () => {
+  it('positional cube name that matches >1 cube → ambiguity error listing each id, exit 1 (gh#850)', async () => {
     const idA = '22222222-2222-2222-2222-222222222222';
     const idB = '33333333-3333-3333-3333-333333333333';
     const identities = [
@@ -209,6 +209,8 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect(err).toContain(idA);
     expect(err).toContain(idB);
     expect(err).toContain('/home/test/projA');
+    expect(err).toContain('re-run as `borg launch-all` without the positional cube name');
+    expect(err).not.toContain('--cube-name');
   });
 
   it('native Windows → pastelist regardless of --mode tmux', async () => {

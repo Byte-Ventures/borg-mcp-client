@@ -52,7 +52,7 @@ async function resolveTargetCube(args, deps) {
                 .join('\n');
             return {
                 error: `'${args.cubeName}' is ambiguous — ${matches.length} saved connections on this machine share that name:\n${list}\n` +
-                    'cd into the intended project and re-run without --cube-name (resolves the active cube), ' +
+                    'cd into the intended project and re-run as `borg launch-all` without the positional cube name (resolves the active cube), ' +
                     'or clear the stale connection(s) by running `borg reset-local-connection` from the worktree that holds each.',
             };
         }
