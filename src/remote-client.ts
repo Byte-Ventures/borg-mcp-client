@@ -17,17 +17,23 @@ import { randomUUID } from 'node:crypto';
 import {
   createProtocolEnvelope,
   decodeDeleteCubeResponse,
+  decodeDeleteRoleRequest,
+  decodeDeleteRoleResult,
   decodeDroneRuntimeMetadataState,
   decodeEvictDroneResult,
   decodeProtocolEnvelope,
   decodeProtocolErrorEnvelope,
   decodeReassignDroneResult,
+  decodeRoleRationaleRequest,
+  decodeRoleRationaleResult,
   decodeUpdateDroneRuntimeMetadataResponse,
   ErrorCode,
   ProtocolContractError,
   type AgentKind,
+  type DeleteRoleResult,
   type EvictDroneResult,
   type ReassignDroneResult,
+  type RoleRationaleResult,
 } from 'borgmcp-shared/protocol';
 import { consolePrefix } from './console-prefix.js';
 import { debugLog } from './debug.js';
@@ -301,7 +307,10 @@ async function localServerRequest<T>(
   path: string,
   method: 'GET' | 'POST' | 'PUT' | 'PATCH',
   payload?: Record<string, unknown>,
-  options: { retryMode?: AuthedFetchRetryMode } = {},
+  options: {
+    retryMode?: AuthedFetchRetryMode;
+    decodePayload?: (value: unknown) => T;
+  } = {},
 ): Promise<T | null> {
   return decodeLocalProtocolResponse<T>((signal) => authedFetch(path, {
       method,
@@ -318,7 +327,7 @@ async function localServerRequest<T>(
           body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
         }),
       retryMode: options.retryMode,
-    }), true);
+    }), true, options.decodePayload);
 }
 
 export interface LocalManageOperation {
@@ -1253,12 +1262,21 @@ export async function roleRationale(
   section: string,
   serverTrustIdentity?: string,
 ): Promise<{ role: string; section: string; body: string }> {
-  void sessionToken;
-  void apiUrl;
-  void role;
-  void section;
-  void serverTrustIdentity;
-  localUnsupported('role rationale sections');
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+  const request = decodeRoleRationaleRequest({ role, section });
+  const result = await localServerRequest<RoleRationaleResult>(
+    local,
+    `/api/cubes/${local.cubeId}/role-rationale`,
+    'POST',
+    { ...request },
+    { decodePayload: decodeRoleRationaleResult },
+  );
+  if (!result) throw new Error('Local Borg server returned an empty role rationale response');
+  return {
+    role: result.role_name,
+    section: result.section.heading,
+    body: result.section.body,
+  };
 }
 
 /**
@@ -1662,8 +1680,26 @@ export async function patchRoleSection(
  * (reassign or evict those drones first).
  */
 export async function deleteRole(roleId: string): Promise<void> {
-  void roleId;
-  localUnsupported('role deletion');
+  assertUuidShape(roleId, 'role_id');
+  const active = await getActiveCube();
+  if (!active?.serverTrustIdentity) throw new Error('Selected Borg server authority state is missing or unreadable');
+  assertUuidShape(active.cubeId, 'cube_id');
+  const result = await localManageRequest<DeleteRoleResult>(
+    active,
+    `/api/cubes/${active.cubeId}/roles/${roleId}`,
+    'DELETE',
+    {
+      operation: `delete role ${manageCopyValue(roleId)} from cube ${manageCopyValue(active.name)}`,
+      cubeName: active.name,
+      noMutation: 'No role was deleted.',
+    },
+    decodeDeleteRoleRequest({}),
+    decodeDeleteRoleResult,
+  );
+  if (!result) throw new Error('Local Borg server returned an empty role deletion response');
+  if (result.role_id !== roleId) {
+    throw new Error('Local Borg server returned a deletion response for an unexpected role');
+  }
 }
 
 /**

@@ -154,8 +154,8 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_role-rationale',
           description:
-            "Fetch an on-demand rationale/case-study section for a role playbook. " +
-            "Pass a role name/id and a plain-label section key to read the rationale without expanding every context refresh.",
+            "Fetch exactly one named section from a role's detailed playbook using the current drone session. " +
+            "Pass a role name/UUID and a plain-label section key. Role names and section keys match case-insensitively; UUIDs match exactly. Malformed selectors, ambiguous role names, and unknown roles/sections refuse. Returns the server's canonical role name, section heading, and bounded section body without expanding every context refresh.",
           inputSchema: {
             type: 'object',
             properties: {
@@ -481,7 +481,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         },
         {
           name: 'borg_delete-role',
-          description: 'Delete a role. Refuses if any drone is still assigned — reassign them with borg_reassign-drone or remove them with borg_evict-drone first.',
+          description: 'Delete a role using the selected local client\'s cube-management grant. Unknown or inaccessible roles refuse. Also refuses for the default, mandatory, or human-seat role; a role referenced by message-taxonomy routing; or a role assigned to an active drone. Reassign active drones with borg_reassign-drone or remove them with borg_evict-drone first. Evicted drones formerly assigned to the deleted role retain activity attribution.',
           inputSchema: {
             type: 'object',
             properties: {
