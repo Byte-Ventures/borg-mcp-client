@@ -8,6 +8,15 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 
 ## Deliberate Transformations
 
+- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release pinned at extraction time (0.6.4) and a fresh standalone lockfile.
+- Replaced local template, role-section, drone-address, and log high-water-mark implementations with `borgmcp-shared` exports.
+- Removed monorepo-only website anti-drift tests and re-anchored remaining filesystem tests to this repository.
+- Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
+- Added standalone source typecheck, unit/release tests, readable build, onboarding smoke, artifact verification, and public-source sensitivity scanning.
+- Made the package root export side-effect-free while retaining `borg-mcp` executable behavior.
+- Kept self-hosted `--host --enroll` preview-only while implementing the
+  client-generated PENDING credential/retry tuple and capability-gated,
+  repository-idempotent cube creation required for local dogfood.
 ## Review Holds
 
 Google OAuth / Cloud sign-in has been fully removed from this local-only client.
