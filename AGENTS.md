@@ -29,14 +29,7 @@
 
 ## Release Boundaries
 
-- **Three files carry the version. All three must move together:**
-  - `package.json` — `version`
-  - `package-lock.json` — `version` and `packages[""].version`
-  - `test/release-lane.test.mjs` — `CLIENT_VERSION`
-
-  The third is deliberate: the test asserts an *independent* expected version against the manifest, so a bump has to be made consciously in two places. Keep it a literal; do not derive it from `package.json`.
-
-  `npm run verify:release` catches a lockfile that did not move — it asserts `lock.version === manifest.version`. **Nothing except `npm test` catches the stale test literal**; no script under `scripts/` reads `test/release-lane.test.mjs`. So a bump needs both commands before the tag, and `npm test` is the one that is easy to skip because the release-readiness gate is green.
+- **Two files carry the version and must move together:** `package.json` (`version`) and `package-lock.json` (`version` and `packages[""].version`). `npm run verify:release` checks their equality.
 
 - `npm run release:check` runs the full release lane: public-source scan, release readiness, lock-registry check, typecheck, tests, build, onboarding smoke, and package verification.
 - Releases are tag-triggered and immutable. A failed run **burns the version** — never re-tag, never rerun, never reuse. Check the registry before naming a version.
