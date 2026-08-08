@@ -318,9 +318,10 @@ async function sha512(path) {
 
 async function packageTarball(packDirectory, clientTarball) {
   if (clientTarball) return realpath(resolve(clientTarball));
-  const [result] = JSON.parse(runNpm([
+  const packOutput = JSON.parse(runNpm([
     'pack', '--ignore-scripts', '--json', '--pack-destination', packDirectory,
   ], { cwd: root, encoding: 'utf8' }));
+  const result = Array.isArray(packOutput) ? packOutput[0] : packOutput.borgmcp;
   return join(packDirectory, result.filename);
 }
 

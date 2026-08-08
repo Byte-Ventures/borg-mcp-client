@@ -112,7 +112,7 @@ jobs:
           set -euo pipefail
           mkdir release
           npm pack --ignore-scripts --json --pack-destination release > release/pack-result.json
-          node -e 'const fs=require("node:fs");const [result]=JSON.parse(fs.readFileSync("release/pack-result.json","utf8"));fs.appendFileSync(process.env.GITHUB_OUTPUT,`tarball=${result.filename}\n`);'
+          node -e 'const fs=require("node:fs");const parsed=JSON.parse(fs.readFileSync("release/pack-result.json","utf8"));const result=Array.isArray(parsed)?parsed[0]:parsed.borgmcp;fs.appendFileSync(process.env.GITHUB_OUTPUT,`tarball=${result.filename}\n`);'
 
       - name: Verify exact release tarball
         run: node scripts/verify-packed-artifact.mjs "release/${{ steps.pack.outputs.tarball }}" > release/artifact-report.json

@@ -182,9 +182,10 @@ test('release exercise rejects a package bin that escapes its SRI-covered root',
   }, null, 2)}\n`);
   await writeFile(join(source, 'dist', 'main.js'), 'export const packaged = true;\n');
   await writeFile(join(published, 'main.js'), 'export const escaped = true;\n');
-  const [packed] = JSON.parse(execFileSync('npm', [
+  const packOutput = JSON.parse(execFileSync('npm', [
     'pack', '--ignore-scripts', '--json', '--pack-destination', directory,
   ], { cwd: source, encoding: 'utf8' }));
+  const packed = Array.isArray(packOutput) ? packOutput[0] : packOutput['borgmcp-server'];
   await writeFile(join(consumer, 'package.json'), '{"name":"escaping-bin-consumer","private":true}\n');
   execFileSync('npm', [
     'install', '--ignore-scripts', '--package-lock=true', '--save-exact',
