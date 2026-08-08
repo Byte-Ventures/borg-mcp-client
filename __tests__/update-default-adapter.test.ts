@@ -76,6 +76,7 @@ function updateDeps(
       next_action: null,
     })),
     verifyRunningProtocol: vi.fn(async () => undefined),
+    refreshAgentMcpConfigs: vi.fn(async () => []),
     stdout: vi.fn(),
     stderr: vi.fn(),
     ...overrides,

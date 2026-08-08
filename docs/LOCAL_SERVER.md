@@ -204,7 +204,11 @@ stopped server remains stopped; matching controller and prepared runtime are
 reported as `prepared; still stopped` without inventing a live protocol check.
 An absent server is skipped rather than installed. Partial completion prints the
 safe retry command `borg update --yes`. Borg never starts a stopped server,
-daemonizes, or restarts agent processes.
+daemonizes, or restarts agent processes. After the package pair verifies, the
+command replaces stale absolute launch paths in Borg-written Claude Code, Codex,
+and OpenCode MCP registrations with the version-stable `borg-mcp` command. It
+does not create absent registrations or modify a `borg` entry that points to
+another command.
 
 `borg server update` remains the server-runtime-only command. It verifies and
 activates the server artifact but deliberately does not rewrite the global

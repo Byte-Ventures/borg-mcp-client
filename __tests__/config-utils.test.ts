@@ -31,6 +31,7 @@ import {
   isCodexSessionStartHookRegistered,
   isCodexUserPromptSubmitHookRegistered,
   isMcpServerConfigured,
+  refreshManagedAgentMcpConfigs,
 } from '../src/config-utils';
 import { resolveRegenPath, resolveLogAuditPath } from '../src/self-path';
 import { shellEscape } from '../src/shell-escape';
@@ -242,6 +243,94 @@ describe('isCodexMcpServerConfigured', () => {
       if (previous === undefined) delete process.env.BORG_STATE_ROOT;
       else process.env.BORG_STATE_ROOT = previous;
     }
+  });
+});
+
+describe('version-stable MCP registrations', () => {
+  it('writes a PATH-resolved borg-mcp command for every supported agent CLI', () => {
+    addMcpServer();
+    addCodexMcpServer();
+    addOpenCodeMcpServer();
+
+    const addCommands = execSyncMock.mock.calls
+      .map(([command]) => String(command))
+      .filter((command) => /^(claude|codex|opencode) mcp add .*\bborg\b/.test(command));
+
+    const assertVersionStable = (commands: string[]) => {
+      expect(commands).toHaveLength(3);
+      for (const command of commands) {
+        expect(command).toMatch(/(?:^| -- | borg )'borg-mcp'$/);
+        expect(command).not.toMatch(/\.nvm\/versions\/node\/v[^/]+\//);
+        expect(command).not.toContain('/dist/index.js');
+      }
+    };
+    assertVersionStable(addCommands);
+
+    const stale = '/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/index.js';
+    expect(() => assertVersionStable(
+      addCommands.map((command) => command.replace("'borg-mcp'", `'${stale}'`)),
+    )).toThrow();
+  });
+
+  it('refreshes every stale Borg-written agent registration', () => {
+    const claudeConfigPath = path.join(tmpDir, 'claude.json');
+    const codexConfigPath = path.join(tmpDir, 'codex.toml');
+    const openCodeConfigPath = path.join(tmpDir, 'opencode.json');
+    const stale = '/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/index.js';
+    fs.writeFileSync(claudeConfigPath, JSON.stringify({
+      mcpServers: { borg: { command: stale } },
+    }));
+    fs.writeFileSync(codexConfigPath,
+      `[mcp_servers.borg]\ncommand = "${stale}"\n\n[mcp_servers.borg.env]\nBORG_AGENT_KIND = "codex"\n`,
+    );
+    fs.writeFileSync(openCodeConfigPath, JSON.stringify({
+      mcp: { borg: { type: 'local', command: [stale], environment: { BORG_AGENT_KIND: 'opencode' } } },
+    }));
+    const addClaude = vi.fn();
+    const addCodex = vi.fn();
+    const addOpenCode = vi.fn();
+
+    expect(refreshManagedAgentMcpConfigs({
+      claudeConfigPath,
+      codexConfigPath,
+      openCodeConfigPath,
+      addClaude,
+      addCodex,
+      addOpenCode,
+    })).toEqual(['claude', 'codex', 'opencode']);
+    expect(addClaude).toHaveBeenCalledOnce();
+    expect(addCodex).toHaveBeenCalledOnce();
+    expect(addOpenCode).toHaveBeenCalledOnce();
+  });
+
+  it('does not rewrite registrations that Borg did not write', () => {
+    const claudeConfigPath = path.join(tmpDir, 'claude.json');
+    const codexConfigPath = path.join(tmpDir, 'codex.toml');
+    const openCodeConfigPath = path.join(tmpDir, 'opencode.json');
+    fs.writeFileSync(claudeConfigPath, JSON.stringify({
+      mcpServers: { borg: { command: '/opt/operator/custom-server' } },
+    }));
+    fs.writeFileSync(codexConfigPath,
+      '[mcp_servers.borg]\ncommand = "/opt/operator/custom-server"\n\n[mcp_servers.borg.env]\nBORG_AGENT_KIND = "codex"\n',
+    );
+    fs.writeFileSync(openCodeConfigPath, JSON.stringify({
+      mcp: { borg: { type: 'local', command: ['/opt/operator/custom-server'], environment: { BORG_AGENT_KIND: 'opencode' } } },
+    }));
+    const addClaude = vi.fn();
+    const addCodex = vi.fn();
+    const addOpenCode = vi.fn();
+
+    expect(refreshManagedAgentMcpConfigs({
+      claudeConfigPath,
+      codexConfigPath,
+      openCodeConfigPath,
+      addClaude,
+      addCodex,
+      addOpenCode,
+    })).toEqual([]);
+    expect(addClaude).not.toHaveBeenCalled();
+    expect(addCodex).not.toHaveBeenCalled();
+    expect(addOpenCode).not.toHaveBeenCalled();
   });
 });
 

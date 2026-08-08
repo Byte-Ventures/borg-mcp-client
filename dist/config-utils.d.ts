@@ -90,6 +90,20 @@ export declare function removeUserPromptSubmitHook(): boolean;
  */
 export declare function isMcpServerConfigured(configPath?: string): boolean;
 export declare function isCodexMcpServerConfigured(configPath?: string): boolean;
+export interface RefreshManagedAgentMcpConfigOptions {
+    claudeConfigPath?: string;
+    codexConfigPath?: string;
+    openCodeConfigPath?: string;
+    addClaude?: () => void;
+    addCodex?: () => void;
+    addOpenCode?: () => void;
+}
+/**
+ * Replace only stale registrations emitted by Borg's prior absolute-path
+ * writers. A `borg` entry that points at another command remains operator-owned
+ * and is not changed.
+ */
+export declare function refreshManagedAgentMcpConfigs(options?: RefreshManagedAgentMcpConfigOptions): Array<'claude' | 'codex' | 'opencode'>;
 /**
  * Get absolute path to borg index.js
  * Returns the actual index.js file, not the npm symlink

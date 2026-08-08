@@ -105,7 +105,10 @@ export function updateHelpText(version) {
         `provenance fail closed with manual-update guidance.\n\n` +
         `If no local server is installed, the server phase is skipped. A failure after the client\n` +
         `succeeds is reported as partial completion with the safe retry command. Borg never starts a\n` +
-        `stopped server and never restarts agent processes; restart active agent sessions yourself.\n`);
+        `stopped server. After package verification, Borg replaces stale MCP launch paths in\n` +
+        `Borg-written Claude Code, Codex, and OpenCode registrations. It leaves absent registrations\n` +
+        `and borg entries that point to another command unchanged. Borg never restarts agent processes;\n` +
+        `restart active agent sessions yourself.\n`);
 }
 /** Product Design-approved client-owned copy for `borg server --help`. */
 export function serverHelpText() {

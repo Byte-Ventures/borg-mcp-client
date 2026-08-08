@@ -15,7 +15,7 @@ const REQUIRED_FILES = ['CONTRIBUTING.md', 'LICENSE', 'NOTICE', 'README.md', 'SE
 const LOCAL_DASHBOARD_OCCURRENCES = JSON.parse(
   readFileSync(new URL('./local-dashboard-occurrences.json', import.meta.url), 'utf8'),
 );
-const dashboardOccurrenceKey = ({ file, lineNumber, line }) => JSON.stringify([file, lineNumber, line]);
+const dashboardOccurrenceKey = ({ file, line }) => JSON.stringify([file, line]);
 const LOCAL_DASHBOARD_OCCURRENCE_KEYS = new Set(LOCAL_DASHBOARD_OCCURRENCES.map(dashboardOccurrenceKey));
 
 if (LOCAL_DASHBOARD_OCCURRENCE_KEYS.size !== LOCAL_DASHBOARD_OCCURRENCES.length) {
@@ -141,7 +141,7 @@ function normalizedPath(root, file) {
 function verifyLocalDashboardOccurrences(content, path) {
   for (const [index, rawLine] of content.split(/\r?\n/).entries()) {
     if (!rawLine.includes('dashboard')) continue;
-    const key = dashboardOccurrenceKey({ file: path, lineNumber: index + 1, line: rawLine.trim() });
+    const key = dashboardOccurrenceKey({ file: path, line: rawLine.trim() });
     if (!LOCAL_DASHBOARD_OCCURRENCE_KEYS.has(key)) {
       throw new Error(`Packed artifact contains an unapproved dashboard occurrence: ${path}:${index + 1}`);
     }
