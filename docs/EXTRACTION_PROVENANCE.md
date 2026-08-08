@@ -1,5 +1,12 @@
 # Extraction Provenance
 
+**This file is a frozen historical record.** It documents the one-time
+extraction of this repository from the monorepo and the state of the client
+line as of that extraction and its immediate releases. Nothing appends to it,
+no release process touches it, and no statement in it describes the current
+version — the authoritative version is `package.json` and the npm registry.
+Facts below were true when recorded and are not maintained.
+
 The initial standalone source was extracted from `Byte-Ventures/borg-mcp` commit `17ff8ce14e12122a8cc9089f6b94174c02fa2a04` on branch `main`.
 
 The extraction copied the monorepo's `client/src/` production boundary and top-level `client/__tests__/*.test.ts` unit tests. It did not import monorepo Git history, worker or website source, deployment configuration, local state, credentials files, build output, or the live integration suite.
@@ -17,20 +24,20 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 - Kept self-hosted `--host --enroll` preview-only while implementing the
   client-generated PENDING credential/retry tuple and capability-gated,
   repository-idempotent cube creation required for local dogfood.
-## Review Holds
+## Review Holds Resolved at Extraction (historical)
 
 Google OAuth / Cloud sign-in has been fully removed from this local-only client.
 `src/auth.ts`, `src/device-auth.ts`, and all installed-application OAuth client
 material are deleted, along with the hosted API default and the Cloud
-subscription/billing/dashboard tools. `scripts/verify-public-source.mjs` now
+subscription/billing/dashboard tools. `scripts/verify-public-source.mjs`
 forbids ANY Google OAuth client ID or `GOCSPX` value anywhere in the source or
 packed artifact (zero tolerance), and a no-cloud egress guard asserts the packed
 artifact reaches no hosted authority.
 
-Local enrollment now uses the reviewed client-generated credential/retry
+At extraction, local enrollment used the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
-store, exact-tuple ambiguous retry, and verified activation. The current client
-candidate resolves to the audited registry `borgmcp-shared@0.9.0` with integrity
+store, exact-tuple ambiguous retry, and verified activation. The client candidate
+at that time resolved to the audited registry `borgmcp-shared@0.9.0` with integrity
 `sha512-bfZPP9JGgBQrCFoZetabqKHc8HLaUqHVR3GJLb/1F1oon7z/B4el4aeBHVvXlxN9+2G7kU/ymPZ/K25nVQapmQ==`.
 The coupled `borgmcp-server@0.9.0` release was published on 2026-08-02 for the
 client `borgmcp@2.10.0` line. Its annotated tag object
