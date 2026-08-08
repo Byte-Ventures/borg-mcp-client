@@ -166,7 +166,7 @@ describe('borg update help', () => {
     expect(topLevelHelpText('9.9.9')).toContain('borg update');
   });
 
-  it('documents preflight, ordering, skip, partial completion, and restart semantics', () => {
+  it('documents preflight, ordering, config refresh, skip, partial completion, and restart semantics', () => {
     const text = updateHelpText('9.9.9');
     expect(text).toContain('borg update');
     expect(text).toContain('--yes');
@@ -176,6 +176,9 @@ describe('borg update help', () => {
     expect(text).toMatch(/client.*first/is);
     expect(text).toMatch(/server.*skipped/i);
     expect(text).toMatch(/partial/i);
+    expect(text).toMatch(/stale borgmcp package launch paths/i);
+    expect(text).toMatch(/preserving their other settings/i);
+    expect(text).toMatch(/entries that point to another command unchanged/i);
     expect(text).toMatch(/restart.*agent/i);
   });
 });

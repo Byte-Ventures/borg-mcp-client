@@ -8,6 +8,7 @@ import { updateHelpText } from './cli-help.js';
 import { preflightBorgServerTag } from './server-handshake.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { shellEscape } from './shell-escape.js';
+import { refreshManagedAgentMcpConfigs } from './config-utils.js';
 const CLIENT_PACKAGE = 'borgmcp';
 const SERVER_PACKAGE = 'borgmcp-server';
 const SHARED_PACKAGE = 'borgmcp-shared';
@@ -496,6 +497,14 @@ export async function runUpdate(options, deps) {
         return interrupted ?? 1;
     }
     if (!serverWasPresent) {
+        try {
+            await deps.refreshAgentMcpConfigs();
+        }
+        catch (error) {
+            deps.stderr(`Client updated, but agent MCP config refresh failed: ${errorMessage(error, 'unknown failure')}.\n` +
+                `Run borg setup to repair Borg-written agent registrations. Configurations that use another command are not changed.\n`);
+            return 1;
+        }
         deps.stdout(`Updated ${CLIENT_PACKAGE}@${pair.client.version}. Local server: skipped (not installed).\n` +
             `Restart active agent sessions to load the updated client.\n`);
         return 0;
@@ -602,6 +611,9 @@ export async function runUpdate(options, deps) {
             retryCommand = 'borg server status';
             await deps.verifyRunningProtocol(status.endpoint);
         }
+        failureStage = 'agent MCP config refresh';
+        retryCommand = 'borg update --yes';
+        await deps.refreshAgentMcpConfigs();
         deps.stdout(state === 'stopped'
             ? (`Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}: prepared.\n` +
                 renderStoppedServiceRecovery(status))
@@ -966,6 +978,7 @@ export function buildDefaultUpdateDeps() {
             const trust = await loadBorgServerTrust(origin);
             await preflightBorgServerTag(origin, trust.fetchImpl);
         },
+        refreshAgentMcpConfigs: async () => refreshManagedAgentMcpConfigs(),
         confirm: defaultConfirm,
         isTTY: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
         stdout: (text) => process.stdout.write(text),

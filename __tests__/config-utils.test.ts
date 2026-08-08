@@ -31,6 +31,7 @@ import {
   isCodexSessionStartHookRegistered,
   isCodexUserPromptSubmitHookRegistered,
   isMcpServerConfigured,
+  refreshManagedAgentMcpConfigs,
 } from '../src/config-utils';
 import { resolveRegenPath, resolveLogAuditPath } from '../src/self-path';
 import { shellEscape } from '../src/shell-escape';
@@ -242,6 +243,116 @@ describe('isCodexMcpServerConfigured', () => {
       if (previous === undefined) delete process.env.BORG_STATE_ROOT;
       else process.env.BORG_STATE_ROOT = previous;
     }
+  });
+});
+
+describe('version-stable MCP registrations', () => {
+  it('writes a PATH-resolved borg-mcp command for every supported agent CLI', () => {
+    addMcpServer();
+    addCodexMcpServer();
+    addOpenCodeMcpServer();
+
+    const addCommands = execSyncMock.mock.calls
+      .map(([command]) => String(command))
+      .filter((command) => /^(claude|codex|opencode) mcp add .*\bborg\b/.test(command));
+
+    const assertVersionStable = (commands: string[]) => {
+      expect(commands).toHaveLength(3);
+      for (const command of commands) {
+        expect(command).toMatch(/(?:^| -- | borg )'borg-mcp'$/);
+        expect(command).not.toMatch(/\.nvm\/versions\/node\/v[^/]+\//);
+        expect(command).not.toContain('/dist/index.js');
+      }
+    };
+    assertVersionStable(addCommands);
+
+    const stale = '/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/index.js';
+    expect(() => assertVersionStable(
+      addCommands.map((command) => command.replace("'borg-mcp'", `'${stale}'`)),
+    )).toThrow();
+  });
+
+  it('refreshes every stale Borg-written agent registration', () => {
+    const claudeConfigPath = path.join(tmpDir, 'claude.json');
+    const codexConfigPath = path.join(tmpDir, 'codex.toml');
+    const openCodeConfigPath = path.join(tmpDir, 'opencode.json');
+    const stale = '/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/index.js';
+    fs.writeFileSync(claudeConfigPath, JSON.stringify({
+      mcpServers: { borg: { command: stale, args: ['--foreign'], env: { FOREIGN: 'keep' } } },
+    }));
+    fs.writeFileSync(codexConfigPath,
+      `[mcp_servers.borg]\ncommand = "${stale}"\n\n[mcp_servers.borg.env]\nBORG_AGENT_KIND = "codex"\n`,
+    );
+    fs.writeFileSync(openCodeConfigPath, JSON.stringify({
+      mcp: { borg: { type: 'local', command: [stale], environment: { BORG_AGENT_KIND: 'opencode' } } },
+    }));
+    expect(refreshManagedAgentMcpConfigs({
+      claudeConfigPath,
+      codexConfigPath,
+      openCodeConfigPath,
+    })).toEqual(['claude', 'codex', 'opencode']);
+
+    expect(JSON.parse(fs.readFileSync(claudeConfigPath, 'utf8')).mcpServers.borg).toEqual({
+      command: 'borg-mcp',
+      args: ['--foreign'],
+      env: { FOREIGN: 'keep' },
+    });
+    expect(fs.readFileSync(codexConfigPath, 'utf8')).toBe(
+      '[mcp_servers.borg]\ncommand = "borg-mcp"\n\n[mcp_servers.borg.env]\nBORG_AGENT_KIND = "codex"\n',
+    );
+    expect(JSON.parse(fs.readFileSync(openCodeConfigPath, 'utf8')).mcp.borg).toEqual({
+      type: 'local',
+      command: ['borg-mcp'],
+      environment: { BORG_AGENT_KIND: 'opencode' },
+    });
+  });
+
+  it('does not rewrite registrations that Borg did not write', () => {
+    const claudeConfigPath = path.join(tmpDir, 'claude.json');
+    const codexConfigPath = path.join(tmpDir, 'codex.toml');
+    const openCodeConfigPath = path.join(tmpDir, 'opencode.json');
+    fs.writeFileSync(claudeConfigPath, JSON.stringify({
+      mcpServers: { borg: { command: '/opt/operator/custom-server' } },
+    }));
+    fs.writeFileSync(codexConfigPath,
+      '[mcp_servers.borg]\ncommand = "/opt/operator/custom-server"\n\n[mcp_servers.borg.env]\nBORG_AGENT_KIND = "codex"\n',
+    );
+    fs.writeFileSync(openCodeConfigPath, JSON.stringify({
+      mcp: { borg: { type: 'local', command: ['/opt/operator/custom-server'], environment: { BORG_AGENT_KIND: 'opencode' } } },
+    }));
+    expect(refreshManagedAgentMcpConfigs({
+      claudeConfigPath,
+      codexConfigPath,
+      openCodeConfigPath,
+    })).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(claudeConfigPath, 'utf8')).mcpServers.borg.command)
+      .toBe('/opt/operator/custom-server');
+    expect(fs.readFileSync(codexConfigPath, 'utf8')).toContain('command = "/opt/operator/custom-server"');
+    expect(JSON.parse(fs.readFileSync(openCodeConfigPath, 'utf8')).mcp.borg.command)
+      .toEqual(['/opt/operator/custom-server']);
+  });
+
+  it('continues refreshing later agents after one stale config cannot be written', () => {
+    const claudeConfigPath = path.join(tmpDir, 'claude.json');
+    const codexConfigPath = path.join(tmpDir, 'codex.toml');
+    const openCodeConfigPath = path.join(tmpDir, 'opencode.json');
+    const stale = '/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/index.js';
+    fs.writeFileSync(claudeConfigPath, JSON.stringify({ mcpServers: { borg: { command: stale } } }));
+    fs.writeFileSync(codexConfigPath,
+      `[mcp_servers.borg]\ncommand = "${stale}"\n\n[mcp_servers.borg.env]\nBORG_AGENT_KIND = "codex"\n`,
+    );
+    fs.writeFileSync(openCodeConfigPath, JSON.stringify({
+      mcp: { borg: { type: 'local', command: [stale], environment: { BORG_AGENT_KIND: 'opencode' } } },
+    }));
+    expect(() => refreshManagedAgentMcpConfigs({
+      claudeConfigPath,
+      codexConfigPath,
+      openCodeConfigPath,
+      refreshClaude: () => { throw new Error('Claude config is read-only'); },
+    })).toThrow(/Claude Code.*read-only/);
+    expect(fs.readFileSync(codexConfigPath, 'utf8')).toContain('command = "borg-mcp"');
+    expect(JSON.parse(fs.readFileSync(openCodeConfigPath, 'utf8')).mcp.borg.command)
+      .toEqual(['borg-mcp']);
   });
 });
 

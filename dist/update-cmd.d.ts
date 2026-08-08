@@ -40,6 +40,7 @@ export interface UpdateDeps {
     reenter(binPath: string, args: readonly string[]): Promise<number>;
     serverJson(binPath: string, command: 'update' | 'status'): Promise<unknown>;
     verifyRunningProtocol(origin: string): Promise<void>;
+    refreshAgentMcpConfigs(): Promise<Array<'claude' | 'codex' | 'opencode'>>;
     confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
     isTTY(): boolean;
     stdout(text: string): void;

@@ -23,13 +23,13 @@ const SRC_DIR = path.join(ROOT, 'src');
 const DOCS_DIR = path.join(ROOT, 'docs');
 const DIST_DIR = path.join(ROOT, 'dist');
 
-type DashboardOccurrence = { file: string; lineNumber: number; line: string };
+type DashboardOccurrence = { file: string; line: string };
 
 const DASHBOARD_ALLOWLIST = JSON.parse(
   readFileSync(path.join(ROOT, 'scripts', 'local-dashboard-occurrences.json'), 'utf8'),
 ) as DashboardOccurrence[];
-const dashboardOccurrenceKey = ({ file, lineNumber, line }: DashboardOccurrence) =>
-  JSON.stringify([file, lineNumber, line]);
+const dashboardOccurrenceKey = ({ file, line }: DashboardOccurrence) =>
+  JSON.stringify([file, line]);
 const DASHBOARD_ALLOWLIST_KEYS = new Set(DASHBOARD_ALLOWLIST.map(dashboardOccurrenceKey));
 
 if (DASHBOARD_ALLOWLIST_KEYS.size !== DASHBOARD_ALLOWLIST.length) {
@@ -139,7 +139,7 @@ function scanDashboardOccurrences(entries: { file: string; text: string }[]) {
   for (const { file, text } of entries) {
     for (const [index, rawLine] of text.split(/\r?\n/).entries()) {
       if (!rawLine.includes('dashboard')) continue;
-      const occurrence = { file, lineNumber: index + 1, line: rawLine.trim() };
+      const occurrence = { file, line: rawLine.trim() };
       const key = dashboardOccurrenceKey(occurrence);
       if (DASHBOARD_ALLOWLIST_KEYS.has(key)) approved.add(key);
       else offenders.push(`${file}:${index + 1}: dashboard`);
