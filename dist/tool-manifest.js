@@ -121,7 +121,7 @@ export const TOOL_MANIFEST = [
     {
         name: 'borg_role-rationale',
         description: "Fetch exactly one named section from a role's detailed playbook using the current drone session. " +
-            "Pass a role name/UUID and a plain-label section key. Role names and section keys match case-insensitively; UUIDs match exactly. Malformed selectors, ambiguous role names, and unknown roles/sections refuse. Returns the server's canonical role name, section heading, and bounded section body without expanding every context refresh.",
+            "Pass a role name/UUID and a plain-label section key. Role names and section keys match case-insensitively; UUIDs match exactly. Malformed selectors, ambiguous role names, and unknown roles/sections refuse. Returns the server's canonical role name, role_id, section heading, and the section body in full, refusing rather than truncating when it exceeds the server's role-text size limit, so a drone can read one section on demand instead of carrying the whole playbook in every borg_regen.",
         inputSchema: {
             type: 'object',
             properties: {
@@ -430,7 +430,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_delete-role',
-        description: 'Delete a role using the selected local client\'s cube-management grant. Unknown or inaccessible roles refuse. Also refuses for the default, mandatory, or human-seat role; a role referenced by message-taxonomy routing; or a role assigned to an active drone. Reassign active drones with borg_reassign-drone or remove them with borg_evict-drone first. Evicted drones formerly assigned to the deleted role retain activity attribution.',
+        description: 'Delete a role using the selected local client\'s cube-management grant. Unknown or inaccessible roles refuse. Also refuses for the default, mandatory, or human-seat role; a role referenced by message-taxonomy routing; or a role assigned to an active drone. Reassign active drones with borg_reassign-drone or remove them with borg_evict-drone first. Evicted drones that held the deleted role are reassigned to the cube\'s default role; their activity-log attribution is unaffected.',
         inputSchema: {
             type: 'object',
             properties: {
