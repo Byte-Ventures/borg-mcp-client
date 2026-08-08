@@ -262,6 +262,6 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 
 ## Release status
 
-This client candidate pins published `borgmcp-shared@0.10.0`. Its release remains
+This client candidate pins published `borgmcp-shared@0.10.1`. Its release remains
 coupled to a server artifact rebuilt against the same shared version, with both
 artifacts required to pass the complete process-level local dogfood gate.
