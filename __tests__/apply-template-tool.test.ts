@@ -11,7 +11,7 @@ const ORIGIN_C = 'https://127.0.0.1:7093';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
 
 function envelope(payload: unknown) {
-  return JSON.stringify({ protocol_version: '7', request_id: 'apply-template-tool-test', payload });
+  return JSON.stringify({ protocol_version: '8', request_id: 'apply-template-tool-test', payload });
 }
 
 describe('borg_apply-template orchestration authority', () => {

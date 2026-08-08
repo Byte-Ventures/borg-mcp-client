@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
+import { TOOL_MANIFEST } from '../src/tool-manifest.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
@@ -16,7 +17,7 @@ const INITIAL_CURSOR = {
 };
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '7', request_id: requestId, payload };
+  return { protocol_version: '8', request_id: requestId, payload };
 }
 
 function connectionReset(): Error & { code: string } {
@@ -117,6 +118,24 @@ describe('local server route adapter', () => {
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/acks` && method === 'POST') {
         return new Response(null, { status: 204 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/role-rationale` && method === 'POST') {
+        return new Response(JSON.stringify(envelope({
+          role_id: ROLE_ID,
+          role_name: 'Builder',
+          section: { heading: 'Workflow', body: 'Workflow:\nBuild carefully.' },
+        })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/roles/${ROLE_ID}` && method === 'DELETE') {
+        return new Response(JSON.stringify(envelope({ role_id: ROLE_ID, deleted: true })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/drones/${DRONE_ID}` && method === 'PATCH') {
+        return new Response(JSON.stringify(envelope({
+          drone: { id: DRONE_ID, cube_id: CUBE_ID, role_id: ROLE_ID, label: 'builder-1' },
+        })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/drones/${DRONE_ID}` && method === 'DELETE') {
+        return new Response(JSON.stringify(envelope({ drone_id: DRONE_ID, evicted: true })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/decisions` && method === 'PUT') {
         return new Response(JSON.stringify(envelope({ decisions: [{ topic: 'local', decision: 'stay local' }] })), { status: 200 });
@@ -431,13 +450,64 @@ describe('local server route adapter', () => {
     )).toBe(false);
   });
 
-  it('fails explicitly before any Cloud-only route is attempted', async () => {
+  it("keeps role-management operations and deletion's advertised remedies reachable (#376)", async () => {
+    const remote = await import('../src/remote-client.js');
+    const deletion = TOOL_MANIFEST.find((tool) => tool.name === 'borg_delete-role');
+    const rationale = TOOL_MANIFEST.find((tool) => tool.name === 'borg_role-rationale');
+
+    expect(deletion?.description).toContain('borg_reassign-drone');
+    expect(deletion?.description).toContain('borg_evict-drone');
+    expect(rationale?.description).toContain('named section');
+
+    await remote.reassignDrone(DRONE_ID, ROLE_ID);
+    await remote.evictDrone(DRONE_ID);
+    await remote.deleteRole(ROLE_ID);
+    await expect(remote.roleRationale(SESSION, ORIGIN, 'Builder', 'Workflow', TRUST_IDENTITY))
+      .resolves.toEqual({
+        role: 'Builder',
+        section: 'Workflow',
+        body: 'Workflow:\nBuild carefully.',
+      });
+
+    const roleRequests = fetchSpy.mock.calls.filter(([input]) =>
+      new URL(String(input)).pathname.includes('/role'),
+    );
+    expect(roleRequests.map(([input, init]) => [
+      new URL(String(input)).pathname,
+      init?.method,
+      new Headers(init?.headers).get('Authorization'),
+      JSON.parse(String(init?.body)).payload,
+    ])).toEqual([
+      [`/api/cubes/${CUBE_ID}/roles/${ROLE_ID}`, 'DELETE', 'Bearer parent-enrollment-token', {}],
+      [`/api/cubes/${CUBE_ID}/role-rationale`, 'POST', `Bearer ${SESSION}`, { role: 'Builder', section: 'Workflow' }],
+    ]);
+  });
+
+  it('applies the published role-management request and result decoders', async () => {
     const remote = await import('../src/remote-client.js');
     const before = fetchSpy.mock.calls.length;
 
-    await expect(remote.roleRationale(SESSION, ORIGIN, 'Builder', 'Workflow'))
-      .rejects.toThrow(/Local Borg server does not support/);
-    expect(fetchSpy.mock.calls).toHaveLength(before);
+    await expect(remote.roleRationale(SESSION, ORIGIN, '', 'Workflow', TRUST_IDENTITY))
+      .rejects.toMatchObject({ name: 'ProtocolContractError' });
+    expect(fetchSpy).toHaveBeenCalledTimes(before);
+
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(envelope({
+      role_id: ROLE_ID,
+      role_name: 'Builder',
+      section: {
+        heading: 'Workflow',
+        body: 'Workflow:\nBuild carefully.\n\nBoundaries:\nDo not broaden scope.',
+      },
+    })), { status: 200 }));
+    await expect(remote.roleRationale(SESSION, ORIGIN, 'Builder', 'Workflow', TRUST_IDENTITY))
+      .rejects.toMatchObject({ name: 'ProtocolContractError' });
+
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(envelope({
+      role_id: ROLE_ID,
+      deleted: false,
+    })), { status: 200 }));
+    await expect(remote.deleteRole(ROLE_ID))
+      .rejects.toMatchObject({ name: 'ProtocolContractError' });
   });
 
   it('rejects a declared local protocol body above the bounded log-page limit', async () => {

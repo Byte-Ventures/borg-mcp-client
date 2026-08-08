@@ -37,7 +37,7 @@ artifact reaches no hosted authority.
 At extraction, local enrollment used the reviewed client-generated credential/retry
 contract, with a pre-request `PENDING` record in the local 0600-permission seat
 store, exact-tuple ambiguous retry, and verified activation. The client candidate
-at that time resolved to the audited registry `borgmcp-shared@0.9.0` with integrity
+at that time resolved to audited registry `borgmcp-shared` version `0.9.0` with integrity
 `sha512-bfZPP9JGgBQrCFoZetabqKHc8HLaUqHVR3GJLb/1F1oon7z/B4el4aeBHVvXlxN9+2G7kU/ymPZ/K25nVQapmQ==`.
 The coupled `borgmcp-server@0.9.0` release was published on 2026-08-02 for the
 client `borgmcp@2.10.0` line. Its annotated tag object

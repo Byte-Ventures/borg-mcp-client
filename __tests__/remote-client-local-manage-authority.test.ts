@@ -12,12 +12,12 @@ const SESSION = 's'.repeat(43);
 const PARENT = 'p'.repeat(43);
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '7', request_id: requestId, payload };
+  return { protocol_version: '8', request_id: requestId, payload };
 }
 
 function errorEnvelope(code: string, message = 'server detail must not be surfaced') {
   return {
-    protocol_version: '7',
+    protocol_version: '8',
     request_id: 'local-error-1',
     error: { code, ...(message === undefined ? {} : { message }) },
   };
@@ -65,6 +65,9 @@ describe('local manage-request authority', () => {
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/roles/${ROLE_ID}` && method === 'PATCH') {
         return new Response(JSON.stringify(envelope({ role: { id: ROLE_ID, name: 'Builder' } })), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}/roles/${ROLE_ID}` && method === 'DELETE') {
+        return new Response(JSON.stringify(envelope({ role_id: ROLE_ID, deleted: true })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/roles/${ROLE_ID}/section-patch` && method === 'POST') {
         return new Response(JSON.stringify(envelope({ role: { id: ROLE_ID, name: 'Builder' } })), { status: 200 });
@@ -133,6 +136,7 @@ describe('local manage-request authority', () => {
     });
     await remote.updateRole(ROLE_ID, { short_description: 'builds carefully' });
     await remote.patchRoleSection(ROLE_ID, { action: 'replace', heading: 'Workflow', body: 'Build.' });
+    await remote.deleteRole(ROLE_ID);
     await remote.reassignDrone(DRONE_ID, ROLE_ID);
     await remote.evictDrone(DRONE_ID, {
       cubeId: CUBE_ID,
@@ -144,13 +148,13 @@ describe('local manage-request authority', () => {
       cubeName: 'local-cube',
       noMutation: 'No drone was removed.',
     });
-    expect(localFetch).toHaveBeenCalledTimes(12);
+    expect(localFetch).toHaveBeenCalledTimes(13);
     for (const [, init] of localFetch.mock.calls) {
       const authorization = new Headers(init?.headers).get('Authorization');
       expect(authorization).toBe(`Bearer ${PARENT}`);
       expect(authorization).not.toContain(SESSION);
     }
-    expect(getServerCredential).toHaveBeenCalledTimes(10);
+    expect(getServerCredential).toHaveBeenCalledTimes(11);
     expect(getServerCredential).toHaveBeenCalledWith(ORIGIN, TRUST_IDENTITY);
     expect(hostedFetch).not.toHaveBeenCalled();
   });
@@ -297,7 +301,7 @@ describe('local manage-request authority', () => {
 
   it.each([
     ['message-less envelope', JSON.stringify({
-      protocol_version: '7',
+      protocol_version: '8',
       request_id: 'local-error-1',
       error: { code: 'INVALID_INPUT' },
     })],
@@ -379,20 +383,6 @@ describe('local manage-request authority', () => {
     expect(getServerCredential).not.toHaveBeenCalled();
   });
 
-  it('does not elevate local admin tools whose routes are not server-declared', async () => {
-    const remote = await import('../src/remote-client.js');
-    const unsupported = [
-      () => remote.deleteRole(ROLE_ID),
-    ];
-
-    for (const call of unsupported) {
-      await expect(call()).rejects.toThrow(/Local Borg server does not support/);
-    }
-    expect(getServerCredential).not.toHaveBeenCalled();
-    expect(localFetch).not.toHaveBeenCalled();
-    expect(hostedFetch).not.toHaveBeenCalled();
-  });
-
   it.each([
     ['missing', undefined],
     ['mismatched', TARGET_CUBE_ID],
@@ -413,7 +403,7 @@ describe('local manage-request authority', () => {
     expect(hostedFetch).not.toHaveBeenCalled();
   });
 
-  it('sends confirmed deletion as an empty protocol-v7 envelope with the parent credential', async () => {
+  it('sends confirmed deletion as an empty protocol-v8 envelope with the parent credential', async () => {
     const { deleteCube } = await import('../src/remote-client.js');
 
     await deleteCube(CUBE_ID, CUBE_ID);
@@ -423,7 +413,7 @@ describe('local manage-request authority', () => {
     expect(init?.method).toBe('DELETE');
     expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${PARENT}`);
     expect(JSON.parse(String(init?.body))).toMatchObject({
-      protocol_version: '7',
+      protocol_version: '8',
       payload: {},
     });
   });
@@ -466,6 +456,7 @@ describe('local manage-request authority', () => {
       }),
       () => remote.updateRole(traversal, { short_description: 'no' }),
       () => remote.patchRoleSection(traversal, { action: 'delete', heading: 'Workflow' }),
+      () => remote.deleteRole(traversal),
       () => remote.reassignDrone(traversal, ROLE_ID),
       () => remote.reassignDrone(DRONE_ID, traversal),
       () => remote.evictDrone(traversal, { cubeId: CUBE_ID, cubeName: 'local-cube', targetReference: traversal }),
