@@ -8,37 +8,6 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
 
 ## Deliberate Transformations
 
-- Replaced the monorepo dependency on `borgmcp-shared` with the exact audited registry release pinned at extraction time (0.6.4) and a fresh standalone lockfile.
-- Replaced local template, role-section, drone-address, and log high-water-mark implementations with `borgmcp-shared` exports.
-- Removed monorepo-only website anti-drift tests and re-anchored remaining filesystem tests to this repository.
-- Removed consumer lifecycle hooks, parent-directory deployment scripts, minification, and private integration-environment configuration.
-- Added standalone source typecheck, unit/release tests, readable build, onboarding smoke, artifact verification, and public-source sensitivity scanning.
-- Made the package root export side-effect-free while retaining `borg-mcp` executable behavior.
-- Kept self-hosted `--host --enroll` preview-only while implementing the
-  client-generated PENDING credential/retry tuple and capability-gated,
-  repository-idempotent cube creation required for local dogfood.
-- Initially set the standalone package identity to `2.0.0`. **The current
-  release identity is `3.0.2`.** Extraction and versioning do not authorize
-  publication.
-
-  Spent versions — each burned an immutable tag and published nothing:
-
-  | Version | Failed at | Recovered by |
-  | --- | --- | --- |
-  | `2.0.0` | lightweight release tag, before packaging | `2.0.1` |
-  | `2.0.7` | before package creation or npm publication | — |
-  | `2.10.1` | before artifact creation or publication | — |
-  | `2.12.0` | before artifact creation or publication | `2.12.1` |
-  | `3.0.1` | publish job never scheduled; run cancelled after verify and approval | `3.0.2` |
-
-  Every other version in the `2.x` and `3.x` lines published and was
-  registry-verified.
-  Record spent versions here when they occur; do not append a clause to this
-  entry. To confirm the table is still complete, list the repository's version
-  tags and `npm view borgmcp versions` — a spent version is a tag whose version
-  never reached the registry, and the two sets should differ by exactly these
-  rows.
-
 ## Review Holds
 
 Google OAuth / Cloud sign-in has been fully removed from this local-only client.
@@ -62,6 +31,7 @@ client `borgmcp@2.10.0` line. Its annotated tag object
 in the `borgmcp-server-0.9.0-release` registry decision. That server and its
 client line pin historical `borgmcp-shared` version `0.8.1` and remain
 immutable. The immutable `v2.0.7` attempt failed before publication and remains
-preserved. The current release identity and publication gate remain governed by
-the reviewed `v3.0.2` source, a fresh annotated tag, and the exact-artifact and
-protected-publication gates.
+preserved. Each release's identity and publication gate are governed by its reviewed
+source at the annotated release tag and the exact-artifact and
+protected-publication gates; the authoritative version is `package.json` and
+the registry, not this document.
