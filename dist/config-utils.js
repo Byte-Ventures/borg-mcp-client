@@ -691,24 +691,74 @@ function readOpenCodeMcpCommand(configPath) {
         return undefined;
     }
 }
+function refreshClaudeMcpCommand(configPath) {
+    const config = readJsonFile(configPath);
+    config.mcpServers[MCP_SERVER_NAME].command = MCP_COMMAND;
+    writeJsonFile(configPath, config);
+}
+function refreshCodexMcpCommand(configPath) {
+    const text = fs.readFileSync(configPath, 'utf-8');
+    const header = /^\s*\[mcp_servers\.borg\]\s*$/m.exec(text);
+    if (!header)
+        return;
+    const sectionStart = header.index + header[0].length;
+    const tail = text.slice(sectionStart);
+    const nextHeader = /^\s*\[/m.exec(tail);
+    const sectionEnd = nextHeader ? sectionStart + nextHeader.index : text.length;
+    const section = text.slice(sectionStart, sectionEnd);
+    const updatedSection = section.replace(/^(\s*command\s*=\s*)"[^"]+"(\s*)$/m, `$1"${MCP_COMMAND}"$2`);
+    fs.writeFileSync(configPath, text.slice(0, sectionStart) + updatedSection + text.slice(sectionEnd), 'utf-8');
+}
+function refreshOpenCodeMcpCommand(configPath) {
+    const config = readJsonFile(configPath);
+    const borgServer = config.mcp[MCP_SERVER_NAME];
+    borgServer.command = Array.isArray(borgServer.command) ? [MCP_COMMAND] : MCP_COMMAND;
+    writeJsonFile(configPath, config);
+}
 /**
- * Replace only stale registrations emitted by Borg's prior absolute-path
- * writers. A `borg` entry that points at another command remains operator-owned
- * and is not changed.
+ * Replace only the command in stale Borg registrations. Other entry fields are
+ * preserved, and a `borg` entry that points at another command is not changed.
  */
 export function refreshManagedAgentMcpConfigs(options = {}) {
     const refreshed = [];
-    if (isStaleBorgMcpCommand(readClaudeMcpCommand(options.claudeConfigPath ?? CLAUDE_CONFIG_PATH))) {
-        (options.addClaude ?? addMcpServer)();
-        refreshed.push('claude');
+    const failures = [];
+    const claudeConfigPath = options.claudeConfigPath ?? CLAUDE_CONFIG_PATH;
+    const codexConfigPath = options.codexConfigPath ?? CODEX_CONFIG_PATH;
+    const openCodeConfigPath = options.openCodeConfigPath ?? OPENCODE_CONFIG_PATH;
+    const agents = [
+        {
+            kind: 'claude',
+            label: 'Claude Code',
+            command: readClaudeMcpCommand(claudeConfigPath),
+            refresh: options.refreshClaude ?? (() => refreshClaudeMcpCommand(claudeConfigPath)),
+        },
+        {
+            kind: 'codex',
+            label: 'Codex',
+            command: readCodexMcpCommand(codexConfigPath),
+            refresh: options.refreshCodex ?? (() => refreshCodexMcpCommand(codexConfigPath)),
+        },
+        {
+            kind: 'opencode',
+            label: 'OpenCode',
+            command: readOpenCodeMcpCommand(openCodeConfigPath),
+            refresh: options.refreshOpenCode ?? (() => refreshOpenCodeMcpCommand(openCodeConfigPath)),
+        },
+    ];
+    for (const agent of agents) {
+        if (!isStaleBorgMcpCommand(agent.command))
+            continue;
+        try {
+            agent.refresh();
+            refreshed.push(agent.kind);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            failures.push(`${agent.label}: ${message}`);
+        }
     }
-    if (isStaleBorgMcpCommand(readCodexMcpCommand(options.codexConfigPath ?? CODEX_CONFIG_PATH))) {
-        (options.addCodex ?? addCodexMcpServer)();
-        refreshed.push('codex');
-    }
-    if (isStaleBorgMcpCommand(readOpenCodeMcpCommand(options.openCodeConfigPath ?? OPENCODE_CONFIG_PATH))) {
-        (options.addOpenCode ?? addOpenCodeMcpServer)();
-        refreshed.push('opencode');
+    if (failures.length > 0) {
+        throw new Error(`Could not refresh agent MCP configs: ${failures.join('; ')}`);
     }
     return refreshed;
 }

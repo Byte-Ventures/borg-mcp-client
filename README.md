@@ -184,10 +184,10 @@ Borg checks that compatible client and server versions are available, asks for
 confirmation, and reports any manual recovery step. Use `borg update --yes` for
 a non-interactive update. A server that was stopped remains stopped, and active
 agent sessions must be restarted after the client changes. After the package
-pair verifies, Borg replaces stale absolute launch paths in Borg-written Claude
-Code, Codex, and OpenCode MCP registrations with the version-stable `borg-mcp`
-command. It leaves absent registrations and `borg` entries that point to another
-command unchanged.
+pair verifies, Borg replaces stale absolute `borgmcp` package launch paths in
+Claude Code, Codex, and OpenCode MCP registrations with the version-stable
+`borg-mcp` command. It preserves the registration's other settings. It leaves
+absent registrations and `borg` entries that point to another command unchanged.
 
 ## Troubleshooting
 

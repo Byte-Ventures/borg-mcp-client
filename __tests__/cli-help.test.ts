@@ -176,7 +176,8 @@ describe('borg update help', () => {
     expect(text).toMatch(/client.*first/is);
     expect(text).toMatch(/server.*skipped/i);
     expect(text).toMatch(/partial/i);
-    expect(text).toMatch(/stale MCP launch paths/i);
+    expect(text).toMatch(/stale borgmcp package launch paths/i);
+    expect(text).toMatch(/preserving their other settings/i);
     expect(text).toMatch(/entries that point to another command unchanged/i);
     expect(text).toMatch(/restart.*agent/i);
   });

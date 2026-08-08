@@ -129,9 +129,10 @@ export function updateHelpText(version: string): string {
     `provenance fail closed with manual-update guidance.\n\n` +
     `If no local server is installed, the server phase is skipped. A failure after the client\n` +
     `succeeds is reported as partial completion with the safe retry command. Borg never starts a\n` +
-    `stopped server. After package verification, Borg replaces stale MCP launch paths in\n` +
-    `Borg-written Claude Code, Codex, and OpenCode registrations. It leaves absent registrations\n` +
-    `and borg entries that point to another command unchanged. Borg never restarts agent processes;\n` +
+    `stopped server. After package verification, Borg replaces stale borgmcp package launch paths\n` +
+    `in Claude Code, Codex, and OpenCode registrations while preserving their other settings. It\n` +
+    `leaves absent registrations and borg entries that point to another command unchanged. Borg\n` +
+    `never restarts agent processes;\n` +
     `restart active agent sessions yourself.\n`
   );
 }

@@ -94,14 +94,13 @@ export interface RefreshManagedAgentMcpConfigOptions {
     claudeConfigPath?: string;
     codexConfigPath?: string;
     openCodeConfigPath?: string;
-    addClaude?: () => void;
-    addCodex?: () => void;
-    addOpenCode?: () => void;
+    refreshClaude?: () => void;
+    refreshCodex?: () => void;
+    refreshOpenCode?: () => void;
 }
 /**
- * Replace only stale registrations emitted by Borg's prior absolute-path
- * writers. A `borg` entry that points at another command remains operator-owned
- * and is not changed.
+ * Replace only the command in stale Borg registrations. Other entry fields are
+ * preserved, and a `borg` entry that points at another command is not changed.
  */
 export declare function refreshManagedAgentMcpConfigs(options?: RefreshManagedAgentMcpConfigOptions): Array<'claude' | 'codex' | 'opencode'>;
 /**
