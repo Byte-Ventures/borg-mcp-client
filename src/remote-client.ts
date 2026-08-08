@@ -95,15 +95,21 @@ export const LOCAL_SERVER_REQUEST_TIMEOUT_MS = 5_000;
 const LOCAL_SERVER_RESPONSE_LIMIT_MESSAGE =
   'Local Borg server response exceeded the response limit';
 
+export const SERVER_ADVISORY_MAX_CHARS = 512;
+// Keep enough source headroom to remove control sequences that cross the
+// visible 512-character boundary without letting regex work scale with the
+// 32 MiB response-body limit.
+const SERVER_MESSAGE_SANITIZE_MAX_CHARS = SERVER_ADVISORY_MAX_CHARS * 8;
+
 function sanitizeServerMessage(message: string): string {
-  return message
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+  const bounded = message.slice(0, SERVER_MESSAGE_SANITIZE_MAX_CHARS);
+
+  return bounded
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\|$)/g, '')
+    .replace(/\u001b\[[0-?]*[ -/]*(?:[@-~]|$)/g, '')
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
     .replace(/\\u(?:000[0-9a-f]|001[0-9a-f]|007f|008[0-9a-f]|009[0-9a-f])/gi, '');
 }
-
-export const SERVER_ADVISORY_MAX_CHARS = 512;
 
 export function sanitizeServerAdvisory(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
