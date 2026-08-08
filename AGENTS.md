@@ -29,7 +29,7 @@
 
 ## Release Boundaries
 
-- **Two files carry the version and must move together:** `package.json` (`version`) and `package-lock.json` (`version` and `packages[""].version`). `npm run verify:release` checks their equality.
+- **Two files carry the version and must move together:** `package.json` (`version`) and `package-lock.json` (`version` and `packages[""].version`). `npm run verify:release` checks the top-level lockfile version against the manifest.
 
 - `npm run release:check` runs the full release lane: public-source scan, release readiness, lock-registry check, typecheck, tests, build, onboarding smoke, and package verification.
 - Releases are tag-triggered and immutable. A failed run **burns the version** — never re-tag, never rerun, never reuse. Check the registry before naming a version.
