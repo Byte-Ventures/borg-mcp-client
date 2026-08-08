@@ -15,9 +15,10 @@ try {
   const packDirectory = join(temporary, 'pack');
   const consumer = join(temporary, 'consumer');
   await mkdir(packDirectory);
-  const [packResult] = JSON.parse(runNpm([
+  const packOutput = JSON.parse(runNpm([
     'pack', '--ignore-scripts', '--json', '--pack-destination', packDirectory,
   ], { cwd: root, encoding: 'utf8' }));
+  const packResult = Array.isArray(packOutput) ? packOutput[0] : packOutput.borgmcp;
   const tarball = join(packDirectory, packResult.filename);
   const artifact = await verifyPackedArtifact(tarball, { repositoryRoot: root });
   runNpm([
