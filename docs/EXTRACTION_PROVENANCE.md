@@ -29,8 +29,10 @@ The extraction copied the monorepo's `client/src/` production boundary and top-l
   | `2.0.7` | before package creation or npm publication | — |
   | `2.10.1` | before artifact creation or publication | — |
   | `2.12.0` | before artifact creation or publication | `2.12.1` |
+  | `3.0.1` | publish job never scheduled; run cancelled after verify and approval | `3.0.2` |
 
-  Every other version in the `2.x` line published and was registry-verified.
+  Every other version in the `2.x` and `3.x` lines published and was
+  registry-verified.
   Record spent versions here when they occur; do not append a clause to this
   entry. To confirm the table is still complete, list the repository's version
   tags and `npm view borgmcp versions` — a spent version is a tag whose version
