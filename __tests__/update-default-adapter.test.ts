@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -15,7 +16,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import which from 'which';
 import {
   BORG_PLUGIN_SOURCE,
-  buildBorgPluginSource,
   openCodePluginPath,
 } from '../src/opencode-plugin.js';
 import { BORG_STATE_ROOT_ENV } from '../src/private-root.js';
@@ -186,7 +186,14 @@ describe('default npm update adapter', () => {
     await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
     expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
 
-    const priorSource = buildBorgPluginSource('3.2.0');
+    const priorSource = readFileSync(
+      new URL('./fixtures/opencode-plugin-3.3.0.js', import.meta.url),
+      'utf8',
+    );
+    expect(Buffer.byteLength(priorSource)).toBe(386);
+    expect(createHash('sha256').update(priorSource).digest('hex')).toBe(
+      '14a64bb955245b818e8afc46a429791868b6ad87d72996d2775b04411095295c',
+    );
     writeFileSync(plugin, priorSource);
     await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
     expect(readFileSync(plugin, 'utf8')).toBe(priorSource);

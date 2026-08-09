@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -103,6 +104,50 @@ describe('agent integration health', () => {
     expect(report.issues).toContain(report.openCodePlugin);
     expect(renderAgentIntegrationHealth(report)).toContain(
       `OpenCode borg-orient.js plugin: version 3.2.0, expected 3.3.0 at ${plugin}`,
+    );
+    expect(renderAgentIntegrationHealth(report)).toContain(
+      'Repair OpenCode plugin: borg update --yes',
+    );
+  });
+
+  it('renders the real unmarked 3.3.0 plugin as version unknown', () => {
+    const f = packageFixture('3.4.0');
+    const home = join(f.root, 'home');
+    const plugin = join(home, '.config', 'opencode', 'plugins', 'borg-orient.js');
+    const legacySource = readFileSync(
+      new URL('./fixtures/opencode-plugin-3.3.0.js', import.meta.url),
+      'utf8',
+    );
+    expect(Buffer.byteLength(legacySource)).toBe(386);
+    expect(createHash('sha256').update(legacySource).digest('hex')).toBe(
+      '14a64bb955245b818e8afc46a429791868b6ad87d72996d2775b04411095295c',
+    );
+    mkdirSync(join(plugin, '..'), { recursive: true });
+    writeFileSync(plugin, legacySource);
+    configureOpenCode(home);
+
+    const report = inspectAgentIntegrationHealth({
+      expectedVersion: '3.4.0',
+      path: f.bin,
+      homeDir: home,
+    });
+    expect(report.openCodePlugin).toMatchObject({
+      configured: true,
+      status: 'outdated',
+      version: 'unknown',
+    });
+    expect(report.issues).toContain(report.openCodePlugin);
+
+    report.openCodePlugin.path = '/Users/example/.config/opencode/plugins/borg-orient.js';
+    const status = renderAgentIntegrationHealth(report).split('\n').find(
+      (line) => line.startsWith('OpenCode borg-orient.js plugin:'),
+    );
+    expect(status).toBe(
+      'OpenCode borg-orient.js plugin: version unknown, expected 3.4.0 at /Users/example/.config/opencode/plugins/borg-orient.js',
+    );
+    expect(Buffer.byteLength(status!)).toBe(121);
+    expect(createHash('sha256').update(status!).digest('hex')).toBe(
+      'f73b36639d3d3769e05155c59a5fbb3b41bc537c631f15d970bfa5ef525bcf6f',
     );
     expect(renderAgentIntegrationHealth(report)).toContain(
       'Repair OpenCode plugin: borg update --yes',
