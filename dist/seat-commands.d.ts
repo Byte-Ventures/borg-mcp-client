@@ -16,7 +16,7 @@ export interface SeatCommandDeps {
         projectPath: string;
         cube: ActiveCube;
     }>>;
-    readAllActiveSeats: () => Promise<Array<{
+    readAllBoundSeats: () => Promise<Array<{
         worktree: string;
         record: SeatRecord;
     }>>;

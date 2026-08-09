@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { getProjectCliPreferenceForPath, readAllProjectIdentities, } from './cubes.js';
 import { resolveBorgPath } from './launch-all-command.js';
-import { readAllActiveSeats } from './seats.js';
+import { readAllBoundSeats } from './seats.js';
 export function parseSeatsArgs(args) {
     return args.length === 0
         ? { ok: true }
@@ -52,9 +52,9 @@ function seatKey(cubeId, droneId) {
     return `${cubeId}\0${droneId}`;
 }
 export async function readLocalSeatRows(deps) {
-    const [identities, activeSeats] = await Promise.all([
+    const [identities, boundSeats] = await Promise.all([
         deps.readAllProjectIdentities(),
-        deps.readAllActiveSeats(),
+        deps.readAllBoundSeats(),
     ]);
     const identityBySeat = new Map(identities.map((entry) => [seatKey(entry.cube.cubeId, entry.cube.droneId), entry]));
     const identityByRealpath = new Map();
@@ -63,7 +63,7 @@ export async function readLocalSeatRows(deps) {
         if (canonical)
             identityByRealpath.set(canonical, entry);
     }
-    const rows = await Promise.all(activeSeats.map(async ({ worktree, record }) => {
+    const rows = await Promise.all(boundSeats.map(async ({ worktree, record }) => {
         const exists = deps.pathExists(worktree);
         const canonicalWorktree = exists ? safeRealpath(deps, worktree) : null;
         const identity = (record.droneId ? identityBySeat.get(seatKey(record.cubeId, record.droneId)) : undefined)
@@ -178,7 +178,7 @@ export async function runLaunchSeat(args, deps) {
 export function buildDefaultSeatCommandDeps() {
     return {
         readAllProjectIdentities,
-        readAllActiveSeats,
+        readAllBoundSeats,
         getProjectCliPreference: getProjectCliPreferenceForPath,
         pathExists: existsSync,
         realpath: realpathSync,

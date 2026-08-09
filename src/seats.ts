@@ -675,6 +675,21 @@ export async function readAllActiveSeats(): Promise<Array<{ worktree: string; re
   return out;
 }
 
+/** All valid worktree-bound registry entries, including a PENDING seat whose
+ * interrupted finalize preserved its worktree for a later resume. Read-only:
+ * pending records remain non-hydratable and getActiveSeatForWorktree stays
+ * active-only. */
+export async function readAllBoundSeats(): Promise<Array<{ worktree: string; record: SeatRecord }>> {
+  const store = await readStore();
+  const out: Array<{ worktree: string; record: SeatRecord }> = [];
+  for (const [ref, record] of Object.entries(store.seats)) {
+    if (typeof record.worktree === 'string' && seatRef(record) === ref) {
+      out.push({ worktree: record.worktree, record });
+    }
+  }
+  return out;
+}
+
 // ─── Reset / scrub / metadata (all single-commit) ────────────────────────────
 
 export type ResetSeatOutcome =

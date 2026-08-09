@@ -507,6 +507,20 @@ export async function readAllActiveSeats() {
     }
     return out;
 }
+/** All valid worktree-bound registry entries, including a PENDING seat whose
+ * interrupted finalize preserved its worktree for a later resume. Read-only:
+ * pending records remain non-hydratable and getActiveSeatForWorktree stays
+ * active-only. */
+export async function readAllBoundSeats() {
+    const store = await readStore();
+    const out = [];
+    for (const [ref, record] of Object.entries(store.seats)) {
+        if (typeof record.worktree === 'string' && seatRef(record) === ref) {
+            out.push({ worktree: record.worktree, record });
+        }
+    }
+    return out;
+}
 /**
  * Reset the seat bound to `worktree`: under ONE flock, re-check the exact FULL
  * binding (ref + drone id) and the token-safe observation, then DELETE the whole

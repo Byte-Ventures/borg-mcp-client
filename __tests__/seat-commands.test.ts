@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   parseLaunchSeatArgs,
   parseSeatsArgs,
@@ -13,6 +17,15 @@ const CUBE_A = '11111111-1111-1111-1111-111111111111';
 const CUBE_B = '22222222-2222-2222-2222-222222222222';
 const DRONE_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const DRONE_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+const originalStateRoot = process.env.BORG_STATE_ROOT;
+const fixtures: string[] = [];
+
+afterEach(() => {
+  if (originalStateRoot === undefined) delete process.env.BORG_STATE_ROOT;
+  else process.env.BORG_STATE_ROOT = originalStateRoot;
+  for (const fixture of fixtures.splice(0)) rmSync(fixture, { recursive: true, force: true });
+  vi.resetModules();
+});
 
 function activeCube(overrides: Partial<ActiveCube> = {}): ActiveCube {
   return {
@@ -53,7 +66,7 @@ function depsFor(cubes: ActiveCube[], overrides: Partial<SeatCommandDeps> = {}) 
   const launchBareBorg = vi.fn(async () => 0);
   const deps: SeatCommandDeps = {
     readAllProjectIdentities: vi.fn(async () => cubes.map((cube) => ({ projectPath: cube.worktree!, cube }))),
-    readAllActiveSeats: vi.fn(async () => cubes.map((cube) => activeSeat(cube))),
+    readAllBoundSeats: vi.fn(async () => cubes.map((cube) => activeSeat(cube))),
     getProjectCliPreference: vi.fn(async (worktree) => worktree.endsWith('/a') ? 'codex' : 'claude'),
     pathExists: vi.fn(() => true),
     realpath: vi.fn((path) => path.replace('/linked/', '/real/')),
@@ -136,7 +149,7 @@ describe('borg seats', () => {
     pending.record.state = 'pending';
     delete pending.record.sessionId;
     const { deps, stdout } = depsFor([], {
-      readAllActiveSeats: vi.fn(async () => [pending]),
+      readAllBoundSeats: vi.fn(async () => [pending]),
       getProjectCliPreference: vi.fn(async () => null),
     });
 
@@ -150,6 +163,67 @@ describe('borg seats', () => {
     expect(stdout.join('')).toBe(
       'No drone seats are registered on this machine. Run `borg assimilate` in a project repository to create one.\n',
     );
+  });
+});
+
+describe('production local-registry wiring', () => {
+  it('lists active and bound-pending records while pending remains non-hydratable', async () => {
+    const stateRoot = realpathSync(mkdtempSync(join(tmpdir(), 'borg-seat-commands-default-')));
+    fixtures.push(stateRoot);
+    process.env.BORG_STATE_ROOT = stateRoot;
+    const activeWorktree = join(stateRoot, 'active-worktree');
+    const pendingWorktree = join(stateRoot, 'pending-worktree');
+    mkdirSync(activeWorktree);
+    mkdirSync(pendingWorktree);
+    vi.resetModules();
+
+    const seats = await import('../src/seats.js');
+    const cubes = await import('../src/cubes.js');
+    const commands = await import('../src/seat-commands.js');
+    const base = {
+      origin: 'https://localhost:8787',
+      trustIdentity: 'spki-sha256:test',
+      cubeId: CUBE_A,
+      roleId: '33333333-3333-3333-3333-333333333333',
+    };
+    const activeBearer = 'active-bearer-'.padEnd(43, 'a');
+    const activeOperation = { projectRoot: stateRoot, kind: 'seat' as const, operationKey: 'active' };
+    await seats.mintPendingSeat({ ...base, operation: activeOperation, credential: activeBearer });
+    await seats.activateAndBindSeat({
+      ...base,
+      operation: activeOperation,
+      expectedPendingDigest: createHash('sha256').update(activeBearer).digest('hex'),
+      droneId: DRONE_A,
+      sessionId: '44444444-4444-4444-4444-444444444444',
+      worktree: activeWorktree,
+      name: 'alpha',
+      droneLabel: 'builder-active',
+    });
+
+    const pendingBearer = 'pending-bearer-'.padEnd(43, 'p');
+    const pendingOperation = { projectRoot: stateRoot, kind: 'sibling' as const, operationKey: 'pending' };
+    await seats.mintPendingSeat({ ...base, operation: pendingOperation, credential: pendingBearer });
+    await seats.bindPendingSeatToWorktree({
+      ...base,
+      operation: pendingOperation,
+      expectedPendingDigest: createHash('sha256').update(pendingBearer).digest('hex'),
+      droneId: DRONE_B,
+      worktree: pendingWorktree,
+      name: 'alpha',
+      droneLabel: 'builder-pending',
+    });
+
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    expect(await commands.runSeats({
+      ...commands.buildDefaultSeatCommandDeps(),
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    })).toBe(0);
+    expect(stderr).toEqual([]);
+    expect(stdout.join('')).toMatch(/builder-active\s+alpha\s+active\s+-\s+.*active-worktree/);
+    expect(stdout.join('')).toMatch(/builder-pending\s+alpha\s+pending\s+-\s+.*pending-worktree/);
+    expect(await cubes.getActiveCubeForWorktree(pendingWorktree)).toBeNull();
   });
 });
 

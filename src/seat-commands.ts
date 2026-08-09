@@ -7,7 +7,7 @@ import {
   type BorgCli,
 } from './cubes.js';
 import { resolveBorgPath } from './launch-all-command.js';
-import { readAllActiveSeats, type SeatRecord } from './seats.js';
+import { readAllBoundSeats, type SeatRecord } from './seats.js';
 
 export type LocalSeatState = 'active' | 'pending';
 
@@ -24,7 +24,7 @@ export interface LocalSeatRow {
 
 export interface SeatCommandDeps {
   readAllProjectIdentities: () => Promise<Array<{ projectPath: string; cube: ActiveCube }>>;
-  readAllActiveSeats: () => Promise<Array<{ worktree: string; record: SeatRecord }>>;
+  readAllBoundSeats: () => Promise<Array<{ worktree: string; record: SeatRecord }>>;
   getProjectCliPreference: (worktree: string) => Promise<BorgCli | null>;
   pathExists: (path: string) => boolean;
   realpath: (path: string) => string;
@@ -91,9 +91,9 @@ function seatKey(cubeId: string, droneId: string): string {
 }
 
 export async function readLocalSeatRows(deps: SeatCommandDeps): Promise<LocalSeatRow[]> {
-  const [identities, activeSeats] = await Promise.all([
+  const [identities, boundSeats] = await Promise.all([
     deps.readAllProjectIdentities(),
-    deps.readAllActiveSeats(),
+    deps.readAllBoundSeats(),
   ]);
   const identityBySeat = new Map(
     identities.map((entry) => [seatKey(entry.cube.cubeId, entry.cube.droneId), entry]),
@@ -104,7 +104,7 @@ export async function readLocalSeatRows(deps: SeatCommandDeps): Promise<LocalSea
     if (canonical) identityByRealpath.set(canonical, entry);
   }
 
-  const rows = await Promise.all(activeSeats.map(async ({ worktree, record }) => {
+  const rows = await Promise.all(boundSeats.map(async ({ worktree, record }) => {
     const exists = deps.pathExists(worktree);
     const canonicalWorktree = exists ? safeRealpath(deps, worktree) : null;
     const identity = (record.droneId ? identityBySeat.get(seatKey(record.cubeId, record.droneId)) : undefined)
@@ -244,7 +244,7 @@ export async function runLaunchSeat(
 export function buildDefaultSeatCommandDeps(): SeatCommandDeps {
   return {
     readAllProjectIdentities,
-    readAllActiveSeats,
+    readAllBoundSeats,
     getProjectCliPreference: getProjectCliPreferenceForPath,
     pathExists: existsSync,
     realpath: realpathSync,

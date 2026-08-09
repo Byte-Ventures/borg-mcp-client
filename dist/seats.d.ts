@@ -254,6 +254,14 @@ export declare function readAllActiveSeats(): Promise<Array<{
     worktree: string;
     record: SeatRecord;
 }>>;
+/** All valid worktree-bound registry entries, including a PENDING seat whose
+ * interrupted finalize preserved its worktree for a later resume. Read-only:
+ * pending records remain non-hydratable and getActiveSeatForWorktree stays
+ * active-only. */
+export declare function readAllBoundSeats(): Promise<Array<{
+    worktree: string;
+    record: SeatRecord;
+}>>;
 export type ResetSeatOutcome = {
     outcome: 'reset';
     ref: string;
