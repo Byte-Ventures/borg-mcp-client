@@ -224,6 +224,22 @@ describe('production local-registry wiring', () => {
     expect(stdout.join('')).toMatch(/builder-active\s+alpha\s+active\s+-\s+.*active-worktree/);
     expect(stdout.join('')).toMatch(/builder-pending\s+alpha\s+pending\s+-\s+.*pending-worktree/);
     expect(await cubes.getActiveCubeForWorktree(pendingWorktree)).toBeNull();
+
+    const launchBareBorg = vi.fn(async () => 0);
+    stderr.length = 0;
+    expect(await commands.runLaunchSeat({ target: 'builder-pending' }, {
+      ...commands.buildDefaultSeatCommandDeps(),
+      launchBareBorg,
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    })).toBe(1);
+    expect(stderr.join('')).toBe(
+      "borg launch: drone 'builder-pending' has a pending seat (shown as `pending` in `borg seats`) — " +
+      'its assimilation did not complete, so launching now would start an unattached session. ' +
+      `To complete the seat, run \`borg assimilate\` in ${pendingWorktree}, then run ` +
+      '`borg launch builder-pending` again.\n',
+    );
+    expect(launchBareBorg).not.toHaveBeenCalled();
   });
 });
 

@@ -225,6 +225,15 @@ export async function runLaunchSeat(
   }
 
   const selected = matches[0];
+  if (selected.state !== 'active') {
+    deps.stderr(
+      `borg launch: drone '${selected.droneLabel}' has a pending seat (shown as \`pending\` in \`borg seats\`) — ` +
+      `its assimilation did not complete, so launching now would start an unattached session. ` +
+      `To complete the seat, run \`borg assimilate\` in ${selected.worktree}, then run ` +
+      `\`borg launch ${selected.droneLabel}\` again.\n`,
+    );
+    return 1;
+  }
   if (!selected.canonicalWorktree) {
     deps.stderr(
       `borg launch: drone '${selected.droneLabel}' is registered at ${selected.worktree}, but that directory does not exist. ` +
