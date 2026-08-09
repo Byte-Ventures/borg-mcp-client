@@ -185,12 +185,16 @@ describe('tmux backend (gh#556 Part 2 §4.1)', () => {
 describe('terminals backend (client#400 + control-char fold-in)', () => {
   const wopts = (platform: NodeJS.Platform) => ({ borgPath: '/usr/local/bin/borg', platform, cubeName: 'myrepo', launchedAtISO: '2026-06-13T12:00:00.000Z', launchDelayMs: 0, sleep: async () => {} });
 
-  it('macOS + iTerm present → creates a tab, names its session for the drone, and writes the lock', async () => {
+  it('macOS + iTerm present → handles zero windows, then creates a parenthesized tab and names its session', async () => {
     const deps = makeStubDeps({ pathExists: vi.fn((p: string) => p === '/Applications/iTerm.app') });
     await runTerminalsBackend([cand()], wopts('darwin'), deps);
     const calls = (deps.runSync as any).mock.calls;
     const script = calls.find((c: any[]) => c[0] === 'osascript')?.[1]?.[1] as string;
-    expect(script).toContain('create tab with default profile');
+    expect(script).toContain('if (count of windows) = 0 then');
+    expect(script).toContain('set launchedWindow to (create window with default profile command');
+    expect(script).toContain('tell current session of launchedWindow to set name to "borg · drone-1 · myrepo"');
+    expect(script).toContain('set launchedTab to (create tab with default profile command');
+    expect(script).not.toContain('set launchedTab to create tab with default profile command');
     expect(script).toContain('set name to "borg · drone-1 · myrepo"');
     expect(deps.writeFile).toHaveBeenCalled();
   });
@@ -203,6 +207,23 @@ describe('terminals backend (client#400 + control-char fold-in)', () => {
     expect(script).toContain('set custom title of launchedTab to "borg · drone-1 · myrepo"');
     expect(script).toContain('set title displays custom title of launchedTab to true');
     expect(script).not.toContain('System Events');
+  });
+
+  it.each([
+    ['iTerm', '/Applications/iTerm.app'],
+    ['Terminal', '/System/Applications/Utilities/Terminal.app'],
+  ])('macOS %s script escapes quote/backslash characters in both command and title', async (_name, appPath) => {
+    const deps = makeStubDeps({ pathExists: vi.fn((p: string) => p === appPath) });
+    await runTerminalsBackend(
+      [cand({ worktreeDir: '/a "quote" \\ path', droneLabel: 'drone-"\\' })],
+      { ...wopts('darwin'), cubeName: 'cube-"\\' },
+      deps,
+    );
+    const script = (deps.runSync as any).mock.calls.find((c: any[]) => c[0] === 'osascript')?.[1]?.[1] as string;
+    expect(script).toContain('/a \\"quote\\" \\\\ path');
+    expect(script).toContain('borg · drone-\\"\\\\ · cube-\\"\\\\');
+    expect(script).not.toContain('/a "quote" \\ path');
+    expect(script).not.toContain('borg · drone-"\\ · cube-"\\');
   });
 
   it('macOS + no terminal app → hard-fails (NoTerminalError)', async () => {

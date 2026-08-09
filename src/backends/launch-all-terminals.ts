@@ -56,7 +56,7 @@ async function launchMacOS(candidates: DroneCandidate[], opts: TerminalsOpts, de
     const cmd = buildLaunchCommand(c.worktreeDir, opts.borgPath);
     const title = composeTerminalTitle({ label: c.droneLabel, cubeName: opts.cubeName }, '');
     const script = hasITerm
-      ? `tell application "iTerm"\n  tell current window\n    set launchedTab to create tab with default profile command "${appleScriptEscape(cmd)}"\n    tell current session of launchedTab to set name to "${appleScriptEscape(title)}"\n  end tell\nend tell`
+      ? `tell application "iTerm"\n  if (count of windows) = 0 then\n    set launchedWindow to (create window with default profile command "${appleScriptEscape(cmd)}")\n    tell current session of launchedWindow to set name to "${appleScriptEscape(title)}"\n  else\n    tell current window\n      set launchedTab to (create tab with default profile command "${appleScriptEscape(cmd)}")\n      tell current session of launchedTab to set name to "${appleScriptEscape(title)}"\n    end tell\n  end if\nend tell`
       : `tell application "Terminal"\n  set launchedTab to do script "${appleScriptEscape(cmd)}"\n  set custom title of launchedTab to "${appleScriptEscape(title)}"\n  set title displays custom title of launchedTab to true\n  activate\nend tell`;
     deps.runSync('osascript', ['-e', script]);
     writeLockMarker(deps, c.cubeId, c.droneLabel, c.worktreeDir, opts.launchedAtISO);
