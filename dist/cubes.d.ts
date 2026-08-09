@@ -38,6 +38,23 @@ export interface ActiveCube {
     /** Canonical worktree bound to this exact durable seat. */
     worktree?: string;
 }
+export declare const BORG_LAUNCH_EXPECTED_SEAT_ENV = "BORG_LAUNCH_EXPECTED_SEAT";
+export interface LaunchSeatExpectation {
+    credentialRef: string;
+    cubeId: string;
+    droneId: string;
+    worktree: string;
+    droneLabel: string;
+}
+export declare class LaunchSeatIdentityChangedError extends Error {
+    readonly code = "LAUNCH_SEAT_IDENTITY_CHANGED";
+    constructor(droneLabel: string);
+}
+export declare function withLaunchSeatExpectationEnv(env: NodeJS.ProcessEnv, expectation: LaunchSeatExpectation): NodeJS.ProcessEnv;
+/** Codex MCP children do not inherit the wrapper environment, so carry the
+ * launch-scoped expected seat through the same per-invocation config channel as
+ * the Borg-session and state-root markers. */
+export declare function codexLaunchSeatExpectationConfigArgs(env?: NodeJS.ProcessEnv): string[];
 export type ActiveCubeInput = Omit<ActiveCube, 'sessionToken'> & {
     sessionToken?: string;
 };

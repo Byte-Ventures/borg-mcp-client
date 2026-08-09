@@ -76,6 +76,111 @@ export interface ActiveCube {
   worktree?: string;
 }
 
+export const BORG_LAUNCH_EXPECTED_SEAT_ENV = 'BORG_LAUNCH_EXPECTED_SEAT';
+
+export interface LaunchSeatExpectation {
+  credentialRef: string;
+  cubeId: string;
+  droneId: string;
+  worktree: string;
+  droneLabel: string;
+}
+
+export class LaunchSeatIdentityChangedError extends Error {
+  readonly code = 'LAUNCH_SEAT_IDENTITY_CHANGED';
+
+  constructor(droneLabel: string) {
+    super(
+      `borg launch: did not launch '${droneLabel}' — its seat registration changed before the launch could start. ` +
+      'Run `borg seats` to see the current state, then try again.',
+    );
+    this.name = 'LaunchSeatIdentityChangedError';
+  }
+}
+
+export function withLaunchSeatExpectationEnv(
+  env: NodeJS.ProcessEnv,
+  expectation: LaunchSeatExpectation,
+): NodeJS.ProcessEnv {
+  // The deterministic ref and public identity are sufficient; never copy the
+  // stored bearer into a process environment.
+  return {
+    ...env,
+    [BORG_LAUNCH_EXPECTED_SEAT_ENV]: JSON.stringify(expectation),
+  };
+}
+
+/** Codex MCP children do not inherit the wrapper environment, so carry the
+ * launch-scoped expected seat through the same per-invocation config channel as
+ * the Borg-session and state-root markers. */
+export function codexLaunchSeatExpectationConfigArgs(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const expectation = env[BORG_LAUNCH_EXPECTED_SEAT_ENV];
+  if (expectation === undefined) return [];
+  return [
+    '-c',
+    `mcp_servers.borg.env.${BORG_LAUNCH_EXPECTED_SEAT_ENV}=${JSON.stringify(expectation)}`,
+  ];
+}
+
+function readLaunchSeatExpectation(
+  env: NodeJS.ProcessEnv = process.env,
+): LaunchSeatExpectation | null {
+  const raw = env[BORG_LAUNCH_EXPECTED_SEAT_ENV];
+  if (raw === undefined) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new LaunchSeatIdentityChangedError('<unknown>');
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new LaunchSeatIdentityChangedError('<unknown>');
+  }
+  const value = parsed as Record<string, unknown>;
+  const droneLabel = typeof value.droneLabel === 'string' ? value.droneLabel : '<unknown>';
+  if (
+    typeof value.credentialRef !== 'string' ||
+    typeof value.cubeId !== 'string' ||
+    typeof value.droneId !== 'string' ||
+    typeof value.worktree !== 'string' ||
+    typeof value.droneLabel !== 'string'
+  ) {
+    throw new LaunchSeatIdentityChangedError(droneLabel);
+  }
+  return {
+    credentialRef: value.credentialRef,
+    cubeId: value.cubeId,
+    droneId: value.droneId,
+    worktree: value.worktree,
+    droneLabel: value.droneLabel,
+  };
+}
+
+function assertLaunchSeatExpectation(
+  expectation: LaunchSeatExpectation,
+  active: ActiveCube | null | undefined,
+  worktree: string,
+  currentRecord: SeatRecord | null,
+): void {
+  if (
+    currentRecord === null ||
+    seatRef(currentRecord) !== expectation.credentialRef ||
+    currentRecord.cubeId !== expectation.cubeId ||
+    currentRecord.droneId !== expectation.droneId ||
+    resolve(worktree) !== resolve(expectation.worktree) ||
+    (active !== undefined && (
+      active === null ||
+      active.localSessionCredentialRef !== expectation.credentialRef ||
+      active.cubeId !== expectation.cubeId ||
+      active.droneId !== expectation.droneId
+    ))
+  ) {
+    throw new LaunchSeatIdentityChangedError(expectation.droneLabel);
+  }
+}
+
 export type ActiveCubeInput = Omit<ActiveCube, 'sessionToken'> & {
   sessionToken?: string;
 };
@@ -303,9 +408,19 @@ export async function getActiveCube(): Promise<ActiveCube | null> {
 }
 
 export async function getActiveCubeForWorktree(worktree: string): Promise<ActiveCube | null> {
-  const record = await getActiveSeatForWorktree(findProjectRoot(worktree));
+  const projectRoot = findProjectRoot(worktree);
+  const expectation = readLaunchSeatExpectation();
+  const record = await getActiveSeatForWorktree(projectRoot);
+  // A launch-by-label child must hydrate the exact record selected by its
+  // parent. Check on both sides of bearer hydration so a concurrent preferred-
+  // seat replacement fails closed instead of launching a different drone.
+  if (expectation) assertLaunchSeatExpectation(expectation, undefined, projectRoot, record);
   if (!record || !record.cubeId || !record.droneId) return null;
   const active = await hydrateActiveCube(record);
+  if (expectation) {
+    const currentRecord = await getActiveSeatForWorktree(projectRoot);
+    assertLaunchSeatExpectation(expectation, active, projectRoot, currentRecord);
+  }
   if (active && pinnedMcpSeatIdentity && (
     resolve(active.worktree ?? '') !== pinnedMcpSeatIdentity.worktree ||
     active.cubeId !== pinnedMcpSeatIdentity.cubeId ||

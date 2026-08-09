@@ -1,4 +1,4 @@
-import { type ActiveCube, type BorgCli } from './cubes.js';
+import { type ActiveCube, type BorgCli, type LaunchSeatExpectation } from './cubes.js';
 import { type SeatRecord } from './seats.js';
 export type LocalSeatState = 'active' | 'pending';
 export interface LocalSeatRow {
@@ -8,6 +8,7 @@ export interface LocalSeatRow {
     cubeId: string;
     worktree: string;
     canonicalWorktree: string | null;
+    credentialRef: string;
     cli: BorgCli | null;
     state: LocalSeatState;
 }
@@ -20,11 +21,13 @@ export interface SeatCommandDeps {
         worktree: string;
         record: SeatRecord;
     }>>;
+    getActiveSeatForWorktree: (worktree: string) => Promise<SeatRecord | null>;
     getProjectCliPreference: (worktree: string) => Promise<BorgCli | null>;
     pathExists: (path: string) => boolean;
     realpath: (path: string) => string;
-    /** Run this same borg executable with no args from the selected worktree. */
-    launchBareBorg: (worktree: string) => Promise<number>;
+    /** Run this same borg executable with no args from the selected worktree,
+     * carrying only the expected durable identity for child-side verification. */
+    launchBareBorg: (worktree: string, expectation: LaunchSeatExpectation) => Promise<number>;
     stdout: (line: string) => void;
     stderr: (line: string) => void;
 }

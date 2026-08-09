@@ -22,7 +22,16 @@ import { basename } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
-import { findProjectRoot, getActiveCube, inboxPathForDrone, setCodexWakeTarget, pruneDeadCodexWakeTargets, type BorgCli } from './cubes.js';
+import {
+  codexLaunchSeatExpectationConfigArgs,
+  findProjectRoot,
+  getActiveCube,
+  inboxPathForDrone,
+  LaunchSeatIdentityChangedError,
+  setCodexWakeTarget,
+  pruneDeadCodexWakeTargets,
+  type BorgCli,
+} from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import { formatSeatReattachRefusal, inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 import { handleVersionFlag, getPackageVersion } from './version.js';
@@ -559,6 +568,7 @@ async function main() {
       ...codexAgentKindConfigArgs(),
       ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
       ...codexStateRootConfigArgs(),
+      ...codexLaunchSeatExpectationConfigArgs(),
       ...remoteArgs,
       ...withCodexCwdArg([...passthroughArgs, kickoff], process.cwd()),
     ];
@@ -684,6 +694,10 @@ function isEntryInvocation(): boolean {
 
 if (isEntryInvocation()) {
   main().catch((error) => {
+    if (error instanceof LaunchSeatIdentityChangedError) {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(1);
+    }
     console.error(`${consolePrefix()}${chalk.red(`\n◼ Error: ${error.message}\n`)}`);
     process.exit(1);
   });

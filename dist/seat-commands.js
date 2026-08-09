@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
-import { getProjectCliPreferenceForPath, readAllProjectIdentities, } from './cubes.js';
+import { getProjectCliPreferenceForPath, readAllProjectIdentities, withLaunchSeatExpectationEnv, } from './cubes.js';
 import { resolveBorgPath } from './launch-all-command.js';
-import { readAllBoundSeats } from './seats.js';
+import { getActiveSeatForWorktree, readAllBoundSeats, seatRef } from './seats.js';
 export function parseSeatsArgs(args) {
     return args.length === 0
         ? { ok: true }
@@ -78,6 +78,7 @@ export async function readLocalSeatRows(deps) {
             cubeId: cube?.cubeId ?? record.cubeId,
             worktree: launchPath,
             canonicalWorktree: launchCanonical,
+            credentialRef: seatRef(record),
             cli: await deps.getProjectCliPreference(launchPath),
             state: record.state,
         };
@@ -174,8 +175,35 @@ export async function runLaunchSeat(args, deps) {
             `\`borg launch ${selected.droneLabel}\` again.\n`);
         return 1;
     }
+    let preferred;
     try {
-        return await deps.launchBareBorg(selected.canonicalWorktree);
+        preferred = await deps.getActiveSeatForWorktree(selected.canonicalWorktree);
+    }
+    catch {
+        preferred = null;
+    }
+    if (!preferred) {
+        deps.stderr(`borg launch: did not launch '${selected.droneLabel}' — its seat registration changed before the launch could start. ` +
+            `Run \`borg seats\` to see the current state, then try again.\n`);
+        return 1;
+    }
+    if (seatRef(preferred) !== selected.credentialRef ||
+        preferred.cubeId !== selected.cubeId ||
+        preferred.droneId !== selected.droneId) {
+        deps.stderr(`borg launch: did not launch '${selected.droneLabel}' — the worktree at ${selected.worktree} would resume ` +
+            `'${preferred.droneLabel}' (cube '${preferred.name}') instead. To resume '${preferred.droneLabel}', run \`borg\` ` +
+            `in that worktree. To review this machine's seats, run \`borg seats\`.\n`);
+        return 1;
+    }
+    const expectation = {
+        credentialRef: selected.credentialRef,
+        cubeId: selected.cubeId,
+        droneId: selected.droneId,
+        worktree: selected.canonicalWorktree,
+        droneLabel: selected.droneLabel,
+    };
+    try {
+        return await deps.launchBareBorg(selected.canonicalWorktree, expectation);
     }
     catch (error) {
         deps.stderr(`borg launch: failed to start borg in ${selected.canonicalWorktree}: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -186,15 +214,16 @@ export function buildDefaultSeatCommandDeps() {
     return {
         readAllProjectIdentities,
         readAllBoundSeats,
+        getActiveSeatForWorktree,
         getProjectCliPreference: getProjectCliPreferenceForPath,
         pathExists: existsSync,
         realpath: realpathSync,
-        launchBareBorg: (worktree) => new Promise((resolve, reject) => {
+        launchBareBorg: (worktree, expectation) => new Promise((resolve, reject) => {
             const child = spawn(resolveBorgPath(), [], {
                 cwd: worktree,
                 stdio: 'inherit',
                 shell: false,
-                env: process.env,
+                env: withLaunchSeatExpectationEnv(process.env, expectation),
             });
             child.once('error', reject);
             child.once('exit', (code, signal) => resolve(signal ? 1 : code ?? 1));

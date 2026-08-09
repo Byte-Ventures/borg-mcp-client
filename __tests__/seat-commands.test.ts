@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  BORG_LAUNCH_EXPECTED_SEAT_ENV,
+  codexLaunchSeatExpectationConfigArgs,
+  withLaunchSeatExpectationEnv,
+} from '../src/cubes';
+import {
   parseLaunchSeatArgs,
   parseSeatsArgs,
   runLaunchSeat,
@@ -17,12 +22,16 @@ const CUBE_A = '11111111-1111-1111-1111-111111111111';
 const CUBE_B = '22222222-2222-2222-2222-222222222222';
 const DRONE_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const DRONE_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+const DRONE_C = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 const originalStateRoot = process.env.BORG_STATE_ROOT;
+const originalLaunchExpectedSeat = process.env.BORG_LAUNCH_EXPECTED_SEAT;
 const fixtures: string[] = [];
 
 afterEach(() => {
   if (originalStateRoot === undefined) delete process.env.BORG_STATE_ROOT;
   else process.env.BORG_STATE_ROOT = originalStateRoot;
+  if (originalLaunchExpectedSeat === undefined) delete process.env.BORG_LAUNCH_EXPECTED_SEAT;
+  else process.env.BORG_LAUNCH_EXPECTED_SEAT = originalLaunchExpectedSeat;
   for (const fixture of fixtures.splice(0)) rmSync(fixture, { recursive: true, force: true });
   vi.resetModules();
 });
@@ -67,6 +76,10 @@ function depsFor(cubes: ActiveCube[], overrides: Partial<SeatCommandDeps> = {}) 
   const deps: SeatCommandDeps = {
     readAllProjectIdentities: vi.fn(async () => cubes.map((cube) => ({ projectPath: cube.worktree!, cube }))),
     readAllBoundSeats: vi.fn(async () => cubes.map((cube) => activeSeat(cube))),
+    getActiveSeatForWorktree: vi.fn(async (worktree) => {
+      const cube = cubes.find((candidate) => candidate.worktree?.replace('/linked/', '/real/') === worktree);
+      return cube ? activeSeat(cube).record : null;
+    }),
     getProjectCliPreference: vi.fn(async (worktree) => worktree.endsWith('/a') ? 'codex' : 'claude'),
     pathExists: vi.fn(() => true),
     realpath: vi.fn((path) => path.replace('/linked/', '/real/')),
@@ -105,6 +118,28 @@ describe('seat command parsers', () => {
     expect(parseLaunchSeatArgs([])).toEqual({ ok: false, error: 'requires a drone label or id prefix' });
     expect(parseLaunchSeatArgs(['builder-aaaaaaaa', '--cube'])).toEqual({ ok: false, error: '--cube requires a cube name' });
     expect(parseLaunchSeatArgs(['one', 'two'])).toEqual({ ok: false, error: 'accepts exactly one drone label or id prefix' });
+  });
+});
+
+describe('launch-seat identity handoff', () => {
+  it('carries only the expected identity through wrapper and Codex MCP child environments', () => {
+    const expectation = {
+      credentialRef: 'borg-server-session:' + 'a'.repeat(64),
+      cubeId: CUBE_A,
+      droneId: DRONE_A,
+      worktree: '/work/a',
+      droneLabel: 'builder-aaaaaaaa',
+    };
+    const env = withLaunchSeatExpectationEnv({ PATH: '/bin' }, expectation);
+    const encoded = JSON.stringify(expectation);
+
+    expect(env).toEqual({ PATH: '/bin', [BORG_LAUNCH_EXPECTED_SEAT_ENV]: encoded });
+    expect(codexLaunchSeatExpectationConfigArgs(env)).toEqual([
+      '-c',
+      `mcp_servers.borg.env.${BORG_LAUNCH_EXPECTED_SEAT_ENV}=${JSON.stringify(encoded)}`,
+    ]);
+    expect(codexLaunchSeatExpectationConfigArgs({})).toEqual([]);
+    expect(encoded).not.toContain('credential":"');
   });
 });
 
@@ -200,6 +235,25 @@ describe('production local-registry wiring', () => {
       droneLabel: 'builder-active',
     });
 
+    const sibling = {
+      ...base,
+      cubeId: CUBE_B,
+      roleId: '55555555-5555-5555-5555-555555555555',
+    };
+    const siblingBearer = 'sibling-bearer-'.padEnd(43, 's');
+    const siblingOperation = { projectRoot: stateRoot, kind: 'sibling' as const, operationKey: 'sibling' };
+    await seats.mintPendingSeat({ ...sibling, operation: siblingOperation, credential: siblingBearer });
+    await seats.activateAndBindSeat({
+      ...sibling,
+      operation: siblingOperation,
+      expectedPendingDigest: createHash('sha256').update(siblingBearer).digest('hex'),
+      droneId: DRONE_B,
+      sessionId: '66666666-6666-6666-6666-666666666666',
+      worktree: activeWorktree,
+      name: 'beta',
+      droneLabel: 'builder-sibling',
+    });
+
     const pendingBearer = 'pending-bearer-'.padEnd(43, 'p');
     const pendingOperation = { projectRoot: stateRoot, kind: 'sibling' as const, operationKey: 'pending' };
     await seats.mintPendingSeat({ ...base, operation: pendingOperation, credential: pendingBearer });
@@ -207,7 +261,7 @@ describe('production local-registry wiring', () => {
       ...base,
       operation: pendingOperation,
       expectedPendingDigest: createHash('sha256').update(pendingBearer).digest('hex'),
-      droneId: DRONE_B,
+      droneId: DRONE_C,
       worktree: pendingWorktree,
       name: 'alpha',
       droneLabel: 'builder-pending',
@@ -222,6 +276,7 @@ describe('production local-registry wiring', () => {
     })).toBe(0);
     expect(stderr).toEqual([]);
     expect(stdout.join('')).toMatch(/builder-active\s+alpha\s+active\s+-\s+.*active-worktree/);
+    expect(stdout.join('')).toMatch(/builder-sibling\s+beta\s+active\s+-\s+.*active-worktree/);
     expect(stdout.join('')).toMatch(/builder-pending\s+alpha\s+pending\s+-\s+.*pending-worktree/);
     expect(await cubes.getActiveCubeForWorktree(pendingWorktree)).toBeNull();
 
@@ -255,6 +310,53 @@ describe('production local-registry wiring', () => {
       'Restore the directory, or run `borg cleanup` to review orphaned worktrees.\n',
     );
     expect(missingLaunchBareBorg).not.toHaveBeenCalled();
+
+    const conflictingLaunchBareBorg = vi.fn(async () => 0);
+    stderr.length = 0;
+    expect(await commands.runLaunchSeat({ target: 'builder-active' }, {
+      ...commands.buildDefaultSeatCommandDeps(),
+      launchBareBorg: conflictingLaunchBareBorg,
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    })).toBe(1);
+    expect(stderr.join('')).toBe(
+      `borg launch: did not launch 'builder-active' — the worktree at ${activeWorktree} would resume ` +
+      "'builder-sibling' (cube 'beta') instead. To resume 'builder-sibling', run `borg` in that worktree. " +
+      "To review this machine's seats, run `borg seats`.\n",
+    );
+    expect(conflictingLaunchBareBorg).not.toHaveBeenCalled();
+
+    const racedLaunchBareBorg = vi.fn(async (worktree, expectation) => {
+      const priorExpectation = process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV];
+      process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV] = JSON.stringify(expectation);
+      try {
+        await expect(cubes.getActiveCubeForWorktree(worktree)).resolves.toMatchObject({
+          cubeId: CUBE_B,
+          droneId: DRONE_B,
+          droneLabel: 'builder-sibling',
+        });
+        await seats.clearSeat(expectation.credentialRef);
+        await expect(cubes.getActiveCubeForWorktree(worktree)).rejects.toMatchObject({
+          name: 'LaunchSeatIdentityChangedError',
+          message:
+            "borg launch: did not launch 'builder-sibling' — its seat registration changed before the launch could start. " +
+            'Run `borg seats` to see the current state, then try again.',
+        });
+        return 1;
+      } finally {
+        if (priorExpectation === undefined) delete process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV];
+        else process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV] = priorExpectation;
+      }
+    });
+    stderr.length = 0;
+    expect(await commands.runLaunchSeat({ target: 'builder-sibling' }, {
+      ...commands.buildDefaultSeatCommandDeps(),
+      launchBareBorg: racedLaunchBareBorg,
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    })).toBe(1);
+    expect(racedLaunchBareBorg).toHaveBeenCalledOnce();
+    expect(stderr).toEqual([]);
   });
 });
 
@@ -264,7 +366,12 @@ describe('borg launch', () => {
     const { deps, launchBareBorg } = depsFor([cube]);
 
     expect(await runLaunchSeat({ target: cube.droneLabel }, deps)).toBe(0);
-    expect(launchBareBorg).toHaveBeenCalledWith('/real/a');
+    expect(launchBareBorg).toHaveBeenCalledWith('/real/a', expect.objectContaining({
+      cubeId: CUBE_A,
+      droneId: DRONE_A,
+      worktree: '/real/a',
+      droneLabel: cube.droneLabel,
+    }));
   });
 
   it('accepts an unambiguous drone id prefix', async () => {
@@ -272,7 +379,12 @@ describe('borg launch', () => {
     const { deps, launchBareBorg } = depsFor([cube]);
 
     expect(await runLaunchSeat({ target: DRONE_A.slice(0, 8) }, deps)).toBe(0);
-    expect(launchBareBorg).toHaveBeenCalledWith('/work/a');
+    expect(launchBareBorg).toHaveBeenCalledWith('/work/a', expect.objectContaining({
+      cubeId: CUBE_A,
+      droneId: DRONE_A,
+      worktree: '/work/a',
+      droneLabel: cube.droneLabel,
+    }));
   });
 
   it('requires disambiguation for the same label in multiple cubes', async () => {
@@ -296,7 +408,12 @@ describe('borg launch', () => {
     const { deps, launchBareBorg } = depsFor([first, second]);
 
     expect(await runLaunchSeat({ target: first.droneLabel, cube: 'beta' }, deps)).toBe(0);
-    expect(launchBareBorg).toHaveBeenCalledWith('/work/b');
+    expect(launchBareBorg).toHaveBeenCalledWith('/work/b', expect.objectContaining({
+      cubeId: CUBE_B,
+      droneId: DRONE_B,
+      worktree: '/work/b',
+      droneLabel: second.droneLabel,
+    }));
   });
 
   it('reports an unknown target and points to borg seats', async () => {
@@ -306,6 +423,20 @@ describe('borg launch', () => {
     const output = stderr.join('');
     expect(output).toBe(
       "borg launch: no drone matches 'builder-deadbeef' on this machine. Run `borg seats` to list the drones you can launch.\n",
+    );
+    expect(launchBareBorg).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the preferred hydration identity can no longer be read', async () => {
+    const cube = activeCube();
+    const { deps, stderr, launchBareBorg } = depsFor([cube], {
+      getActiveSeatForWorktree: vi.fn(async () => { throw new Error('store changed'); }),
+    });
+
+    expect(await runLaunchSeat({ target: cube.droneLabel }, deps)).toBe(1);
+    expect(stderr.join('')).toBe(
+      "borg launch: did not launch 'builder-aaaaaaaa' — its seat registration changed before the launch could start. " +
+      'Run `borg seats` to see the current state, then try again.\n',
     );
     expect(launchBareBorg).not.toHaveBeenCalled();
   });

@@ -3,11 +3,13 @@ import { existsSync, realpathSync } from 'node:fs';
 import {
   getProjectCliPreferenceForPath,
   readAllProjectIdentities,
+  withLaunchSeatExpectationEnv,
   type ActiveCube,
   type BorgCli,
+  type LaunchSeatExpectation,
 } from './cubes.js';
 import { resolveBorgPath } from './launch-all-command.js';
-import { readAllBoundSeats, type SeatRecord } from './seats.js';
+import { getActiveSeatForWorktree, readAllBoundSeats, seatRef, type SeatRecord } from './seats.js';
 
 export type LocalSeatState = 'active' | 'pending';
 
@@ -18,6 +20,7 @@ export interface LocalSeatRow {
   cubeId: string;
   worktree: string;
   canonicalWorktree: string | null;
+  credentialRef: string;
   cli: BorgCli | null;
   state: LocalSeatState;
 }
@@ -25,11 +28,13 @@ export interface LocalSeatRow {
 export interface SeatCommandDeps {
   readAllProjectIdentities: () => Promise<Array<{ projectPath: string; cube: ActiveCube }>>;
   readAllBoundSeats: () => Promise<Array<{ worktree: string; record: SeatRecord }>>;
+  getActiveSeatForWorktree: (worktree: string) => Promise<SeatRecord | null>;
   getProjectCliPreference: (worktree: string) => Promise<BorgCli | null>;
   pathExists: (path: string) => boolean;
   realpath: (path: string) => string;
-  /** Run this same borg executable with no args from the selected worktree. */
-  launchBareBorg: (worktree: string) => Promise<number>;
+  /** Run this same borg executable with no args from the selected worktree,
+   * carrying only the expected durable identity for child-side verification. */
+  launchBareBorg: (worktree: string, expectation: LaunchSeatExpectation) => Promise<number>;
   stdout: (line: string) => void;
   stderr: (line: string) => void;
 }
@@ -119,6 +124,7 @@ export async function readLocalSeatRows(deps: SeatCommandDeps): Promise<LocalSea
       cubeId: cube?.cubeId ?? record.cubeId,
       worktree: launchPath,
       canonicalWorktree: launchCanonical,
+      credentialRef: seatRef(record),
       cli: await deps.getProjectCliPreference(launchPath),
       state: record.state,
     };
@@ -242,8 +248,42 @@ export async function runLaunchSeat(
     return 1;
   }
 
+  let preferred: SeatRecord | null;
   try {
-    return await deps.launchBareBorg(selected.canonicalWorktree);
+    preferred = await deps.getActiveSeatForWorktree(selected.canonicalWorktree);
+  } catch {
+    preferred = null;
+  }
+  if (!preferred) {
+    deps.stderr(
+      `borg launch: did not launch '${selected.droneLabel}' — its seat registration changed before the launch could start. ` +
+      `Run \`borg seats\` to see the current state, then try again.\n`,
+    );
+    return 1;
+  }
+  if (
+    seatRef(preferred) !== selected.credentialRef ||
+    preferred.cubeId !== selected.cubeId ||
+    preferred.droneId !== selected.droneId
+  ) {
+    deps.stderr(
+      `borg launch: did not launch '${selected.droneLabel}' — the worktree at ${selected.worktree} would resume ` +
+      `'${preferred.droneLabel}' (cube '${preferred.name}') instead. To resume '${preferred.droneLabel}', run \`borg\` ` +
+      `in that worktree. To review this machine's seats, run \`borg seats\`.\n`,
+    );
+    return 1;
+  }
+
+  const expectation: LaunchSeatExpectation = {
+    credentialRef: selected.credentialRef,
+    cubeId: selected.cubeId,
+    droneId: selected.droneId,
+    worktree: selected.canonicalWorktree,
+    droneLabel: selected.droneLabel,
+  };
+
+  try {
+    return await deps.launchBareBorg(selected.canonicalWorktree, expectation);
   } catch (error) {
     deps.stderr(`borg launch: failed to start borg in ${selected.canonicalWorktree}: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
@@ -254,15 +294,16 @@ export function buildDefaultSeatCommandDeps(): SeatCommandDeps {
   return {
     readAllProjectIdentities,
     readAllBoundSeats,
+    getActiveSeatForWorktree,
     getProjectCliPreference: getProjectCliPreferenceForPath,
     pathExists: existsSync,
     realpath: realpathSync,
-    launchBareBorg: (worktree) => new Promise((resolve, reject) => {
+    launchBareBorg: (worktree, expectation) => new Promise((resolve, reject) => {
       const child = spawn(resolveBorgPath(), [], {
         cwd: worktree,
         stdio: 'inherit',
         shell: false,
-        env: process.env,
+        env: withLaunchSeatExpectationEnv(process.env, expectation),
       });
       child.once('error', reject);
       child.once('exit', (code, signal) => resolve(signal ? 1 : code ?? 1));
