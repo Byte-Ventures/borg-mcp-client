@@ -13,7 +13,7 @@ import {
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 import { streamOnce } from '../src/log-stream';
-import { OPENCODE_INJECTED_ENTRY_MARKER } from '../src/opencode-plugin';
+import { OPENCODE_INJECTED_ENTRY_METADATA_KEY } from '../src/opencode-plugin';
 
 const DIRECTORY = '/repo';
 const SERVER_URL = 'http://127.0.0.1:15113';
@@ -520,9 +520,11 @@ describe('OpenCode wake target binding', () => {
     expect(api.promptBodies.map((body) =>
       ((body.parts as Array<{ text: string }>)[0]?.text)
     )).toEqual(['first', 'second', 'third']);
-    expect(api.promptBodies.every((body) =>
-      ((body.parts as Array<{ text: string }>)[1]?.text) === OPENCODE_INJECTED_ENTRY_MARKER
-    )).toBe(true);
+    expect(api.promptBodies.every((body) => {
+      const parts = body.parts as Array<{ text: string; metadata?: Record<string, unknown> }>;
+      return parts.length === 1
+        && parts[0]?.metadata?.[OPENCODE_INJECTED_ENTRY_METADATA_KEY] === true;
+    })).toBe(true);
     expect(api.promptBodies.every((body) => !Object.hasOwn(body, 'messageID'))).toBe(true);
   });
 
@@ -745,8 +747,10 @@ describe('OpenCode wake target binding', () => {
 
     expect(promptBodies).toHaveLength(1);
     expect(promptBodies[0]).not.toHaveProperty('messageID');
-    expect(storedParts).toHaveLength(2);
-    expect((storedParts[1] as { text?: string }).text).toBe(OPENCODE_INJECTED_ENTRY_MARKER);
+    expect(storedParts).toHaveLength(1);
+    expect((storedParts[0] as { metadata?: Record<string, unknown> }).metadata?.[
+      OPENCODE_INJECTED_ENTRY_METADATA_KEY
+    ]).toBe(true);
     expect(messageListCount).toBeGreaterThanOrEqual(4);
   });
 });

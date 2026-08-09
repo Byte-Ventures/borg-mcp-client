@@ -19,7 +19,7 @@ export interface AgentIntegrationHealth {
 export interface OpenCodePluginHealth {
     path: string;
     configured: boolean;
-    status: 'ok' | 'present' | 'absent' | 'missing' | 'outdated' | 'unreadable';
+    status: 'ok' | 'present' | 'absent' | 'missing' | 'outdated' | 'unreadable' | 'refused';
     version?: string;
     detail?: string;
 }

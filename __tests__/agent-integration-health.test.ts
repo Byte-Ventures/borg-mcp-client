@@ -169,19 +169,24 @@ describe('agent integration health', () => {
     );
   });
 
-  it('names an unreadable unconfigured OpenCode plugin without a no-op update command', () => {
+  it('inventories a refused unconfigured OpenCode plugin without recovery', () => {
     const f = packageFixture();
     const home = join(f.root, 'home');
     const plugin = join(home, '.config', 'opencode', 'plugins', 'borg-orient.js');
     mkdirSync(plugin, { recursive: true });
     const report = inspectAgentIntegrationHealth({ expectedVersion: '3.3.0', path: f.bin, homeDir: home });
     const text = renderAgentIntegrationHealth(report);
-    expect(text).toContain(`OpenCode borg-orient.js plugin: unreadable at ${plugin}`);
-    expect(text).toContain(`Fix or remove unreadable OpenCode plugin ${plugin}`);
-    expect(text).not.toContain('then run: borg update --yes');
+    expect(report.openCodePlugin).toMatchObject({
+      configured: false,
+      status: 'refused',
+      detail: 'plugin path is not a regular file',
+    });
+    expect(report.issues).toEqual([]);
+    expect(text).toContain(`OpenCode borg-orient.js plugin: refused at ${plugin}`);
+    expect(text).not.toContain('Remove or replace symlinked OpenCode plugin');
   });
 
-  it('gives an unreadable configured OpenCode plugin the two-step update recovery', () => {
+  it('gives a refused configured OpenCode plugin the two-step update recovery', () => {
     const f = packageFixture();
     const home = join(f.root, 'home');
     const plugin = join(home, '.config', 'opencode', 'plugins', 'borg-orient.js');
@@ -189,9 +194,55 @@ describe('agent integration health', () => {
     configureOpenCode(home);
     const report = inspectAgentIntegrationHealth({ expectedVersion: '3.3.0', path: f.bin, homeDir: home });
     const text = renderAgentIntegrationHealth(report);
-    expect(text).toContain(`OpenCode borg-orient.js plugin: unreadable at ${plugin}`);
+    expect(report.openCodePlugin).toMatchObject({
+      configured: true,
+      status: 'refused',
+      detail: 'plugin path is not a regular file',
+    });
+    expect(report.issues).toContain(report.openCodePlugin);
+    expect(text).toContain(`OpenCode borg-orient.js plugin: refused at ${plugin}`);
     expect(text).toContain(
-      `Fix or replace unreadable OpenCode plugin ${plugin}, then run: borg update --yes`,
+      `Remove or replace symlinked OpenCode plugin ${plugin}, then run: borg update --yes`,
+    );
+  });
+
+  it('renders a symlinked plugin as refused inventory or a configured issue', () => {
+    const f = packageFixture();
+    const home = join(f.root, 'home');
+    const plugin = join(home, '.config', 'opencode', 'plugins', 'borg-orient.js');
+    const target = join(home, 'operator-data.txt');
+    mkdirSync(join(plugin, '..'), { recursive: true });
+    writeFileSync(target, 'operator data');
+    symlinkSync(target, plugin);
+
+    const inventory = inspectAgentIntegrationHealth({
+      expectedVersion: '3.3.0', path: f.bin, homeDir: home,
+    });
+    expect(inventory.openCodePlugin).toMatchObject({
+      configured: false,
+      status: 'refused',
+      detail: 'plugin path is a symlink',
+    });
+    expect(inventory.issues).toEqual([]);
+    expect(renderAgentIntegrationHealth(inventory)).not.toContain(
+      'Remove or replace symlinked OpenCode plugin',
+    );
+
+    configureOpenCode(home);
+    const actionable = inspectAgentIntegrationHealth({
+      expectedVersion: '3.3.0', path: f.bin, homeDir: home,
+    });
+    expect(actionable.openCodePlugin).toMatchObject({ configured: true, status: 'refused' });
+    expect(actionable.issues).toContain(actionable.openCodePlugin);
+    actionable.openCodePlugin.path = '/Users/example/.config/opencode/plugins/borg-orient.js';
+    const text = renderAgentIntegrationHealth(actionable);
+    const status = text.split('\n').find((line) => line.startsWith('OpenCode borg-orient.js plugin:'));
+    const recovery = text.split('\n').find((line) => line.startsWith('Remove or replace symlinked'));
+    expect(status).toBe(
+      'OpenCode borg-orient.js plugin: refused at /Users/example/.config/opencode/plugins/borg-orient.js (plugin path is a symlink)',
+    );
+    expect(recovery).toBe(
+      'Remove or replace symlinked OpenCode plugin /Users/example/.config/opencode/plugins/borg-orient.js, then run: borg update --yes',
     );
   });
 

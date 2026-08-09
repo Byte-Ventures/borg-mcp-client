@@ -53,7 +53,7 @@ function inspectOpenCodePlugin(homeDir, expectedVersion) {
                     return {
                         path: pluginPath,
                         configured,
-                        status: 'unreadable',
+                        status: 'refused',
                         detail: 'plugin path contains a symlink',
                     };
                 }
@@ -65,7 +65,7 @@ function inspectOpenCodePlugin(homeDir, expectedVersion) {
             return {
                 path: pluginPath,
                 configured,
-                status: 'unreadable',
+                status: 'refused',
                 detail: 'plugin path is a symlink',
             };
         }
@@ -73,7 +73,7 @@ function inspectOpenCodePlugin(homeDir, expectedVersion) {
             return {
                 path: pluginPath,
                 configured,
-                status: 'unreadable',
+                status: 'refused',
                 detail: 'plugin path contains a symlink',
             };
         }
@@ -81,7 +81,7 @@ function inspectOpenCodePlugin(homeDir, expectedVersion) {
             return {
                 path: pluginPath,
                 configured,
-                status: 'unreadable',
+                status: 'refused',
                 detail: 'plugin path is not a regular file',
             };
         }
@@ -148,6 +148,7 @@ export function inspectAgentIntegrationHealth(options = {}) {
             ...bins.filter((bin) => bin.status !== 'ok'),
             ...hookConfigs.filter((config) => config.status === 'stale' || config.status === 'invalid'),
             ...(openCodePlugin.status === 'unreadable' ||
+                (openCodePlugin.status === 'refused' && openCodePlugin.configured) ||
                 (openCodePlugin.configured && openCodePlugin.status !== 'ok')
                 ? [openCodePlugin]
                 : []),
@@ -174,6 +175,7 @@ function renderOpenCodePlugin(plugin, expectedVersion) {
         case 'missing': return `${prefix} missing at ${plugin.path}`;
         case 'outdated': return `${prefix} version ${plugin.version}, expected ${expectedVersion} at ${plugin.path}`;
         case 'unreadable': return `${prefix} unreadable at ${plugin.path}${plugin.detail ? ` (${plugin.detail})` : ''}`;
+        case 'refused': return `${prefix} refused at ${plugin.path}${plugin.detail ? ` (${plugin.detail})` : ''}`;
     }
 }
 export function renderAgentIntegrationHealth(report) {
@@ -220,6 +222,9 @@ export function renderAgentIntegrationHealth(report) {
         lines.push(report.openCodePlugin.configured
             ? `Fix or replace unreadable OpenCode plugin ${report.openCodePlugin.path}, then run: borg update --yes`
             : `Fix or remove unreadable OpenCode plugin ${report.openCodePlugin.path}`);
+    }
+    else if (report.openCodePlugin.status === 'refused' && report.openCodePlugin.configured) {
+        lines.push(`Remove or replace symlinked OpenCode plugin ${report.openCodePlugin.path}, then run: borg update --yes`);
     }
     return `${lines.join('\n')}\n`;
 }

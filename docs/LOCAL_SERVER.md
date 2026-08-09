@@ -223,7 +223,9 @@ repair a named invalid configuration before rerunning update, or run
 `borg update --yes` to install a missing or outdated OpenCode plugin. The plugin API is
 empirically bound to OpenCode 1.18.15 with `@opencode-ai/plugin` 1.17.18; that
 SDK uses the path/query/body options shape for history reads and prompt
-submission, not the newer flat v2 call shape. The health gate treats OpenCode
+submission, not the newer flat v2 call shape. At that bound, `TextPart.metadata`
+exists, persists through history reads, compaction, and process reload, and is
+not rendered in the TUI or supplied to the model. The health gate treats OpenCode
 as configured only when `~/.config/opencode/opencode.json` contains a local
 `mcp.borg` entry with `type: "local"`. That path and shape were exercised by the
 3.2.0 config-refresh live proof (PR #390) and are part of the OpenCode 1.18.15

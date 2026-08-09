@@ -6,50 +6,42 @@ import { getPackageVersion } from './version.js';
 export const OPENCODE_COMPATIBILITY = {
     // Empirically pinned on 2026-08-09. OpenCode 1.18.15 loads the default
     // function -> Hooks object shape while the installed SDK uses the 1.17.18
-    // path/query/body client call shape. Do not replace it with the v2 flat
-    // call shape without a new live compatibility measurement.
+    // path/query/body client call shape. TextPart.metadata exists, persists
+    // through history/compaction/reload, and is hidden from the TUI and model.
+    // Do not replace either contract without a new live compatibility measurement.
     opencode: '1.18.15',
     sdk: '1.17.18',
 };
 const COMPACT_FALLBACK = '## Borg Cube\nYou are in a Borg MCP multi-agent coordination cube. ' +
     'Use MCP tool borg_regen to get full context and recent activity.';
-const KICKOFF_MARKER = 'borg-opencode-correlation:';
-const RECOVERY_MARKER = 'borg-opencode-session-orientation:';
-export const OPENCODE_INJECTED_ENTRY_MARKER = '<!-- borg-opencode-injected-entry -->';
-export const BORG_OPENCODE_LAUNCH_NONCE_ENV = 'BORG_OPENCODE_LAUNCH_NONCE';
+export const OPENCODE_INJECTED_ENTRY_METADATA_KEY = 'borgOpenCodeInjectedEntry';
+export const OPENCODE_RECOVERY_METADATA_KEY = 'borgOpenCodeSessionOrientation';
 const PLUGIN_REL_PATH = path.join('.config', 'opencode', 'plugins', 'borg-orient.js');
 /** Pure, dependency-injected behavior core. Its emitted JavaScript function
  * body is also embedded in the installed self-contained plugin. */
 export function createOpenCodePluginCore(deps, options) {
     const claimedSessions = new Set();
-    const recoveryIdentity = `${options.recoveryMarker}${options.pluginVersion}`;
-    const recoveryComment = `<!-- ${recoveryIdentity} -->`;
+    const humanPromptSessions = new Set();
     const textParts = (message) => Array.isArray(message?.parts)
         ? message.parts.filter((part) => part?.type === 'text' && typeof part.text === 'string')
         : [];
     const isInjectedEntry = (message) => {
         const parts = textParts(message);
-        return message?.info?.role === 'user' && parts.length >= 2 &&
-            parts[1]?.text === options.injectedEntryMarker;
-    };
-    const isOwnedKickoff = (message) => {
-        if (!options.kickoffNonce || message?.info?.role !== 'user' || isInjectedEntry(message))
-            return false;
-        const identity = `<!-- ${options.kickoffMarker}${options.kickoffNonce} -->`;
-        return textParts(message).some((part) => part.text.endsWith(identity));
+        return message?.info?.role === 'user' &&
+            parts[0]?.metadata?.[options.injectedEntryMetadataKey] === true;
     };
     const isOwnedRecovery = (message) => {
         const parts = textParts(message);
-        return message?.info?.role === 'user' && parts.length >= 2 &&
-            parts[1]?.text === recoveryComment;
+        return message?.info?.role === 'user' &&
+            parts[0]?.metadata?.[options.recoveryMetadataKey] === options.pluginVersion;
     };
-    const hasRecoveryBlocker = (messages) => messages.some((message) => isOwnedKickoff(message) || isOwnedRecovery(message) ||
+    const hasRecoveryBlocker = (sessionID, messages) => humanPromptSessions.has(sessionID) || messages.some((message) => isOwnedRecovery(message) ||
         (message?.info?.role === 'user' && !isInjectedEntry(message)));
     const recoverNewSession = async (sessionID) => {
         try {
             for (let attempt = 0; attempt < options.kickoffPollAttempts; attempt++) {
                 const messages = await deps.listMessages(sessionID);
-                if (hasRecoveryBlocker(messages))
+                if (hasRecoveryBlocker(sessionID, messages))
                     return;
                 if (attempt + 1 < options.kickoffPollAttempts)
                     await deps.wait(options.pollDelayMs);
@@ -58,9 +50,11 @@ export function createOpenCodePluginCore(deps, options) {
             if (!orientation)
                 return;
             const beforeSubmit = await deps.listMessages(sessionID);
-            if (hasRecoveryBlocker(beforeSubmit))
+            if (hasRecoveryBlocker(sessionID, beforeSubmit))
                 return;
-            await deps.submitPrompt(sessionID, orientation, recoveryComment);
+            const submitted = await deps.submitPrompt(sessionID, orientation, options.pluginVersion, () => !hasRecoveryBlocker(sessionID, []));
+            if (!submitted)
+                return;
             // promptAsync is not idempotent. Confirmation may retry, submission may not.
             for (let attempt = 0; attempt < options.confirmationPollAttempts; attempt++) {
                 const messages = await deps.listMessages(sessionID);
@@ -98,9 +92,14 @@ export function createOpenCodePluginCore(deps, options) {
         'chat.message': async (input, output) => {
             if (!options.enabled)
                 return;
+            const current = { info: { role: 'user' }, parts: [...output.parts] };
+            if (!isInjectedEntry(current) && !isOwnedRecovery(current)) {
+                // chat.message fires before the user message is persisted. Record the
+                // human turn synchronously so recovery cannot race that short gap.
+                humanPromptSessions.add(input.sessionID);
+            }
             try {
                 const history = await deps.listMessages(input.sessionID);
-                const current = { info: { role: 'user' }, parts: [...output.parts] };
                 const nudge = deps.audit([...history, current]);
                 if (nudge)
                     output.parts.push({ type: 'text', text: nudge });
@@ -112,7 +111,7 @@ export function createOpenCodePluginCore(deps, options) {
     };
 }
 export function buildBorgPluginSource(version) {
-    const marker = `borgmcp-opencode-plugin:${version};opencode=${OPENCODE_COMPATIBILITY.opencode};sdk=${OPENCODE_COMPATIBILITY.sdk}`;
+    const marker = `borgmcp-opencode-plugin:${version};opencode=${OPENCODE_COMPATIBILITY.opencode};sdk=${OPENCODE_COMPATIBILITY.sdk};textpart-metadata=exists+persisted+tui-hidden+model-hidden`;
     return `// ${marker}
 // Generated by borgmcp. Self-contained; do not edit.
 const createCore = ${createOpenCodePluginCore.toString()};
@@ -134,28 +133,31 @@ export default async function (ctx) {
       return Array.isArray(result.data) ? result.data : [];
     },
     renderOrientation: runRegen,
-    submitPrompt: async (sessionID, text, marker) => {
+    submitPrompt: async (sessionID, text, recoveryVersion, shouldSubmit) => {
+      if (!shouldSubmit()) return false;
       await ctx.client.session.promptAsync({
         path: { id: sessionID },
         query: { directory: ctx.directory },
-        body: { parts: [{ type: 'text', text }, { type: 'text', text: marker }] },
+        body: { parts: [{
+          type: 'text',
+          text,
+          metadata: { [${JSON.stringify(OPENCODE_RECOVERY_METADATA_KEY)}]: recoveryVersion },
+        }] },
       });
+      return true;
     },
     audit: (messages) => evaluateAudit(messages),
   }, {
     ...${JSON.stringify({
         pluginVersion: version,
-        kickoffMarker: KICKOFF_MARKER,
-        kickoffNonce: '',
-        recoveryMarker: RECOVERY_MARKER,
-        injectedEntryMarker: OPENCODE_INJECTED_ENTRY_MARKER,
+        recoveryMetadataKey: OPENCODE_RECOVERY_METADATA_KEY,
+        injectedEntryMetadataKey: OPENCODE_INJECTED_ENTRY_METADATA_KEY,
         kickoffPollAttempts: 6,
         confirmationPollAttempts: 6,
         pollDelayMs: 200,
         compactFallback: COMPACT_FALLBACK,
     })},
     enabled: process.env.BORG_SESSION === '1',
-    kickoffNonce: process.env[${JSON.stringify(BORG_OPENCODE_LAUNCH_NONCE_ENV)}] || '',
   });
 }
 `;

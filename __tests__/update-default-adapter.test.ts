@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -207,7 +208,10 @@ describe('default npm update adapter', () => {
     rmSync(plugin);
     symlinkSync(symlinkTarget, plugin);
     await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
-      /OpenCode borg-orient\.js plugin: unreadable .*plugin path is a symlink/,
+      /OpenCode borg-orient\.js plugin: refused .*plugin path is a symlink/,
+    );
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
+      /Remove or replace symlinked OpenCode plugin .* then run: borg update --yes/,
     );
     expect(readFileSync(symlinkTarget, 'utf8')).toBe('operator data');
     rmSync(plugin);
@@ -218,12 +222,14 @@ describe('default npm update adapter', () => {
     rmSync(plugin);
     mkdirSync(plugin);
     await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
-      /Fix or replace unreadable OpenCode plugin .* then run: borg update --yes/,
+      /OpenCode borg-orient\.js plugin: refused .*plugin path is not a regular file/,
+    );
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
+      /Remove or replace symlinked OpenCode plugin .* then run: borg update --yes/,
     );
     rmSync(openCodeConfig);
-    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
-      /Fix or remove unreadable OpenCode plugin/,
-    );
+    await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
+    expect(lstatSync(plugin).isDirectory()).toBe(true);
   });
 
   it('includes bounded server stderr when a JSON command fails before producing JSON', async () => {

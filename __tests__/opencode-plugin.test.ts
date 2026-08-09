@@ -3,11 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  BORG_OPENCODE_LAUNCH_NONCE_ENV,
   buildBorgPluginSource,
   createOpenCodePluginCore,
   installBorgPlugin,
-  OPENCODE_INJECTED_ENTRY_MARKER,
+  OPENCODE_INJECTED_ENTRY_METADATA_KEY,
+  OPENCODE_RECOVERY_METADATA_KEY,
   openCodePluginPath,
 } from '../src/opencode-plugin';
 
@@ -26,18 +26,23 @@ function harness(messages: unknown[][] = [[]], enabled = true) {
     wait: vi.fn(async () => {}),
     listMessages: vi.fn(async () => messages[Math.min(read++, messages.length - 1)] ?? []),
     renderOrientation: vi.fn(async (source: string) => `orientation:${source}`),
-    submitPrompt: vi.fn(async (sessionID: string, text: string, marker: string) => {
+    submitPrompt: vi.fn(async (
+      sessionID: string,
+      text: string,
+      marker: string,
+      shouldSubmit: () => boolean,
+    ) => {
+      if (!shouldSubmit()) return false;
       submitted.push({ sessionID, text, marker });
+      return true;
     }),
     audit: vi.fn(() => null as string | null),
   };
   const core = createOpenCodePluginCore(deps, {
     enabled,
     pluginVersion: '3.4.0',
-    kickoffMarker: 'borg-opencode-correlation:',
-    kickoffNonce: 'abc',
-    recoveryMarker: 'borg-opencode-session-orientation:',
-    injectedEntryMarker: OPENCODE_INJECTED_ENTRY_MARKER,
+    recoveryMetadataKey: OPENCODE_RECOVERY_METADATA_KEY,
+    injectedEntryMetadataKey: OPENCODE_INJECTED_ENTRY_METADATA_KEY,
     kickoffPollAttempts: 2,
     confirmationPollAttempts: 2,
     pollDelayMs: 1,
@@ -72,10 +77,11 @@ describe('OpenCode plugin core', () => {
   });
 
   it('submits one marked recovery turn for an empty New session and only confirms afterward', async () => {
-    const marker = '<!-- borg-opencode-session-orientation:3.4.0 -->';
+    const marker = '3.4.0';
     const h = harness([[], [], [], [{ info: { role: 'user' }, parts: [
-      { type: 'text', text: 'orientation:clear' },
-      { type: 'text', text: marker },
+      { type: 'text', text: 'orientation:clear', metadata: {
+        [OPENCODE_RECOVERY_METADATA_KEY]: marker,
+      } },
     ] }]]);
     await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'new' } } } });
     await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'new' } } } });
@@ -95,8 +101,8 @@ describe('OpenCode plugin core', () => {
       {
         type: 'text',
         text: 'foreign borg-opencode-correlation:abc borg-opencode-session-orientation:3.4.0',
+        metadata: { [OPENCODE_INJECTED_ENTRY_METADATA_KEY]: true },
       },
-      { type: 'text', text: OPENCODE_INJECTED_ENTRY_MARKER },
       { type: 'text', text: 'audit nudge appended by another hook' },
     ] };
     const h = harness([[], [injected]]);
@@ -105,22 +111,67 @@ describe('OpenCode plugin core', () => {
     expect(h.deps.submitPrompt).toHaveBeenCalledTimes(1);
   });
 
-  it('does not treat assistant-authored marker text as launcher or recovery identity', async () => {
-    const assistant = { info: { role: 'assistant' }, parts: [{
-      type: 'text',
-      text: '<!-- borg-opencode-correlation:abc --> <!-- borg-opencode-session-orientation:3.4.0 -->',
+  it('suppresses recovery for an ordinary persisted human prompt without trusting its text', async () => {
+    const human = { info: { role: 'user' }, parts: [{
+      type: 'text', text: '<!-- borg-opencode-injected-entry --> typed by a human',
     }] };
-    const h = harness([[], [assistant]]);
-    await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'assistant' } } } });
-    await Promise.all(h.deferred);
-    expect(h.deps.submitPrompt).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not interrupt a user prompt that wins the deferred New-session race', async () => {
-    const h = harness([[{ info: { role: 'user' }, parts: [{ type: 'text', text: 'hello' }] }]]);
-    await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'raced' } } } });
+    const h = harness([[], [human]]);
+    await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'human' } } } });
     await Promise.all(h.deferred);
     expect(h.deps.submitPrompt).not.toHaveBeenCalled();
+  });
+
+  it('suppresses recovery when chat.message reports a human prompt before history persists', async () => {
+    const h = harness([[], [], []]);
+    await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'raced' } } } });
+    await h.core['chat.message']({ sessionID: 'raced' }, {
+      message: {}, parts: [{ type: 'text', text: 'hello' }],
+    });
+    await Promise.all(h.deferred);
+    expect(h.deps.submitPrompt).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the chat.message guard after the history check and before network submit', async () => {
+    const h = harness([[], [], []]);
+    let networkSubmitted = false;
+    h.deps.submitPrompt.mockImplementationOnce(async (
+      _sessionID: string,
+      _text: string,
+      _marker: string,
+      shouldSubmit: () => boolean,
+    ) => {
+      await h.core['chat.message']({ sessionID: 'between' }, {
+        message: {}, parts: [{ type: 'text', text: 'human between check and submit' }],
+      });
+      if (!shouldSubmit()) return false;
+      networkSubmitted = true;
+      return true;
+    });
+    await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'between' } } } });
+    await Promise.all(h.deferred);
+    expect(h.deps.submitPrompt).toHaveBeenCalledTimes(1);
+    expect(networkSubmitted).toBe(false);
+  });
+
+  it('does not let a structurally marked Borg entry set the pre-persistence human guard', async () => {
+    const marker = '3.4.0';
+    const h = harness([[], [], [], [], [{ info: { role: 'user' }, parts: [
+      { type: 'text', text: 'orientation:clear', metadata: {
+        [OPENCODE_RECOVERY_METADATA_KEY]: marker,
+      } },
+    ] }]]);
+    await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'foreign-live' } } } });
+    await h.core['chat.message']({ sessionID: 'foreign-live' }, {
+      message: {}, parts: [
+        {
+          type: 'text',
+          text: 'foreign text with <!-- borg-opencode-session-orientation:3.4.0 -->',
+          metadata: { [OPENCODE_INJECTED_ENTRY_METADATA_KEY]: true },
+        },
+      ],
+    });
+    await Promise.all(h.deferred);
+    expect(h.deps.submitPrompt).toHaveBeenCalledTimes(1);
   });
 
   it('injects regenerated compact context and preserves the proven fallback', async () => {
@@ -151,7 +202,10 @@ describe('OpenCode plugin core', () => {
 describe('generated OpenCode plugin artifact', () => {
   it('pins measured compatibility and derives behavior from the pure core', () => {
     const source = buildBorgPluginSource('3.4.0');
-    expect(source).toContain('borgmcp-opencode-plugin:3.4.0;opencode=1.18.15;sdk=1.17.18');
+    expect(source).toContain(
+      'borgmcp-opencode-plugin:3.4.0;opencode=1.18.15;sdk=1.17.18;' +
+      'textpart-metadata=exists+persisted+tui-hidden+model-hidden',
+    );
     expect(source).toContain('borg-regen');
     expect(source).toContain('experimental.session.compacting');
     expect(source).toContain('session.created');
@@ -188,9 +242,7 @@ describe('generated OpenCode plugin artifact', () => {
   it('loads as self-contained ESM and uses the measured 1.17.18 client shape', async () => {
     vi.useFakeTimers();
     const priorSession = process.env.BORG_SESSION;
-    const priorNonce = process.env[BORG_OPENCODE_LAUNCH_NONCE_ENV];
     process.env.BORG_SESSION = '1';
-    process.env[BORG_OPENCODE_LAUNCH_NONCE_ENV] = 'artifact-nonce';
     try {
       const source = buildBorgPluginSource('3.4.0');
       const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
@@ -224,15 +276,15 @@ describe('generated OpenCode plugin artifact', () => {
       expect(promptAsync).toHaveBeenCalledWith({
         path: { id: 'new-session' },
         query: { directory: '/repo' },
-        body: { parts: [{ type: 'text', text: expect.stringContaining(
-          'measured orientation',
-        ) }, { type: 'text', text: '<!-- borg-opencode-session-orientation:3.4.0 -->' }] },
+        body: { parts: [{
+          type: 'text',
+          text: expect.stringContaining('measured orientation'),
+          metadata: { [OPENCODE_RECOVERY_METADATA_KEY]: '3.4.0' },
+        }] },
       });
     } finally {
       if (priorSession === undefined) delete process.env.BORG_SESSION;
       else process.env.BORG_SESSION = priorSession;
-      if (priorNonce === undefined) delete process.env[BORG_OPENCODE_LAUNCH_NONCE_ENV];
-      else process.env[BORG_OPENCODE_LAUNCH_NONCE_ENV] = priorNonce;
       vi.useRealTimers();
     }
   });
