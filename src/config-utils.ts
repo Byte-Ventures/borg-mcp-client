@@ -1167,7 +1167,7 @@ export function isCodexUserPromptSubmitHookRegistered(hooksPath: string = CODEX_
  * `type: "local"`. Safe-default: any read error returns `false`.
  */
 export function isOpenCodeMcpServerConfigured(
-  configPath: string = OPENCODE_CONFIG_PATH
+  configPath: string = path.join(borgHomeRoot(), '.config', 'opencode', 'opencode.json')
 ): boolean {
   try {
     if (!fs.existsSync(configPath)) return false;

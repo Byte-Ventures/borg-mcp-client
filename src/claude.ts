@@ -630,6 +630,7 @@ function ensureResolvedCliConfigured(cli: BorgCli): void {
       addClaudeUserPromptSubmitHook: addUserPromptSubmitHook,
       addCodexSessionStartHook,
       addCodexUserPromptSubmitHook,
+      installOpenCodePlugin: installBorgPlugin,
     });
   } catch (err: any) {
     console.error(`${consolePrefix()}${chalk.yellow(`warning: ${label} integration check failed: ${err?.message ?? err}`)}`);

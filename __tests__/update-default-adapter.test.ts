@@ -1,8 +1,12 @@
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -12,6 +16,11 @@ import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import which from 'which';
 import {
+  BORG_PLUGIN_SOURCE,
+  openCodePluginPath,
+} from '../src/opencode-plugin.js';
+import { BORG_STATE_ROOT_ENV } from '../src/private-root.js';
+import {
   buildDefaultUpdateDeps,
   runUpdate,
   type PublishedPackage,
@@ -20,6 +29,7 @@ import {
 
 const roots: string[] = [];
 const originalPath = process.env.PATH;
+const originalStateRoot = process.env[BORG_STATE_ROOT_ENV];
 const CLIENT_TARGET: PublishedPackage = {
   name: 'borgmcp',
   version: '2.3.0',
@@ -137,10 +147,91 @@ else process.exit(91);
 afterEach(() => {
   vi.unstubAllGlobals();
   process.env.PATH = originalPath;
+  if (originalStateRoot === undefined) delete process.env[BORG_STATE_ROOT_ENV];
+  else process.env[BORG_STATE_ROOT_ENV] = originalStateRoot;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe('default npm update adapter', () => {
+  it('gates OpenCode plugin repair on registration and preserves unreadable failures', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'borg-update-opencode-plugin-'));
+    roots.push(root);
+    const canonicalRoot = realpathSync(root);
+    const stateRoot = join(canonicalRoot, 'state');
+    const bin = join(canonicalRoot, 'bin');
+    mkdirSync(stateRoot);
+    mkdirSync(bin);
+    const scripts = {
+      'borg-regen': 'regen.js',
+      'borg-clear-rewake': 'clear-rewake.js',
+      'borg-log-audit': 'log-audit.js',
+      'borg-foreign-path-reminder': 'foreign-path-reminder.js',
+      'borg-inbox-monitor': 'inbox-monitor.js',
+    } as const;
+    for (const [name, script] of Object.entries(scripts)) {
+      symlinkSync(join(process.cwd(), 'dist', script), join(bin, name));
+    }
+    process.env.PATH = `${bin}${delimiter}${originalPath ?? ''}`;
+    process.env[BORG_STATE_ROOT_ENV] = stateRoot;
+    const plugin = openCodePluginPath(stateRoot);
+    const openCodeConfigDir = join(stateRoot, '.config', 'opencode');
+    const openCodeConfig = join(openCodeConfigDir, 'opencode.json');
+    const deps = buildDefaultUpdateDeps();
+
+    await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
+    expect(existsSync(plugin)).toBe(false);
+
+    mkdirSync(openCodeConfigDir, { recursive: true });
+    mkdirSync(join(plugin, '..'));
+    writeFileSync(plugin, BORG_PLUGIN_SOURCE);
+    await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
+    expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
+
+    const priorSource = readFileSync(
+      new URL('./fixtures/opencode-plugin-3.3.0.js', import.meta.url),
+      'utf8',
+    );
+    expect(Buffer.byteLength(priorSource)).toBe(386);
+    expect(createHash('sha256').update(priorSource).digest('hex')).toBe(
+      '14a64bb955245b818e8afc46a429791868b6ad87d72996d2775b04411095295c',
+    );
+    writeFileSync(plugin, priorSource);
+    await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
+    expect(readFileSync(plugin, 'utf8')).toBe(priorSource);
+
+    writeFileSync(openCodeConfig, JSON.stringify({ mcp: { borg: { type: 'local' } } }));
+    await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
+    expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
+
+    const symlinkTarget = join(canonicalRoot, 'operator-data.txt');
+    writeFileSync(symlinkTarget, 'operator data');
+    rmSync(plugin);
+    symlinkSync(symlinkTarget, plugin);
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
+      /OpenCode borg-orient\.js plugin: refused .*plugin path is a symlink/,
+    );
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
+      /Remove or replace the OpenCode plugin path .* then run: borg update --yes/,
+    );
+    expect(readFileSync(symlinkTarget, 'utf8')).toBe('operator data');
+    rmSync(plugin);
+
+    await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
+    expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
+
+    rmSync(plugin);
+    mkdirSync(plugin);
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
+      /OpenCode borg-orient\.js plugin: refused .*plugin path is not a regular file/,
+    );
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
+      /Remove or replace the OpenCode plugin path .* then run: borg update --yes/,
+    );
+    rmSync(openCodeConfig);
+    await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
+    expect(lstatSync(plugin).isDirectory()).toBe(true);
+  });
+
   it('includes bounded server stderr when a JSON command fails before producing JSON', async () => {
     const root = mkdtempSync(join(tmpdir(), 'borg-update-server-json-'));
     roots.push(root);

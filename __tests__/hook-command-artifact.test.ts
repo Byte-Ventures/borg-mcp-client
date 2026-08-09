@@ -41,6 +41,7 @@ describe('written hook config artifacts stay version-stable', () => {
     vi.resetModules();
     const config = await import('../src/config-utils');
     const { wakePathArming } = await import('../src/regen-format');
+    const { installBorgPlugin, openCodePluginPath } = await import('../src/opencode-plugin');
     const project = path.join(stateRoot, '.borg', 'worktrees', 'repo', 'seat');
     fs.mkdirSync(project, { recursive: true });
 
@@ -51,14 +52,19 @@ describe('written hook config artifacts stay version-stable', () => {
     config.addCodexSessionStartHook();
     config.addCodexUserPromptSubmitHook();
     config.addCodexForeignPathReminderHook();
+    installBorgPlugin();
 
     const artifacts = listFiles(stateRoot).map((file) => fs.readFileSync(file, 'utf8'));
     artifacts.push(wakePathArming('claude', path.join(stateRoot, 'inbox'), path.join(stateRoot, 'monitor')));
     assertNoInstallPinnedHookPath(artifacts);
     expect(artifacts.join('\n')).toContain('borg-regen');
     expect(artifacts.join('\n')).toContain('borg-inbox-monitor');
+    expect(fs.readFileSync(openCodePluginPath(), 'utf8')).toContain('borg-regen');
 
     const seededStale = `${artifacts[0]}\n/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/regen.js`;
     expect(() => assertNoInstallPinnedHookPath([seededStale])).toThrow(/install-pinned hook command/);
+    const seededPlugin = fs.readFileSync(openCodePluginPath(), 'utf8') +
+      '\n/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/regen.js';
+    expect(() => assertNoInstallPinnedHookPath([seededPlugin])).toThrow(/install-pinned hook command/);
   });
 });

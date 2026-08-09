@@ -12,12 +12,16 @@ export interface AgentHookBinHealth {
 export interface AgentIntegrationHealth {
     expectedVersion: string;
     bins: AgentHookBinHealth[];
-    issues: Array<AgentHookBinHealth | ManagedAgentHookConfigHealth>;
+    issues: Array<AgentHookBinHealth | ManagedAgentHookConfigHealth | OpenCodePluginHealth>;
     hookConfigs: ManagedAgentHookConfigHealth[];
-    openCodePlugin: {
-        path: string;
-        present: boolean;
-    };
+    openCodePlugin: OpenCodePluginHealth;
+}
+export interface OpenCodePluginHealth {
+    path: string;
+    configured: boolean;
+    status: 'ok' | 'present' | 'absent' | 'missing' | 'outdated' | 'unreadable' | 'refused';
+    version?: string;
+    detail?: string;
 }
 export interface InspectAgentIntegrationHealthOptions {
     expectedVersion?: string;

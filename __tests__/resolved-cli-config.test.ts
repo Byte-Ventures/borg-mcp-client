@@ -9,6 +9,7 @@ function deps() {
     addClaudeUserPromptSubmitHook: vi.fn(),
     addCodexSessionStartHook: vi.fn(),
     addCodexUserPromptSubmitHook: vi.fn(),
+    installOpenCodePlugin: vi.fn(),
   };
 }
 
@@ -21,6 +22,7 @@ describe('configureResolvedCli', () => {
     expect(d.removeClaudeGlobalSessionStartHook).toHaveBeenCalledOnce();
     expect(d.addClaudeUserPromptSubmitHook).toHaveBeenCalledOnce();
     expect(d.addCodexSessionStartHook).not.toHaveBeenCalled();
+    expect(d.installOpenCodePlugin).not.toHaveBeenCalled();
     expect(d.addCodexUserPromptSubmitHook).not.toHaveBeenCalled();
   });
 
@@ -32,12 +34,14 @@ describe('configureResolvedCli', () => {
     expect(d.addCodexUserPromptSubmitHook).toHaveBeenCalledOnce();
     expect(d.addClaudeProjectSessionStartHook).not.toHaveBeenCalled();
     expect(d.removeClaudeGlobalSessionStartHook).not.toHaveBeenCalled();
+    expect(d.installOpenCodePlugin).not.toHaveBeenCalled();
   });
 
   it('configures only OpenCode', () => {
     const d = deps();
     configureResolvedCli('opencode', d);
     expect(d.ensureMcp).toHaveBeenCalledWith('opencode');
+    expect(d.installOpenCodePlugin).toHaveBeenCalledOnce();
     expect(d.addClaudeProjectSessionStartHook).not.toHaveBeenCalled();
     expect(d.addCodexSessionStartHook).not.toHaveBeenCalled();
   });

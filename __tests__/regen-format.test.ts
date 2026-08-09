@@ -939,6 +939,17 @@ describe('formatLeanOrientation', () => {
     expect(out).not.toContain('/loop');
   });
 
+  it('names the OpenCode New-session recovery without Claude-only language', () => {
+    const out = formatLeanOrientation({ ...base, agentKind: 'opencode', source: 'clear' });
+    expect(out).toContain(
+      '_(OpenCode started a new session; Borg supplied this orientation automatically.)_',
+    );
+    expect(out).not.toContain('restored');
+    expect(out).not.toContain('wake path');
+    expect(out).not.toContain('/clear');
+    expect(out).not.toContain('re-arm the inbox Monitor');
+  });
+
   it('omits the /clear note for non-clear sources', () => {
     expect(formatLeanOrientation({ ...base, source: 'startup' })).not.toContain('/clear');
     expect(formatLeanOrientation(base)).not.toContain('/clear');

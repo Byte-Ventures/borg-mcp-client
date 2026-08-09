@@ -1093,7 +1093,7 @@ export function isCodexUserPromptSubmitHookRegistered(hooksPath = CODEX_HOOKS_PA
  * Reads the config as JSON and checks for a `mcp.borg` entry with
  * `type: "local"`. Safe-default: any read error returns `false`.
  */
-export function isOpenCodeMcpServerConfigured(configPath = OPENCODE_CONFIG_PATH) {
+export function isOpenCodeMcpServerConfigured(configPath = path.join(borgHomeRoot(), '.config', 'opencode', 'opencode.json')) {
     try {
         if (!fs.existsSync(configPath))
             return false;

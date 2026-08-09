@@ -3,12 +3,18 @@ import path from 'node:path';
 import which from 'which';
 import {
   inspectManagedAgentHookConfigs,
+  isOpenCodeMcpServerConfigured,
   type ManagedAgentHookConfigHealth,
   refreshManagedAgentHookConfigs,
   refreshManagedAgentMcpConfigs,
 } from './config-utils.js';
-import { borgHomeRoot } from './private-root.js';
+import { borgHomeRoot, isCanonicalPath } from './private-root.js';
 import { getPackageVersion } from './version.js';
+import {
+  buildBorgPluginSource,
+  installBorgPlugin,
+  openCodePluginPath,
+} from './opencode-plugin.js';
 
 export const AGENT_HOOK_BINS = [
   'borg-regen',
@@ -32,9 +38,17 @@ export interface AgentHookBinHealth {
 export interface AgentIntegrationHealth {
   expectedVersion: string;
   bins: AgentHookBinHealth[];
-  issues: Array<AgentHookBinHealth | ManagedAgentHookConfigHealth>;
+  issues: Array<AgentHookBinHealth | ManagedAgentHookConfigHealth | OpenCodePluginHealth>;
   hookConfigs: ManagedAgentHookConfigHealth[];
-  openCodePlugin: { path: string; present: boolean };
+  openCodePlugin: OpenCodePluginHealth;
+}
+
+export interface OpenCodePluginHealth {
+  path: string;
+  configured: boolean;
+  status: 'ok' | 'present' | 'absent' | 'missing' | 'outdated' | 'unreadable' | 'refused';
+  version?: string;
+  detail?: string;
 }
 
 export interface InspectAgentIntegrationHealthOptions {
@@ -67,6 +81,72 @@ function defaultResolveBin(name: AgentHookBinName, searchPath: string | undefine
     return which.sync(name, searchPath === undefined ? undefined : { path: searchPath });
   } catch {
     return null;
+  }
+}
+
+function inspectOpenCodePlugin(homeDir: string, expectedVersion: string): OpenCodePluginHealth {
+  const pluginPath = openCodePluginPath(homeDir);
+  const configured = isOpenCodeMcpServerConfigured(
+    path.join(homeDir, '.config', 'opencode', 'opencode.json'),
+  );
+  try {
+    let metadata: fs.Stats;
+    try {
+      metadata = fs.lstatSync(pluginPath);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        if (!isCanonicalPath(pluginPath)) {
+          return {
+            path: pluginPath,
+            configured,
+            status: 'refused',
+            detail: 'plugin path contains a symlink',
+          };
+        }
+        return { path: pluginPath, configured, status: configured ? 'missing' : 'absent' };
+      }
+      throw error;
+    }
+    if (metadata.isSymbolicLink()) {
+      return {
+        path: pluginPath,
+        configured,
+        status: 'refused',
+        detail: 'plugin path is a symlink',
+      };
+    }
+    if (!isCanonicalPath(pluginPath)) {
+      return {
+        path: pluginPath,
+        configured,
+        status: 'refused',
+        detail: 'plugin path contains a symlink',
+      };
+    }
+    if (!metadata.isFile()) {
+      return {
+        path: pluginPath,
+        configured,
+        status: 'refused',
+        detail: 'plugin path is not a regular file',
+      };
+    }
+    const source = fs.readFileSync(pluginPath, 'utf8');
+    const marker = source.match(/borgmcp-opencode-plugin:([^;\s]+);opencode=/)?.[1];
+    if (!configured) {
+      return { path: pluginPath, configured, status: 'present', version: marker ?? 'unknown' };
+    }
+    if (source === buildBorgPluginSource(expectedVersion)) {
+      return { path: pluginPath, configured, status: 'ok', version: expectedVersion };
+    }
+    return { path: pluginPath, configured, status: 'outdated', version: marker ?? 'unknown' };
+  } catch (error) {
+    return {
+      path: pluginPath,
+      configured,
+      status: 'unreadable',
+      detail: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -105,17 +185,22 @@ export function inspectAgentIntegrationHealth(
     }
     return { name, status: 'ok', resolvedPath, owner: owner.name, version: owner.version };
   });
-  const pluginPath = path.join(homeDir, '.config', 'opencode', 'plugins', 'borg-orient.js');
   const hookConfigs = inspectManagedAgentHookConfigs(homeDir);
+  const openCodePlugin = inspectOpenCodePlugin(homeDir, expectedVersion);
   return {
     expectedVersion,
     bins,
     issues: [
       ...bins.filter((bin) => bin.status !== 'ok'),
       ...hookConfigs.filter((config) => config.status === 'stale' || config.status === 'invalid'),
+      ...(openCodePlugin.status === 'unreadable' ||
+        (openCodePlugin.status === 'refused' && openCodePlugin.configured) ||
+        (openCodePlugin.configured && openCodePlugin.status !== 'ok')
+        ? [openCodePlugin]
+        : []),
     ],
     hookConfigs,
-    openCodePlugin: { path: pluginPath, present: fs.existsSync(pluginPath) },
+    openCodePlugin,
   };
 }
 
@@ -129,6 +214,22 @@ function renderBin(bin: AgentHookBinHealth, expectedVersion: string): string {
   }
 }
 
+function renderOpenCodePlugin(
+  plugin: OpenCodePluginHealth,
+  expectedVersion: string,
+): string {
+  const prefix = 'OpenCode borg-orient.js plugin:';
+  switch (plugin.status) {
+    case 'ok': return `${prefix} ok (${plugin.version})`;
+    case 'present': return `${prefix} present`;
+    case 'absent': return `${prefix} absent`;
+    case 'missing': return `${prefix} missing at ${plugin.path}`;
+    case 'outdated': return `${prefix} version ${plugin.version}, expected ${expectedVersion} at ${plugin.path}`;
+    case 'unreadable': return `${prefix} unreadable at ${plugin.path}${plugin.detail ? ` (${plugin.detail})` : ''}`;
+    case 'refused': return `${prefix} refused at ${plugin.path}${plugin.detail ? ` (${plugin.detail})` : ''}`;
+  }
+}
+
 export function renderAgentIntegrationHealth(report: AgentIntegrationHealth): string {
   const lines = [
     `Borg agent integration (borgmcp ${report.expectedVersion})`,
@@ -137,7 +238,7 @@ export function renderAgentIntegrationHealth(report: AgentIntegrationHealth): st
     ...report.hookConfigs.map((item) => (
       `  ${item.status}: ${item.path}${item.detail ? ` (${item.detail})` : ''}`
     )),
-    `OpenCode borg-orient.js plugin: ${report.openCodePlugin.present ? 'present' : 'absent'} (${report.openCodePlugin.path})`,
+    renderOpenCodePlugin(report.openCodePlugin, report.expectedVersion),
   ];
   for (const bin of report.bins) {
     switch (bin.status) {
@@ -167,6 +268,19 @@ export function renderAgentIntegrationHealth(report: AgentIntegrationHealth): st
         ? `Restore readable, non-symlinked hook inventory path ${config.path}, then run: borg doctor`
         : `Repair invalid managed hook config ${config.path}, then run: borg update --yes`);
     }
+  }
+  if (report.openCodePlugin.status === 'missing') {
+    lines.push('Repair missing OpenCode plugin: borg update --yes');
+  } else if (report.openCodePlugin.status === 'outdated' && report.openCodePlugin.configured) {
+    lines.push('Repair OpenCode plugin: borg update --yes');
+  } else if (report.openCodePlugin.status === 'unreadable') {
+    lines.push(report.openCodePlugin.configured
+      ? `Fix or replace unreadable OpenCode plugin ${report.openCodePlugin.path}, then run: borg update --yes`
+      : `Fix or remove unreadable OpenCode plugin ${report.openCodePlugin.path}`);
+  } else if (report.openCodePlugin.status === 'refused' && report.openCodePlugin.configured) {
+    lines.push(
+      `Remove or replace the OpenCode plugin path ${report.openCodePlugin.path}, then run: borg update --yes`,
+    );
   }
   return `${lines.join('\n')}\n`;
 }
@@ -223,6 +337,7 @@ export function refreshAndVerifyManagedAgentIntegrations(): void {
       'Repair the named managed hook config, then rerun borg update --yes',
     );
   }
+  if (isOpenCodeMcpServerConfigured()) installBorgPlugin();
   try {
     assertAgentIntegrationHealthy(inspectAgentIntegrationHealth());
   } catch (error) {
