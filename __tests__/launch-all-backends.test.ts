@@ -10,7 +10,7 @@ import {
 } from '../src/launch-all-locks';
 import { runPastelistBackend } from '../src/backends/launch-all-pastelist';
 import { runTmuxBackend } from '../src/backends/launch-all-tmux';
-import { runWindowsBackend } from '../src/backends/launch-all-windows';
+import { runTerminalsBackend } from '../src/backends/launch-all-terminals';
 import type { LaunchAllDeps } from '../src/launch-all-deps';
 import type { DroneCandidate } from '../src/launch-all-discovery';
 
@@ -182,40 +182,54 @@ describe('tmux backend (gh#556 Part 2 §4.1)', () => {
   });
 });
 
-describe('windows backend (gh#556 Part 2 §4.2 + control-char fold-in)', () => {
-  const wopts = (platform: NodeJS.Platform) => ({ borgPath: '/usr/local/bin/borg', platform, launchedAtISO: '2026-06-13T12:00:00.000Z', launchDelayMs: 0, sleep: async () => {} });
+describe('terminals backend (client#400 + control-char fold-in)', () => {
+  const wopts = (platform: NodeJS.Platform) => ({ borgPath: '/usr/local/bin/borg', platform, cubeName: 'myrepo', launchedAtISO: '2026-06-13T12:00:00.000Z', launchDelayMs: 0, sleep: async () => {} });
 
-  it('macOS + iTerm present → osascript per candidate + lock written', async () => {
+  it('macOS + iTerm present → creates a tab, names its session for the drone, and writes the lock', async () => {
     const deps = makeStubDeps({ pathExists: vi.fn((p: string) => p === '/Applications/iTerm.app') });
-    await runWindowsBackend([cand()], wopts('darwin'), deps);
+    await runTerminalsBackend([cand()], wopts('darwin'), deps);
     const calls = (deps.runSync as any).mock.calls;
-    expect(calls.some((c: any[]) => c[0] === 'osascript')).toBe(true);
+    const script = calls.find((c: any[]) => c[0] === 'osascript')?.[1]?.[1] as string;
+    expect(script).toContain('create tab with default profile');
+    expect(script).toContain('set name to "borg · drone-1 · myrepo"');
     expect(deps.writeFile).toHaveBeenCalled();
+  });
+
+  it('macOS + Terminal.app → opens a permission-free named window without System Events', async () => {
+    const deps = makeStubDeps({ pathExists: vi.fn((p: string) => p === '/System/Applications/Utilities/Terminal.app') });
+    await runTerminalsBackend([cand()], wopts('darwin'), deps);
+    const script = (deps.runSync as any).mock.calls.find((c: any[]) => c[0] === 'osascript')?.[1]?.[1] as string;
+    expect(script).toContain('set launchedTab to do script');
+    expect(script).toContain('set custom title of launchedTab to "borg · drone-1 · myrepo"');
+    expect(script).toContain('set title displays custom title of launchedTab to true');
+    expect(script).not.toContain('System Events');
   });
 
   it('macOS + no terminal app → hard-fails (NoTerminalError)', async () => {
     const deps = makeStubDeps({ pathExists: vi.fn(() => false) });
-    await expect(runWindowsBackend([cand()], wopts('darwin'), deps)).rejects.toThrow(/compatible terminal app/);
+    await expect(runTerminalsBackend([cand()], wopts('darwin'), deps)).rejects.toThrow(/compatible terminal app/);
   });
 
   it('control-char (newline) in worktree path → skipped + warned (not passed to osascript)', async () => {
     const deps = makeStubDeps({ pathExists: vi.fn((p: string) => p === '/Applications/iTerm.app') });
-    await runWindowsBackend([cand({ worktreeDir: '/a/evil\nrm -rf' })], wopts('darwin'), deps);
+    await runTerminalsBackend([cand({ worktreeDir: '/a/evil\nrm -rf' })], wopts('darwin'), deps);
     expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('control'));
     expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(false);
   });
 
   it('Linux → uses $BORG_TERMINAL when set', async () => {
     const deps = makeStubDeps({ getEnv: vi.fn((n: string) => (n === 'BORG_TERMINAL' ? 'kitty' : undefined)) });
-    await runWindowsBackend([cand()], wopts('linux'), deps);
-    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'kitty')).toBe(true);
+    await runTerminalsBackend([cand()], wopts('linux'), deps);
+    const call = (deps.runSync as any).mock.calls.find((c: any[]) => c[0] === 'kitty');
+    expect(call).toBeDefined();
+    expect(call[1].at(-1)).toContain("borg · drone-1 · myrepo");
   });
 
   it('rate-limit stagger on macOS: sleep(launchDelayMs) fires BETWEEN launches (N-1), not before the first', async () => {
     const sleep = vi.fn(async () => {});
     const deps = makeStubDeps({ pathExists: vi.fn((p: string) => p === '/Applications/iTerm.app') });
     const fleet = [cand({ worktreeDir: '/w/a' }), cand({ worktreeDir: '/w/b' }), cand({ worktreeDir: '/w/c' })];
-    await runWindowsBackend(fleet, { ...wopts('darwin'), launchDelayMs: 800, sleep }, deps);
+    await runTerminalsBackend(fleet, { ...wopts('darwin'), launchDelayMs: 800, sleep }, deps);
     expect(sleep).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(800);
   });

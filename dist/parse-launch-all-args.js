@@ -1,6 +1,6 @@
 // gh#556 Part 2 — argument parser for `borg launch-all [cube] [flags]` (spec §9.1).
 // Pure: rawArgs → validated LaunchAllArgs | error. Mirror of parse-assimilate-args.
-const SUPPORTED = '--mode <tmux|windows|pastelist>, --only <name>, --dry-run, --cli <claude|codex|opencode>, ' +
+const SUPPORTED = '--mode <tmux|terminals|pastelist>, --only <name>, --dry-run, --cli <claude|codex|opencode>, ' +
     '--no-attach, --yes/-y, --force, --launch-delay <ms>';
 export function parseLaunchAllArgs(rawArgs) {
     const flags = {};
@@ -10,8 +10,8 @@ export function parseLaunchAllArgs(rawArgs) {
         switch (arg) {
             case '--mode': {
                 const v = rawArgs[++i];
-                if (v !== 'tmux' && v !== 'windows' && v !== 'pastelist') {
-                    return { ok: false, error: `--mode must be one of tmux|windows|pastelist (got: ${v ?? '<missing>'})` };
+                if (v !== 'tmux' && v !== 'terminals' && v !== 'pastelist') {
+                    return { ok: false, error: `--mode must be one of tmux|terminals|pastelist (got: ${v ?? '<missing>'})` };
                 }
                 flags.mode = v;
                 break;

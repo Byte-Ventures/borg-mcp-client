@@ -12,6 +12,21 @@ describe('parseLaunchAllArgs (gh#556 Part 2 §11.1)', () => {
     const r = parseLaunchAllArgs(['--mode', 'tmux']);
     expect(r).toMatchObject({ ok: true, args: { flags: { mode: 'tmux' } } });
   });
+  it('--mode terminals → mode set; removed windows spelling is rejected', () => {
+    expect(parseLaunchAllArgs(['--mode', 'terminals'])).toMatchObject({
+      ok: true,
+      args: { flags: { mode: 'terminals' } },
+    });
+    const removed = parseLaunchAllArgs(['--mode', 'windows']);
+    expect(removed).toEqual({
+      ok: false,
+      error: '--mode must be one of tmux|terminals|pastelist (got: windows)',
+    });
+    expect(parseLaunchAllArgs(['--mode'])).toEqual({
+      ok: false,
+      error: '--mode must be one of tmux|terminals|pastelist (got: <missing>)',
+    });
+  });
   it('--mode invalid → error', () => {
     const r = parseLaunchAllArgs(['--mode', 'invalid']);
     expect(r.ok).toBe(false);

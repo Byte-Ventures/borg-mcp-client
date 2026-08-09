@@ -1,5 +1,5 @@
 export interface LaunchAllFlags {
-    mode?: 'tmux' | 'windows' | 'pastelist';
+    mode?: 'tmux' | 'terminals' | 'pastelist';
     only?: string;
     dryRun?: boolean;
     cli?: 'claude' | 'codex' | 'opencode';
