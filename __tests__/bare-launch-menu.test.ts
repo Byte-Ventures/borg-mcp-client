@@ -2,15 +2,15 @@
  * gh#853 — bare `borg` (no-args) interactive launch menu.
  *
  * The menu's option-set + selection→action mapping + show/collapse decision are
- * factored into PURE, deps-injected functions so they're unit-testable without a
- * real TTY. claude.ts main() is thin glue: compute the three inputs (default cli,
- * other-installed cli, launch-all targets), gate on shouldShowLaunchMenu, then
- * dispatch the returned action.
+ * factored into deps-injected functions so they're unit-testable without a real
+ * TTY. claude.ts main() supplies the saved-seat and launch dependencies, gates
+ * on shouldShowLaunchMenu, then dispatches the returned action.
  */
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildLaunchMenuOptions,
   configureSelectedLaunchCli,
+  discoverLiveLaunchMenuCandidates,
   explicitCliLaunchHint,
   resolveLaunchMenuChoice,
   runBareLaunchMenu,
@@ -31,6 +31,64 @@ describe('gh#853 — shouldShowLaunchMenu (gate: bare-borg + TTY only)', () => {
   it('any explicit args/flags → no menu (only bare borg triggers it)', () => {
     expect(shouldShowLaunchMenu({ extraArgs: ['--resume'], stdinIsTTY: true, stdoutIsTTY: true })).toBe(false);
     expect(shouldShowLaunchMenu({ extraArgs: ['somePrompt'], stdinIsTTY: true, stdoutIsTTY: true })).toBe(false);
+  });
+
+  it('an active seat launches directly without showing the menu', () => {
+    expect(shouldShowLaunchMenu({
+      extraArgs: [],
+      stdinIsTTY: true,
+      stdoutIsTTY: true,
+      hasActiveSeat: true,
+    })).toBe(false);
+  });
+});
+
+describe('client#362 — live sibling drone discovery', () => {
+  const ALPHA_ID = '11111111-1111-4111-8111-111111111111';
+  const BETA_ID = '22222222-2222-4222-8222-222222222222';
+  const EVICTED_ID = '33333333-3333-4333-8333-333333333333';
+  const PENDING_ID = '44444444-4444-4444-8444-444444444444';
+  const MISSING_ID = '55555555-5555-4555-8555-555555555555';
+  const CUBE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+  it('keeps only linked, present, active, non-terminal sibling seats', async () => {
+    const identities = [
+      { projectPath: '/repo/beta', cube: { cubeId: CUBE_ID, droneId: BETA_ID, droneLabel: 'beta', name: 'my-cube' } },
+      { projectPath: '/repo/alpha', cube: { cubeId: CUBE_ID, droneId: ALPHA_ID, droneLabel: 'alpha', name: 'my-cube' } },
+      { projectPath: '/repo/evicted', cube: { cubeId: CUBE_ID, droneId: EVICTED_ID, droneLabel: 'evicted', name: 'my-cube' } },
+      { projectPath: '/repo/pending', cube: { cubeId: CUBE_ID, droneId: PENDING_ID, droneLabel: 'pending', name: 'my-cube' } },
+      { projectPath: '/repo/missing', cube: { cubeId: CUBE_ID, droneId: MISSING_ID, droneLabel: 'missing', name: 'my-cube' } },
+    ];
+    const discovered = identities.map(({ projectPath, cube }) => ({
+      worktreeDir: projectPath,
+      cubeId: cube.cubeId,
+      droneId: cube.droneId,
+      droneLabel: cube.droneLabel,
+      sessionToken: `token-${cube.droneLabel}`,
+      apiUrl: 'https://127.0.0.1:3000',
+    }));
+    const activeIds = new Set([ALPHA_ID, BETA_ID, EVICTED_ID, MISSING_ID]);
+
+    const result = await discoverLiveLaunchMenuCandidates({
+      readAllProjectIdentities: async () => identities,
+      discoverDroneCandidates: async () => discovered,
+      getActiveSeatForWorktree: async (worktree) => {
+        const found = identities.find((entry) => entry.projectPath === worktree);
+        return found && activeIds.has(found.cube.droneId)
+          ? { cubeId: found.cube.cubeId, droneId: found.cube.droneId }
+          : null;
+      },
+      pathExists: (worktree) => worktree !== '/repo/missing',
+      probeSeat: async (candidate) => candidate.droneId === EVICTED_ID ? 'evicted' : 'live',
+    });
+
+    expect(result).toEqual({
+      candidates: [
+        { droneLabel: 'alpha', target: ALPHA_ID, worktree: '/repo/alpha' },
+        { droneLabel: 'beta', target: BETA_ID, worktree: '/repo/beta' },
+      ],
+      launchAllCubeId: CUBE_ID,
+    });
   });
 });
 
@@ -160,6 +218,31 @@ describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
     const fourOpts = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: ['codex', 'opencode'], hasLaunchAllTargets: true });
     expect(fourOpts.map((o) => o.key)).toEqual(['1', '2', '3', '4']);
   });
+
+  it('puts sorted sibling drones first, then launch-all, then unattached launches', () => {
+    const opts = buildLaunchMenuOptions({
+      defaultCli: 'claude',
+      otherConfiguredClis: ['codex'],
+      hasLaunchAllTargets: true,
+      launchAllCubeId: 'cube-id',
+      droneCandidates: [
+        { droneLabel: 'beta', target: 'beta-id', worktree: '/repo/beta' },
+        { droneLabel: 'alpha', target: 'alpha-id', worktree: '/repo/alpha' },
+      ],
+    });
+
+    expect(opts).toEqual([
+      { key: '1', label: 'Resume alpha (/repo/alpha)', action: { kind: 'launch-seat', target: 'alpha-id' } },
+      { key: '2', label: 'Resume beta (/repo/beta)', action: { kind: 'launch-seat', target: 'beta-id' } },
+      { key: '3', label: "Launch all (this cube's drone worktrees)", action: { kind: 'launch-all', cubeId: 'cube-id' } },
+      { key: '4', label: 'Launch Claude here without a drone', action: { kind: 'launch', cli: 'claude' } },
+      { key: '5', label: 'Launch with Codex here without a drone (one-shot)', action: { kind: 'launch', cli: 'codex' } },
+    ]);
+    expect(resolveLaunchMenuChoice(opts, '')).toEqual({
+      ok: true,
+      action: { kind: 'launch-seat', target: 'alpha-id' },
+    });
+  });
 });
 
 describe('gh#853 — resolveLaunchMenuChoice (selection → action)', () => {
@@ -235,5 +318,27 @@ describe('gh#853 — runBareLaunchMenu (orchestration)', () => {
     );
     expect(prompt).toHaveBeenCalledTimes(2);
     expect(action).toEqual({ kind: 'launch', cli: 'codex' });
+  });
+
+  it('falls back to the first sorted drone after three invalid candidate-menu choices', async () => {
+    const prompt = vi.fn(async () => 'nonsense');
+    const action = await runBareLaunchMenu(
+      {
+        defaultCli: 'claude',
+        otherConfiguredClis: [],
+        hasLaunchAllTargets: true,
+        launchAllCubeId: 'cube-id',
+        droneCandidates: [
+          { droneLabel: 'beta', target: 'beta-id', worktree: '/repo/beta' },
+          { droneLabel: 'alpha', target: 'alpha-id', worktree: '/repo/alpha' },
+        ],
+      },
+      prompt,
+    );
+
+    expect(prompt).toHaveBeenCalledTimes(3);
+    expect(prompt.mock.calls[0][0]).toContain('borg — how do you want to launch?\n  1) Resume alpha (/repo/alpha)');
+    expect(prompt.mock.calls[1][0].startsWith('Invalid choice.\n')).toBe(true);
+    expect(action).toEqual({ kind: 'launch-seat', target: 'alpha-id' });
   });
 });
