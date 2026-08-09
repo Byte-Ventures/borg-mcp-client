@@ -240,6 +240,21 @@ describe('production local-registry wiring', () => {
       '`borg launch builder-pending` again.\n',
     );
     expect(launchBareBorg).not.toHaveBeenCalled();
+
+    const missingLaunchBareBorg = vi.fn(async () => 0);
+    stderr.length = 0;
+    expect(await commands.runLaunchSeat({ target: 'builder-pending' }, {
+      ...commands.buildDefaultSeatCommandDeps(),
+      pathExists: (path) => path !== pendingWorktree,
+      launchBareBorg: missingLaunchBareBorg,
+      stdout: (line) => stdout.push(line),
+      stderr: (line) => stderr.push(line),
+    })).toBe(1);
+    expect(stderr.join('')).toBe(
+      `borg launch: drone 'builder-pending' is registered at ${pendingWorktree}, but that directory does not exist. ` +
+      'Restore the directory, or run `borg cleanup` to review orphaned worktrees.\n',
+    );
+    expect(missingLaunchBareBorg).not.toHaveBeenCalled();
   });
 });
 
