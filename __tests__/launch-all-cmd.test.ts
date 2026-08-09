@@ -34,7 +34,7 @@ function makeStubDeps(over: Partial<LaunchAllDeps> = {}): LaunchAllDeps {
     runSyncExitCode: vi.fn(() => 1), // has-session: absent
     attachInteractive: vi.fn(),
     cwd: vi.fn(() => '/work/myrepo'),
-    pathExists: vi.fn(() => true),
+    pathExists: vi.fn((p: string) => !p.endsWith('.app')),
     homedir: vi.fn(() => '/home/test'),
     mkdirp: vi.fn(),
     readFileOpt: vi.fn(() => null), // no live locks
@@ -230,6 +230,91 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     // pastelist printed cd lines; no tmux new-session
     expect((deps.runSync as any).mock.calls.some((c: any[]) => c[1]?.[0] === 'new-session')).toBe(false);
     expect(stdoutOf(deps)).toContain('assimilate --here');
+  });
+
+  it.each([
+    '/Applications/iTerm.app',
+    '/System/Applications/Utilities/Terminal.app',
+  ])('macOS auto prefers the terminals backend when %s exists, even when tmux is available', async (terminalApp) => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+      pathExists: vi.fn((p: string) => p === terminalApp || paths.includes(p)),
+      isTTY: vi.fn(() => true),
+      runSync: vi.fn((cmd: string) => (cmd === 'git' ? porcelainFor(paths) : '')),
+    });
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(true);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[1]?.[0] === 'new-session')).toBe(false);
+  });
+
+  it('macOS non-TTY auto never dispatches osascript and retains the prior pastelist fallback', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+      pathExists: vi.fn((p: string) => p === '/Applications/iTerm.app' || paths.includes(p)),
+      isTTY: vi.fn(() => false),
+      runSync: vi.fn((cmd: string, args: string[]) => {
+        if (cmd === 'git') return porcelainFor(paths);
+        if (cmd === 'tmux' && args[0] === '-V') throw new Error('ENOENT');
+        return '';
+      }),
+    });
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(false);
+    expect(stdoutOf(deps)).toContain('assimilate --here');
+    expect(stderrOf(deps)).toContain('Falling back to pastelist mode');
+  });
+
+  it('explicit --mode terminals wins over tmux availability', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+      pathExists: vi.fn((p: string) => p === '/System/Applications/Utilities/Terminal.app' || paths.includes(p)),
+      runSync: vi.fn((cmd: string) => (cmd === 'git' ? porcelainFor(paths) : '')),
+    });
+    expect(await runLaunchAll({ flags: { mode: 'terminals' } }, deps, OPTS)).toBe(0);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(true);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[1]?.[0] === 'new-session')).toBe(false);
+    expect(stdoutOf(deps)).not.toContain('Attach: tmux');
+  });
+
+  it('explicit --mode tmux wins over the macOS terminal-app default', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+      pathExists: vi.fn((p: string) => p === '/Applications/iTerm.app' || paths.includes(p)),
+      runSync: vi.fn((cmd: string, args: string[]) => {
+        if (cmd === 'git') return porcelainFor(paths);
+        if (cmd === 'tmux' && (args[0] === 'new-session' || args[0] === 'new-window')) return '@7\n';
+        return '';
+      }),
+    });
+    expect(await runLaunchAll({ flags: { mode: 'tmux' } }, deps, OPTS)).toBe(0);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'tmux' && c[1]?.[0] === 'new-session')).toBe(true);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(false);
+  });
+
+  it('Linux auto stays tmux-first', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+      platform: vi.fn(() => 'linux'),
+      getEnv: vi.fn((name: string) => (name === 'BORG_TERMINAL' ? 'kitty' : undefined)),
+      runSync: vi.fn((cmd: string, args: string[]) => {
+        if (cmd === 'git') return porcelainFor(paths);
+        if (cmd === 'tmux' && (args[0] === 'new-session' || args[0] === 'new-window')) return '@7\n';
+        return '';
+      }),
+    });
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'tmux' && c[1]?.[0] === 'new-session')).toBe(true);
+    expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'kitty')).toBe(false);
   });
 
   it('live lock → skip + warn (no --force); --force → relaunch', async () => {
