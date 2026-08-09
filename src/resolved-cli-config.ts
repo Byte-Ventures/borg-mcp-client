@@ -7,6 +7,7 @@ export interface ResolvedCliConfigDeps {
   addClaudeUserPromptSubmitHook(): void;
   addCodexSessionStartHook(): void;
   addCodexUserPromptSubmitHook(): void;
+  installOpenCodePlugin(): void;
 }
 /**
  * Apply only the integration writes for the CLI the launcher resolved.
@@ -37,4 +38,5 @@ export function configureResolvedCli(
   }
 
   deps.ensureMcp('opencode');
+  deps.installOpenCodePlugin();
 }

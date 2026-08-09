@@ -22,5 +22,6 @@ export function configureResolvedCli(cli, deps) {
         return;
     }
     deps.ensureMcp('opencode');
+    deps.installOpenCodePlugin();
 }
 //# sourceMappingURL=resolved-cli-config.js.map

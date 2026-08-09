@@ -9,6 +9,7 @@ import {
   runDoctor,
   warnIfAgentIntegrationUnhealthy,
 } from '../src/agent-integration-health';
+import { buildBorgPluginSource } from '../src/opencode-plugin';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -39,7 +40,7 @@ describe('agent integration health', () => {
     const f = packageFixture();
     const plugin = join(f.root, 'home', '.config', 'opencode', 'plugins', 'borg-orient.js');
     mkdirSync(join(plugin, '..'), { recursive: true });
-    writeFileSync(plugin, 'plugin');
+    writeFileSync(plugin, buildBorgPluginSource('3.3.0'));
     const report = inspectAgentIntegrationHealth({
       expectedVersion: '3.3.0',
       path: f.bin,
@@ -49,7 +50,32 @@ describe('agent integration health', () => {
     expect(report.bins.map((bin) => [bin.name, bin.status])).toEqual(
       f.names.map((name) => [name, 'ok']),
     );
-    expect(report.openCodePlugin).toEqual({ path: plugin, present: true });
+    expect(report.openCodePlugin).toMatchObject({ path: plugin, status: 'ok', version: '3.3.0' });
+  });
+
+  it('makes an outdated OpenCode plugin actionable with relaunch recovery', () => {
+    const f = packageFixture();
+    const home = join(f.root, 'home');
+    const plugin = join(home, '.config', 'opencode', 'plugins', 'borg-orient.js');
+    mkdirSync(join(plugin, '..'), { recursive: true });
+    writeFileSync(plugin, buildBorgPluginSource('3.2.0'));
+    const report = inspectAgentIntegrationHealth({ expectedVersion: '3.3.0', path: f.bin, homeDir: home });
+    expect(report.openCodePlugin).toMatchObject({ status: 'outdated', version: '3.2.0' });
+    expect(report.issues).toContain(report.openCodePlugin);
+    expect(renderAgentIntegrationHealth(report)).toContain(
+      'Repair outdated OpenCode plugin: borg --cli opencode',
+    );
+  });
+
+  it('makes a missing OpenCode plugin actionable', () => {
+    const f = packageFixture();
+    const home = join(f.root, 'home');
+    const report = inspectAgentIntegrationHealth({ expectedVersion: '3.3.0', path: f.bin, homeDir: home });
+    expect(report.openCodePlugin.status).toBe('missing');
+    expect(report.issues).toContain(report.openCodePlugin);
+    expect(renderAgentIntegrationHealth(report)).toContain(
+      'Repair missing OpenCode plugin: borg --cli opencode',
+    );
   });
 
   it('names missing, wrong-owner, and version-skew bins with truthful status-specific recovery', () => {
@@ -100,7 +126,10 @@ describe('agent integration health', () => {
     const f = packageFixture();
     const home = join(f.root, 'home');
     const configPath = join(home, '.claude', 'settings.json');
+    const plugin = join(home, '.config', 'opencode', 'plugins', 'borg-orient.js');
     mkdirSync(join(home, '.claude'), { recursive: true });
+    mkdirSync(join(plugin, '..'), { recursive: true });
+    writeFileSync(plugin, buildBorgPluginSource('3.3.0'));
     const stale = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{
       type: 'command',
       command: '/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/regen.js',

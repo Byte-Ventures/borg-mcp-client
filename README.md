@@ -195,7 +195,13 @@ Run `borg doctor` for a read-only inventory of the five hook bins, their owning
 `borgmcp` version, managed hook files, and the OpenCode orientation plugin. It
 names a package reinstall for a missing bin, a PATH correction for a bin owned
 by the wrong package or version, `borg update --yes` for stale managed hooks,
-and the invalid file that must be repaired before update can rewrite it.
+the invalid file that must be repaired before update can rewrite it, and an
+OpenCode relaunch for a missing or outdated orientation plugin.
+
+For Borg-launched OpenCode, the plugin restores the lean Borg orientation after
+OpenCode creates a new session, preserves it across compaction, and applies the
+same cube-log audit used by the other agent integrations. The launcher kickoff
+remains the only orientation for the initial session, so it is not duplicated.
 
 ## Troubleshooting
 

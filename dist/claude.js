@@ -519,6 +519,7 @@ function ensureResolvedCliConfigured(cli) {
             addClaudeUserPromptSubmitHook: addUserPromptSubmitHook,
             addCodexSessionStartHook,
             addCodexUserPromptSubmitHook,
+            installOpenCodePlugin: installBorgPlugin,
         });
     }
     catch (err) {

@@ -16,9 +16,9 @@
  *      gets a turn of breathing room after each post.
  *
  * Stays generic — knows nothing about git, branches, or any project's
- * conventions. Only the Anthropic tool name `mcp__borg__borg_log` and a
- * small set of canonical mutating tool names. If no cube is active in
- * this project, silently exits.
+ * conventions. Its pure scan core recognizes the Borg log tool names used by
+ * Claude/Codex and OpenCode plus a small set of canonical mutating tool names.
+ * If no cube is active in this project, silently exits.
  *
  * Hook input arrives as JSON on stdin (Claude Code's standard hook
  * contract). The relevant field is `transcript_path`.

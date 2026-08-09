@@ -190,7 +190,7 @@ export function formatLeanOrientation(args: {
               '\n_(`/clear` cleared Claude\'s conversation — re-arm the inbox Monitor now.)_',
               '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, drain `borg_read-log unread_only=true`, then re-arm the Monitor._\n',
             ].join('\n')
-          : ''
+          : '\n_(OpenCode started a new session; Borg restored this lean orientation and wake path.)_\n'
       : '';
   return [
     `# Cube: ${cubeName} — ${droneLabel}`,
