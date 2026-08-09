@@ -32,7 +32,7 @@ export function launchAllHelpText(version: string): string {
     `Usage:\n` +
     `  borg launch-all [cube] [options]\n\n` +
     `Options:\n` +
-    `  --mode <tmux|windows|pastelist>       Select the launch backend\n` +
+    `  --mode <tmux|terminals|pastelist>     Select the launch backend\n` +
     `  --only <name>                         Launch one role or drone label\n` +
     `  --dry-run                             Show what would launch\n` +
     `  --cli <claude|codex|opencode>         Select the agent CLI\n` +
@@ -40,7 +40,15 @@ export function launchAllHelpText(version: string): string {
     `  --yes, -y                             Skip the large-fleet confirmation\n` +
     `  --force                               Override live-session skips\n` +
     `  --launch-delay <ms>                   Wait between launches\n` +
-    `  --help, -h                            Show this help\n`
+    `  --help, -h                            Show this help\n\n` +
+    `Modes:\n` +
+    `  terminals  Open each drone in its own terminal tab, with the drone's name as\n` +
+    `             the tab title. Default on macOS when iTerm2 or Terminal.app is\n` +
+    `             installed. Terminal.app opens one named window for each drone\n` +
+    `             instead; tabs would need macOS automation permissions, which borg\n` +
+    `             does not request.\n` +
+    `  tmux       Open all drones in one shared tmux session. Default on Linux.\n` +
+    `  pastelist  Print the launch commands so you can run them yourself.\n`
   );
 }
 

@@ -15,7 +15,7 @@
 `src/` is flat and large (110+ modules). The groupings that matter:
 
 - `src/index.ts` is the MCP server entry (`borg-mcp`). `src/claude.ts` backs the `borg` launcher, `src/setup.ts` backs `borg setup`.
-- Agent launchers are per-CLI and top-level: `claude-launch-args.ts`, `codex-launch.ts`, `opencode-drone.ts` and siblings. `src/backends/` holds only the three multi-drone launchers (`launch-all-tmux.ts`, `launch-all-pastelist.ts`, `launch-all-windows.ts`). Borg runs an agent CLI the user installed; it never installs one.
+- Agent launchers are per-CLI and top-level: `claude-launch-args.ts`, `codex-launch.ts`, `opencode-drone.ts` and siblings. `src/backends/` holds only the three multi-drone launchers (`launch-all-tmux.ts`, `launch-all-pastelist.ts`, `launch-all-terminals.ts`). Borg runs an agent CLI the user installed; it never installs one.
 - `src/cli-help.ts` composes all `--help` output. It is the first surface a new user reads, and it is a separate render surface from the README — a term defined only in the README is undefined here.
 - `src/docs-sections.ts` is the section index `borg_docs` serves to agents. It is a third documentation surface; a concept added to the README and the help text is still missing here.
 - `src/config.ts`, `src/cubes.ts`, `src/credential-paths.ts` own on-disk state under the user's config root. Treat every path there as the operator's data.

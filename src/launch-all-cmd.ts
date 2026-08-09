@@ -11,10 +11,10 @@ import type { SeatStatus } from './seat-probe.js';
 import { resolveBorgPath } from './launch-all-command.js';
 import { sweepStaleLocks, isLockLive } from './launch-all-locks.js';
 import { runTmuxBackend } from './backends/launch-all-tmux.js';
-import { runWindowsBackend } from './backends/launch-all-windows.js';
+import { hasMacOSTerminalApp, runTerminalsBackend } from './backends/launch-all-terminals.js';
 import { runPastelistBackend } from './backends/launch-all-pastelist.js';
 
-type Backend = 'tmux' | 'windows' | 'pastelist';
+type Backend = 'tmux' | 'terminals' | 'pastelist';
 
 const TMUX_INSTALL_HINT =
   'borg launch-all: tmux not found.\n' +
@@ -82,10 +82,11 @@ async function resolveTargetCube(
   return { cubeId: active.cubeId, name: active.name };
 }
 
-/** Backend selection (spec §4.1): native-Windows / explicit / tmux-preflight / auto. */
+/** Backend selection: native-Windows / explicit / platform-specific auto. */
 function selectBackend(args: LaunchAllArgs, deps: LaunchAllDeps): { backend: Backend } | { hardFail: string } {
   const explicit = args.flags.mode;
-  const nativeWindows = deps.platform() === 'win32' && !isWSL(deps);
+  const platform = deps.platform();
+  const nativeWindows = platform === 'win32' && !isWSL(deps);
   if (nativeWindows) {
     deps.stderr(
       'native Windows is not supported for interactive launch; using pastelist mode instead ' +
@@ -93,13 +94,23 @@ function selectBackend(args: LaunchAllArgs, deps: LaunchAllDeps): { backend: Bac
     );
     return { backend: 'pastelist' };
   }
-  if (explicit === 'windows') return { backend: 'windows' };
+  if (explicit === 'terminals') return { backend: 'terminals' };
   if (explicit === 'pastelist') return { backend: 'pastelist' };
+  if (explicit === 'tmux') {
+    return checkTmuxAvailable(deps) ? { backend: 'tmux' } : { hardFail: TMUX_INSTALL_HINT };
+  }
+
+  // macOS defaults to native terminal tabs/windows when either supported app
+  // is installed. Explicit modes above always win.
+  if (
+    platform === 'darwin' &&
+    deps.isTTY() &&
+    hasMacOSTerminalApp(deps)
+  ) {
+    return { backend: 'terminals' };
+  }
 
   const tmuxAvail = checkTmuxAvailable(deps);
-  if (explicit === 'tmux') {
-    return tmuxAvail ? { backend: 'tmux' } : { hardFail: TMUX_INSTALL_HINT };
-  }
   // auto (no explicit mode)
   if (tmuxAvail) return { backend: 'tmux' };
   deps.stderr(TMUX_INSTALL_HINT + 'Falling back to pastelist mode (paste the commands below).\n');
@@ -416,8 +427,8 @@ export async function runLaunchAll(
         }
         printCheatSheet(sessionName, deps);
       }
-    } else if (sel.backend === 'windows') {
-      await runWindowsBackend(launchable, { borgPath, platform: deps.platform(), launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+    } else if (sel.backend === 'terminals') {
+      await runTerminalsBackend(launchable, { borgPath, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
     } else {
       runPastelistBackend(launchable, borgPath, deps);
       return 0; // pastelist: nothing to reconcile (operator pastes manually)
@@ -453,6 +464,8 @@ export async function runLaunchAll(
     const status = statuses ? (statuses.get(c.droneId) === 'verified' ? 'VERIFIED' : 'unconfirmed (may still be joining)') : 'launched';
     deps.stdout(`  ${c.droneLabel}  ${c.worktreeDir}  ${status}\n`);
   }
-  deps.stdout(`\nAttach: tmux attach -t ${sessionName}\n`);
+  if (sel.backend === 'tmux') {
+    deps.stdout(`\nAttach: tmux attach -t ${sessionName}\n`);
+  }
   return 0;
 }

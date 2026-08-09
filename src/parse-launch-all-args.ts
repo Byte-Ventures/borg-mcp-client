@@ -2,7 +2,7 @@
 // Pure: rawArgs → validated LaunchAllArgs | error. Mirror of parse-assimilate-args.
 
 export interface LaunchAllFlags {
-  mode?: 'tmux' | 'windows' | 'pastelist';
+  mode?: 'tmux' | 'terminals' | 'pastelist';
   only?: string;
   dryRun?: boolean;
   cli?: 'claude' | 'codex' | 'opencode';
@@ -28,7 +28,7 @@ export type ParseLaunchAllResult =
   | { ok: false; error: string };
 
 const SUPPORTED =
-  '--mode <tmux|windows|pastelist>, --only <name>, --dry-run, --cli <claude|codex|opencode>, ' +
+  '--mode <tmux|terminals|pastelist>, --only <name>, --dry-run, --cli <claude|codex|opencode>, ' +
   '--no-attach, --yes/-y, --force, --launch-delay <ms>';
 
 export function parseLaunchAllArgs(rawArgs: string[]): ParseLaunchAllResult {
@@ -40,8 +40,8 @@ export function parseLaunchAllArgs(rawArgs: string[]): ParseLaunchAllResult {
     switch (arg) {
       case '--mode': {
         const v = rawArgs[++i];
-        if (v !== 'tmux' && v !== 'windows' && v !== 'pastelist') {
-          return { ok: false, error: `--mode must be one of tmux|windows|pastelist (got: ${v ?? '<missing>'})` };
+        if (v !== 'tmux' && v !== 'terminals' && v !== 'pastelist') {
+          return { ok: false, error: `--mode must be one of tmux|terminals|pastelist (got: ${v ?? '<missing>'})` };
         }
         flags.mode = v;
         break;
