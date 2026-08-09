@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 function packageFixture(version = '3.3.0') {
-  const root = mkdtempSync(join(tmpdir(), 'borg-hook-health-'));
+  const root = fs.realpathSync(mkdtempSync(join(tmpdir(), 'borg-hook-health-')));
   roots.push(root);
   const packageRoot = join(root, 'lib', 'node_modules', 'borgmcp');
   const dist = join(packageRoot, 'dist');

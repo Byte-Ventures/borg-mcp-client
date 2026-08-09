@@ -2,19 +2,23 @@ export declare const OPENCODE_COMPATIBILITY: {
     readonly opencode: "1.18.15";
     readonly sdk: "1.17.18";
 };
+export declare const OPENCODE_INJECTED_ENTRY_MARKER = "<!-- borg-opencode-injected-entry -->";
+export declare const BORG_OPENCODE_LAUNCH_NONCE_ENV = "BORG_OPENCODE_LAUNCH_NONCE";
 export interface OpenCodePluginCoreDeps {
     defer(task: () => Promise<void>): void;
     wait(milliseconds: number): Promise<void>;
     listMessages(sessionID: string): Promise<any[]>;
     renderOrientation(source: 'clear' | 'compact'): Promise<string>;
-    submitPrompt(sessionID: string, text: string): Promise<void>;
+    submitPrompt(sessionID: string, text: string, marker: string): Promise<void>;
     audit(messages: readonly any[]): string | null;
 }
 export interface OpenCodePluginCoreOptions {
     enabled: boolean;
     pluginVersion: string;
     kickoffMarker: string;
+    kickoffNonce: string;
     recoveryMarker: string;
+    injectedEntryMarker: string;
     kickoffPollAttempts: number;
     confirmationPollAttempts: number;
     pollDelayMs: number;

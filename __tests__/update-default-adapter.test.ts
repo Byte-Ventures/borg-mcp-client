@@ -202,7 +202,16 @@ describe('default npm update adapter', () => {
     await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
     expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
 
+    const symlinkTarget = join(canonicalRoot, 'operator-data.txt');
+    writeFileSync(symlinkTarget, 'operator data');
     rmSync(plugin);
+    symlinkSync(symlinkTarget, plugin);
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
+      /OpenCode borg-orient\.js plugin: unreadable .*plugin path is a symlink/,
+    );
+    expect(readFileSync(symlinkTarget, 'utf8')).toBe('operator data');
+    rmSync(plugin);
+
     await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
     expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
 

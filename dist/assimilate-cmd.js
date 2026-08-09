@@ -16,7 +16,7 @@ import { formatSeatReattachRefusal, inspectLiveInboxMonitor, } from './seat-reat
 import { resolveLaunchEnv } from './model-presets.js';
 import { unlinkSync } from 'node:fs';
 import { gcOrphanInboxesForCube, defaultListInboxLogs, defaultInboxLivenessDeps, isInboxLive, ORPHAN_INBOX_STALE_MS, } from './gc-orphan-inboxes.js';
-import { installBorgPlugin } from './opencode-plugin.js';
+import { BORG_OPENCODE_LAUNCH_NONCE_ENV, installBorgPlugin } from './opencode-plugin.js';
 import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
@@ -1602,6 +1602,7 @@ export async function runAssimilate(args, deps) {
         installBorgPlugin();
         const cwd = agentCwd;
         openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
+        childEnv[BORG_OPENCODE_LAUNCH_NONCE_ENV] = openCodeKickoff.nonce;
         launchArgs = buildOpenCodeLaunchArgs(cwd, dronePort, openCodeKickoff.prompt);
     }
     // gh#673 P1: mark the launched agent session as borg-launched so the

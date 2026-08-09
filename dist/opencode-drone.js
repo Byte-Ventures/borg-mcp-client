@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { OPENCODE_INJECTED_ENTRY_MARKER } from './opencode-plugin.js';
 const LOG_FILE = join(tmpdir(), 'borg-opencode-drone.log');
 function log(msg) {
     const line = `[${new Date().toISOString()}] ${msg}\n`;
@@ -389,7 +390,10 @@ async function deliverOpenCodeEntry(owner, delivery) {
         let status = null;
         try {
             status = await promptSession(target.id, {
-                parts: [{ type: 'text', text: delivery.text }],
+                parts: [
+                    { type: 'text', text: delivery.text },
+                    { type: 'text', text: OPENCODE_INJECTED_ENTRY_MARKER },
+                ],
             });
         }
         catch (err) {

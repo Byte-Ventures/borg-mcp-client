@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import which from 'which';
 import { inspectManagedAgentHookConfigs, isOpenCodeMcpServerConfigured, refreshManagedAgentHookConfigs, refreshManagedAgentMcpConfigs, } from './config-utils.js';
-import { borgHomeRoot } from './private-root.js';
+import { borgHomeRoot, isCanonicalPath } from './private-root.js';
 import { getPackageVersion } from './version.js';
 import { buildBorgPluginSource, installBorgPlugin, openCodePluginPath, } from './opencode-plugin.js';
 export const AGENT_HOOK_BINS = [
@@ -42,10 +42,49 @@ function defaultResolveBin(name, searchPath) {
 function inspectOpenCodePlugin(homeDir, expectedVersion) {
     const pluginPath = openCodePluginPath(homeDir);
     const configured = isOpenCodeMcpServerConfigured(path.join(homeDir, '.config', 'opencode', 'opencode.json'));
-    if (!fs.existsSync(pluginPath)) {
-        return { path: pluginPath, configured, status: configured ? 'missing' : 'absent' };
-    }
     try {
+        let metadata;
+        try {
+            metadata = fs.lstatSync(pluginPath);
+        }
+        catch (error) {
+            if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+                if (!isCanonicalPath(pluginPath)) {
+                    return {
+                        path: pluginPath,
+                        configured,
+                        status: 'unreadable',
+                        detail: 'plugin path contains a symlink',
+                    };
+                }
+                return { path: pluginPath, configured, status: configured ? 'missing' : 'absent' };
+            }
+            throw error;
+        }
+        if (metadata.isSymbolicLink()) {
+            return {
+                path: pluginPath,
+                configured,
+                status: 'unreadable',
+                detail: 'plugin path is a symlink',
+            };
+        }
+        if (!isCanonicalPath(pluginPath)) {
+            return {
+                path: pluginPath,
+                configured,
+                status: 'unreadable',
+                detail: 'plugin path contains a symlink',
+            };
+        }
+        if (!metadata.isFile()) {
+            return {
+                path: pluginPath,
+                configured,
+                status: 'unreadable',
+                detail: 'plugin path is not a regular file',
+            };
+        }
         const source = fs.readFileSync(pluginPath, 'utf8');
         const marker = source.match(/borgmcp-opencode-plugin:([^;\s]+);opencode=/)?.[1];
         if (!configured) {

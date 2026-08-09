@@ -56,7 +56,10 @@ function artifactForEndpoint(endpoint: string): string {
 }
 
 vi.mock('../src/opencode-drone.js', () => openCodeDroneMocks);
-vi.mock('../src/opencode-plugin.js', () => ({ installBorgPlugin: vi.fn() }));
+vi.mock('../src/opencode-plugin.js', () => ({
+  BORG_OPENCODE_LAUNCH_NONCE_ENV: 'BORG_OPENCODE_LAUNCH_NONCE',
+  installBorgPlugin: vi.fn(),
+}));
 vi.mock('../src/ensure-mcp-config.js', () => mcpConfigMocks);
 
 beforeEach(() => {
@@ -790,6 +793,9 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     expect(portIndex).toBeGreaterThanOrEqual(0);
     expect(launchArgs[portIndex + 1]).toBe('15555');
     expect(exec.mock.calls[0][3]).toEqual(expect.objectContaining({ BORG_OPENCODE_PORT: '15555' }));
+    expect(exec.mock.calls[0][3]).toEqual(expect.objectContaining({
+      BORG_OPENCODE_LAUNCH_NONCE: 'nonce-for-test',
+    }));
     expect(openCodePrompt).toContain('Call borg_regen and follow the playbook');
     expect(openCodePrompt).toContain('<!-- borg-opencode-correlation:nonce-for-test -->');
     expect(openCodeDroneMocks.createOpenCodeLaunchKickoff).toHaveBeenCalledWith(

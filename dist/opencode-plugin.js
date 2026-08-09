@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { evaluateLogAudit } from './log-audit-core.js';
-import { borgHomeRoot } from './private-root.js';
+import { borgHomeRoot, isCanonicalPath } from './private-root.js';
 import { getPackageVersion } from './version.js';
 export const OPENCODE_COMPATIBILITY = {
     // Empirically pinned on 2026-08-09. OpenCode 1.18.15 loads the default
@@ -15,26 +15,41 @@ const COMPACT_FALLBACK = '## Borg Cube\nYou are in a Borg MCP multi-agent coordi
     'Use MCP tool borg_regen to get full context and recent activity.';
 const KICKOFF_MARKER = 'borg-opencode-correlation:';
 const RECOVERY_MARKER = 'borg-opencode-session-orientation:';
+export const OPENCODE_INJECTED_ENTRY_MARKER = '<!-- borg-opencode-injected-entry -->';
+export const BORG_OPENCODE_LAUNCH_NONCE_ENV = 'BORG_OPENCODE_LAUNCH_NONCE';
 const PLUGIN_REL_PATH = path.join('.config', 'opencode', 'plugins', 'borg-orient.js');
 /** Pure, dependency-injected behavior core. Its emitted JavaScript function
  * body is also embedded in the installed self-contained plugin. */
 export function createOpenCodePluginCore(deps, options) {
     const claimedSessions = new Set();
-    const textFromMessages = (messages) => messages
-        .flatMap((message) => Array.isArray(message?.parts) ? message.parts : [])
-        .filter((part) => part?.type === 'text' && typeof part.text === 'string')
-        .map((part) => part.text)
-        .join('\n');
     const recoveryIdentity = `${options.recoveryMarker}${options.pluginVersion}`;
     const recoveryComment = `<!-- ${recoveryIdentity} -->`;
+    const textParts = (message) => Array.isArray(message?.parts)
+        ? message.parts.filter((part) => part?.type === 'text' && typeof part.text === 'string')
+        : [];
+    const isInjectedEntry = (message) => {
+        const parts = textParts(message);
+        return message?.info?.role === 'user' && parts.length >= 2 &&
+            parts[1]?.text === options.injectedEntryMarker;
+    };
+    const isOwnedKickoff = (message) => {
+        if (!options.kickoffNonce || message?.info?.role !== 'user' || isInjectedEntry(message))
+            return false;
+        const identity = `<!-- ${options.kickoffMarker}${options.kickoffNonce} -->`;
+        return textParts(message).some((part) => part.text.endsWith(identity));
+    };
+    const isOwnedRecovery = (message) => {
+        const parts = textParts(message);
+        return message?.info?.role === 'user' && parts.length >= 2 &&
+            parts[1]?.text === recoveryComment;
+    };
+    const hasRecoveryBlocker = (messages) => messages.some((message) => isOwnedKickoff(message) || isOwnedRecovery(message) ||
+        (message?.info?.role === 'user' && !isInjectedEntry(message)));
     const recoverNewSession = async (sessionID) => {
         try {
             for (let attempt = 0; attempt < options.kickoffPollAttempts; attempt++) {
                 const messages = await deps.listMessages(sessionID);
-                const text = textFromMessages(messages);
-                if (text.includes(options.kickoffMarker) || text.includes(recoveryIdentity))
-                    return;
-                if (messages.length > 0)
+                if (hasRecoveryBlocker(messages))
                     return;
                 if (attempt + 1 < options.kickoffPollAttempts)
                     await deps.wait(options.pollDelayMs);
@@ -43,16 +58,13 @@ export function createOpenCodePluginCore(deps, options) {
             if (!orientation)
                 return;
             const beforeSubmit = await deps.listMessages(sessionID);
-            const beforeText = textFromMessages(beforeSubmit);
-            if (beforeText.includes(options.kickoffMarker) || beforeText.includes(recoveryIdentity))
+            if (hasRecoveryBlocker(beforeSubmit))
                 return;
-            if (beforeSubmit.length > 0)
-                return;
-            await deps.submitPrompt(sessionID, `${orientation}\n\n${recoveryComment}`);
+            await deps.submitPrompt(sessionID, orientation, recoveryComment);
             // promptAsync is not idempotent. Confirmation may retry, submission may not.
             for (let attempt = 0; attempt < options.confirmationPollAttempts; attempt++) {
                 const messages = await deps.listMessages(sessionID);
-                if (textFromMessages(messages).includes(recoveryIdentity))
+                if (messages.some(isOwnedRecovery))
                     return;
                 if (attempt + 1 < options.confirmationPollAttempts)
                     await deps.wait(options.pollDelayMs);
@@ -122,11 +134,11 @@ export default async function (ctx) {
       return Array.isArray(result.data) ? result.data : [];
     },
     renderOrientation: runRegen,
-    submitPrompt: async (sessionID, text) => {
+    submitPrompt: async (sessionID, text, marker) => {
       await ctx.client.session.promptAsync({
         path: { id: sessionID },
         query: { directory: ctx.directory },
-        body: { parts: [{ type: 'text', text }] },
+        body: { parts: [{ type: 'text', text }, { type: 'text', text: marker }] },
       });
     },
     audit: (messages) => evaluateAudit(messages),
@@ -134,13 +146,16 @@ export default async function (ctx) {
     ...${JSON.stringify({
         pluginVersion: version,
         kickoffMarker: KICKOFF_MARKER,
+        kickoffNonce: '',
         recoveryMarker: RECOVERY_MARKER,
+        injectedEntryMarker: OPENCODE_INJECTED_ENTRY_MARKER,
         kickoffPollAttempts: 6,
         confirmationPollAttempts: 6,
         pollDelayMs: 200,
         compactFallback: COMPACT_FALLBACK,
     })},
     enabled: process.env.BORG_SESSION === '1',
+    kickoffNonce: process.env[${JSON.stringify(BORG_OPENCODE_LAUNCH_NONCE_ENV)}] || '',
   });
 }
 `;
@@ -153,9 +168,29 @@ export function installBorgPlugin(options = {}) {
     const pluginPath = openCodePluginPath(options.homeDir);
     const source = buildBorgPluginSource(options.version ?? getPackageVersion());
     try {
-        if (fs.existsSync(pluginPath) && fs.readFileSync(pluginPath, 'utf-8') === source)
+        if (!isCanonicalPath(pluginPath))
             return;
+        try {
+            if (fs.lstatSync(pluginPath).isSymbolicLink())
+                return;
+            if (fs.readFileSync(pluginPath, 'utf-8') === source)
+                return;
+        }
+        catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
+                return;
+        }
         fs.mkdirSync(path.dirname(pluginPath), { recursive: true });
+        if (!isCanonicalPath(pluginPath))
+            return;
+        try {
+            if (fs.lstatSync(pluginPath).isSymbolicLink())
+                return;
+        }
+        catch (error) {
+            if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
+                return;
+        }
         fs.writeFileSync(pluginPath, source, 'utf-8');
     }
     catch {

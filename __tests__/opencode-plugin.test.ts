@@ -3,9 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  BORG_OPENCODE_LAUNCH_NONCE_ENV,
   buildBorgPluginSource,
   createOpenCodePluginCore,
   installBorgPlugin,
+  OPENCODE_INJECTED_ENTRY_MARKER,
   openCodePluginPath,
 } from '../src/opencode-plugin';
 
@@ -17,15 +19,15 @@ afterEach(() => {
 
 function harness(messages: unknown[][] = [[]], enabled = true) {
   let read = 0;
-  const submitted: Array<{ sessionID: string; text: string }> = [];
+  const submitted: Array<{ sessionID: string; text: string; marker: string }> = [];
   const deferred: Array<Promise<void>> = [];
   const deps = {
     defer: (task: () => Promise<void>) => { deferred.push(task()); },
     wait: vi.fn(async () => {}),
     listMessages: vi.fn(async () => messages[Math.min(read++, messages.length - 1)] ?? []),
     renderOrientation: vi.fn(async (source: string) => `orientation:${source}`),
-    submitPrompt: vi.fn(async (sessionID: string, text: string) => {
-      submitted.push({ sessionID, text });
+    submitPrompt: vi.fn(async (sessionID: string, text: string, marker: string) => {
+      submitted.push({ sessionID, text, marker });
     }),
     audit: vi.fn(() => null as string | null),
   };
@@ -33,7 +35,9 @@ function harness(messages: unknown[][] = [[]], enabled = true) {
     enabled,
     pluginVersion: '3.4.0',
     kickoffMarker: 'borg-opencode-correlation:',
+    kickoffNonce: 'abc',
     recoveryMarker: 'borg-opencode-session-orientation:',
+    injectedEntryMarker: OPENCODE_INJECTED_ENTRY_MARKER,
     kickoffPollAttempts: 2,
     confirmationPollAttempts: 2,
     pollDelayMs: 1,
@@ -69,7 +73,10 @@ describe('OpenCode plugin core', () => {
 
   it('submits one marked recovery turn for an empty New session and only confirms afterward', async () => {
     const marker = '<!-- borg-opencode-session-orientation:3.4.0 -->';
-    const h = harness([[], [], [], [{ info: { role: 'user' }, parts: [{ type: 'text', text: marker }] }]]);
+    const h = harness([[], [], [], [{ info: { role: 'user' }, parts: [
+      { type: 'text', text: 'orientation:clear' },
+      { type: 'text', text: marker },
+    ] }]]);
     await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'new' } } } });
     await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'new' } } } });
     await Promise.all(h.deferred);
@@ -77,9 +84,36 @@ describe('OpenCode plugin core', () => {
     expect(h.submitted).toHaveLength(1);
     expect(h.submitted[0]).toEqual({
       sessionID: 'new',
-      text: `orientation:clear\n\n${marker}`,
+      text: 'orientation:clear',
+      marker,
     });
     expect(h.deps.listMessages).toHaveBeenCalledTimes(4);
+  });
+
+  it('ignores a marked Borg inbox entry even when foreign text contains recovery markers', async () => {
+    const injected = { info: { role: 'user' }, parts: [
+      {
+        type: 'text',
+        text: 'foreign borg-opencode-correlation:abc borg-opencode-session-orientation:3.4.0',
+      },
+      { type: 'text', text: OPENCODE_INJECTED_ENTRY_MARKER },
+      { type: 'text', text: 'audit nudge appended by another hook' },
+    ] };
+    const h = harness([[], [injected]]);
+    await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'foreign' } } } });
+    await Promise.all(h.deferred);
+    expect(h.deps.submitPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat assistant-authored marker text as launcher or recovery identity', async () => {
+    const assistant = { info: { role: 'assistant' }, parts: [{
+      type: 'text',
+      text: '<!-- borg-opencode-correlation:abc --> <!-- borg-opencode-session-orientation:3.4.0 -->',
+    }] };
+    const h = harness([[], [assistant]]);
+    await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'assistant' } } } });
+    await Promise.all(h.deferred);
+    expect(h.deps.submitPrompt).toHaveBeenCalledTimes(1);
   });
 
   it('does not interrupt a user prompt that wins the deferred New-session race', async () => {
@@ -125,7 +159,7 @@ describe('generated OpenCode plugin artifact', () => {
   });
 
   it('installs at the shared canonical path idempotently', () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'borg-opencode-plugin-'));
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'borg-opencode-plugin-')));
     roots.push(home);
     const expected = buildBorgPluginSource('3.4.0');
     installBorgPlugin({ homeDir: home, version: '3.4.0' });
@@ -136,10 +170,27 @@ describe('generated OpenCode plugin artifact', () => {
     expect(fs.statSync(pathname).mtimeMs).toBe(before);
   });
 
+  it('refuses a symlinked plugin file without changing its target', () => {
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'borg-opencode-plugin-link-')));
+    roots.push(home);
+    const pathname = openCodePluginPath(home);
+    const target = path.join(home, 'operator-data.txt');
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    fs.writeFileSync(target, 'operator data');
+    fs.symlinkSync(target, pathname);
+
+    installBorgPlugin({ homeDir: home, version: '3.4.0' });
+
+    expect(fs.lstatSync(pathname).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, 'utf8')).toBe('operator data');
+  });
+
   it('loads as self-contained ESM and uses the measured 1.17.18 client shape', async () => {
     vi.useFakeTimers();
     const priorSession = process.env.BORG_SESSION;
+    const priorNonce = process.env[BORG_OPENCODE_LAUNCH_NONCE_ENV];
     process.env.BORG_SESSION = '1';
+    process.env[BORG_OPENCODE_LAUNCH_NONCE_ENV] = 'artifact-nonce';
     try {
       const source = buildBorgPluginSource('3.4.0');
       const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
@@ -174,12 +225,14 @@ describe('generated OpenCode plugin artifact', () => {
         path: { id: 'new-session' },
         query: { directory: '/repo' },
         body: { parts: [{ type: 'text', text: expect.stringContaining(
-          '<!-- borg-opencode-session-orientation:3.4.0 -->',
-        ) }] },
+          'measured orientation',
+        ) }, { type: 'text', text: '<!-- borg-opencode-session-orientation:3.4.0 -->' }] },
       });
     } finally {
       if (priorSession === undefined) delete process.env.BORG_SESSION;
       else process.env.BORG_SESSION = priorSession;
+      if (priorNonce === undefined) delete process.env[BORG_OPENCODE_LAUNCH_NONCE_ENV];
+      else process.env[BORG_OPENCODE_LAUNCH_NONCE_ENV] = priorNonce;
       vi.useRealTimers();
     }
   });
