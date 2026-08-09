@@ -443,10 +443,12 @@ describe('runUpdate', () => {
       },
     }, d)).resolves.toBe(1);
 
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
-      'Server update failed during agent integration refresh and health check: borg-clear-rewake: missing.',
-    ));
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('Next: borg update --yes'));
+    const output = vi.mocked(d.stderr).mock.calls.map(([text]) => text).join('');
+    expect(output).toContain(
+      'Updated borgmcp@2.3.0 and borgmcp-server@0.4.0; running identities and protocol verified.',
+    );
+    expect(output).toContain('Agent integration refresh and health check failed: borg-clear-rewake: missing.');
+    expect(output).not.toContain('Server update failed');
   });
 
   it('accepts a stopped server only when controller and prepared runtime match target', async () => {

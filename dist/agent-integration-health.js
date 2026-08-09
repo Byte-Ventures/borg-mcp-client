@@ -103,8 +103,32 @@ export function renderAgentIntegrationHealth(report) {
         ...report.hookConfigs.map((item) => (`  ${item.status}: ${item.path}${item.detail ? ` (${item.detail})` : ''}`)),
         `OpenCode borg-orient.js plugin: ${report.openCodePlugin.present ? 'present' : 'absent'} (${report.openCodePlugin.path})`,
     ];
-    if (report.issues.length > 0)
-        lines.push('Repair: borg update --yes');
+    for (const bin of report.bins) {
+        switch (bin.status) {
+            case 'missing':
+                lines.push(`Repair missing ${bin.name}: npm install --global borgmcp@${report.expectedVersion} --ignore-scripts`);
+                break;
+            case 'wrong-owner':
+            case 'version-skew':
+                lines.push(`Fix PATH so ${bin.name} resolves to borgmcp@${report.expectedVersion}, then run borg doctor.`);
+                break;
+            case 'unreadable':
+                lines.push(`Fix or replace unreadable ${bin.name}, then run borg doctor.`);
+                break;
+            case 'ok':
+                break;
+        }
+    }
+    for (const config of report.hookConfigs) {
+        if (config.status === 'stale') {
+            lines.push('Repair stale managed hooks: borg update --yes');
+        }
+        else if (config.status === 'invalid') {
+            lines.push(config.detail?.startsWith('inventory failed:')
+                ? `Restore readable, non-symlinked hook inventory path ${config.path}, then run borg doctor.`
+                : `Repair invalid managed hook config ${config.path}, then run borg update --yes.`);
+        }
+    }
     return `${lines.join('\n')}\n`;
 }
 export function assertAgentIntegrationHealthy(report) {
@@ -118,11 +142,18 @@ export function runDoctor(options = {}) {
     return report.issues.length === 0 ? 0 : 1;
 }
 export function warnIfAgentIntegrationUnhealthy(options = {}) {
-    const report = inspectAgentIntegrationHealth(options);
-    if (report.issues.length === 0)
-        return true;
-    (options.stderr ?? ((text) => process.stderr.write(text)))(`Warning: Borg agent integration is incomplete or version-skewed.\n${renderAgentIntegrationHealth(report)}`);
-    return false;
+    const stderr = options.stderr ?? ((text) => process.stderr.write(text));
+    try {
+        const report = inspectAgentIntegrationHealth(options);
+        if (report.issues.length === 0)
+            return true;
+        stderr(`Warning: Borg agent integration is incomplete or version-skewed.\n${renderAgentIntegrationHealth(report)}`);
+        return false;
+    }
+    catch (error) {
+        stderr(`Warning: Borg agent integration health check failed; launch continues: ${error instanceof Error ? error.message : String(error)}\n`);
+        return false;
+    }
 }
 /** Update-time whole-integration refresh. Attempt each independent surface so
  * one malformed config does not hide later repairs, then aggregate failures. */
@@ -132,13 +163,15 @@ export function refreshAndVerifyManagedAgentIntegrations() {
         refreshManagedAgentMcpConfigs();
     }
     catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
+        failures.push(`${error instanceof Error ? error.message : String(error)}. ` +
+            'Repair the named agent MCP config, then rerun borg update --yes');
     }
     try {
         refreshManagedAgentHookConfigs();
     }
     catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
+        failures.push(`${error instanceof Error ? error.message : String(error)}. ` +
+            'Repair the named managed hook config, then rerun borg update --yes');
     }
     try {
         assertAgentIntegrationHealthy(inspectAgentIntegrationHealth());

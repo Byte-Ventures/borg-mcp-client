@@ -424,6 +424,23 @@ describe('version-stable managed hook refresh', () => {
     expect(JSON.parse(fs.readFileSync(codexPath, 'utf8')).hooks.UserPromptSubmit[0].hooks[0].command)
       .toBe('borg-log-audit');
   });
+
+  it('refuses a symlinked intermediate .borg directory', () => {
+    const home = path.join(tmpDir, 'home');
+    const externalBorg = path.join(tmpDir, 'external-borg');
+    const externalSettings = path.join(externalBorg, 'worktrees', 'repo', 'seat', '.claude', 'settings.local.json');
+    fs.mkdirSync(path.dirname(externalSettings), { recursive: true });
+    const stale = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{
+      type: 'command',
+      command: '/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/regen.js',
+    }] }] } });
+    fs.writeFileSync(externalSettings, stale);
+    fs.mkdirSync(home, { recursive: true });
+    fs.symlinkSync(externalBorg, path.join(home, '.borg'));
+
+    expect(refreshManagedAgentHookConfigs({ homeDir: home })).toEqual([]);
+    expect(fs.readFileSync(externalSettings, 'utf8')).toBe(stale);
+  });
 });
 
 describe('native agent registration roots', () => {

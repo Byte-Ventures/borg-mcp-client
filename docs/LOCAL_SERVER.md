@@ -202,8 +202,8 @@ installed shared packages, controller identity, prepared artifact and integrity,
 and any running artifact and pinned-TLS protocol identity to agree. A previously
 stopped server remains stopped; matching controller and prepared runtime are
 reported as `prepared; still stopped` without inventing a live protocol check.
-An absent server is skipped rather than installed. Partial completion prints the
-safe retry command `borg update --yes`. Borg never starts a stopped server,
+An absent server is skipped rather than installed. Partial completion reports
+the verified state and status-specific recovery. Borg never starts a stopped server,
 daemonizes, or restarts agent processes. After the package pair verifies, the
 command replaces stale absolute `borgmcp` package launch paths in Claude Code,
 Codex, and OpenCode MCP registrations and managed hooks with version-stable
@@ -214,7 +214,9 @@ noncanonical worktrees heal when Borg next launches or assimilates them.
 
 `borg doctor` performs the same bin-owner and version checks without changing
 state. It inventories managed hook files and the OpenCode orientation plugin,
-and names `borg update --yes` when a hook bin is missing or version-skewed.
+and reports status-specific recovery: reinstall a missing bin, correct PATH for
+the wrong package or version, run `borg update --yes` for stale managed hooks,
+or repair a named invalid configuration before rerunning update.
 
 `borg server update` remains the server-runtime-only command. It verifies and
 activates the server artifact but deliberately does not rewrite the global

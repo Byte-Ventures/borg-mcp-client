@@ -222,7 +222,7 @@ function commandMatches(entryCommand, bareName, absolutePath) {
  *      absolute command — always owned, no marker required (fixes neutral-path
  *      false negatives that broke idempotency)
  *  (c) Foreign-install heuristic: absolute path ending in an owned basename
- *      AND containing a borg package marker (borgmcp|borg-mcp) in the path
+ *      immediately below an exact borgmcp|borg-mcp/dist package path
  *  This prevents false-positive ownership of unrelated scripts that happen
  *  to share a basename (e.g. /opt/custom-tool/regen.js). */
 function ownedCanonical(command) {
@@ -246,9 +246,16 @@ function ownedCanonical(command) {
         return AUDIT_HOOK_COMMAND;
     if (command === FOREIGN_PATH_REMINDER_HOOK_COMMAND || stripped === resolveForeignPathReminderPath())
         return FOREIGN_PATH_REMINDER_HOOK_COMMAND;
-    // (c) Foreign-install heuristic: absolute path + owned basename + borg marker
-    if (stripped.startsWith('/') && (stripped.includes('borgmcp') || stripped.includes('borg-mcp'))) {
-        const name = stripped.split('/').pop() ?? '';
+    // (c) Foreign-install heuristic: require exact path segments shaped like a
+    // package root. A substring such as /opt/borgmcp-tools/ is not ownership.
+    const segments = stripped.split('/');
+    const packageIndex = segments.length - 3;
+    const packageShaped = packageIndex >= 0 &&
+        (segments[packageIndex] === 'borgmcp' || segments[packageIndex] === 'borg-mcp') &&
+        segments[packageIndex + 1] === 'dist' &&
+        packageIndex + 2 === segments.length - 1;
+    if (stripped.startsWith('/') && packageShaped) {
+        const name = segments.at(-1) ?? '';
         if (name === 'regen.js')
             return HOOK_COMMAND;
         if (name === 'clear-rewake.js')
@@ -319,6 +326,12 @@ function migrateAndDedupOwnedHooks(entries) {
     }
     return changed;
 }
+function globalManagedAgentHookConfigPaths(homeDir) {
+    return [
+        path.join(homeDir, '.claude', 'settings.json'),
+        path.join(homeDir, '.codex', 'hooks.json'),
+    ];
+}
 function realDirectory(pathname) {
     try {
         const stat = fs.lstatSync(pathname);
@@ -333,11 +346,11 @@ function realDirectory(pathname) {
  * traversed component must be a real directory; symlinks are never followed.
  */
 export function managedAgentHookConfigPaths(homeDir = CONFIG_HOME) {
-    const paths = [
-        path.join(homeDir, '.claude', 'settings.json'),
-        path.join(homeDir, '.codex', 'hooks.json'),
-    ];
-    const root = path.join(homeDir, '.borg', 'worktrees');
+    const paths = globalManagedAgentHookConfigPaths(homeDir);
+    const borgDir = path.join(homeDir, '.borg');
+    if (!realDirectory(borgDir))
+        return paths;
+    const root = path.join(borgDir, 'worktrees');
     if (!realDirectory(root))
         return paths;
     for (const repo of fs.readdirSync(root, { withFileTypes: true })) {
@@ -397,7 +410,15 @@ export function refreshManagedAgentHookConfigs(options = {}) {
     const homeDir = options.homeDir ?? CONFIG_HOME;
     const refreshed = [];
     const failures = [];
-    for (const configPath of managedAgentHookConfigPaths(homeDir)) {
+    let configPaths = globalManagedAgentHookConfigPaths(homeDir);
+    try {
+        configPaths = managedAgentHookConfigPaths(homeDir);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push(`hook inventory ${path.join(homeDir, '.borg', 'worktrees')}: ${message}`);
+    }
+    for (const configPath of configPaths) {
         try {
             if (refreshHookFile(configPath))
                 refreshed.push(configPath);
@@ -417,7 +438,19 @@ export function refreshManagedAgentHookConfigs(options = {}) {
 }
 /** Read-only mirror of the updater's stale-command predicate. */
 export function inspectManagedAgentHookConfigs(homeDir = CONFIG_HOME) {
-    return managedAgentHookConfigPaths(homeDir).map((configPath) => {
+    let configPaths = globalManagedAgentHookConfigPaths(homeDir);
+    let inventoryIssue = null;
+    try {
+        configPaths = managedAgentHookConfigPaths(homeDir);
+    }
+    catch (error) {
+        inventoryIssue = {
+            path: path.join(homeDir, '.borg', 'worktrees'),
+            status: 'invalid',
+            detail: `inventory failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+    }
+    const health = configPaths.map((configPath) => {
         if (!fs.existsSync(configPath))
             return { path: configPath, status: 'absent' };
         try {
@@ -446,6 +479,9 @@ export function inspectManagedAgentHookConfigs(homeDir = CONFIG_HOME) {
             };
         }
     });
+    if (inventoryIssue)
+        health.push(inventoryIssue);
+    return health;
 }
 /** Strict canonical match. Quoted bare and legacy path forms are owned but
  * require migration before they count as the one current command form. */

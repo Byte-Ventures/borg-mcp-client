@@ -112,8 +112,8 @@ export function updateHelpText(version) {
         `and runtime are updated. Alternate registries and unsupported or ambiguous package-manager\n` +
         `provenance fail closed with manual-update guidance.\n\n` +
         `If no local server is installed, the server phase is skipped. A failure after the client\n` +
-        `succeeds is reported as partial completion with the safe retry command. Borg never starts a\n` +
-        `stopped server. After package verification, Borg replaces stale borgmcp package launch paths\n` +
+        `succeeds is reported as partial completion with status-specific recovery. Borg never starts\n` +
+        `a stopped server. After package verification, Borg replaces stale borgmcp package launch paths\n` +
         `in MCP registrations and managed agent hooks while preserving their other settings. It\n` +
         `leaves absent registrations and borg entries that point to another command unchanged. Borg\n` +
         `never restarts agent processes;\n` +

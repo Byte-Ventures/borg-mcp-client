@@ -501,8 +501,7 @@ export async function runUpdate(options, deps) {
             await deps.refreshAgentIntegrations();
         }
         catch (error) {
-            deps.stderr(`Client updated, but agent integration refresh and health check failed: ${errorMessage(error, 'unknown failure')}.\n` +
-                `Repair with: borg update --yes\n`);
+            deps.stderr(`Client updated, but agent integration refresh and health check failed: ${errorMessage(error, 'unknown failure')}.\n`);
             return 1;
         }
         deps.stdout(`Updated ${CLIENT_PACKAGE}@${pair.client.version}. Local server: skipped (not installed).\n` +
@@ -611,9 +610,17 @@ export async function runUpdate(options, deps) {
             retryCommand = 'borg server status';
             await deps.verifyRunningProtocol(status.endpoint);
         }
-        failureStage = 'agent integration refresh and health check';
-        retryCommand = 'borg update --yes';
-        await deps.refreshAgentIntegrations();
+        try {
+            await deps.refreshAgentIntegrations();
+        }
+        catch (error) {
+            const verifiedOutcome = state === 'stopped'
+                ? 'prepared runtime verified; server remains stopped'
+                : 'running identities and protocol verified';
+            deps.stderr(`Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; ${verifiedOutcome}.\n` +
+                `Agent integration refresh and health check failed: ${errorMessage(error, 'unknown failure')}.\n`);
+            return signalExitCode(error) ?? 1;
+        }
         deps.stdout(state === 'stopped'
             ? (`Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}: prepared.\n` +
                 renderStoppedServiceRecovery(status))

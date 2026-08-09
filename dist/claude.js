@@ -524,9 +524,14 @@ function ensureResolvedCliConfigured(cli) {
     catch (err) {
         console.error(`${consolePrefix()}${chalk.yellow(`warning: ${label} integration check failed: ${err?.message ?? err}`)}`);
     }
-    warnIfAgentIntegrationUnhealthy({
-        stderr: (text) => console.error(`${consolePrefix()}${chalk.yellow(text.trimEnd())}`),
-    });
+    try {
+        warnIfAgentIntegrationUnhealthy({
+            stderr: (text) => console.error(`${consolePrefix()}${chalk.yellow(text.trimEnd())}`),
+        });
+    }
+    catch (err) {
+        console.error(`${consolePrefix()}${chalk.yellow(`warning: agent integration health check failed; launch continues: ${err?.message ?? err}`)}`);
+    }
 }
 function isEntryInvocation() {
     try {

@@ -192,8 +192,10 @@ and worktrees outside `~/.borg/worktrees/<repo>/<name>` unchanged; those
 noncanonical worktrees heal when Borg next launches or assimilates them.
 
 Run `borg doctor` for a read-only inventory of the five hook bins, their owning
-`borgmcp` version, managed hook files, and the OpenCode orientation plugin. A
-missing or version-skewed bin reports the exact repair command.
+`borgmcp` version, managed hook files, and the OpenCode orientation plugin. It
+names a package reinstall for a missing bin, a PATH correction for a bin owned
+by the wrong package or version, `borg update --yes` for stale managed hooks,
+and the invalid file that must be repaired before update can rewrite it.
 
 ## Troubleshooting
 

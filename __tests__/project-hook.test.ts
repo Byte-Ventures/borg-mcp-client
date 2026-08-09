@@ -164,7 +164,10 @@ describe('addProjectSessionStartHook', () => {
     fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
     fs.writeFileSync(settingsPath(), JSON.stringify({
       hooks: { SessionStart: [
-        { matcher: '*', hooks: [{ type: 'command', command: '/opt/custom-tool/regen.js' }] },
+        { matcher: '*', hooks: [
+          { type: 'command', command: '/opt/custom-tool/regen.js' },
+          { type: 'command', command: '/opt/borgmcp-tools/regen.js' },
+        ] },
       ] },
     }));
 
@@ -172,6 +175,7 @@ describe('addProjectSessionStartHook', () => {
     const entries = JSON.parse(fs.readFileSync(settingsPath(), 'utf-8')).hooks.SessionStart;
     // Unrelated script preserved as-is.
     expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === '/opt/custom-tool/regen.js'))).toBe(true);
+    expect(entries.some((e: any) => e.hooks?.some((h: any) => h.command === '/opt/borgmcp-tools/regen.js'))).toBe(true);
     // Canonical regen still appended (unrelated script doesn't count).
     expect(entries.filter((e: any) => e.hooks?.some((h: any) => h.command === 'borg-regen'))).toHaveLength(1);
   });
