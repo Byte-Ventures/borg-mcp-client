@@ -30,6 +30,9 @@ export function ensureCliMcpConfigured(cli, deps = defaultDeps) {
             if (deps.isOpenCodeConfigured())
                 return false;
             deps.addOpenCode();
+            if (!deps.isOpenCodeConfigured()) {
+                throw new Error('OpenCode MCP registration could not be verified after setup');
+            }
             return true;
     }
 }

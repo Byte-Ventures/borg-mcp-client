@@ -16,13 +16,25 @@ describe('ensureCliMcpConfigured', () => {
   it.each([
     ['claude', 'isClaudeConfigured', 'addClaude'],
     ['codex', 'isCodexConfigured', 'addCodex'],
-    ['opencode', 'isOpenCodeConfigured', 'addOpenCode'],
   ] as const)('adds borg only for an unconfigured %s CLI', (cli, checkName, addName) => {
     const deps = makeDeps();
 
     expect(ensureCliMcpConfigured(cli, deps)).toBe(true);
     expect(deps[checkName]).toHaveBeenCalledOnce();
     expect(deps[addName]).toHaveBeenCalledOnce();
+  });
+
+  it('adds OpenCode and proves the registration is effective before returning', () => {
+    let configured = false;
+    const deps = {
+      ...makeDeps(),
+      isOpenCodeConfigured: vi.fn(() => configured),
+      addOpenCode: vi.fn(() => { configured = true; }),
+    };
+
+    expect(ensureCliMcpConfigured('opencode', deps)).toBe(true);
+    expect(deps.isOpenCodeConfigured).toHaveBeenCalledTimes(2);
+    expect(deps.addOpenCode).toHaveBeenCalledOnce();
   });
 
   it.each(['claude', 'codex', 'opencode'] as const)('does not rewrite an existing %s MCP registration', (cli) => {
@@ -41,5 +53,15 @@ describe('ensureCliMcpConfigured', () => {
     const deps = { ...makeDeps(), addOpenCode };
 
     expect(() => ensureCliMcpConfigured('opencode', deps)).toThrow('opencode CLI not found');
+  });
+
+  it('rejects an ineffective OpenCode registration write', () => {
+    const deps = makeDeps();
+
+    expect(() => ensureCliMcpConfigured('opencode', deps)).toThrow(
+      'OpenCode MCP registration could not be verified after setup',
+    );
+    expect(deps.isOpenCodeConfigured).toHaveBeenCalledTimes(2);
+    expect(deps.addOpenCode).toHaveBeenCalledOnce();
   });
 });
