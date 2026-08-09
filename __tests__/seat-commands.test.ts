@@ -429,6 +429,37 @@ describe('borg launch', () => {
     }));
   });
 
+  it('reports an unknown --cube name without denying a registered drone match', async () => {
+    const cube = activeCube();
+    const { deps, stderr, launchBareBorg } = depsFor([cube]);
+
+    expect(await runLaunchSeat({ target: cube.droneLabel, cube: 'typo-cube' }, deps)).toBe(1);
+    expect(stderr.join('')).toBe(
+      "borg launch: no cube named 'typo-cube' is registered on this machine. " +
+      "Run `borg seats` to list this machine's cubes and drones.\n",
+    );
+    expect(launchBareBorg).not.toHaveBeenCalled();
+  });
+
+  it('reports a target missing from the selected cube without denying its other-cube match', async () => {
+    const first = activeCube();
+    const second = activeCube({
+      cubeId: CUBE_B,
+      droneId: DRONE_B,
+      name: 'beta',
+      droneLabel: 'reviewer-bbbbbbbb',
+      worktree: '/work/b',
+    });
+    const { deps, stderr, launchBareBorg } = depsFor([first, second]);
+
+    expect(await runLaunchSeat({ target: first.droneLabel, cube: 'beta' }, deps)).toBe(1);
+    expect(stderr.join('')).toBe(
+      "borg launch: no drone matches 'builder-aaaaaaaa' in cube 'beta'. " +
+      "Run `borg seats` to list the drones you can launch.\n",
+    );
+    expect(launchBareBorg).not.toHaveBeenCalled();
+  });
+
   it('reports an unknown target and points to borg seats', async () => {
     const { deps, stderr, launchBareBorg } = depsFor([activeCube()]);
 

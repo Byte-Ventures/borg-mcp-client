@@ -135,7 +135,8 @@ export async function runLaunchSeat(args, deps) {
     if (args.cube) {
         const cubeIds = new Set(rows.filter((row) => row.cubeName === args.cube).map((row) => row.cubeId));
         if (cubeIds.size === 0) {
-            deps.stderr(`borg launch: no drone matches '${args.target}' on this machine. Run \`borg seats\` to list the drones you can launch.\n`);
+            deps.stderr(`borg launch: no cube named '${args.cube}' is registered on this machine. ` +
+                `Run \`borg seats\` to list this machine's cubes and drones.\n`);
             return 1;
         }
         rows = rows.filter((row) => cubeIds.has(row.cubeId));
@@ -149,6 +150,10 @@ export async function runLaunchSeat(args, deps) {
             deps.stderr(`borg launch: drone '${args.target}' is not in this machine's seat registry. ` +
                 `The registry is local to each machine and lists only drones assimilated here. ` +
                 `Run \`borg seats\` on the machine where the drone was created.\n`);
+        }
+        else if (args.cube) {
+            deps.stderr(`borg launch: no drone matches '${args.target}' in cube '${args.cube}'. ` +
+                `Run \`borg seats\` to list the drones you can launch.\n`);
         }
         else {
             deps.stderr(`borg launch: no drone matches '${args.target}' on this machine. ` +
