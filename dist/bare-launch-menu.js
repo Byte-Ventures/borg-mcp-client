@@ -13,14 +13,7 @@ const TERMINAL_SEAT_STATUSES = new Set([
 export async function discoverLiveLaunchMenuCandidates(deps) {
     const identities = await deps.readAllProjectIdentities();
     const cubeIds = [...new Set(identities.map(({ cube }) => cube.cubeId))];
-    const discovered = (await Promise.all(cubeIds.map(async (cubeId) => {
-        try {
-            return await deps.discoverDroneCandidates(cubeId);
-        }
-        catch {
-            return [];
-        }
-    }))).flat();
+    const discovered = (await Promise.all(cubeIds.map((cubeId) => deps.discoverDroneCandidates(cubeId)))).flat();
     const candidates = [];
     const seen = new Set();
     for (const candidate of discovered) {

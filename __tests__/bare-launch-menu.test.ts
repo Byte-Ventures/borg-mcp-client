@@ -90,6 +90,33 @@ describe('client#362 — live sibling drone discovery', () => {
       launchAllCubeId: CUBE_ID,
     });
   });
+
+  it('fails closed before the menu when linked-worktree discovery fails', async () => {
+    const prompt = vi.fn(async () => '');
+    const resolveMenu = async () => {
+      const siblingContext = await discoverLiveLaunchMenuCandidates({
+        readAllProjectIdentities: async () => [{
+          projectPath: '/repo/alpha',
+          cube: { cubeId: CUBE_ID, droneId: ALPHA_ID, droneLabel: 'alpha', name: 'my-cube' },
+        }],
+        discoverDroneCandidates: async () => {
+          throw new Error('git worktree list failed');
+        },
+        getActiveSeatForWorktree: async () => null,
+        pathExists: () => true,
+        probeSeat: async () => 'live',
+      });
+      return runBareLaunchMenu({
+        defaultCli: 'claude',
+        otherConfiguredClis: [],
+        hasLaunchAllTargets: false,
+        droneCandidates: siblingContext.candidates,
+      }, prompt);
+    };
+
+    await expect(resolveMenu()).rejects.toThrow('git worktree list failed');
+    expect(prompt).not.toHaveBeenCalled();
+  });
 });
 
 describe('gh#967 — explicit --cli launch-all hint', () => {

@@ -79,13 +79,7 @@ export async function discoverLiveLaunchMenuCandidates(
   const identities = await deps.readAllProjectIdentities();
   const cubeIds = [...new Set(identities.map(({ cube }) => cube.cubeId))];
   const discovered = (
-    await Promise.all(cubeIds.map(async (cubeId) => {
-      try {
-        return await deps.discoverDroneCandidates(cubeId);
-      } catch {
-        return [];
-      }
-    }))
+    await Promise.all(cubeIds.map((cubeId) => deps.discoverDroneCandidates(cubeId)))
   ).flat();
 
   const candidates: Array<LaunchMenuDroneCandidate & { cubeId: string }> = [];
