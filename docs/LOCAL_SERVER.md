@@ -223,7 +223,11 @@ repair a named invalid configuration before rerunning update, or run
 `borg update --yes` to install a missing or outdated OpenCode plugin. The plugin API is
 empirically bound to OpenCode 1.18.15 with `@opencode-ai/plugin` 1.17.18; that
 SDK uses the path/query/body options shape for history reads and prompt
-submission, not the newer flat v2 call shape.
+submission, not the newer flat v2 call shape. The health gate treats OpenCode
+as configured only when `~/.config/opencode/opencode.json` contains a local
+`mcp.borg` entry with `type: "local"`. That path and shape were exercised by the
+3.2.0 config-refresh live proof (PR #390) and are part of the OpenCode 1.18.15
+compatibility gate.
 
 `borg server update` remains the server-runtime-only command. It verifies and
 activates the server artifact but deliberately does not rewrite the global

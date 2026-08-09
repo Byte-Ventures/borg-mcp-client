@@ -232,7 +232,7 @@ export function renderAgentIntegrationHealth(report: AgentIntegrationHealth): st
   if (report.openCodePlugin.status === 'missing') {
     lines.push('Repair missing OpenCode plugin: borg update --yes');
   } else if (report.openCodePlugin.status === 'outdated' && report.openCodePlugin.configured) {
-    lines.push('Repair outdated OpenCode plugin: borg update --yes');
+    lines.push('Repair OpenCode plugin: borg update --yes');
   } else if (report.openCodePlugin.status === 'unreadable') {
     lines.push(report.openCodePlugin.configured
       ? `Fix or replace unreadable OpenCode plugin ${report.openCodePlugin.path}, then run: borg update --yes`

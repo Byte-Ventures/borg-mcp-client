@@ -87,7 +87,7 @@ describe('agent integration health', () => {
       const text = renderAgentIntegrationHealth(report);
       expect(text).toContain('OpenCode borg-orient.js plugin: present');
       expect(text).not.toContain('expected 3.3.0');
-      expect(text).not.toContain('Repair outdated OpenCode plugin');
+      expect(text).not.toContain('Repair OpenCode plugin');
     },
   );
 
@@ -105,7 +105,7 @@ describe('agent integration health', () => {
       `OpenCode borg-orient.js plugin: version 3.2.0, expected 3.3.0 at ${plugin}`,
     );
     expect(renderAgentIntegrationHealth(report)).toContain(
-      'Repair outdated OpenCode plugin: borg update --yes',
+      'Repair OpenCode plugin: borg update --yes',
     );
   });
 

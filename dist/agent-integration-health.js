@@ -175,7 +175,7 @@ export function renderAgentIntegrationHealth(report) {
         lines.push('Repair missing OpenCode plugin: borg update --yes');
     }
     else if (report.openCodePlugin.status === 'outdated' && report.openCodePlugin.configured) {
-        lines.push('Repair outdated OpenCode plugin: borg update --yes');
+        lines.push('Repair OpenCode plugin: borg update --yes');
     }
     else if (report.openCodePlugin.status === 'unreadable') {
         lines.push(report.openCodePlugin.configured
