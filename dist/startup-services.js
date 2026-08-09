@@ -8,12 +8,10 @@ export async function runMcpStartupServices(readinessProbe, services, options = 
     if (readinessProbe)
         return;
     const tasks = options.openCodeFirst ? [
-        services.sessionStartHook,
         services.auditHook,
         services.openCode,
         services.sseStream,
     ] : [
-        services.sessionStartHook,
         services.auditHook,
         services.sseStream,
         services.openCode,

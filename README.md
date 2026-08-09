@@ -185,9 +185,15 @@ confirmation, and reports any manual recovery step. Use `borg update --yes` for
 a non-interactive update. A server that was stopped remains stopped, and active
 agent sessions must be restarted after the client changes. After the package
 pair verifies, Borg replaces stale absolute `borgmcp` package launch paths in
-Claude Code, Codex, and OpenCode MCP registrations with the version-stable
-`borg-mcp` command. It preserves the registration's other settings. It leaves
-absent registrations and `borg` entries that point to another command unchanged.
+Claude Code, Codex, and OpenCode MCP registrations and managed hooks with the
+version-stable shipped bin names. It preserves unrelated settings and hooks.
+It leaves absent registrations, `borg` entries that point to another command,
+and worktrees outside `~/.borg/worktrees/<repo>/<name>` unchanged; those
+noncanonical worktrees heal when Borg next launches or assimilates them.
+
+Run `borg doctor` for a read-only inventory of the five hook bins, their owning
+`borgmcp` version, managed hook files, and the OpenCode orientation plugin. A
+missing or version-skewed bin reports the exact repair command.
 
 ## Troubleshooting
 

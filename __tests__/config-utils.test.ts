@@ -31,13 +31,13 @@ import {
   isCodexSessionStartHookRegistered,
   isCodexUserPromptSubmitHookRegistered,
   isMcpServerConfigured,
+  refreshManagedAgentHookConfigs,
   refreshManagedAgentMcpConfigs,
 } from '../src/config-utils';
-import { resolveRegenPath, resolveLogAuditPath } from '../src/self-path';
-import { shellEscape } from '../src/shell-escape';
+import { resolveLogAuditPath, resolveRegenPath } from '../src/self-path';
 
-const CANONICAL_REGEN = shellEscape(resolveRegenPath());
-const CANONICAL_AUDIT = shellEscape(resolveLogAuditPath());
+const CANONICAL_REGEN = 'borg-regen';
+const CANONICAL_AUDIT = 'borg-log-audit';
 
 let tmpDir: string;
 let tmpConfig: string;
@@ -356,6 +356,76 @@ describe('version-stable MCP registrations', () => {
   });
 });
 
+describe('version-stable managed hook refresh', () => {
+  it('surgically heals global and canonical worktree hooks without following symlinks', () => {
+    const home = path.join(tmpDir, 'home');
+    const claudePath = path.join(home, '.claude', 'settings.json');
+    const codexPath = path.join(home, '.codex', 'hooks.json');
+    const canonical = path.join(home, '.borg', 'worktrees', 'repo', 'seat', '.claude', 'settings.local.json');
+    const outside = path.join(tmpDir, 'outside', '.claude', 'settings.local.json');
+    const outsideViaClaudeLink = path.join(tmpDir, 'outside-claude', 'settings.local.json');
+    const stale = "'/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/regen.js'";
+    for (const file of [claudePath, codexPath, canonical, outside, outsideViaClaudeLink]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({
+        keep: { operator: true },
+        hooks: {
+          SessionStart: [{ matcher: '*', hooks: [
+            { type: 'command', command: stale, timeout: 30 },
+            { type: 'command', command: '/opt/operator/hook' },
+          ] }],
+          OperatorEvent: [
+            { matcher: 'keep-empty', hooks: [] },
+            { matcher: 'keep-shape', metadata: { operator: true } },
+          ],
+        },
+      }));
+    }
+    fs.mkdirSync(path.join(home, '.borg', 'worktrees', 'linked-repo'), { recursive: true });
+    fs.symlinkSync(path.join(tmpDir, 'outside'), path.join(home, '.borg', 'worktrees', 'linked-repo', 'linked-seat'));
+    const claudeLinkedSeat = path.join(home, '.borg', 'worktrees', 'repo', 'claude-linked-seat');
+    fs.mkdirSync(claudeLinkedSeat, { recursive: true });
+    fs.symlinkSync(path.dirname(outsideViaClaudeLink), path.join(claudeLinkedSeat, '.claude'));
+
+    expect(refreshManagedAgentHookConfigs({ homeDir: home })).toEqual([
+      claudePath,
+      codexPath,
+      canonical,
+    ]);
+    for (const file of [claudePath, codexPath, canonical]) {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(parsed.keep).toEqual({ operator: true });
+      expect(parsed.hooks.SessionStart[0].hooks).toEqual([
+        { type: 'command', command: 'borg-regen', timeout: 30 },
+        { type: 'command', command: '/opt/operator/hook' },
+      ]);
+      expect(parsed.hooks.OperatorEvent).toEqual([
+        { matcher: 'keep-empty', hooks: [] },
+        { matcher: 'keep-shape', metadata: { operator: true } },
+      ]);
+    }
+    expect(fs.readFileSync(outside, 'utf8')).toContain('.nvm/versions/node/v22.22.2');
+    expect(fs.readFileSync(outsideViaClaudeLink, 'utf8')).toContain('.nvm/versions/node/v22.22.2');
+  });
+
+  it('aggregates invalid managed files after refreshing later files', () => {
+    const home = path.join(tmpDir, 'home');
+    const claudePath = path.join(home, '.claude', 'settings.json');
+    const codexPath = path.join(home, '.codex', 'hooks.json');
+    fs.mkdirSync(path.dirname(claudePath), { recursive: true });
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+    fs.writeFileSync(claudePath, '{bad json');
+    fs.writeFileSync(codexPath, JSON.stringify({ hooks: {
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: "'borg-log-audit'" }] }],
+    } }));
+
+    expect(() => refreshManagedAgentHookConfigs({ homeDir: home }))
+      .toThrow(/Claude Code.*settings\.json/);
+    expect(JSON.parse(fs.readFileSync(codexPath, 'utf8')).hooks.UserPromptSubmit[0].hooks[0].command)
+      .toBe('borg-log-audit');
+  });
+});
+
 describe('native agent registration roots', () => {
   it('preserves native config roots when no Borg override is configured', () => {
     const previous = {
@@ -468,32 +538,32 @@ describe('isCodexHookRegistered', () => {
 describe('gh#844 codex hook peeks (gate the writers + the consent disclosure)', () => {
   it('isCodexSessionStartHookRegistered true iff the borg-regen SessionStart hook is present', () => {
     const p = path.join(tmpDir, 'hooks.json');
-    // Write bare name — peek should NOT match (requires canonical).
+    // The unquoted bare name is the strict canonical form.
     fs.writeFileSync(p, JSON.stringify({
       hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'borg-regen' }] }] },
     }));
-    expect(isCodexSessionStartHookRegistered(p)).toBe(false);
-    // Write canonical (shell-escaped) form — peek should match.
-    fs.writeFileSync(p, JSON.stringify({
-      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: CANONICAL_REGEN }] }] },
-    }));
     expect(isCodexSessionStartHookRegistered(p)).toBe(true);
+    // A quoted bare name is owned but needs normalization before strict peek.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: "'borg-regen'" }] }] },
+    }));
+    expect(isCodexSessionStartHookRegistered(p)).toBe(false);
     fs.writeFileSync(p, JSON.stringify({ hooks: {} }));
     expect(isCodexSessionStartHookRegistered(p)).toBe(false);
   });
 
   it('isCodexUserPromptSubmitHookRegistered true iff the borg-log-audit UPS hook is present', () => {
     const p = path.join(tmpDir, 'hooks.json');
-    // Write bare name — peek should NOT match (requires canonical).
+    // The unquoted bare name is the strict canonical form.
     fs.writeFileSync(p, JSON.stringify({
       hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'borg-log-audit' }] }] },
     }));
-    expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
-    // Write canonical form — peek should match.
-    fs.writeFileSync(p, JSON.stringify({
-      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: CANONICAL_AUDIT }] }] },
-    }));
     expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(true);
+    // A quoted bare name is owned but needs normalization before strict peek.
+    fs.writeFileSync(p, JSON.stringify({
+      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: "'borg-log-audit'" }] }] },
+    }));
+    expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
     // SessionStart present but NOT UPS → still false (each hook gated independently).
     fs.writeFileSync(p, JSON.stringify({
       hooks: { SessionStart: [{ hooks: [{ type: 'command', command: CANONICAL_REGEN }] }] },
@@ -517,8 +587,8 @@ describe('gh#844 codex hook peeks (gate the writers + the consent disclosure)', 
     expect(isCodexUserPromptSubmitHookRegistered(p)).toBe(false);
   });
 
-  // gh#client#18: stale prior-install absolute paths must NOT pass strict
-  // canonical peek — they need migration to shell-escaped canonical form.
+  // Stale prior-install absolute paths must not pass strict canonical peek;
+  // they need migration to the stable bare command.
   it('stale prior-install path does NOT pass strict peek', () => {
     const p = path.join(tmpDir, 'hooks.json');
     fs.writeFileSync(p, JSON.stringify({

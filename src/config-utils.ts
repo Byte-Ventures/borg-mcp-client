@@ -28,13 +28,13 @@ import type { LaunchAccessPaths } from './launch-access.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// gh#client#18: canonical hook commands stored in JSON are shell-escaped
-// absolute paths. Bare names and stale/other-install absolute paths are
-// migrated to this form on every hook write.
-const HOOK_COMMAND = shellEscape(resolveRegenPath());
-const CLEAR_REWAKE_HOOK_COMMAND = shellEscape(resolveClearRewakePath());
-const AUDIT_HOOK_COMMAND = shellEscape(resolveLogAuditPath());
-const FOREIGN_PATH_REMINDER_HOOK_COMMAND = shellEscape(resolveForeignPathReminderPath());
+// client#394: hook commands are stable npm bin names. They intentionally stay
+// unquoted: each is a fixed single shell token with no metacharacters. Legacy
+// quoted bare names and install-specific absolute paths migrate to this form.
+const HOOK_COMMAND = 'borg-regen';
+const CLEAR_REWAKE_HOOK_COMMAND = 'borg-clear-rewake';
+const AUDIT_HOOK_COMMAND = 'borg-log-audit';
+const FOREIGN_PATH_REMINDER_HOOK_COMMAND = 'borg-foreign-path-reminder';
 const MCP_COMMAND = 'borg-mcp';
 
 /**
@@ -234,8 +234,7 @@ function addSessionStartHookAt(settingsFile: string, includeClearRewake = false)
   return true;
 }
 
-// gh#client#18: match bare names (old configs), stale absolute paths (other
-// installations), shell-escaped canonical paths, and unescaped canonical paths.
+// Match stable bare names plus legacy install-specific absolute forms.
 function commandMatches(entryCommand: string, bareName: string, absolutePath: string): boolean {
   const escaped = shellEscape(absolutePath);
   if (entryCommand === escaped || entryCommand === absolutePath || entryCommand === bareName) return true;
@@ -311,6 +310,7 @@ function migrateAndDedupOwnedHooks(entries: any[]): boolean {
   // object across all entries. Remove only the duplicate hook objects, not
   // entire entries (preserving unrelated siblings and entry metadata).
   const seenCanonicals = new Set<string>();
+  const emptiedByOwnedDedup = new Set<any>();
   for (const entry of entries) {
     if (!Array.isArray(entry?.hooks)) continue;
     const before = entry.hooks.length;
@@ -326,11 +326,13 @@ function migrateAndDedupOwnedHooks(entries: any[]): boolean {
       return true;
     });
     if (entry.hooks.length !== before) changed = true;
+    if (before > 0 && entry.hooks.length === 0) emptiedByOwnedDedup.add(entry);
   }
 
-  // Phase 3: Remove entries that became empty after dedup
+  // Phase 3: remove only entries emptied by removal of duplicate Borg-owned
+  // hooks. Pre-existing empty or unusual operator entries remain byte-stable.
   for (let i = entries.length - 1; i >= 0; i--) {
-    if (!Array.isArray(entries[i]?.hooks) || entries[i].hooks.length === 0) {
+    if (emptiedByOwnedDedup.has(entries[i])) {
       entries.splice(i, 1);
       changed = true;
     }
@@ -339,9 +341,139 @@ function migrateAndDedupOwnedHooks(entries: any[]): boolean {
   return changed;
 }
 
-/** Strict canonical match: only the shell-escaped canonical form.
- *  gh#client#18: raw unescaped paths are NOT canonical — a path with spaces
- *  or metacharacters would break at shell-fire time if not escaped. */
+export interface RefreshManagedAgentHookConfigOptions {
+  homeDir?: string;
+}
+
+export interface ManagedAgentHookConfigHealth {
+  path: string;
+  status: 'absent' | 'ok' | 'stale' | 'invalid';
+  detail?: string;
+}
+
+function realDirectory(pathname: string): boolean {
+  try {
+    const stat = fs.lstatSync(pathname);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Enumerate only Borg's canonical two-level managed-worktree layout. Every
+ * traversed component must be a real directory; symlinks are never followed.
+ */
+export function managedAgentHookConfigPaths(homeDir: string = CONFIG_HOME): string[] {
+  const paths = [
+    path.join(homeDir, '.claude', 'settings.json'),
+    path.join(homeDir, '.codex', 'hooks.json'),
+  ];
+  const root = path.join(homeDir, '.borg', 'worktrees');
+  if (!realDirectory(root)) return paths;
+
+  for (const repo of fs.readdirSync(root, { withFileTypes: true })) {
+    const repoPath = path.join(root, repo.name);
+    if (!repo.isDirectory() || !realDirectory(repoPath)) continue;
+    for (const worktree of fs.readdirSync(repoPath, { withFileTypes: true })) {
+      const worktreePath = path.join(repoPath, worktree.name);
+      if (!worktree.isDirectory() || !realDirectory(worktreePath)) continue;
+      const claudeDir = path.join(worktreePath, '.claude');
+      if (!realDirectory(claudeDir)) continue;
+      const settingsFile = path.join(claudeDir, 'settings.local.json');
+      try {
+        if (fs.lstatSync(settingsFile).isSymbolicLink()) continue;
+      } catch {
+        // No settings file in this canonical worktree; nothing to inventory.
+        continue;
+      }
+      paths.push(settingsFile);
+    }
+  }
+  return paths;
+}
+
+function refreshHookFile(configPath: string): boolean {
+  if (!fs.existsSync(configPath)) return false;
+  const config = readJsonFile(configPath);
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('top-level value is not an object');
+  }
+  const hooks = config.hooks;
+  if (hooks === undefined) return false;
+  if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) {
+    throw new Error('hooks is not an object');
+  }
+  let changed = false;
+  for (const entries of Object.values(hooks)) {
+    if (!Array.isArray(entries)) continue;
+    changed = migrateAndDedupOwnedHooks(entries) || changed;
+  }
+  if (changed) writeJsonFile(configPath, config);
+  return changed;
+}
+
+/**
+ * Heal stale Borg-owned hook commands in global agent files and canonical
+ * managed worktrees. Non-Borg hooks and noncanonical worktree roots are left
+ * untouched. Later files are still attempted when one file is invalid.
+ */
+export function refreshManagedAgentHookConfigs(
+  options: RefreshManagedAgentHookConfigOptions = {},
+): string[] {
+  const homeDir = options.homeDir ?? CONFIG_HOME;
+  const refreshed: string[] = [];
+  const failures: string[] = [];
+  for (const configPath of managedAgentHookConfigPaths(homeDir)) {
+    try {
+      if (refreshHookFile(configPath)) refreshed.push(configPath);
+    } catch (error) {
+      const label = configPath.endsWith(path.join('.codex', 'hooks.json'))
+        ? 'Codex'
+        : 'Claude Code';
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`${label} ${configPath}: ${message}`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Could not refresh managed agent hooks: ${failures.join('; ')}`);
+  }
+  return refreshed;
+}
+
+/** Read-only mirror of the updater's stale-command predicate. */
+export function inspectManagedAgentHookConfigs(
+  homeDir: string = CONFIG_HOME,
+): ManagedAgentHookConfigHealth[] {
+  return managedAgentHookConfigPaths(homeDir).map((configPath) => {
+    if (!fs.existsSync(configPath)) return { path: configPath, status: 'absent' };
+    try {
+      const config = readJsonFile(configPath);
+      if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        return { path: configPath, status: 'invalid', detail: 'top-level value is not an object' };
+      }
+      if (config.hooks === undefined) return { path: configPath, status: 'ok' };
+      if (!config.hooks || typeof config.hooks !== 'object' || Array.isArray(config.hooks)) {
+        return { path: configPath, status: 'invalid', detail: 'hooks is not an object' };
+      }
+      const copy = structuredClone(config.hooks);
+      let stale = false;
+      for (const entries of Object.values(copy)) {
+        if (Array.isArray(entries)) stale = migrateAndDedupOwnedHooks(entries) || stale;
+      }
+      return { path: configPath, status: stale ? 'stale' : 'ok' };
+    } catch (error) {
+      return {
+        path: configPath,
+        status: 'invalid',
+        detail: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+}
+
+/** Strict canonical match. Quoted bare and legacy path forms are owned but
+ * require migration before they count as the one current command form. */
 function isCanonicalCommand(entryCommand: string, canonical: string): boolean {
   return entryCommand === canonical;
 }
@@ -368,7 +500,7 @@ function hasCommandHook(entries: any[], command: string): boolean {
   );
 }
 
-/** Strict: only the shell-escaped canonical form (no bare-name fallback). */
+/** Strict: only the current unquoted bare canonical form. */
 function hasCanonicalCommandHook(entries: any[], command: string): boolean {
   return entries.some((entry: any) =>
     Array.isArray(entry?.hooks) &&

@@ -30,7 +30,6 @@ describe('MCP readiness probe mode', () => {
     let streamLockCreated = false;
     let sseFetchCount = 0;
     const services: McpStartupServices = {
-      sessionStartHook: () => { calls.push('session-hook'); },
       auditHook: () => { calls.push('audit-hook'); },
       sseStream: () => {
         calls.push('sse-stream');
@@ -135,13 +134,11 @@ process.stdin.on('data', (chunk) => {
   it('starts SSE and the other background services for a normal MCP child', async () => {
     const calls: string[] = [];
     await runMcpStartupServices(false, {
-      sessionStartHook: () => { calls.push('session-hook'); },
       auditHook: () => { calls.push('audit-hook'); },
       sseStream: () => { calls.push('sse-stream'); },
       openCode: () => { calls.push('opencode'); },
     });
     expect(calls).toEqual([
-      'session-hook',
       'audit-hook',
       'sse-stream',
       'opencode',
@@ -151,22 +148,20 @@ process.stdin.on('data', (chunk) => {
   it('isolates task failures so normal startup still reaches the SSE task', async () => {
     const calls: string[] = [];
     await runMcpStartupServices(false, {
-      sessionStartHook: () => { throw new Error('hook failed'); },
-      auditHook: () => { calls.push('audit-hook'); },
+      auditHook: () => { throw new Error('hook failed'); },
       sseStream: () => { calls.push('sse-stream'); },
       openCode: () => { calls.push('opencode'); },
     });
-    expect(calls).toEqual(['audit-hook', 'sse-stream', 'opencode']);
+    expect(calls).toEqual(['sse-stream', 'opencode']);
   });
 
   it('initializes OpenCode injection before SSE without changing the default CLI order', async () => {
     const calls: string[] = [];
     await runMcpStartupServices(false, {
-      sessionStartHook: () => { calls.push('session-hook'); },
       auditHook: () => { calls.push('audit-hook'); },
       sseStream: () => { calls.push('sse-stream'); },
       openCode: () => { calls.push('opencode'); },
     }, { openCodeFirst: true });
-    expect(calls).toEqual(['session-hook', 'audit-hook', 'opencode', 'sse-stream']);
+    expect(calls).toEqual(['audit-hook', 'opencode', 'sse-stream']);
   });
 });

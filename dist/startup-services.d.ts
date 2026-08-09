@@ -1,7 +1,6 @@
 export type McpStartupTask = () => void | Promise<void>;
 /** Required named services: omission from index wiring is a type error. */
 export interface McpStartupServices {
-    sessionStartHook: McpStartupTask;
     auditHook: McpStartupTask;
     sseStream: McpStartupTask;
     openCode: McpStartupTask;

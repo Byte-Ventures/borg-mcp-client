@@ -44,6 +44,15 @@ export function launchAllHelpText(version: string): string {
   );
 }
 
+export function doctorHelpText(version: string): string {
+  return (
+    `borg doctor (borgmcp ${version}) — inspect Borg agent integrations without changing them\n\n` +
+    `Usage:\n` +
+    `  borg doctor          Run read-only checks for hook bins, hook configuration, and the OpenCode plugin\n` +
+    `  borg doctor --help   Show this help\n`
+  );
+}
+
 export function clientSubcommandHelpText(
   command: string | undefined,
   args: readonly string[],
@@ -57,6 +66,7 @@ export function clientSubcommandHelpText(
     case 'recover-enrollment': return recoverEnrollmentHelpText(version);
     case 'cleanup': return cleanupHelpText(version);
     case 'launch-all': return launchAllHelpText(version);
+    case 'doctor': return doctorHelpText(version);
     default: return null;
   }
 }
@@ -86,6 +96,7 @@ export function topLevelHelpText(version: string): string {
     `  borg                     Launch your agent CLI; in a TTY, bare borg may show the launch menu\n` +
     `  borg setup               Set up borg MCP server + agent CLI integration\n` +
     `  borg update              Update the client and installed local server together\n` +
+    `  borg doctor              Check agent hook bins, versions, configs, and the OpenCode plugin\n` +
     `  borg assimilate [role]   Join or create a cube\n` +
     `  borg assimilate --host <host>   Join or create on an explicit server\n` +
     `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
@@ -130,7 +141,7 @@ export function updateHelpText(version: string): string {
     `If no local server is installed, the server phase is skipped. A failure after the client\n` +
     `succeeds is reported as partial completion with the safe retry command. Borg never starts a\n` +
     `stopped server. After package verification, Borg replaces stale borgmcp package launch paths\n` +
-    `in Claude Code, Codex, and OpenCode registrations while preserving their other settings. It\n` +
+    `in MCP registrations and managed agent hooks while preserving their other settings. It\n` +
     `leaves absent registrations and borg entries that point to another command unchanged. Borg\n` +
     `never restarts agent processes;\n` +
     `restart active agent sessions yourself.\n`

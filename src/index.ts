@@ -73,7 +73,7 @@ import {
   pinMcpSeatIdentity,
 } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
-import { addSessionStartHook, addUserPromptSubmitHook } from './config-utils.js';
+import { addUserPromptSubmitHook } from './config-utils.js';
 import {
   humanAgo,
   formatLogEntryMarkdown,
@@ -282,12 +282,6 @@ export async function main() {
   const readinessProbe = isMcpReadinessProbe();
   const openCodeRuntime = resolveSessionAgentKind() === 'opencode';
   const startupServices = {
-    // Auto-register the SessionStart hook so existing users get borg-regen
-    // auto-orientation on session start without re-running borg setup. Idempotent.
-    sessionStartHook: () => {
-      addSessionStartHook();
-    },
-
     // Auto-register the UserPromptSubmit audit hook so the drone gets a
     // nudge if the previous assistant span used state-changing tools
     // without calling borg_log. Domain-agnostic — knows nothing about git

@@ -18,7 +18,6 @@ import {
   renderRuntimeMetadataLines,
 } from './roster-render.js';
 import { shellEscape } from './shell-escape.js';
-import { resolveInboxMonitorPath } from './self-path.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
 import { isBorgSession } from './launch-gate.js';
 
@@ -112,10 +111,10 @@ export function wakePathArming(
   if (agentKind === 'opencode') {
     return OPENCODE_WAKE_PATH_GUIDANCE;
   }
-  // gh#client#18: use absolute path to THIS installation's borg-inbox-monitor
-  // so the orientation command always resolves to the same version as the
-  // running client — never a different one via PATH.
-  const monitorBin = shellEscape(resolveInboxMonitorPath());
+  // client#394: the stable npm bin survives Node/nvm install-path rotation.
+  // Launch-time health checks make a missing or version-skewed PATH target
+  // visible instead of silently embedding a stale installation path here.
+  const monitorBin = 'borg-inbox-monitor';
   const monitorCommand = monitorStateRoot
     ? `${monitorBin} --state-root ${shellEscape(monitorStateRoot)} ${shellEscape(inboxPath)}`
     : `${monitorBin} ${shellEscape(inboxPath)}`;

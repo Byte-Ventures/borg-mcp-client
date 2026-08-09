@@ -86,6 +86,7 @@ import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { isClientOwnedCubeInitArgv, runEarlyServerFacade } from './server-facade.js';
 import { runEarlyUpdate } from './update-cmd.js';
+import { runDoctor, warnIfAgentIntegrationUnhealthy } from './agent-integration-health.js';
 
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
 
@@ -208,6 +209,9 @@ async function main() {
   if (process.argv[2] === 'setup') {
     await import('./setup.js');
     return;
+  }
+  if (process.argv[2] === 'doctor') {
+    process.exit(runDoctor());
   }
   if (process.argv[2] === 'assimilate') {
     const code = await runAssimilateEntry(process.argv.slice(3));
@@ -630,6 +634,9 @@ function ensureResolvedCliConfigured(cli: BorgCli): void {
   } catch (err: any) {
     console.error(`${consolePrefix()}${chalk.yellow(`warning: ${label} integration check failed: ${err?.message ?? err}`)}`);
   }
+  warnIfAgentIntegrationUnhealthy({
+    stderr: (text) => console.error(`${consolePrefix()}${chalk.yellow(text.trimEnd())}`),
+  });
 }
 
 function isEntryInvocation(): boolean {

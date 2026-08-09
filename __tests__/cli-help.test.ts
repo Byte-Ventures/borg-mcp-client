@@ -15,6 +15,7 @@ import {
   cubeInitHelpText,
   isHelpFlag,
   launchAllHelpText,
+  doctorHelpText,
   resetLocalSeatHelpText,
   recoverEnrollmentHelpText,
   serverHelpText,
@@ -67,6 +68,7 @@ describe('client subcommand help', () => {
     ['recover-enrollment', recoverEnrollmentHelpText],
     ['cleanup', cleanupHelpText],
     ['launch-all', launchAllHelpText],
+    ['doctor', doctorHelpText],
   ] as const)('routes borg %s --help before command parsing', (command, render) => {
     expect(clientSubcommandHelpText(command, ['--help'], '9.9.9')).toBe(render('9.9.9'));
     expect(clientSubcommandHelpText(command, ['-h'], '9.9.9')).toBe(render('9.9.9'));
@@ -177,9 +179,20 @@ describe('borg update help', () => {
     expect(text).toMatch(/server.*skipped/i);
     expect(text).toMatch(/partial/i);
     expect(text).toMatch(/stale borgmcp package launch paths/i);
+    expect(text).toMatch(/managed agent hooks/i);
     expect(text).toMatch(/preserving their other settings/i);
     expect(text).toMatch(/entries that point to another command unchanged/i);
     expect(text).toMatch(/restart.*agent/i);
+  });
+});
+
+describe('borg doctor help', () => {
+  it('advertises a read-only agent integration check', () => {
+    expect(topLevelHelpText('9.9.9')).toContain('borg doctor');
+    const text = doctorHelpText('9.9.9');
+    expect(text).toContain('read-only');
+    expect(text).toContain('hook bins');
+    expect(text).toContain('OpenCode');
   });
 });
 
