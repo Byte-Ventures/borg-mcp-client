@@ -123,9 +123,9 @@ function renderBin(bin: AgentHookBinHealth, expectedVersion: string): string {
   switch (bin.status) {
     case 'ok': return `${bin.name}: ok (${bin.version})`;
     case 'missing': return `${bin.name}: missing`;
-    case 'wrong-owner': return `${bin.name}: wrong owner ${bin.owner}${bin.version ? `@${bin.version}` : ''}`;
-    case 'version-skew': return `${bin.name}: version ${bin.version}, expected ${expectedVersion}`;
-    case 'unreadable': return `${bin.name}: unreadable${bin.detail ? ` (${bin.detail})` : ''}`;
+    case 'wrong-owner': return `${bin.name}: wrong owner ${bin.owner}${bin.version ? `@${bin.version}` : ''}${bin.resolvedPath ? ` at ${bin.resolvedPath}` : ''}`;
+    case 'version-skew': return `${bin.name}: version ${bin.version}, expected ${expectedVersion}${bin.resolvedPath ? ` at ${bin.resolvedPath}` : ''}`;
+    case 'unreadable': return `${bin.name}: unreadable${bin.resolvedPath ? ` at ${bin.resolvedPath}` : ''}${bin.detail ? ` (${bin.detail})` : ''}`;
   }
 }
 
@@ -149,11 +149,11 @@ export function renderAgentIntegrationHealth(report: AgentIntegrationHealth): st
       case 'wrong-owner':
       case 'version-skew':
         lines.push(
-          `Fix PATH so ${bin.name} resolves to borgmcp@${report.expectedVersion}, then run borg doctor.`,
+          `Fix PATH so ${bin.name} resolves to borgmcp@${report.expectedVersion}, then run: borg doctor`,
         );
         break;
       case 'unreadable':
-        lines.push(`Fix or replace unreadable ${bin.name}, then run borg doctor.`);
+        lines.push(`Fix or replace unreadable ${bin.name}, then run: borg doctor`);
         break;
       case 'ok':
         break;
@@ -164,8 +164,8 @@ export function renderAgentIntegrationHealth(report: AgentIntegrationHealth): st
       lines.push('Repair stale managed hooks: borg update --yes');
     } else if (config.status === 'invalid') {
       lines.push(config.detail?.startsWith('inventory failed:')
-        ? `Restore readable, non-symlinked hook inventory path ${config.path}, then run borg doctor.`
-        : `Repair invalid managed hook config ${config.path}, then run borg update --yes.`);
+        ? `Restore readable, non-symlinked hook inventory path ${config.path}, then run: borg doctor`
+        : `Repair invalid managed hook config ${config.path}, then run: borg update --yes`);
     }
   }
   return `${lines.join('\n')}\n`;

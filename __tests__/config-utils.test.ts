@@ -441,6 +441,30 @@ describe('version-stable managed hook refresh', () => {
     expect(refreshManagedAgentHookConfigs({ homeDir: home })).toEqual([]);
     expect(fs.readFileSync(externalSettings, 'utf8')).toBe(stale);
   });
+
+  it('refuses a symlinked worktree settings file', () => {
+    const home = path.join(tmpDir, 'home');
+    const settingsPath = path.join(
+      home,
+      '.borg',
+      'worktrees',
+      'repo',
+      'seat',
+      '.claude',
+      'settings.local.json',
+    );
+    const externalSettings = path.join(tmpDir, 'external-settings.json');
+    const stale = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{
+      type: 'command',
+      command: '/Users/example/.nvm/versions/node/v22.22.2/lib/node_modules/borgmcp/dist/regen.js',
+    }] }] } });
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(externalSettings, stale);
+    fs.symlinkSync(externalSettings, settingsPath);
+
+    expect(refreshManagedAgentHookConfigs({ homeDir: home })).toEqual([]);
+    expect(fs.readFileSync(externalSettings, 'utf8')).toBe(stale);
+  });
 });
 
 describe('native agent registration roots', () => {

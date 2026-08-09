@@ -69,11 +69,17 @@ describe('agent integration health', () => {
     });
     const text = renderAgentIntegrationHealth(report);
     expect(text).toContain('borg-clear-rewake: missing');
-    expect(text).toContain('borg-foreign-path-reminder: wrong owner other-package@3.3.0');
-    expect(text).toContain('borg-regen: version 3.2.0, expected 3.3.0');
+    expect(text).toContain(
+      `borg-foreign-path-reminder: wrong owner other-package@3.3.0 at ${fs.realpathSync(foreignBin)}`,
+    );
+    expect(text).toContain(
+      `borg-regen: version 3.2.0, expected 3.3.0 at ${fs.realpathSync(join(f.root, 'lib', 'node_modules', 'borgmcp', 'dist', 'regen.js'))}`,
+    );
     expect(text).toContain('npm install --global borgmcp@3.3.0 --ignore-scripts');
     expect(text).toContain('Fix PATH so borg-foreign-path-reminder resolves to borgmcp@3.3.0');
     expect(text).toContain('Fix PATH so borg-regen resolves to borgmcp@3.3.0');
+    expect(text).toContain('then run: borg doctor');
+    expect(text).not.toContain('borg doctor.');
     expect(text).not.toContain('Repair: borg update --yes');
   });
 
@@ -118,7 +124,7 @@ describe('agent integration health', () => {
     const report = inspectAgentIntegrationHealth({ expectedVersion: '3.3.0', path: f.bin, homeDir: home });
     const text = renderAgentIntegrationHealth(report);
     expect(text).toContain(`invalid: ${configPath}`);
-    expect(text).toContain(`Repair invalid managed hook config ${configPath}, then run borg update --yes.`);
+    expect(text).toContain(`Repair invalid managed hook config ${configPath}, then run: borg update --yes`);
   });
 
   it('launch-time visibility warns and continues with truthful recovery', () => {
@@ -128,8 +134,29 @@ describe('agent integration health', () => {
       expectedVersion: '3.3.0', path: f.bin, homeDir: join(f.root, 'home'),
       stderr: (text) => stderr.push(text),
     })).toBe(false);
-    expect(stderr.join('')).toContain('borg-regen: version 3.2.0, expected 3.3.0');
+    expect(stderr.join('')).toContain(
+      `borg-regen: version 3.2.0, expected 3.3.0 at ${fs.realpathSync(join(f.root, 'lib', 'node_modules', 'borgmcp', 'dist', 'regen.js'))}`,
+    );
     expect(stderr.join('')).toContain('Fix PATH so borg-regen resolves to borgmcp@3.3.0');
+    expect(stderr.join('')).toContain('then run: borg doctor');
+    expect(stderr.join('')).not.toContain('borg doctor.');
+  });
+
+  it('names the unreadable resolved path and ends recovery with a copyable command', () => {
+    const f = packageFixture();
+    const unreadablePath = join(f.root, 'missing', 'borg-inbox-monitor');
+    const report = inspectAgentIntegrationHealth({
+      expectedVersion: '3.3.0',
+      path: f.bin,
+      homeDir: join(f.root, 'home'),
+      resolveBin: (name) => name === 'borg-inbox-monitor'
+        ? unreadablePath
+        : join(f.bin, name),
+    });
+    const text = renderAgentIntegrationHealth(report);
+    expect(text).toContain(`borg-inbox-monitor: unreadable at ${unreadablePath}`);
+    expect(text).toContain('Fix or replace unreadable borg-inbox-monitor, then run: borg doctor');
+    expect(text).not.toContain('borg doctor.');
   });
 
   it('contains inventory read errors and warns instead of throwing from launch health', () => {
@@ -158,6 +185,10 @@ describe('agent integration health', () => {
     }
     expect(stderr.join('')).toContain('inventory denied');
     expect(stderr.join('')).toContain(`stale: ${globalConfig}`);
+    expect(stderr.join('')).toContain(
+      `Restore readable, non-symlinked hook inventory path ${join(home, '.borg', 'worktrees')}, then run: borg doctor`,
+    );
+    expect(stderr.join('')).not.toContain('borg doctor.');
     expect(stderr.join('')).toMatch(/warning/i);
   });
 });

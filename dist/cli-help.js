@@ -37,7 +37,7 @@ export function launchAllHelpText(version) {
 export function doctorHelpText(version) {
     return (`borg doctor (borgmcp ${version}) — inspect Borg agent integrations without changing them\n\n` +
         `Usage:\n` +
-        `  borg doctor          Run read-only checks for hook bins, hook configuration, and the OpenCode plugin\n` +
+        `  borg doctor          Run read-only checks for hook commands, hook configuration, and the OpenCode plugin\n` +
         `  borg doctor --help   Show this help\n`);
 }
 export function clientSubcommandHelpText(command, args, version) {
@@ -75,7 +75,7 @@ export function topLevelHelpText(version) {
         `  borg                     Launch your agent CLI; in a TTY, bare borg may show the launch menu\n` +
         `  borg setup               Set up borg MCP server + agent CLI integration\n` +
         `  borg update              Update the client and installed local server together\n` +
-        `  borg doctor              Check agent hook bins, versions, configs, and the OpenCode plugin\n` +
+        `  borg doctor              Check agent hook commands, versions, configs, and the OpenCode plugin\n` +
         `  borg assimilate [role]   Join or create a cube\n` +
         `  borg assimilate --host <host>   Join or create on an explicit server\n` +
         `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +

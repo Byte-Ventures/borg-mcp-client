@@ -191,7 +191,7 @@ describe('borg doctor help', () => {
     expect(topLevelHelpText('9.9.9')).toContain('borg doctor');
     const text = doctorHelpText('9.9.9');
     expect(text).toContain('read-only');
-    expect(text).toContain('hook bins');
+    expect(text).toContain('hook commands');
     expect(text).toContain('OpenCode');
   });
 });
