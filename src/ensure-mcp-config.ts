@@ -5,7 +5,7 @@ import {
   addOpenCodeMcpServer,
   isCodexMcpServerConfigured,
   isMcpServerConfigured,
-  isOpenCodeMcpServerConfigured,
+  isOpenCodeMcpServerConfiguredForLaunch,
 } from './config-utils.js';
 
 export interface EnsureMcpConfigDeps {
@@ -22,7 +22,7 @@ const defaultDeps: EnsureMcpConfigDeps = {
   addClaude: addMcpServer,
   isCodexConfigured: isCodexMcpServerConfigured,
   addCodex: addCodexMcpServer,
-  isOpenCodeConfigured: isOpenCodeMcpServerConfigured,
+  isOpenCodeConfigured: isOpenCodeMcpServerConfiguredForLaunch,
   addOpenCode: addOpenCodeMcpServer,
 };
 
@@ -49,6 +49,9 @@ export function ensureCliMcpConfigured(
     case 'opencode':
       if (deps.isOpenCodeConfigured()) return false;
       deps.addOpenCode();
+      if (!deps.isOpenCodeConfigured()) {
+        throw new Error('OpenCode MCP registration could not be verified after setup');
+      }
       return true;
   }
 }

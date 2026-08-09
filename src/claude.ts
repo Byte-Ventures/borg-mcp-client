@@ -22,7 +22,18 @@ import { basename } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import chalk from 'chalk';
-import { findProjectRoot, getActiveCube, inboxPathForDrone, setCodexWakeTarget, pruneDeadCodexWakeTargets, type BorgCli } from './cubes.js';
+import {
+  BORG_LAUNCH_EXPECTED_SEAT_ENV,
+  codexLaunchSeatExpectationConfigArgs,
+  findProjectRoot,
+  getActiveCube,
+  inboxPathForDrone,
+  LaunchSeatIdentityChangedError,
+  setCodexWakeTarget,
+  pruneDeadCodexWakeTargets,
+  type ActiveCube,
+  type BorgCli,
+} from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import { formatSeatReattachRefusal, inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 import { handleVersionFlag, getPackageVersion } from './version.js';
@@ -43,6 +54,13 @@ import { unknownSubcommand } from './unknown-subcommand.js';
 import { parseRecoverEnrollmentArgs, runRecoverEnrollment } from './recover-enrollment-cmd.js';
 import { runLaunchAll } from './launch-all-cmd.js';
 import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
+import {
+  buildDefaultSeatCommandDeps,
+  parseLaunchSeatArgs,
+  parseSeatsArgs,
+  runLaunchSeat,
+  runSeats,
+} from './seat-commands.js';
 import { discoverDroneCandidates } from './launch-all-discovery.js';
 import {
   configureSelectedLaunchCli,
@@ -89,6 +107,19 @@ import { runEarlyUpdate } from './update-cmd.js';
 import { runDoctor, warnIfAgentIntegrationUnhealthy } from './agent-integration-health.js';
 
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
+
+export class OpenCodeTargetedLaunchConfigError extends Error {
+  readonly code = 'OPENCODE_TARGETED_LAUNCH_CONFIG';
+
+  constructor(droneLabel: string, worktree: string) {
+    super(
+      `borg launch: did not launch '${droneLabel}' — borg could not update or verify the OpenCode configuration ` +
+      'that a targeted launch needs to open the correct drone. Check that the OpenCode configuration file is ' +
+      `writable, then try again. As a fallback, run \`borg\` in ${worktree} to resume that worktree's drone directly.`,
+    );
+    this.name = 'OpenCodeTargetedLaunchConfigError';
+  }
+}
 
 export function createOpenCodeLaunchPlan(
   cwd: string,
@@ -267,6 +298,27 @@ async function main() {
     const code = await runCleanup({}, parsed.options);
     process.exit(code);
   }
+  if (process.argv[2] === 'seats') {
+    const parsed = parseSeatsArgs(process.argv.slice(3));
+    if (!parsed.ok) {
+      process.stderr.write(chalk.red(`${consolePrefix()}◼ borg seats: ${parsed.error}\n`));
+      process.stderr.write(`Run \`borg seats --help\` for usage.\n`);
+      process.exit(1);
+    }
+    process.exit(await runSeats(buildDefaultSeatCommandDeps()));
+  }
+  if (process.argv[2] === 'launch') {
+    const parsed = parseLaunchSeatArgs(process.argv.slice(3));
+    if (!parsed.ok) {
+      process.stderr.write(chalk.red(`${consolePrefix()}◼ borg launch: ${parsed.error}\n`));
+      process.stderr.write(`Run \`borg launch --help\` for usage.\n`);
+      process.exit(1);
+    }
+    process.exit(await runLaunchSeat(
+      { target: parsed.target, ...(parsed.cube ? { cube: parsed.cube } : {}) },
+      buildDefaultSeatCommandDeps(),
+    ));
+  }
   if (process.argv[2] === 'launch-all') {
     const parsed = parseLaunchAllArgs(process.argv.slice(3));
     if (!parsed.ok) {
@@ -382,7 +434,11 @@ async function main() {
 
   // Configure only the CLI that will actually launch. This must follow the
   // one-shot menu: the resolved default can differ from the menu selection.
-  cli = configureSelectedLaunchCli(cli, launchAction, ensureResolvedCliConfigured);
+  cli = configureSelectedLaunchCli(
+    cli,
+    launchAction,
+    (selectedCli) => ensureResolvedCliConfigured(selectedCli, active),
+  );
 
   if (active && !parsedCli.force) {
     const inboxPath = inboxPathForDrone(active.cubeId, active.droneId);
@@ -531,6 +587,7 @@ async function main() {
       ...codexAgentKindConfigArgs(),
       ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
       ...codexStateRootConfigArgs(),
+      ...codexLaunchSeatExpectationConfigArgs(),
       ...remoteArgs,
       ...withCodexCwdArg([...passthroughArgs, kickoff], process.cwd()),
     ];
@@ -614,11 +671,25 @@ async function main() {
   });
 }
 
-function ensureResolvedCliConfigured(cli: BorgCli): void {
+export function ensureResolvedCliConfigured(cli: BorgCli, active: ActiveCube | null = null): void {
   const label = cli === 'claude' ? 'Claude Code' : cli === 'codex' ? 'Codex' : 'OpenCode';
+  const targetedOpenCodeLaunch = cli === 'opencode' &&
+    Boolean(process.env[BORG_LAUNCH_EXPECTED_SEAT_ENV]);
   try {
     configureResolvedCli(cli, {
-      ensureMcp: ensureCliMcpConfigured,
+      ensureMcp: (selectedCli) => {
+        try {
+          ensureCliMcpConfigured(selectedCli);
+        } catch (error) {
+          if (targetedOpenCodeLaunch && selectedCli === 'opencode') {
+            throw new OpenCodeTargetedLaunchConfigError(
+              active?.droneLabel ?? '<unknown>',
+              active?.worktree ?? process.cwd(),
+            );
+          }
+          throw error;
+        }
+      },
       addClaudeProjectSessionStartHook: () => {
         // gh#673 P2 (WI-1): the orientation hook lives PROJECT-LOCAL in
         // <root>/.claude/settings.local.json — ensured on every bare
@@ -633,6 +704,7 @@ function ensureResolvedCliConfigured(cli: BorgCli): void {
       installOpenCodePlugin: installBorgPlugin,
     });
   } catch (err: any) {
+    if (err instanceof OpenCodeTargetedLaunchConfigError) throw err;
     console.error(`${consolePrefix()}${chalk.yellow(`warning: ${label} integration check failed: ${err?.message ?? err}`)}`);
   }
   try {
@@ -656,6 +728,13 @@ function isEntryInvocation(): boolean {
 
 if (isEntryInvocation()) {
   main().catch((error) => {
+    if (
+      error instanceof LaunchSeatIdentityChangedError ||
+      error instanceof OpenCodeTargetedLaunchConfigError
+    ) {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(1);
+    }
     console.error(`${consolePrefix()}${chalk.red(`\n◼ Error: ${error.message}\n`)}`);
     process.exit(1);
   });

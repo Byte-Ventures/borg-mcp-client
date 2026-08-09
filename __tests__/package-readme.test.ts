@@ -125,4 +125,12 @@ describe('published package artifact', () => {
     );
   });
 
+  it('teaches local drone discovery and single-drone relaunch from any directory', () => {
+    const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
+    expect(readme).toContain('borg seats');
+    expect(readme).toContain('borg launch <label-or-id-prefix>');
+    expect(readme).toContain("finds the drone's worktree in the local seat registry");
+    expect(readme).toContain('add `--cube <name>` or use the drone id prefix');
+  });
+
 });

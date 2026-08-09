@@ -9,6 +9,8 @@
 export declare function isHelpFlag(arg: string | undefined): boolean;
 export declare function cleanupHelpText(version: string): string;
 export declare function launchAllHelpText(version: string): string;
+export declare function seatsHelpText(version: string): string;
+export declare function launchSeatHelpText(version: string): string;
 export declare function doctorHelpText(version: string): string;
 export declare function clientSubcommandHelpText(command: string | undefined, args: readonly string[], version: string): string | null;
 export declare function setupNextStepsText(): string;

@@ -1,10 +1,10 @@
-import { addCodexMcpServer, addMcpServer, addOpenCodeMcpServer, isCodexMcpServerConfigured, isMcpServerConfigured, isOpenCodeMcpServerConfigured, } from './config-utils.js';
+import { addCodexMcpServer, addMcpServer, addOpenCodeMcpServer, isCodexMcpServerConfigured, isMcpServerConfigured, isOpenCodeMcpServerConfiguredForLaunch, } from './config-utils.js';
 const defaultDeps = {
     isClaudeConfigured: isMcpServerConfigured,
     addClaude: addMcpServer,
     isCodexConfigured: isCodexMcpServerConfigured,
     addCodex: addCodexMcpServer,
-    isOpenCodeConfigured: isOpenCodeMcpServerConfigured,
+    isOpenCodeConfigured: isOpenCodeMcpServerConfiguredForLaunch,
     addOpenCode: addOpenCodeMcpServer,
 };
 /**
@@ -30,6 +30,9 @@ export function ensureCliMcpConfigured(cli, deps = defaultDeps) {
             if (deps.isOpenCodeConfigured())
                 return false;
             deps.addOpenCode();
+            if (!deps.isOpenCodeConfigured()) {
+                throw new Error('OpenCode MCP registration could not be verified after setup');
+            }
             return true;
     }
 }

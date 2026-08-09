@@ -15,9 +15,14 @@
  *   borg server <cmd>   → Forward a lifecycle command to borg-mcp-server
  */
 import { spawn } from 'child_process';
+import { type ActiveCube, type BorgCli } from './cubes.js';
 import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
 import { connectOpenCodeDrone, createOpenCodeLaunchKickoff } from './opencode-drone.js';
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
+export declare class OpenCodeTargetedLaunchConfigError extends Error {
+    readonly code = "OPENCODE_TARGETED_LAUNCH_CONFIG";
+    constructor(droneLabel: string, worktree: string);
+}
 export declare function createOpenCodeLaunchPlan(cwd: string, port: number, prompt: string, passthroughArgs?: string[]): {
     launchArgs: string[];
     envPort: string;
@@ -40,4 +45,5 @@ export declare function launchOpenCodeProcess(options: {
     process: ReturnType<typeof spawn>;
 };
 export declare function runAssimilateEntry(args: readonly string[], buildDeps?: AssimilateDepsBuilder): Promise<number>;
+export declare function ensureResolvedCliConfigured(cli: BorgCli, active?: ActiveCube | null): void;
 //# sourceMappingURL=claude.d.ts.map

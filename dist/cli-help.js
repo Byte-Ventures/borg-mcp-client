@@ -42,6 +42,23 @@ export function launchAllHelpText(version) {
         `  tmux       Open all drones in one shared tmux session. Default on Linux.\n` +
         `  pastelist  Print the launch commands so you can run them yourself.\n`);
 }
+export function seatsHelpText(version) {
+    return (`borg seats (borgmcp ${version}) — list this machine's registered drones\n\n` +
+        `Usage:\n` +
+        `  borg seats          Show drone, cube, worktree, agent CLI, and local state\n` +
+        `  borg seats --help   Show this help\n\n` +
+        `The local registry belongs to this machine only.\n`);
+}
+export function launchSeatHelpText(version) {
+    return (`borg launch (borgmcp ${version}) — reopen one registered drone from its worktree\n\n` +
+        `Usage:\n` +
+        `  borg launch <drone-label-or-id-prefix>\n` +
+        `  borg launch <drone-label-or-id-prefix> --cube <name>\n` +
+        `  borg launch --help\n\n` +
+        `Options:\n` +
+        `  --cube <name>                Disambiguate the same drone label across cubes\n` +
+        `  --help, -h                   Show this help\n`);
+}
 export function doctorHelpText(version) {
     return (`borg doctor (borgmcp ${version}) — inspect Borg agent integrations without changing them\n\n` +
         `Usage:\n` +
@@ -57,6 +74,8 @@ export function clientSubcommandHelpText(command, args, version) {
         case 'reset-local-connection': return resetLocalSeatHelpText(version);
         case 'recover-enrollment': return recoverEnrollmentHelpText(version);
         case 'cleanup': return cleanupHelpText(version);
+        case 'seats': return seatsHelpText(version);
+        case 'launch': return launchSeatHelpText(version);
         case 'launch-all': return launchAllHelpText(version);
         case 'doctor': return doctorHelpText(version);
         default: return null;
@@ -91,6 +110,8 @@ export function topLevelHelpText(version) {
         `  borg reset-local-connection  Clear ONLY this worktree's saved connection to its cube (offline; after a rejection)\n` +
         `  borg recover-enrollment  Restore or clear ONLY one failed server enrollment transaction\n` +
         `  borg cleanup [--prune]   Report (or --prune) worktrees orphaned by evicted drones\n` +
+        `  borg seats               List this machine's registered drones and worktrees\n` +
+        `  borg launch <drone-label-or-id-prefix>  Reopen one registered drone from its worktree\n` +
         `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
         `  borg launch-all [cube] --cli claude|codex|opencode\n` +
         `                           Launch all drone worktrees with that agent CLI\n` +
