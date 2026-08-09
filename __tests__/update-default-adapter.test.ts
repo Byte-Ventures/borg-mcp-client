@@ -211,7 +211,7 @@ describe('default npm update adapter', () => {
       /OpenCode borg-orient\.js plugin: refused .*plugin path is a symlink/,
     );
     await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
-      /Remove or replace symlinked OpenCode plugin .* then run: borg update --yes/,
+      /Remove or replace the OpenCode plugin path .* then run: borg update --yes/,
     );
     expect(readFileSync(symlinkTarget, 'utf8')).toBe('operator data');
     rmSync(plugin);
@@ -225,7 +225,7 @@ describe('default npm update adapter', () => {
       /OpenCode borg-orient\.js plugin: refused .*plugin path is not a regular file/,
     );
     await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
-      /Remove or replace symlinked OpenCode plugin .* then run: borg update --yes/,
+      /Remove or replace the OpenCode plugin path .* then run: borg update --yes/,
     );
     rmSync(openCodeConfig);
     await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();

@@ -224,7 +224,7 @@ export function renderAgentIntegrationHealth(report) {
             : `Fix or remove unreadable OpenCode plugin ${report.openCodePlugin.path}`);
     }
     else if (report.openCodePlugin.status === 'refused' && report.openCodePlugin.configured) {
-        lines.push(`Remove or replace symlinked OpenCode plugin ${report.openCodePlugin.path}, then run: borg update --yes`);
+        lines.push(`Remove or replace the OpenCode plugin path ${report.openCodePlugin.path}, then run: borg update --yes`);
     }
     return `${lines.join('\n')}\n`;
 }

@@ -183,7 +183,7 @@ describe('agent integration health', () => {
     });
     expect(report.issues).toEqual([]);
     expect(text).toContain(`OpenCode borg-orient.js plugin: refused at ${plugin}`);
-    expect(text).not.toContain('Remove or replace symlinked OpenCode plugin');
+    expect(text).not.toContain('Remove or replace the OpenCode plugin path');
   });
 
   it('gives a refused configured OpenCode plugin the two-step update recovery', () => {
@@ -202,7 +202,7 @@ describe('agent integration health', () => {
     expect(report.issues).toContain(report.openCodePlugin);
     expect(text).toContain(`OpenCode borg-orient.js plugin: refused at ${plugin}`);
     expect(text).toContain(
-      `Remove or replace symlinked OpenCode plugin ${plugin}, then run: borg update --yes`,
+      `Remove or replace the OpenCode plugin path ${plugin}, then run: borg update --yes`,
     );
   });
 
@@ -225,7 +225,7 @@ describe('agent integration health', () => {
     });
     expect(inventory.issues).toEqual([]);
     expect(renderAgentIntegrationHealth(inventory)).not.toContain(
-      'Remove or replace symlinked OpenCode plugin',
+      'Remove or replace the OpenCode plugin path',
     );
 
     configureOpenCode(home);
@@ -237,12 +237,14 @@ describe('agent integration health', () => {
     actionable.openCodePlugin.path = '/Users/example/.config/opencode/plugins/borg-orient.js';
     const text = renderAgentIntegrationHealth(actionable);
     const status = text.split('\n').find((line) => line.startsWith('OpenCode borg-orient.js plugin:'));
-    const recovery = text.split('\n').find((line) => line.startsWith('Remove or replace symlinked'));
+    const recovery = text.split('\n').find(
+      (line) => line.startsWith('Remove or replace the OpenCode plugin path'),
+    );
     expect(status).toBe(
       'OpenCode borg-orient.js plugin: refused at /Users/example/.config/opencode/plugins/borg-orient.js (plugin path is a symlink)',
     );
     expect(recovery).toBe(
-      'Remove or replace symlinked OpenCode plugin /Users/example/.config/opencode/plugins/borg-orient.js, then run: borg update --yes',
+      'Remove or replace the OpenCode plugin path /Users/example/.config/opencode/plugins/borg-orient.js, then run: borg update --yes',
     );
   });
 
