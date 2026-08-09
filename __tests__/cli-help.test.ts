@@ -14,11 +14,13 @@ import {
   clientSubcommandHelpText,
   cubeInitHelpText,
   isHelpFlag,
+  launchSeatHelpText,
   launchAllHelpText,
   doctorHelpText,
   resetLocalSeatHelpText,
   recoverEnrollmentHelpText,
   serverHelpText,
+  seatsHelpText,
   setupHelpText,
   setupNextStepsText,
   topLevelHelpText,
@@ -67,6 +69,8 @@ describe('client subcommand help', () => {
     ['reset-local-connection', resetLocalSeatHelpText],
     ['recover-enrollment', recoverEnrollmentHelpText],
     ['cleanup', cleanupHelpText],
+    ['seats', seatsHelpText],
+    ['launch', launchSeatHelpText],
     ['launch-all', launchAllHelpText],
     ['doctor', doctorHelpText],
   ] as const)('routes borg %s --help before command parsing', (command, render) => {
@@ -81,6 +85,21 @@ describe('client subcommand help', () => {
       '--mode', '--only', '--dry-run', '--cli', '--no-attach', '--yes', '--force',
       '--launch-delay', '--help',
     ]) expect(text).toContain(flag);
+  });
+
+  it('documents local drone discovery and relaunch without bypassing the worktree', () => {
+    const top = topLevelHelpText('9.9.9');
+    expect(top).toContain('borg seats');
+    expect(top).toContain('borg launch <drone-label-or-id-prefix>');
+
+    const seats = seatsHelpText('9.9.9');
+    expect(seats).toContain('borg seats');
+    expect(seats).toMatch(/local.*registry/i);
+
+    const launch = launchSeatHelpText('9.9.9');
+    expect(launch).toContain('borg launch <drone-label-or-id-prefix>');
+    expect(launch).toContain('--cube');
+    expect(launch).toMatch(/worktree/i);
   });
 
   it('describes journal-aware enrollment recovery and its exact scope', () => {

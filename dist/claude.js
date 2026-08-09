@@ -38,6 +38,7 @@ import { unknownSubcommand } from './unknown-subcommand.js';
 import { parseRecoverEnrollmentArgs, runRecoverEnrollment } from './recover-enrollment-cmd.js';
 import { runLaunchAll } from './launch-all-cmd.js';
 import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
+import { buildDefaultSeatCommandDeps, parseLaunchSeatArgs, parseSeatsArgs, runLaunchSeat, runSeats, } from './seat-commands.js';
 import { discoverDroneCandidates } from './launch-all-discovery.js';
 import { configureSelectedLaunchCli, explicitCliLaunchHint, runBareLaunchMenu, shouldResolveExplicitCliLaunchHintTargets, shouldShowLaunchMenu, } from './bare-launch-menu.js';
 import { setTerminalTitle } from './terminal-title.js';
@@ -196,6 +197,24 @@ async function main() {
         }
         const code = await runCleanup({}, parsed.options);
         process.exit(code);
+    }
+    if (process.argv[2] === 'seats') {
+        const parsed = parseSeatsArgs(process.argv.slice(3));
+        if (!parsed.ok) {
+            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg seats: ${parsed.error}\n`));
+            process.stderr.write(`Run \`borg seats --help\` for usage.\n`);
+            process.exit(1);
+        }
+        process.exit(await runSeats(buildDefaultSeatCommandDeps()));
+    }
+    if (process.argv[2] === 'launch') {
+        const parsed = parseLaunchSeatArgs(process.argv.slice(3));
+        if (!parsed.ok) {
+            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg launch: ${parsed.error}\n`));
+            process.stderr.write(`Run \`borg launch --help\` for usage.\n`);
+            process.exit(1);
+        }
+        process.exit(await runLaunchSeat({ target: parsed.target, ...(parsed.cube ? { cube: parsed.cube } : {}) }, buildDefaultSeatCommandDeps()));
     }
     if (process.argv[2] === 'launch-all') {
         const parsed = parseLaunchAllArgs(process.argv.slice(3));

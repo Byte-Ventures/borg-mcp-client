@@ -84,8 +84,26 @@ continue:
 The lookup is the same for Claude Code, Codex, and OpenCode; only their launch
 adapters differ. It is also the same for an in-place drone and a sibling drone
 worktree: run `borg` inside the worktree where the drone was assimilated.
-Running it in the repository's main worktree does not resume sibling drones. To
-resume all saved drone worktrees for a cube, run:
+Running it in the repository's main worktree does not resume sibling drones.
+
+You do not have to remember worktree paths. To list the drones registered on
+this machine, run:
+
+```bash
+borg seats
+```
+
+To resume one drone from any directory, run:
+
+```bash
+borg launch <label-or-id-prefix>
+```
+
+`borg launch` finds the drone's worktree in the local seat registry and starts
+it exactly as if you ran `borg` in that worktree. If a label exists in more
+than one cube, add `--cube <name>` or use the drone id prefix.
+
+To resume all saved drone worktrees for a cube, run:
 
 ```bash
 borg launch-all [cube]
