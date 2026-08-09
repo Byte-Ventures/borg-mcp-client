@@ -46,7 +46,7 @@ export interface AgentIntegrationHealth {
 export interface OpenCodePluginHealth {
   path: string;
   configured: boolean;
-  status: 'ok' | 'absent' | 'missing' | 'outdated' | 'unreadable';
+  status: 'ok' | 'present' | 'absent' | 'missing' | 'outdated' | 'unreadable';
   version?: string;
   detail?: string;
 }
@@ -95,6 +95,9 @@ function inspectOpenCodePlugin(homeDir: string, expectedVersion: string): OpenCo
   try {
     const source = fs.readFileSync(pluginPath, 'utf8');
     const marker = source.match(/borgmcp-opencode-plugin:([^;\s]+);opencode=/)?.[1];
+    if (!configured) {
+      return { path: pluginPath, configured, status: 'present', version: marker ?? 'unknown' };
+    }
     if (source === buildBorgPluginSource(expectedVersion)) {
       return { path: pluginPath, configured, status: 'ok', version: expectedVersion };
     }
@@ -179,6 +182,7 @@ function renderOpenCodePlugin(
   const prefix = 'OpenCode borg-orient.js plugin:';
   switch (plugin.status) {
     case 'ok': return `${prefix} ok (${plugin.version})`;
+    case 'present': return `${prefix} present`;
     case 'absent': return `${prefix} absent`;
     case 'missing': return `${prefix} missing at ${plugin.path}`;
     case 'outdated': return `${prefix} version ${plugin.version}, expected ${expectedVersion} at ${plugin.path}`;
@@ -230,9 +234,9 @@ export function renderAgentIntegrationHealth(report: AgentIntegrationHealth): st
   } else if (report.openCodePlugin.status === 'outdated' && report.openCodePlugin.configured) {
     lines.push('Repair outdated OpenCode plugin: borg update --yes');
   } else if (report.openCodePlugin.status === 'unreadable') {
-    lines.push(
-      `Fix or replace unreadable OpenCode plugin ${report.openCodePlugin.path}, then run: borg update --yes`,
-    );
+    lines.push(report.openCodePlugin.configured
+      ? `Fix or replace unreadable OpenCode plugin ${report.openCodePlugin.path}, then run: borg update --yes`
+      : `Fix or remove unreadable OpenCode plugin ${report.openCodePlugin.path}`);
   }
   return `${lines.join('\n')}\n`;
 }

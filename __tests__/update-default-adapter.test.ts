@@ -181,19 +181,33 @@ describe('default npm update adapter', () => {
     expect(existsSync(plugin)).toBe(false);
 
     mkdirSync(openCodeConfigDir, { recursive: true });
+    mkdirSync(join(plugin, '..'));
+    writeFileSync(plugin, BORG_PLUGIN_SOURCE);
+    await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
+    expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
+
+    const priorSource = buildBorgPluginSource('3.2.0');
+    writeFileSync(plugin, priorSource);
+    await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
+    expect(readFileSync(plugin, 'utf8')).toBe(priorSource);
+
     writeFileSync(openCodeConfig, JSON.stringify({ mcp: { borg: { type: 'local' } } }));
     await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
     expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
 
-    writeFileSync(plugin, buildBorgPluginSource('3.2.0'));
+    rmSync(plugin);
     await expect(deps.refreshAgentIntegrations()).resolves.toBeUndefined();
     expect(readFileSync(plugin, 'utf8')).toBe(BORG_PLUGIN_SOURCE);
 
     rmSync(plugin);
     mkdirSync(plugin);
-    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(/plugin: unreadable/);
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
+      /Fix or replace unreadable OpenCode plugin .* then run: borg update --yes/,
+    );
     rmSync(openCodeConfig);
-    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(/plugin: unreadable/);
+    await expect(deps.refreshAgentIntegrations()).rejects.toThrow(
+      /Fix or remove unreadable OpenCode plugin/,
+    );
   });
 
   it('includes bounded server stderr when a JSON command fails before producing JSON', async () => {
