@@ -84,7 +84,7 @@ continue:
 The lookup is the same for Claude Code, Codex, and OpenCode; only their launch
 adapters differ. It is also the same for an in-place drone and a sibling drone
 worktree: run `borg` inside the worktree where the drone was assimilated.
-Running it in the repository's main worktree does not resume sibling drones.
+In a TTY, running `borg` in the repository's main worktree offers the repository's drones so you can pick one to resume.
 
 You do not have to remember worktree paths. To list the drones registered on
 this machine, run:

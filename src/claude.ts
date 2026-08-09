@@ -64,6 +64,7 @@ import {
 import { discoverDroneCandidates } from './launch-all-discovery.js';
 import {
   configureSelectedLaunchCli,
+  discoverLiveLaunchMenuCandidates,
   explicitCliLaunchHint,
   runBareLaunchMenu,
   shouldResolveExplicitCliLaunchHintTargets,
@@ -411,19 +412,59 @@ async function main() {
       extraArgs: process.argv.slice(2),
       stdinIsTTY,
       stdoutIsTTY,
+      hasActiveSeat: active !== null,
     })
   ) {
+    const launchAllDeps = buildDefaultLaunchAllDeps();
+    const seatCommandDeps = buildDefaultSeatCommandDeps();
+    const siblingContext = await discoverLiveLaunchMenuCandidates({
+      readAllProjectIdentities: launchAllDeps.readAllProjectIdentities,
+      discoverDroneCandidates: (cubeId) => discoverDroneCandidates(
+        { targetCubeId: cubeId },
+        { ...launchAllDeps, stderr: () => {} },
+      ),
+      getActiveSeatForWorktree: seatCommandDeps.getActiveSeatForWorktree,
+      pathExists: launchAllDeps.pathExists,
+      probeSeat: (candidate) => launchAllDeps.probeSeat(
+        candidate.sessionToken,
+        candidate.apiUrl,
+        candidate.serverTrustIdentity,
+      ),
+    });
     const otherConfiguredClis = configuredCliNames(
       detectCliAvailability(),
       detectCliConfiguration(),
     ).filter((c) => c !== cli);
     const action = await runBareLaunchMenu(
-      { defaultCli: cli, otherConfiguredClis, hasLaunchAllTargets: await hasLaunchAllTargets() },
+      {
+        defaultCli: cli,
+        otherConfiguredClis,
+        hasLaunchAllTargets: siblingContext.launchAllCubeId !== undefined,
+        droneCandidates: siblingContext.candidates,
+        ...(siblingContext.launchAllCubeId
+          ? { launchAllCubeId: siblingContext.launchAllCubeId }
+          : {}),
+      },
       prompt
     );
+    if (action.kind === 'launch-seat') {
+      process.exit(await runLaunchSeat(
+        { target: action.target },
+        buildDefaultSeatCommandDeps(),
+      ));
+    }
     if (action.kind === 'launch-all') {
-      const parsed = parseLaunchAllArgs([]); // empty args → active cube, auto backend
-      const code = parsed.ok ? await runLaunchAll(parsed.args, buildDefaultLaunchAllDeps()) : 1;
+      const deps = buildDefaultLaunchAllDeps();
+      const selectedIdentity = action.cubeId
+        ? (await deps.readAllProjectIdentities()).find(({ cube }) => cube.cubeId === action.cubeId)
+        : undefined;
+      const parsed = parseLaunchAllArgs([]);
+      const code = parsed.ok
+        ? await runLaunchAll(
+          parsed.args,
+          selectedIdentity ? { ...deps, getActiveCube: async () => selectedIdentity.cube } : deps,
+        )
+        : 1;
       process.exit(code);
     }
     // option 1 → configured default; option 2 → the other agent, ONE-SHOT

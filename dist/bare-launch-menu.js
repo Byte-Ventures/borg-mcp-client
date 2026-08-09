@@ -1,3 +1,59 @@
+const TERMINAL_SEAT_STATUSES = new Set([
+    'evicted',
+    'revoked',
+    'rejected',
+    'credential-rejected',
+    'trust-mismatch',
+]);
+/**
+ * Find linked sibling worktrees that still own their preferred active seat.
+ * Authoritative terminal probe results are omitted; transient/unknown probe
+ * results stay visible, matching launch-all's constructive fail-open behavior.
+ */
+export async function discoverLiveLaunchMenuCandidates(deps) {
+    const identities = await deps.readAllProjectIdentities();
+    const cubeIds = [...new Set(identities.map(({ cube }) => cube.cubeId))];
+    const discovered = (await Promise.all(cubeIds.map((cubeId) => deps.discoverDroneCandidates(cubeId)))).flat();
+    const candidates = [];
+    const seen = new Set();
+    for (const candidate of discovered) {
+        if (!deps.pathExists(candidate.worktreeDir))
+            continue;
+        const preferred = await deps.getActiveSeatForWorktree(candidate.worktreeDir);
+        if (!preferred ||
+            preferred.cubeId !== candidate.cubeId ||
+            preferred.droneId !== candidate.droneId)
+            continue;
+        let status;
+        try {
+            status = await deps.probeSeat(candidate);
+        }
+        catch {
+            status = 'indeterminate';
+        }
+        if (TERMINAL_SEAT_STATUSES.has(status))
+            continue;
+        const key = `${candidate.cubeId}\0${candidate.droneId}\0${candidate.worktreeDir}`;
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        candidates.push({
+            cubeId: candidate.cubeId,
+            droneLabel: candidate.droneLabel,
+            target: candidate.droneId,
+            worktree: candidate.worktreeDir,
+        });
+    }
+    candidates.sort((a, b) => a.droneLabel.localeCompare(b.droneLabel) || a.worktree.localeCompare(b.worktree));
+    const candidateCubeIds = new Set(candidates.map((candidate) => candidate.cubeId));
+    const launchAllCubeId = candidateCubeIds.size === 1
+        ? candidates[0].cubeId
+        : undefined;
+    return {
+        candidates: candidates.map(({ cubeId: _cubeId, ...candidate }) => candidate),
+        ...(launchAllCubeId ? { launchAllCubeId } : {}),
+    };
+}
 /**
  * Resolve and configure the CLI that will actually launch.
  *
@@ -12,12 +68,15 @@ export function configureSelectedLaunchCli(defaultCli, action, configure) {
 }
 const PRETTY = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
 /**
- * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY. Any explicit
- * subcommand/flag, or a non-TTY (piped/scripted/CI) invocation, falls straight
- * through to the existing default launch — no menu, no behavior change.
+ * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY without an
+ * active seat. Explicit invocations, non-TTY launches, and direct worktree
+ * resumes fall straight through to the existing launch path.
  */
 export function shouldShowLaunchMenu(args) {
-    return args.extraArgs.length === 0 && args.stdinIsTTY && args.stdoutIsTTY;
+    return args.extraArgs.length === 0
+        && args.stdinIsTTY
+        && args.stdoutIsTTY
+        && !args.hasActiveSeat;
 }
 export function explicitCliLaunchHint(args) {
     if (!args.explicitCli || !args.stdinIsTTY || !args.stdoutIsTTY)
@@ -35,6 +94,38 @@ export function shouldResolveExplicitCliLaunchHintTargets(args) {
  * middle option never produces a "1) … 3) …" gap menu.
  */
 export function buildLaunchMenuOptions(inputs) {
+    if (inputs.droneCandidates && inputs.droneCandidates.length > 0) {
+        const options = [...inputs.droneCandidates]
+            .sort((a, b) => a.droneLabel.localeCompare(b.droneLabel) || a.worktree.localeCompare(b.worktree))
+            .map((candidate, index) => ({
+            key: String(index + 1),
+            label: `Resume ${candidate.droneLabel} (${candidate.worktree})`,
+            action: { kind: 'launch-seat', target: candidate.target },
+        }));
+        if (inputs.hasLaunchAllTargets) {
+            options.push({
+                key: String(options.length + 1),
+                label: "Launch all (this cube's drone worktrees)",
+                action: {
+                    kind: 'launch-all',
+                    ...(inputs.launchAllCubeId ? { cubeId: inputs.launchAllCubeId } : {}),
+                },
+            });
+        }
+        options.push({
+            key: String(options.length + 1),
+            label: `Launch ${PRETTY[inputs.defaultCli]} here without a drone`,
+            action: { kind: 'launch', cli: inputs.defaultCli },
+        });
+        for (const cli of inputs.otherConfiguredClis) {
+            options.push({
+                key: String(options.length + 1),
+                label: `Launch with ${PRETTY[cli]} here without a drone (one-shot)`,
+                action: { kind: 'launch', cli },
+            });
+        }
+        return options;
+    }
     const options = [
         {
             key: '1',

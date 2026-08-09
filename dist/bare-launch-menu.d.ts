@@ -1,29 +1,38 @@
 /**
  * gh#853 — bare `borg` (no-args) interactive launch menu.
  *
- * When `borg` is run with NO arguments in a TTY, offer a small launch selector
- * instead of launching immediately:
- *   1. Launch (default)             — the configured agent (Enter selects).
- *   2. Launch with <other> instead  — the OTHER configured agent, ONE-SHOT
- *                                      (does NOT persist the preference).
- *   3. Launch all                   — runLaunchAll for the active cube.
+ * When `borg` is run with NO arguments in a TTY outside an active seat, offer
+ * a small launch selector. In a repository with live sibling drones, those
+ * drones come first; otherwise the existing agent choices remain unchanged.
  *
  * The option-set, the selection→action mapping, and the show/collapse decision
  * are pure functions so they're unit-testable without a real TTY. claude.ts
- * main() is thin glue: it computes the inputs (default cli, other-configured cli,
- * launch-all targets), gates on shouldShowLaunchMenu, runs the orchestrator with
- * the real readline prompt, then dispatches the returned action.
+ * main() is thin glue: it computes the available candidates and agent choices,
+ * gates on shouldShowLaunchMenu, runs the orchestrator with the real readline
+ * prompt, then dispatches the returned action.
  *
- * Load-bearing safety: TTY-only + bare-args-only (shouldShowLaunchMenu) so every
- * scripted/programmatic `borg` and every explicit subcommand/flag is untouched.
+ * Load-bearing safety: TTY-only + bare-args-only + no-active-seat
+ * (shouldShowLaunchMenu), so scripted/programmatic invocations and direct
+ * worktree resumes are untouched.
  */
-import type { BorgCli } from './cubes.js';
+import type { ActiveCube, BorgCli } from './cubes.js';
+import type { DroneCandidate } from './launch-all-discovery.js';
+import type { SeatStatus } from './seat-probe.js';
 export type LaunchMenuAction = {
     kind: 'launch';
     cli: BorgCli;
 } | {
+    kind: 'launch-seat';
+    target: string;
+} | {
     kind: 'launch-all';
+    cubeId?: string;
 };
+export interface LaunchMenuDroneCandidate {
+    droneLabel: string;
+    target: string;
+    worktree: string;
+}
 export interface LaunchMenuOption {
     /** The keystroke that selects this option (sequential: '1', '2', …). */
     key: string;
@@ -35,9 +44,35 @@ export interface LaunchMenuInputs {
     defaultCli: BorgCli;
     /** All configured agents that are NOT the default, in display order. */
     otherConfiguredClis: BorgCli[];
-    /** True iff there's an active cube with >=1 discoverable drone (option 3). */
+    /** True iff the current menu context has launch-all targets. */
     hasLaunchAllTargets: boolean;
+    /** Live sibling drones offered before the unattached launch choices. */
+    droneCandidates?: LaunchMenuDroneCandidate[];
+    /** Cube selected by the sibling-drone context for its launch-all action. */
+    launchAllCubeId?: string;
 }
+interface LaunchMenuCandidateDeps {
+    readAllProjectIdentities: () => Promise<Array<{
+        projectPath: string;
+        cube: ActiveCube;
+    }>>;
+    discoverDroneCandidates: (cubeId: string) => Promise<DroneCandidate[]>;
+    getActiveSeatForWorktree: (worktree: string) => Promise<{
+        cubeId: string;
+        droneId?: string;
+    } | null>;
+    pathExists: (worktree: string) => boolean;
+    probeSeat: (candidate: DroneCandidate) => Promise<SeatStatus>;
+}
+/**
+ * Find linked sibling worktrees that still own their preferred active seat.
+ * Authoritative terminal probe results are omitted; transient/unknown probe
+ * results stay visible, matching launch-all's constructive fail-open behavior.
+ */
+export declare function discoverLiveLaunchMenuCandidates(deps: LaunchMenuCandidateDeps): Promise<{
+    candidates: LaunchMenuDroneCandidate[];
+    launchAllCubeId?: string;
+}>;
 /**
  * Resolve and configure the CLI that will actually launch.
  *
@@ -47,14 +82,15 @@ export interface LaunchMenuInputs {
  */
 export declare function configureSelectedLaunchCli(defaultCli: BorgCli, action: LaunchMenuAction | undefined, configure: (cli: BorgCli) => void): BorgCli;
 /**
- * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY. Any explicit
- * subcommand/flag, or a non-TTY (piped/scripted/CI) invocation, falls straight
- * through to the existing default launch — no menu, no behavior change.
+ * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY without an
+ * active seat. Explicit invocations, non-TTY launches, and direct worktree
+ * resumes fall straight through to the existing launch path.
  */
 export declare function shouldShowLaunchMenu(args: {
     extraArgs: string[];
     stdinIsTTY: boolean;
     stdoutIsTTY: boolean;
+    hasActiveSeat?: boolean;
 }): boolean;
 export declare function explicitCliLaunchHint(args: {
     explicitCli: BorgCli | undefined;
@@ -94,4 +130,5 @@ export declare function runBareLaunchMenu(inputs: LaunchMenuInputs, prompt: (mes
     maxAttempts?: number;
     warn?: (message: string) => void;
 }): Promise<LaunchMenuAction>;
+export {};
 //# sourceMappingURL=bare-launch-menu.d.ts.map
