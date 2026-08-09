@@ -9,8 +9,6 @@ import {
   addOpenCodeLaunchAccess,
   isCodexHookRegistered,
 } from '../src/config-utils';
-import { resolveForeignPathReminderPath } from '../src/self-path';
-import { shellEscape } from '../src/shell-escape';
 import { codexLaunchDirectoryArgs, scratchRootForSeat } from '../src/launch-access';
 
 let root: string;
@@ -56,7 +54,7 @@ describe('Claude launch access', () => {
     expect(parsed.hooks.UserPromptSubmit[0].hooks[0].command).toBe('other-tool');
     expect(parsed.hooks.PreToolUse).toContainEqual({
       matcher: '*',
-      hooks: [{ type: 'command', command: shellEscape(resolveForeignPathReminderPath()) }],
+      hooks: [{ type: 'command', command: 'borg-foreign-path-reminder' }],
     });
 
     const first = fs.readFileSync(settingsPath, 'utf8');
@@ -160,9 +158,9 @@ describe('Codex launch hook', () => {
     const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
     expect(parsed.hooks.SessionStart[0].hooks[0].command).toBe('existing');
     expect(parsed.hooks.PreToolUse).toContainEqual({
-      hooks: [{ type: 'command', command: shellEscape(resolveForeignPathReminderPath()) }],
+      hooks: [{ type: 'command', command: 'borg-foreign-path-reminder' }],
     });
-    expect(isCodexHookRegistered('PreToolUse', shellEscape(resolveForeignPathReminderPath()), hooksPath)).toBe(true);
+    expect(isCodexHookRegistered('PreToolUse', 'borg-foreign-path-reminder', hooksPath)).toBe(true);
   });
 });
 

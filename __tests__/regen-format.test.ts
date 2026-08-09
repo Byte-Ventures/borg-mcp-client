@@ -769,6 +769,7 @@ describe('wakePathArming', () => {
     const arming = wakePathArming('claude', inboxPath, monitorStateRoot);
 
     it('uses the inbox Monitor without a polling wake timer', () => {
+      expect(arming).toContain('`borg-inbox-monitor --state-root');
       expect(arming).toContain('inbox-monitor');
       expect(arming).toContain('--state-root');
       expect(arming).toContain(monitorStateRoot);
@@ -963,12 +964,7 @@ describe('formatLeanOrientation', () => {
     }
   });
 
-  // gh#client#18: long install paths (e.g. deeply nested node_modules or
-  // paths with spaces) must not push orientation over the 2KB budget.
-  // The self-path module is mocked to simulate a genuinely long install path
-  // with spaces and an embedded single quote, then wakePathArming is exercised
-  // via a fresh dynamic import to ensure the production code handles it.
-  it('stays under 2KB with a long install path containing spaces and an embedded single quote', async () => {
+  it('stays under 2KB and never embeds the running installation path', async () => {
     const longDir = '/Users/dev/Projects/my borg workspace/node_modules/borgmcp/dist';
     const longBin = `${longDir}/inbox-monitor.js`;
     const longRegen = `${longDir}/regen.js`;
@@ -999,11 +995,9 @@ describe('formatLeanOrientation', () => {
           expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(2048);
         }
       }
-      // Verify the long path appears in the output (production code ran).
-      // wakePathArming shell-escapes the path (wraps in single quotes),
-      // so check for the escaped form.
       const sample = mod.formatLeanOrientation({ ...base, agentKind: 'claude', source: undefined });
-      expect(sample).toContain(shellEscape(longBin));
+      expect(sample).toContain('borg-inbox-monitor');
+      expect(sample).not.toContain(longBin);
     } finally {
       vi.doUnmock('../src/self-path.js');
       vi.doUnmock('../src/stream-status.js');

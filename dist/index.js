@@ -18,7 +18,7 @@ import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, append
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, getActiveCubeForWorktree, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, pinMcpSeatIdentity, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
-import { addSessionStartHook, addUserPromptSubmitHook } from './config-utils.js';
+import { addUserPromptSubmitHook } from './config-utils.js';
 import { humanAgo, formatLogEntryMarkdown, formatRegenMarkdown, getDronePlaybook, getDronePlaybookChapter, markArrivalAnnouncedThisProcess, nullTaxonomyTip, regenWakePathDroneLabel, } from './regen-format.js';
 import { startLogStream, getStreamStatus } from './log-stream.js';
 import { isMcpReadinessProbe } from './readiness-probe.js';
@@ -141,11 +141,6 @@ export async function main() {
     const readinessProbe = isMcpReadinessProbe();
     const openCodeRuntime = resolveSessionAgentKind() === 'opencode';
     const startupServices = {
-        // Auto-register the SessionStart hook so existing users get borg-regen
-        // auto-orientation on session start without re-running borg setup. Idempotent.
-        sessionStartHook: () => {
-            addSessionStartHook();
-        },
         // Auto-register the UserPromptSubmit audit hook so the drone gets a
         // nudge if the previous assistant span used state-changing tools
         // without calling borg_log. Domain-agnostic — knows nothing about git

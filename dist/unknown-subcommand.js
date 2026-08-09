@@ -14,6 +14,7 @@
 export const KNOWN_SUBCOMMANDS = [
     'setup',
     'update',
+    'doctor',
     'assimilate',
     'reset-local-connection',
     'recover-enrollment',

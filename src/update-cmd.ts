@@ -8,7 +8,7 @@ import { updateHelpText } from './cli-help.js';
 import { preflightBorgServerTag } from './server-handshake.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { shellEscape } from './shell-escape.js';
-import { refreshManagedAgentMcpConfigs } from './config-utils.js';
+import { refreshAndVerifyManagedAgentIntegrations } from './agent-integration-health.js';
 
 const CLIENT_PACKAGE = 'borgmcp';
 const SERVER_PACKAGE = 'borgmcp-server';
@@ -65,7 +65,7 @@ export interface UpdateDeps {
   reenter(binPath: string, args: readonly string[]): Promise<number>;
   serverJson(binPath: string, command: 'update' | 'status'): Promise<unknown>;
   verifyRunningProtocol(origin: string): Promise<void>;
-  refreshAgentMcpConfigs(): Promise<Array<'claude' | 'codex' | 'opencode'>>;
+  refreshAgentIntegrations(): Promise<void>;
   confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
   isTTY(): boolean;
   stdout(text: string): void;
@@ -115,8 +115,7 @@ type ServerUpdateFailureStage =
   | 'final server state verification'
   | 'final package verification'
   | 'managed service continuity check'
-  | 'running server protocol verification'
-  | 'agent MCP config refresh';
+  | 'running server protocol verification';
 
 interface NpmContext {
   commandPath: string;
@@ -699,11 +698,10 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
 
   if (!serverWasPresent) {
     try {
-      await deps.refreshAgentMcpConfigs();
+      await deps.refreshAgentIntegrations();
     } catch (error) {
       deps.stderr(
-        `Client updated, but agent MCP config refresh failed: ${errorMessage(error, 'unknown failure')}.\n` +
-        `Run borg setup to repair Borg-written agent registrations. Configurations that use another command are not changed.\n`,
+        `Client updated, but agent integration refresh and health check failed: ${errorMessage(error, 'unknown failure')}.\n`,
       );
       return 1;
     }
@@ -821,9 +819,18 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       retryCommand = 'borg server status';
       await deps.verifyRunningProtocol(status.endpoint!);
     }
-    failureStage = 'agent MCP config refresh';
-    retryCommand = 'borg update --yes';
-    await deps.refreshAgentMcpConfigs();
+    try {
+      await deps.refreshAgentIntegrations();
+    } catch (error) {
+      const verifiedOutcome = state === 'stopped'
+        ? 'prepared runtime verified; server remains stopped'
+        : 'running identities and protocol verified';
+      deps.stderr(
+        `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; ${verifiedOutcome}.\n` +
+        `Agent integration refresh and health check failed: ${errorMessage(error, 'unknown failure')}.\n`,
+      );
+      return signalExitCode(error) ?? 1;
+    }
     deps.stdout(
       state === 'stopped'
         ? (
@@ -1225,7 +1232,7 @@ export function buildDefaultUpdateDeps(): UpdateDeps {
       const trust = await loadBorgServerTrust(origin);
       await preflightBorgServerTag(origin, trust.fetchImpl);
     },
-    refreshAgentMcpConfigs: async () => refreshManagedAgentMcpConfigs(),
+    refreshAgentIntegrations: async () => refreshAndVerifyManagedAgentIntegrations(),
     confirm: defaultConfirm,
     isTTY: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
     stdout: (text) => process.stdout.write(text),

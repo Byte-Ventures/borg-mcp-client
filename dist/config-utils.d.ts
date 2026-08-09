@@ -32,6 +32,27 @@ export declare function addProjectSessionStartHook(projectRoot: string): boolean
 export declare function addClaudeLaunchAccess(projectRoot: string, paths: LaunchAccessPaths): boolean;
 /** Peek variant of addProjectSessionStartHook — no mutation. */
 export declare function isProjectSessionStartHookRegistered(projectRoot: string): boolean;
+export interface RefreshManagedAgentHookConfigOptions {
+    homeDir?: string;
+}
+export interface ManagedAgentHookConfigHealth {
+    path: string;
+    status: 'absent' | 'ok' | 'stale' | 'invalid';
+    detail?: string;
+}
+/**
+ * Enumerate only Borg's canonical two-level managed-worktree layout. Every
+ * traversed component must be a real directory; symlinks are never followed.
+ */
+export declare function managedAgentHookConfigPaths(homeDir?: string): string[];
+/**
+ * Heal stale Borg-owned hook commands in global agent files and canonical
+ * managed worktrees. Non-Borg hooks and noncanonical worktree roots are left
+ * untouched. Later files are still attempted when one file is invalid.
+ */
+export declare function refreshManagedAgentHookConfigs(options?: RefreshManagedAgentHookConfigOptions): string[];
+/** Read-only mirror of the updater's stale-command predicate. */
+export declare function inspectManagedAgentHookConfigs(homeDir?: string): ManagedAgentHookConfigHealth[];
 /**
  * Peek whether the borg-regen SessionStart hook is already registered, without
  * mutating settings. Returns false on any read error (safe-default).

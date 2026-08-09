@@ -132,7 +132,7 @@ function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
         : runningStatus;
     }),
     verifyRunningProtocol: vi.fn(async () => { calls.push('protocol'); }),
-    refreshAgentMcpConfigs: vi.fn(async () => { calls.push('refresh-agent-mcp'); return []; }),
+    refreshAgentIntegrations: vi.fn(async () => { calls.push('refresh-agent-integrations'); }),
     confirm: vi.fn(async () => 'yes'),
     isTTY: () => true,
     stdout: vi.fn(),
@@ -391,12 +391,12 @@ describe('runUpdate', () => {
       'server:update',
       'server:status',
       'protocol',
-      'refresh-agent-mcp',
+      'refresh-agent-integrations',
     ]);
     expect(d.verifyRunningProtocol).toHaveBeenCalledWith('https://127.0.0.1:7091');
   });
 
-  it('refreshes Borg-written agent MCP registrations after the pair is verified', async () => {
+  it('refreshes and verifies Borg-written agent integrations after the pair is verified', async () => {
     const d = targetDeps();
 
     await expect(runUpdate({
@@ -408,12 +408,12 @@ describe('runUpdate', () => {
       },
     }, d)).resolves.toBe(0);
 
-    expect(d.refreshAgentMcpConfigs).toHaveBeenCalledOnce();
+    expect(d.refreshAgentIntegrations).toHaveBeenCalledOnce();
     expect(vi.mocked(d.verifyRunningProtocol).mock.invocationCallOrder[0])
-      .toBeLessThan(vi.mocked(d.refreshAgentMcpConfigs).mock.invocationCallOrder[0]);
+      .toBeLessThan(vi.mocked(d.refreshAgentIntegrations).mock.invocationCallOrder[0]);
   });
 
-  it('refreshes Borg-written agent MCP registrations when no server is installed', async () => {
+  it('refreshes Borg-written agent integrations when no server is installed', async () => {
     const d = targetDeps({ currentServer: vi.fn(async () => null) });
 
     await expect(runUpdate({
@@ -425,13 +425,13 @@ describe('runUpdate', () => {
       },
     }, d)).resolves.toBe(0);
 
-    expect(d.refreshAgentMcpConfigs).toHaveBeenCalledOnce();
+    expect(d.refreshAgentIntegrations).toHaveBeenCalledOnce();
     expect(d.serverJson).not.toHaveBeenCalled();
   });
 
-  it('reports partial completion when agent MCP config refresh fails', async () => {
+  it('reports partial completion when agent integration refresh or health fails', async () => {
     const d = targetDeps({
-      refreshAgentMcpConfigs: vi.fn(async () => { throw new Error('opencode config is invalid'); }),
+      refreshAgentIntegrations: vi.fn(async () => { throw new Error('borg-clear-rewake: missing'); }),
     });
 
     await expect(runUpdate({
@@ -443,10 +443,12 @@ describe('runUpdate', () => {
       },
     }, d)).resolves.toBe(1);
 
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
-      'Server update failed during agent MCP config refresh: opencode config is invalid.',
-    ));
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('Next: borg update --yes'));
+    const output = vi.mocked(d.stderr).mock.calls.map(([text]) => text).join('');
+    expect(output).toContain(
+      'Updated borgmcp@2.3.0 and borgmcp-server@0.4.0; running identities and protocol verified.',
+    );
+    expect(output).toContain('Agent integration refresh and health check failed: borg-clear-rewake: missing.');
+    expect(output).not.toContain('Server update failed');
   });
 
   it('accepts a stopped server only when controller and prepared runtime match target', async () => {
@@ -641,7 +643,7 @@ describe('runUpdate', () => {
       yes: true,
       target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
     }, d)).resolves.toBe(0);
-    expect(d.calls).toEqual(['server:status', 'protocol', 'refresh-agent-mcp']);
+    expect(d.calls).toEqual(['server:status', 'protocol', 'refresh-agent-integrations']);
   });
 
   it('updates only the client when the server was absent and never installs it', async () => {
