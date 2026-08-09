@@ -128,7 +128,9 @@ function readLaunchSeatExpectation(
   env: NodeJS.ProcessEnv = process.env,
 ): LaunchSeatExpectation | null {
   const raw = env[BORG_LAUNCH_EXPECTED_SEAT_ENV];
-  if (raw === undefined) return null;
+  // OpenCode substitutes an unset `{env:NAME}` reference with an empty string.
+  // That is an ordinary bare launch, not a malformed launch-seat expectation.
+  if (raw === undefined || raw === '') return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);

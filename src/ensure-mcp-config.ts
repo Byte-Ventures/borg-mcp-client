@@ -5,7 +5,7 @@ import {
   addOpenCodeMcpServer,
   isCodexMcpServerConfigured,
   isMcpServerConfigured,
-  isOpenCodeMcpServerConfigured,
+  isOpenCodeMcpServerConfiguredForLaunch,
 } from './config-utils.js';
 
 export interface EnsureMcpConfigDeps {
@@ -22,7 +22,7 @@ const defaultDeps: EnsureMcpConfigDeps = {
   addClaude: addMcpServer,
   isCodexConfigured: isCodexMcpServerConfigured,
   addCodex: addCodexMcpServer,
-  isOpenCodeConfigured: isOpenCodeMcpServerConfigured,
+  isOpenCodeConfigured: isOpenCodeMcpServerConfiguredForLaunch,
   addOpenCode: addOpenCodeMcpServer,
 };
 

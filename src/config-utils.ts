@@ -23,6 +23,7 @@ import {
 import { shellEscape } from './shell-escape.js';
 import { BORG_STATE_ROOT_ENV, borgAgentConfigEnv, borgHomeRoot } from './private-root.js';
 import type { LaunchAccessPaths } from './launch-access.js';
+import { BORG_LAUNCH_EXPECTED_SEAT_ENV } from './cubes.js';
 
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -36,6 +37,7 @@ const CLEAR_REWAKE_HOOK_COMMAND = 'borg-clear-rewake';
 const AUDIT_HOOK_COMMAND = 'borg-log-audit';
 const FOREIGN_PATH_REMINDER_HOOK_COMMAND = 'borg-foreign-path-reminder';
 const MCP_COMMAND = 'borg-mcp';
+const OPENCODE_LAUNCH_EXPECTED_SEAT_REFERENCE = `{env:${BORG_LAUNCH_EXPECTED_SEAT_ENV}}`;
 
 /**
  * Claude Code CLI config path. The CLI reads `mcpServers.<name>` from
@@ -1184,6 +1186,28 @@ export function isOpenCodeMcpServerConfigured(
 }
 
 /**
+ * Launch-time OpenCode registration check. Ordinary launches retain the
+ * existing configured/not-configured behavior. A targeted `borg launch`,
+ * identified by its non-empty expected-seat marker, additionally requires the
+ * config substitution that carries that marker into OpenCode's MCP child.
+ */
+export function isOpenCodeMcpServerConfiguredForLaunch(
+  configPath: string = path.join(borgHomeRoot(), '.config', 'opencode', 'opencode.json'),
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!isOpenCodeMcpServerConfigured(configPath)) return false;
+  if (!env[BORG_LAUNCH_EXPECTED_SEAT_ENV]) return true;
+  try {
+    const borgServer = readJsonFile(configPath)?.mcp?.borg;
+    const environment = borgServer?.environment ?? borgServer?.env;
+    return environment?.[BORG_LAUNCH_EXPECTED_SEAT_ENV] ===
+      OPENCODE_LAUNCH_EXPECTED_SEAT_REFERENCE;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Pre-authorize the exact worktree + scratch paths in the launch-root
  * OpenCode config. This intentionally writes only the project-local
  * `.opencode/opencode.json`; the user-global config is shared by every seat.
@@ -1254,12 +1278,11 @@ export function addOpenCodeLaunchAccess(
 
 /**
  * Add borg MCP server to OpenCode using `opencode mcp add` CLI.
- * Pins BORG_SESSION=1, BORG_AGENT_KIND=opencode, the legacy BORG_OPENCODE=1,
- * and BORG_API_URL in the server environment so the MCP child inherits the
- * activation gate + explicit agent-kind signal (same approach as Codex's
- * pinned env — OpenCode MCP children only see pinned env, not parent process
- * env). Existing configs with BORG_OPENCODE remain supported by the runtime
- * fallback.
+ * Pins activation and agent-kind signals plus an OpenCode config substitution
+ * for the launch-scoped expected seat. OpenCode resolves `{env:NAME}` from its
+ * own launch environment before starting the MCP child, so `borg launch`
+ * reaches the identity check without persisting one launch's value. Existing
+ * configs with BORG_OPENCODE remain supported by the runtime fallback.
  */
 export function addOpenCodeMcpServer(): void {
   try {
@@ -1270,8 +1293,10 @@ export function addOpenCodeMcpServer(): void {
     const stateRootEnvArg = stateRoot
       ? ` --env ${BORG_STATE_ROOT_ENV}=${shellQuote(stateRoot)}`
       : '';
+    const launchExpectedSeatEnvArg =
+      ` --env ${BORG_LAUNCH_EXPECTED_SEAT_ENV}=${shellQuote(OPENCODE_LAUNCH_EXPECTED_SEAT_REFERENCE)}`;
     execSync(
-      `opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg}${stateRootEnvArg} -- ${shellQuote(MCP_COMMAND)}`,
+      `opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg}${stateRootEnvArg}${launchExpectedSeatEnvArg} -- ${shellQuote(MCP_COMMAND)}`,
       { stdio: 'inherit', env: borgAgentConfigEnv(process.env) }
     );
   } catch (error: any) {

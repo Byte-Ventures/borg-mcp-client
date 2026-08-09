@@ -31,9 +31,12 @@ import {
   isCodexSessionStartHookRegistered,
   isCodexUserPromptSubmitHookRegistered,
   isMcpServerConfigured,
+  isOpenCodeMcpServerConfigured,
+  isOpenCodeMcpServerConfiguredForLaunch,
   refreshManagedAgentHookConfigs,
   refreshManagedAgentMcpConfigs,
 } from '../src/config-utils';
+import { BORG_LAUNCH_EXPECTED_SEAT_ENV } from '../src/cubes';
 import { resolveLogAuditPath, resolveRegenPath } from '../src/self-path';
 
 const CANONICAL_REGEN = 'borg-regen';
@@ -243,6 +246,46 @@ describe('isCodexMcpServerConfigured', () => {
       if (previous === undefined) delete process.env.BORG_STATE_ROOT;
       else process.env.BORG_STATE_ROOT = previous;
     }
+  });
+
+  it('forwards the launch identity marker through OpenCode config substitution', () => {
+    addOpenCodeMcpServer();
+    const addCall = execSyncMock.mock.calls.find(([command]) =>
+      String(command).startsWith('opencode mcp add borg ')
+    );
+    expect(addCall).toBeDefined();
+    const [command] = addCall! as [string, { env: NodeJS.ProcessEnv }];
+    expect(command).toContain(
+      `--env ${BORG_LAUNCH_EXPECTED_SEAT_ENV}='{env:${BORG_LAUNCH_EXPECTED_SEAT_ENV}}'`,
+    );
+  });
+});
+
+describe('isOpenCodeMcpServerConfiguredForLaunch', () => {
+  it('requires the launch identity marker to be forwarded from the OpenCode process', () => {
+    const p = path.join(tmpDir, 'opencode.json');
+    const environment: Record<string, string> = {
+      BORG_AGENT_KIND: 'opencode',
+      [BORG_LAUNCH_EXPECTED_SEAT_ENV]: `{env:${BORG_LAUNCH_EXPECTED_SEAT_ENV}}`,
+    };
+    fs.writeFileSync(p, JSON.stringify({
+      mcp: { borg: { type: 'local', command: ['borg-mcp'], environment } },
+    }));
+    const launchEnv = { [BORG_LAUNCH_EXPECTED_SEAT_ENV]: 'selected-seat' };
+    expect(isOpenCodeMcpServerConfiguredForLaunch(p, launchEnv)).toBe(true);
+
+    delete environment[BORG_LAUNCH_EXPECTED_SEAT_ENV];
+    fs.writeFileSync(p, JSON.stringify({
+      mcp: { borg: { type: 'local', command: ['borg-mcp'], environment } },
+    }));
+    expect(isOpenCodeMcpServerConfigured(p)).toBe(true);
+    expect(isOpenCodeMcpServerConfiguredForLaunch(p, launchEnv)).toBe(false);
+
+    environment[BORG_LAUNCH_EXPECTED_SEAT_ENV] = 'stale-launch';
+    fs.writeFileSync(p, JSON.stringify({
+      mcp: { borg: { type: 'local', command: ['borg-mcp'], environment } },
+    }));
+    expect(isOpenCodeMcpServerConfiguredForLaunch(p, launchEnv)).toBe(false);
   });
 });
 

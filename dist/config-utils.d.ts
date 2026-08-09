@@ -161,6 +161,13 @@ export declare function isCodexUserPromptSubmitHookRegistered(hooksPath?: string
  */
 export declare function isOpenCodeMcpServerConfigured(configPath?: string): boolean;
 /**
+ * Launch-time OpenCode registration check. Ordinary launches retain the
+ * existing configured/not-configured behavior. A targeted `borg launch`,
+ * identified by its non-empty expected-seat marker, additionally requires the
+ * config substitution that carries that marker into OpenCode's MCP child.
+ */
+export declare function isOpenCodeMcpServerConfiguredForLaunch(configPath?: string, env?: NodeJS.ProcessEnv): boolean;
+/**
  * Pre-authorize the exact worktree + scratch paths in the launch-root
  * OpenCode config. This intentionally writes only the project-local
  * `.opencode/opencode.json`; the user-global config is shared by every seat.
@@ -168,12 +175,11 @@ export declare function isOpenCodeMcpServerConfigured(configPath?: string): bool
 export declare function addOpenCodeLaunchAccess(projectRoot: string, paths: LaunchAccessPaths): boolean;
 /**
  * Add borg MCP server to OpenCode using `opencode mcp add` CLI.
- * Pins BORG_SESSION=1, BORG_AGENT_KIND=opencode, the legacy BORG_OPENCODE=1,
- * and BORG_API_URL in the server environment so the MCP child inherits the
- * activation gate + explicit agent-kind signal (same approach as Codex's
- * pinned env — OpenCode MCP children only see pinned env, not parent process
- * env). Existing configs with BORG_OPENCODE remain supported by the runtime
- * fallback.
+ * Pins activation and agent-kind signals plus an OpenCode config substitution
+ * for the launch-scoped expected seat. OpenCode resolves `{env:NAME}` from its
+ * own launch environment before starting the MCP child, so `borg launch`
+ * reaches the identity check without persisting one launch's value. Existing
+ * configs with BORG_OPENCODE remain supported by the runtime fallback.
  */
 export declare function addOpenCodeMcpServer(): void;
 //# sourceMappingURL=config-utils.d.ts.map

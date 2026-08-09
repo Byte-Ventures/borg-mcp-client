@@ -254,6 +254,19 @@ describe('production local-registry wiring', () => {
       droneLabel: 'builder-sibling',
     });
 
+    const priorEmptyExpectation = process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV];
+    process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV] = '';
+    try {
+      await expect(cubes.getActiveCubeForWorktree(activeWorktree)).resolves.toMatchObject({
+        cubeId: CUBE_B,
+        droneId: DRONE_B,
+        droneLabel: 'builder-sibling',
+      });
+    } finally {
+      if (priorEmptyExpectation === undefined) delete process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV];
+      else process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV] = priorEmptyExpectation;
+    }
+
     const pendingBearer = 'pending-bearer-'.padEnd(43, 'p');
     const pendingOperation = { projectRoot: stateRoot, kind: 'sibling' as const, operationKey: 'pending' };
     await seats.mintPendingSeat({ ...base, operation: pendingOperation, credential: pendingBearer });
