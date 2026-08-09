@@ -18,7 +18,8 @@ export interface AgentIntegrationHealth {
 }
 export interface OpenCodePluginHealth {
     path: string;
-    status: 'ok' | 'missing' | 'outdated' | 'unreadable';
+    configured: boolean;
+    status: 'ok' | 'absent' | 'missing' | 'outdated' | 'unreadable';
     version?: string;
     detail?: string;
 }

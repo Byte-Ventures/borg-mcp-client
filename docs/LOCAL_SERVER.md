@@ -155,8 +155,8 @@ Borg tools are inactive unless the agent session was launched with `borg`.
 For Claude Code and Codex, `BORG_DISABLE_LAUNCH_REMINDER` is a presence-based
 local opt-out for launch orientation messaging; setting it does not activate
 Borg tools or change server authorization. OpenCode has no plain-launch reminder;
-inside a Borg-launched process, its orientation plugin restores the lean Borg
-orientation once after OpenCode creates a New session and preserves it across
+inside a Borg-launched process, its orientation plugin supplies the Borg
+orientation once after OpenCode creates a new session and preserves it across
 compaction.
 
 Each assimilated seat also receives a disposable scratch root at
@@ -219,8 +219,8 @@ state. It inventories managed hook files and verifies the OpenCode orientation
 plugin against its borgmcp version marker and generated behavior,
 and reports status-specific recovery: reinstall a missing bin, correct PATH for
 the wrong package or version, run `borg update --yes` for stale managed hooks,
-repair a named invalid configuration before rerunning update, or relaunch with
-`borg --cli opencode` to install a missing or outdated plugin. The plugin API is
+repair a named invalid configuration before rerunning update, or run
+`borg update --yes` to install a missing or outdated OpenCode plugin. The plugin API is
 empirically bound to OpenCode 1.18.15 with `@opencode-ai/plugin` 1.17.18; that
 SDK uses the path/query/body options shape for history reads and prompt
 submission, not the newer flat v2 call shape.
