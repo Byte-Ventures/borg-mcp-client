@@ -86,6 +86,7 @@ function selectBackend(args, deps) {
     // macOS defaults to native terminal tabs/windows when either supported app
     // is installed. Explicit modes above always win.
     if (platform === 'darwin' &&
+        deps.isTTY() &&
         hasMacOSTerminalApp(deps)) {
         return { backend: 'terminals' };
     }

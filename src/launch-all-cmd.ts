@@ -104,6 +104,7 @@ function selectBackend(args: LaunchAllArgs, deps: LaunchAllDeps): { backend: Bac
   // is installed. Explicit modes above always win.
   if (
     platform === 'darwin' &&
+    deps.isTTY() &&
     hasMacOSTerminalApp(deps)
   ) {
     return { backend: 'terminals' };
