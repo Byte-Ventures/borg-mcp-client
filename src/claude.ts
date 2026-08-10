@@ -65,9 +65,7 @@ import { discoverDroneCandidates } from './launch-all-discovery.js';
 import {
   configureSelectedLaunchCli,
   discoverLiveLaunchMenuCandidates,
-  explicitCliLaunchHint,
   runBareLaunchMenu,
-  shouldResolveExplicitCliLaunchHintTargets,
   shouldShowLaunchMenu,
   type LaunchMenuAction,
 } from './bare-launch-menu.js';
@@ -372,34 +370,9 @@ async function main() {
   // Active cube for this directory — needed for the launch menu's option-3
   // availability, the terminal title, and the inbox-Monitor clause below.
   const active = await getActiveCube();
-  let launchAllTargetsAvailable: boolean | undefined;
-  const hasLaunchAllTargets = async (): Promise<boolean> => {
-    if (!active) return false;
-    if (launchAllTargetsAvailable === undefined) {
-      const candidates = await discoverDroneCandidates(
-        { targetCubeId: active.cubeId },
-        buildDefaultLaunchAllDeps()
-      );
-      launchAllTargetsAvailable = candidates.length > 0;
-    }
-    return launchAllTargetsAvailable;
-  };
 
   const stdinIsTTY = process.stdin.isTTY === true;
   const stdoutIsTTY = process.stdout.isTTY === true;
-  const explicitCliHint = explicitCliLaunchHint({
-    explicitCli: parsedCli.cli,
-    stdinIsTTY,
-    stdoutIsTTY,
-    hasActiveCube: active !== null,
-    hasLaunchAllTargets: shouldResolveExplicitCliLaunchHintTargets({
-      explicitCli: parsedCli.cli,
-      stdinIsTTY,
-      stdoutIsTTY,
-      hasActiveCube: active !== null,
-    }) ? await hasLaunchAllTargets() : false,
-  });
-  if (explicitCliHint) process.stderr.write(explicitCliHint);
 
   // gh#853: bare `borg` (no args) interactive launch menu. TTY-only + bare-args-
   // only (shouldShowLaunchMenu) so every scripted/programmatic `borg` and every

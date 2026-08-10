@@ -219,12 +219,13 @@ borg assimilate --host <server> --enroll
 
 ## Multiple seats and deterministic selection
 
-An in-place seat uses operation kind `seat` and operation key
-`current-worktree`. A sibling uses operation kind `sibling`; named siblings key
-on their worktree name, while implicit siblings receive a unique operation key.
-These operations derive distinct credential references and distinct bearers.
-Creating a sibling therefore never moves or overwrites the original
-worktree's active seat.
+Every new drone uses operation kind `sibling` in a managed worktree. Named
+siblings key on their worktree name, while implicit siblings receive a unique
+operation key. The older `seat` kind with operation key `current-worktree`
+remains supported only for reading and resuming legacy in-place seats with
+`--here`; Borg does not migrate or re-key them. These operations derive distinct
+credential references and distinct bearers, so creating a sibling never moves
+or overwrites a legacy worktree's active seat.
 
 Historical recovery or interrupted operations can leave more than one active
 record bound to one worktree. Every process uses the same total order:
@@ -232,7 +233,7 @@ record bound to one worktree. Every process uses the same total order:
 1. A candidate not definitively rejected in this process comes before a
    rejected, revoked, or evicted candidate.
 2. A `sibling` candidate finalized into this worktree comes before an older
-   in-place `seat` candidate.
+   legacy in-place `seat` candidate.
 3. Remaining ties use the credential reference's lexical order.
 
 Only `active` records participate in normal selection. A bound `pending` record

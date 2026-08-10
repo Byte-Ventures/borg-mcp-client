@@ -227,17 +227,17 @@ export function assimilateHelpText(version: string): string {
   return (
     `borg assimilate (borgmcp ${version}) — join or create a cube under a role\n\n` +
     `Usage:\n` +
-    `  borg assimilate [role]               Join the active cube under [role] (default role if omitted)\n` +
-    `  borg assimilate [role] --worktree <name>   Spawn the drone in an isolated git worktree\n` +
+    `  borg assimilate [role]               Create the drone in a managed git worktree\n` +
+    `  borg assimilate [role] --worktree <name>   Name the drone's managed git worktree\n` +
     `                                       (~/.borg/worktrees/<repo>/<name>)\n` +
-    `  borg assimilate --here               Assimilate in the current worktree (no sibling spawn)\n` +
+    `  borg assimilate --here               Resume this worktree's saved drone\n` +
     `  borg assimilate --here --force       Reattach despite a still-live inbox monitor\n` +
     `  borg assimilate --host <host>        Join an authorized self-hosted cube\n` +
     `  borg assimilate --host <host> --enroll   Operator-terminal enrollment, then create/join (preview)\n` +
     `  borg assimilate --help               Show this help\n\n` +
     `Flags:\n` +
-    `  --worktree <name>          Create + launch the drone in a sibling git worktree\n` +
-    `  --here                     Stay in the current worktree (no sibling spawn)\n` +
+    `  --worktree <name>          Name the managed worktree created for the new drone\n` +
+    `  --here                     Resume this worktree's saved drone\n` +
     `  --force                    Reattach despite a still-live inbox monitor in this worktree\n` +
     `  --cube-name <name>         Repository cube name (otherwise edit the proposed name)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +
