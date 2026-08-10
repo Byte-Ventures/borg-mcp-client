@@ -27,7 +27,6 @@ export function launchAllHelpText(version) {
         `  --mode <tmux|terminals|pastelist>     Select the launch backend\n` +
         `  --only <name>                         Launch one role or drone label\n` +
         `  --dry-run                             Show what would launch\n` +
-        `  --cli <claude|codex|opencode>         Select the agent CLI\n` +
         `  --no-attach                           Do not attach to the tmux session\n` +
         `  --yes, -y                             Skip the large-fleet confirmation\n` +
         `  --force                               Override live-session skips\n` +
@@ -113,8 +112,6 @@ export function topLevelHelpText(version) {
         `  borg seats               List this machine's registered drones and worktrees\n` +
         `  borg launch <drone-label-or-id-prefix>  Reopen one registered drone from its worktree\n` +
         `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
-        `  borg launch-all [cube] --cli claude|codex|opencode\n` +
-        `                           Launch all drone worktrees with that agent CLI\n` +
         `  borg server <command> [arguments]\n` +
         `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
         `  borg --version           Show installed version\n\n` +

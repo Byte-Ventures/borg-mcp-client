@@ -1,6 +1,6 @@
 // gh#556 Part 2 — tmux backend (primary, spec §4.1).
 // One detached `borg-<cube>` session, one window per drone, each running
-// `borg assimilate --here`. Idempotent: reuses an existing session (adds windows).
+// `borg launch <droneId>`. Idempotent: reuses an existing session (adds windows).
 import { buildLaunchCommand } from '../launch-all-command.js';
 import { writeLockMarker } from '../launch-all-locks.js';
 export async function runTmuxBackend(candidates, opts, deps) {
@@ -9,7 +9,7 @@ export async function runTmuxBackend(candidates, opts, deps) {
     for (let i = 0; i < candidates.length; i++) {
         const c = candidates[i];
         // Rate-limit stagger: wait BEFORE each launch after the first, so a fleet's
-        // agents don't all bootstrap (assimilate + regen + roster) simultaneously and
+        // agents don't all bootstrap (launch + regen + roster) simultaneously and
         // trip the per-user/IP limiter. Window creation is ~instant otherwise, so
         // without this N agents start within ~100ms. 0 → no delay (first never waits).
         if (i > 0 && launchDelayMs > 0) {
@@ -33,7 +33,7 @@ export async function runTmuxBackend(candidates, opts, deps) {
         }
         // tmux-level window name (status bar). The agent's own OSC-0 may update it later.
         deps.runSync('tmux', ['rename-window', '-t', windowId, c.droneLabel]);
-        const cmd = buildLaunchCommand(c.worktreeDir, borgPath, { keepOpenOnFail: true });
+        const cmd = buildLaunchCommand(c, borgPath, { keepOpenOnFail: true });
         deps.runSync('tmux', ['send-keys', '-t', windowId, cmd, 'Enter']);
         // Lock marker written immediately after dispatch (best-effort liveness signal).
         writeLockMarker(deps, c.cubeId, c.droneLabel, c.worktreeDir, launchedAtISO);

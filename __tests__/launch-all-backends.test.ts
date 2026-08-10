@@ -118,7 +118,9 @@ describe('pastelist backend (gh#556 Part 2 §4.3)', () => {
     const deps = makeStubDeps();
     runPastelistBackend([cand({ worktreeDir: "/a b/it's" })], '/usr/local/bin/borg', deps);
     const out = (deps.stdout as any).mock.calls.map((c: any[]) => c[0]).join('');
-    expect(out).toContain("cd '/a b/it'\\''s' && '/usr/local/bin/borg' assimilate --here");
+    expect(out).toContain(
+      "cd '/a b/it'\\''s' && '/usr/local/bin/borg' launch '00000001-0000-0000-0000-000000000000'"
+    );
   });
 });
 
@@ -138,7 +140,7 @@ describe('tmux backend (gh#556 Part 2 §4.1)', () => {
     expect(calls.some((a: string[]) => a[0] === 'rename-window' && a[2] === '@7' && a[3] === 'drone-1')).toBe(true);
     const sk = calls.find((a: string[]) => a[0] === 'send-keys');
     expect(sk[2]).toBe('@7');
-    expect(sk[3]).toContain('assimilate --here');
+    expect(sk[3]).toContain("launch '00000001-0000-0000-0000-000000000000'");
     expect(calls.some((a: string[]) => String(a[2] ?? '').includes(':0'))).toBe(false); // never index-targets
     expect(deps.writeFile).toHaveBeenCalled(); // lock marker
   });

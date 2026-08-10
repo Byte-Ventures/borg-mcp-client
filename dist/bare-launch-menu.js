@@ -83,7 +83,7 @@ export function explicitCliLaunchHint(args) {
         return null;
     if (!args.hasActiveCube || !args.hasLaunchAllTargets)
         return null;
-    return `borg --cli ${args.explicitCli} launches ${PRETTY[args.explicitCli]} directly; use bare borg for the launch menu or borg launch-all --cli ${args.explicitCli} for all drone worktrees.\n`;
+    return `borg --cli ${args.explicitCli} launches ${PRETTY[args.explicitCli]} directly; use bare borg for the launch menu.\n`;
 }
 export function shouldResolveExplicitCliLaunchHintTargets(args) {
     return Boolean(args.explicitCli && args.stdinIsTTY && args.stdoutIsTTY && args.hasActiveCube);

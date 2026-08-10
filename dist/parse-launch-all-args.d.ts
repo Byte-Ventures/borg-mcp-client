@@ -2,7 +2,6 @@ export interface LaunchAllFlags {
     mode?: 'tmux' | 'terminals' | 'pastelist';
     only?: string;
     dryRun?: boolean;
-    cli?: 'claude' | 'codex' | 'opencode';
     noAttach?: boolean;
     yes?: boolean;
     force?: boolean;

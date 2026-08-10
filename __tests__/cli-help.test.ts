@@ -82,9 +82,10 @@ describe('client subcommand help', () => {
   it('documents every accepted launch-all option', () => {
     const text = launchAllHelpText('9.9.9');
     for (const flag of [
-      '--mode', '--only', '--dry-run', '--cli', '--no-attach', '--yes', '--force',
+      '--mode', '--only', '--dry-run', '--no-attach', '--yes', '--force',
       '--launch-delay', '--help',
     ]) expect(text).toContain(flag);
+    expect(text).not.toContain('--cli');
     expect(text).toContain('--mode <tmux|terminals|pastelist>');
     expect(text).not.toContain('--mode <tmux|windows|pastelist>');
     expect(text).toContain(
@@ -267,11 +268,11 @@ describe('gh#556 Part 2 — launch-all in top-level help', () => {
     expect(topLevelHelpText('9.9.9')).toContain('borg launch-all [cube]');
   });
 
-  it('distinguishes bare menu, direct --cli launch, and launch-all --cli fleet launch', () => {
+  it('keeps direct --cli launch without teaching the removed launch-all flag', () => {
     const t = topLevelHelpText('9.9.9');
     expect(t).toContain('borg                     Launch your agent CLI; in a TTY, bare borg may show the launch menu');
     expect(t).toContain('borg --cli claude|codex|opencode  Launch that agent CLI directly');
-    expect(t).toContain('borg launch-all [cube] --cli claude|codex|opencode');
+    expect(t).not.toContain('borg launch-all [cube] --cli claude|codex|opencode');
   });
 });
 

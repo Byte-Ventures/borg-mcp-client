@@ -8,11 +8,13 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('../src/cubes.js', () => ({
-  getActiveCube: vi.fn(),
-}));
+vi.mock('../src/cubes.js', async () => {
+  const actual = await vi.importActual<typeof import('../src/cubes.js')>('../src/cubes.js');
+  return { ...actual, getActiveCube: vi.fn() };
+});
 
-import { getActiveCube } from '../src/cubes.js';
+import { getActiveCube, LaunchSeatIdentityChangedError } from '../src/cubes.js';
+import { resolveCliChoice } from '../src/cli-platform.js';
 import {
   initConsolePrefix,
   droneIdPrefix,
@@ -96,6 +98,24 @@ describe('initConsolePrefix — cube-cache-miss', () => {
     const prefix = await initConsolePrefix();
     expect(prefix).toMatch(/^\[borg · /);
     expect(prefix).not.toContain('unassimilated');
+  });
+
+  it('rethrows a targeted-launch seat mismatch before CLI preference mutation', async () => {
+    const mismatch = new LaunchSeatIdentityChangedError('builder-1');
+    (getActiveCube as any).mockRejectedValue(mismatch);
+    const setPreference = vi.fn(async () => {});
+
+    await expect(
+      initConsolePrefix().then(() => resolveCliChoice(undefined, {
+        detectCli: () => ({ claude: null, codex: '/usr/local/bin/codex', opencode: null }),
+        detectConfigured: () => ({ claude: false, codex: true, opencode: false }),
+        getPreference: async () => null,
+        setPreference,
+        prompt: async () => '1',
+        isTTY: () => false,
+      }))
+    ).rejects.toBe(mismatch);
+    expect(setPreference).not.toHaveBeenCalled();
   });
 
   it('falls back when cached entry lacks droneLabel', async () => {

@@ -166,7 +166,7 @@ describe('gh#967 — explicit --cli launch-all hint', () => {
       hasActiveCube: true,
       hasLaunchAllTargets: true,
     })).toBe(
-      'borg --cli codex launches Codex directly; use bare borg for the launch menu or borg launch-all --cli codex for all drone worktrees.\n'
+      'borg --cli codex launches Codex directly; use bare borg for the launch menu.\n'
     );
 
     expect(explicitCliLaunchHint({
