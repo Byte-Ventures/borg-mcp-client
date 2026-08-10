@@ -35,10 +35,11 @@ export class LaunchSeatIdentityChangedError extends Error {
 }
 export function withLaunchSeatExpectationEnv(env, expectation) {
     // The deterministic ref and public identity are sufficient; never copy the
-    // stored bearer into a process environment.
+    // stored bearer into a process environment. OpenCode substitutes this value
+    // into raw JSONC before parsing, so keep the transport free of JSON syntax.
     return {
         ...env,
-        [BORG_LAUNCH_EXPECTED_SEAT_ENV]: JSON.stringify(expectation),
+        [BORG_LAUNCH_EXPECTED_SEAT_ENV]: Buffer.from(JSON.stringify(expectation), 'utf8').toString('base64url'),
     };
 }
 /** Codex MCP children do not inherit the wrapper environment, so carry the
@@ -61,7 +62,10 @@ function readLaunchSeatExpectation(env = process.env) {
         return null;
     let parsed;
     try {
-        parsed = JSON.parse(raw);
+        const encoded = Buffer.from(raw, 'base64url');
+        if (encoded.toString('base64url') !== raw)
+            throw new Error('invalid base64url');
+        parsed = JSON.parse(encoded.toString('utf8'));
     }
     catch {
         throw new LaunchSeatIdentityChangedError('<unknown>');

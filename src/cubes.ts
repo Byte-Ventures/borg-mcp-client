@@ -103,10 +103,14 @@ export function withLaunchSeatExpectationEnv(
   expectation: LaunchSeatExpectation,
 ): NodeJS.ProcessEnv {
   // The deterministic ref and public identity are sufficient; never copy the
-  // stored bearer into a process environment.
+  // stored bearer into a process environment. OpenCode substitutes this value
+  // into raw JSONC before parsing, so keep the transport free of JSON syntax.
   return {
     ...env,
-    [BORG_LAUNCH_EXPECTED_SEAT_ENV]: JSON.stringify(expectation),
+    [BORG_LAUNCH_EXPECTED_SEAT_ENV]: Buffer.from(
+      JSON.stringify(expectation),
+      'utf8',
+    ).toString('base64url'),
   };
 }
 
@@ -133,7 +137,9 @@ function readLaunchSeatExpectation(
   if (raw === undefined || raw === '') return null;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    const encoded = Buffer.from(raw, 'base64url');
+    if (encoded.toString('base64url') !== raw) throw new Error('invalid base64url');
+    parsed = JSON.parse(encoded.toString('utf8'));
   } catch {
     throw new LaunchSeatIdentityChangedError('<unknown>');
   }

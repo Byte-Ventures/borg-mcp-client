@@ -71,11 +71,13 @@ if (args[0] === 'mcp' && args[1] === 'add') {
   }));
   process.exit(0);
 }
-const server = JSON.parse(fs.readFileSync(configPath, 'utf8')).mcp.borg;
-const environment = Object.fromEntries(Object.entries(server.environment).map(([key, value]) => [
-  key,
-  value.replace(/\{env:([^}]+)\}/g, (_match, name) => process.env[name] ?? ''),
-]));
+const configText = fs.readFileSync(configPath, 'utf8');
+const substitutedConfig = configText.replace(
+  /\{env:([^}]+)\}/g,
+  (_match, name) => process.env[name] ?? '',
+);
+const server = JSON.parse(substitutedConfig).mcp.borg;
+const environment = server.environment;
 const inheritedEnvironment = { ...process.env };
 delete inheritedEnvironment.BORG_LAUNCH_EXPECTED_SEAT;
 const child = spawnSync(server.command[0], server.command.slice(1), {
@@ -98,7 +100,8 @@ fs.writeFileSync(process.env.BORG_TEST_CAPTURE, process.env.BORG_LAUNCH_EXPECTED
       worktree: '/work/a',
       droneLabel: 'builder-aaaaaaaa',
     };
-    process.env.BORG_LAUNCH_EXPECTED_SEAT = JSON.stringify(expectation);
+    process.env.BORG_LAUNCH_EXPECTED_SEAT =
+      withLaunchSeatExpectationEnv({}, expectation).BORG_LAUNCH_EXPECTED_SEAT;
     const configPath = path.join(root, '.config', 'opencode', 'opencode.json');
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({
@@ -125,7 +128,9 @@ fs.writeFileSync(process.env.BORG_TEST_CAPTURE, process.env.BORG_LAUNCH_EXPECTED
     const [exitCode] = await once(launched.process, 'exit');
 
     expect(exitCode).toBe(0);
-    expect(fs.readFileSync(capture, 'utf8')).toBe(JSON.stringify(expectation));
+    expect(fs.readFileSync(capture, 'utf8')).toBe(
+      Buffer.from(JSON.stringify(expectation), 'utf8').toString('base64url'),
+    );
   });
 
   it.each(['failed', 'ineffective'] as const)(
@@ -153,7 +158,8 @@ process.exit(process.env.BORG_TEST_OPENCODE_MODE === 'failed' ? 2 : 0);
         worktree: '/work/a',
         droneLabel: 'builder-aaaaaaaa',
       };
-      process.env.BORG_LAUNCH_EXPECTED_SEAT = JSON.stringify(expectation);
+      process.env.BORG_LAUNCH_EXPECTED_SEAT =
+        withLaunchSeatExpectationEnv({}, expectation).BORG_LAUNCH_EXPECTED_SEAT;
       const configPath = path.join(root, '.config', 'opencode', 'opencode.json');
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.writeFileSync(configPath, JSON.stringify({

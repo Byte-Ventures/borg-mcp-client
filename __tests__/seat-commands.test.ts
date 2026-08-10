@@ -131,9 +131,10 @@ describe('launch-seat identity handoff', () => {
       droneLabel: 'builder-aaaaaaaa',
     };
     const env = withLaunchSeatExpectationEnv({ PATH: '/bin' }, expectation);
-    const encoded = JSON.stringify(expectation);
+    const encoded = Buffer.from(JSON.stringify(expectation), 'utf8').toString('base64url');
 
     expect(env).toEqual({ PATH: '/bin', [BORG_LAUNCH_EXPECTED_SEAT_ENV]: encoded });
+    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(codexLaunchSeatExpectationConfigArgs(env)).toEqual([
       '-c',
       `mcp_servers.borg.env.${BORG_LAUNCH_EXPECTED_SEAT_ENV}=${JSON.stringify(encoded)}`,
@@ -341,13 +342,20 @@ describe('production local-registry wiring', () => {
 
     const racedLaunchBareBorg = vi.fn(async (worktree, expectation) => {
       const priorExpectation = process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV];
-      process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV] = JSON.stringify(expectation);
+      const encodedExpectation =
+        cubes.withLaunchSeatExpectationEnv({}, expectation)[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV]!;
+      process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV] = encodedExpectation;
       try {
         await expect(cubes.getActiveCubeForWorktree(worktree)).resolves.toMatchObject({
           cubeId: CUBE_B,
           droneId: DRONE_B,
           droneLabel: 'builder-sibling',
         });
+        process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV] = `${encodedExpectation}!`;
+        await expect(cubes.getActiveCubeForWorktree(worktree)).rejects.toMatchObject({
+          name: 'LaunchSeatIdentityChangedError',
+        });
+        process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV] = encodedExpectation;
         await seats.clearSeat(expectation.credentialRef);
         await expect(cubes.getActiveCubeForWorktree(worktree)).rejects.toMatchObject({
           name: 'LaunchSeatIdentityChangedError',
