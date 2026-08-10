@@ -69,7 +69,7 @@ import {
   isTerminalLaunchMenuSeatStatus,
   runBareLaunchMenu,
   shouldShowLaunchMenu,
-  terminalLaunchMenuSeatRefusal,
+  terminalLaunchMenuSeatNotice,
   type LaunchMenuAction,
 } from './bare-launch-menu.js';
 import type { SeatStatus } from './seat-probe.js';
@@ -373,7 +373,7 @@ async function main() {
 
   // Active cube for this directory — needed for the launch menu's option-3
   // availability, the terminal title, and the inbox-Monitor clause below.
-  const active = await getActiveCube();
+  let active = await getActiveCube();
   const launchAllDeps = buildDefaultLaunchAllDeps();
   const isMainWorktree = isMainGitWorktree((args) =>
     launchAllDeps.runSync('git', args, { cwd: process.cwd() })
@@ -405,8 +405,8 @@ async function main() {
         currentDroneStatus = 'indeterminate';
       }
       if (isTerminalLaunchMenuSeatStatus(currentDroneStatus)) {
-        process.stderr.write(terminalLaunchMenuSeatRefusal(currentDroneStatus));
-        process.exit(1);
+        process.stderr.write(terminalLaunchMenuSeatNotice(currentDroneStatus));
+        active = null;
       }
     }
     const siblingContext = await discoverLiveLaunchMenuCandidates({

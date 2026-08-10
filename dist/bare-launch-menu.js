@@ -26,7 +26,7 @@ const TERMINAL_SEAT_STATUSES = new Set([
 export function isTerminalLaunchMenuSeatStatus(status) {
     return TERMINAL_SEAT_STATUSES.has(status);
 }
-export function terminalLaunchMenuSeatRefusal(status) {
+export function terminalLaunchMenuSeatNotice(status) {
     const reason = {
         evicted: 'the server reports that it was evicted',
         revoked: 'its local session was revoked',
@@ -38,7 +38,7 @@ export function terminalLaunchMenuSeatRefusal(status) {
         ? 'Verify that this is the expected server; if it was re-initialized, restore the expected identity before relaunching.\n'
         : 'Run `borg reset-local-connection`, then `borg assimilate` to start a replacement managed-worktree drone.\n';
     return (`This worktree's saved drone cannot be resumed because ${reason[status]}. ` +
-        `No agent was launched and nothing was changed. ${recovery}`);
+        `It is not offered in the menu below. ${recovery}`);
 }
 /**
  * Find linked sibling worktrees that still own their preferred active seat.

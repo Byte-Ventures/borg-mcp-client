@@ -16,7 +16,7 @@ import {
   resolveLaunchMenuChoice,
   runBareLaunchMenu,
   shouldShowLaunchMenu,
-  terminalLaunchMenuSeatRefusal,
+  terminalLaunchMenuSeatNotice,
 } from '../src/bare-launch-menu';
 
 describe('gh#853 — main-worktree launch-menu gate', () => {
@@ -41,8 +41,9 @@ describe('gh#853 — main-worktree launch-menu gate', () => {
     const gateInput = source.indexOf('isMainWorktree,', gate);
     const legacyProbe = source.indexOf('await launchAllDeps.probeSeat(active)', gateInput);
     const terminalGuard = source.indexOf("isTerminalLaunchMenuSeatStatus(currentDroneStatus)", legacyProbe);
-    const refusalExit = source.indexOf('process.exit(1)', terminalGuard);
-    const menu = source.indexOf('const action = await runBareLaunchMenu', refusalExit);
+    const notice = source.indexOf('terminalLaunchMenuSeatNotice(currentDroneStatus)', terminalGuard);
+    const clearActive = source.indexOf('active = null', notice);
+    const menu = source.indexOf('const action = await runBareLaunchMenu', terminalGuard);
     const currentDroneInput = source.indexOf('currentDrone:', gate);
     const configure = source.indexOf('ensureResolvedCliConfigured(selectedCli, active)', menu);
     const spawn = source.indexOf(': spawn(cli, launchArgs', configure);
@@ -53,8 +54,10 @@ describe('gh#853 — main-worktree launch-menu gate', () => {
     expect(gateInput).toBeGreaterThan(gate);
     expect(legacyProbe).toBeGreaterThan(gateInput);
     expect(terminalGuard).toBeGreaterThan(legacyProbe);
-    expect(refusalExit).toBeGreaterThan(terminalGuard);
-    expect(menu).toBeGreaterThan(refusalExit);
+    expect(notice).toBeGreaterThan(terminalGuard);
+    expect(clearActive).toBeGreaterThan(notice);
+    expect(menu).toBeGreaterThan(clearActive);
+    expect(source.slice(legacyProbe, menu)).not.toContain('process.exit');
     expect(currentDroneInput).toBeGreaterThan(menu);
     expect(configure).toBeGreaterThan(menu);
     expect(spawn).toBeGreaterThan(configure);
@@ -310,17 +313,20 @@ describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
     });
   });
 
-  it('renders bounded terminal refusal copy without credential material', () => {
-    const rejected = terminalLaunchMenuSeatRefusal('credential-rejected');
-    expect(rejected).toContain('saved credential was rejected');
-    expect(rejected).toContain('No agent was launched and nothing was changed.');
-    expect(rejected).toContain('borg reset-local-connection');
-    expect(rejected).not.toMatch(/sessionToken|credentialRef|bearer/i);
+  it('renders bounded terminal notice copy without credential material', () => {
+    const evicted = terminalLaunchMenuSeatNotice('evicted');
+    expect(evicted).toContain('server reports that it was evicted');
+    expect(evicted).toContain('not offered in the menu below');
+    expect(evicted).toContain('borg reset-local-connection');
+    expect(evicted).toContain('borg assimilate');
+    expect(evicted).not.toContain('No agent was launched');
+    expect(evicted).not.toMatch(/sessionToken|credentialRef|bearer/i);
 
-    const trustMismatch = terminalLaunchMenuSeatRefusal('trust-mismatch');
+    const trustMismatch = terminalLaunchMenuSeatNotice('trust-mismatch');
     expect(trustMismatch).toContain('saved server identity no longer matches');
     expect(trustMismatch).toContain('restore the expected identity');
     expect(trustMismatch).not.toContain('borg reset-local-connection');
+    expect(trustMismatch).not.toMatch(/sessionToken|credentialRef|bearer/i);
   });
 });
 
