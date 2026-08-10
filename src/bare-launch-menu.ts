@@ -82,7 +82,7 @@ export function isTerminalLaunchMenuSeatStatus(
   return TERMINAL_SEAT_STATUSES.has(status as TerminalLaunchMenuSeatStatus);
 }
 
-export function terminalLaunchMenuSeatRefusal(status: TerminalLaunchMenuSeatStatus): string {
+export function terminalLaunchMenuSeatNotice(status: TerminalLaunchMenuSeatStatus): string {
   const reason: Record<TerminalLaunchMenuSeatStatus, string> = {
     evicted: 'the server reports that it was evicted',
     revoked: 'its local session was revoked',
@@ -95,7 +95,7 @@ export function terminalLaunchMenuSeatRefusal(status: TerminalLaunchMenuSeatStat
     : 'Run `borg reset-local-connection`, then `borg assimilate` to start a replacement managed-worktree drone.\n';
   return (
     `This worktree's saved drone cannot be resumed because ${reason[status]}. ` +
-    `No agent was launched and nothing was changed. ${recovery}`
+    `It is not offered in the menu below. ${recovery}`
   );
 }
 

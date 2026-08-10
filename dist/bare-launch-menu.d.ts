@@ -55,7 +55,7 @@ interface LaunchMenuCandidateDeps {
 }
 export type TerminalLaunchMenuSeatStatus = Extract<SeatStatus, 'evicted' | 'revoked' | 'rejected' | 'credential-rejected' | 'trust-mismatch'>;
 export declare function isTerminalLaunchMenuSeatStatus(status: SeatStatus): status is TerminalLaunchMenuSeatStatus;
-export declare function terminalLaunchMenuSeatRefusal(status: TerminalLaunchMenuSeatStatus): string;
+export declare function terminalLaunchMenuSeatNotice(status: TerminalLaunchMenuSeatStatus): string;
 /**
  * Find linked sibling worktrees that still own their preferred active seat.
  * Authoritative terminal probe results are omitted; transient/unknown probe
