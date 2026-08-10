@@ -5,9 +5,10 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from 'n
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
 
 // Executable production-chain regression (SR-six 02b6f245 / thirty-seven; CR #6):
-// the real defaultProbeSeat → whoami → localAuthorityContext → authedFetch path
+// the real defaultProbeSeat → whoami → assertSeatAuthority → authedFetch path
 // must PRESERVE the distinct cause — typed revoked and superseded session errors
 // remain distinct, while any OTHER 401 → `credential-rejected` (non-destructive
 // re-enroll), a trust/identity mismatch → `trust-mismatch` (terminal), a 410
@@ -22,7 +23,7 @@ const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 
-function envelope(payload: unknown, requestId = 'r1') {
+function envelope(payload: unknown, requestId = 'request-1') {
   return { protocol_version: '8', request_id: requestId, payload };
 }
 
@@ -37,7 +38,11 @@ const ACTIVE_CUBE = {
   roleName: 'Builder',
 };
 
-function wireMocks(opts: { fetchImpl: any; trustIdentity?: string }) {
+function wireMocks(opts: {
+  fetchImpl: any;
+  trustIdentity?: string;
+  getActiveCube?: () => Promise<unknown>;
+}) {
   vi.doMock('../src/config.js', () => ({
     getServerCredential: vi.fn(async () => 'parent-enrollment-token'),
   }));
@@ -47,9 +52,9 @@ function wireMocks(opts: { fetchImpl: any; trustIdentity?: string }) {
       fetchImpl: opts.fetchImpl,
     })),
   }));
-  vi.doMock('../src/cubes.js', () => ({
-    getActiveCube: vi.fn(async () => ACTIVE_CUBE),
-  }));
+  const getActiveCube = vi.fn(opts.getActiveCube ?? (async () => ACTIVE_CUBE));
+  vi.doMock('../src/cubes.js', () => ({ getActiveCube }));
+  return { getActiveCube };
 }
 
 // A bounded shared-v2 typed error envelope. Only the exact SESSION_REJECTED code
@@ -77,8 +82,31 @@ describe('defaultProbeSeat production chain (real whoami → authedFetch verdict
   async function probe(fetchImpl: any, trustIdentity?: string): Promise<string> {
     wireMocks({ fetchImpl, trustIdentity });
     const { defaultProbeSeat } = await import('../src/seat-probe.js');
-    return defaultProbeSeat(SESSION, ORIGIN, TRUST);
+    return defaultProbeSeat(ACTIVE_CUBE);
   }
+
+  it.each([
+    ['a different cwd seat', async () => ({ ...ACTIVE_CUBE, droneId: '44444444-4444-4444-8444-444444444444' })],
+    ['a cwd seat read failure', async () => { throw new Error('cwd has no readable seat'); }],
+  ])('probes the supplied seat when getActiveCube resolves to %s', async (_case, getActiveCube) => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(input.toString()).pathname;
+      const payload = path.endsWith('/roles')
+        ? { roles: [{ id: ROLE_ID, name: 'Builder' }] }
+        : path.endsWith('/drones')
+          ? { drones: [{ id: DRONE_ID, role_id: ROLE_ID, ...UNREPORTED_DRONE_RUNTIME_METADATA }] }
+          : { cube: { id: CUBE_ID, name: 'local-cube' } };
+      return new Response(JSON.stringify(envelope(payload)), { status: 200 });
+    });
+    const mocks = wireMocks({ fetchImpl, getActiveCube });
+    const { defaultProbeSeat } = await import('../src/seat-probe.js');
+    const { whoami } = await import('../src/remote-client.js');
+
+    await expect(whoami(ACTIVE_CUBE)).resolves.toMatchObject({ drone_id: DRONE_ID });
+    await expect(defaultProbeSeat(ACTIVE_CUBE)).resolves.toBe('live');
+    expect(mocks.getActiveCube).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
 
   // (The `live` and `evicted` end-to-end cases are covered by the local-server
   // route-adapter suite and the evicted-reattach + drone-lifecycle tests; this
@@ -178,7 +206,7 @@ describe('defaultProbeSeat real wrong-cert chain (CR5 TLS lattice)', () => {
     vi.doMock('../src/cubes.js', () => ({ getActiveCube: vi.fn(async () => ({ ...ACTIVE_CUBE, apiUrl: origin })) }));
     vi.doMock('../src/server-trust.js', () => ({ ...actual, loadBorgServerTrust: vi.fn(async () => ({ identity: TRUST, fetchImpl: pinned })) }));
     const { defaultProbeSeat } = await import('../src/seat-probe.js');
-    return defaultProbeSeat(SESSION, origin, TRUST);
+    return defaultProbeSeat({ ...ACTIVE_CUBE, apiUrl: origin });
   }
 
   it('a live server presenting a WRONG cert (CA mismatch) → trust-mismatch through the real probe chain', async () => {
@@ -208,13 +236,13 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
   it('drone-SESSION 401 with the EXACT SESSION_REJECTED code → SESSION_REJECTED', async () => {
     wireMocks({ fetchImpl: sessionRejected401() });
     const { whoami } = await import('../src/remote-client.js');
-    await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'SESSION_REJECTED' });
+    await expect(whoami(ACTIVE_CUBE)).rejects.toMatchObject({ code: 'SESSION_REJECTED' });
   });
 
   it('drone-SESSION 401 with a bare/untyped body → CREDENTIAL_REJECTED (bare 401 is never enough)', async () => {
     wireMocks({ fetchImpl: vi.fn(async () => new Response('nope', { status: 401 })) });
     const { whoami } = await import('../src/remote-client.js');
-    await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+    await expect(whoami(ACTIVE_CUBE)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
   });
 
   it('parent-ENROLLMENT-credential 401 EVEN WITH a SESSION_REJECTED code → CREDENTIAL_REJECTED (drone-session gate)', async () => {
@@ -228,7 +256,7 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
   it('drone-SESSION 401 with SESSION_REVOKED → SESSION_REVOKED', async () => {
     wireMocks({ fetchImpl: sessionRevoked401() });
     const { whoami } = await import('../src/remote-client.js');
-    await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'SESSION_REVOKED' });
+    await expect(whoami(ACTIVE_CUBE)).rejects.toMatchObject({ code: 'SESSION_REVOKED' });
   });
 
   it('drone-SESSION 401 with another non-recoverable typed code → CREDENTIAL_REJECTED (never reset)', async () => {
@@ -236,7 +264,7 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
       vi.resetModules();
       wireMocks({ fetchImpl: vi.fn(async () => new Response(errorEnvelope(code), { status: 401 })) });
       const { whoami } = await import('../src/remote-client.js');
-      await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+      await expect(whoami(ACTIVE_CUBE)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
     }
   });
 
@@ -247,7 +275,7 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
     const wrongVersion = JSON.stringify({ protocol_version: '1', error: { code: 'SESSION_REJECTED', message: 'rejected' } });
     wireMocks({ fetchImpl: vi.fn(async () => new Response(wrongVersion, { status: 401 })) });
     const { whoami } = await import('../src/remote-client.js');
-    await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+    await expect(whoami(ACTIVE_CUBE)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
   });
 
   // RQ (b): a DECLARED + CHUNKED oversized 401 body must trip the bounded read
@@ -270,6 +298,6 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
     });
     wireMocks({ fetchImpl: vi.fn(async () => new Response(chunkedStream(), { status: 401 })) });
     const { whoami } = await import('../src/remote-client.js');
-    await expect(whoami(SESSION, ORIGIN, TRUST)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
+    await expect(whoami(ACTIVE_CUBE)).rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
   });
 });

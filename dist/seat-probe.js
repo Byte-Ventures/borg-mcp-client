@@ -43,9 +43,9 @@ function isTransportFailure(err) {
  * but `evicted`; the launch path treats every non-`evicted`/non-terminal cause as
  * fail-OPEN.
  */
-export async function defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity) {
+export async function defaultProbeSeat(seat) {
     try {
-        await whoami(sessionToken, apiUrl, serverTrustIdentity);
+        await whoami(seat);
         return 'live';
     }
     catch (err) {

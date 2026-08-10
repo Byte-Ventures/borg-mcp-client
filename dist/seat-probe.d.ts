@@ -1,3 +1,4 @@
+import type { ActiveCube } from './cubes.js';
 /**
  * Eviction-probe verdict for ONE worktree's saved seat. Distinct CAUSES are
  * preserved (CR #6 / CR5 — the probe must NOT collapse them). Each verdict is
@@ -34,5 +35,5 @@ export type SeatStatus = 'evicted' | 'revoked' | 'rejected' | 'live' | 'credenti
  * but `evicted`; the launch path treats every non-`evicted`/non-terminal cause as
  * fail-OPEN.
  */
-export declare function defaultProbeSeat(sessionToken: string, apiUrl: string, serverTrustIdentity?: string): Promise<SeatStatus>;
+export declare function defaultProbeSeat(seat: ActiveCube): Promise<SeatStatus>;
 //# sourceMappingURL=seat-probe.d.ts.map

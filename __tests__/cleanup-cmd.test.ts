@@ -112,7 +112,7 @@ function makeResponder(worktrees: WtSpec[]) {
 function makeDeps(
   worktrees: WtSpec[],
   seats: Array<{ projectPath: string; cube: ActiveCube }>,
-  probe: (token: string) => SeatStatus,
+  probe: (seat: ActiveCube) => SeatStatus,
   extra: Partial<CleanupDeps> = {}
 ): { deps: CleanupDeps; calls: Array<{ args: string[]; cwd?: string }>; out: string[]; err: string[] } {
   const { run, calls } = recordingRun(makeResponder(worktrees));
@@ -123,7 +123,7 @@ function makeDeps(
     homeDir: () => HOME,
     cwd: () => PRIMARY,
     listSeats: async () => seats,
-    probeSeat: async (token) => probe(token),
+    probeSeat: async (seat) => probe(seat),
     realpath: (p) => p, // identity (no symlinks) unless a test overrides
     stdout: (l) => out.push(l),
     stderr: (l) => err.push(l),
@@ -292,6 +292,15 @@ describe('buildCleanupReport classification', () => {
     expect(await reasonFor({}, 'indeterminate')).toBe('UNKNOWN-indeterminate');
   });
 
+  it('UNKNOWN-indeterminate when the probe throws (fail-safe — never delete)', async () => {
+    const wt = `${WT_HOME}/repo/throws`;
+    const { deps } = makeDeps([{ path: wt }], [seat(wt, '1')], () => 'live', {
+      probeSeat: async () => { throw new Error('network down'); },
+    });
+    const { rows } = await buildCleanupReport({ ...(deps as any) });
+    expect(rows.find((row) => row.worktreePath === wt)?.reason).toBe('UNKNOWN-indeterminate');
+  });
+
   it('UNKNOWN-no-connection for a worktreesHome dir without a saved connection', async () => {
     const wt = `${WT_HOME}/repo/noseat`;
     const { deps } = makeDeps([{ path: wt }], [], () => 'evicted');
@@ -357,7 +366,7 @@ describe('runCleanup prune behavior', () => {
   const live2 = `${WT_HOME}/repo/live2`;   // live → SURVIVES-live
 
   function scenario(prune: boolean) {
-    const probe = (token: string): SeatStatus => (token === 'tok-1' ? 'evicted' : 'live');
+    const probe = (seat: ActiveCube): SeatStatus => (seat.sessionToken === 'tok-1' ? 'evicted' : 'live');
     const { deps, calls, out } = makeDeps(
       [{ path: dead1, merged: true }, { path: live2, merged: true }],
       [seat(dead1, '1'), seat(live2, '2')],
@@ -410,7 +419,7 @@ describe('runCleanup prune behavior', () => {
 
   it('--prune also deletes the dangling derived wt-<suffix> base branch when HEAD was a feature branch (gh#884)', async () => {
     const dead = `${WT_HOME}/repo/dead1`;
-    const probe = (token: string): SeatStatus => (token === 'tok-1' ? 'evicted' : 'live');
+    const probe = (seat: ActiveCube): SeatStatus => (seat.sessionToken === 'tok-1' ? 'evicted' : 'live');
     // The worktree's ACTUAL checked-out HEAD is a feature branch, so its derived
     // base branch wt-dead1 is a SEPARATE ref that would dangle after prune.
     const { deps, calls } = makeDeps(
@@ -431,7 +440,7 @@ describe('runCleanup prune behavior', () => {
 
   it('--prune does NOT double-delete when HEAD already IS the derived wt-<suffix> base (gh#884)', async () => {
     const dead = `${WT_HOME}/repo/dead1`;
-    const probe = (token: string): SeatStatus => (token === 'tok-1' ? 'evicted' : 'live');
+    const probe = (seat: ActiveCube): SeatStatus => (seat.sessionToken === 'tok-1' ? 'evicted' : 'live');
     // HEAD == wt-dead1 (drone never cut a feature branch) → derived === actual,
     // so only ONE `git branch -d wt-dead1` fires (guard skips the redundant one).
     const { deps, calls } = makeDeps(

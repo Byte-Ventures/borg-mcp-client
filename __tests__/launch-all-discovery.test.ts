@@ -84,6 +84,10 @@ describe('discoverDroneCandidates (gh#556 Part 2)', () => {
     expect(c).toHaveLength(1);
     expect(c[0].worktreeDir).toBe('/work/myrepo-builder');
     expect(c[0].droneLabel).toBe('drone-1');
+    expect(c[0].seat).toEqual(cube({ droneLabel: 'drone-1' }));
+    expect(c[0]).not.toHaveProperty('sessionToken');
+    expect(c[0]).not.toHaveProperty('apiUrl');
+    expect(c[0]).not.toHaveProperty('serverTrustIdentity');
   });
 
   it('excludes a worktree with no cubes.json entry (silent)', async () => {

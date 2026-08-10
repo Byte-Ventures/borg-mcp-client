@@ -68,10 +68,10 @@ export function buildDefaultLaunchAllDeps() {
                 return [];
             }
         },
-        getRoster: (token, apiUrl, since, serverTrustIdentity) => getRoster(token, apiUrl, since, serverTrustIdentity),
+        getRoster: (seat, since) => getRoster(seat, since),
         // getCube uses the drone session token via authedFetch (cubeId-only); apiUrl/token unused.
         getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
-        probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
+        probeSeat: (seat) => defaultProbeSeat(seat),
         getCliPreferenceForPath: (projectPath) => getProjectCliPreferenceForPath(projectPath),
         readAllProjectIdentities: () => cubesReadAllProjectIdentities(),
         findProjectRoot: (dir) => findProjectRoot(dir),

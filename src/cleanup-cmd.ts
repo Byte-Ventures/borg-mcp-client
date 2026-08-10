@@ -97,11 +97,7 @@ export interface CleanupDeps {
   /** Enumerate borg-managed seats from the central cubes.json. */
   listSeats?: () => Promise<Array<{ projectPath: string; cube: ActiveCube }>>;
   /** Probe ONE seat's eviction status using ITS OWN token (gh#877). */
-  probeSeat?: (
-    sessionToken: string,
-    apiUrl: string,
-    serverTrustIdentity?: string,
-  ) => Promise<SeatStatus>;
+  probeSeat?: (seat: ActiveCube) => Promise<SeatStatus>;
   /** realpath resolver — injected so tests can model symlink escape. */
   realpath?: (p: string) => string;
   stdout?: (line: string) => void;
@@ -337,11 +333,15 @@ async function classifyWorktree(
   }
 
   // (5) ONLY now probe eviction with the worktree's OWN seat token (S1).
-  const status = await deps.probeSeat(
-    seat.sessionToken,
-    seat.apiUrl,
-    seat.serverTrustIdentity,
-  );
+  let status: SeatStatus;
+  try {
+    status = await deps.probeSeat(seat);
+  } catch {
+    return {
+      reason: 'UNKNOWN-indeterminate',
+      detail: 'probe failed — not deleting',
+    };
+  }
   switch (status) {
     case 'evicted':
       return { reason: 'PRUNABLE', detail: '410 DRONE_EVICTED (clean + merged)' };

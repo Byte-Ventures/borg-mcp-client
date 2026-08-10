@@ -425,11 +425,7 @@ async function main() {
       ),
       getActiveSeatForWorktree: seatCommandDeps.getActiveSeatForWorktree,
       pathExists: launchAllDeps.pathExists,
-      probeSeat: (candidate) => launchAllDeps.probeSeat(
-        candidate.sessionToken,
-        candidate.apiUrl,
-        candidate.serverTrustIdentity,
-      ),
+      probeSeat: (candidate) => launchAllDeps.probeSeat(candidate.seat),
     });
     const otherConfiguredClis = configuredCliNames(
       detectCliAvailability(),

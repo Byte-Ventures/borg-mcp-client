@@ -104,7 +104,7 @@ describe('Sprint 10 WU2 local adapter', () => {
     const { getRoster } = await import('../src/remote-client.js');
     const since = '2026-07-23T15:00:00.000Z';
 
-    await expect(getRoster(SESSION, ORIGIN, since, TRUST_IDENTITY)).resolves.toMatchObject({
+    await expect(getRoster(activeAuthority, since)).resolves.toMatchObject({
       drones: [{ id: DRONE_ID, role_id: ROLE_ID }],
       since,
     });

@@ -808,7 +808,7 @@ export async function runAssimilate(args, deps) {
             savedLocalRole = existing.roleName
                 ? cubeDetail.roles.find((role) => role.name === existing.roleName)
                 : undefined;
-            const status = await deps.probeSeat(existing.sessionToken ?? '', auth.apiUrl, auth.serverTrustIdentity);
+            const status = await deps.probeSeat(existing);
             // Canonical rotated/revoked path: a pin-matched 401 on THIS worktree's
             // saved bearer. PURE DIAGNOSIS — attach never mutates local state on a
             // rejection; it points at the offline `borg reset-local-connection` command.

@@ -131,7 +131,7 @@ export interface AssimilateDeps {
         roleId: string;
         credentialRef: string;
     } | null>;
-    probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
+    probeSeat: (seat: ActiveCube) => Promise<SeatStatus>;
     setActiveCube: (a: ActiveCube) => Promise<void>;
     /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
      *  typed expectation, persist the binding FIRST, then run `activate` (keychain

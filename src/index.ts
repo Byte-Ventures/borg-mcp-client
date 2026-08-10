@@ -601,11 +601,7 @@ export async function main() {
           seedDisplayIdentity(active);
           let result: Awaited<ReturnType<typeof whoami>>;
           try {
-            result = await whoami(
-              active.sessionToken,
-              active.apiUrl,
-              active.serverTrustIdentity,
-            );
+            result = await whoami(active);
           } catch (error) {
             markDisplayIdentityReadFailed(active);
             throw error;
@@ -737,12 +733,7 @@ export async function main() {
         case 'borg_roster': {
           const active = await requireActiveCube();
           const since = typeof args?.since === 'string' ? args.since : undefined;
-          const { drones, roles, since: resolvedSince } = await getRoster(
-            active.sessionToken,
-            active.apiUrl,
-            since,
-            active.serverTrustIdentity,
-          );
+          const { drones, roles, since: resolvedSince } = await getRoster(active, since);
           const text = renderRoster({
             cubeName: active.name,
             drones,

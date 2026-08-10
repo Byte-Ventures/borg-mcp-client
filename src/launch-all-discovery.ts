@@ -6,15 +6,14 @@
 // only worktrees whose saved identity has cubeId === target.
 
 import type { LaunchAllDeps, RunSyncFn } from './launch-all-deps.js';
+import type { ActiveCube } from './cubes.js';
 
 export interface DroneCandidate {
   worktreeDir: string;
   cubeId: string;
   droneId: string;
   droneLabel: string;
-  sessionToken: string;
-  apiUrl: string;
-  serverTrustIdentity?: string;
+  seat: ActiveCube;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -107,11 +106,7 @@ export async function discoverDroneCandidates(
       cubeId: cube.cubeId,
       droneId: cube.droneId,
       droneLabel: cube.droneLabel,
-      sessionToken: cube.sessionToken,
-      apiUrl: cube.apiUrl,
-      ...(cube.serverTrustIdentity === undefined
-        ? {}
-        : { serverTrustIdentity: cube.serverTrustIdentity }),
+      seat: cube,
     });
   }
   return candidates;
