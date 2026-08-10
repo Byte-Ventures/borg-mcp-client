@@ -1,20 +1,3 @@
-/**
- * gh#853 — bare `borg` (no-args) interactive launch menu.
- *
- * When `borg` is run with NO arguments in a TTY from a repository's main
- * worktree, offer a small launch selector. A linked worktree still resumes its
- * own drone directly, so selecting a sibling from the menu cannot recurse.
- *
- * The option-set, the selection→action mapping, and the show/collapse decision
- * are pure functions so they're unit-testable without a real TTY. claude.ts
- * main() is thin glue: it computes the available candidates and agent choices,
- * gates on shouldShowLaunchMenu, runs the orchestrator with the real readline
- * prompt, then dispatches the returned action.
- *
- * Load-bearing safety: TTY-only + bare-args-only + main-worktree-only
- * (shouldShowLaunchMenu), so scripted/programmatic invocations and direct
- * linked-worktree resumes are untouched.
- */
 import type { ActiveCube, BorgCli } from './cubes.js';
 import type { DroneCandidate } from './launch-all-discovery.js';
 import type { SeatStatus } from './seat-probe.js';
@@ -50,6 +33,7 @@ export interface LaunchMenuInputs {
     currentDrone?: {
         droneLabel: string;
         worktree: string;
+        status: SeatStatus;
     };
     /** Live sibling drones offered before the unattached launch choices. */
     droneCandidates?: LaunchMenuDroneCandidate[];
@@ -69,6 +53,9 @@ interface LaunchMenuCandidateDeps {
     pathExists: (worktree: string) => boolean;
     probeSeat: (candidate: DroneCandidate) => Promise<SeatStatus>;
 }
+export type TerminalLaunchMenuSeatStatus = Extract<SeatStatus, 'evicted' | 'revoked' | 'rejected' | 'credential-rejected' | 'trust-mismatch'>;
+export declare function isTerminalLaunchMenuSeatStatus(status: SeatStatus): status is TerminalLaunchMenuSeatStatus;
+export declare function terminalLaunchMenuSeatRefusal(status: TerminalLaunchMenuSeatStatus): string;
 /**
  * Find linked sibling worktrees that still own their preferred active seat.
  * Authoritative terminal probe results are omitted; transient/unknown probe

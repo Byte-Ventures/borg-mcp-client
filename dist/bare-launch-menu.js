@@ -1,3 +1,21 @@
+/**
+ * gh#853 — bare `borg` (no-args) interactive launch menu.
+ *
+ * When `borg` is run with NO arguments in a TTY from a repository's main
+ * worktree, offer a small launch selector. A linked worktree still resumes its
+ * own drone directly, so selecting a sibling from the menu cannot recurse.
+ *
+ * The option-set, the selection→action mapping, and the show/collapse decision
+ * are pure functions so they're unit-testable without a real TTY. claude.ts
+ * main() is thin glue: it computes the available candidates and agent choices,
+ * gates on shouldShowLaunchMenu, runs the orchestrator with the real readline
+ * prompt, then dispatches the returned action.
+ *
+ * Load-bearing safety: TTY-only + bare-args-only + main-worktree-only
+ * (shouldShowLaunchMenu), so scripted/programmatic invocations and direct
+ * linked-worktree resumes are untouched.
+ */
+import { isAbsolute } from 'node:path';
 const TERMINAL_SEAT_STATUSES = new Set([
     'evicted',
     'revoked',
@@ -5,6 +23,23 @@ const TERMINAL_SEAT_STATUSES = new Set([
     'credential-rejected',
     'trust-mismatch',
 ]);
+export function isTerminalLaunchMenuSeatStatus(status) {
+    return TERMINAL_SEAT_STATUSES.has(status);
+}
+export function terminalLaunchMenuSeatRefusal(status) {
+    const reason = {
+        evicted: 'the server reports that it was evicted',
+        revoked: 'its local session was revoked',
+        rejected: 'its local session was superseded by a newer enrollment',
+        'credential-rejected': 'its saved credential was rejected',
+        'trust-mismatch': 'the saved server identity no longer matches',
+    };
+    const recovery = status === 'trust-mismatch'
+        ? 'Verify that this is the expected server; if it was re-initialized, restore the expected identity before relaunching.\n'
+        : 'Run `borg reset-local-connection`, then `borg assimilate` to start a replacement managed-worktree drone.\n';
+    return (`This worktree's saved drone cannot be resumed because ${reason[status]}. ` +
+        `No agent was launched and nothing was changed. ${recovery}`);
+}
 /**
  * Find linked sibling worktrees that still own their preferred active seat.
  * Authoritative terminal probe results are omitted; transient/unknown probe
@@ -31,7 +66,7 @@ export async function discoverLiveLaunchMenuCandidates(deps) {
         catch {
             status = 'indeterminate';
         }
-        if (TERMINAL_SEAT_STATUSES.has(status))
+        if (isTerminalLaunchMenuSeatStatus(status))
             continue;
         const key = `${candidate.cubeId}\0${candidate.droneId}\0${candidate.worktreeDir}`;
         if (seen.has(key))
@@ -76,7 +111,7 @@ export function isMainGitWorktree(readGitPath) {
     try {
         const gitDir = readGitPath(['rev-parse', '--path-format=absolute', '--git-dir']).trim();
         const commonDir = readGitPath(['rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
-        return gitDir.length > 0 && commonDir.length > 0 && gitDir === commonDir;
+        return isAbsolute(gitDir) && isAbsolute(commonDir) && gitDir === commonDir;
     }
     catch {
         return false;
@@ -99,12 +134,15 @@ export function shouldShowLaunchMenu(args) {
  * middle option never produces a "1) … 3) …" gap menu.
  */
 export function buildLaunchMenuOptions(inputs) {
-    if (inputs.currentDrone || (inputs.droneCandidates && inputs.droneCandidates.length > 0)) {
+    const currentDrone = inputs.currentDrone && !isTerminalLaunchMenuSeatStatus(inputs.currentDrone.status)
+        ? inputs.currentDrone
+        : undefined;
+    if (currentDrone || (inputs.droneCandidates && inputs.droneCandidates.length > 0)) {
         const options = [];
-        if (inputs.currentDrone) {
+        if (currentDrone) {
             options.push({
                 key: '1',
-                label: `Resume ${inputs.currentDrone.droneLabel} (${inputs.currentDrone.worktree})`,
+                label: `Resume ${currentDrone.droneLabel} (${currentDrone.worktree})`,
                 action: { kind: 'launch', cli: inputs.defaultCli },
             });
         }
@@ -125,7 +163,7 @@ export function buildLaunchMenuOptions(inputs) {
                 },
             });
         }
-        if (!inputs.currentDrone) {
+        if (!currentDrone) {
             options.push({
                 key: String(options.length + 1),
                 label: `Launch ${PRETTY[inputs.defaultCli]} here without a drone`,
@@ -135,8 +173,8 @@ export function buildLaunchMenuOptions(inputs) {
         for (const cli of inputs.otherConfiguredClis) {
             options.push({
                 key: String(options.length + 1),
-                label: inputs.currentDrone
-                    ? `Resume ${inputs.currentDrone.droneLabel} with ${PRETTY[cli]} (one-shot)`
+                label: currentDrone
+                    ? `Resume ${currentDrone.droneLabel} with ${PRETTY[cli]} (one-shot)`
                     : `Launch with ${PRETTY[cli]} here without a drone (one-shot)`,
                 action: { kind: 'launch', cli },
             });

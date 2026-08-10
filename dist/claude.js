@@ -40,7 +40,7 @@ import { runLaunchAll } from './launch-all-cmd.js';
 import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
 import { buildDefaultSeatCommandDeps, parseLaunchSeatArgs, parseSeatsArgs, runLaunchSeat, runSeats, } from './seat-commands.js';
 import { discoverDroneCandidates } from './launch-all-discovery.js';
-import { configureSelectedLaunchCli, discoverLiveLaunchMenuCandidates, isMainGitWorktree, runBareLaunchMenu, shouldShowLaunchMenu, } from './bare-launch-menu.js';
+import { configureSelectedLaunchCli, discoverLiveLaunchMenuCandidates, isMainGitWorktree, isTerminalLaunchMenuSeatStatus, runBareLaunchMenu, shouldShowLaunchMenu, terminalLaunchMenuSeatRefusal, } from './bare-launch-menu.js';
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
@@ -283,6 +283,19 @@ async function main() {
         isMainWorktree,
     })) {
         const seatCommandDeps = buildDefaultSeatCommandDeps();
+        let currentDroneStatus = null;
+        if (active) {
+            try {
+                currentDroneStatus = await launchAllDeps.probeSeat(active);
+            }
+            catch {
+                currentDroneStatus = 'indeterminate';
+            }
+            if (isTerminalLaunchMenuSeatStatus(currentDroneStatus)) {
+                process.stderr.write(terminalLaunchMenuSeatRefusal(currentDroneStatus));
+                process.exit(1);
+            }
+        }
         const siblingContext = await discoverLiveLaunchMenuCandidates({
             readAllProjectIdentities: launchAllDeps.readAllProjectIdentities,
             discoverDroneCandidates: (cubeId) => discoverDroneCandidates({ targetCubeId: cubeId }, { ...launchAllDeps, stderr: () => { } }),
@@ -295,11 +308,12 @@ async function main() {
             defaultCli: cli,
             otherConfiguredClis,
             hasLaunchAllTargets: siblingContext.launchAllCubeId !== undefined,
-            ...(active
+            ...(active && currentDroneStatus
                 ? {
                     currentDrone: {
                         droneLabel: active.droneLabel,
                         worktree: active.worktree ?? findProjectRoot(process.cwd()),
+                        status: currentDroneStatus,
                     },
                 }
                 : {}),

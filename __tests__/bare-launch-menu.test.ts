@@ -16,6 +16,7 @@ import {
   resolveLaunchMenuChoice,
   runBareLaunchMenu,
   shouldShowLaunchMenu,
+  terminalLaunchMenuSeatRefusal,
 } from '../src/bare-launch-menu';
 
 describe('gh#853 — main-worktree launch-menu gate', () => {
@@ -28,6 +29,9 @@ describe('gh#853 — main-worktree launch-menu gate', () => {
     expect(isMainGitWorktree(main)).toBe(true);
     expect(isMainGitWorktree(linked)).toBe(false);
     expect(isMainGitWorktree(() => { throw new Error('not a repository'); })).toBe(false);
+    expect(isMainGitWorktree(() => 'fatal: malformed repository state\n')).toBe(false);
+    expect(isMainGitWorktree((args) => args.includes('--git-dir') ? '.git\n' : '/repo/.git\n')).toBe(false);
+    expect(isMainGitWorktree((args) => args.includes('--git-dir') ? '/repo/.git\n' : '.git\n')).toBe(false);
   });
 
   it('wires the Git worktree probe and legacy current drone into the launcher menu', () => {
@@ -35,13 +39,25 @@ describe('gh#853 — main-worktree launch-menu gate', () => {
     const probe = source.indexOf('const isMainWorktree = isMainGitWorktree');
     const gate = source.indexOf('shouldShowLaunchMenu({', probe);
     const gateInput = source.indexOf('isMainWorktree,', gate);
+    const legacyProbe = source.indexOf('await launchAllDeps.probeSeat(active)', gateInput);
+    const terminalGuard = source.indexOf("isTerminalLaunchMenuSeatStatus(currentDroneStatus)", legacyProbe);
+    const refusalExit = source.indexOf('process.exit(1)', terminalGuard);
+    const menu = source.indexOf('const action = await runBareLaunchMenu', refusalExit);
     const currentDroneInput = source.indexOf('currentDrone:', gate);
+    const configure = source.indexOf('ensureResolvedCliConfigured(selectedCli, active)', menu);
+    const spawn = source.indexOf(': spawn(cli, launchArgs', configure);
 
     expect(probe).toBeGreaterThan(0);
     expect(source.indexOf("launchAllDeps.runSync('git'", probe)).toBeGreaterThan(probe);
     expect(gate).toBeGreaterThan(probe);
     expect(gateInput).toBeGreaterThan(gate);
-    expect(currentDroneInput).toBeGreaterThan(gateInput);
+    expect(legacyProbe).toBeGreaterThan(gateInput);
+    expect(terminalGuard).toBeGreaterThan(legacyProbe);
+    expect(refusalExit).toBeGreaterThan(terminalGuard);
+    expect(menu).toBeGreaterThan(refusalExit);
+    expect(currentDroneInput).toBeGreaterThan(menu);
+    expect(configure).toBeGreaterThan(menu);
+    expect(spawn).toBeGreaterThan(configure);
   });
 
   it('bare borg + both streams TTY + main worktree → show', () => {
@@ -234,7 +250,7 @@ describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
       otherConfiguredClis: ['claude'],
       hasLaunchAllTargets: true,
       launchAllCubeId: 'cube-id',
-      currentDrone: { droneLabel: 'coordinator', worktree: '/repo' },
+      currentDrone: { droneLabel: 'coordinator', worktree: '/repo', status: 'live' },
       droneCandidates: [
         { droneLabel: 'reviewer', target: 'reviewer-id', worktree: '/repo-reviewer' },
       ],
@@ -246,6 +262,65 @@ describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
       { key: '3', label: "Launch all (this cube's drone worktrees)", action: { kind: 'launch-all', cubeId: 'cube-id' } },
       { key: '4', label: 'Resume coordinator with Claude (one-shot)', action: { kind: 'launch', cli: 'claude' } },
     ]);
+  });
+
+  it.each([
+    'evicted',
+    'revoked',
+    'rejected',
+    'credential-rejected',
+    'trust-mismatch',
+  ] as const)('omits a %s legacy main-worktree drone from menu options', (status) => {
+    const opts = buildLaunchMenuOptions({
+      defaultCli: 'codex',
+      otherConfiguredClis: [],
+      hasLaunchAllTargets: true,
+      launchAllCubeId: 'cube-id',
+      currentDrone: { droneLabel: 'coordinator', worktree: '/repo', status },
+      droneCandidates: [
+        { droneLabel: 'reviewer', target: 'reviewer-id', worktree: '/repo-reviewer' },
+      ],
+    });
+
+    expect(opts).toEqual([
+      { key: '1', label: 'Resume reviewer (/repo-reviewer)', action: { kind: 'launch-seat', target: 'reviewer-id' } },
+      { key: '2', label: "Launch all (this cube's drone worktrees)", action: { kind: 'launch-all', cubeId: 'cube-id' } },
+      { key: '3', label: 'Launch Codex here without a drone', action: { kind: 'launch', cli: 'codex' } },
+    ]);
+  });
+
+  it.each([
+    'live',
+    'unreachable',
+    'endpoint-mismatch',
+    'server-failure',
+    'indeterminate',
+  ] as const)('keeps a %s legacy main-worktree drone available', (status) => {
+    const opts = buildLaunchMenuOptions({
+      defaultCli: 'codex',
+      otherConfiguredClis: [],
+      hasLaunchAllTargets: false,
+      currentDrone: { droneLabel: 'coordinator', worktree: '/repo', status },
+    });
+
+    expect(opts[0]).toEqual({
+      key: '1',
+      label: 'Resume coordinator (/repo)',
+      action: { kind: 'launch', cli: 'codex' },
+    });
+  });
+
+  it('renders bounded terminal refusal copy without credential material', () => {
+    const rejected = terminalLaunchMenuSeatRefusal('credential-rejected');
+    expect(rejected).toContain('saved credential was rejected');
+    expect(rejected).toContain('No agent was launched and nothing was changed.');
+    expect(rejected).toContain('borg reset-local-connection');
+    expect(rejected).not.toMatch(/sessionToken|credentialRef|bearer/i);
+
+    const trustMismatch = terminalLaunchMenuSeatRefusal('trust-mismatch');
+    expect(trustMismatch).toContain('saved server identity no longer matches');
+    expect(trustMismatch).toContain('restore the expected identity');
+    expect(trustMismatch).not.toContain('borg reset-local-connection');
   });
 });
 

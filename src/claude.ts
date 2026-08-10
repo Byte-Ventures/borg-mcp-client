@@ -66,10 +66,13 @@ import {
   configureSelectedLaunchCli,
   discoverLiveLaunchMenuCandidates,
   isMainGitWorktree,
+  isTerminalLaunchMenuSeatStatus,
   runBareLaunchMenu,
   shouldShowLaunchMenu,
+  terminalLaunchMenuSeatRefusal,
   type LaunchMenuAction,
 } from './bare-launch-menu.js';
+import type { SeatStatus } from './seat-probe.js';
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
@@ -394,6 +397,18 @@ async function main() {
     })
   ) {
     const seatCommandDeps = buildDefaultSeatCommandDeps();
+    let currentDroneStatus: SeatStatus | null = null;
+    if (active) {
+      try {
+        currentDroneStatus = await launchAllDeps.probeSeat(active);
+      } catch {
+        currentDroneStatus = 'indeterminate';
+      }
+      if (isTerminalLaunchMenuSeatStatus(currentDroneStatus)) {
+        process.stderr.write(terminalLaunchMenuSeatRefusal(currentDroneStatus));
+        process.exit(1);
+      }
+    }
     const siblingContext = await discoverLiveLaunchMenuCandidates({
       readAllProjectIdentities: launchAllDeps.readAllProjectIdentities,
       discoverDroneCandidates: (cubeId) => discoverDroneCandidates(
@@ -413,11 +428,12 @@ async function main() {
         defaultCli: cli,
         otherConfiguredClis,
         hasLaunchAllTargets: siblingContext.launchAllCubeId !== undefined,
-        ...(active
+        ...(active && currentDroneStatus
           ? {
               currentDrone: {
                 droneLabel: active.droneLabel,
                 worktree: active.worktree ?? findProjectRoot(process.cwd()),
+                status: currentDroneStatus,
               },
             }
           : {}),
