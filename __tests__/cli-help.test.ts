@@ -82,9 +82,10 @@ describe('client subcommand help', () => {
   it('documents every accepted launch-all option', () => {
     const text = launchAllHelpText('9.9.9');
     for (const flag of [
-      '--mode', '--only', '--dry-run', '--cli', '--no-attach', '--yes', '--force',
+      '--mode', '--only', '--dry-run', '--no-attach', '--yes', '--force',
       '--launch-delay', '--help',
     ]) expect(text).toContain(flag);
+    expect(text).not.toContain('--cli');
     expect(text).toContain('--mode <tmux|terminals|pastelist>');
     expect(text).not.toContain('--mode <tmux|windows|pastelist>');
     expect(text).toContain(

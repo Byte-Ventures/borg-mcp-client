@@ -5,7 +5,6 @@ export interface LaunchAllFlags {
   mode?: 'tmux' | 'terminals' | 'pastelist';
   only?: string;
   dryRun?: boolean;
-  cli?: 'claude' | 'codex' | 'opencode';
   noAttach?: boolean;
   yes?: boolean;
   force?: boolean;
@@ -28,7 +27,7 @@ export type ParseLaunchAllResult =
   | { ok: false; error: string };
 
 const SUPPORTED =
-  '--mode <tmux|terminals|pastelist>, --only <name>, --dry-run, --cli <claude|codex|opencode>, ' +
+  '--mode <tmux|terminals|pastelist>, --only <name>, --dry-run, ' +
   '--no-attach, --yes/-y, --force, --launch-delay <ms>';
 
 export function parseLaunchAllArgs(rawArgs: string[]): ParseLaunchAllResult {
@@ -52,14 +51,6 @@ export function parseLaunchAllArgs(rawArgs: string[]): ParseLaunchAllResult {
           return { ok: false, error: `--only requires a value (role name or drone label)` };
         }
         flags.only = v;
-        break;
-      }
-      case '--cli': {
-        const v = rawArgs[++i];
-        if (v !== 'claude' && v !== 'codex' && v !== 'opencode') {
-          return { ok: false, error: `--cli must be one of claude|codex|opencode (got: ${v ?? '<missing>'})` };
-        }
-        flags.cli = v;
         break;
       }
       case '--launch-delay': {

@@ -35,7 +35,6 @@ export function launchAllHelpText(version: string): string {
     `  --mode <tmux|terminals|pastelist>     Select the launch backend\n` +
     `  --only <name>                         Launch one role or drone label\n` +
     `  --dry-run                             Show what would launch\n` +
-    `  --cli <claude|codex|opencode>         Select the agent CLI\n` +
     `  --no-attach                           Do not attach to the tmux session\n` +
     `  --yes, -y                             Skip the large-fleet confirmation\n` +
     `  --force                               Override live-session skips\n` +

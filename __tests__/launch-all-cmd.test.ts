@@ -227,7 +227,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('native Windows is not supported'));
     // pastelist printed cd lines; no tmux new-session
     expect((deps.runSync as any).mock.calls.some((c: any[]) => c[1]?.[0] === 'new-session')).toBe(false);
-    expect(stdoutOf(deps)).toContain('assimilate --here');
+    expect(stdoutOf(deps)).toContain(`launch '${did(1)}'`);
   });
 
   it.each([
@@ -262,7 +262,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     });
     expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
     expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(false);
-    expect(stdoutOf(deps)).toContain('assimilate --here');
+    expect(stdoutOf(deps)).toContain(`launch '${did(1)}'`);
     expect(stderrOf(deps)).toContain('Falling back to pastelist mode');
   });
 
@@ -352,7 +352,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
 
     const auto = mk();
     expect(await runLaunchAll({ flags: {} }, auto, OPTS)).toBe(0);
-    expect(stdoutOf(auto)).toContain('assimilate --here'); // pastelist
+    expect(stdoutOf(auto)).toContain(`launch '${did(1)}'`); // pastelist
   });
 });
 

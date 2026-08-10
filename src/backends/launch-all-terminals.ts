@@ -53,7 +53,7 @@ async function launchMacOS(candidates: DroneCandidate[], opts: TerminalsOpts, de
   for (let i = 0; i < candidates.length; i++) {
     const c = candidates[i];
     if (i > 0 && opts.launchDelayMs > 0) await opts.sleep(opts.launchDelayMs); // rate-limit stagger
-    const cmd = buildLaunchCommand(c.worktreeDir, opts.borgPath);
+    const cmd = buildLaunchCommand(c, opts.borgPath);
     const title = composeTerminalTitle({ label: c.droneLabel, cubeName: opts.cubeName }, '');
     const script = hasITerm
       ? `tell application "iTerm"\n  if (count of windows) = 0 then\n    set launchedWindow to (create window with default profile command "${appleScriptEscape(cmd)}")\n    tell current session of launchedWindow to set name to "${appleScriptEscape(title)}"\n  else\n    tell current window\n      set launchedTab to (create tab with default profile command "${appleScriptEscape(cmd)}")\n      tell current session of launchedTab to set name to "${appleScriptEscape(title)}"\n    end tell\n  end if\nend tell`
@@ -88,7 +88,7 @@ async function launchLinux(candidates: DroneCandidate[], opts: TerminalsOpts, de
     const title = composeTerminalTitle({ label: c.droneLabel, cubeName: opts.cubeName }, '');
     const cmd =
       `printf '\\033]0;%s\\007' ${shellEscape(title)}; ` +
-      buildLaunchCommand(c.worktreeDir, opts.borgPath, { keepOpenOnFail: true });
+      buildLaunchCommand(c, opts.borgPath, { keepOpenOnFail: true });
     // `<term> -e sh -c '<cmd>'` opens a new window running the command.
     deps.runSync(term, ['-e', 'sh', '-c', cmd]);
     writeLockMarker(deps, c.cubeId, c.droneLabel, c.worktreeDir, opts.launchedAtISO);
