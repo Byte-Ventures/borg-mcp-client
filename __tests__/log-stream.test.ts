@@ -490,7 +490,7 @@ describe('streamOnce', () => {
 
     expect(appendLine).not.toHaveBeenCalled();
     expect(injectOpenCode).toHaveBeenCalledWith(
-      expect.stringContaining('<!-- borg-wake-nonce:wake-1 -->'),
+      expect.not.stringContaining('borg-wake-nonce'),
       'wake-1',
       true,
     );
@@ -512,7 +512,7 @@ describe('streamOnce', () => {
     expect(appendLine).toHaveBeenCalledTimes(1);
     expect(injectOpenCode).toHaveBeenCalledTimes(2);
     expect(injectOpenCode).toHaveBeenLastCalledWith(
-      expect.stringContaining('<!-- borg-wake-nonce:wake-same -->'),
+      expect.not.stringContaining('borg-wake-nonce'),
       'wake-same',
       true,
     );
@@ -575,7 +575,7 @@ describe('streamOnce', () => {
     );
     expect(appendLine).not.toHaveBeenCalled();
     expect(injectOpenCode).toHaveBeenCalledWith(
-      expect.stringContaining('<!-- borg-wake-nonce:wake-live -->'),
+      expect.not.stringContaining('borg-wake-nonce'),
       'wake-live',
       true,
     );

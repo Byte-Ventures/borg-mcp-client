@@ -142,11 +142,8 @@ export function setModuleInjectOpenCode(
  */
 const RECENT_IDS_CAP = 50;
 
-function formatOpenCodeWakePrompt(line: string, wakeNonce?: string): string {
-  const prompt = formatCubeActivityWakeMessage(line);
-  return wakeNonce === undefined
-    ? prompt
-    : `${prompt}\n\n<!-- borg-wake-nonce:${wakeNonce} -->`;
+function formatOpenCodeWakePrompt(line: string): string {
+  return formatCubeActivityWakeMessage(line);
 }
 
 export const INBOX_TAIL_LINES_CAP = 512;
@@ -875,7 +872,7 @@ export async function streamOnce(
       // exception: each wake nonce is a new delivery identity even when the
       // underlying inbox line is already durable.
       if (isReping) {
-        await injectOpenCode(formatOpenCodeWakePrompt(line, ev.wake_nonce), deliveryId, true);
+        await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true);
       }
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
@@ -883,7 +880,7 @@ export async function streamOnce(
     // The inbox append is the durable record. OpenCode injection is only the
     // wake attempt and may return before the agent finishes processing.
     await appendLine(active.cubeId, active.droneId, line);
-    if (!(await injectOpenCode(formatOpenCodeWakePrompt(line, ev.wake_nonce), deliveryId, true))) {
+    if (!(await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true))) {
       if (ev.wake_nonce === undefined) wakeCodex(formatCodexWakePrompt(line));
       else wakeCodex(formatCodexWakePrompt(line), ev.wake_nonce);
     }
@@ -1201,7 +1198,7 @@ export async function streamOnce(
         if (isRecentWakeReplay) {
           const line = formatInboxLine(withSseEventId(event.data, event.id));
           const wakeNonce = event.wake_nonce;
-          if (wakeNonce !== undefined && !(await injectOpenCode(formatOpenCodeWakePrompt(line, wakeNonce), wakeNonce, true))) {
+          if (wakeNonce !== undefined && !(await injectOpenCode(formatOpenCodeWakePrompt(line), wakeNonce, true))) {
             wakeCodex(formatCodexWakePrompt(line), wakeNonce);
           }
           continue;

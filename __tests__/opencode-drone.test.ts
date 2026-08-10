@@ -13,7 +13,10 @@ import {
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 import { streamOnce } from '../src/log-stream';
-import { OPENCODE_INJECTED_ENTRY_METADATA_KEY } from '../src/opencode-plugin';
+import {
+  OPENCODE_INJECTED_ENTRY_METADATA_KEY,
+  OPENCODE_WAKE_IDENTITY_METADATA_KEY,
+} from '../src/opencode-plugin';
 
 const DIRECTORY = '/repo';
 const SERVER_URL = 'http://127.0.0.1:15113';
@@ -442,7 +445,14 @@ describe('OpenCode wake target binding', () => {
           ...kickoffMessages(launch.prompt),
           {
             info: { id: 'msg_000000000001prior', role: 'user' },
-            parts: [{ type: 'text', text: 'persisted by prior process' }],
+            parts: [{
+              type: 'text',
+              text: 'persisted by prior process',
+              metadata: {
+                [OPENCODE_INJECTED_ENTRY_METADATA_KEY]: true,
+                [OPENCODE_WAKE_IDENTITY_METADATA_KEY]: 'entry-prior-process',
+              },
+            }],
           },
         ],
       },
@@ -520,10 +530,15 @@ describe('OpenCode wake target binding', () => {
     expect(api.promptBodies.map((body) =>
       ((body.parts as Array<{ text: string }>)[0]?.text)
     )).toEqual(['first', 'second', 'third']);
-    expect(api.promptBodies.every((body) => {
+    expect(api.promptBodies.every((body, index) => {
       const parts = body.parts as Array<{ text: string; metadata?: Record<string, unknown> }>;
       return parts.length === 1
-        && parts[0]?.metadata?.[OPENCODE_INJECTED_ENTRY_METADATA_KEY] === true;
+        && parts[0]?.metadata?.[OPENCODE_INJECTED_ENTRY_METADATA_KEY] === true
+        && parts[0]?.metadata?.[OPENCODE_WAKE_IDENTITY_METADATA_KEY] === [
+          'entry-first',
+          'entry-second',
+          'entry-third',
+        ][index];
     })).toBe(true);
     expect(api.promptBodies.every((body) => !Object.hasOwn(body, 'messageID'))).toBe(true);
   });
@@ -590,9 +605,12 @@ describe('OpenCode wake target binding', () => {
       ((body.parts as Array<{ text: string }>)[0]?.text)
     );
     expect(submittedTexts).toHaveLength(3);
-    expect(submittedTexts[0]).not.toContain('borg-wake-nonce');
-    expect(submittedTexts[1]).toContain('<!-- borg-wake-nonce:wake-nonce-1 -->');
-    expect(submittedTexts[2]).toContain('<!-- borg-wake-nonce:wake-nonce-2 -->');
+    expect(new Set(submittedTexts).size).toBe(1);
+    expect(submittedTexts.every((text) => !text.includes('borg-wake-nonce'))).toBe(true);
+    expect(api.promptBodies.map((body) => {
+      const parts = body.parts as Array<{ metadata?: Record<string, unknown> }>;
+      return parts[0]?.metadata?.[OPENCODE_WAKE_IDENTITY_METADATA_KEY];
+    })).toEqual(['entry-raw-sse', 'wake-nonce-1', 'wake-nonce-2']);
     expect(appendLine).toHaveBeenCalledTimes(1);
     expect(appendLine.mock.calls[0]?.[2]).not.toContain('borg-wake-nonce');
   });
@@ -633,9 +651,56 @@ describe('OpenCode wake target binding', () => {
 
     releaseConfirmation(new Response(JSON.stringify([{
       info: { id: 'msg_000000000001generated', role: 'user' },
-      parts: [{ type: 'text', text: 'pending confirmation' }],
+      parts: [{
+        type: 'text',
+        text: 'pending confirmation',
+        metadata: {
+          [OPENCODE_INJECTED_ENTRY_METADATA_KEY]: true,
+          [OPENCODE_WAKE_IDENTITY_METADATA_KEY]: 'entry-unconfirmed',
+        },
+      }],
     }]), { status: 200 }));
     await expect(delivery).resolves.toBe(true);
+  });
+
+  it('reports stripped delivery metadata as delivered-unconfirmed', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('stripped-delivery-metadata');
+    const root = session('stripped-metadata-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messageListResponse: ({ promptBodies, messages }) => {
+        if (promptBodies.length === 0) {
+          return new Response(JSON.stringify(messages), { status: 200 });
+        }
+        return new Response(JSON.stringify([
+          ...kickoffMessages(launch.prompt),
+          {
+            info: { id: 'msg_000000000001stripped', role: 'user' },
+            parts: [{ type: 'text', text: 'metadata stripped after delivery' }],
+          },
+        ]), { status: 200 });
+      },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const delivery = injectOpenCodeEntry(
+      'metadata stripped after delivery',
+      'entry-stripped-metadata',
+    );
+    await vi.runAllTimersAsync();
+    await expect(delivery).resolves.toBe(false);
+
+    expect(api.promptBodies).toHaveLength(1);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      totalEntriesInjected: 0,
+      deliveryStates: {
+        'delivered-unconfirmed': 1,
+        failed: 0,
+      },
+    });
   });
 
   it('retains an ambiguous submission as terminal delivered-unconfirmed', async () => {
@@ -751,6 +816,9 @@ describe('OpenCode wake target binding', () => {
     expect((storedParts[0] as { metadata?: Record<string, unknown> }).metadata?.[
       OPENCODE_INJECTED_ENTRY_METADATA_KEY
     ]).toBe(true);
+    expect((storedParts[0] as { metadata?: Record<string, unknown> }).metadata?.[
+      OPENCODE_WAKE_IDENTITY_METADATA_KEY
+    ]).toBe('entry-post-acceptance-loss');
     expect(messageListCount).toBeGreaterThanOrEqual(4);
   });
 });

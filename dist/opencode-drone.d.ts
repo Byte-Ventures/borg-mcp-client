@@ -25,10 +25,9 @@ export declare function connectOpenCodeDrone(deps: ConnectDeps): Promise<void>;
 export declare function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promise<boolean>;
 /**
  * Queue one durable inbox entry for delivery into the bound OpenCode session.
- * The injected text identifies the OpenCode-generated user message, so retries
- * and replay can confirm an earlier ambiguous submission without supplying an
- * ordering-breaking caller message ID or running it twice. Normal delivery uses
- * canonical inbox text; wake re-pings include their stable nonce marker.
+ * The delivery identity is stored in TextPart metadata, so retries and replay
+ * can confirm an earlier ambiguous submission without supplying an
+ * ordering-breaking caller message ID or exposing the identity in delivered text.
  */
 export declare function injectOpenCodeEntry(text: string, entryId?: string, allowSubmit?: boolean): Promise<boolean>;
 export declare function probeOpenCodeDroneArmed(): Promise<boolean | null>;
