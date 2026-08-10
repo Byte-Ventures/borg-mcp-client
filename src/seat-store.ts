@@ -408,6 +408,24 @@ export async function withStoreLock<T>(
           await new Promise((resolvePromise) => setTimeout(resolvePromise, waitMs));
           continue;
         }
+        // The holder may have released cleanly between our payload read and the
+        // liveness check. Revalidate the exact observation before diagnosing it as
+        // stale: a missing or changed pathname is lock turnover, so retry acquisition.
+        // An unchanged dead/corrupt observation still fails closed below; we never
+        // delete, reclaim, or steal it.
+        let currentRaw: string | null;
+        try {
+          currentRaw = await readStoreFile(
+            lockPath,
+            opts.secureRoot
+              ? { secureRoot: opts.secureRoot, rootMode: opts.rootMode }
+              : {},
+          );
+        } catch (readErr) {
+          if ((readErr as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw readErr;
+        }
+        if (currentRaw === null || currentRaw !== raw) continue;
         // Dead recorded holder, or a missing/unparseable payload → fail closed. The
         // operator must confirm no borg process is running and delete the file by hand.
         throw staleLockError(lockPath, held);
