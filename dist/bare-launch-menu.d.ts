@@ -92,19 +92,6 @@ export declare function shouldShowLaunchMenu(args: {
     stdoutIsTTY: boolean;
     hasActiveSeat?: boolean;
 }): boolean;
-export declare function explicitCliLaunchHint(args: {
-    explicitCli: BorgCli | undefined;
-    stdinIsTTY: boolean;
-    stdoutIsTTY: boolean;
-    hasActiveCube: boolean;
-    hasLaunchAllTargets: boolean;
-}): string | null;
-export declare function shouldResolveExplicitCliLaunchHintTargets(args: {
-    explicitCli: BorgCli | undefined;
-    stdinIsTTY: boolean;
-    stdoutIsTTY: boolean;
-    hasActiveCube: boolean;
-}): boolean;
 /**
  * The context-filtered option set. Option 1 is always present; options 2/3 are
  * included only when applicable. Keys are sequential with no gaps, so a hidden

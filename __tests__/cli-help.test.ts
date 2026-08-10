@@ -301,6 +301,9 @@ describe('model configuration ownership', () => {
     expect(t).toContain('hidden enrollment invitation');
     expect(t).toContain('operator terminal');
     expect(t).toContain('Repository cube name');
+    expect(t).toContain("Resume this worktree's saved drone");
+    expect(t).not.toContain('Assimilate in the current worktree');
+    expect(t).not.toContain('Stay in the current worktree');
     expect(t).toContain('require an explicit cube grant');
     expect(t).toContain('Preview only');
     expect(t).not.toContain('falls back to Borg Cloud');

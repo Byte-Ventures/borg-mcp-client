@@ -40,7 +40,7 @@ import { runLaunchAll } from './launch-all-cmd.js';
 import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
 import { buildDefaultSeatCommandDeps, parseLaunchSeatArgs, parseSeatsArgs, runLaunchSeat, runSeats, } from './seat-commands.js';
 import { discoverDroneCandidates } from './launch-all-discovery.js';
-import { configureSelectedLaunchCli, discoverLiveLaunchMenuCandidates, explicitCliLaunchHint, runBareLaunchMenu, shouldResolveExplicitCliLaunchHintTargets, shouldShowLaunchMenu, } from './bare-launch-menu.js';
+import { configureSelectedLaunchCli, discoverLiveLaunchMenuCandidates, runBareLaunchMenu, shouldShowLaunchMenu, } from './bare-launch-menu.js';
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
@@ -266,32 +266,8 @@ async function main() {
     // Active cube for this directory — needed for the launch menu's option-3
     // availability, the terminal title, and the inbox-Monitor clause below.
     const active = await getActiveCube();
-    let launchAllTargetsAvailable;
-    const hasLaunchAllTargets = async () => {
-        if (!active)
-            return false;
-        if (launchAllTargetsAvailable === undefined) {
-            const candidates = await discoverDroneCandidates({ targetCubeId: active.cubeId }, buildDefaultLaunchAllDeps());
-            launchAllTargetsAvailable = candidates.length > 0;
-        }
-        return launchAllTargetsAvailable;
-    };
     const stdinIsTTY = process.stdin.isTTY === true;
     const stdoutIsTTY = process.stdout.isTTY === true;
-    const explicitCliHint = explicitCliLaunchHint({
-        explicitCli: parsedCli.cli,
-        stdinIsTTY,
-        stdoutIsTTY,
-        hasActiveCube: active !== null,
-        hasLaunchAllTargets: shouldResolveExplicitCliLaunchHintTargets({
-            explicitCli: parsedCli.cli,
-            stdinIsTTY,
-            stdoutIsTTY,
-            hasActiveCube: active !== null,
-        }) ? await hasLaunchAllTargets() : false,
-    });
-    if (explicitCliHint)
-        process.stderr.write(explicitCliHint);
     // gh#853: bare `borg` (no args) interactive launch menu. TTY-only + bare-args-
     // only (shouldShowLaunchMenu) so every scripted/programmatic `borg` and every
     // explicit subcommand/flag is untouched; the get-started breadcrumb already

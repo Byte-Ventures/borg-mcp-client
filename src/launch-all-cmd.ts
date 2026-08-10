@@ -55,28 +55,60 @@ async function resolveTargetCube(
     if (matches.length === 0) {
       return { error: `no cube named '${args.cubeName}' found among this machine's saved connections — has any drone assimilated into it?` };
     }
+    const matchesByCubeId = new Map<string, typeof matches>();
+    for (const match of matches) {
+      const sameCube = matchesByCubeId.get(match.cube.cubeId) ?? [];
+      sameCube.push(match);
+      matchesByCubeId.set(match.cube.cubeId, sameCube);
+    }
     // gh#850: distinct cubes can share a name (same name across accounts/
     // environments, or a stale seat). Silently taking matches[0] could launch
     // the wrong fleet, so when the name is ambiguous, surface each match's
-    // cubeId + the project that holds the seat and refuse to guess.
-    if (matches.length > 1) {
-      const list = matches
-        .map((m) => `  ${m.cube.cubeId}  (drone in ${m.projectPath})`)
+    // cubeId + one project that holds a seat and refuse to guess. Multiple
+    // seats for the SAME cube are one fleet, not ambiguity.
+    if (matchesByCubeId.size > 1) {
+      const list = [...matchesByCubeId.entries()]
+        .map(([cubeId, sameCube]) => `  ${cubeId}  (drone in ${sameCube[0].projectPath})`)
         .join('\n');
       return {
         error:
-          `'${args.cubeName}' is ambiguous — ${matches.length} saved connections on this machine share that name:\n${list}\n` +
+          `'${args.cubeName}' is ambiguous — ${matchesByCubeId.size} distinct cubes on this machine share that name:\n${list}\n` +
           'cd into the intended project and re-run as `borg launch-all` without the positional cube name (resolves the active cube), ' +
           'or clear the stale connection(s) by running `borg reset-local-connection` from the worktree that holds each.',
       };
     }
-    return { cubeId: matches[0].cube.cubeId, name: args.cubeName };
+    return { cubeId: matchesByCubeId.keys().next().value!, name: args.cubeName };
   }
   const active = await deps.getActiveCube();
   if (!active) {
+    const identities = await deps.readAllProjectIdentities();
+    const knownCubeIds = [...new Set(identities.map(({ cube }) => cube.cubeId))];
+    const candidates = (
+      await Promise.all(knownCubeIds.map((cubeId) =>
+        discoverDroneCandidates({ targetCubeId: cubeId }, deps)
+      ))
+    ).flat();
+    const candidatesByCubeId = new Map<string, DroneCandidate[]>();
+    for (const candidate of candidates) {
+      const sameCube = candidatesByCubeId.get(candidate.cubeId) ?? [];
+      sameCube.push(candidate);
+      candidatesByCubeId.set(candidate.cubeId, sameCube);
+    }
+    if (candidatesByCubeId.size === 1) {
+      const [cubeId, sameCube] = candidatesByCubeId.entries().next().value!;
+      return { cubeId, name: sameCube[0].seat.name };
+    }
+    if (candidatesByCubeId.size === 0) {
+      return {
+        error:
+          'no saved drone worktrees were found for this repository; pass a cube name explicitly as ' +
+          '`borg launch-all <cube-name>`, or cd into a drone worktree and rerun `borg launch-all`',
+      };
+    }
     return {
       error:
-        'no active cube in this directory; run `borg assimilate` first, or pass a cube name explicitly',
+        `linked drone worktrees for this repository belong to ${candidatesByCubeId.size} cubes; ` +
+        'pass the intended cube name as `borg launch-all <cube-name>`, or cd into a drone worktree and rerun `borg launch-all`',
     };
   }
   return { cubeId: active.cubeId, name: active.name };

@@ -16,7 +16,6 @@ import {
   isCleanTree,
   classifyDirty,
   isMerged,
-  adoptWorktree,
   cleanupMerged,
   type RunSync,
 } from '../src/worktree-lifecycle';
@@ -92,57 +91,6 @@ describe('isMerged', () => {
   it('isMerged true when feature tip is an ancestor of origin/main', () => {
     const { run } = scriptedRun({ 'merge-base --is-ancestor fix/foo origin/main': { status: 0 } });
     expect(isMerged(run, '/wt', 'fix/foo', 'origin/main')).toBe(true);
-  });
-});
-
-describe('adoptWorktree (migration §4.5)', () => {
-  it('BLOCKS when current HEAD has unmerged work (no switch, no discard)', () => {
-    const { run, calls } = scriptedRun({
-      'status --porcelain': { status: 0, stdout: '' },
-      'merge-base --is-ancestor HEAD origin/main': { status: 1 },
-    });
-    const res = adoptWorktree(run, '/wt', 'wt-x', 'origin/main');
-    expect(res.action).toBe('blocked-unmerged');
-    expect(calls.some((a) => a[0] === 'switch')).toBe(false);
-  });
-  it('adopts wt-branch when clean + HEAD merged + target absent (creates fresh)', () => {
-    const { run, calls } = scriptedRun({
-      'status --porcelain': { status: 0, stdout: '' },
-      'merge-base --is-ancestor HEAD origin/main': { status: 0 },
-      'rev-parse --verify --quiet refs/heads/wt-x': { status: 1 }, // target ABSENT
-    });
-    const res = adoptWorktree(run, '/wt', 'wt-x', 'origin/main');
-    expect(res.action).toBe('adopted');
-    expect(calls).toContainEqual(['switch', '-C', 'wt-x', 'origin/main']);
-  });
-  it('adopts (lossless reset) when target wt- exists but is merged into ref', () => {
-    const { run, calls } = scriptedRun({
-      'status --porcelain': { status: 0, stdout: '' },
-      'merge-base --is-ancestor HEAD origin/main': { status: 0 },
-      'rev-parse --verify --quiet refs/heads/wt-x': { status: 0 }, // target EXISTS
-      'merge-base --is-ancestor wt-x origin/main': { status: 0 },   // ...and is merged → safe reset
-    });
-    const res = adoptWorktree(run, '/wt', 'wt-x', 'origin/main');
-    expect(res.action).toBe('adopted');
-    expect(calls).toContainEqual(['switch', '-C', 'wt-x', 'origin/main']);
-  });
-  // gh#33 CR-v2 blocker 078d1630: the target wt- branch's committed-unmerged
-  // work must not be force-reset away by `switch -C`.
-  it('BLOCKS (no force-switch) when target wt- exists with unmerged commits', () => {
-    const { run, calls } = scriptedRun({
-      'status --porcelain': { status: 0, stdout: '' },
-      'merge-base --is-ancestor HEAD origin/main': { status: 0 },   // HEAD (e.g. main) merged
-      'rev-parse --verify --quiet refs/heads/wt-x': { status: 0 },  // target EXISTS
-      'merge-base --is-ancestor wt-x origin/main': { status: 1 },   // ...with unmerged commits
-    });
-    const res = adoptWorktree(run, '/wt', 'wt-x', 'origin/main');
-    expect(res.action).toBe('blocked-target-unmerged');
-    expect(calls.some((a) => a[0] === 'switch')).toBe(false);
-  });
-  it('skips + surfaces when dirty (no switch)', () => {
-    const { run, calls } = scriptedRun({ 'status --porcelain': { status: 0, stdout: ' M x\n' } });
-    expect(adoptWorktree(run, '/wt', 'wt-x', 'origin/main').action).toBe('skipped-dirty');
-    expect(calls.some((a) => a[0] === 'switch')).toBe(false);
   });
 });
 

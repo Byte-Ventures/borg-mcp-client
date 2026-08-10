@@ -123,54 +123,9 @@ export function isMerged(runSync: RunSync, cwd: string, branch: string, ref: str
   return runSync('git', ['merge-base', '--is-ancestor', branch, ref], cwd).status === 0;
 }
 
-export interface AdoptResult {
-  action: 'adopted' | 'blocked-unmerged' | 'blocked-target-unmerged' | 'skipped-dirty';
-  message?: string;
-}
-
 /** True iff a local branch named `branch` already exists. */
 export function localBranchExists(runSync: RunSync, cwd: string, branch: string): boolean {
   return runSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], cwd).status === 0;
-}
-
-/**
- * Migration (Q4/Q5/§4.5): bring a detached/stale worktree onto
- * `wt-<basename>` at `ref`. Idempotent: re-running on an already-adopted
- * clean worktree is a lossless reset to `ref`. Never discards:
- *   - dirty work tree            -> skipped-dirty (surface)
- *   - current HEAD unmerged      -> blocked-unmerged (surface)
- *   - TARGET `branch` exists with commits not on `ref` -> blocked-target-
- *     unmerged (surface). This is load-bearing: the switch uses `-C`
- *     (force-create/reset), which would ORPHAN commits on a pre-existing
- *     `wt-` branch. The HEAD-merged check alone misses this when the
- *     target branch != HEAD (e.g. on `main` while a prior `wt-x` holds
- *     committed-but-unmerged work). gh#33 CR-v2 blocker 078d1630.
- */
-export function adoptWorktree(runSync: RunSync, cwd: string, branch: string, ref: string): AdoptResult {
-  if (!isCleanTree(runSync, cwd)) {
-    return {
-      action: 'skipped-dirty',
-      message: 'uncommitted changes present; not switching (nothing discarded)',
-    };
-  }
-  if (!isMerged(runSync, cwd, 'HEAD', ref)) {
-    return {
-      action: 'blocked-unmerged',
-      message: `current HEAD has commits not on ${ref}; commit/push or set aside before adopting`,
-    };
-  }
-  // Guard the TARGET branch ref before the `switch -C` force-reset. If
-  // `branch` already exists and is NOT an ancestor of `ref`, it carries
-  // committed-unmerged work that `-C` would discard — block instead.
-  // (Absent, or an ancestor of `ref` = a clean reset target → proceed.)
-  if (localBranchExists(runSync, cwd, branch) && !isMerged(runSync, cwd, branch, ref)) {
-    return {
-      action: 'blocked-target-unmerged',
-      message: `branch ${branch} exists with commits not on ${ref}; resolve before adopting (a force-switch would discard them)`,
-    };
-  }
-  runSync('git', ['switch', '-C', branch, ref], cwd);
-  return { action: 'adopted' };
 }
 
 export interface CleanupResult {

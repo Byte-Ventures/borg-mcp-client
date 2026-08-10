@@ -71,10 +71,59 @@ function stderrOf(deps: LaunchAllDeps): string {
 }
 
 describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
-  it('no cube argument + no active cube → error, exit 1', async () => {
+  it('no cube argument + no active cube + no repo drone worktrees → cause-accurate error, exit 1', async () => {
     const deps = makeStubDeps({ getActiveCube: vi.fn(async () => null) });
     expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('no active cube'));
+    const error = stderrOf(deps);
+    expect(error).toContain('no saved drone worktrees');
+    expect(error).toContain('borg launch-all <cube-name>');
+    expect(error).toContain('cd into a drone worktree');
+    expect(error).not.toContain('borg assimilate');
+  });
+
+  it('positional cube name dedupes two saved seats with the same cubeId', async () => {
+    const { paths, identities } = fleet(2);
+    const deps = makeStubDeps({
+      runSync: vi.fn(() => porcelainFor(paths)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+    });
+
+    expect(await runLaunchAll({ cubeName: 'myrepo', flags: { dryRun: true } }, deps, OPTS)).toBe(0);
+    expect(stdoutOf(deps)).toContain('dry-run');
+    expect(stderrOf(deps)).not.toContain('ambiguous');
+  });
+
+  it('no-name launch from a seatless main checkout infers the one cube in linked drone worktrees', async () => {
+    const { paths, identities } = fleet(2);
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => null),
+      runSync: vi.fn(() => porcelainFor(paths)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+    });
+
+    expect(await runLaunchAll({ flags: { dryRun: true } }, deps, OPTS)).toBe(0);
+    expect(stdoutOf(deps)).toContain('dry-run');
+    expect(stderrOf(deps)).not.toContain('borg assimilate');
+  });
+
+  it('no-name launch from a seatless main checkout refuses when linked worktrees span two cubes', async () => {
+    const paths = ['/home/test/.borg/worktrees/myrepo/a', '/home/test/.borg/worktrees/myrepo/b'];
+    const identities = [
+      { projectPath: paths[0], cube: { cubeId: CUBE_ID, droneId: did(1), name: 'cube-a', sessionToken: 's', droneLabel: 'drone-1', apiUrl: 'http://api.test' } as ActiveCube },
+      { projectPath: paths[1], cube: { cubeId: '22222222-2222-2222-2222-222222222222', droneId: did(2), name: 'cube-b', sessionToken: 's', droneLabel: 'drone-2', apiUrl: 'http://api.test' } as ActiveCube },
+    ];
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => null),
+      runSync: vi.fn(() => porcelainFor(paths)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+    });
+
+    expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(1);
+    const error = stderrOf(deps);
+    expect(error).toContain('belong to 2 cubes');
+    expect(error).toContain('borg launch-all <cube-name>');
+    expect(error).toContain('cd into a drone worktree');
+    expect(error).not.toContain('borg assimilate');
   });
 
   it('zero candidates after discovery → message + exit 0', async () => {
@@ -191,7 +240,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect(stderrOf(deps)).toContain('roster confirmation skipped (token rotated mid-launch)');
   });
 
-  it('positional cube name that matches >1 cube → ambiguity error listing each id, exit 1 (gh#850)', async () => {
+  it('positional cube name shared by two distinct cubeIds still refuses as ambiguous (gh#850)', async () => {
     const idA = '22222222-2222-2222-2222-222222222222';
     const idB = '33333333-3333-3333-3333-333333333333';
     const identities = [

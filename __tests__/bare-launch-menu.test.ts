@@ -11,10 +11,8 @@ import {
   buildLaunchMenuOptions,
   configureSelectedLaunchCli,
   discoverLiveLaunchMenuCandidates,
-  explicitCliLaunchHint,
   resolveLaunchMenuChoice,
   runBareLaunchMenu,
-  shouldResolveExplicitCliLaunchHintTargets,
   shouldShowLaunchMenu,
 } from '../src/bare-launch-menu';
 
@@ -123,83 +121,6 @@ describe('client#362 — live sibling drone discovery', () => {
   });
 });
 
-describe('gh#967 — explicit --cli launch-all hint', () => {
-  it('resolves launch-all targets only when an explicit --cli hint could be shown', () => {
-    expect(shouldResolveExplicitCliLaunchHintTargets({
-      explicitCli: 'codex',
-      stdinIsTTY: true,
-      stdoutIsTTY: true,
-      hasActiveCube: true,
-    })).toBe(true);
-
-    expect(shouldResolveExplicitCliLaunchHintTargets({
-      explicitCli: undefined,
-      stdinIsTTY: true,
-      stdoutIsTTY: true,
-      hasActiveCube: true,
-    })).toBe(false);
-    expect(shouldResolveExplicitCliLaunchHintTargets({
-      explicitCli: 'codex',
-      stdinIsTTY: false,
-      stdoutIsTTY: true,
-      hasActiveCube: true,
-    })).toBe(false);
-    expect(shouldResolveExplicitCliLaunchHintTargets({
-      explicitCli: 'codex',
-      stdinIsTTY: true,
-      stdoutIsTTY: false,
-      hasActiveCube: true,
-    })).toBe(false);
-    expect(shouldResolveExplicitCliLaunchHintTargets({
-      explicitCli: 'codex',
-      stdinIsTTY: true,
-      stdoutIsTTY: true,
-      hasActiveCube: false,
-    })).toBe(false);
-  });
-
-  it('emits a hint only for interactive explicit --cli launches in an active cube with launch-all targets', () => {
-    expect(explicitCliLaunchHint({
-      explicitCli: 'codex',
-      stdinIsTTY: true,
-      stdoutIsTTY: true,
-      hasActiveCube: true,
-      hasLaunchAllTargets: true,
-    })).toBe(
-      'borg --cli codex launches Codex directly; use bare borg for the launch menu.\n'
-    );
-
-    expect(explicitCliLaunchHint({
-      explicitCli: undefined,
-      stdinIsTTY: true,
-      stdoutIsTTY: true,
-      hasActiveCube: true,
-      hasLaunchAllTargets: true,
-    })).toBeNull();
-    expect(explicitCliLaunchHint({
-      explicitCli: 'codex',
-      stdinIsTTY: false,
-      stdoutIsTTY: true,
-      hasActiveCube: true,
-      hasLaunchAllTargets: true,
-    })).toBeNull();
-    expect(explicitCliLaunchHint({
-      explicitCli: 'codex',
-      stdinIsTTY: true,
-      stdoutIsTTY: true,
-      hasActiveCube: false,
-      hasLaunchAllTargets: true,
-    })).toBeNull();
-    expect(explicitCliLaunchHint({
-      explicitCli: 'codex',
-      stdinIsTTY: true,
-      stdoutIsTTY: true,
-      hasActiveCube: true,
-      hasLaunchAllTargets: false,
-    })).toBeNull();
-  });
-});
-
 describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
   it('option 1 (launch default) is always present and names the default cli', () => {
     const opts = buildLaunchMenuOptions({ defaultCli: 'claude', otherConfiguredClis: [], hasLaunchAllTargets: false });
@@ -250,7 +171,7 @@ describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
     expect(fourOpts.map((o) => o.key)).toEqual(['1', '2', '3', '4']);
   });
 
-  it('puts sorted sibling drones first, then launch-all, then unattached launches', () => {
+  it('gives a seatless main checkout sorted drones, launch-all, then unattached launches', () => {
     const opts = buildLaunchMenuOptions({
       defaultCli: 'claude',
       otherConfiguredClis: ['codex'],
