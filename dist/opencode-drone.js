@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { OPENCODE_INJECTED_ENTRY_METADATA_KEY } from './opencode-plugin.js';
+import { OPENCODE_INJECTED_ENTRY_METADATA_KEY, OPENCODE_WAKE_IDENTITY_METADATA_KEY, } from './opencode-plugin.js';
 const LOG_FILE = join(tmpdir(), 'borg-opencode-drone.log');
 function log(msg) {
     const line = `[${new Date().toISOString()}] ${msg}\n`;
@@ -123,13 +123,16 @@ async function listSessionMessages(id) {
         throw new Error(`OpenCode session messages request failed (${status})`);
     return JSON.parse(body);
 }
-async function findInjectedMessage(sessionId, text) {
+async function findInjectedMessage(sessionId, expectedWakeIdentity) {
     const messages = await listSessionMessages(sessionId);
     for (let index = messages.length - 1; index >= 0; index--) {
         const message = messages[index];
         if (message?.info?.role !== 'user' || typeof message.info.id !== 'string')
             continue;
-        if (message.parts?.some((part) => part.type === 'text' && part.text === text)) {
+        const part = message.parts?.[0];
+        if (part?.type === 'text' &&
+            part.metadata?.[OPENCODE_INJECTED_ENTRY_METADATA_KEY] === true &&
+            part.metadata?.[OPENCODE_WAKE_IDENTITY_METADATA_KEY] === expectedWakeIdentity) {
             return message.info.id;
         }
     }
@@ -372,7 +375,7 @@ async function deliverOpenCodeEntry(owner, delivery) {
             }
         }
         try {
-            if (await findInjectedMessage(target.id, delivery.text)) {
+            if (await findInjectedMessage(target.id, delivery.entryId)) {
                 log(`entry ${delivery.entryId} already present in session ${target.id}`);
                 return 'delivered';
             }
@@ -393,7 +396,10 @@ async function deliverOpenCodeEntry(owner, delivery) {
                 parts: [{
                         type: 'text',
                         text: delivery.text,
-                        metadata: { [OPENCODE_INJECTED_ENTRY_METADATA_KEY]: true },
+                        metadata: {
+                            [OPENCODE_INJECTED_ENTRY_METADATA_KEY]: true,
+                            [OPENCODE_WAKE_IDENTITY_METADATA_KEY]: delivery.entryId,
+                        },
                     }],
             });
         }
@@ -416,7 +422,7 @@ async function deliverOpenCodeEntry(owner, delivery) {
                 delivery.state = 'delivered-unconfirmed';
             }
             try {
-                if (await findInjectedMessage(target.id, delivery.text)) {
+                if (await findInjectedMessage(target.id, delivery.entryId)) {
                     return 'delivered';
                 }
             }
@@ -516,10 +522,9 @@ export async function injectInitialKickoff(launch) {
 }
 /**
  * Queue one durable inbox entry for delivery into the bound OpenCode session.
- * The injected text identifies the OpenCode-generated user message, so retries
- * and replay can confirm an earlier ambiguous submission without supplying an
- * ordering-breaking caller message ID or running it twice. Normal delivery uses
- * canonical inbox text; wake re-pings include their stable nonce marker.
+ * The delivery identity is stored in TextPart metadata, so retries and replay
+ * can confirm an earlier ambiguous submission without supplying an
+ * ordering-breaking caller message ID or exposing the identity in delivered text.
  */
 export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(text).digest('hex'), allowSubmit = true) {
     const owner = state;

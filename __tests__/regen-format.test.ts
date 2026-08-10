@@ -812,6 +812,8 @@ describe('wakePathArming', () => {
     it('retains its native injected wake path without Claude recovery deadlines', () => {
       expect(arming).toBe(OPENCODE_WAKE_PATH_GUIDANCE);
       expect(arming).toContain('HTTP entry injection');
+      expect(arming).toContain('unique persisted metadata identity');
+      expect(arming).not.toContain('unique persisted entry text');
       expect(arming).not.toContain('adaptive recovery deadline');
       expect(arming).not.toContain('[9000, 12600]');
       expect(arming).not.toContain('[720, 1080]');

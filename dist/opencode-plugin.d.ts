@@ -3,6 +3,7 @@ export declare const OPENCODE_COMPATIBILITY: {
     readonly sdk: "1.17.18";
 };
 export declare const OPENCODE_INJECTED_ENTRY_METADATA_KEY = "borgOpenCodeInjectedEntry";
+export declare const OPENCODE_WAKE_IDENTITY_METADATA_KEY = "borgOpenCodeWakeIdentity";
 export declare const OPENCODE_RECOVERY_METADATA_KEY = "borgOpenCodeSessionOrientation";
 export interface OpenCodePluginCoreDeps {
     defer(task: () => Promise<void>): void;

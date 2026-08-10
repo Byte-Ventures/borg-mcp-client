@@ -8,6 +8,7 @@ import {
   installBorgPlugin,
   OPENCODE_INJECTED_ENTRY_METADATA_KEY,
   OPENCODE_RECOVERY_METADATA_KEY,
+  OPENCODE_WAKE_IDENTITY_METADATA_KEY,
   openCodePluginPath,
 } from '../src/opencode-plugin';
 
@@ -204,7 +205,8 @@ describe('generated OpenCode plugin artifact', () => {
     const source = buildBorgPluginSource('3.4.0');
     expect(source).toContain(
       'borgmcp-opencode-plugin:3.4.0;opencode=1.18.15;sdk=1.17.18;' +
-      'textpart-metadata=exists+persisted+tui-hidden+model-hidden',
+      'textpart-metadata=exists+persisted+tui-hidden+model-hidden;' +
+      `wake-identity-key=${OPENCODE_WAKE_IDENTITY_METADATA_KEY}`,
     );
     expect(source).toContain('borg-regen');
     expect(source).toContain('experimental.session.compacting');
