@@ -40,7 +40,7 @@ import { runLaunchAll } from './launch-all-cmd.js';
 import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
 import { buildDefaultSeatCommandDeps, parseLaunchSeatArgs, parseSeatsArgs, runLaunchSeat, runSeats, } from './seat-commands.js';
 import { discoverDroneCandidates } from './launch-all-discovery.js';
-import { configureSelectedLaunchCli, discoverLiveLaunchMenuCandidates, explicitCliLaunchHint, runBareLaunchMenu, shouldResolveExplicitCliLaunchHintTargets, shouldShowLaunchMenu, } from './bare-launch-menu.js';
+import { configureSelectedLaunchCli, discoverLiveLaunchMenuCandidates, explicitCliLaunchHint, isMainGitWorktree, runBareLaunchMenu, shouldResolveExplicitCliLaunchHintTargets, shouldShowLaunchMenu, } from './bare-launch-menu.js';
 import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
@@ -266,12 +266,14 @@ async function main() {
     // Active cube for this directory — needed for the launch menu's option-3
     // availability, the terminal title, and the inbox-Monitor clause below.
     const active = await getActiveCube();
+    const launchAllDeps = buildDefaultLaunchAllDeps();
+    const isMainWorktree = isMainGitWorktree((args) => launchAllDeps.runSync('git', args, { cwd: process.cwd() }));
     let launchAllTargetsAvailable;
     const hasLaunchAllTargets = async () => {
         if (!active)
             return false;
         if (launchAllTargetsAvailable === undefined) {
-            const candidates = await discoverDroneCandidates({ targetCubeId: active.cubeId }, buildDefaultLaunchAllDeps());
+            const candidates = await discoverDroneCandidates({ targetCubeId: active.cubeId }, launchAllDeps);
             launchAllTargetsAvailable = candidates.length > 0;
         }
         return launchAllTargetsAvailable;
@@ -283,11 +285,13 @@ async function main() {
         stdinIsTTY,
         stdoutIsTTY,
         hasActiveCube: active !== null,
+        isMainWorktree,
         hasLaunchAllTargets: shouldResolveExplicitCliLaunchHintTargets({
             explicitCli: parsedCli.cli,
             stdinIsTTY,
             stdoutIsTTY,
             hasActiveCube: active !== null,
+            isMainWorktree,
         }) ? await hasLaunchAllTargets() : false,
     });
     if (explicitCliHint)
@@ -302,9 +306,8 @@ async function main() {
         extraArgs: process.argv.slice(2),
         stdinIsTTY,
         stdoutIsTTY,
-        hasActiveSeat: active !== null,
+        isMainWorktree,
     })) {
-        const launchAllDeps = buildDefaultLaunchAllDeps();
         const seatCommandDeps = buildDefaultSeatCommandDeps();
         const siblingContext = await discoverLiveLaunchMenuCandidates({
             readAllProjectIdentities: launchAllDeps.readAllProjectIdentities,
@@ -318,6 +321,14 @@ async function main() {
             defaultCli: cli,
             otherConfiguredClis,
             hasLaunchAllTargets: siblingContext.launchAllCubeId !== undefined,
+            ...(active
+                ? {
+                    currentDrone: {
+                        droneLabel: active.droneLabel,
+                        worktree: active.worktree ?? findProjectRoot(process.cwd()),
+                    },
+                }
+                : {}),
             droneCandidates: siblingContext.candidates,
             ...(siblingContext.launchAllCubeId
                 ? { launchAllCubeId: siblingContext.launchAllCubeId }

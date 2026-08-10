@@ -269,7 +269,7 @@ describe('gh#556 Part 2 — launch-all in top-level help', () => {
 
   it('distinguishes bare menu, direct --cli launch, and launch-all --cli fleet launch', () => {
     const t = topLevelHelpText('9.9.9');
-    expect(t).toContain('borg                     Launch your agent CLI; in a TTY, bare borg may show the launch menu');
+    expect(t).toContain('borg                     Show the launch menu in a repository root; resume directly in a linked worktree');
     expect(t).toContain('borg --cli claude|codex|opencode  Launch that agent CLI directly');
     expect(t).toContain('borg launch-all [cube] --cli claude|codex|opencode');
   });

@@ -68,25 +68,44 @@ export function configureSelectedLaunchCli(defaultCli, action, configure) {
 }
 const PRETTY = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
 /**
- * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY without an
- * active seat. Explicit invocations, non-TTY launches, and direct worktree
- * resumes fall straight through to the existing launch path.
+ * Git reports the main worktree with identical absolute git-dir/common-dir
+ * paths. Linked worktrees instead use <common>/worktrees/<name> as git-dir.
+ * Fail closed when either probe is absent or malformed.
+ */
+export function isMainGitWorktree(readGitPath) {
+    try {
+        const gitDir = readGitPath(['rev-parse', '--path-format=absolute', '--git-dir']).trim();
+        const commonDir = readGitPath(['rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
+        return gitDir.length > 0 && commonDir.length > 0 && gitDir === commonDir;
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY from the main
+ * repository worktree. Explicit invocations, non-TTY launches, and linked
+ * worktree resumes fall straight through to the existing launch path.
  */
 export function shouldShowLaunchMenu(args) {
     return args.extraArgs.length === 0
         && args.stdinIsTTY
         && args.stdoutIsTTY
-        && !args.hasActiveSeat;
+        && args.isMainWorktree;
 }
 export function explicitCliLaunchHint(args) {
     if (!args.explicitCli || !args.stdinIsTTY || !args.stdoutIsTTY)
         return null;
-    if (!args.hasActiveCube || !args.hasLaunchAllTargets)
+    if (!args.isMainWorktree || !args.hasActiveCube || !args.hasLaunchAllTargets)
         return null;
     return `borg --cli ${args.explicitCli} launches ${PRETTY[args.explicitCli]} directly; use bare borg for the launch menu or borg launch-all --cli ${args.explicitCli} for all drone worktrees.\n`;
 }
 export function shouldResolveExplicitCliLaunchHintTargets(args) {
-    return Boolean(args.explicitCli && args.stdinIsTTY && args.stdoutIsTTY && args.hasActiveCube);
+    return Boolean(args.explicitCli &&
+        args.stdinIsTTY &&
+        args.stdoutIsTTY &&
+        args.hasActiveCube &&
+        args.isMainWorktree);
 }
 /**
  * The context-filtered option set. Option 1 is always present; options 2/3 are
@@ -94,14 +113,22 @@ export function shouldResolveExplicitCliLaunchHintTargets(args) {
  * middle option never produces a "1) … 3) …" gap menu.
  */
 export function buildLaunchMenuOptions(inputs) {
-    if (inputs.droneCandidates && inputs.droneCandidates.length > 0) {
-        const options = [...inputs.droneCandidates]
+    if (inputs.currentDrone || (inputs.droneCandidates && inputs.droneCandidates.length > 0)) {
+        const options = [];
+        if (inputs.currentDrone) {
+            options.push({
+                key: '1',
+                label: `Resume ${inputs.currentDrone.droneLabel} (${inputs.currentDrone.worktree})`,
+                action: { kind: 'launch', cli: inputs.defaultCli },
+            });
+        }
+        options.push(...[...(inputs.droneCandidates ?? [])]
             .sort((a, b) => a.droneLabel.localeCompare(b.droneLabel) || a.worktree.localeCompare(b.worktree))
             .map((candidate, index) => ({
-            key: String(index + 1),
+            key: String(options.length + index + 1),
             label: `Resume ${candidate.droneLabel} (${candidate.worktree})`,
             action: { kind: 'launch-seat', target: candidate.target },
-        }));
+        })));
         if (inputs.hasLaunchAllTargets) {
             options.push({
                 key: String(options.length + 1),
@@ -112,15 +139,19 @@ export function buildLaunchMenuOptions(inputs) {
                 },
             });
         }
-        options.push({
-            key: String(options.length + 1),
-            label: `Launch ${PRETTY[inputs.defaultCli]} here without a drone`,
-            action: { kind: 'launch', cli: inputs.defaultCli },
-        });
+        if (!inputs.currentDrone) {
+            options.push({
+                key: String(options.length + 1),
+                label: `Launch ${PRETTY[inputs.defaultCli]} here without a drone`,
+                action: { kind: 'launch', cli: inputs.defaultCli },
+            });
+        }
         for (const cli of inputs.otherConfiguredClis) {
             options.push({
                 key: String(options.length + 1),
-                label: `Launch with ${PRETTY[cli]} here without a drone (one-shot)`,
+                label: inputs.currentDrone
+                    ? `Resume ${inputs.currentDrone.droneLabel} with ${PRETTY[cli]} (one-shot)`
+                    : `Launch with ${PRETTY[cli]} here without a drone (one-shot)`,
                 action: { kind: 'launch', cli },
             });
         }
@@ -163,15 +194,13 @@ export function renderLaunchMenu(options) {
     return `borg — how do you want to launch?\n${lines.join('\n')}\n[1]: `;
 }
 /**
- * Orchestrate the menu with an injected readline-style prompt. Collapses to a
- * direct default launch (no render, no prompt) when only option 1 applies.
- * Re-prompts on invalid input up to `maxAttempts`, then falls back to the safe
- * default (option 1) so a fat-fingered session still launches.
+ * Orchestrate the menu with an injected readline-style prompt. The caller has
+ * already established that this is a bare interactive main-worktree launch,
+ * so even a one-item selector is rendered. Re-prompts on invalid input up to
+ * `maxAttempts`, then falls back to the safe default (option 1).
  */
 export async function runBareLaunchMenu(inputs, prompt, opts = {}) {
     const options = buildLaunchMenuOptions(inputs);
-    if (options.length === 1)
-        return options[0].action; // collapse — never a 1-item menu
     const maxAttempts = opts.maxAttempts ?? 3;
     const menu = renderLaunchMenu(options);
     for (let attempt = 0; attempt < maxAttempts; attempt++) {

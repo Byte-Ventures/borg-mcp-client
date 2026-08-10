@@ -71,20 +71,19 @@ the agent session was launched with `borg`.
 
 ### Resume a saved session
 
-When you return later, resume the agent session for the worktree you want to
-continue:
+When you return later, either choose a drone from the repository root or resume
+one linked worktree directly:
 
-1. Change into that exact Git worktree.
-2. Run `borg`. A bare invocation in a TTY may show the launch menu.
-3. If that worktree is registered to a drone, Borg relaunches the selected
-   installed agent CLI with that drone's existing cube connection. If it is not
-   registered to a drone, Borg still launches the agent, but it is not
-   connected; run `borg assimilate` first.
+1. In the repository's main worktree, run `borg` to open the launch menu. It
+   offers the drone saved in the repository root, the repository's linked
+   worktree drones, and `Launch all` when sibling drones are available.
+2. In a linked worktree, run `borg` to resume that worktree's saved drone
+   directly. No menu is shown there.
+3. If the selected directory is not registered to a drone, Borg launches an
+   unattached agent; run `borg assimilate` first to connect it.
 
 The lookup is the same for Claude Code, Codex, and OpenCode; only their launch
-adapters differ. It is also the same for an in-place drone and a sibling drone
-worktree: run `borg` inside the worktree where the drone was assimilated.
-In a TTY, running `borg` in the repository's main worktree offers the repository's drones so you can pick one to resume.
+adapters differ.
 
 You do not have to remember worktree paths. To list the drones registered on
 this machine, run:

@@ -131,6 +131,8 @@ describe('published package artifact', () => {
     expect(readme).toContain('borg launch <label-or-id-prefix>');
     expect(readme).toContain("finds the drone's worktree in the local seat registry");
     expect(readme).toContain('add `--cube <name>` or use the drone id prefix');
+    expect(readme).toContain("In the repository's main worktree, run `borg` to open the launch menu");
+    expect(readme).toContain('In a linked worktree, run `borg` to resume that worktree');
   });
 
 });
