@@ -6,37 +6,85 @@
  * TTY. claude.ts main() supplies the saved-seat and launch dependencies, gates
  * on shouldShowLaunchMenu, then dispatches the returned action.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildLaunchMenuOptions,
   configureSelectedLaunchCli,
   discoverLiveLaunchMenuCandidates,
+  isMainGitWorktree,
   resolveLaunchMenuChoice,
   runBareLaunchMenu,
   shouldShowLaunchMenu,
+  terminalLaunchMenuSeatRefusal,
 } from '../src/bare-launch-menu';
 
-describe('gh#853 — shouldShowLaunchMenu (gate: bare-borg + TTY only)', () => {
-  it('bare borg + both streams TTY → show', () => {
-    expect(shouldShowLaunchMenu({ extraArgs: [], stdinIsTTY: true, stdoutIsTTY: true })).toBe(true);
+describe('gh#853 — main-worktree launch-menu gate', () => {
+  it('identifies the main worktree from git-dir/common-dir equality', () => {
+    const main = vi.fn((args: string[]) => args.includes('--git-dir') ? '/repo/.git\n' : '/repo/.git\n');
+    const linked = vi.fn((args: string[]) =>
+      args.includes('--git-dir') ? '/repo/.git/worktrees/reviewer\n' : '/repo/.git\n'
+    );
+
+    expect(isMainGitWorktree(main)).toBe(true);
+    expect(isMainGitWorktree(linked)).toBe(false);
+    expect(isMainGitWorktree(() => { throw new Error('not a repository'); })).toBe(false);
+    expect(isMainGitWorktree(() => 'fatal: malformed repository state\n')).toBe(false);
+    expect(isMainGitWorktree((args) => args.includes('--git-dir') ? '.git\n' : '/repo/.git\n')).toBe(false);
+    expect(isMainGitWorktree((args) => args.includes('--git-dir') ? '/repo/.git\n' : '.git\n')).toBe(false);
   });
 
-  it('non-TTY (stdin OR stdout) → no menu (scripted/programmatic borg unchanged)', () => {
-    expect(shouldShowLaunchMenu({ extraArgs: [], stdinIsTTY: false, stdoutIsTTY: true })).toBe(false);
-    expect(shouldShowLaunchMenu({ extraArgs: [], stdinIsTTY: true, stdoutIsTTY: false })).toBe(false);
+  it('wires the Git worktree probe and legacy current drone into the launcher menu', () => {
+    const source = readFileSync(new URL('../src/claude.ts', import.meta.url), 'utf8');
+    const probe = source.indexOf('const isMainWorktree = isMainGitWorktree');
+    const gate = source.indexOf('shouldShowLaunchMenu({', probe);
+    const gateInput = source.indexOf('isMainWorktree,', gate);
+    const legacyProbe = source.indexOf('await launchAllDeps.probeSeat(active)', gateInput);
+    const terminalGuard = source.indexOf("isTerminalLaunchMenuSeatStatus(currentDroneStatus)", legacyProbe);
+    const refusalExit = source.indexOf('process.exit(1)', terminalGuard);
+    const menu = source.indexOf('const action = await runBareLaunchMenu', refusalExit);
+    const currentDroneInput = source.indexOf('currentDrone:', gate);
+    const configure = source.indexOf('ensureResolvedCliConfigured(selectedCli, active)', menu);
+    const spawn = source.indexOf(': spawn(cli, launchArgs', configure);
+
+    expect(probe).toBeGreaterThan(0);
+    expect(source.indexOf("launchAllDeps.runSync('git'", probe)).toBeGreaterThan(probe);
+    expect(gate).toBeGreaterThan(probe);
+    expect(gateInput).toBeGreaterThan(gate);
+    expect(legacyProbe).toBeGreaterThan(gateInput);
+    expect(terminalGuard).toBeGreaterThan(legacyProbe);
+    expect(refusalExit).toBeGreaterThan(terminalGuard);
+    expect(menu).toBeGreaterThan(refusalExit);
+    expect(currentDroneInput).toBeGreaterThan(menu);
+    expect(configure).toBeGreaterThan(menu);
+    expect(spawn).toBeGreaterThan(configure);
   });
 
-  it('any explicit args/flags → no menu (only bare borg triggers it)', () => {
-    expect(shouldShowLaunchMenu({ extraArgs: ['--resume'], stdinIsTTY: true, stdoutIsTTY: true })).toBe(false);
-    expect(shouldShowLaunchMenu({ extraArgs: ['somePrompt'], stdinIsTTY: true, stdoutIsTTY: true })).toBe(false);
-  });
-
-  it('an active seat launches directly without showing the menu', () => {
+  it('bare borg + both streams TTY + main worktree → show', () => {
     expect(shouldShowLaunchMenu({
       extraArgs: [],
       stdinIsTTY: true,
       stdoutIsTTY: true,
-      hasActiveSeat: true,
+      isMainWorktree: true,
+    })).toBe(true);
+  });
+
+  it('non-TTY (stdin OR stdout) → no menu (scripted/programmatic borg unchanged)', () => {
+    expect(shouldShowLaunchMenu({ extraArgs: [], stdinIsTTY: false, stdoutIsTTY: true, isMainWorktree: true })).toBe(false);
+    expect(shouldShowLaunchMenu({ extraArgs: [], stdinIsTTY: true, stdoutIsTTY: false, isMainWorktree: true })).toBe(false);
+  });
+
+  it('any explicit args/flags → no menu (only bare borg triggers it)', () => {
+    expect(shouldShowLaunchMenu({ extraArgs: ['--resume'], stdinIsTTY: true, stdoutIsTTY: true, isMainWorktree: true })).toBe(false);
+    expect(shouldShowLaunchMenu({ extraArgs: ['somePrompt'], stdinIsTTY: true, stdoutIsTTY: true, isMainWorktree: true })).toBe(false);
+  });
+
+  it('a linked worktree launches its saved drone directly without showing the menu', () => {
+    expect(shouldShowLaunchMenu({
+      extraArgs: [],
+      stdinIsTTY: true,
+      stdoutIsTTY: true,
+      isMainWorktree: false,
     })).toBe(false);
   });
 });
@@ -195,6 +243,85 @@ describe('gh#853 — buildLaunchMenuOptions (context-aware option set)', () => {
       action: { kind: 'launch-seat', target: 'alpha-id' },
     });
   });
+
+  it('puts a legacy main-worktree drone first, then managed siblings and launch-all', () => {
+    const opts = buildLaunchMenuOptions({
+      defaultCli: 'codex',
+      otherConfiguredClis: ['claude'],
+      hasLaunchAllTargets: true,
+      launchAllCubeId: 'cube-id',
+      currentDrone: { droneLabel: 'coordinator', worktree: '/repo', status: 'live' },
+      droneCandidates: [
+        { droneLabel: 'reviewer', target: 'reviewer-id', worktree: '/repo-reviewer' },
+      ],
+    });
+
+    expect(opts).toEqual([
+      { key: '1', label: 'Resume coordinator (/repo)', action: { kind: 'launch', cli: 'codex' } },
+      { key: '2', label: 'Resume reviewer (/repo-reviewer)', action: { kind: 'launch-seat', target: 'reviewer-id' } },
+      { key: '3', label: "Launch all (this cube's drone worktrees)", action: { kind: 'launch-all', cubeId: 'cube-id' } },
+      { key: '4', label: 'Resume coordinator with Claude (one-shot)', action: { kind: 'launch', cli: 'claude' } },
+    ]);
+  });
+
+  it.each([
+    'evicted',
+    'revoked',
+    'rejected',
+    'credential-rejected',
+    'trust-mismatch',
+  ] as const)('omits a %s legacy main-worktree drone from menu options', (status) => {
+    const opts = buildLaunchMenuOptions({
+      defaultCli: 'codex',
+      otherConfiguredClis: [],
+      hasLaunchAllTargets: true,
+      launchAllCubeId: 'cube-id',
+      currentDrone: { droneLabel: 'coordinator', worktree: '/repo', status },
+      droneCandidates: [
+        { droneLabel: 'reviewer', target: 'reviewer-id', worktree: '/repo-reviewer' },
+      ],
+    });
+
+    expect(opts).toEqual([
+      { key: '1', label: 'Resume reviewer (/repo-reviewer)', action: { kind: 'launch-seat', target: 'reviewer-id' } },
+      { key: '2', label: "Launch all (this cube's drone worktrees)", action: { kind: 'launch-all', cubeId: 'cube-id' } },
+      { key: '3', label: 'Launch Codex here without a drone', action: { kind: 'launch', cli: 'codex' } },
+    ]);
+  });
+
+  it.each([
+    'live',
+    'unreachable',
+    'endpoint-mismatch',
+    'server-failure',
+    'indeterminate',
+  ] as const)('keeps a %s legacy main-worktree drone available', (status) => {
+    const opts = buildLaunchMenuOptions({
+      defaultCli: 'codex',
+      otherConfiguredClis: [],
+      hasLaunchAllTargets: false,
+      currentDrone: { droneLabel: 'coordinator', worktree: '/repo', status },
+    });
+
+    expect(opts[0]).toEqual({
+      key: '1',
+      label: 'Resume coordinator (/repo)',
+      action: { kind: 'launch', cli: 'codex' },
+    });
+  });
+
+  it('renders bounded terminal refusal copy without credential material', () => {
+    const rejected = terminalLaunchMenuSeatRefusal('credential-rejected');
+    expect(rejected).toContain('saved credential was rejected');
+    expect(rejected).toContain('No agent was launched and nothing was changed.');
+    expect(rejected).toContain('borg reset-local-connection');
+    expect(rejected).not.toMatch(/sessionToken|credentialRef|bearer/i);
+
+    const trustMismatch = terminalLaunchMenuSeatRefusal('trust-mismatch');
+    expect(trustMismatch).toContain('saved server identity no longer matches');
+    expect(trustMismatch).toContain('restore the expected identity');
+    expect(trustMismatch).not.toContain('borg reset-local-connection');
+  });
 });
 
 describe('gh#853 — resolveLaunchMenuChoice (selection → action)', () => {
@@ -231,14 +358,16 @@ describe('gh#326 — launch self-heal follows the final menu selection', () => {
 });
 
 describe('gh#853 — runBareLaunchMenu (orchestration)', () => {
-  it('collapses to a direct default launch (NO prompt) when only option 1 applies', async () => {
+  it('renders the main-worktree menu even when only option 1 applies', async () => {
     const prompt = vi.fn(async () => '');
     const action = await runBareLaunchMenu(
       { defaultCli: 'claude', otherConfiguredClis: [], hasLaunchAllTargets: false },
       prompt
     );
     expect(action).toEqual({ kind: 'launch', cli: 'claude' });
-    expect(prompt).not.toHaveBeenCalled(); // never render a 1-item menu
+    expect(prompt).toHaveBeenCalledWith(
+      'borg — how do you want to launch?\n  1) Launch (default · Claude)\n[1]: '
+    );
   });
 
   it('renders + maps the selection when there is a real choice', async () => {

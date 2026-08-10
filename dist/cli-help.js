@@ -98,7 +98,7 @@ export function topLevelHelpText(version) {
         `Install Claude Code, Codex, or OpenCode first. Type \`borg ...\` in your terminal;\n` +
         `type \`borg_...\` inside your agent session once you've joined a cube ("assimilate").\n\n` +
         `Usage:\n` +
-        `  borg                     Launch your agent CLI; in a TTY, bare borg may show the launch menu\n` +
+        `  borg                     Show the launch menu in a repository root; resume directly in a linked worktree\n` +
         `  borg setup               Set up borg MCP server + agent CLI integration\n` +
         `  borg update              Update the client and installed local server together\n` +
         `  borg doctor              Check agent hook commands, versions, configs, and the OpenCode plugin\n` +

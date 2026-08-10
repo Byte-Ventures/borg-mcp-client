@@ -129,6 +129,8 @@ describe('published package artifact', () => {
     const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
     expect(readme).toContain('~/.borg/worktrees/<repo>/');
     expect(readme).toContain('the repository root does not host a drone');
+    expect(readme).toContain("In the repository's main worktree, run `borg` to open the launch menu");
+    expect(readme).toContain('In a linked worktree, run `borg` to resume that worktree');
     expect(readme).toMatch(/Use `--here` only\s+to resume a drone already saved/);
   });
 
