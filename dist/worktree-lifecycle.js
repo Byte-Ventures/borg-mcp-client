@@ -105,45 +105,6 @@ export function localBranchExists(runSync, cwd, branch) {
     return runSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], cwd).status === 0;
 }
 /**
- * Migration (Q4/Q5/§4.5): bring a detached/stale worktree onto
- * `wt-<basename>` at `ref`. Idempotent: re-running on an already-adopted
- * clean worktree is a lossless reset to `ref`. Never discards:
- *   - dirty work tree            -> skipped-dirty (surface)
- *   - current HEAD unmerged      -> blocked-unmerged (surface)
- *   - TARGET `branch` exists with commits not on `ref` -> blocked-target-
- *     unmerged (surface). This is load-bearing: the switch uses `-C`
- *     (force-create/reset), which would ORPHAN commits on a pre-existing
- *     `wt-` branch. The HEAD-merged check alone misses this when the
- *     target branch != HEAD (e.g. on `main` while a prior `wt-x` holds
- *     committed-but-unmerged work). gh#33 CR-v2 blocker 078d1630.
- */
-export function adoptWorktree(runSync, cwd, branch, ref) {
-    if (!isCleanTree(runSync, cwd)) {
-        return {
-            action: 'skipped-dirty',
-            message: 'uncommitted changes present; not switching (nothing discarded)',
-        };
-    }
-    if (!isMerged(runSync, cwd, 'HEAD', ref)) {
-        return {
-            action: 'blocked-unmerged',
-            message: `current HEAD has commits not on ${ref}; commit/push or set aside before adopting`,
-        };
-    }
-    // Guard the TARGET branch ref before the `switch -C` force-reset. If
-    // `branch` already exists and is NOT an ancestor of `ref`, it carries
-    // committed-unmerged work that `-C` would discard — block instead.
-    // (Absent, or an ancestor of `ref` = a clean reset target → proceed.)
-    if (localBranchExists(runSync, cwd, branch) && !isMerged(runSync, cwd, branch, ref)) {
-        return {
-            action: 'blocked-target-unmerged',
-            message: `branch ${branch} exists with commits not on ${ref}; resolve before adopting (a force-switch would discard them)`,
-        };
-    }
-    runSync('git', ['switch', '-C', branch, ref], cwd);
-    return { action: 'adopted' };
-}
-/**
  * Post-merge cleanup (Q3): when `feature` is fully merged into `ref`,
  * either ANNOUNCE it as prunable (default) or actually prune it with the
  * safe `git branch -d` (which itself refuses to delete an unmerged

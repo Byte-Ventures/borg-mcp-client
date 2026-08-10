@@ -6,11 +6,17 @@
 export declare function resolveBorgPath(): string;
 /**
  * The shell command run inside each worktree's window/tab.
- * `keepOpenOnFail` wraps a `|| read` pause so a failed assimilate doesn't close
+ * `borg launch <droneId>` is a prompt-free, network-free preflight that pins the
+ * saved seat. The spawned child fail-closes through BORG_LAUNCH_EXPECTED_SEAT if
+ * the worktree's seat changed instead of silently resuming a different drone.
+ * `keepOpenOnFail` wraps a `|| read` pause so a failed launch doesn't close
  * the tmux window before the operator reads the error (tmux convenience only;
  * the pastelist backend omits it — the operator owns their own shell).
  */
-export declare function buildLaunchCommand(worktreeDir: string, borgPath: string, opts?: {
+export declare function buildLaunchCommand(candidate: {
+    worktreeDir: string;
+    droneId: string;
+}, borgPath: string, opts?: {
     keepOpenOnFail?: boolean;
 }): string;
 //# sourceMappingURL=launch-all-command.d.ts.map

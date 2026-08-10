@@ -161,27 +161,6 @@ export function shouldShowLaunchMenu(args: {
     && !args.hasActiveSeat;
 }
 
-export function explicitCliLaunchHint(args: {
-  explicitCli: BorgCli | undefined;
-  stdinIsTTY: boolean;
-  stdoutIsTTY: boolean;
-  hasActiveCube: boolean;
-  hasLaunchAllTargets: boolean;
-}): string | null {
-  if (!args.explicitCli || !args.stdinIsTTY || !args.stdoutIsTTY) return null;
-  if (!args.hasActiveCube || !args.hasLaunchAllTargets) return null;
-  return `borg --cli ${args.explicitCli} launches ${PRETTY[args.explicitCli]} directly; use bare borg for the launch menu or borg launch-all --cli ${args.explicitCli} for all drone worktrees.\n`;
-}
-
-export function shouldResolveExplicitCliLaunchHintTargets(args: {
-  explicitCli: BorgCli | undefined;
-  stdinIsTTY: boolean;
-  stdoutIsTTY: boolean;
-  hasActiveCube: boolean;
-}): boolean {
-  return Boolean(args.explicitCli && args.stdinIsTTY && args.stdoutIsTTY && args.hasActiveCube);
-}
-
 /**
  * The context-filtered option set. Option 1 is always present; options 2/3 are
  * included only when applicable. Keys are sequential with no gaps, so a hidden

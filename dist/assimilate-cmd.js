@@ -6,7 +6,7 @@ import { renderAssimilationWelcome } from './assimilate-welcome.js';
 import { shellEscape } from './shell-escape.js';
 import { withCodexCwdArg } from './codex-remote.js';
 import { buildAgentKickoffPrompt, buildKickoffWakePathClause, recordCodexWakeTarget, socketPathFromRemoteArgs, } from './codex-launch.js';
-import { perWorktreeBranchName, adoptWorktree, computeWorktreePath, localBranchExists, isMerged } from './worktree-lifecycle.js';
+import { perWorktreeBranchName, computeWorktreePath, localBranchExists, isMerged } from './worktree-lifecycle.js';
 import { DroneEvictedError } from './drone-lifecycle.js';
 import { codexBorgSessionConfigArgs } from './launch-gate.js';
 import { codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, codexStateRootConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
@@ -460,6 +460,23 @@ export async function runAssimilate(args, deps) {
         return reportServerFailure(deps, authority.apiUrl, localSeatReadError, false, mode);
     }
     const projectRoot = repositoryContext.root;
+    const wantSibling = args.flags.worktree !== undefined ||
+        (!args.flags.here && !(existing === null && hasPersistedIdentity));
+    let verifiedHead = '';
+    if (mode !== 'cube-init' && args.flags.here && existing === null && !hasPersistedIdentity) {
+        deps.stderr('`borg assimilate --here` resumes this worktree\'s saved drone, but no saved drone was found.\n' +
+            'Run `borg assimilate` to create a new drone in a managed worktree.\n');
+        return 1;
+    }
+    if (mode !== 'cube-init' && wantSibling) {
+        const headProbe = deps.runSync('git', ['rev-parse', '--verify', 'HEAD'], projectRoot);
+        if (headProbe.status !== 0) {
+            deps.stderr('sibling worktree spawn requires HEAD pointing at a commit.\n' +
+                'Create an initial commit (for example: `git commit --allow-empty -m "Initial commit"`), then rerun `borg assimilate`.\n');
+            return 1;
+        }
+        verifiedHead = headProbe.stdout.trim();
+    }
     let auth;
     {
         try {
@@ -651,7 +668,6 @@ export async function runAssimilate(args, deps) {
     // retain its original role so the attach request reuses the exact durable
     // retry binding instead of selecting another unoccupied role and minting a
     // duplicate seat.
-    const wantSibling = args.flags.worktree !== undefined || (existing !== null && !args.flags.here);
     // `let`: the bound-pending resume path (CR#2) OVERRIDES this from the stored
     // operation so a rerun re-derives the EXACT original sibling seat ref.
     let sessionOperation = {
@@ -659,7 +675,7 @@ export async function runAssimilate(args, deps) {
         // cwd. This is the stable seat/sibling namespace for the pending bearer, so a
         // deliberate sibling never collides with the durable in-place seat's bearer.
         projectRoot,
-        kind: wantSibling ? 'sibling' : 'seat',
+        kind: 'sibling',
         // CR1(a): an implicit sibling's operation key must be COLLISION-SAFE — two
         // unnamed siblings of the same (origin,trust,cube,role) must get DISTINCT seat
         // refs, else prepareSeat reuses the first sibling's ACTIVE record and the
@@ -667,11 +683,9 @@ export async function runAssimilate(args, deps) {
         // and rebound). A named sibling already keys on its name; an unnamed one derives
         // a per-invocation-unique key so every distinct implicit sibling target mints a
         // distinct bearer / seat ref.
-        operationKey: wantSibling
-            ? (args.flags.worktree === undefined
-                ? `implicit-sibling:${randomUUID()}`
-                : `named-sibling:${args.flags.worktree}`)
-            : 'current-worktree',
+        operationKey: args.flags.worktree === undefined
+            ? `implicit-sibling:${randomUUID()}`
+            : `named-sibling:${args.flags.worktree}`,
     };
     // A selected sibling can be the surviving live seat for this worktree (#63).
     // `--here` must re-send that seat's durable operation, not reconstruct the
@@ -1110,19 +1124,7 @@ export async function runAssimilate(args, deps) {
     // spawn.)
     let spawnedWorktreePath = null;
     if (wantSibling) {
-        // BUG-4 / gh#150 fix (v0.9.5): `git worktree add --detach <path>`
-        // fails with "fatal: not a valid object name: 'HEAD'" when the
-        // repo has no commits yet (unborn HEAD). Detect explicitly via
-        // `git rev-parse --verify HEAD` so we surface an actionable
-        // prerequisite error rather than git's cryptic internal message.
-        const headProbe = deps.runSync('git', ['rev-parse', '--verify', 'HEAD'], projectRoot);
-        if (headProbe.status !== 0) {
-            deps.stderr(`sibling worktree spawn requires HEAD pointing at a commit.\n` +
-                `  Fix: create at least one commit (\`git commit --allow-empty -m "initial"\`)\n` +
-                `  OR:  pass --here to skip the sibling spawn and use the current directory\n`);
-            return 1;
-        }
-        const localHead = headProbe.stdout.trim();
+        const localHead = verifiedHead;
         const originProbe = deps.runSync('git', ['remote', 'get-url', 'origin'], projectRoot);
         let startRef = 'HEAD';
         if (originProbe.status === 0 && originProbe.stdout.trim().length > 0) {
@@ -1242,8 +1244,10 @@ export async function runAssimilate(args, deps) {
                 'A local drone reservation was created and remains pending; rerunning after fixing the worktree issue resumes that reservation.\n');
             return 1;
         }
-        deps.stderr(`spawned sibling worktree at ${candidate} on branch ${wtBranch} (${startRef}); ` +
-            `the original dir keeps its active drone binding — run \`borg reset-local-connection\` there if that binding is stale.\n`);
+        deps.stderr(`spawned sibling worktree at ${candidate} on branch ${wtBranch} (${startRef})` +
+            (existing !== null
+                ? `; the original dir keeps its active drone binding — run \`borg reset-local-connection\` there if that binding is stale.\n`
+                : '.\n'));
         deps.chdir(candidate);
         deps.stderr(renderWorktreeSteeringNote(candidate, wtBranch, projectRoot));
         spawnedWorktreePath = deps.cwd();
@@ -1475,30 +1479,6 @@ export async function runAssimilate(args, deps) {
     catch {
         deps.stderr(`warning: could not install the project-local SessionStart hook in ${agentCwd}; it will be re-attempted on the next borg launch\n`);
     }
-    // gh#33 (Q2/Q4/Q6): in-place wt- adoption. A freshly-spawned worktree is
-    // already at origin/main on a fresh wt- branch, so only the in-place /
-    // --here path (running in an existing checkout) needs handling. ADOPT
-    // the per-worktree branch — switch the checkout onto wt-<suffix> at
-    // origin/main when clean + merged. This both moves the drone off main
-    // (Q4: main is never a working branch) AND brings the branch current,
-    // which a bare ff-sync would not do (it would leave a main checkout on
-    // main — the gap two-of-four-CR 27af1001 + QA c7a0c615 caught). Dirty ->
-    // skip + surface; unmerged HEAD -> block + surface; NEVER discards.
-    // Using adoptWorktree (HEAD-merged check + explicit `switch -C wtBranch
-    // ref`) also closes one-of-four-CR's compute-name-vs-current-branch NIT.
-    // Best-effort: a skip/block surfaces but never blocks the launch.
-    if (!spawnedWorktreePath) {
-        deps.runSync('git', ['fetch', 'origin', '--prune'], agentCwd);
-        const wtBranch = perWorktreeBranchName(basename(agentCwd), basename(projectRoot));
-        const adopt = adoptWorktree(deps.runSync, agentCwd, wtBranch, 'origin/main');
-        if (adopt.action === 'adopted') {
-            deps.stderr(`worktree: adopted branch ${wtBranch} at origin/main\n`);
-            deps.stderr(renderInPlaceWorktreeNote(agentCwd, wtBranch));
-        }
-        else if (adopt.message) {
-            deps.stderr(`worktree sync: ${adopt.message}\n`);
-        }
-    }
     // BUG-5 / v0.9.3: probe MCP readiness before launching claude so
     // the launched session sees tools at startup. Non-blocking: probe
     // failure surfaces a stderr warning but the launch proceeds (the
@@ -1671,11 +1651,6 @@ function renderWorktreeSteeringNote(worktreePath, wtBranch, primaryPath) {
         `use relative paths / your cwd. NEVER \`git -C ${primaryPath}\` or operate on the primary checkout ${primaryPath}: ` +
         `the same branch can't be checked out in two worktrees, so work created in the primary won't reach your wt-branch ` +
         `without manual surgery (cherry-pick/merge).\n`);
-}
-function renderInPlaceWorktreeNote(worktreePath, wtBranch) {
-    return (`\nWORKTREE STEERING: This checkout is now on branch ${wtBranch}. ` +
-        `Do ALL work HERE in ${worktreePath} — cut your feature branch (fix/.../feat/...) off ${wtBranch}, ` +
-        `use relative paths / your cwd.\n`);
 }
 /**
  * Sprint 4 / gh#147 (drone-8 SR-PE-FINDING-1): strip ASCII control

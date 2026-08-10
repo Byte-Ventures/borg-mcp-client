@@ -25,7 +25,7 @@
  */
 import { basename } from 'node:path';
 import chalk from 'chalk';
-import { getActiveCube } from './cubes.js';
+import { getActiveCube, LaunchSeatIdentityChangedError } from './cubes.js';
 import { _resetDisplayIdentityForTests, currentDisplayIdentity, seedDisplayIdentity, } from './display-identity.js';
 let initialized = false;
 /** Neutral prefix for a not-yet-assimilated session (gh#818 P1). */
@@ -49,7 +49,12 @@ export async function initConsolePrefix() {
             return droneIdPrefix();
         }
     }
-    catch {
+    catch (error) {
+        // A targeted `borg launch` child must stop before CLI selection can write
+        // launch.json. This identity guard is a launch boundary, not a cosmetic
+        // prefix read failure, so never collapse it into the neutral fallback.
+        if (error instanceof LaunchSeatIdentityChangedError)
+            throw error;
         // Fall through to unassimilated fallback.
     }
     initialized = true;

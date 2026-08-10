@@ -35,7 +35,6 @@ export function launchAllHelpText(version: string): string {
     `  --mode <tmux|terminals|pastelist>     Select the launch backend\n` +
     `  --only <name>                         Launch one role or drone label\n` +
     `  --dry-run                             Show what would launch\n` +
-    `  --cli <claude|codex|opencode>         Select the agent CLI\n` +
     `  --no-attach                           Do not attach to the tmux session\n` +
     `  --yes, -y                             Skip the large-fleet confirmation\n` +
     `  --force                               Override live-session skips\n` +
@@ -140,8 +139,6 @@ export function topLevelHelpText(version: string): string {
     `  borg seats               List this machine's registered drones and worktrees\n` +
     `  borg launch <drone-label-or-id-prefix>  Reopen one registered drone from its worktree\n` +
     `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
-    `  borg launch-all [cube] --cli claude|codex|opencode\n` +
-    `                           Launch all drone worktrees with that agent CLI\n` +
     `  borg server <command> [arguments]\n` +
     `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
     `  borg --version           Show installed version\n\n` +
@@ -230,17 +227,17 @@ export function assimilateHelpText(version: string): string {
   return (
     `borg assimilate (borgmcp ${version}) — join or create a cube under a role\n\n` +
     `Usage:\n` +
-    `  borg assimilate [role]               Join the active cube under [role] (default role if omitted)\n` +
-    `  borg assimilate [role] --worktree <name>   Spawn the drone in an isolated git worktree\n` +
+    `  borg assimilate [role]               Create the drone in a managed git worktree\n` +
+    `  borg assimilate [role] --worktree <name>   Name the drone's managed git worktree\n` +
     `                                       (~/.borg/worktrees/<repo>/<name>)\n` +
-    `  borg assimilate --here               Assimilate in the current worktree (no sibling spawn)\n` +
+    `  borg assimilate --here               Resume this worktree's saved drone\n` +
     `  borg assimilate --here --force       Reattach despite a still-live inbox monitor\n` +
     `  borg assimilate --host <host>        Join an authorized self-hosted cube\n` +
     `  borg assimilate --host <host> --enroll   Operator-terminal enrollment, then create/join (preview)\n` +
     `  borg assimilate --help               Show this help\n\n` +
     `Flags:\n` +
-    `  --worktree <name>          Create + launch the drone in a sibling git worktree\n` +
-    `  --here                     Stay in the current worktree (no sibling spawn)\n` +
+    `  --worktree <name>          Name the managed worktree created for the new drone\n` +
+    `  --here                     Resume this worktree's saved drone\n` +
     `  --force                    Reattach despite a still-live inbox monitor in this worktree\n` +
     `  --cube-name <name>         Repository cube name (otherwise edit the proposed name)\n` +
     `  --host <host>              Borg server host or URL (bare hosts default to HTTPS)\n` +

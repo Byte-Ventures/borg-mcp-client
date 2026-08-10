@@ -41,9 +41,11 @@ describe('parseLaunchAllArgs (gh#556 Part 2 §11.1)', () => {
   it('--dry-run → dryRun true', () => {
     expect(parseLaunchAllArgs(['--dry-run'])).toMatchObject({ ok: true, args: { flags: { dryRun: true } } });
   });
-  it('--cli codex → cli set; --cli vim → error', () => {
-    expect(parseLaunchAllArgs(['--cli', 'codex'])).toMatchObject({ ok: true, args: { flags: { cli: 'codex' } } });
-    expect(parseLaunchAllArgs(['--cli', 'vim']).ok).toBe(false);
+  it('--cli is rejected as an unknown flag', () => {
+    expect(parseLaunchAllArgs(['--cli', 'codex'])).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('unknown flag: --cli'),
+    });
   });
   it('--no-attach → noAttach true', () => {
     expect(parseLaunchAllArgs(['--no-attach'])).toMatchObject({ ok: true, args: { flags: { noAttach: true } } });

@@ -134,6 +134,8 @@ function makeEntryDeps(question: PromptQuestion) {
     getInboxPath: vi.fn(() => '/tmp/inbox'),
     probeMcpReady: vi.fn(async () => true),
     resolveCli: vi.fn(async () => 'claude' as const),
+    setCliPreferenceForWorktree: vi.fn(async () => {}),
+    installProjectSessionHook: vi.fn(),
     prepareCodexRemoteLaunch: vi.fn(async () => ({ args: [], warning: null, env: {} })),
     setCodexWakeTarget: vi.fn(),
     findLoadedCodexThread: vi.fn(async () => null),
@@ -171,7 +173,7 @@ const entrypoints = [
   {
     entry: 'borg assimilate',
     run: (deps: AssimilateDeps, extra: string[] = []) => runAssimilateEntry(
-      ['coordinator', '--host', 'localhost:8787', '--here', ...extra],
+      ['coordinator', '--host', 'localhost:8787', ...extra],
       () => deps,
     ),
   },

@@ -125,6 +125,13 @@ describe('published package artifact', () => {
     );
   });
 
+  it('teaches that new drones use managed worktrees and leave the repository root without a drone', () => {
+    const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
+    expect(readme).toContain('~/.borg/worktrees/<repo>/');
+    expect(readme).toContain('the repository root does not host a drone');
+    expect(readme).toMatch(/Use `--here` only\s+to resume a drone already saved/);
+  });
+
   it('teaches local drone discovery and single-drone relaunch from any directory', () => {
     const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
     expect(readme).toContain('borg seats');

@@ -66,8 +66,9 @@ borg assimilate
 ```
 
 Borg creates or reuses a repository-specific cube, registers the new drone, and
-launches your agent CLI with the cube's context. Borg tools are inactive unless
-the agent session was launched with `borg`.
+creates a dedicated worktree under `~/.borg/worktrees/<repo>/`. It launches your
+agent CLI there; the repository root does not host a drone and remains available
+for choosing which drone to resume. Borg tools are inactive unless the agent session was launched with `borg`.
 
 ### Resume a saved session
 
@@ -82,8 +83,8 @@ continue:
    connected; run `borg assimilate` first.
 
 The lookup is the same for Claude Code, Codex, and OpenCode; only their launch
-adapters differ. It is also the same for an in-place drone and a sibling drone
-worktree: run `borg` inside the worktree where the drone was assimilated.
+adapters differ. Run `borg` inside the managed worktree where the drone was
+assimilated. Legacy in-place drones remain resumable from their original checkout.
 In a TTY, running `borg` in the repository's main worktree offers the repository's drones so you can pick one to resume.
 
 You do not have to remember worktree paths. To list the drones registered on
@@ -116,6 +117,10 @@ same Git repository:
 cd ~/code/my-app
 borg assimilate builder
 ```
+
+Each assimilation creates another dedicated managed worktree. Use `--here` only
+to resume a drone already saved in the current worktree; it does not create a new
+in-place drone.
 
 Two sessions of the same agent CLI work. To choose a CLI explicitly, use one of:
 

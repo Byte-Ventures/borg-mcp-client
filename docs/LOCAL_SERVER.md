@@ -236,12 +236,14 @@ activates the server artifact but deliberately does not rewrite the global
 controller executable that is running it.
 
 After the first attach, the launched agent should run `borg_whoami` and
-`borg_roster` to verify its seat and begin coordinating. To create a second seat,
-the operator runs the explicit local assimilation command from the intended
-worktree. A fresh worktree operation creates a distinct drone; an ambiguous
-retry of that same operation resumes the same drone.
+`borg_roster` to verify its seat and begin coordinating. Each plain
+`borg assimilate` creates a distinct drone in a dedicated managed worktree under
+`~/.borg/worktrees/<repo>/`; the repository root is not bound to the new drone.
+An interrupted managed-worktree operation resumes its exact pending identity.
 
-An identical `--here` rerun validates the saved local seat and reattaches by
+`--here` is resume-only and refuses when the current main checkout or linked
+worktree has no saved seat. For a saved seat, an identical `--here` rerun
+validates the local seat and reattaches by
 re-sending the same client-generated session bearer — the sole server correlator —
 instead of choosing another role or minting a new drone. The bearer is REUSED, not
 rotated: the server binds only its digest, so a re-sent identical bearer resolves to

@@ -928,19 +928,22 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
 
   it('installs the project-local SessionStart hook at the launch root (gh#673 P2)', async () => {
     const installProjectSessionHook = vi.fn();
+    let currentCwd = '/work/myrepo';
     const deps = makeStubDeps({
       installProjectSessionHook,
+      cwd: () => currentCwd,
+      chdir: (path) => { currentCwd = path; },
       listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
       getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [
         { id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false },
       ]})),
     });
-    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(0);
     // agentCwd = deps.cwd() at launch time — the spawned worktree
     // (post-chdir) or the in-place root; either way the hook lands in
     // the directory the agent will run from.
-    expect(installProjectSessionHook).toHaveBeenCalledWith('/work/myrepo');
+    expect(installProjectSessionHook).toHaveBeenCalledWith('/home/test/.borg/worktrees/myrepo/drone');
   });
 
   it('a hook-install failure never blocks the assimilate (best-effort + launcher re-ensure)', async () => {
@@ -955,7 +958,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
         { id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false },
       ]})),
     });
-    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(0);
     const text = (stderr.mock.calls as unknown as string[][]).map((c) => c[0]).join('');
     expect(text).toContain('project-local SessionStart hook');
@@ -1943,7 +1946,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     expect(removedWorktree(calls)).toBe(false);
   });
 
-  it('CR #1: an in-place attach passes the typed expectation + revalidate_at_prepare to deps.assimilate', async () => {
+  it('CR #1: a fresh attach uses an implicit sibling operation and revalidates ABSENT at PREPARE', async () => {
     const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
     const assimilate = localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {}));
     const deps = makeStubDeps({
@@ -1951,8 +1954,9 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
     });
     expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
-    // A fresh in-place attach → ABSENT expectation, revalidated at PREPARE.
     const params = assimilate.mock.calls[0][2];
+    expect(params.session_operation!.kind).toBe('sibling');
+    expect(params.session_operation!.operationKey).toMatch(/^implicit-sibling:/);
     expect(params.session_expected).toEqual({ kind: 'absent' });
     expect(params.revalidate_at_prepare).toBe(true);
   });
@@ -1962,6 +1966,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
       cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', droneLabel: 'drone-1',
       apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY,
       localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone',
+      operation: { projectRoot: '/work/myrepo', kind: 'seat' as const, operationKey: 'current-worktree' },
     };
     const runOnce = async () => {
       const assimilate = vi.fn(async () => ({
@@ -1980,7 +1985,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
           roles: [{ id: 'role-default', name: 'Drone', is_default: true, is_human_seat: false }],
         })),
       });
-      // No --here + an existing active cube ⇒ implicit sibling spawn.
+      // Plain assimilation from a legacy in-place seat creates a managed sibling.
       expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
       return assimilate.mock.calls[0][2];
     };
@@ -2359,86 +2364,32 @@ describe('runAssimilate: step 4 (cube existence + detail)', () => {
 });
 
 describe('runAssimilate: step 3 (worktree decision)', () => {
-  it('uses cwd when no cubes.json entry exists', async () => {
-    const chdir = vi.fn();
-    const runSync = vi.fn(() => ({ status: 0, stdout: '', stderr: '' }));
-    const deps = makeStubDeps({ chdir, runSync, getActiveCube: vi.fn(async () => null) });
-    await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(chdir).not.toHaveBeenCalled();
-  });
-
-  // gh#33 (Q2/Q4/Q6): in-place path ADOPTS the wt- branch — fetch + switch
-  // the checkout onto wt-<suffix> at origin/main (clean + merged). A bare
-  // ff would leave a main checkout on main; adoption moves it off main.
-  it('adopts the wt- branch (switch -C) before launch when in-place + clean + merged', async () => {
-    const calls: string[][] = [];
-    const stderr = vi.fn();
-    const runSync = vi.fn((_cmd: string, args: string[]) => {
-      calls.push(args);
-      if (args.join(' ') === 'status --porcelain') return { status: 0, stdout: '', stderr: '' };       // clean
-      // adoptWorktree checks HEAD merged into origin/main
-      if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return { status: 0, stdout: '', stderr: '' };
-      return { status: 0, stdout: '', stderr: '' };
-    });
-    const deps = makeStubDeps({
-      runSync, stderr,
-      getActiveCube: vi.fn(async () => null),  // no cube => no sibling spawn => in-place
-      cwd: () => '/work/borg-mcp',
-      findProjectRoot: () => '/work/borg-mcp',
-    });
-    await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(calls).toContainEqual(['fetch', 'origin', '--prune']);
-    // wt-<suffix> for dir 'borg-mcp' under repo 'borg-mcp' => 'wt-borg-mcp'
-    expect(calls).toContainEqual(['switch', '-C', 'wt-borg-mcp', 'origin/main']);
-    const stderrPayload = stderr.mock.calls.map((call) => String(call[0])).join('');
-    expect(stderrPayload).toContain('worktree: adopted branch wt-borg-mcp at origin/main');
-    expect(stderrPayload).toContain('WORKTREE STEERING');
-    expect(stderrPayload).toContain('This checkout is now on branch wt-borg-mcp');
-    expect(stderrPayload).toContain('Do ALL work HERE');
-    expect(stderrPayload).toContain('in /work/borg-mcp');
-    expect(stderrPayload).toContain('cut your feature branch (fix/.../feat/...) off wt-borg-mcp');
-    expect(stderrPayload).not.toContain('NEVER `git -C /work/borg-mcp`');
-    expect(stderrPayload).not.toContain('primary checkout /work/borg-mcp');
-  });
-
-  // gh#33: dirty in-place worktree => adoption must NOT mutate (no switch,
-  // no reset/checkout) — never discards uncommitted work.
-  it('skips wt- adoption without mutation when the in-place worktree is dirty', async () => {
+  it('first assimilation spawns a managed sibling and leaves the main checkout untouched', async () => {
+    let currentCwd = '/work/myrepo';
     const calls: string[][] = [];
     const runSync = vi.fn((_cmd: string, args: string[]) => {
       calls.push(args);
-      if (args.join(' ') === 'status --porcelain') return { status: 0, stdout: ' M src/x.ts\n', stderr: '' };
+      if (args[0] === 'remote') return { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'list') return { status: 0, stdout: '/work/myrepo\n', stderr: '' };
+      if (args[0] === 'rev-parse' && args[3] === 'refs/heads/wt-drone') return { status: 1, stdout: '', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'add') return { status: 0, stdout: '', stderr: '' };
       return { status: 0, stdout: '', stderr: '' };
     });
+    const chdir = vi.fn((path: string) => { currentCwd = path; });
     const deps = makeStubDeps({
       runSync,
+      chdir,
+      cwd: () => currentCwd,
       getActiveCube: vi.fn(async () => null),
-      cwd: () => '/work/borg-mcp',
-      findProjectRoot: () => '/work/borg-mcp',
     });
-    await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(calls.some((a) => a[0] === 'switch')).toBe(false);
-    expect(calls.some((a) => a[0] === 'reset' || (a[0] === 'checkout' && a[1] === '--'))).toBe(false);
-  });
-
-  // gh#33: in-place HEAD with unmerged work => BLOCKED, no switch, no
-  // discard — the never-discard safety the CR/QA blocker emphasized.
-  it('does NOT adopt (no switch) when in-place HEAD has unmerged work', async () => {
-    const calls: string[][] = [];
-    const runSync = vi.fn((_cmd: string, args: string[]) => {
-      calls.push(args);
-      if (args.join(' ') === 'status --porcelain') return { status: 0, stdout: '', stderr: '' };   // clean
-      if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return { status: 1, stdout: '', stderr: '' }; // unmerged
-      return { status: 0, stdout: '', stderr: '' };
-    });
-    const deps = makeStubDeps({
-      runSync,
-      getActiveCube: vi.fn(async () => null),
-      cwd: () => '/work/borg-mcp',
-      findProjectRoot: () => '/work/borg-mcp',
-    });
-    await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
-    expect(calls.some((a) => a[0] === 'switch')).toBe(false);
+    await expect(runAssimilate({ role: undefined, flags: { yes: true } }, deps)).resolves.toBe(0);
+    expect(calls).toContainEqual([
+      'worktree', 'add', '-b', 'wt-drone',
+      '/home/test/.borg/worktrees/myrepo/drone', 'origin/main',
+    ]);
+    expect(chdir).toHaveBeenCalledWith('/home/test/.borg/worktrees/myrepo/drone');
+    expect(calls).not.toContainEqual(['fetch', 'origin', '--prune']);
+    expect(calls.some((args) => args[0] === 'switch')).toBe(false);
   });
 
   it('auto-creates sibling worktree on collision', async () => {
@@ -2645,8 +2596,8 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(stderr).toHaveBeenCalledWith(
       'note: no usable origin; new worktree will start on local HEAD (16c1405)\n',
     );
-    expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toContain(
-      'the original dir keeps its active drone binding — run `borg reset-local-connection` there if that binding is stale.',
+    expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain(
+      'the original dir keeps its active drone binding',
     );
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('active seat');
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('that seat binding');
@@ -2702,6 +2653,8 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
 
   it('BUG-4 / unborn HEAD: fails fast with actionable error before git worktree add', async () => {
     const stderr = vi.fn();
+    const assimilate = vi.fn();
+    const createCube = vi.fn();
     const runSync = vi.fn((cmd: string, args: string[]) => {
       if (args[0] === 'remote') return { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' };
       // unborn HEAD: git rev-parse --verify HEAD exits non-zero.
@@ -2715,9 +2668,7 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       return { status: 0, stdout: '', stderr: '' };
     });
     const deps = makeStubDeps({
-      runSync, stderr,
-      // Force step 3 sibling-spawn via stale cubes.json collision.
-      getActiveCube: vi.fn(async () => ({ cubeId: 'old', droneId: 'd', name: 'myrepo', sessionToken: 's', droneLabel: 'l', apiUrl: 'a' })),
+      runSync, stderr, assimilate, createCube,
       cwd: () => '/work/myrepo',
       findProjectRoot: () => '/work/myrepo',
     });
@@ -2726,7 +2677,9 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     const stderrCalls = stderr.mock.calls.map((c) => String(c[0])).join('');
     expect(stderrCalls).toContain('sibling worktree spawn requires HEAD pointing at a commit');
     expect(stderrCalls).toContain('git commit --allow-empty');
-    expect(stderrCalls).toContain('pass --here');
+    expect(stderrCalls).not.toContain('--here');
+    expect(createCube).not.toHaveBeenCalled();
+    expect(assimilate).not.toHaveBeenCalled();
     // Crucially, `worktree add` was never invoked — runSync would have thrown.
     const worktreeAddCalls = runSync.mock.calls.filter(
       (c) => c[1][0] === 'worktree' && c[1][1] === 'add'
@@ -2804,7 +2757,7 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(assimilateSpy).not.toHaveBeenCalled();
   });
 
-  it('--here + existing + SAME cube = broken-seat recovery: POSTs with prior_drone_id, adopts the rotated token, no sibling spawn (gh#780 PR-D)', async () => {
+  it('--here resumes a legacy in-place seat without spawning a sibling (gh#780 PR-D)', async () => {
     const runSync = vi.fn((cmd: string, args: string[]) => {
       if (args[0] === 'remote') return { status: 0, stdout: 'git@github.com:org/myrepo.git', stderr: '' };
       return { status: 0, stdout: '', stderr: '' };
@@ -2826,7 +2779,12 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       finalizeServerSeat,
       assimilate: assimilateSpy as any,
       // Saved identity for THIS worktree, SAME cube + server authority as the target.
-      getActiveCube: vi.fn(async () => ({ cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', droneLabel: 'one-of-one-builder', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Builder' })),
+      getActiveCube: vi.fn(async () => ({
+        cubeId: 'cube-1', droneId: 'drone-prior', name: 'myrepo', droneLabel: 'one-of-one-builder',
+        apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY,
+        localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Builder',
+        operation: { projectRoot: '/work/myrepo', kind: 'seat', operationKey: 'current-worktree' },
+      })),
       listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
       getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [
         { id: 'role-builder', name: 'Builder', is_default: false, is_human_seat: false },
@@ -2840,6 +2798,10 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       expect.objectContaining({ prior_drone_id: 'drone-prior' }),
       expect.any(String),
     );
+    const params = (assimilateSpy.mock.calls[0] as unknown as [string, string, Record<string, unknown>])[2];
+    expect(params.session_operation).toEqual({
+      projectRoot: '/work/myrepo', kind: 'seat', operationKey: 'current-worktree',
+    });
     expect(finalizeServerSeat).toHaveBeenCalledWith(expect.objectContaining({
       active: expect.objectContaining({
         droneId: 'drone-prior',
@@ -2926,26 +2888,33 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     expect(assimilateSpy).toHaveBeenCalledOnce();
   });
 
-  it('a normal mint does NOT send prior_drone_id (fresh worktree, no saved identity)', async () => {
-    const assimilateSpy = vi.fn(async () => ({
-      cube_id: 'cube-1',
-      drone_id: 'drone-new',
-      drone_label: 'one-of-one-builder',
-      role_id: 'role-builder',
-      result: 'created' as const,
-      local_session: { credential_ref: 'borg-server-session:' + 'a'.repeat(64) },
-    }));
+  it.each([
+    ['main checkout', '/work/myrepo', '/work/myrepo/.git'],
+    ['hand-made linked worktree', '/work/manual', '/work/myrepo/.git/worktrees/manual'],
+  ])('refuses --here without a saved seat in a %s before cube or drone creation', async (_label, root, commonDir) => {
+    const assimilate = vi.fn();
+    const createCube = vi.fn();
+    const stderr = vi.fn();
     const deps = makeStubDeps({
-      assimilate: assimilateSpy as any,
-      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
-      getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [
-        { id: 'role-builder', name: 'Builder', is_default: true, is_human_seat: false },
-      ]})),
+      assimilate,
+      createCube,
+      stderr,
+      cwd: () => root,
+      findProjectRoot: () => root,
+      resolveRepositoryContext: vi.fn(async () => ({
+        root,
+        commonDir,
+        derivedName: 'myrepo',
+        publicRepository: { kind: 'origin', value: 'https://github.com/org/myrepo' },
+        publicRepositoryName: 'org/myrepo',
+      })),
     });
-    const exit = await runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps);
-    expect(exit).toBe(0);
-    const params = (assimilateSpy.mock.calls[0] as unknown as [string, string, Record<string, unknown>])[2];
-    expect(params.prior_drone_id).toBeUndefined();
+
+    await expect(runAssimilate({ role: undefined, flags: { yes: true, here: true } }, deps)).resolves.toBe(1);
+    expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toContain('borg assimilate');
+    expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('Run `borg assimilate --here`');
+    expect(createCube).not.toHaveBeenCalled();
+    expect(assimilate).not.toHaveBeenCalled();
   });
 });
 
@@ -2997,7 +2966,11 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
   });
 
   it('uses the sanitized repository basename with --yes when no origin exists', async () => {
-    const runSync = vi.fn(() => ({ status: 1, stdout: '', stderr: 'fatal: No such remote' }));
+    const runSync = vi.fn((_cmd: string, args: string[]) =>
+      args.join(' ') === 'rev-parse --verify HEAD'
+        ? { status: 0, stdout: 'abc123\n', stderr: '' }
+        : { status: 1, stdout: '', stderr: 'fatal: No such remote' }
+    );
     const prompt = vi.fn();
     const createCube = vi.fn(async () => ({ id: 'c', name: 'my-repo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] }));
     const deps = makeStubDeps({
@@ -3013,7 +2986,18 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
   });
 
   it('uses the editable guided name for a no-origin repository', async () => {
-    const runSync = vi.fn(() => ({ status: 1, stdout: '', stderr: 'fatal: No such remote' }));
+    const runSync = vi.fn((_cmd: string, args: string[]) => {
+      if (args.join(' ') === 'rev-parse --verify HEAD') {
+        return { status: 0, stdout: 'abc123\n', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return { status: 0, stdout: '/work/myrepo\n', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: 'fatal: No such remote' };
+    });
     const prompt = vi.fn()
       .mockResolvedValueOnce('')
       .mockResolvedValueOnce('')
@@ -3041,7 +3025,11 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
   });
 
   it('does not create when the user declines the guided confirmation', async () => {
-    const runSync = vi.fn(() => ({ status: 1, stdout: '', stderr: 'fatal: No such remote' }));
+    const runSync = vi.fn((_cmd: string, args: string[]) =>
+      args.join(' ') === 'rev-parse --verify HEAD'
+        ? { status: 0, stdout: 'abc123\n', stderr: '' }
+        : { status: 1, stdout: '', stderr: 'fatal: No such remote' }
+    );
     const prompt = vi.fn()
       .mockResolvedValueOnce('')
       .mockResolvedValueOnce('')
@@ -3063,7 +3051,11 @@ describe('runAssimilate: step 2 (cube-name derivation)', () => {
   });
 
   it('requires --cube-name or --yes for a non-interactive no-origin repository', async () => {
-    const runSync = vi.fn(() => ({ status: 1, stdout: '', stderr: 'fatal: No such remote' }));
+    const runSync = vi.fn((_cmd: string, args: string[]) =>
+      args.join(' ') === 'rev-parse --verify HEAD'
+        ? { status: 0, stdout: 'abc123\n', stderr: '' }
+        : { status: 1, stdout: '', stderr: 'fatal: No such remote' }
+    );
     const createCube = vi.fn();
     const deps = makeStubDeps({ runSync, createCube, isTTY: () => false });
     await expect(runAssimilate({ role: undefined, flags: {} }, deps)).resolves.toBe(1);
@@ -4251,13 +4243,17 @@ describe('runAssimilate: local saved-seat idempotency', () => {
       listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
       getCube: vi.fn(async () => localCube(active !== null)),
     });
-    const args = {
+    const createArgs = {
+      role: undefined,
+      flags: { server: 'localhost:8787', yes: true, cubeName: 'myrepo' },
+    };
+    const resumeArgs = {
       role: undefined,
       flags: { server: 'localhost:8787', here: true, yes: true, cubeName: 'myrepo' },
     };
 
-    await expect(runAssimilate(args, deps)).resolves.toBe(0);
-    await expect(runAssimilate(args, deps)).resolves.toBe(0);
+    await expect(runAssimilate(createArgs, deps)).resolves.toBe(0);
+    await expect(runAssimilate(resumeArgs, deps)).resolves.toBe(0);
 
     expect(droneCount).toBe(1);
     expect(assimilate).toHaveBeenCalledTimes(2);

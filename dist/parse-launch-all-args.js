@@ -1,6 +1,6 @@
 // gh#556 Part 2 — argument parser for `borg launch-all [cube] [flags]` (spec §9.1).
 // Pure: rawArgs → validated LaunchAllArgs | error. Mirror of parse-assimilate-args.
-const SUPPORTED = '--mode <tmux|terminals|pastelist>, --only <name>, --dry-run, --cli <claude|codex|opencode>, ' +
+const SUPPORTED = '--mode <tmux|terminals|pastelist>, --only <name>, --dry-run, ' +
     '--no-attach, --yes/-y, --force, --launch-delay <ms>';
 export function parseLaunchAllArgs(rawArgs) {
     const flags = {};
@@ -22,14 +22,6 @@ export function parseLaunchAllArgs(rawArgs) {
                     return { ok: false, error: `--only requires a value (role name or drone label)` };
                 }
                 flags.only = v;
-                break;
-            }
-            case '--cli': {
-                const v = rawArgs[++i];
-                if (v !== 'claude' && v !== 'codex' && v !== 'opencode') {
-                    return { ok: false, error: `--cli must be one of claude|codex|opencode (got: ${v ?? '<missing>'})` };
-                }
-                flags.cli = v;
                 break;
             }
             case '--launch-delay': {

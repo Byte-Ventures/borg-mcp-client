@@ -68,26 +68,8 @@ export interface DirtyClassification {
 export declare function classifyDirty(runSync: RunSync, cwd: string): DirtyClassification;
 /** True iff `branch`'s tip is an ancestor of `ref` — i.e. fully merged into it. */
 export declare function isMerged(runSync: RunSync, cwd: string, branch: string, ref: string): boolean;
-export interface AdoptResult {
-    action: 'adopted' | 'blocked-unmerged' | 'blocked-target-unmerged' | 'skipped-dirty';
-    message?: string;
-}
 /** True iff a local branch named `branch` already exists. */
 export declare function localBranchExists(runSync: RunSync, cwd: string, branch: string): boolean;
-/**
- * Migration (Q4/Q5/§4.5): bring a detached/stale worktree onto
- * `wt-<basename>` at `ref`. Idempotent: re-running on an already-adopted
- * clean worktree is a lossless reset to `ref`. Never discards:
- *   - dirty work tree            -> skipped-dirty (surface)
- *   - current HEAD unmerged      -> blocked-unmerged (surface)
- *   - TARGET `branch` exists with commits not on `ref` -> blocked-target-
- *     unmerged (surface). This is load-bearing: the switch uses `-C`
- *     (force-create/reset), which would ORPHAN commits on a pre-existing
- *     `wt-` branch. The HEAD-merged check alone misses this when the
- *     target branch != HEAD (e.g. on `main` while a prior `wt-x` holds
- *     committed-but-unmerged work). gh#33 CR-v2 blocker 078d1630.
- */
-export declare function adoptWorktree(runSync: RunSync, cwd: string, branch: string, ref: string): AdoptResult;
 export interface CleanupResult {
     action: 'pruned' | 'announced' | 'not-merged';
     /** The feature branch this result concerns (for the announce message). */
