@@ -251,6 +251,65 @@ describe('seat-store single-lock RCW (checklist #4)', () => {
     expect(existsSync(lock)).toBe(true);
   });
 
+  it('retries when the observed holder releases before the dead-pid diagnosis', async () => {
+    const dir = fixture();
+    const lock = join(dir, 'seats.json.lock');
+    const releasingPid = 2 ** 30;
+    writeFileSync(lock, JSON.stringify({
+      pid: releasingPid,
+      startTime: '2020-01-01T00:00:00.000Z',
+    }));
+    chmodSync(lock, 0o600);
+
+    // Deterministically place the clean release in the production race window:
+    // after Borg reads this payload, but before it decides the observation is stale.
+    const kill = vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+      if (pid === releasingPid) {
+        rmSync(lock);
+        throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+      }
+      return true;
+    }) as typeof process.kill);
+    try {
+      let ran = false;
+      await withStoreLock(lock, async () => { ran = true; }, { attempts: 3, waitMs: 1 });
+      expect(ran).toBe(true);
+      expect(existsSync(lock)).toBe(false);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('preserves a successor lock that replaces the observed dead holder', async () => {
+    const dir = fixture();
+    const lock = join(dir, 'seats.json.lock');
+    const releasingPid = 2 ** 30;
+    const successor = JSON.stringify({ pid: process.pid, startTime: new Date().toISOString() });
+    writeFileSync(lock, JSON.stringify({
+      pid: releasingPid,
+      startTime: '2020-01-01T00:00:00.000Z',
+    }));
+    chmodSync(lock, 0o600);
+
+    const kill = vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+      if (pid === releasingPid) {
+        rmSync(lock);
+        writeFileSync(lock, successor);
+        chmodSync(lock, 0o600);
+        throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+      }
+      return true;
+    }) as typeof process.kill);
+    try {
+      await expect(
+        withStoreLock(lock, async () => { /* unreachable */ }, { attempts: 2, waitMs: 1 }),
+      ).rejects.toThrow(/busy/i);
+      expect(readFileSync(lock, 'utf8')).toBe(successor);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
   it('option (b): a missing/unparseable lock payload FAILS CLOSED (corrupt lock never stolen)', async () => {
     const dir = fixture();
     const lock = join(dir, 'seats.json.lock');

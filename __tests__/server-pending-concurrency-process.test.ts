@@ -31,6 +31,16 @@ async function runChild(mode: string, fixture: string): Promise<any> {
   return JSON.parse(stdout);
 }
 
+async function joinChildren<T>(children: Array<Promise<T>>): Promise<T[]> {
+  const settled = await Promise.allSettled(children);
+  const failure = settled.find((result) => result.status === 'rejected');
+  if (failure?.status === 'rejected') throw failure.reason;
+  return settled.map((result) => {
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
+  });
+}
+
 afterEach(async () => {
   await Promise.all(fixtures.splice(0).map((fixture) =>
     rm(fixture, { recursive: true, force: true })));
@@ -42,7 +52,9 @@ describe('cross-process credential-store serialization (single flock)', () => {
     async (mode) => {
       const fixture = await mkdtemp(join(tmpdir(), `borg-pending-${mode}-`));
       fixtures.push(fixture);
-      const outputs = await Promise.all(Array.from({ length: 8 }, () =>
+      // Always join every spawned process before surfacing a failure. Otherwise an
+      // early rejection starts fixture teardown while sibling children still use it.
+      const outputs = await joinChildren(Array.from({ length: 8 }, () =>
         runChild(mode, fixture) as Promise<{ retryKey: string; credential?: string }>));
 
       // All 8 racing processes must converge on ONE minted tuple — the store lock
@@ -53,6 +65,20 @@ describe('cross-process credential-store serialization (single flock)', () => {
       }
     },
   );
+
+  it('joins every child before surfacing an early child failure', async () => {
+    let siblingSettled = false;
+    const earlyFailure = Promise.reject(new Error('child failed'));
+    const sibling = new Promise<string>((resolveSibling) => {
+      setImmediate(() => {
+        siblingSettled = true;
+        resolveSibling('done');
+      });
+    });
+
+    await expect(joinChildren([earlyFailure, sibling])).rejects.toThrow('child failed');
+    expect(siblingSettled).toBe(true);
+  });
 
   it('resumes the exact persisted enrollment tuple in a new process after response loss', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'borg-pending-resume-'));
