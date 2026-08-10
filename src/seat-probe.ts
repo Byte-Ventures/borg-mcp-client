@@ -6,6 +6,7 @@
 // graph. cleanup-cmd re-exports `SeatStatus` for backwards compatibility.
 
 import { whoami } from './remote-client.js';
+import type { ActiveCube } from './cubes.js';
 import { DroneEvictedError } from './drone-lifecycle.js';
 import {
   BorgServerError,
@@ -87,12 +88,10 @@ function isTransportFailure(err: unknown): boolean {
  * fail-OPEN.
  */
 export async function defaultProbeSeat(
-  sessionToken: string,
-  apiUrl: string,
-  serverTrustIdentity?: string,
+  seat: ActiveCube,
 ): Promise<SeatStatus> {
   try {
-    await whoami(sessionToken, apiUrl, serverTrustIdentity);
+    await whoami(seat);
     return 'live';
   } catch (err) {
     if (err instanceof DroneEvictedError) return 'evicted';

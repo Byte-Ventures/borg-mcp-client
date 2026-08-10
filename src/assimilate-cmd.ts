@@ -269,11 +269,7 @@ export interface AssimilateDeps {
     cubeId: string;
     projectRoot: string;
   }) => Promise<{ operation: ServerSessionOperation; roleId: string; credentialRef: string } | null>;
-  probeSeat: (
-    sessionToken: string,
-    apiUrl: string,
-    serverTrustIdentity?: string,
-  ) => Promise<SeatStatus>;
+  probeSeat: (seat: ActiveCube) => Promise<SeatStatus>;
   setActiveCube: (a: ActiveCube) => Promise<void>;
   /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
    *  typed expectation, persist the binding FIRST, then run `activate` (keychain
@@ -1316,11 +1312,7 @@ export async function runAssimilate(
       savedLocalRole = existing.roleName
         ? cubeDetail.roles.find((role) => role.name === existing.roleName)
         : undefined;
-      const status = await deps.probeSeat(
-        existing.sessionToken ?? '',
-        auth.apiUrl,
-        auth.serverTrustIdentity,
-      );
+      const status = await deps.probeSeat(existing);
       // Canonical rotated/revoked path: a pin-matched 401 on THIS worktree's
       // saved bearer. PURE DIAGNOSIS — attach never mutates local state on a
       // rejection; it points at the offline `borg reset-local-connection` command.

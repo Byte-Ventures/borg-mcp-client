@@ -11,6 +11,17 @@ const LOG_ID = '44444444-4444-4444-8444-444444444444';
 const ORIGIN = 'https://localhost:8787';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
+const ACTIVE_CUBE = {
+  cubeId: CUBE_ID,
+  droneId: DRONE_ID,
+  name: 'local-cube',
+  droneLabel: 'builder-1',
+  roleName: 'Builder',
+  sessionToken: SESSION,
+  apiUrl: ORIGIN,
+  serverTrustIdentity: TRUST_IDENTITY,
+  localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
+};
 const INITIAL_CURSOR = {
   id: '77777777-7777-4777-8777-777777777777',
   created_at: '2026-07-14T13:00:00.000Z',
@@ -159,18 +170,7 @@ describe('local server route adapter', () => {
       })),
     }));
     vi.doMock('../src/cubes.js', () => ({
-      getActiveCube: vi.fn(async () => ({
-        cubeId: CUBE_ID,
-        droneId: DRONE_ID,
-        name: 'local-cube',
-        droneLabel: 'builder-1',
-        roleName: 'Builder',
-        sessionToken: SESSION,
-        apiUrl: ORIGIN,
-        serverTrustIdentity: TRUST_IDENTITY,
-        localSessionCredentialRef: `borg-server-session:${'a'.repeat(64)}`,
-        localSessionGeneration: 2,
-      })),
+      getActiveCube: vi.fn(async () => ACTIVE_CUBE),
     }));
     vi.doMock('../src/local-server-cursor.js', () => ({
       getLocalServerCursor: getCursor,
@@ -191,7 +191,7 @@ describe('local server route adapter', () => {
     expect(cubeInfo.roles).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: ROLE_ID }),
     ]));
-    await expect(remote.whoami(SESSION, ORIGIN)).resolves.toEqual({
+    await expect(remote.whoami(ACTIVE_CUBE)).resolves.toEqual({
       cube_id: CUBE_ID,
       cube_name: 'local-cube',
       drone_id: DRONE_ID,

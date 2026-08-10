@@ -311,7 +311,7 @@ async function main() {
             discoverDroneCandidates: (cubeId) => discoverDroneCandidates({ targetCubeId: cubeId }, { ...launchAllDeps, stderr: () => { } }),
             getActiveSeatForWorktree: seatCommandDeps.getActiveSeatForWorktree,
             pathExists: launchAllDeps.pathExists,
-            probeSeat: (candidate) => launchAllDeps.probeSeat(candidate.sessionToken, candidate.apiUrl, candidate.serverTrustIdentity),
+            probeSeat: (candidate) => launchAllDeps.probeSeat(candidate.seat),
         });
         const otherConfiguredClis = configuredCliNames(detectCliAvailability(), detectCliConfiguration()).filter((c) => c !== cli);
         const action = await runBareLaunchMenu({

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
+import type { ActiveCube } from '../src/cubes.js';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
@@ -184,17 +185,21 @@ describe('remote-client explicit authority connection', () => {
     'https://127.0.0.1:7091',
     'https://borg.internal.example:9443',
   ])('rejects downgraded trust metadata for explicit endpoint %s before network', async (apiUrl) => {
+    const downgradedActive = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'local-cube',
+      sessionToken: 'legacy-local-session',
+      droneLabel: 'builder-1',
+      apiUrl,
+      // Deliberately empty: no verified trust identity is present.
+      serverTrustIdentity: '',
+    } satisfies ActiveCube;
     vi.doMock('../src/config.js', () => ({
       getServerCredential: vi.fn(async () => null),
     }));
     vi.doMock('../src/cubes.js', () => ({
-      getActiveCube: vi.fn(async () => ({
-        cubeId: CUBE_ID,
-        droneId: DRONE_ID,
-        sessionToken: 'legacy-local-session',
-        apiUrl,
-        // Deliberately removed: serverTrustIdentity.
-      })),
+      getActiveCube: vi.fn(async () => downgradedActive),
     }));
     vi.doMock('../src/server-trust.js', () => ({
       loadBorgServerTrust: vi.fn(async () => {
@@ -205,9 +210,31 @@ describe('remote-client explicit authority connection', () => {
     vi.stubGlobal('fetch', fetchSpy);
     const { getRoster } = await import('../src/remote-client.js');
 
-    await expect(getRoster('legacy-local-session', apiUrl, undefined, undefined))
+    await expect(getRoster(downgradedActive))
       .rejects.toThrow(/authority state is missing or unreadable/i);
 
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['cube_id', { cubeId: '../protocol' }],
+    ['drone_id', { droneId: '../protocol' }],
+  ])('rejects a malformed supplied %s before network', async (field, override) => {
+    const active: ActiveCube = {
+      cubeId: CUBE_ID,
+      droneId: DRONE_ID,
+      name: 'local-cube',
+      sessionToken: 'drone-session',
+      droneLabel: 'builder-1',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: 'spki-sha256:test-server',
+      ...override,
+    };
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { whoami } = await import('../src/remote-client.js');
+
+    await expect(whoami(active)).rejects.toThrow(new RegExp(`${field} .* not a UUID`));
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

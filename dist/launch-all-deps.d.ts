@@ -35,7 +35,7 @@ export interface LaunchAllDeps {
     /** Directory entries, or [] if absent. */
     listDir: (p: string) => string[];
     /** Roster call (wraps getRoster from remote-client.ts). */
-    getRoster: (token: string, apiUrl: string, since?: string, serverTrustIdentity?: string) => Promise<{
+    getRoster: (seat: ActiveCube, since?: string) => Promise<{
         drones: Array<{
             id: string;
             seen_since?: boolean;
@@ -55,7 +55,7 @@ export interface LaunchAllDeps {
      * reuse via seat-probe.ts). Lets launch-all skip evicted seats instead
      * of relaunching them (which silently re-mints a fresh drone — resurrection).
      */
-    probeSeat: (sessionToken: string, apiUrl: string, serverTrustIdentity?: string) => Promise<SeatStatus>;
+    probeSeat: (seat: ActiveCube) => Promise<SeatStatus>;
     /** Saved CLI preference for a worktree path (launch.json). */
     getCliPreferenceForPath: (projectPath: string) => Promise<'claude' | 'codex' | 'opencode' | null>;
     /** All persisted project identities from cubes.json. */

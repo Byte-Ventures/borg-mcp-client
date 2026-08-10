@@ -244,6 +244,15 @@ async function localAuthorityContext(
   return matched;
 }
 
+function assertSeatAuthority(active: ActiveCube): ActiveCube {
+  if (!active.serverTrustIdentity) {
+    throw new Error('Selected Borg server authority state is missing or unreadable');
+  }
+  assertUuidShape(active.cubeId, 'cube_id');
+  assertUuidShape(active.droneId, 'drone_id');
+  return active;
+}
+
 function localUnsupported(capability: string): never {
   throw new LocalUnsupportedError(capability);
 }
@@ -942,11 +951,9 @@ export async function getRoleInfoByName(
 }
 
 export async function whoami(
-  sessionToken: string,
-  apiUrl: string,
-  serverTrustIdentity?: string,
+  active: ActiveCube,
 ): Promise<{ cube_id: string; cube_name: string; drone_id: string; drone_label: string; role_id: string; role_name: string; runtime_metadata: { agent_kind: AgentKind | null; reported_model: string | null; working_repo_name: string | null; working_repo_origin: string | null }; runtime_metadata_reported: boolean }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+  const local = assertSeatAuthority(active);
   const composed = await localCubeComposition(local);
   return {
     cube_id: composed.cube.id,
@@ -978,12 +985,10 @@ export async function whoami(
  *     even when the caller passed an entry-id)
  */
 export async function getRoster(
-  sessionToken: string,
-  apiUrl: string,
+  active: ActiveCube,
   since?: string,
-  serverTrustIdentity?: string,
 ): Promise<{ drones: any[]; roles: any[]; message_taxonomy?: MessageTaxonomy | null; since?: string | null }> {
-  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+  const local = assertSeatAuthority(active);
   if (since !== undefined) {
     const [dronePayload, rolePayload, cubePayload] = await Promise.all([
       localServerRequest<{ drones: any[]; since?: string | null }>(

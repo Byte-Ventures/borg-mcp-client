@@ -1,12 +1,11 @@
 import type { LaunchAllDeps, RunSyncFn } from './launch-all-deps.js';
+import type { ActiveCube } from './cubes.js';
 export interface DroneCandidate {
     worktreeDir: string;
     cubeId: string;
     droneId: string;
     droneLabel: string;
-    sessionToken: string;
-    apiUrl: string;
-    serverTrustIdentity?: string;
+    seat: ActiveCube;
 }
 /**
  * --only TIER-1 (local, no server call): exact case-insensitive droneLabel match,

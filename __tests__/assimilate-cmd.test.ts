@@ -4266,11 +4266,12 @@ describe('runAssimilate: local saved-seat idempotency', () => {
       role_id: 'role-default',
       prior_drone_id: 'drone-saved',
     });
-    expect(probeSeat).toHaveBeenCalledWith(
-      'saved-local-session',
-      'https://localhost:8787',
-      SERVER_TRUST_IDENTITY,
-    );
+    expect(probeSeat).toHaveBeenCalledWith(expect.objectContaining({
+      sessionToken: 'saved-local-session',
+      apiUrl: 'https://localhost:8787',
+      serverTrustIdentity: SERVER_TRUST_IDENTITY,
+      droneId: 'drone-saved',
+    }));
     expect(active).toMatchObject({ droneId: 'drone-saved' });
   });
 

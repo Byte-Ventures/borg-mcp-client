@@ -149,10 +149,8 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect(await runLaunchAll({ flags: {} }, deps, OPTS)).toBe(0);
     expect(stdoutOf(deps)).toContain('VERIFIED');
     expect(deps.getRoster).toHaveBeenCalledWith(
-      'sess',
-      'http://api.test',
+      identities[0].cube,
       '2026-06-13T12:00:00.000Z',
-      'spki-sha256:local-server',
     );
   });
 
@@ -390,14 +388,14 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
 
   it('skips an EVICTED seat, launches the live ones, probes EACH seat with its OWN token', async () => {
     const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'evicted' : 'live'));
+    const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'evicted' : 'live'));
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain('drone-b');
     expect(stderrOf(deps)).toMatch(/drone no longer in cube \(evicted\)/);
-    const tokens = (deps.probeSeat as any).mock.calls.map((c: any[]) => c[0]);
-    expect(tokens).toContain('tok-a');
-    expect(tokens).toContain('tok-b');
+    const seats = (deps.probeSeat as any).mock.calls.map((c: any[]) => c[0]);
+    expect(seats).toContain(identities[0].cube);
+    expect(seats).toContain(identities[1].cube);
   });
 
   it('ALL seats evicted → nothing to launch (the 4b post-server-gate early-return), exit 0, backend never invoked', async () => {
@@ -411,7 +409,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
 
   it('a superseded seat is skipped with the exact bounded recovery', async () => {
     const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'rejected' : 'live'));
+    const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'rejected' : 'live'));
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain(
@@ -422,7 +420,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
 
   it('a revoked seat is skipped with the distinct exact bounded recovery', async () => {
     const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'revoked' : 'live'));
+    const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'revoked' : 'live'));
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toContain(
@@ -444,7 +442,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
 
   it('an INDETERMINATE (transient) seat is LAUNCHED (fail-OPEN) with a soft note', async () => {
     const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'indeterminate' : 'live'));
+    const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'indeterminate' : 'live'));
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     expect(stderrOf(deps)).toMatch(/could not confirm drone-b.*launching anyway/);
@@ -452,7 +450,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
 
   it('SR-seven (b): a TRUST-MISMATCH seat is a TERMINAL SKIP (never fail-open-launched)', async () => {
     const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'trust-mismatch' : 'live'));
+    const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'trust-mismatch' : 'live'));
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     // The live one launches; the trust-mismatch one is SKIPPED, not launched.
     expect(dispatched(deps)).toBe(true);
@@ -472,7 +470,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
 
   it('SR-seven (b): a CREDENTIAL-REJECTED seat is a cause-accurate SKIP (not fail-open), re-enroll guidance', async () => {
     const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'credential-rejected' : 'live'));
+    const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'credential-rejected' : 'live'));
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
     expect(dispatched(deps)).toBe(true);
     const err = stderrOf(deps);
@@ -491,7 +489,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
 
   it('--dry-run reflects the post-gate set (evicted seat omitted from the would-launch list)', async () => {
     const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => (token === 'tok-b' ? 'evicted' : 'live'));
+    const deps = depsFor(identities, async (seat) => (seat.sessionToken === 'tok-b' ? 'evicted' : 'live'));
     expect(await runLaunchAll({ flags: { dryRun: true } }, deps, OPTS)).toBe(0);
     const out = stdoutOf(deps);
     expect(out).toContain('drone-a');
@@ -507,7 +505,7 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
       projectPath: `/home/test/.borg/worktrees/myrepo/${l}`,
       cube: { cubeId: CUBE_ID, droneId: did(i + 1), name: 'myrepo', sessionToken: `tok-${l}`, droneLabel: `drone-${l}`, apiUrl: 'http://api.test' } as ActiveCube,
     }));
-    const deps = depsFor(identities, async (token) => statusByTok[token]);
+    const deps = depsFor(identities, async (seat) => statusByTok[seat.sessionToken]);
     // dry-run prints exactly the post-gate would-launch set; the gate ran first.
     expect(await runLaunchAll({ flags: { dryRun: true } }, deps, OPTS)).toBe(0);
     const out = stdoutOf(deps);
@@ -521,8 +519,8 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
 
   it('a probeSeat that THROWS is treated as indeterminate → LAUNCHED (fail-OPEN catch path)', async () => {
     const { identities } = twoSeats();
-    const deps = depsFor(identities, async (token) => {
-      if (token === 'tok-b') throw new Error('network down');
+    const deps = depsFor(identities, async (seat) => {
+      if (seat.sessionToken === 'tok-b') throw new Error('network down');
       return 'live';
     });
     expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);

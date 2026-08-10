@@ -52,8 +52,14 @@ function cand(over: Partial<DroneCandidate> = {}): DroneCandidate {
     cubeId: CUBE_ID,
     droneId: '00000001-0000-0000-0000-000000000000',
     droneLabel: 'drone-1',
-    sessionToken: 'sess',
-    apiUrl: 'http://api.test',
+    seat: {
+      cubeId: CUBE_ID,
+      droneId: '00000001-0000-0000-0000-000000000000',
+      name: 'myrepo',
+      sessionToken: 'sess',
+      droneLabel: 'drone-1',
+      apiUrl: 'http://api.test',
+    },
     ...over,
   };
 }

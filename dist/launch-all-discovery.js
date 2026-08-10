@@ -78,11 +78,7 @@ export async function discoverDroneCandidates(opts, deps) {
             cubeId: cube.cubeId,
             droneId: cube.droneId,
             droneLabel: cube.droneLabel,
-            sessionToken: cube.sessionToken,
-            apiUrl: cube.apiUrl,
-            ...(cube.serverTrustIdentity === undefined
-                ? {}
-                : { serverTrustIdentity: cube.serverTrustIdentity }),
+            seat: cube,
         });
     }
     return candidates;

@@ -111,7 +111,7 @@ export declare function getRoleInfo(sessionToken: string, apiUrl: string, server
 export declare function getRoleInfoByName(sessionToken: string, apiUrl: string, role: string, serverTrustIdentity?: string): Promise<{
     role: any;
 }>;
-export declare function whoami(sessionToken: string, apiUrl: string, serverTrustIdentity?: string): Promise<{
+export declare function whoami(active: ActiveCube): Promise<{
     cube_id: string;
     cube_name: string;
     drone_id: string;
@@ -138,7 +138,7 @@ export declare function whoami(sessionToken: string, apiUrl: string, serverTrust
  *     (echoed back so the renderer can label the column accurately
  *     even when the caller passed an entry-id)
  */
-export declare function getRoster(sessionToken: string, apiUrl: string, since?: string, serverTrustIdentity?: string): Promise<{
+export declare function getRoster(active: ActiveCube, since?: string): Promise<{
     drones: any[];
     roles: any[];
     message_taxonomy?: MessageTaxonomy | null;

@@ -138,9 +138,7 @@ function sanitizeSessionName(cubeName: string): string {
 /** Roster reconciliation (spec §7.2). Returns droneId → 'verified'|'unconfirmed'. */
 async function reconcileRoster(
   deps: LaunchAllDeps,
-  token: string,
-  apiUrl: string,
-  serverTrustIdentity: string | undefined,
+  seat: DroneCandidate['seat'],
   launchStartISO: string,
   launchedDroneIds: string[],
   now: () => number = Date.now,
@@ -156,10 +154,8 @@ async function reconcileRoster(
     let roster: { drones: Array<{ id: string; seen_since?: boolean }> };
     try {
       roster = await deps.getRoster(
-        token,
-        apiUrl,
+        seat,
         launchStartISO,
-        serverTrustIdentity,
       );
     } catch (err) {
       // gh#850: the roster-reconcile token can rotate mid-launch — authedFetch
@@ -294,7 +290,7 @@ export async function runLaunchAll(
   for (const c of lockLaunchable) {
     let status: SeatStatus;
     try {
-      status = await deps.probeSeat(c.sessionToken, c.apiUrl, c.serverTrustIdentity);
+      status = await deps.probeSeat(c.seat);
     } catch {
       status = 'indeterminate';
     }
@@ -310,7 +306,7 @@ export async function runLaunchAll(
       revokedCount += 1;
       deps.stderr(
         `Local session was revoked.\n` +
-          `Next: run borg reset-local-connection, then borg assimilate --host ${c.apiUrl} --enroll.\n`
+          `Next: run borg reset-local-connection, then borg assimilate --host ${c.seat.apiUrl} --enroll.\n`
       );
       continue;
     }
@@ -318,7 +314,7 @@ export async function runLaunchAll(
       rejectedCount += 1;
       deps.stderr(
         `Local session was superseded by a newer enrollment.\n` +
-          `Next: run borg reset-local-connection, then borg assimilate --host ${c.apiUrl} --enroll.\n`
+          `Next: run borg reset-local-connection, then borg assimilate --host ${c.seat.apiUrl} --enroll.\n`
       );
       continue;
     }
@@ -328,7 +324,7 @@ export async function runLaunchAll(
       trustMismatchCount += 1;
       deps.stderr(
         `skipping ${c.droneLabel} (${c.worktreeDir}): could not verify the server identity ` +
-          `(pinned trust changed) — this is terminal. Confirm ${c.apiUrl} is the expected server; ` +
+          `(pinned trust changed) — this is terminal. Confirm ${c.seat.apiUrl} is the expected server; ` +
           'if it was re-initialized, restore the expected identity before relaunching.\n'
       );
       continue;
@@ -339,7 +335,7 @@ export async function runLaunchAll(
       credentialRejectedCount += 1;
       deps.stderr(
         `skipping ${c.droneLabel} (${c.worktreeDir}): saved credential was rejected (not a takeover) — ` +
-          `re-enroll from that worktree with \`borg assimilate --host ${c.apiUrl} --enroll\`.\n`
+          `re-enroll from that worktree with \`borg assimilate --host ${c.seat.apiUrl} --enroll\`.\n`
       );
       continue;
     }
@@ -438,25 +434,15 @@ export async function runLaunchAll(
     return 1;
   }
 
-  // 9. roster reconciliation (best-effort; uses the OLD saved token from the first candidate)
-  const reconToken = launchable[0].sessionToken;
-  const reconApiUrl = launchable[0].apiUrl;
-  const reconServerTrustIdentity = launchable[0].serverTrustIdentity;
-  let statuses: Map<string, 'verified' | 'unconfirmed'> | null = null;
-  if (reconToken && reconApiUrl) {
-    statuses = await reconcileRoster(
-      deps,
-      reconToken,
-      reconApiUrl,
-      reconServerTrustIdentity,
-      launchStartISO,
-      launchable.map((c) => c.droneId),
-      opts.now,
-      opts.sleep
-    );
-  } else {
-    deps.stderr('roster reconciliation skipped — no session token available\n');
-  }
+  // 9. roster reconciliation (best-effort; uses the first launchable seat)
+  const statuses = await reconcileRoster(
+    deps,
+    launchable[0].seat,
+    launchStartISO,
+    launchable.map((c) => c.droneId),
+    opts.now,
+    opts.sleep
+  );
 
   // 10. summary
   deps.stdout(`\nborg launch-all: launched ${launchable.length} drones for cube '${cubeName}'\n\n`);

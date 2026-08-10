@@ -62,10 +62,8 @@ export interface LaunchAllDeps {
   listDir: (p: string) => string[];
   /** Roster call (wraps getRoster from remote-client.ts). */
   getRoster: (
-    token: string,
-    apiUrl: string,
+    seat: ActiveCube,
     since?: string,
-    serverTrustIdentity?: string,
   ) => Promise<{ drones: Array<{ id: string; seen_since?: boolean }> }>;
   /** getCube for --only tier-2 role-name resolution (best-effort). */
   getCube: (
@@ -79,9 +77,7 @@ export interface LaunchAllDeps {
    * of relaunching them (which silently re-mints a fresh drone — resurrection).
    */
   probeSeat: (
-    sessionToken: string,
-    apiUrl: string,
-    serverTrustIdentity?: string,
+    seat: ActiveCube,
   ) => Promise<SeatStatus>;
   /** Saved CLI preference for a worktree path (launch.json). */
   getCliPreferenceForPath: (projectPath: string) => Promise<'claude' | 'codex' | 'opencode' | null>;
@@ -157,12 +153,10 @@ export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
         return [];
       }
     },
-    getRoster: (token, apiUrl, since, serverTrustIdentity) =>
-      getRoster(token, apiUrl, since, serverTrustIdentity),
+    getRoster: (seat, since) => getRoster(seat, since),
     // getCube uses the drone session token via authedFetch (cubeId-only); apiUrl/token unused.
     getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
-    probeSeat: (sessionToken, apiUrl, serverTrustIdentity) =>
-      defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
+    probeSeat: (seat) => defaultProbeSeat(seat),
     getCliPreferenceForPath: (projectPath) => getProjectCliPreferenceForPath(projectPath),
     readAllProjectIdentities: () => cubesReadAllProjectIdentities(),
     findProjectRoot: (dir) => findProjectRoot(dir),

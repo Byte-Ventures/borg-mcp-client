@@ -151,6 +151,14 @@ async function localAuthorityContext(sessionToken, apiUrl, expectedServerTrustId
     // network use when no verified local authority is present.
     return matched;
 }
+function assertSeatAuthority(active) {
+    if (!active.serverTrustIdentity) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
+    assertUuidShape(active.cubeId, 'cube_id');
+    assertUuidShape(active.droneId, 'drone_id');
+    return active;
+}
 function localUnsupported(capability) {
     throw new LocalUnsupportedError(capability);
 }
@@ -666,8 +674,8 @@ export async function getRoleInfoByName(sessionToken, apiUrl, role, serverTrustI
         throw new Error(`Local Borg server has no role named ${JSON.stringify(role)}`);
     return { role: matched };
 }
-export async function whoami(sessionToken, apiUrl, serverTrustIdentity) {
-    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+export async function whoami(active) {
+    const local = assertSeatAuthority(active);
     const composed = await localCubeComposition(local);
     return {
         cube_id: composed.cube.id,
@@ -697,8 +705,8 @@ export async function whoami(sessionToken, apiUrl, serverTrustIdentity) {
  *     (echoed back so the renderer can label the column accurately
  *     even when the caller passed an entry-id)
  */
-export async function getRoster(sessionToken, apiUrl, since, serverTrustIdentity) {
-    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+export async function getRoster(active, since) {
+    const local = assertSeatAuthority(active);
     if (since !== undefined) {
         const [dronePayload, rolePayload, cubePayload] = await Promise.all([
             localServerRequest(local, `/api/cubes/${local.cubeId}/drones?since=${encodeURIComponent(since)}`, 'GET'),

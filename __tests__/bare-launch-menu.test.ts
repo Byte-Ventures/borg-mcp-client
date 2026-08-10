@@ -64,8 +64,12 @@ describe('client#362 — live sibling drone discovery', () => {
       cubeId: cube.cubeId,
       droneId: cube.droneId,
       droneLabel: cube.droneLabel,
-      sessionToken: `token-${cube.droneLabel}`,
-      apiUrl: 'https://127.0.0.1:3000',
+      seat: {
+        ...cube,
+        name: 'my-cube',
+        sessionToken: `token-${cube.droneLabel}`,
+        apiUrl: 'https://127.0.0.1:3000',
+      },
     }));
     const activeIds = new Set([ALPHA_ID, BETA_ID, EVICTED_ID, MISSING_ID]);
 

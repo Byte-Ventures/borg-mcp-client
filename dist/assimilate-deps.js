@@ -129,7 +129,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                 return null;
             return { operation: record.operation, roleId: record.roleId, credentialRef: seatRef(record) };
         },
-        probeSeat: (sessionToken, apiUrl, serverTrustIdentity) => defaultProbeSeat(sessionToken, apiUrl, serverTrustIdentity),
+        probeSeat: (seat) => defaultProbeSeat(seat),
         setActiveCube: (a) => cubesSetActive(a),
         // Single-store FINALIZE: the merged activate+bind (reached via the injected
         // `activate` thunk from sendBorgServerAttach) stamps the exact
