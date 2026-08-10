@@ -65,6 +65,7 @@ import { discoverDroneCandidates } from './launch-all-discovery.js';
 import {
   configureSelectedLaunchCli,
   discoverLiveLaunchMenuCandidates,
+  isMainGitWorktree,
   runBareLaunchMenu,
   shouldShowLaunchMenu,
   type LaunchMenuAction,
@@ -370,6 +371,10 @@ async function main() {
   // Active cube for this directory — needed for the launch menu's option-3
   // availability, the terminal title, and the inbox-Monitor clause below.
   const active = await getActiveCube();
+  const launchAllDeps = buildDefaultLaunchAllDeps();
+  const isMainWorktree = isMainGitWorktree((args) =>
+    launchAllDeps.runSync('git', args, { cwd: process.cwd() })
+  );
 
   const stdinIsTTY = process.stdin.isTTY === true;
   const stdoutIsTTY = process.stdout.isTTY === true;
@@ -385,10 +390,9 @@ async function main() {
       extraArgs: process.argv.slice(2),
       stdinIsTTY,
       stdoutIsTTY,
-      hasActiveSeat: active !== null,
+      isMainWorktree,
     })
   ) {
-    const launchAllDeps = buildDefaultLaunchAllDeps();
     const seatCommandDeps = buildDefaultSeatCommandDeps();
     const siblingContext = await discoverLiveLaunchMenuCandidates({
       readAllProjectIdentities: launchAllDeps.readAllProjectIdentities,
@@ -409,6 +413,14 @@ async function main() {
         defaultCli: cli,
         otherConfiguredClis,
         hasLaunchAllTargets: siblingContext.launchAllCubeId !== undefined,
+        ...(active
+          ? {
+              currentDrone: {
+                droneLabel: active.droneLabel,
+                worktree: active.worktree ?? findProjectRoot(process.cwd()),
+              },
+            }
+          : {}),
         droneCandidates: siblingContext.candidates,
         ...(siblingContext.launchAllCubeId
           ? { launchAllCubeId: siblingContext.launchAllCubeId }

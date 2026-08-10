@@ -1,9 +1,9 @@
 /**
  * gh#853 — bare `borg` (no-args) interactive launch menu.
  *
- * When `borg` is run with NO arguments in a TTY outside an active seat, offer
- * a small launch selector. In a repository with live sibling drones, those
- * drones come first; otherwise the existing agent choices remain unchanged.
+ * When `borg` is run with NO arguments in a TTY from a repository's main
+ * worktree, offer a small launch selector. A linked worktree still resumes its
+ * own drone directly, so selecting a sibling from the menu cannot recurse.
  *
  * The option-set, the selection→action mapping, and the show/collapse decision
  * are pure functions so they're unit-testable without a real TTY. claude.ts
@@ -11,9 +11,9 @@
  * gates on shouldShowLaunchMenu, runs the orchestrator with the real readline
  * prompt, then dispatches the returned action.
  *
- * Load-bearing safety: TTY-only + bare-args-only + no-active-seat
+ * Load-bearing safety: TTY-only + bare-args-only + main-worktree-only
  * (shouldShowLaunchMenu), so scripted/programmatic invocations and direct
- * worktree resumes are untouched.
+ * linked-worktree resumes are untouched.
  */
 import type { ActiveCube, BorgCli } from './cubes.js';
 import type { DroneCandidate } from './launch-all-discovery.js';
@@ -44,6 +44,8 @@ export interface LaunchMenuInputs {
   otherConfiguredClis: BorgCli[];
   /** True iff the current menu context has launch-all targets. */
   hasLaunchAllTargets: boolean;
+  /** Legacy drone saved in the repository's main worktree, resumed in this process. */
+  currentDrone?: { droneLabel: string; worktree: string };
   /** Live sibling drones offered before the unattached launch choices. */
   droneCandidates?: LaunchMenuDroneCandidate[];
   /** Cube selected by the sibling-drone context for its launch-all action. */
@@ -145,20 +147,37 @@ export function configureSelectedLaunchCli(
 const PRETTY: Record<BorgCli, string> = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' };
 
 /**
- * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY without an
- * active seat. Explicit invocations, non-TTY launches, and direct worktree
- * resumes fall straight through to the existing launch path.
+ * Git reports the main worktree with identical absolute git-dir/common-dir
+ * paths. Linked worktrees instead use <common>/worktrees/<name> as git-dir.
+ * Fail closed when either probe is absent or malformed.
+ */
+export function isMainGitWorktree(
+  readGitPath: (args: string[]) => string,
+): boolean {
+  try {
+    const gitDir = readGitPath(['rev-parse', '--path-format=absolute', '--git-dir']).trim();
+    const commonDir = readGitPath(['rev-parse', '--path-format=absolute', '--git-common-dir']).trim();
+    return gitDir.length > 0 && commonDir.length > 0 && gitDir === commonDir;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY from the main
+ * repository worktree. Explicit invocations, non-TTY launches, and linked
+ * worktree resumes fall straight through to the existing launch path.
  */
 export function shouldShowLaunchMenu(args: {
   extraArgs: string[];
   stdinIsTTY: boolean;
   stdoutIsTTY: boolean;
-  hasActiveSeat?: boolean;
+  isMainWorktree: boolean;
 }): boolean {
   return args.extraArgs.length === 0
     && args.stdinIsTTY
     && args.stdoutIsTTY
-    && !args.hasActiveSeat;
+    && args.isMainWorktree;
 }
 
 /**
@@ -167,14 +186,22 @@ export function shouldShowLaunchMenu(args: {
  * middle option never produces a "1) … 3) …" gap menu.
  */
 export function buildLaunchMenuOptions(inputs: LaunchMenuInputs): LaunchMenuOption[] {
-  if (inputs.droneCandidates && inputs.droneCandidates.length > 0) {
-    const options: LaunchMenuOption[] = [...inputs.droneCandidates]
+  if (inputs.currentDrone || (inputs.droneCandidates && inputs.droneCandidates.length > 0)) {
+    const options: LaunchMenuOption[] = [];
+    if (inputs.currentDrone) {
+      options.push({
+        key: '1',
+        label: `Resume ${inputs.currentDrone.droneLabel} (${inputs.currentDrone.worktree})`,
+        action: { kind: 'launch', cli: inputs.defaultCli },
+      });
+    }
+    options.push(...[...(inputs.droneCandidates ?? [])]
       .sort((a, b) => a.droneLabel.localeCompare(b.droneLabel) || a.worktree.localeCompare(b.worktree))
       .map((candidate, index) => ({
-        key: String(index + 1),
+        key: String(options.length + index + 1),
         label: `Resume ${candidate.droneLabel} (${candidate.worktree})`,
         action: { kind: 'launch-seat' as const, target: candidate.target },
-      }));
+      })));
     if (inputs.hasLaunchAllTargets) {
       options.push({
         key: String(options.length + 1),
@@ -185,15 +212,19 @@ export function buildLaunchMenuOptions(inputs: LaunchMenuInputs): LaunchMenuOpti
         },
       });
     }
-    options.push({
-      key: String(options.length + 1),
-      label: `Launch ${PRETTY[inputs.defaultCli]} here without a drone`,
-      action: { kind: 'launch', cli: inputs.defaultCli },
-    });
+    if (!inputs.currentDrone) {
+      options.push({
+        key: String(options.length + 1),
+        label: `Launch ${PRETTY[inputs.defaultCli]} here without a drone`,
+        action: { kind: 'launch', cli: inputs.defaultCli },
+      });
+    }
     for (const cli of inputs.otherConfiguredClis) {
       options.push({
         key: String(options.length + 1),
-        label: `Launch with ${PRETTY[cli]} here without a drone (one-shot)`,
+        label: inputs.currentDrone
+          ? `Resume ${inputs.currentDrone.droneLabel} with ${PRETTY[cli]} (one-shot)`
+          : `Launch with ${PRETTY[cli]} here without a drone (one-shot)`,
         action: { kind: 'launch', cli },
       });
     }
@@ -242,10 +273,10 @@ export function renderLaunchMenu(options: LaunchMenuOption[]): string {
 }
 
 /**
- * Orchestrate the menu with an injected readline-style prompt. Collapses to a
- * direct default launch (no render, no prompt) when only option 1 applies.
- * Re-prompts on invalid input up to `maxAttempts`, then falls back to the safe
- * default (option 1) so a fat-fingered session still launches.
+ * Orchestrate the menu with an injected readline-style prompt. The caller has
+ * already established that this is a bare interactive main-worktree launch,
+ * so even a one-item selector is rendered. Re-prompts on invalid input up to
+ * `maxAttempts`, then falls back to the safe default (option 1).
  */
 export async function runBareLaunchMenu(
   inputs: LaunchMenuInputs,
@@ -253,7 +284,6 @@ export async function runBareLaunchMenu(
   opts: { maxAttempts?: number; warn?: (message: string) => void } = {}
 ): Promise<LaunchMenuAction> {
   const options = buildLaunchMenuOptions(inputs);
-  if (options.length === 1) return options[0].action; // collapse — never a 1-item menu
 
   const maxAttempts = opts.maxAttempts ?? 3;
   const menu = renderLaunchMenu(options);

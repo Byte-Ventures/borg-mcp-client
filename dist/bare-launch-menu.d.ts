@@ -1,9 +1,9 @@
 /**
  * gh#853 — bare `borg` (no-args) interactive launch menu.
  *
- * When `borg` is run with NO arguments in a TTY outside an active seat, offer
- * a small launch selector. In a repository with live sibling drones, those
- * drones come first; otherwise the existing agent choices remain unchanged.
+ * When `borg` is run with NO arguments in a TTY from a repository's main
+ * worktree, offer a small launch selector. A linked worktree still resumes its
+ * own drone directly, so selecting a sibling from the menu cannot recurse.
  *
  * The option-set, the selection→action mapping, and the show/collapse decision
  * are pure functions so they're unit-testable without a real TTY. claude.ts
@@ -11,9 +11,9 @@
  * gates on shouldShowLaunchMenu, runs the orchestrator with the real readline
  * prompt, then dispatches the returned action.
  *
- * Load-bearing safety: TTY-only + bare-args-only + no-active-seat
+ * Load-bearing safety: TTY-only + bare-args-only + main-worktree-only
  * (shouldShowLaunchMenu), so scripted/programmatic invocations and direct
- * worktree resumes are untouched.
+ * linked-worktree resumes are untouched.
  */
 import type { ActiveCube, BorgCli } from './cubes.js';
 import type { DroneCandidate } from './launch-all-discovery.js';
@@ -46,6 +46,11 @@ export interface LaunchMenuInputs {
     otherConfiguredClis: BorgCli[];
     /** True iff the current menu context has launch-all targets. */
     hasLaunchAllTargets: boolean;
+    /** Legacy drone saved in the repository's main worktree, resumed in this process. */
+    currentDrone?: {
+        droneLabel: string;
+        worktree: string;
+    };
     /** Live sibling drones offered before the unattached launch choices. */
     droneCandidates?: LaunchMenuDroneCandidate[];
     /** Cube selected by the sibling-drone context for its launch-all action. */
@@ -82,15 +87,21 @@ export declare function discoverLiveLaunchMenuCandidates(deps: LaunchMenuCandida
  */
 export declare function configureSelectedLaunchCli(defaultCli: BorgCli, action: LaunchMenuAction | undefined, configure: (cli: BorgCli) => void): BorgCli;
 /**
- * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY without an
- * active seat. Explicit invocations, non-TTY launches, and direct worktree
- * resumes fall straight through to the existing launch path.
+ * Git reports the main worktree with identical absolute git-dir/common-dir
+ * paths. Linked worktrees instead use <common>/worktrees/<name> as git-dir.
+ * Fail closed when either probe is absent or malformed.
+ */
+export declare function isMainGitWorktree(readGitPath: (args: string[]) => string): boolean;
+/**
+ * Gate: the menu fires ONLY for bare `borg` (no args) in a TTY from the main
+ * repository worktree. Explicit invocations, non-TTY launches, and linked
+ * worktree resumes fall straight through to the existing launch path.
  */
 export declare function shouldShowLaunchMenu(args: {
     extraArgs: string[];
     stdinIsTTY: boolean;
     stdoutIsTTY: boolean;
-    hasActiveSeat?: boolean;
+    isMainWorktree: boolean;
 }): boolean;
 /**
  * The context-filtered option set. Option 1 is always present; options 2/3 are
@@ -108,10 +119,10 @@ export declare function resolveLaunchMenuChoice(options: LaunchMenuOption[], raw
 /** The rendered menu text (prompt suffix `[1]:` defaults to option 1 on Enter). */
 export declare function renderLaunchMenu(options: LaunchMenuOption[]): string;
 /**
- * Orchestrate the menu with an injected readline-style prompt. Collapses to a
- * direct default launch (no render, no prompt) when only option 1 applies.
- * Re-prompts on invalid input up to `maxAttempts`, then falls back to the safe
- * default (option 1) so a fat-fingered session still launches.
+ * Orchestrate the menu with an injected readline-style prompt. The caller has
+ * already established that this is a bare interactive main-worktree launch,
+ * so even a one-item selector is rendered. Re-prompts on invalid input up to
+ * `maxAttempts`, then falls back to the safe default (option 1).
  */
 export declare function runBareLaunchMenu(inputs: LaunchMenuInputs, prompt: (message: string) => Promise<string>, opts?: {
     maxAttempts?: number;
