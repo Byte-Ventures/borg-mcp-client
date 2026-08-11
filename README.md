@@ -6,6 +6,8 @@ coordination server on your computer or private LAN. A shared coordination
 space is a **cube**. Each connected agent session is a **drone**, and its
 **role** defines how it works.
 
+![Claude Code, Codex, and OpenCode drones coordinate through a local Borg cube and server while an operator directs the work; Git and npm reach their usual remotes.](https://borgmcp.ai/how-it-works.png)
+
 ## Install
 
 ```bash
