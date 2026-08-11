@@ -27,28 +27,25 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     }
   });
 
-  it('routes each section to the page that contains its promised content', () => {
-    expect(Object.fromEntries(DOCS_SECTIONS.map(({ slug, url }) => [slug, url]))).toEqual({
-      overview: 'https://borgmcp.ai/docs/',
-      concepts: 'https://borgmcp.ai/docs/concepts/',
-      install: 'https://borgmcp.ai/get-started/',
-      'run-server': 'https://borgmcp.ai/docs/run-server/',
-      enroll: 'https://borgmcp.ai/docs/security/',
-      'seat-lifecycle': 'https://github.com/Byte-Ventures/borg-mcp-client/blob/main/docs/SEAT_LIFECYCLE.md',
-      'self-hosting': 'https://borgmcp.ai/docs/self-hosting/',
-      cli: 'https://borgmcp.ai/docs/cli/',
-      tools: 'https://borgmcp.ai/docs/tools/',
-      faq: 'https://borgmcp.ai/docs/faq/',
-      license: 'https://borgmcp.ai/docs/license/',
-    });
+  it('uses distinct content surfaces and grounds the repository-hosted enrollment route', () => {
     expect(new Set(DOCS_SECTIONS.map(({ url }) => url)).size).toBe(DOCS_SECTIONS.length);
+
+    const enroll = DOCS_SECTIONS.find(({ slug }) => slug === 'enroll');
+    const enrollmentGuide = readFileSync(new URL('../docs/LOCAL_SERVER.md', import.meta.url), 'utf8');
+    expect(enroll?.url).toBe('https://github.com/Byte-Ventures/borg-mcp-client/blob/main/docs/LOCAL_SERVER.md');
+    expect(enrollmentGuide).toContain('borg assimilate --host <server> --enroll');
+    expect(enrollmentGuide).toContain('grant that enrolled client');
+
+    for (const section of DOCS_SECTIONS.filter(({ slug }) => !['enroll', 'seat-lifecycle'].includes(slug))) {
+      expect(new URL(section.url).hostname).toBe('borgmcp.ai');
+    }
   });
 
   it('matchDocsSections routes common topics to the right section', () => {
     expect(matchDocsSections('pricing')[0]?.slug).toBe('faq');
     expect(matchDocsSections('cost free').map((s) => s.slug)).toContain('faq');
     expect(matchDocsSections('license licensing')[0]?.slug).toBe('license');
-    expect(matchDocsSections('dashboard monitoring observability')[0]?.slug).toBe('self-hosting');
+    expect(matchDocsSections('dashboard monitoring observability')).toEqual([]);
     expect(matchDocsSections('add agent teammate invite')[0]?.slug).toBe('enroll');
     expect(matchDocsSections('install borgmcp')[0]?.slug).toBe('install');
     expect(matchDocsSections('opencode install').map((s) => s.slug)).toContain('install');

@@ -11,6 +11,7 @@
  */
 const SITE_URL = "https://borgmcp.ai";
 const REPOSITORY_URL = "https://github.com/Byte-Ventures/borg-mcp-client";
+const LOCAL_SERVER_URL = `${REPOSITORY_URL}/blob/main/docs/LOCAL_SERVER.md`;
 const SEAT_LIFECYCLE_URL = `${REPOSITORY_URL}/blob/main/docs/SEAT_LIFECYCLE.md`;
 export const DOCS_SECTIONS = [
     {
@@ -44,7 +45,7 @@ export const DOCS_SECTIONS = [
     {
         slug: "enroll",
         title: "Enroll",
-        url: `${SITE_URL}/docs/security/`,
+        url: LOCAL_SERVER_URL,
         summary: "Connect a client to a self-hosted server: invitations, assimilate --host --enroll, credentials.",
         keywords: ["enroll", "enrollment", "invitation", "invite", "assimilate", "--host", "credential", "credentials", "owner", "join server", "add agent", "teammate"],
     },
@@ -60,7 +61,7 @@ export const DOCS_SECTIONS = [
         title: "Self-hosting operations",
         url: `${SITE_URL}/docs/self-hosting/`,
         summary: "Operate a self-hosted server: data directory, credential rotation and grants, capacity, backup, upgrades.",
-        keywords: ["self-hosting", "operations", "operate", "backup", "restore", "upgrade", "rotate", "revoke", "grant", "capacity", "data directory", "dashboard", "monitoring", "observability"],
+        keywords: ["self-hosting", "operations", "operate", "backup", "restore", "upgrade", "rotate", "revoke", "grant", "capacity", "data directory"],
     },
     {
         slug: "cli",

@@ -469,8 +469,8 @@ export function formatRegenMarkdown(result, opts = {}) {
         ? [
             '## Getting started',
             '',
-            '**You (this agent):** `borg_log message="Starting work on <your task>"`; `borg_roster`.',
-            '**Your user (in a terminal):** add a teammate: `borg assimilate <role>`; optional `--worktree <name>` names its worktree.',
+            '**You (this agent):** post `borg_log message="<task>"`; check `borg_roster`.',
+            '**Your user:** in a new terminal in the repository, add a teammate: `borg assimilate <role>`; optional `--worktree <name>` names its worktree.',
             'For "what do I do next?", use `borg_docs`.',
             '',
             '---',

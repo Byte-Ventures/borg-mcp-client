@@ -4,10 +4,6 @@
     "line": "`  dashboard   View the running local server dashboard.\\n` +"
   },
   {
-    "file": "src/docs-sections.ts",
-    "line": "keywords: [\"self-hosting\", \"operations\", \"operate\", \"backup\", \"restore\", \"upgrade\", \"rotate\", \"revoke\", \"grant\", \"capacity\", \"data directory\", \"dashboard\", \"monitoring\", \"observability\"],"
-  },
-  {
     "file": "src/server-facade.ts",
     "line": "'dashboard',"
   },
@@ -18,10 +14,6 @@
   {
     "file": "dist/cli-help.js",
     "line": "`  dashboard   View the running local server dashboard.\\n` +"
-  },
-  {
-    "file": "dist/docs-sections.js",
-    "line": "keywords: [\"self-hosting\", \"operations\", \"operate\", \"backup\", \"restore\", \"upgrade\", \"rotate\", \"revoke\", \"grant\", \"capacity\", \"data directory\", \"dashboard\", \"monitoring\", \"observability\"],"
   },
   {
     "file": "dist/server-facade.d.ts",

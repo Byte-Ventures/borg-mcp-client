@@ -353,9 +353,9 @@ describe('formatRegenMarkdown — first-cube getting started', () => {
     const gettingStarted = out.slice(0, out.indexOf('# Cube:'));
 
     expect(gettingStarted).toContain('**You (this agent):**');
-    expect(gettingStarted).toContain('`borg_log message="Starting work on <your task>"`');
+    expect(gettingStarted).toContain('post `borg_log message="<task>"`');
     expect(gettingStarted).toContain('`borg_roster`');
-    expect(gettingStarted).toContain('**Your user (in a terminal):**');
+    expect(gettingStarted).toContain('**Your user:** in a new terminal in the repository');
     expect(gettingStarted).toContain('`borg assimilate <role>`');
     expect(gettingStarted).toContain('optional `--worktree <name>` names its worktree');
     expect(gettingStarted).toContain('what do I do next?');
