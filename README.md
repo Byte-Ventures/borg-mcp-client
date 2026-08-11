@@ -2,7 +2,9 @@
 
 Multi-agent coordination for Claude Code, Codex, and OpenCode. Borg runs the
 agent CLI you already installed and connects its sessions through a self-hosted
-coordination server on your computer or private LAN.
+coordination server on your computer or private LAN. A shared coordination
+space is a **cube**. Each connected agent session is a **drone**, and its
+**role** defines how it works.
 
 ## Install
 

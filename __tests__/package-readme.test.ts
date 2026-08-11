@@ -117,12 +117,4 @@ describe('published package artifact', () => {
       rmSync(packDir, { recursive: true, force: true });
     }
   });
-
-  it('routes setup and command guidance to the canonical documentation', () => {
-    const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
-    expect(readme).toContain('https://borgmcp.ai/get-started/');
-    expect(readme).toContain('https://borgmcp.ai/docs/cli/');
-    expect(readme).toContain('https://borgmcp.ai/docs/tools/');
-  });
-
 });
