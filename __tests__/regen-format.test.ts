@@ -339,6 +339,30 @@ describe('formatRegenMarkdown — taxonomy tip (gh#479)', () => {
   });
 });
 
+describe('formatRegenMarkdown — first-cube getting started', () => {
+  it('separates agent actions from user terminal steps and routes next-step questions to docs', () => {
+    __resetRegenSessionState();
+    const out = formatRegenMarkdown({
+      cube: { name: 'first-cube', cube_directive: 'coordinate', message_taxonomy: [] },
+      role: { name: 'Coordinator', detailed_description: 'Coordinate.' },
+      drone: { label: 'coordinator-1' },
+      roles: [{ id: 'r1', name: 'Coordinator', short_description: 'coordinates', is_default: true }],
+      drones: [{ id: 'd1', label: 'coordinator-1', role_id: 'r1', last_seen: '2026-05-30T12:00:00.000Z' }],
+      behind_by: 0,
+    });
+    const gettingStarted = out.slice(0, out.indexOf('# Cube:'));
+
+    expect(gettingStarted).toContain('**You (this agent):**');
+    expect(gettingStarted).toContain('post `borg_log message="<task>"`');
+    expect(gettingStarted).toContain('`borg_roster`');
+    expect(gettingStarted).toContain('**Your user:** in a new terminal in the repository');
+    expect(gettingStarted).toContain('`borg assimilate <role>`');
+    expect(gettingStarted).toContain('optional `--worktree <name>` names its worktree');
+    expect(gettingStarted).toContain('what do I do next?');
+    expect(gettingStarted).toContain('`borg_docs`');
+  });
+});
+
 describe('formatRegenMarkdown — lite mode (gh#496-B)', () => {
   const baseResult = (roleText = 'Workflow:\nBuild things.') => ({
     cube: {

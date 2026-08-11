@@ -4,9 +4,11 @@
  * The single canonical list of borg_* MCP tool definitions. The runtime and
  * documentation consumers use the same pure-data list.
  *
- * PURE DATA — no imports, no side effects — so documentation builds do not pull
- * in the client's MCP runtime dependencies.
+ * CONTRACT-BACKED DATA — imports only published scalar contract constants, with
+ * no client runtime side effects.
  */
+import { DECISION_TEXT_MAX_BYTES } from 'borgmcp-shared/protocol';
+
 export interface ToolManifestEntry {
   name: string;
   description: string;
@@ -128,7 +130,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_docs',
           description:
-            'Look up the Borg MCP documentation. Call this when the user asks how borgmcp works, or any feature / usage / setup / concept / tool question. Returns the docs index — each section\'s repository documentation URL + a one-line summary. Pass `topic` (e.g. "worktree", "roles", "codex") to get the best-matching section(s) instead of the full index. Then WebFetch the returned URL to read the page — borg_docs returns the index only, it does not fetch the page for you.',
+            'Look up the Borg MCP documentation. Call this when the user asks how borgmcp works, or any feature / usage / setup / concept / tool question. Returns the docs index — each section\'s documentation URL + a one-line summary. Pass `topic` (e.g. "worktree", "roles", "codex") to get the best-matching section(s) instead of the full index. Then WebFetch the returned URL to read the page — borg_docs returns the index only, it does not fetch the page for you.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -262,11 +264,11 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
               },
               decision: {
                 type: 'string',
-                description: 'The ratified decision text. Max 2000 chars.',
+                description: `The ratified decision text. Max ${DECISION_TEXT_MAX_BYTES} UTF-8 bytes (bytes, not characters).`,
               },
               rationale: {
                 type: 'string',
-                description: 'Optional why. Max 2000 chars.',
+                description: `Optional why. Max ${DECISION_TEXT_MAX_BYTES} UTF-8 bytes (bytes, not characters).`,
               },
             },
           },

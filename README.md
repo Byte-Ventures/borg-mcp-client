@@ -62,7 +62,7 @@ agent's local control connection is no longer available.
 
 ## License
 
-Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+This client and [`borgmcp-shared`](https://github.com/Byte-Ventures/borg-mcp-shared) are Apache-2.0; the self-hosted [`borgmcp-server`](https://github.com/Byte-Ventures/borg-mcp-server) is licensed separately under FSL-1.1 and converts to Apache-2.0 under its terms. See this client's [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Links
 
