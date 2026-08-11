@@ -1,41 +1,41 @@
 # Self-Hosted Server
 
-Install and initialize the server in the human operator's terminal:
+Use the interactive client setup in the human operator's terminal. It offers
+the exact server version compatible with the installed client and initializes
+the server without starting it:
 
 ```bash
-npm install -g borgmcp-server
-borg server setup
+borg setup
 borg server start
 ```
 
-The client owns the `borg server` facade. It forwards commands and renders
-verified server evidence. It does not infer a checkout, activate an artifact,
-create a service, or claim a build identity by itself. The server owns artifact
-verification, activation, data and identity preservation, runtime build
-identity, rollback, and explicit Linux/macOS service adapters. The server
-executable remains the direct foreground authority.
+See the [Get Started guide](https://borgmcp.ai/get-started/) for the complete
+installation sequence.
+
+The client owns the `borg server` facade and the client-side `cube init` flow.
+Other facade commands execute the separately installed `borgmcp-server` with
+the terminal attached, so the server renders its own evidence. The client does
+not infer a checkout, activate an artifact, create a service, or claim a build
+identity by itself. The server owns artifact verification, activation, data and
+identity preservation, runtime build identity, rollback, and explicit
+Linux/macOS service adapters. The server executable remains the direct
+foreground authority.
 
 `borg server start` and `borg-mcp-server start` are foreground commands. They
 must never imply that a daemon, LaunchAgent, or systemd service was installed.
 Ctrl-C stops the foreground process. Managed persistence is a separate explicit
 handoff.
 
-The available lifecycle facade commands are:
+Use installed help for the command set and exact options for your version:
 
 ```text
-Usage: borg server <command> [arguments]
-
-Commands:
-  setup    Prepare local server identity and data; does not start the server.
-  start    Start the verified server in the foreground.
-  stop     Stop the managed local server.
-  status   Report verified runtime evidence.
-  update   Verify and activate a local server artifact.
-  invite   Create a single-use invitation in an interactive terminal.
-  cube init   Initialize this Git repository's cube; does not create a drone.
-
-Run borg server <command> --help for server command options.
+borg server --help
+borg server <command> --help
 ```
+
+The [server operations](https://borgmcp.ai/docs/run-server/) and
+[self-hosting](https://borgmcp.ai/docs/self-hosting/) guides cover lifecycle,
+network, backup, and recovery tasks.
 
 `borg server cube init --help` derives accepted template names from the pinned
 shared release. Relevant options include:
@@ -92,11 +92,12 @@ borg assimilate
 ```
 
 Setup provisions the first same-machine owner credential directly, so this flow
-does not ask for an invitation. For another client or device, run `borg server
-invite` in the server operator's interactive terminal. On the intended recipient,
-run `borg assimilate --host <server> --enroll` and enter the single-use invitation
-at the labeled hidden prompt. Never put an invitation in argv, environment
-variables, logs, or diagnostics.
+does not ask for an invitation. For another client or device, follow the
+[trust and provisioning guide](https://github.com/Byte-Ventures/borg-mcp-server/blob/main/docs/trust-and-provisioning.md):
+mint a single-use invitation, enroll the recipient, grant that enrolled client
+explicit access to the intended cube, then rerun assimilation. Enrollment alone
+grants no cube access. Never put an invitation in argv, environment variables,
+logs, or diagnostics.
 
 For explicit invitation enrollment, the client generates a 256-bit credential
 and UUID retry key and persists the exact tuple as `PENDING` in the 0600
@@ -151,7 +152,9 @@ being redirected.
 
 ## Agent Launch State
 
-Borg tools are inactive unless the agent session was launched with `borg`.
+Borg tools are normally inactive unless the agent session was launched with
+`borg`. Setting `BORG_SESSION=1` is a supported power-user activation override;
+it does not grant server access or change authorization.
 For Claude Code and Codex, `BORG_DISABLE_LAUNCH_REMINDER` is a presence-based
 local opt-out for launch orientation messaging; setting it does not activate
 Borg tools or change server authorization. OpenCode has no plain-launch reminder;
@@ -216,20 +219,11 @@ noncanonical worktrees heal when Borg next launches or assimilates them.
 
 `borg doctor` performs the same bin-owner and version checks without changing
 state. It inventories managed hook files and verifies the OpenCode orientation
-plugin against its borgmcp version marker and generated behavior,
-and reports status-specific recovery: reinstall a missing bin, correct PATH for
-the wrong package or version, run `borg update --yes` for stale managed hooks,
-repair a named invalid configuration before rerunning update, or run
-`borg update --yes` to install a missing or outdated OpenCode plugin. The plugin API is
-empirically bound to OpenCode 1.18.15 with `@opencode-ai/plugin` 1.17.18; that
-SDK uses the path/query/body options shape for history reads and prompt
-submission, not the newer flat v2 call shape. At that bound, `TextPart.metadata`
-exists, persists through history reads, compaction, and process reload, and is
-not rendered in the TUI or supplied to the model. The health gate treats OpenCode
-as configured only when `~/.config/opencode/opencode.json` contains a local
-`mcp.borg` entry with `type: "local"`. That path and shape were exercised by the
-3.2.0 config-refresh live proof (PR #390) and are part of the OpenCode 1.18.15
-compatibility gate.
+plugin against its borgmcp version marker and generated behavior. It reports
+status-specific recovery: reinstall a missing bin, correct PATH for the wrong
+package or version, run `borg update --yes` for stale managed hooks, repair a
+named invalid configuration before rerunning update, or run `borg update --yes`
+to install a missing or outdated OpenCode plugin.
 
 `borg server update` remains the server-runtime-only command. It verifies and
 activates the server artifact but deliberately does not rewrite the global
@@ -260,18 +254,24 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 
 ## Recovery commands
 
-- No saved or rejected enrollment: generate a single-use invitation with
-  `borg server invite`, then run `borg assimilate --host <server> --enroll` from
-  the intended recipient's interactive terminal.
+- No saved enrollment: generate a single-use invitation with `borg server
+  invite`, then run `borg assimilate --host <server> --enroll` from the intended
+  recipient's interactive terminal. After enrollment, the operator must grant
+  that client access to the intended cube; then rerun `borg assimilate --host
+  <server>`.
 - Rejected or expired invitation: keep the server running and mint a replacement
   invitation with `borg server invite`, then rerun `borg assimilate --host
-  <server> --enroll` with the replacement invitation.
+  <server> --enroll` with the replacement invitation. After enrollment, grant
+  cube access and rerun assimilation without `--enroll`.
 - Revoked or superseded local session: run `borg reset-local-connection`, ask the
   operator for a new invitation from `borg server invite`, then run `borg
-  assimilate --host <server> --enroll` with the server still running.
-- Unloadable local seat: run `borg reset-local-connection --host <server>` to clear
-  ONLY this worktree's saved local seat, then rerun `borg assimilate --host
-  <server>` with the server still running.
+  assimilate --host <server> --enroll` with the server still running. After
+  enrollment, grant cube access and rerun assimilation without `--enroll`.
+- A valid saved connection that cannot be hydrated for the selected host: run
+  `borg reset-local-connection --host <server>` to clear only this worktree's
+  saved connection, then rerun `borg assimilate --host <server>` with the server
+  still running. A malformed private store fails closed and is not reset by this
+  command; preserve the store and the exact error for diagnosis.
 - Unreachable server: start or restart it with `borg server start`, then
   rerun `borg assimilate --host <server>`.
 - Trust mismatch after an intentional server re-initialization: verify the
@@ -282,9 +282,3 @@ The default discovery endpoint is `https://127.0.0.1:7091`. Explicit `--host` va
 - Unusable project name: rerun with `--cube-name <name>`.
 - Incompatible response: verify compatible client and server versions, then
   retry the same endpoint.
-
-## Release status
-
-This client candidate pins published `borgmcp-shared@0.10.1`. Its release remains
-coupled to a server artifact rebuilt against the same shared version, with both
-artifacts required to pass the complete process-level local dogfood gate.

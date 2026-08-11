@@ -1,163 +1,42 @@
 # Borg MCP
 
-Multi-agent coordination for AI coding agents. Borg wraps the CLI agent you
-already installed—Claude Code, Codex, or OpenCode—so its sessions can
-coordinate in the same project. A shared coordination space is a **cube**, and
-each connected agent session is a **drone**. Roles are yours to define, with
-names such as builder, reviewer, coordinator, or designer.
-
-## What you get
-
-- Shared project context, role instructions, a roster, and an activity log.
-- Direct and broadcast messages between agent sessions.
-- Live wake-up support so agents can react to new activity.
-- Launchers for Claude Code, Codex, and OpenCode, including sibling worktrees.
-- A self-hosted server for localhost or LAN use, with no account or subscription.
+Multi-agent coordination for Claude Code, Codex, and OpenCode. Borg runs the
+agent CLI you already installed and connects its sessions through a self-hosted
+coordination server on your computer or private LAN. A shared coordination
+space is a **cube**. Each connected agent session is a **drone**, and its
+**role** defines how it works.
 
 ## Install
-
-You install Claude Code, Codex, or OpenCode yourself. Borg runs the installed
-agent for you. When the current worktree is registered to a drone, Borg attaches
-that drone's cube connection. Use
-`borg ...` commands in your terminal, and use `borg_...` MCP tools inside the
-agent session.
-
-Install the client from npm:
 
 ```bash
 npm install -g borgmcp
 ```
 
-You also need at least one supported agent CLI: Claude Code, Codex, or OpenCode.
+Continue with the [Get Started guide](https://borgmcp.ai/get-started/) to check
+the requirements, configure Borg, start the local server, and add your first
+drone. Borg has no hosted account or subscription.
 
-Verify the installation:
+## Documentation
 
-```bash
-borg --version
-borg --help
-```
+- [Core concepts](https://borgmcp.ai/docs/concepts/) defines cubes, drones,
+  roles, and the activity log.
+- [CLI commands](https://borgmcp.ai/docs/cli/) covers launching, resuming,
+  updating, and worktree maintenance. The installed client's `borg --help` and
+  `borg <command> --help` are the exact reference for its version.
+- [MCP tool reference](https://borgmcp.ai/docs/tools/) lists the `borg_...`
+  tools available inside agent sessions.
+- [Server operations](https://borgmcp.ai/docs/run-server/) covers loopback and
+  private-LAN operation.
+- [Security](https://borgmcp.ai/docs/security/) explains invitations, client
+  access, and network exposure.
+- [Self-hosting](https://borgmcp.ai/docs/self-hosting/) covers data locations,
+  backups, client administration, and upgrades.
+- [FAQ](https://borgmcp.ai/docs/faq/) answers common setup and workflow
+  questions.
 
-## Quick Start
-
-Run the setup wizard:
-
-```bash
-borg setup
-```
-
-If the local server is not installed, the wizard offers to install a compatible
-version. It also configures the supported agent CLIs found on your machine.
-
-Prepare and start the server in one terminal:
-
-```bash
-borg server setup
-borg server start
-```
-
-`borg server start` stays in the foreground. Leave that terminal open while you
-use Borg; press Ctrl-C when you want to stop the server.
-
-In a second terminal, open your project's Git repository and join its cube:
-
-```bash
-cd ~/code/my-app
-borg assimilate
-```
-
-Borg creates or reuses a repository-specific cube, registers the new drone, and
-creates a dedicated worktree under `~/.borg/worktrees/<repo>/`. It launches your
-agent CLI there; the repository root does not host a drone and remains available
-for choosing which drone to resume. Borg tools are inactive unless the agent session was launched with `borg`.
-
-### Resume a saved session
-
-When you return later, either choose a drone from the repository root or resume
-one linked worktree directly:
-
-1. In the repository's main worktree, run `borg` to open the launch menu. It
-   offers the repository's managed-worktree drones and `Launch all` when one
-   cube's drones are available. A legacy in-place drone appears first if this
-   repository still has one.
-2. In a linked worktree, run `borg` to resume that worktree's saved drone
-   directly. No menu is shown there.
-3. If the main worktree has no saved drones, the menu still offers an unattached
-   agent launch; run `borg assimilate` to create a managed-worktree drone.
-
-The lookup is the same for Claude Code, Codex, and OpenCode; only their launch
-adapters differ.
-
-You do not have to remember worktree paths. To list the drones registered on
-this machine, run:
-
-```bash
-borg seats
-```
-
-To resume one drone from any directory, run:
-
-```bash
-borg launch <label-or-id-prefix>
-```
-
-`borg launch` finds the drone's worktree in the local seat registry and starts
-it exactly as if you ran `borg` in that worktree. If a label exists in more
-than one cube, add `--cube <name>` or use the drone id prefix.
-
-To resume all saved drone worktrees for a cube, run:
-
-```bash
-borg launch-all [cube]
-```
-
-To run another agent at the same time, open a third terminal and change to the
-same Git repository:
-
-```bash
-cd ~/code/my-app
-borg assimilate builder
-```
-
-Each assimilation creates another dedicated managed worktree. Use `--here` only
-to resume a drone already saved in the current worktree; it does not create a new
-in-place drone.
-
-Two sessions of the same agent CLI work. To choose a CLI explicitly, use one of:
-
-```bash
-borg assimilate --cli claude
-borg assimilate --cli codex
-borg assimilate --cli opencode
-```
-
-## Cubes And Roles
-
-On first use in a repository, Borg shows the proposed cube name and template
-before creating anything. If it finds one accessible cube with the same name,
-it asks before linking that cube to the repository. It never links an existing
-cube by name during a non-interactive run.
-
-To create a repository cube without launching an agent:
-
-```bash
-borg server cube init
-```
-
-To supply creation defaults non-interactively, pass `--host`, `--cube-name`, and
-`--yes`. The `--yes` flag accepts defaults for a new cube; it does not approve
-linking an existing cube.
-
-To launch a drone in a named sibling worktree:
-
-```bash
-borg assimilate builder --worktree drone-2
-```
-
-See [`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md) for remote enrollment,
-invitations, server recovery, and security details. See
-[`docs/SEAT_LIFECYCLE.md`](docs/SEAT_LIFECYCLE.md) for what a worktree's saved
-connection contains, how it re-attaches, and how it is revoked,
-superseded, evicted, or reset.
+For client-specific recovery details, see
+[`docs/LOCAL_SERVER.md`](docs/LOCAL_SERVER.md) and
+[`docs/SEAT_LIFECYCLE.md`](docs/SEAT_LIFECYCLE.md).
 
 ## Agent Permissions
 
@@ -173,73 +52,7 @@ receive the warning plus repair snippet instead. The launch-only override does
 not modify the agent's configuration. `borg setup` can show the corresponding
 persistent configuration snippets.
 
-## Core MCP Tools
-
-After assimilation, the agent session can use these tools:
-
-- `borg_regen` refreshes cube context, role instructions, and roster state.
-- `borg_log` posts to the shared activity log; `borg_read-log` reads it.
-- `borg_ack` acknowledges a routed entry without posting another log message.
-- `borg_roster` lists drones and liveness markers.
-- `borg_stream-status` diagnoses the wake-up path.
-- `borg_cube`, `borg_role`, and `borg_whoami` inspect the current identity.
-- `borg_create-cube` creates a cube; `borg_update-cube` updates its directive or
-  message taxonomy.
-- `borg_delete-cube` deletes a cube after explicit confirmation of its exact
-  cube ID.
-- `borg_create-role`, `borg_update-role`, and `borg_reassign-drone` manage roles
-  and assignments.
-- `borg_apply-template`, `borg_sync-roles`, and `borg_patch-taxonomy-class`
-  maintain role and message-taxonomy templates.
-
-The available tools are also discoverable from the agent's MCP tool list.
-
-## Update
-
-For npm-global installations, update the client and an installed local server
-together:
-
-```bash
-borg update
-```
-
-Borg checks that compatible client and server versions are available, asks for
-confirmation, and reports any manual recovery step. Use `borg update --yes` for
-a non-interactive update. A server that was stopped remains stopped, and active
-agent sessions must be restarted after the client changes. After the package
-pair verifies, Borg replaces stale absolute `borgmcp` package launch paths in
-Claude Code, Codex, and OpenCode MCP registrations and managed hooks with the
-version-stable shipped bin names. It preserves unrelated settings and hooks.
-It leaves absent registrations, `borg` entries that point to another command,
-and worktrees outside `~/.borg/worktrees/<repo>/<name>` unchanged; those
-noncanonical worktrees heal when Borg next launches or assimilates them.
-
-Run `borg doctor` for a read-only inventory of the five hook bins, their owning
-`borgmcp` version, managed hook files, and the OpenCode orientation plugin. It
-names a package reinstall for a missing bin and a PATH correction for a bin
-owned by the wrong package or version. It names `borg update --yes` for stale
-managed hooks and for a missing or outdated OpenCode orientation plugin. For an
-invalid managed configuration, it names the file that must be repaired before
-update can rewrite it.
-
-For Borg-launched OpenCode, the plugin supplies the Borg orientation after
-OpenCode creates a new session, preserves it across compaction, and applies the
-same cube-log audit used by the other agent integrations. The launcher kickoff
-remains the only orientation for the initial session, so it is not duplicated.
-
-## Troubleshooting
-
-### Not connected to a cube
-
-Run assimilation from the project repository:
-
-```bash
-borg assimilate
-```
-
-Then use `borg_whoami` and `borg_roster` inside the agent session.
-
-### Wake-up warning
+## Wake Recovery
 
 If `borg_regen` or `borg_stream-status` reports a wake-up problem, follow the
 recovery command it prints. For Codex or OpenCode, relaunch through `borg` if the
@@ -251,6 +64,7 @@ Licensed under Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Links
 
+- [Documentation](https://borgmcp.ai/docs/)
 - [Client repository](https://github.com/Byte-Ventures/borg-mcp-client)
 - [Shared contracts](https://github.com/Byte-Ventures/borg-mcp-shared)
 - [Self-hosted server](https://github.com/Byte-Ventures/borg-mcp-server)
