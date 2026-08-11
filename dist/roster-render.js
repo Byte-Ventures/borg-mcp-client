@@ -16,7 +16,7 @@
  */
 import { formatDroneAddressToken } from 'borgmcp-shared/drone-address';
 import { escapeSyncDisplay } from './sync-roles-render.js';
-export const RUNTIME_METADATA_ADVISORY = 'Agent CLI, reported model, and working repository are advisory. They do not determine authority, role, health, activity, wake behavior, or routing.';
+export const RUNTIME_METADATA_ADVISORY = "Agent CLI and reported model are advisory; they do not determine authority, role, health, activity, wake behavior, or routing. Working repository is the drone's home assignment: route repository-specific work to the drone homed there, and drones do not take work outside their own repository. These fields carry no server-side authority, and the server does not enforce repository homing.";
 /**
  * gh#503 — render-layer display labels for the wake-path wire enum.
  *

@@ -45,7 +45,7 @@ function drone(overrides: Partial<RosterDrone> & { label: string }): RosterDrone
 
 const LEGACY_CLASSIC_RENDER = `# Drones in cube: my-cube
 
-_Agent CLI, reported model, and working repository are advisory. They do not determine authority, role, health, activity, wake behavior, or routing._
+_Agent CLI and reported model are advisory; they do not determine authority, role, health, activity, wake behavior, or routing. Working repository is the drone's home assignment: route repository-specific work to the drone homed there, and drones do not take work outside their own repository. These fields carry no server-side authority, and the server does not enforce repository homing._
 
 - **drone-1** \`id:drone-uu\` (Role: Coordinator) — last seen 0s ago
   - **Agent CLI:** not reported
@@ -60,7 +60,7 @@ _Agent CLI, reported model, and working repository are advisory. They do not det
 
 const LEGACY_AWAKE_RENDER = `# Drones in cube: c
 
-_Agent CLI, reported model, and working repository are advisory. They do not determine authority, role, health, activity, wake behavior, or routing._
+_Agent CLI and reported model are advisory; they do not determine authority, role, health, activity, wake behavior, or routing. Working repository is the drone's home assignment: route repository-specific work to the drone homed there, and drones do not take work outside their own repository. These fields carry no server-side authority, and the server does not enforce repository homing._
 
 _Liveness probe since 2026-05-11T18:00:00.000Z (0s ago). \`awake\` = drone posted to the cube log after that point._
 

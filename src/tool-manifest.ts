@@ -521,7 +521,7 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_list-drones',
           description:
-            'List every drone in a cube when this local client has a live read, write, or manage grant. Returns id, label, role_id, agent_kind, last_seen, advisory reported model, working repository, and wake_path_alert_class. Role labels affect workflow only and grant no server permission.',
+            'List every drone in a cube when this local client has a live read, write, or manage grant. Returns id, label, role_id, agent_kind, last_seen, advisory reported model, working repository home assignment, and wake_path_alert_class. Repository homing and role labels affect workflow only and grant no server permission.',
           inputSchema: {
             type: 'object',
             properties: {

@@ -74,7 +74,7 @@ export const DOCS_SECTIONS: DocsSection[] = [
     title: "Self-hosting operations",
     url: `${SITE_URL}/docs/self-hosting/`,
     summary: "Operate a self-hosted server: data directory, credential rotation and grants, capacity, backup, upgrades.",
-    keywords: ["self-hosting", "operations", "operate", "backup", "restore", "upgrade", "rotate", "revoke", "grant", "capacity", "data directory"],
+    keywords: ["self-hosting", "operations", "operate", "backup", "restore", "upgrade", "rotate", "revoke", "grant", "capacity", "data directory", "dashboard", "monitoring", "observability"],
   },
   {
     slug: "cli",

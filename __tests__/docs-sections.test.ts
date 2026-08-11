@@ -45,7 +45,7 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(matchDocsSections('pricing')[0]?.slug).toBe('faq');
     expect(matchDocsSections('cost free').map((s) => s.slug)).toContain('faq');
     expect(matchDocsSections('license licensing')[0]?.slug).toBe('license');
-    expect(matchDocsSections('dashboard monitoring observability')).toEqual([]);
+    expect(matchDocsSections('dashboard monitoring observability')[0]?.slug).toBe('self-hosting');
     expect(matchDocsSections('add agent teammate invite')[0]?.slug).toBe('enroll');
     expect(matchDocsSections('install borgmcp')[0]?.slug).toBe('install');
     expect(matchDocsSections('opencode install').map((s) => s.slug)).toContain('install');
