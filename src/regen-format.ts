@@ -303,6 +303,9 @@ ${arrivalInstruction}
 
 **Pre-commit git hygiene (universal):**
 
+One seat uses one stable worktree. Start each new item there with \`git checkout -b <branch>\`; do not create another worktree for the item.
+A reviewing seat uses \`git checkout --detach <SHA>\` in its own worktree. Keep scratch work under \`~/.borg/scratch/<seat>/\`; load \`borg_playbook\` for the full mechanism.
+
 Any drone that commits code: run \`git diff --staged --stat\` before \`git commit\` to verify file count + LOC direction + paths match your intent. Catches deleted files / anomalous -LOC / wrong paths pre-push. Your role may layer more git rules (code-implementing + coordinating roles typically carry the full set).`;
 }
 
@@ -354,7 +357,18 @@ The discipline applies at FOUR surfaces. Catches at the surface closest to origi
 - **Surface 3 (review-time verification)**: the existing review-class discipline (Code Reviewer formal gates + Security Auditor SR gates + PM/UX/QA courtesy reviews). Late catch opportunity; if the error propagated through Surfaces 1 + 2, multiple reviewers may have already trusted the framing instead of source-grepping themselves.
 - **Surface 4 (durable-tracking-artifact-writing time)**: when filing a deferred-tracking issue from a cube event payload, the FILING drone fetches the originating entry's full body from the cube log BEFORE composing the issue body. For routine wake triage, use \`borg_read-log unread_only=true\` and drain until caught up; do not rely on a truncated event preview or a \`since=<same timestamp>\` read, which can skip the boundary entry. Cube event previews can truncate substantive content (mid-paragraph cuts on long entries); filing from the truncated preview trusts a derivative artifact instead of the source-of-truth full entry. Most expensive surface — the filed issue becomes the cube's durable cross-cycle memory; correcting it requires a follow-up correction post, and later pickup drones inherit the incomplete framing if the correction is missed.
 
-**Ratified-decision drift is a four-surface drift-class.** A ratified cube decision restated from memory drifts exactly like a code-identifier claim — it propagates dispatch (Surface 1, brainstorm) → copy (Surface 2, comment) → gate (Surface 3, review), and the cheapest catch is at the brainstorm surface. At each surface, a drone restating a ratified decision source-reads \`borg_decisions {topic}\` FIRST: the active registry entry is the source of truth; your memory is a derivative artifact. Core rule — **cite ratified decisions by topic; never restate one from memory.**`;
+**Ratified-decision drift is a four-surface drift-class.** A ratified cube decision restated from memory drifts exactly like a code-identifier claim — it propagates dispatch (Surface 1, brainstorm) → copy (Surface 2, comment) → gate (Surface 3, review), and the cheapest catch is at the brainstorm surface. At each surface, a drone restating a ratified decision source-reads \`borg_decisions {topic}\` FIRST: the active registry entry is the source of truth; your memory is a derivative artifact. Core rule — **cite ratified decisions by topic; never restate one from memory.**
+
+**Worktree and git mechanism:**
+
+- One seat uses one stable worktree, created once at assimilation under the standard worktree root and approved once by the operator. All seats for a repository use worktrees from the same clone family, sharing its object database and refs.
+- Start each new work item in that stable worktree with \`git checkout -b <branch>\`. Do not create a new worktree or folder for each item.
+- Hand a branch to another seat only through an explicit log event.
+- Treat branch history as shared: another seat may have the branch checked out or fetched, so never rebase or force-push it.
+- Hand over a ref and exact commit SHA, never a filesystem path. A reviewing seat checks out the SHA in its own worktree with \`git checkout --detach <SHA>\` and never reads another seat's folder.
+- With no hosted remote, the commit is the durable handover artifact because clone-family worktrees share refs; omit the push step. If local push/fetch semantics are required, use a local bare repository as the origin path.
+- Put detached review checkouts, clean-environment rigs, fake HOMEs, unpacked artifacts, and throwaway worktrees under \`~/.borg/scratch/<your-seat-label>/\`. Never use \`/tmp\` or an ad-hoc path. Scratch contents are disposable and must be cleaned up with the work.
+- When an origin exists, synchronize with merge-only history using \`git fetch origin && git merge origin/main\`.`;
 }
 
 /**

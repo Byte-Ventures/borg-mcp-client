@@ -223,6 +223,14 @@ describe('getDronePlaybook', () => {
     expect(playbook).toContain('never post secrets relying on');
   });
 
+  it('always points every template to the stable worktree mechanism', () => {
+    const playbook = getDronePlaybook();
+    expect(playbook).toContain('One seat uses one stable worktree');
+    expect(playbook).toContain('git checkout -b <branch>');
+    expect(playbook).toContain('git checkout --detach <SHA>');
+    expect(playbook).toContain('~/.borg/scratch/<seat>/');
+  });
+
   it('introduces the claim kind as advisory ownership + the keyed-on-real-gate invariant, TEMPLATE-AGNOSTICALLY (gh#418 / #921)', () => {
     const playbook = getDronePlaybook();
     // the new kind + how to use it
@@ -666,6 +674,21 @@ describe('DRONE_PLAYBOOK core/chapter split (gh#912)', () => {
     expect(chapter).toContain('Surface 1 (brainstorm-proposal time)');
     expect(chapter).toContain('v3 (end-to-end execution path');
     expect(chapter).toContain('Concrete verification surfaces by claim type');
+  });
+
+  it('CHAPTER carries the complete worktree and git mechanism for every template', () => {
+    const chapter = getDronePlaybookChapter();
+    expect(chapter).toContain('Worktree and git mechanism');
+    expect(chapter).toContain('same clone family');
+    expect(chapter).toContain('sharing its object database and refs');
+    expect(chapter).toContain('git checkout -b <branch>');
+    expect(chapter).toContain('explicit log event');
+    expect(chapter).toContain('checked out or fetched');
+    expect(chapter).toContain('ref and exact commit SHA, never a filesystem path');
+    expect(chapter).toContain('git checkout --detach <SHA>');
+    expect(chapter).toContain('local bare repository as the origin path');
+    expect(chapter).toContain('~/.borg/scratch/<your-seat-label>/');
+    expect(chapter).toContain('git fetch origin && git merge origin/main');
   });
 
   it('CHAPTER strips dev-tracking refs + internal-incident case studies (gh#914 STAGE 2 / directive-1)', () => {
