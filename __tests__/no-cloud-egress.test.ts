@@ -210,20 +210,18 @@ describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('shipped docs + package metadata carry no hosted product URL or Cloud journey', () => {
+  it('shipped docs + package metadata carry no hosted authority or Cloud journey', () => {
     const docFiles = [
       path.join(ROOT, 'README.md'),
       path.join(ROOT, 'package.json'),
       ...listFiles(DOCS_DIR, ['.md']),
     ].filter(existsSync);
-    // borgmcp.ai product links are forbidden; the GitHub repo is allowed. Assert
-    // no bare `//borgmcp.ai` host (the marketing/product/API site) survives.
     const offenders: string[] = [];
     for (const f of docFiles) {
       const text = readFileSync(f, 'utf8');
       const rel = path.relative(ROOT, f);
-      if (/\/\/borgmcp\.ai/.test(text) || /\/\/api\.borgmcp\.ai/.test(text)) {
-        offenders.push(`${rel}: borgmcp.ai host link`);
+      for (const needle of HOSTED_URL_NEEDLES.filter((value) => value !== 'borgmcp.ai/get-started')) {
+        if (text.includes(needle)) offenders.push(`${rel}: ${needle}`);
       }
     }
     expect(offenders).toEqual([]);

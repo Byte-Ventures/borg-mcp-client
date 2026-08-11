@@ -69,16 +69,17 @@ Before preparing a candidate, independently verify:
 ### Clean-environment rig lifecycle
 
 Every clean-environment verification rig has an explicit identity and an
-explicit end-of-life. Keep filesystem workspaces under the seat's disposable
-`~/.borg/scratch/<seat>/` root, and give each workspace a name beginning with
-`borg-rig-` followed by the seat, purpose, and a unique suffix. Before the
-first command that can create files, anchor the rig as its own npm project:
+explicit end-of-life. Run it from a Borg-launched session and keep filesystem
+workspaces under the exact disposable scratch root Borg exports. Give each
+workspace a name beginning with `borg-rig-` followed by its owner, purpose, and
+a unique suffix. Before the first command that can create files, anchor the rig
+as its own npm project:
 
 ```sh
-BORG_SEAT_LABEL="${BORG_SEAT_LABEL:?set the seat label}"
-BORG_SCRATCH_ROOT="${BORG_SCRATCH_ROOT:-$HOME/.borg/scratch/$BORG_SEAT_LABEL}"
+BORG_SCRATCH_ROOT="${BORG_LAUNCH_SCRATCH:?run from a Borg-launched session}"
+RIG_OWNER="$(basename "$BORG_SCRATCH_ROOT")"
 RIG_NONCE="${RIG_NONCE:-$(date +%Y%m%d%H%M%S)-$$}"
-RIG_ID="borg-rig-${BORG_SEAT_LABEL}-release-${RIG_NONCE}"
+RIG_ID="borg-rig-${RIG_OWNER}-release-${RIG_NONCE}"
 RIG_ROOT="$BORG_SCRATCH_ROOT/$RIG_ID"
 mkdir -p "$RIG_ROOT"
 printf '%s\n' '{"private":true}' > "$RIG_ROOT/package.json"
@@ -87,8 +88,8 @@ printf '%s\n' '{"private":true}' > "$RIG_ROOT/package.json"
 The manifest anchor is required before any `npm install`, `npm update`, or
 other npm command. Without it, npm can walk up from an empty scratch directory
 and write the operator's `package.json` instead of creating project-local
-state. The committed `release:exercise` follows this rule for its temporary
-consumer; other QA scripts and manual rigs must do the same.
+state. In a source checkout, the committed `release:exercise` follows this rule
+for its temporary consumer; other QA scripts and manual rigs must do the same.
 
 The system temporary root is shared with the whole machine, so an unbounded
 listing there is not an inspectable cleanup check. Bound that leg by the
@@ -124,22 +125,16 @@ touch "$TEMP_SCAN_START"
 ```
 
 Container-backed rigs use the same `RIG_ID` as the container name and carry
-both labels below. `--rm` is preferred; a runtime without automatic removal
-must remove the exact `RIG_ID` in its cleanup path and retain the labels for a
-bounded sweep:
+both labels below. Register exact-target cleanup before launching the rig:
 
 ```sh
-RIG_IMAGE="${RIG_IMAGE:?set the rig image}"
-docker run --rm \
-  --name "$RIG_ID" \
-  --label borg-rig=1 \
-  --label "borg-rig-owner=$BORG_SEAT_LABEL" \
-  "$RIG_IMAGE"
-```
+list_owned_rig_containers() {
+  docker container ls --all \
+    --filter label=borg-rig=1 \
+    --filter "label=borg-rig-owner=${RIG_OWNER:?}" \
+    --format '{{.ID}}\t{{.Names}}\t{{.Status}}'
+}
 
-Register the exact-target cleanup before launching the rig:
-
-```sh
 cleanup_done=0
 cleanup() {
   [ "$cleanup_done" -eq 0 ] || return
@@ -147,6 +142,9 @@ cleanup() {
   trap - EXIT HUP INT TERM
   docker container rm --force "$RIG_ID" >/dev/null 2>&1 || true
   rm -rf -- "$RIG_ROOT"
+  list_owned_rig_containers
+  find "$BORG_SCRATCH_ROOT" -mindepth 1 -print
+  find "$BORG_SCRATCH_ROOT" -name 'borg-rig-*' -print
   if [ -e "$TEMP_SCAN_START" ]; then
     touch "$TEMP_SCAN_END"
     list_recent_owned_temp_rigs
@@ -159,34 +157,49 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 ```
 
-List before starting and after cleanup. The filters distinguish this seat's
-rigs from unrelated containers on a shared host:
+List containers and scratch paths before starting. The filters distinguish this
+session's rigs from unrelated containers on a shared host:
 
 ```sh
-docker container ls --all \
-  --filter label=borg-rig=1 \
-  --filter "label=borg-rig-owner=${BORG_SEAT_LABEL:?}" \
-  --format '{{.ID}}\t{{.Names}}\t{{.Status}}'
+list_owned_rig_containers
 find "$BORG_SCRATCH_ROOT" -mindepth 1 -print
 find "$BORG_SCRATCH_ROOT" -name 'borg-rig-*' -print
 ```
 
+Only after the cleanup traps and pre-launch listings are in place, launch a
+container-backed rig. `--rm` is preferred; a runtime without automatic removal
+must remove the exact `RIG_ID` in its cleanup path and retain the labels for a
+bounded sweep:
+
+```sh
+RIG_IMAGE="${RIG_IMAGE:?set the rig image}"
+docker run --rm \
+  --name "$RIG_ID" \
+  --label borg-rig=1 \
+  --label "borg-rig-owner=$RIG_OWNER" \
+  "$RIG_IMAGE"
+```
+
 The unfiltered filesystem listings expose legacy names as well as conforming
-rigs. The bounded temporary-directory function covers tools that use `mkdtemp`
-instead of the seat scratch root. Run the container and scratch listings before
-launch and again from the cleanup path; the temporary-directory function runs
-after cleanup, between the start and end markers. Inspect its results and do
-not remove unrelated temporary files.
+rigs. The bounded temporary-directory function reports same-user directories
+created during the run window, including unrelated work; it does not establish
+which process owns them. The cleanup path runs the container and scratch
+listings after removing this rig, then runs the bounded temporary-directory
+listing between the start and end markers. Inspect and report its results. If a
+rig creates an exact system-temporary path, record that path when it is created
+and remove that exact path during cleanup; never remove a path solely because
+the bounded listing found it.
 
 Register cleanup before launching any process, run it on success and failure,
-and do not deliver a verdict until the container listing, both scratch listings,
-and the bounded temporary-directory listing show no rig owned by the seat from
-this run. For a non-`--rm` container runtime,
+and do not deliver a verdict until the container listing and both scratch
+listings show no rig owned by this run, every exact system-temporary path
+recorded by the rig has been removed, and the bounded temporary-directory
+listing has been inspected and reported. For a non-`--rm` container runtime,
 remove only the named rig or the same owner label; never prune unrelated
 containers. A completed verification
 therefore implies zero running or stopped rig containers and no rig workspace
-created by this run left in either the seat scratch root or the system temporary
-directory.
+created by this run left in either the session scratch root or any exact
+system-temporary path the rig recorded.
 
 ### Pre-tag composed exercise
 

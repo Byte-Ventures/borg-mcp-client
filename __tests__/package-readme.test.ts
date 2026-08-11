@@ -118,28 +118,11 @@ describe('published package artifact', () => {
     }
   });
 
-  it('states that Borg tools require a borg-launched agent session', () => {
+  it('routes setup and command guidance to the canonical documentation', () => {
     const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
-    expect(readme).toMatch(
-      /Borg tools are inactive unless\s+the agent session was launched with `borg`\./,
-    );
-  });
-
-  it('teaches that new drones use managed worktrees and leave the repository root without a drone', () => {
-    const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
-    expect(readme).toContain('~/.borg/worktrees/<repo>/');
-    expect(readme).toContain('the repository root does not host a drone');
-    expect(readme).toContain("In the repository's main worktree, run `borg` to open the launch menu");
-    expect(readme).toContain('In a linked worktree, run `borg` to resume that worktree');
-    expect(readme).toMatch(/Use `--here` only\s+to resume a drone already saved/);
-  });
-
-  it('teaches local drone discovery and single-drone relaunch from any directory', () => {
-    const readme = readFileSync(join(clientRoot, 'README.md'), 'utf8');
-    expect(readme).toContain('borg seats');
-    expect(readme).toContain('borg launch <label-or-id-prefix>');
-    expect(readme).toContain("finds the drone's worktree in the local seat registry");
-    expect(readme).toContain('add `--cube <name>` or use the drone id prefix');
+    expect(readme).toContain('https://borgmcp.ai/get-started/');
+    expect(readme).toContain('https://borgmcp.ai/docs/cli/');
+    expect(readme).toContain('https://borgmcp.ai/docs/tools/');
   });
 
 });
