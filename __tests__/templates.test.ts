@@ -333,10 +333,14 @@ describe('Template.cube_directive field', () => {
     for (const template of Object.values(TEMPLATES)) {
       const coordinatingRecipient = template.name === 'local-model' ? 'director' : 'coordinator';
       for (const className of ['peer-question', 'peer-answer', 'peer-heads-up']) {
+        const peerClass = template.message_taxonomy?.find((entry) => entry.class === className);
         expect(
-          template.message_taxonomy?.find((entry) => entry.class === className)?.default_to,
+          peerClass,
           `${template.name}.${className}`,
-        ).toEqual([coordinatingRecipient, 'queen']);
+        ).toMatchObject({
+          routing: 'directed',
+          default_to: [coordinatingRecipient, 'queen'],
+        });
       }
     }
   });
