@@ -127,7 +127,7 @@ describe('Template.cube_directive field', () => {
 
     const productDesign = roles.get('Product Design')!;
     expect(productDesign).toContain('accessibility');
-    expect(productDesign).toContain('responsive states');
+    expect(productDesign).toContain('responsive behavior');
     expect(productDesign).toContain('user-facing software');
 
     const productStrategy = roles.get('Product Strategy')!;
@@ -269,12 +269,16 @@ describe('Template.cube_directive field', () => {
     expect(byClass.get('review-request')).toMatchObject({ routing: 'directed' });
     expect(byClass.get('review-request')?.prefixes).toContain('REVIEW-READY');
     expect(byClass.get('review-request')?.default_to).toEqual(['coordinator', 'queen']);
-    // Only DECISION / HALT stay genuinely cube-wide.
+    // DECISION / HALT / MERGED stay genuinely cube-wide.
     expect(byClass.get('cube-wide')).toMatchObject({ routing: 'broadcast' });
-    expect(byClass.get('cube-wide')?.prefixes).toEqual(['DECISION', 'HALT']);
-    // Merge state is directed to the Coordinator, not a cube-wide wake.
-    expect(byClass.get('merge-status')).toMatchObject({ routing: 'directed' });
-    expect(byClass.get('merge-status')?.prefixes).toContain('MERGED');
+    expect(byClass.get('cube-wide')?.prefixes).toEqual(['DECISION', 'HALT', 'MERGED']);
+    expect(byClass.has('merge-status')).toBe(false);
+    for (const className of ['peer-question', 'peer-answer', 'peer-heads-up']) {
+      expect(byClass.get(className)).toMatchObject({
+        routing: 'directed',
+        default_to: ['coordinator', 'queen'],
+      });
+    }
     // The legacy broadcast 'gate-signal' / 'coordination' classes are gone.
     expect(byClass.has('gate-signal')).toBe(false);
     expect(byClass.has('coordination')).toBe(false);
@@ -283,14 +287,14 @@ describe('Template.cube_directive field', () => {
   it('software-dev taxonomy uses consolidated role signals and remains structurally valid', () => {
     const taxonomy = getTemplate('software-dev')!.message_taxonomy!;
     const byClass = new Map(taxonomy.map((entry) => [entry.class, entry.prefixes ?? []]));
-    expect(byClass.get('completion-status')).toContain('RQ-UPDATED');
+    expect(byClass.get('completion-status')).toEqual(['DONE']);
     expect(byClass.get('review-feedback')).toEqual(
       expect.arrayContaining(['RQ-FEEDBACK', 'PD-FEEDBACK', 'PS-FEEDBACK'])
     );
     expect(byClass.get('completion-gate')).toEqual(
       expect.arrayContaining(['RQ-APPROVED', 'PD-APPROVED', 'PS-APPROVED'])
     );
-    expect(byClass.get('finding')).toContain('RQ-FLAG');
+    expect(byClass.get('finding')).toEqual(['PROPOSAL']);
     const allPrefixes = taxonomy.flatMap((entry) => entry.prefixes ?? []);
     for (const retiredPrefix of [
       'QA-FAIL',
@@ -303,6 +307,8 @@ describe('Template.cube_directive field', () => {
       'DOCS-FEEDBACK',
       'DOCS-APPROVED',
       'DOCS-FLAG',
+      'RQ-UPDATED',
+      'RQ-FLAG',
     ]) {
       expect(allPrefixes).not.toContain(retiredPrefix);
     }
@@ -322,6 +328,15 @@ describe('Template.cube_directive field', () => {
             `${template.name}.${messageClass.class} recipient ${recipient}`
           ).toBe(true);
         }
+      }
+    }
+    for (const template of Object.values(TEMPLATES)) {
+      const coordinatingRecipient = template.name === 'local-model' ? 'director' : 'coordinator';
+      for (const className of ['peer-question', 'peer-answer', 'peer-heads-up']) {
+        expect(
+          template.message_taxonomy?.find((entry) => entry.class === className)?.default_to,
+          `${template.name}.${className}`,
+        ).toEqual([coordinatingRecipient, 'queen']);
       }
     }
   });
