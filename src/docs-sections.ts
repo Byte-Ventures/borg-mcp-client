@@ -52,8 +52,8 @@ export const DOCS_SECTIONS: DocsSection[] = [
     slug: "run-server",
     title: "Run server",
     url: `${SITE_URL}/docs/run-server/`,
-    summary: "Run a self-hosted borgmcp-server: setup, start, endpoint, network configuration.",
-    keywords: ["server", "self-hosted", "borgmcp-server", "borg-mcp-server", "setup", "start", "listen port", "7091", "local server", "--lan", "tls"],
+    summary: "Run a self-hosted borgmcp-server: setup, start, private-LAN and TLS configuration.",
+    keywords: ["server", "self-hosted", "borgmcp-server", "borg-mcp-server", "setup", "start", "local server", "--lan", "tls"],
   },
   {
     slug: "enroll",
@@ -80,8 +80,8 @@ export const DOCS_SECTIONS: DocsSection[] = [
     slug: "cli",
     title: "CLI commands",
     url: `${SITE_URL}/docs/cli/`,
-    summary: "Client launch, sync, cleanup, worktree maintenance, and launch-all reference.",
-    keywords: ["cli", "command", "sync", "cleanup", "worktree", "launch", "launch-all", "terminal", "maintenance", "prune"],
+    summary: "Client launch, cleanup, worktree maintenance, and launch-all reference.",
+    keywords: ["cli", "command", "cleanup", "worktree", "launch", "launch-all", "terminal", "maintenance", "prune"],
   },
   {
     slug: "tools",
@@ -94,7 +94,7 @@ export const DOCS_SECTIONS: DocsSection[] = [
     slug: "faq",
     title: "FAQ",
     url: `${SITE_URL}/docs/faq/`,
-    summary: "Common questions — agents, coordination, worktrees, docs maturity, security.",
+    summary: "Common questions — agents, coordination, worktrees, local setup, security, cost and licensing.",
     keywords: ["faq", "question", "agent", "claude", "codex", "opencode", "coordination", "worktree", "security", "reporting", "second agent", "pricing", "cost", "free"],
   },
   {

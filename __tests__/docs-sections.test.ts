@@ -68,7 +68,13 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(matchDocsSections('rotate revoke credentials').map((s) => s.slug)).toContain('self-hosting');
     expect(matchDocsSections('enroll invitation')[0]?.slug).toBe('enroll');
     expect(matchDocsSections('assimilate host enroll').map((s) => s.slug)).toContain('enroll');
-    expect(matchDocsSections('listen port 7091').map((s) => s.slug)).toContain('run-server');
+    expect(matchDocsSections('private LAN TLS').map((s) => s.slug)).toContain('run-server');
+  });
+
+  it('does not route topics the served pages do not cover', () => {
+    expect(matchDocsSections('endpoint listen port 7091').map((s) => s.slug)).not.toContain('run-server');
+    expect(matchDocsSections('sync sync-roles').map((s) => s.slug)).not.toContain('cli');
+    expect(matchDocsSections('docs maturity documentation maturity').map((s) => s.slug)).not.toContain('faq');
   });
 
   it('routes saved-seat lifecycle and recovery topics to the dedicated guide', () => {
