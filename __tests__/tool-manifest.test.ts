@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { DECISION_TEXT_MAX_BYTES } from 'borgmcp-shared/protocol';
 import { TOOL_MANIFEST } from '../src/tool-manifest';
 const clientEntrySource = readFileSync(
   fileURLToPath(new URL('../src/index.ts', import.meta.url)),
@@ -99,6 +100,16 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(tool?.inputSchema.oneOf).toEqual([{ required: ['topic'] }, { required: ['decision_id'] }]);
     expect(tool?.inputSchema.properties).toHaveProperty('topic');
     expect(tool?.inputSchema.properties).toHaveProperty('decision_id');
+  });
+
+  it('derives borg_decide text limits from the UTF-8 byte contract', () => {
+    const decide = TOOL_MANIFEST.find((entry) => entry.name === 'borg_decide');
+    for (const field of ['decision', 'rationale']) {
+      const description = decide?.inputSchema.properties[field].description ?? '';
+      expect(description).toContain(`${DECISION_TEXT_MAX_BYTES} UTF-8 bytes`);
+      expect(description).toContain('bytes, not characters');
+      expect(description).not.toContain('2000');
+    }
   });
 
   it('keeps cube tool schemas aligned with supported name contracts', () => {

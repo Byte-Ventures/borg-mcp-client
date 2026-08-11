@@ -3,98 +3,92 @@
  *
  * `borg_docs` (index.ts) returns these sections so an agent can route a "how
  * does borgmcp work / setup / concept / tool" question to the right
- * repository-local document, then WebFetch the URL for the content. Pure data +
+ * public documentation page, then WebFetch the URL for the content. Pure data +
  * a lazy keyword match — NO server-side fetch, NO RAG/embeddings.
  *
- * This is a local-only client: every URL points at the public source repository
- * (its README + `docs/`), never a hosted product site.
- *
- * `page` is the repository-local file each section maps to (anti-drift anchor).
+ * Most topics route to borgmcp.ai; repository-resident operator detail routes
+ * to the public source repository.
  */
-export const DOCS_BASE_URL = "https://github.com/Byte-Ventures/borg-mcp-client";
-const README_URL = `${DOCS_BASE_URL}#readme`;
-const LOCAL_SERVER_URL = `${DOCS_BASE_URL}/blob/main/docs/LOCAL_SERVER.md`;
-const SEAT_LIFECYCLE_URL = `${DOCS_BASE_URL}/blob/main/docs/SEAT_LIFECYCLE.md`;
+const SITE_URL = "https://borgmcp.ai";
+const REPOSITORY_URL = "https://github.com/Byte-Ventures/borg-mcp-client";
+const SEAT_LIFECYCLE_URL = `${REPOSITORY_URL}/blob/main/docs/SEAT_LIFECYCLE.md`;
 export const DOCS_SECTIONS = [
     {
         slug: "overview",
         title: "Overview",
-        url: README_URL,
-        page: "README.md",
+        url: `${SITE_URL}/docs/`,
         summary: "What Borg MCP is + the cube / drone / role / log mental model.",
         keywords: ["overview", "what is", "intro", "mental model", "how it works", "start"],
     },
     {
         slug: "concepts",
         title: "Core concepts",
-        url: README_URL,
-        page: "README.md",
+        url: `${SITE_URL}/docs/concepts/`,
         summary: "Cubes, drones, roles, the activity log + signals, claims, decisions.",
         keywords: ["cube", "drone", "role", "log", "signal", "claim", "decision", "coordinate", "coordination"],
     },
     {
         slug: "install",
         title: "Install client",
-        url: README_URL,
-        page: "README.md",
+        url: `${SITE_URL}/get-started/`,
         summary: "Install the published Borg MCP client and verify the borg CLI.",
         keywords: ["install", "installation", "npm", "client", "borgmcp", "borg help", "claude code", "codex", "opencode"],
     },
     {
         slug: "run-server",
         title: "Run server",
-        url: LOCAL_SERVER_URL,
-        page: "docs/LOCAL_SERVER.md",
+        url: `${SITE_URL}/docs/run-server/`,
         summary: "Run a self-hosted borgmcp-server: setup, start, endpoint, network configuration.",
         keywords: ["server", "self-hosted", "borgmcp-server", "borg-mcp-server", "setup", "start", "listen port", "7091", "local server", "--lan", "tls"],
     },
     {
         slug: "enroll",
         title: "Enroll",
-        url: LOCAL_SERVER_URL,
-        page: "docs/LOCAL_SERVER.md",
+        url: `${SITE_URL}/docs/security/`,
         summary: "Connect a client to a self-hosted server: invitations, assimilate --host --enroll, credentials.",
-        keywords: ["enroll", "enrollment", "invitation", "invite", "assimilate", "--host", "credential", "credentials", "owner", "join server"],
+        keywords: ["enroll", "enrollment", "invitation", "invite", "assimilate", "--host", "credential", "credentials", "owner", "join server", "add agent", "teammate"],
     },
     {
         slug: "seat-lifecycle",
         title: "Seat lifecycle and recovery",
         url: SEAT_LIFECYCLE_URL,
-        page: "docs/SEAT_LIFECYCLE.md",
         summary: "Saved-seat states, re-attach and reset recovery, duplicate-session guards, and deterministic multi-seat selection.",
         keywords: ["seat", "lifecycle", "reattach", "re-attach", "reset-local-connection", "evicted", "revoked", "superseded", "inbox monitor", "multiple seats", "silent deafness"],
     },
     {
         slug: "self-hosting",
         title: "Self-hosting operations",
-        url: LOCAL_SERVER_URL,
-        page: "docs/LOCAL_SERVER.md",
+        url: `${SITE_URL}/docs/self-hosting/`,
         summary: "Operate a self-hosted server: data directory, credential rotation and grants, capacity, backup, upgrades.",
-        keywords: ["self-hosting", "operations", "operate", "backup", "restore", "upgrade", "rotate", "revoke", "grant", "capacity", "data directory", "license"],
+        keywords: ["self-hosting", "operations", "operate", "backup", "restore", "upgrade", "rotate", "revoke", "grant", "capacity", "data directory", "dashboard", "monitoring", "observability"],
     },
     {
         slug: "cli",
         title: "CLI commands",
-        url: README_URL,
-        page: "README.md",
+        url: `${SITE_URL}/docs/cli/`,
         summary: "Client launch, sync, cleanup, worktree maintenance, and launch-all reference.",
         keywords: ["cli", "command", "sync", "cleanup", "worktree", "launch", "launch-all", "terminal", "maintenance", "prune"],
     },
     {
         slug: "tools",
         title: "Tool reference",
-        url: README_URL,
-        page: "README.md",
+        url: `${SITE_URL}/docs/tools/`,
         summary: "Every borg_* tool — name, description, params.",
         keywords: ["tool", "tools", "api", "reference", "param", "borg_"],
     },
     {
         slug: "faq",
         title: "FAQ",
-        url: README_URL,
-        page: "README.md",
+        url: `${SITE_URL}/docs/faq/`,
         summary: "Common questions — agents, coordination, worktrees, docs maturity, security.",
-        keywords: ["faq", "question", "agent", "claude", "codex", "opencode", "coordination", "worktree", "security", "reporting", "second agent"],
+        keywords: ["faq", "question", "agent", "claude", "codex", "opencode", "coordination", "worktree", "security", "reporting", "second agent", "pricing", "cost", "free"],
+    },
+    {
+        slug: "license",
+        title: "License",
+        url: `${SITE_URL}/docs/license/`,
+        summary: "Licenses for the client, shared contracts, and self-hosted server.",
+        keywords: ["license", "licensing", "apache", "fsl", "source available"],
     },
 ];
 /**

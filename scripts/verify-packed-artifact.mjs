@@ -38,10 +38,10 @@ const FORBIDDEN_CONTENT = [
   { pattern: /\bpostgres(?:ql)?:\/\//i, description: 'database connection URL' },
   { pattern: /\b[a-z0-9-]+\.workers\.dev\b/i, description: 'Worker service URL' },
   { pattern: /(?:^|[^A-Za-z])(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)/m, description: 'local absolute path' },
-  // Local-only client (server-client-localhost-lan-only-no-cloud): no hosted
-  // Borg API/product URL may appear in ANY shipped file (dist, src, docs, README).
+  // Local-only client (server-client-localhost-lan-only-no-cloud): public docs
+  // links are allowed, but hosted authority/account journeys are not.
   { pattern: /\/\/api\.borgmcp\.ai/i, description: 'hosted Borg API URL' },
-  { pattern: /borgmcp\.ai\/(?:dashboard|get-started|pricing|account|upgrade|subscribe)/i, description: 'hosted Borg product URL' },
+  { pattern: /borgmcp\.ai\/(?:dashboard|pricing|account|upgrade|subscribe)/i, description: 'hosted Borg product URL' },
 ];
 // Operator-facing DOCS copy migrated OFF the OS keychain / `cubes.json` seat
 // model onto the local 0600-permission seat store. No shipped `.md` doc may

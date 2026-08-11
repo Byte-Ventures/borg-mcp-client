@@ -16,30 +16,40 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     }
   });
 
-  it('every section is well-formed (slug/title/url/summary/keywords; url is repository-local, never hosted)', () => {
+  it('every section is well-formed and routes to a public documentation URL', () => {
     expect(DOCS_SECTIONS.length).toBeGreaterThan(0);
     for (const s of DOCS_SECTIONS) {
       expect(s.slug).toBeTruthy();
       expect(s.title).toBeTruthy();
       expect(s.summary.trim().length).toBeGreaterThan(0);
-      expect(s.url).toMatch(/^https:\/\/github\.com\/Byte-Ventures\/borg-mcp-client/);
-      expect(s.url).not.toMatch(/borgmcp\.ai/);
+      expect(s.url).toMatch(/^https:\/\/(?:borgmcp\.ai|github\.com\/Byte-Ventures\/borg-mcp-client)/);
       expect(s.keywords.length).toBeGreaterThan(0);
     }
   });
 
-  it('each URL points at its repository-local page (README, or docs/LOCAL_SERVER.md for server topics)', () => {
-    for (const s of DOCS_SECTIONS) {
-      const expected =
-        s.page === 'README.md'
-          ? 'https://github.com/Byte-Ventures/borg-mcp-client#readme'
-          : `https://github.com/Byte-Ventures/borg-mcp-client/blob/main/${s.page}`;
-      expect(s.url).toBe(expected);
-    }
+  it('routes each section to the page that contains its promised content', () => {
+    expect(Object.fromEntries(DOCS_SECTIONS.map(({ slug, url }) => [slug, url]))).toEqual({
+      overview: 'https://borgmcp.ai/docs/',
+      concepts: 'https://borgmcp.ai/docs/concepts/',
+      install: 'https://borgmcp.ai/get-started/',
+      'run-server': 'https://borgmcp.ai/docs/run-server/',
+      enroll: 'https://borgmcp.ai/docs/security/',
+      'seat-lifecycle': 'https://github.com/Byte-Ventures/borg-mcp-client/blob/main/docs/SEAT_LIFECYCLE.md',
+      'self-hosting': 'https://borgmcp.ai/docs/self-hosting/',
+      cli: 'https://borgmcp.ai/docs/cli/',
+      tools: 'https://borgmcp.ai/docs/tools/',
+      faq: 'https://borgmcp.ai/docs/faq/',
+      license: 'https://borgmcp.ai/docs/license/',
+    });
+    expect(new Set(DOCS_SECTIONS.map(({ url }) => url)).size).toBe(DOCS_SECTIONS.length);
   });
 
   it('matchDocsSections routes common topics to the right section', () => {
-    expect(matchDocsSections('pricing')).toEqual([]);
+    expect(matchDocsSections('pricing')[0]?.slug).toBe('faq');
+    expect(matchDocsSections('cost free').map((s) => s.slug)).toContain('faq');
+    expect(matchDocsSections('license licensing')[0]?.slug).toBe('license');
+    expect(matchDocsSections('dashboard monitoring observability')[0]?.slug).toBe('self-hosting');
+    expect(matchDocsSections('add agent teammate invite')[0]?.slug).toBe('enroll');
     expect(matchDocsSections('install borgmcp')[0]?.slug).toBe('install');
     expect(matchDocsSections('opencode install').map((s) => s.slug)).toContain('install');
     expect(matchDocsSections('worktree')[0]?.slug).toBe('cli');

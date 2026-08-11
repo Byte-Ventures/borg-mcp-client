@@ -70,7 +70,6 @@ const DELETED_MODULES = [
 const HOSTED_URL_NEEDLES = [
   'api.borgmcp.ai',
   'borgmcp.ai/dashboard',
-  'borgmcp.ai/get-started',
   'borgmcp.ai/pricing',
   'borgmcp.ai/account',
   'borgmcp.ai/upgrade',
@@ -220,7 +219,7 @@ describe('no-cloud-egress guard (blocker-2, packed-artifact scope)', () => {
     for (const f of docFiles) {
       const text = readFileSync(f, 'utf8');
       const rel = path.relative(ROOT, f);
-      for (const needle of HOSTED_URL_NEEDLES.filter((value) => value !== 'borgmcp.ai/get-started')) {
+      for (const needle of HOSTED_URL_NEEDLES) {
         if (text.includes(needle)) offenders.push(`${rel}: ${needle}`);
       }
     }
