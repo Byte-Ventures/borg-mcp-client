@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runLaunchAll, resolveLaunchDelayMs, DEFAULT_LAUNCH_DELAY_MS } from '../src/launch-all-cmd';
+import {
+  runLaunchAll,
+  resolveLaunchDelayMs,
+  DEFAULT_LAUNCH_DELAY_MS,
+  LAUNCH_ALL_NO_DISPATCH_EXIT_CODE,
+} from '../src/launch-all-cmd';
 import type { LaunchAllDeps } from '../src/launch-all-deps';
 import type { ActiveCube } from '../src/cubes';
 
@@ -348,7 +353,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
         requireAllRequested: true,
         targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
       },
-    )).toBe(1);
+    )).toBe(LAUNCH_ALL_NO_DISPATCH_EXIT_CODE);
     expect(stderrOf(deps)).toContain('pastelist mode prints commands for manual use but does not launch sessions');
     expect(stdoutOf(deps)).not.toContain(`launch '${did(1)}'`);
   });
@@ -409,7 +414,7 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
         requireAllRequested: true,
         targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
       },
-    )).toBe(1);
+    )).toBe(LAUNCH_ALL_NO_DISPATCH_EXIT_CODE);
     expect(stderrOf(deps)).toContain('pastelist mode prints commands for manual use but does not launch sessions');
     expect(stdoutOf(deps)).not.toContain(`launch '${did(1)}'`);
   });

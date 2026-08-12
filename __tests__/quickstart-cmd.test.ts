@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AssimilateDeps, PreparedAssimilation } from '../src/assimilate-cmd';
 import type { ActiveCube } from '../src/cubes';
 import type { LaunchAllDeps } from '../src/launch-all-deps';
+import { LAUNCH_ALL_NO_DISPATCH_EXIT_CODE } from '../src/launch-all-cmd';
 import { runQuickstart, type QuickstartDeps } from '../src/quickstart-cmd';
 
 const context = {
@@ -240,8 +241,8 @@ describe('runQuickstart', () => {
 
   it('propagates strict pastelist no-dispatch as failure without launched copy', async () => {
     const rig = makeDeps({
-      launchCode: 1,
-      launchOutput: 'borg launch-all: pastelist mode prints commands for manual use but does not launch sessions; nothing was launched.\n',
+      launchCode: LAUNCH_ALL_NO_DISPATCH_EXIT_CODE,
+      launchOutput: 'launch-all copy changed independently; no prose contract is required.\n',
     });
     expect(await runQuickstart({
       template: 'software-dev', roles: [{ slug: 'builder', count: 1 }], yes: true,
@@ -251,6 +252,7 @@ describe('runQuickstart', () => {
       'No sessions were launched: this environment has no terminal or tmux backend. ' +
       'Run `borg launch-all` to print the commands, then paste them.',
     );
+    expect(rig.errors.join('')).toContain('launch-all copy changed independently');
     expect(rig.errors.join('')).not.toContain('Fix the cause above');
     expect(rig.output.join('')).not.toContain('drone launched');
     expect(rig.output.join('')).not.toContain('is staffed');

@@ -9,7 +9,7 @@ import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
 import type { ActiveCube } from './cubes.js';
 import { readAllProjectIdentities } from './cubes.js';
 import { buildDefaultLaunchAllDeps, type LaunchAllDeps } from './launch-all-deps.js';
-import { runLaunchAll } from './launch-all-cmd.js';
+import { LAUNCH_ALL_NO_DISPATCH_EXIT_CODE, runLaunchAll } from './launch-all-cmd.js';
 import type { QuickstartArgs } from './parse-quickstart-args.js';
 import { roleSlug, type Role } from './role-resolver.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
@@ -376,7 +376,7 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
   }
   if (launchCode !== 0) {
     if (launchOutput) deps.stderr(launchOutput);
-    deps.stderr(launchOutput.includes('pastelist mode prints commands for manual use but does not launch sessions')
+    deps.stderr(launchCode === LAUNCH_ALL_NO_DISPATCH_EXIT_CODE
       ? 'No sessions were launched: this environment has no terminal or tmux backend. Run `borg launch-all` to print the commands, then paste them.\n'
       : 'The drones were created, but one or more sessions did not launch. Fix the cause above, then run `borg launch-all`.\n');
     return 1;

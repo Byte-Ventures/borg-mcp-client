@@ -9,6 +9,8 @@ import { sweepStaleLocks, isLockLive } from './launch-all-locks.js';
 import { runTmuxBackend } from './backends/launch-all-tmux.js';
 import { hasMacOSTerminalApp, runTerminalsBackend } from './backends/launch-all-terminals.js';
 import { runPastelistBackend } from './backends/launch-all-pastelist.js';
+/** Internal strict-seam result: requested sessions were not dispatched. */
+export const LAUNCH_ALL_NO_DISPATCH_EXIT_CODE = 2;
 const TMUX_INSTALL_HINT = 'borg launch-all: tmux not found.\n' +
     '  macOS:  brew install tmux\n' +
     '  Debian: sudo apt install tmux\n' +
@@ -387,7 +389,7 @@ export async function runLaunchAll(args, deps, opts = {}) {
     if (sel.backend === 'pastelist' && opts.requireAllRequested) {
         deps.stderr('borg launch-all: pastelist mode prints commands for manual use but does not launch sessions; ' +
             'nothing was launched. Run `borg launch-all` separately to print the commands.\n');
-        return 1;
+        return LAUNCH_ALL_NO_DISPATCH_EXIT_CODE;
     }
     const sessionName = sanitizeSessionName(cubeName);
     const launchStartISO = nowISO();
