@@ -210,6 +210,7 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
   const template = existing?.template ?? await selectTemplate(args, deps);
   if (!template) return 130;
   const availableRoles = existing?.roles ?? plannedTemplateRoles(template);
+  const humanSeatRole = availableRoles.find((role) => role.isHumanSeat);
   const requested = aggregateRequestedRoles(args, availableRoles);
   if (typeof requested === 'string') {
     deps.stderr(`borg quickstart: ${requested}.\n`);
@@ -378,8 +379,8 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
       `Start in the ${human.role.slug} session (\`${human.existing.cube.droneLabel}\`) and tell it what\n` +
       'you want built. It dispatches the rest.\n',
     );
-  } else {
-    deps.stdout('Start a Coordinator session later with: borg assimilate coordinator\n');
+  } else if (humanSeatRole) {
+    deps.stdout(`Start a ${humanSeatRole.name} session later with: borg assimilate ${humanSeatRole.slug}\n`);
   }
   return 0;
 }

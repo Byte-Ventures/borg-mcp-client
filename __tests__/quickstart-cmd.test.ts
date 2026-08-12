@@ -124,6 +124,15 @@ describe('runQuickstart', () => {
     expect(rig.output.join('')).toContain('Start a Coordinator session later with: borg assimilate coordinator');
   });
 
+  it('derives fallback human-session guidance from the selected template', async () => {
+    const rig = makeDeps();
+    expect(await runQuickstart({
+      template: 'local-model', roles: [{ slug: 'executor', count: 1 }], yes: true,
+    }, rig.deps)).toBe(0);
+    expect(rig.output.join('')).toContain('Start a Director session later with: borg assimilate director');
+    expect(rig.output.join('')).not.toContain('borg assimilate coordinator');
+  });
+
   it('skips the template prompt for an existing cube', async () => {
     const rig = makeDeps({ existing: true, prompts: ['y'] });
     expect(await runQuickstart({ roles: [], yes: false }, rig.deps)).toBe(0);
