@@ -59,6 +59,7 @@ import { formatCubeActivityWakeMessage } from './cube-activity-wake-copy.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { BorgServerError } from './server-errors.js';
 import { markSeatRejected } from './seats.js';
+import { hasPendingWakeEntry as hasPendingDurableWakeEntry } from './remote-client.js';
 import {
   acquireStreamLease,
   readOwnershipSnapshot,
@@ -124,13 +125,16 @@ function isProcessAlive(pid: number): boolean {
  * Used by defaultDeps when no explicit injectOpenCode is supplied.
  */
 let _moduleInjectOpenCode:
-  | ((text: string, entryId: string, allowSubmit: boolean) => Promise<boolean>)
+  | ((text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string) => Promise<boolean>)
   | undefined;
+let _moduleSettleOpenCodeEntry: ((sourceEntryId: string) => void) | undefined;
 
 export function setModuleInjectOpenCode(
-  fn: (text: string, entryId: string, allowSubmit: boolean) => Promise<boolean>
+  fn: (text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string) => Promise<boolean>,
+  settle: (sourceEntryId: string) => void,
 ): void {
   _moduleInjectOpenCode = fn;
+  _moduleSettleOpenCodeEntry = settle;
 }
 
 /**
@@ -403,8 +407,13 @@ export interface StreamDeps {
   injectOpenCode?: (
     text: string,
     entryId: string,
-    allowSubmit: boolean
+    allowSubmit: boolean,
+    sourceEntryId?: string,
   ) => Promise<boolean>;
+  /** Inspect whether one retry source remains beyond the durable unread cursor. */
+  hasPendingWakeEntry?: (active: ActiveCube, entryId: string) => Promise<boolean>;
+  /** Clear in-process retry diagnostics after the durable entry is consumed. */
+  settleOpenCodeEntry?: (sourceEntryId: string) => void;
 }
 
 const defaultDeps: Required<StreamDeps> = {
@@ -420,10 +429,15 @@ const defaultDeps: Required<StreamDeps> = {
   abortSignal: new AbortController().signal,
   ownerDeps: {},
   ownerStaleMs: 70_000,
-  injectOpenCode: (text, entryId, allowSubmit) =>
+  injectOpenCode: (text, entryId, allowSubmit, sourceEntryId) =>
     _moduleInjectOpenCode
-      ? _moduleInjectOpenCode(text, entryId, allowSubmit)
+      ? _moduleInjectOpenCode(text, entryId, allowSubmit, sourceEntryId)
       : Promise.resolve(false),
+  hasPendingWakeEntry: (active, entryId) => hasPendingDurableWakeEntry(
+    active as Parameters<typeof hasPendingDurableWakeEntry>[0],
+    entryId,
+  ),
+  settleOpenCodeEntry: (sourceEntryId) => _moduleSettleOpenCodeEntry?.(sourceEntryId),
 };
 
 // ------------------------------------------------------------------
@@ -678,6 +692,8 @@ export async function streamOnce(
     hwmDivergenceGraceMs,
     abortSignal,
     injectOpenCode,
+    hasPendingWakeEntry,
+    settleOpenCodeEntry,
   } = { ...defaultDeps, ...deps };
 
   assertUuidShape(active.cubeId, 'cube_id');
@@ -819,6 +835,17 @@ export async function streamOnce(
     pendingHwmDivergence = { hwm, timer };
   };
 
+  const shouldDeliverWakeRetry = async (entryId: string): Promise<boolean> => {
+    try {
+      if (await hasPendingWakeEntry(active, entryId)) return true;
+      settleOpenCodeEntry(entryId);
+    } catch {
+      // A retry is never authoritative enough to cross the model boundary on
+      // its own. The durable inbox and a later retry remain available.
+    }
+    return false;
+  };
+
   // Bounded recent-id set for replay-on-reconnect dedup per spec §(3).
   // Set + FIFO array for O(1) membership + bounded memory.
   const recentIds = new Set<string>();
@@ -844,6 +871,10 @@ export async function streamOnce(
     const line = formatInboxLine(withSseEventId(ev.data, ev.id));
     const deliveryId = ev.wake_nonce ?? ev.id;
     const isReping = ev.wake_nonce !== undefined;
+    if (isReping && !(await shouldDeliverWakeRetry(ev.id))) {
+      markEventPersisted(ev.id, ev.data?.created_at ?? '');
+      return 'persisted-skip';
+    }
     const eventHwm = ev.data?.created_at
       ? { id: ev.id, created_at: ev.data.created_at }
       : null;
@@ -867,12 +898,11 @@ export async function streamOnce(
       await hasInboxEntryId(active.cubeId, active.droneId, ev.id, line)
     );
     if (alreadyPersisted) {
-      // An ordinary entry at/before the persisted cursor is already delivered
-      // and must not re-enter the OpenCode queue. Re-pings are the explicit
-      // exception: each wake nonce is a new delivery identity even when the
-      // underlying inbox line is already durable.
+      // An ordinary entry at/before the persisted cursor must not re-enter the
+      // OpenCode queue. A still-unread re-ping may reconcile the prior attempt;
+      // its source entry ID prevents a new nonce from resubmitting that prompt.
       if (isReping) {
-        await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true);
+        await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true, ev.id);
       }
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
@@ -880,7 +910,10 @@ export async function streamOnce(
     // The inbox append is the durable record. OpenCode injection is only the
     // wake attempt and may return before the agent finishes processing.
     await appendLine(active.cubeId, active.droneId, line);
-    if (!(await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true))) {
+    const openCodeDelivered = isReping
+      ? await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true, ev.id)
+      : await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true);
+    if (!openCodeDelivered) {
       if (ev.wake_nonce === undefined) wakeCodex(formatCodexWakePrompt(line));
       else wakeCodex(formatCodexWakePrompt(line), ev.wake_nonce);
     }
@@ -1198,7 +1231,11 @@ export async function streamOnce(
         if (isRecentWakeReplay) {
           const line = formatInboxLine(withSseEventId(event.data, event.id));
           const wakeNonce = event.wake_nonce;
-          if (wakeNonce !== undefined && !(await injectOpenCode(formatOpenCodeWakePrompt(line), wakeNonce, true))) {
+          if (
+            wakeNonce !== undefined &&
+            await shouldDeliverWakeRetry(event.id) &&
+            !(await injectOpenCode(formatOpenCodeWakePrompt(line), wakeNonce, true, event.id))
+          ) {
             wakeCodex(formatCodexWakePrompt(line), wakeNonce);
           }
           continue;

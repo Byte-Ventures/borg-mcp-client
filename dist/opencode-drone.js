@@ -14,6 +14,11 @@ function log(msg) {
 }
 let state = null;
 const OPEN_CODE_DELIVERY_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000];
+const OPEN_CODE_RECONCILIATION_DELAY_MS = 3_000;
+// Keep one accepted-but-unconfirmed prompt from holding timers forever. It
+// remains pending (never failed or resubmitted), and any later wake retry
+// re-arms another confirmation-only window.
+const OPEN_CODE_RECONCILIATION_ATTEMPTS = 20;
 const OPEN_CODE_DELIVERY_HISTORY_LIMIT = 256;
 // This is correlation metadata, intentionally not an instruction to the
 // launched agent. A markdown comment keeps it benign in the user-visible
@@ -60,6 +65,8 @@ export async function connectOpenCodeDrone(deps) {
         deliveredEntries: new Map(),
         unconfirmedEntries: new Map(),
         failedEntries: new Map(),
+        pendingSubmissions: new Map(),
+        reconcilingEntryIds: new Set(),
         processingDeliveries: false,
     };
     log(`connected url=${deps.serverUrl} dir=${deps.directory}`);
@@ -155,7 +162,7 @@ function bindingPath() {
 }
 function bindingMatchesState(binding) {
     const current = state;
-    return binding.version === 2
+    return binding.version === 4
         && binding.serverUrl === current.serverUrl
         && binding.directory === current.directory
         && binding.droneLabel === current.droneLabel
@@ -163,7 +170,11 @@ function bindingMatchesState(binding) {
         && typeof binding.sessionId === 'string'
         && typeof binding.sessionCreatedAt === 'number'
         && Array.isArray(binding.knownRootSessionIds)
-        && binding.knownRootSessionIds.every((id) => typeof id === 'string');
+        && binding.knownRootSessionIds.every((id) => typeof id === 'string')
+        && Array.isArray(binding.pendingSubmissions)
+        && binding.pendingSubmissions.every((pending) => typeof pending?.entryId === 'string'
+            && typeof pending?.sourceEntryId === 'string'
+            && typeof pending.sessionId === 'string');
 }
 function readBinding() {
     try {
@@ -184,6 +195,11 @@ function clearBinding() {
     state.sessionId = null;
     state.sessionCreatedAt = null;
     state.knownRootSessionIds = [];
+    // A missing/replaced target does not prove that an earlier prompt_async was
+    // rejected. Keep its durable submission marker (and origin session) so a
+    // replacement binding and later MCP-child reconnect remain confirmation-only.
+    if (state.pendingSubmissions.size > 0)
+        return;
     try {
         unlinkSync(path);
     }
@@ -191,18 +207,8 @@ function clearBinding() {
         // The file may have already been removed by the launch process.
     }
 }
-function saveBinding(session, knownRootSessionIds) {
+function writeBinding(binding) {
     const current = state;
-    const binding = {
-        version: 2,
-        sessionId: session.id,
-        sessionCreatedAt: session.time.created,
-        knownRootSessionIds,
-        serverUrl: current.serverUrl,
-        directory: current.directory,
-        droneLabel: current.droneLabel,
-        cubeName: current.cubeName,
-    };
     current.sessionId = binding.sessionId;
     current.sessionCreatedAt = binding.sessionCreatedAt;
     current.knownRootSessionIds = binding.knownRootSessionIds;
@@ -211,17 +217,58 @@ function saveBinding(session, knownRootSessionIds) {
         const temporary = `${path}.${process.pid}.tmp`;
         writeFileSync(temporary, JSON.stringify(binding), { mode: 0o600 });
         renameSync(temporary, path);
+        return true;
     }
     catch (err) {
         log(`session binding write failed: ${err}`);
+        return false;
     }
+}
+function saveBinding(session, knownRootSessionIds) {
+    const current = state;
+    const binding = {
+        version: 4,
+        sessionId: session.id,
+        sessionCreatedAt: session.time.created,
+        knownRootSessionIds,
+        serverUrl: current.serverUrl,
+        directory: current.directory,
+        droneLabel: current.droneLabel,
+        cubeName: current.cubeName,
+        pendingSubmissions: [...current.pendingSubmissions].map(([entryId, pending]) => ({
+            entryId,
+            sourceEntryId: pending.sourceEntryId,
+            sessionId: pending.sessionId,
+        })),
+    };
+    writeBinding(binding);
+}
+function persistCurrentBinding() {
+    const current = state;
+    if (!current?.sessionId || current.sessionCreatedAt === null)
+        return false;
+    return writeBinding({
+        version: 4,
+        sessionId: current.sessionId,
+        sessionCreatedAt: current.sessionCreatedAt,
+        knownRootSessionIds: current.knownRootSessionIds,
+        serverUrl: current.serverUrl,
+        directory: current.directory,
+        droneLabel: current.droneLabel,
+        cubeName: current.cubeName,
+        pendingSubmissions: [...current.pendingSubmissions].map(([entryId, pending]) => ({
+            entryId,
+            sourceEntryId: pending.sourceEntryId,
+            sessionId: pending.sessionId,
+        })),
+    });
 }
 function restoreBinding() {
     if (!state)
         return null;
     if (state.sessionId && state.sessionCreatedAt !== null) {
         return {
-            version: 2,
+            version: 4,
             sessionId: state.sessionId,
             sessionCreatedAt: state.sessionCreatedAt,
             knownRootSessionIds: state.knownRootSessionIds,
@@ -229,6 +276,11 @@ function restoreBinding() {
             directory: state.directory,
             droneLabel: state.droneLabel,
             cubeName: state.cubeName,
+            pendingSubmissions: [...state.pendingSubmissions].map(([entryId, pending]) => ({
+                entryId,
+                sourceEntryId: pending.sourceEntryId,
+                sessionId: pending.sessionId,
+            })),
         };
     }
     const binding = readBinding();
@@ -237,6 +289,13 @@ function restoreBinding() {
     state.sessionId = binding.sessionId;
     state.sessionCreatedAt = binding.sessionCreatedAt;
     state.knownRootSessionIds = binding.knownRootSessionIds;
+    state.pendingSubmissions = new Map(binding.pendingSubmissions.map((pending) => [
+        pending.entryId,
+        {
+            sourceEntryId: pending.sourceEntryId,
+            sessionId: pending.sessionId,
+        },
+    ]));
     return binding;
 }
 function isBoundSession(session, binding) {
@@ -328,15 +387,64 @@ async function resolveInjectionSession() {
     }
     return bound;
 }
-function rememberBounded(entries, entryId, text) {
+function rememberBounded(entries, entryId, text, sourceEntryId) {
     entries.delete(entryId);
-    entries.set(entryId, text);
+    entries.set(entryId, { text, sourceEntryId });
     while (entries.size > OPEN_CODE_DELIVERY_HISTORY_LIMIT) {
         const oldest = entries.keys().next().value;
         if (typeof oldest !== 'string')
             break;
         entries.delete(oldest);
     }
+}
+function clearPendingSubmission(owner, entryId) {
+    if (!owner.pendingSubmissions.delete(entryId))
+        return;
+    if (state === owner)
+        persistCurrentBinding();
+}
+function confirmOpenCodeDelivery(owner, delivery) {
+    const unconfirmed = owner.unconfirmedEntries.get(delivery.entryId);
+    if (unconfirmed && unconfirmed.text !== delivery.text)
+        return;
+    owner.unconfirmedEntries.delete(delivery.entryId);
+    owner.failedEntries.delete(delivery.entryId);
+    clearPendingSubmission(owner, delivery.entryId);
+    rememberBounded(owner.deliveredEntries, delivery.entryId, delivery.text, delivery.sourceEntryId);
+    owner.totalEntriesInjected++;
+}
+function scheduleOpenCodeReconciliation(owner, delivery) {
+    if (!delivery.sessionId || owner.reconcilingEntryIds.has(delivery.entryId))
+        return;
+    owner.reconcilingEntryIds.add(delivery.entryId);
+    const sessionId = delivery.sessionId;
+    void (async () => {
+        try {
+            for (let attempt = 0; attempt < OPEN_CODE_RECONCILIATION_ATTEMPTS; attempt++) {
+                await new Promise((resolve) => setTimeout(resolve, OPEN_CODE_RECONCILIATION_DELAY_MS));
+                if (state !== owner || !owner.connected || delivery.settled)
+                    return;
+                const record = owner.unconfirmedEntries.get(delivery.entryId);
+                if (!record || record.text !== delivery.text)
+                    return;
+                owner.totalEntriesRetried++;
+                try {
+                    if (await findInjectedMessage(sessionId, delivery.entryId)) {
+                        if (delivery.settled)
+                            return;
+                        confirmOpenCodeDelivery(owner, delivery);
+                        return;
+                    }
+                }
+                catch (err) {
+                    log(`entry ${delivery.entryId} reconciliation unavailable: ${err}`);
+                }
+            }
+        }
+        finally {
+            owner.reconcilingEntryIds.delete(delivery.entryId);
+        }
+    })();
 }
 function waitForDeliveryRetry(attempt) {
     const delay = OPEN_CODE_DELIVERY_RETRY_DELAYS_MS[attempt] ?? 0;
@@ -352,12 +460,16 @@ async function deliverOpenCodeEntry(owner, delivery) {
     // ever becoming the active user turn. The unique inbox text correlates the
     // generated message across confirmation and process-replay instead.
     for (let attempt = 0; attempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; attempt++) {
+        if (delivery.settled)
+            return 'delivered';
         if (state !== owner || !owner.connected)
             return 'failed';
         if (attempt > 0) {
             delivery.state = 'retried';
             owner.totalEntriesRetried++;
             await waitForDeliveryRetry(attempt);
+            if (delivery.settled)
+                return 'delivered';
             if (state !== owner || !owner.connected)
                 return 'failed';
         }
@@ -373,10 +485,18 @@ async function deliverOpenCodeEntry(owner, delivery) {
                 log(`entry ${delivery.entryId} target unavailable: no bound session`);
                 return 'failed';
             }
+            delivery.sessionId = target.id;
         }
+        const pendingSubmission = owner.pendingSubmissions.get(delivery.entryId);
+        const confirmationSessionId = pendingSubmission?.sessionId ?? target.id;
+        delivery.sessionId = confirmationSessionId;
         try {
-            if (await findInjectedMessage(target.id, delivery.entryId)) {
-                log(`entry ${delivery.entryId} already present in session ${target.id}`);
+            const deliveredIdentity = await findInjectedMessage(confirmationSessionId, delivery.entryId) ?? (delivery.sourceEntryId === delivery.entryId
+                ? null
+                : await findInjectedMessage(confirmationSessionId, delivery.sourceEntryId));
+            if (deliveredIdentity) {
+                log(`entry ${delivery.entryId} already present in session ${confirmationSessionId}`);
+                clearPendingSubmission(owner, delivery.entryId);
                 return 'delivered';
             }
         }
@@ -384,45 +504,67 @@ async function deliverOpenCodeEntry(owner, delivery) {
             log(`entry ${delivery.entryId} confirmation unavailable: ${err}`);
             continue;
         }
-        if (!delivery.allowSubmit) {
+        const submittedBefore = pendingSubmission !== undefined;
+        if (!delivery.allowSubmit && !submittedBefore) {
             continue;
         }
-        // prompt_async is not idempotent. Submit at most once, then only poll for
-        // the exact text. A transport failure is ambiguous and follows the same
-        // confirmation-only path.
-        let status = null;
-        try {
-            status = await promptSession(target.id, {
-                parts: [{
-                        type: 'text',
-                        text: delivery.text,
-                        metadata: {
-                            [OPENCODE_INJECTED_ENTRY_METADATA_KEY]: true,
-                            [OPENCODE_WAKE_IDENTITY_METADATA_KEY]: delivery.entryId,
-                        },
-                    }],
+        if (submittedBefore) {
+            delivery.acceptedSubmission = true;
+            delivery.state = 'delivered-unconfirmed';
+        }
+        else {
+            if (delivery.settled)
+                return 'delivered';
+            owner.pendingSubmissions.set(delivery.entryId, {
+                sourceEntryId: delivery.sourceEntryId,
+                sessionId: target.id,
             });
-        }
-        catch (err) {
-            log(`entry ${delivery.entryId} submission outcome unavailable: ${err}`);
-        }
-        delivery.state = 'delivered-unconfirmed';
-        if (status !== null && status !== 200 && status !== 204) {
-            if (status === 404)
-                clearBinding();
-            return 'failed';
+            if (!persistCurrentBinding()) {
+                owner.pendingSubmissions.delete(delivery.entryId);
+                log(`entry ${delivery.entryId} submission skipped: pending intent was not durable`);
+                return 'failed';
+            }
+            // prompt_async is not idempotent. Persist the intent before the one POST;
+            // every recovery path is confirmation-only until that identity appears.
+            let status = null;
+            try {
+                status = await promptSession(target.id, {
+                    parts: [{
+                            type: 'text',
+                            text: delivery.text,
+                            metadata: {
+                                [OPENCODE_INJECTED_ENTRY_METADATA_KEY]: true,
+                                [OPENCODE_WAKE_IDENTITY_METADATA_KEY]: delivery.entryId,
+                            },
+                        }],
+                });
+            }
+            catch (err) {
+                log(`entry ${delivery.entryId} submission outcome unavailable: ${err}`);
+            }
+            delivery.state = 'delivered-unconfirmed';
+            if (status !== null && status !== 200 && status !== 204) {
+                clearPendingSubmission(owner, delivery.entryId);
+                if (status === 404)
+                    clearBinding();
+                return 'failed';
+            }
+            delivery.acceptedSubmission = true;
         }
         for (let confirmationAttempt = 0; confirmationAttempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; confirmationAttempt++) {
             if (confirmationAttempt > 0) {
                 delivery.state = 'retried';
                 owner.totalEntriesRetried++;
                 await waitForDeliveryRetry(confirmationAttempt);
+                if (delivery.settled)
+                    return 'delivered';
                 if (state !== owner || !owner.connected)
                     return 'delivered-unconfirmed';
                 delivery.state = 'delivered-unconfirmed';
             }
             try {
-                if (await findInjectedMessage(target.id, delivery.entryId)) {
+                if (await findInjectedMessage(delivery.sessionId, delivery.entryId)) {
+                    clearPendingSubmission(owner, delivery.entryId);
                     return 'delivered';
                 }
             }
@@ -452,21 +594,23 @@ async function processOpenCodeDeliveries(owner) {
                 log(`entry ${delivery.entryId} delivery error: ${err}`);
             }
             owner.activeDeliveries.delete(delivery.entryId);
-            if (outcome === 'delivered') {
-                owner.unconfirmedEntries.delete(delivery.entryId);
-                owner.failedEntries.delete(delivery.entryId);
-                rememberBounded(owner.deliveredEntries, delivery.entryId, delivery.text);
-                owner.totalEntriesInjected++;
+            if (delivery.settled) {
+                delivery.resolve(true);
+            }
+            else if (outcome === 'delivered') {
+                confirmOpenCodeDelivery(owner, delivery);
                 delivery.resolve(true);
             }
             else if (outcome === 'delivered-unconfirmed') {
                 owner.failedEntries.delete(delivery.entryId);
-                rememberBounded(owner.unconfirmedEntries, delivery.entryId, delivery.text);
-                delivery.resolve(false);
+                rememberBounded(owner.unconfirmedEntries, delivery.entryId, delivery.text, delivery.sourceEntryId);
+                delivery.resolve(delivery.acceptedSubmission);
+                if (delivery.acceptedSubmission)
+                    scheduleOpenCodeReconciliation(owner, delivery);
             }
             else {
                 owner.unconfirmedEntries.delete(delivery.entryId);
-                rememberBounded(owner.failedEntries, delivery.entryId, delivery.text);
+                rememberBounded(owner.failedEntries, delivery.entryId, delivery.text, delivery.sourceEntryId);
                 delivery.resolve(false);
             }
         }
@@ -524,39 +668,91 @@ export async function injectInitialKickoff(launch) {
  * Queue one durable inbox entry for delivery into the bound OpenCode session.
  * The delivery identity is stored in TextPart metadata, so retries and replay
  * can confirm an earlier ambiguous submission without supplying an
- * ordering-breaking caller message ID or exposing the identity in delivered text.
+ * ordering-breaking caller message ID or exposing the identity in delivered
+ * text. Retry nonces also carry their durable source entry ID so they reconcile
+ * one submission instead of creating a second prompt.
  */
-export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(text).digest('hex'), allowSubmit = true) {
+export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(text).digest('hex'), allowSubmit = true, sourceEntryId = entryId) {
     const owner = state;
     if (!owner?.connected) {
         log(`entry ${entryId} rejected: OpenCode is not connected`);
         return Promise.resolve(false);
     }
-    const deliveredText = owner.deliveredEntries.get(entryId);
-    if (deliveredText !== undefined) {
-        if (deliveredText !== text) {
+    // Rehydrate durable source markers before source-level deduplication. A
+    // freshly connected MCP child starts with an empty in-memory map; waiting
+    // until target resolution would let a different wake nonce queue a second
+    // submission before the prior source identity is visible locally.
+    restoreBinding();
+    const pendingSource = [...owner.pendingSubmissions].find(([pendingEntryId, pending]) => pendingEntryId !== entryId && pending.sourceEntryId === sourceEntryId);
+    if (pendingSource) {
+        log(`entry ${entryId} reconciles pending source ${sourceEntryId}`);
+        return injectOpenCodeEntry(text, pendingSource[0], false, sourceEntryId);
+    }
+    for (const [deliveredEntryId, record] of owner.deliveredEntries) {
+        if (deliveredEntryId !== entryId && record.sourceEntryId === sourceEntryId) {
+            if (record.text !== text)
+                return Promise.resolve(false);
+            log(`entry ${entryId} source ${sourceEntryId} already delivered`);
+            return Promise.resolve(true);
+        }
+    }
+    for (const [unconfirmedEntryId, record] of owner.unconfirmedEntries) {
+        if (unconfirmedEntryId !== entryId && record.sourceEntryId === sourceEntryId) {
+            if (record.text !== text)
+                return Promise.resolve(false);
+            log(`entry ${entryId} source ${sourceEntryId} remains unconfirmed`);
+            return Promise.resolve(true);
+        }
+    }
+    for (const active of owner.activeDeliveries.values()) {
+        if (active.entryId !== entryId && active.sourceEntryId === sourceEntryId) {
+            if (active.text !== text)
+                return Promise.resolve(false);
+            log(`entry ${entryId} joined active source ${sourceEntryId}`);
+            return active.promise;
+        }
+    }
+    const delivered = owner.deliveredEntries.get(entryId);
+    if (delivered !== undefined) {
+        if (delivered.text !== text || delivered.sourceEntryId !== sourceEntryId) {
             log(`entry ${entryId} replay text mismatch`);
-            rememberBounded(owner.failedEntries, entryId, text);
+            rememberBounded(owner.failedEntries, entryId, text, sourceEntryId);
             return Promise.resolve(false);
         }
         log(`entry ${entryId} replay already delivered`);
         return Promise.resolve(true);
     }
-    const unconfirmedText = owner.unconfirmedEntries.get(entryId);
-    if (unconfirmedText !== undefined) {
-        if (unconfirmedText !== text) {
+    const unconfirmed = owner.unconfirmedEntries.get(entryId);
+    if (unconfirmed !== undefined) {
+        if (unconfirmed.text !== text || unconfirmed.sourceEntryId !== sourceEntryId) {
             log(`entry ${entryId} unconfirmed replay text mismatch`);
-            rememberBounded(owner.failedEntries, entryId, text);
+            rememberBounded(owner.failedEntries, entryId, text, sourceEntryId);
             return Promise.resolve(false);
         }
         log(`entry ${entryId} replay remains unconfirmed`);
-        return Promise.resolve(false);
+        const pending = owner.pendingSubmissions.get(entryId);
+        const accepted = pending !== undefined;
+        if (pending) {
+            scheduleOpenCodeReconciliation(owner, {
+                entryId,
+                sourceEntryId,
+                text,
+                allowSubmit: false,
+                acceptedSubmission: true,
+                sessionId: pending.sessionId,
+                settled: false,
+                state: 'delivered-unconfirmed',
+                resolve: () => { },
+                promise: Promise.resolve(true),
+            });
+        }
+        return Promise.resolve(accepted);
     }
     const active = owner.activeDeliveries.get(entryId);
     if (active) {
-        if (active.text !== text) {
+        if (active.text !== text || active.sourceEntryId !== sourceEntryId) {
             log(`entry ${entryId} active text mismatch`);
-            rememberBounded(owner.failedEntries, entryId, text);
+            rememberBounded(owner.failedEntries, entryId, text, sourceEntryId);
             return Promise.resolve(false);
         }
         log(`entry ${entryId} replay joined active delivery`);
@@ -568,8 +764,12 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
     });
     const delivery = {
         entryId,
+        sourceEntryId,
         text,
         allowSubmit,
+        acceptedSubmission: false,
+        sessionId: null,
+        settled: false,
         state: 'queued',
         resolve: resolveDelivery,
         promise,
@@ -580,6 +780,33 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
     owner.deliveryQueue.push(delivery);
     void processOpenCodeDeliveries(owner);
     return promise;
+}
+/** Stop retrying every delivery identity derived from a durable entry that the
+ * agent has already consumed. Confirmed history stays available for dedup. */
+export function settleOpenCodeEntry(sourceEntryId) {
+    const owner = state;
+    if (!owner)
+        return;
+    let bindingChanged = false;
+    for (const [entryId, record] of owner.unconfirmedEntries) {
+        if (record.sourceEntryId !== sourceEntryId)
+            continue;
+        owner.unconfirmedEntries.delete(entryId);
+        bindingChanged = owner.pendingSubmissions.delete(entryId) || bindingChanged;
+    }
+    for (const [entryId, record] of owner.failedEntries) {
+        if (record.sourceEntryId === sourceEntryId)
+            owner.failedEntries.delete(entryId);
+    }
+    for (const delivery of owner.activeDeliveries.values()) {
+        if (delivery.sourceEntryId !== sourceEntryId)
+            continue;
+        delivery.settled = true;
+        delivery.resolve(true);
+        bindingChanged = owner.pendingSubmissions.delete(delivery.entryId) || bindingChanged;
+    }
+    if (bindingChanged)
+        persistCurrentBinding();
 }
 export async function probeOpenCodeDroneArmed() {
     if (!state?.connected)

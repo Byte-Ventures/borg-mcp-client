@@ -153,6 +153,7 @@ function makeDeps(fetchImpl: typeof fetch, appendLine?: any): StreamDeps {
     fetchImpl,
     appendLine: appendLine ?? vi.fn().mockResolvedValue(undefined),
     wakeCodex: vi.fn(),
+    hasPendingWakeEntry: vi.fn(async () => true),
     // Tight watchdog so any timer-based path doesn't hang the test.
     heartbeatTimeoutMs: 500,
     hwmDivergenceGraceMs: 10,
@@ -493,7 +494,29 @@ describe('streamOnce', () => {
       expect.not.stringContaining('borg-wake-nonce'),
       'wake-1',
       true,
+      'e-reping',
     );
+  });
+
+  it('settles a consumed entry without emitting another wake retry', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(true);
+    const settleOpenCodeEntry = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-consumed\ndata: {"entry":{"id":"e-consumed","message":"already drained","wake_nonce":"wake-consumed"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, 'older-entry', vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      hasInboxEntryId: vi.fn().mockResolvedValue(true),
+      hasPendingWakeEntry: vi.fn().mockResolvedValue(false),
+      settleOpenCodeEntry,
+      injectOpenCode,
+    });
+
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(injectOpenCode).not.toHaveBeenCalled();
+    expect(settleOpenCodeEntry).toHaveBeenCalledWith('e-consumed');
   });
 
   it('re-pings a same-stream recent event without appending a second inbox line', async () => {
@@ -515,6 +538,7 @@ describe('streamOnce', () => {
       expect.not.stringContaining('borg-wake-nonce'),
       'wake-same',
       true,
+      'e-same',
     );
   });
 
@@ -578,6 +602,7 @@ describe('streamOnce', () => {
       expect.not.stringContaining('borg-wake-nonce'),
       'wake-live',
       true,
+      'e-live',
     );
   });
 

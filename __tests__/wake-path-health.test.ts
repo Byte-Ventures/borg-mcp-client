@@ -95,6 +95,9 @@ describe('runtime wake-path health', () => {
     expect(out).toContain('- **OpenCode delivered-unconfirmed**: 0');
     expect(out).toContain('- **OpenCode retried**: 0');
     expect(out).toContain('- **OpenCode failed**: 1');
+    expect(out).toContain(
+      'delivered-unconfirmed counts entries that may have been submitted but are not visible in session history; failed counts entries that could not be submitted or were rejected, until the durable source entry is observed consumed',
+    );
     expect(out).toContain('`borg_read-log unread_only=true`');
     expect(out).not.toContain('Monitor command');
   });

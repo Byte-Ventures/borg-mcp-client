@@ -407,6 +407,31 @@ export async function hasPendingWakeActivity(active, deps = {}) {
         cursor = page.cursor;
     }
 }
+/**
+ * Inspect the durable unread window for one specific SSE entry without
+ * advancing the agent-owned cursor. Wake nonces are retries of that entry, so
+ * the entry itself remains the authority for whether another wake is owed.
+ */
+export async function hasPendingWakeEntry(active, entryId, deps = {}) {
+    if (!active.serverTrustIdentity) {
+        throw new Error('Selected Borg server authority state is missing or unreadable');
+    }
+    const getCursor = deps.getCursor ?? getLocalServerCursor;
+    const readPage = deps.readPage ?? localReadLogPage;
+    let cursor = await getCursor(localCursorBinding(active));
+    for (;;) {
+        const page = await readPage(active, { cursor, limit: 500 });
+        if (page.entries.some((entry) => entry.id === entryId && isPendingWakeEntry(entry, active.droneId)))
+            return true;
+        if (!page.has_more)
+            return false;
+        if (!page.cursor ||
+            (cursor && page.cursor.id === cursor.id && page.cursor.created_at === cursor.created_at)) {
+            throw new Error('Local Borg server returned a non-advancing log cursor');
+        }
+        cursor = page.cursor;
+    }
+}
 async function resolveLocalLogCursor(active, since) {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
         .test(since);
