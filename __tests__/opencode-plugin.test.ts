@@ -190,13 +190,23 @@ describe('OpenCode plugin core', () => {
   it('audits prior history plus the not-yet-persisted current prompt', async () => {
     const h = harness([[{ info: { role: 'assistant' }, parts: [{ type: 'tool', tool: 'bash' }] }]]);
     h.deps.audit.mockReturnValue('audit nudge');
-    const output = { message: {}, parts: [{ type: 'text', text: 'current prompt' }] as any[] };
+    const identifiedPart = {
+      id: 'prt_current',
+      sessionID: 'ses_current',
+      messageID: 'msg_current',
+      type: 'text',
+      text: 'current prompt',
+    };
+    const output = { message: {}, parts: [identifiedPart] as any[] };
     await h.core['chat.message']({ sessionID: 's' }, output);
     expect(h.deps.audit).toHaveBeenCalledWith([
       { info: { role: 'assistant' }, parts: [{ type: 'tool', tool: 'bash' }] },
-      { info: { role: 'user' }, parts: output.parts.slice(0, 1) },
+      { info: { role: 'user' }, parts: [identifiedPart] },
     ]);
-    expect(output.parts.at(-1)).toEqual({ type: 'text', text: 'audit nudge' });
+    expect(output.parts).toEqual([{
+      ...identifiedPart,
+      text: 'current prompt\n\naudit nudge',
+    }]);
   });
 });
 
