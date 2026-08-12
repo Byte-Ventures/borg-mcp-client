@@ -116,6 +116,13 @@ describe('runQuickstart', () => {
     expect(rig.runAssimilate.mock.calls.map((call) => call[0].role)).toEqual(['builder', 'builder', 'code-reviewer']);
   });
 
+  it('uses singular copy for a one-drone plan and success', async () => {
+    const rig = makeDeps({ prompts: ['1', 'y'] });
+    expect(await runQuickstart({ roles: [{ slug: 'builder', count: 1 }], yes: false }, rig.deps)).toBe(0);
+    expect(rig.deps.prompt).toHaveBeenLastCalledWith('Create and launch these 1 drone? [Y/n] ');
+    expect(rig.output.join('')).toContain('1 drone launched.');
+  });
+
   it('skips the template prompt for an existing cube', async () => {
     const rig = makeDeps({ existing: true, prompts: ['y'] });
     expect(await runQuickstart({ roles: [], yes: false }, rig.deps)).toBe(0);
@@ -158,6 +165,7 @@ describe('runQuickstart', () => {
       template: 'software-dev', roles: [{ slug: 'builder', count: 2 }], yes: true,
     }, rig.deps)).toBe(1);
     expect(rig.runAssimilate).toHaveBeenCalledTimes(2);
+    expect(rig.errors.join('')).toContain('builder is missing.');
     expect(rig.errors.join('')).toContain('run `borg quickstart` again');
     expect(rig.runLaunchAll).not.toHaveBeenCalled();
   });

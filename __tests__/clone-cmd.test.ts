@@ -187,8 +187,7 @@ describe('runClone', () => {
     const destination = join(base, 'checkouts', 'new-checkout');
     expect(await runClone({ repositoryUrl: join(base, 'missing'), destination, noLaunch: true }, testRig.deps)).toBe(1);
     expect(existsSync(destination)).toBe(false);
-    expect(testRig.errors.join('')).toContain('destination');
-    expect(testRig.errors.join('')).toContain('was not created');
+    expect(testRig.errors.join('')).toContain(`the directory borg created at ${destination} was removed`);
   });
 
   it('preserves a pre-existing empty destination when clone fails', async () => {

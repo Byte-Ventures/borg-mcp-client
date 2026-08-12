@@ -216,7 +216,7 @@ export async function runClone(args: CloneArgs, rawDeps: CloneDeps): Promise<num
         `borg clone: clone failed${result.stderr.trim() ? `: ${result.stderr.trim()}` : ''}.\n` +
         `Rollback: ${destinationExisted
           ? `the pre-existing empty destination ${destination} was preserved; inspect it for partial Git files`
-          : deps.pathExists(destination) ? `partial checkout remains at ${destination}` : `destination ${destination} was not created`}.\n`,
+          : deps.pathExists(destination) ? `partial checkout remains at ${destination}` : `the directory borg created at ${destination} was removed`}.\n`,
       );
       return 1;
     }

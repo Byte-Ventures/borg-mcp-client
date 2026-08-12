@@ -128,7 +128,7 @@ export function topLevelHelpText(version) {
         `  borg update              Update the client and installed local server together\n` +
         `  borg doctor              Check agent hook commands, versions, configs, and the OpenCode plugin\n` +
         `  borg clone <url> [dir]   Clone a repository, then create and launch its cube\n` +
-        `  borg quickstart           Create a cube and a drone for every role, then launch them\n` +
+        `  borg quickstart          Create a cube and a drone for every role, then launch them\n` +
         `  borg assimilate [role]   Join or create a cube\n` +
         `  borg assimilate --host <host>   Join or create on an explicit server\n` +
         `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +

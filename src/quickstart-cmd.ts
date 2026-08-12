@@ -270,7 +270,7 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
     }
     const prompt = existing
       ? 'Continue? [Y/n] '
-      : `Create and launch these ${requested.length} drones? [Y/n] `;
+      : `Create and launch these ${requested.length} ${requested.length === 1 ? 'drone' : 'drones'}? [Y/n] `;
     let answer: string;
     try {
       answer = await deps.prompt(prompt);
@@ -318,7 +318,7 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
       const completed = targets.filter((item) => item.existing).length;
       const remaining = targets.filter((item) => !item.existing).map((item) => item.role);
       deps.stderr(
-        `Stopped. ${completed} of ${requested.length} drones exist; ${remaining.map((role) => role.slug).join(', ')} are missing.\n` +
+        `Stopped. ${completed} of ${requested.length} drones exist; ${remaining.map((role) => role.slug).join(', ')} ${remaining.length === 1 ? 'is' : 'are'} missing.\n` +
         `Fix the cause above, then run \`borg quickstart\` again — it continues from here and does not touch the drones that already exist.\n`,
       );
       return 1;
@@ -369,7 +369,7 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
     return 1;
   }
 
-  deps.stdout(`✓ Cube \`${cubeName}\` is staffed. ${droneIds.length} drones launched.\n`);
+  deps.stdout(`✓ Cube \`${cubeName}\` is staffed. ${droneIds.length} ${droneIds.length === 1 ? 'drone' : 'drones'} launched.\n`);
   const human = targets.find((target) => target.role.isHumanSeat && target.existing);
   if (human?.existing) {
     deps.stdout(

@@ -60,6 +60,7 @@ describe('gh#611 — top-level borg --help', () => {
     const t = topLevelHelpText('9.9.9');
     expect(t).toContain('borgmcp 9.9.9');
     expect(t).toContain('borg setup');
+    expect(t).toContain('  borg quickstart          Create a cube and a drone for every role, then launch them');
     // The removed Cloud device-code flow must not resurface in help.
     expect(t).not.toContain('--no-browser');
   });
