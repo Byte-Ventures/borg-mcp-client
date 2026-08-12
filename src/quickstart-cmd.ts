@@ -257,7 +257,9 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
   if (existing) {
     deps.stdout(`Cube        ${existing.cubeName} (existing)\n`);
     if (have.length > 0) deps.stdout(`${renderRoleList('Have', have)}\n`);
-    deps.stdout(missing.length > 0 ? `${renderRoleList('Will create', missing)}\n` : 'Will create no drones\n');
+    deps.stdout(missing.length > 0
+      ? `${renderRoleList('Will create', missing)}\n`
+      : 'Will create nothing; every requested drone already exists\n');
   } else {
     deps.stdout(`Cube        ${context.derivedName} (new, template: ${templatePresentation(template).label})\n`);
     deps.stdout(`${renderRoleList('Drones', requested)}\n`);
@@ -376,6 +378,8 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
       `Start in the ${human.role.slug} session (\`${human.existing.cube.droneLabel}\`) and tell it what\n` +
       'you want built. It dispatches the rest.\n',
     );
+  } else {
+    deps.stdout('Start a Coordinator session later with: borg assimilate coordinator\n');
   }
   return 0;
 }

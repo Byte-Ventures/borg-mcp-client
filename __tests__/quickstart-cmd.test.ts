@@ -121,6 +121,7 @@ describe('runQuickstart', () => {
     expect(await runQuickstart({ roles: [{ slug: 'builder', count: 1 }], yes: false }, rig.deps)).toBe(0);
     expect(rig.deps.prompt).toHaveBeenLastCalledWith('Create and launch these 1 drone? [Y/n] ');
     expect(rig.output.join('')).toContain('1 drone launched.');
+    expect(rig.output.join('')).toContain('Start a Coordinator session later with: borg assimilate coordinator');
   });
 
   it('skips the template prompt for an existing cube', async () => {
@@ -152,6 +153,7 @@ describe('runQuickstart', () => {
     expect(await runQuickstart({ roles: [{ slug: 'builder', count: 1 }], yes: true }, rig.deps)).toBe(0);
     expect(rig.runAssimilate).not.toHaveBeenCalled();
     expect(rig.output.join('')).toContain('Have        builder');
+    expect(rig.output.join('')).toContain('Will create nothing; every requested drone already exists');
     expect(rig.runLaunchAll.mock.calls[0][2]).toEqual({
       droneIds: [existingBuilder.droneId],
       requireAllRequested: true,
