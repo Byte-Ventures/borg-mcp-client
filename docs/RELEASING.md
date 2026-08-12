@@ -356,6 +356,18 @@ registry attestation is authoritative. Only then may the release be announced,
 issues closed, consumer pins or site data synchronized, or the version described
 as published.
 
+After all three packages cross that boundary, create their GitHub Releases in
+the same shared → server → client operator session. In each package repository,
+run:
+
+```sh
+GITHUB_TOKEN="$(gh auth token)" node scripts/create-github-release.mjs <version>
+```
+
+The script binds the annotated tag, merged release pull request, successful tag
+workflow artifact, and live npm integrity before creating the Release. It copies
+the merged release pull request body verbatim and refuses an existing Release.
+
 Separately, once the release is installable from the canonical registry, install
 it into an isolated prefix and exercise the real user update path end to end.
 This is product verification, not candidate validation: failure routes a new
