@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { hasPendingWakeActivity } from '../src/remote-client';
+import { hasPendingWakeActivity, hasPendingWakeEntry } from '../src/remote-client';
 
 const ACTIVE = {
   cubeId: '11111111-1111-4111-8111-111111111111',
@@ -67,5 +67,24 @@ describe('hasPendingWakeActivity', () => {
       getCursor: async () => null,
       readPage,
     })).resolves.toBe(true);
+  });
+});
+
+describe('hasPendingWakeEntry', () => {
+  it('finds only the named entry after the durable unread cursor', async () => {
+    const readPage = vi.fn(async () => ({
+      entries: [entry({ id: 'pending-entry' })],
+      cursor: cursor('dddddddd-dddd-4ddd-8ddd-dddddddddddd'),
+      has_more: false,
+    }));
+
+    await expect(hasPendingWakeEntry(ACTIVE, 'pending-entry', {
+      getCursor: async () => cursor('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      readPage,
+    })).resolves.toBe(true);
+    await expect(hasPendingWakeEntry(ACTIVE, 'consumed-entry', {
+      getCursor: async () => cursor('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      readPage,
+    })).resolves.toBe(false);
   });
 });

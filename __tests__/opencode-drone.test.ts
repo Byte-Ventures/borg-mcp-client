@@ -10,6 +10,7 @@ import {
   getOpenCodeConnectionState,
   injectInitialKickoff,
   injectOpenCodeEntry,
+  settleOpenCodeEntry,
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 import { streamOnce } from '../src/log-stream';
@@ -433,6 +434,55 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState().totalEntriesRetried).toBe(1);
   });
 
+  it('does not resubmit a durable pending identity after the MCP child reconnects', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('pending-child-reconnect');
+    const root = session('pending-child-root', 10);
+    let visibleAt = Number.POSITIVE_INFINITY;
+    let storedParts: unknown[] = [];
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messageListResponse: ({ messages }) => new Response(JSON.stringify(
+        Date.now() >= visibleAt
+          ? [...messages, {
+            info: { id: 'msg_000000000001pending', role: 'user' },
+            parts: storedParts,
+          }]
+          : messages,
+      ), { status: 200 }),
+      promptResponse: ({ body }) => {
+        visibleAt = Date.now() + 6_000;
+        storedParts = Array.isArray(body.parts) ? body.parts : [];
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const first = injectOpenCodeEntry('pending once', 'entry-pending-child');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.promptBodies).toHaveLength(1);
+
+    disconnectOpenCodeDrone();
+    await expect(first).resolves.toBe(false);
+    await connect();
+    const replay = injectOpenCodeEntry('pending once', 'entry-pending-child');
+    await vi.advanceTimersByTimeAsync(7_250);
+    await expect(replay).resolves.toBe(true);
+
+    expect(api.promptBodies).toHaveLength(1);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      totalEntriesInjected: 1,
+      deliveryStates: {
+        queued: 0,
+        'delivered-unconfirmed': 0,
+        retried: 0,
+        failed: 0,
+      },
+    });
+  });
+
   it('confirms a delayed prior-process submission on replay without posting again', async () => {
     vi.useFakeTimers();
     const launch = launchKickoff('prior-process-replay');
@@ -543,7 +593,7 @@ describe('OpenCode wake target binding', () => {
     expect(api.promptBodies.every((body) => !Object.hasOwn(body, 'messageID'))).toBe(true);
   });
 
-  it('submits once per distinct wake nonce from raw SSE and deduplicates the nonce after reconnect', async () => {
+  it('submits once for one durable source across distinct wake nonces and reconnect', async () => {
     const launch = launchKickoff('raw-sse-wake-nonce');
     const root = session('raw-sse-root', 10);
     const api = installOpenCodeApi({
@@ -585,6 +635,8 @@ describe('OpenCode wake target binding', () => {
       getCursor: vi.fn(async () => null),
       appendLine,
       hasInboxEntryId: vi.fn(async () => true),
+      hasPendingWakeEntry: vi.fn(async () => true),
+      settleOpenCodeEntry: vi.fn(),
       injectOpenCode: injectOpenCodeEntry,
       wakeCodex: vi.fn(),
       heartbeatTimeoutMs: 500,
@@ -604,13 +656,13 @@ describe('OpenCode wake target binding', () => {
     const submittedTexts = api.promptBodies.map((body) =>
       ((body.parts as Array<{ text: string }>)[0]?.text)
     );
-    expect(submittedTexts).toHaveLength(3);
+    expect(submittedTexts).toHaveLength(1);
     expect(new Set(submittedTexts).size).toBe(1);
     expect(submittedTexts.every((text) => !text.includes('borg-wake-nonce'))).toBe(true);
     expect(api.promptBodies.map((body) => {
       const parts = body.parts as Array<{ metadata?: Record<string, unknown> }>;
       return parts[0]?.metadata?.[OPENCODE_WAKE_IDENTITY_METADATA_KEY];
-    })).toEqual(['entry-raw-sse', 'wake-nonce-1', 'wake-nonce-2']);
+    })).toEqual(['entry-raw-sse']);
     expect(appendLine).toHaveBeenCalledTimes(1);
     expect(appendLine.mock.calls[0]?.[2]).not.toContain('borg-wake-nonce');
   });
@@ -691,7 +743,7 @@ describe('OpenCode wake target binding', () => {
       'entry-stripped-metadata',
     );
     await vi.runAllTimersAsync();
-    await expect(delivery).resolves.toBe(false);
+    await expect(delivery).resolves.toBe(true);
 
     expect(api.promptBodies).toHaveLength(1);
     expect(getOpenCodeConnectionState()).toMatchObject({
@@ -703,7 +755,7 @@ describe('OpenCode wake target binding', () => {
     });
   });
 
-  it('retains an ambiguous submission as terminal delivered-unconfirmed', async () => {
+  it('retains an ambiguous submission as pending delivered-unconfirmed', async () => {
     vi.useFakeTimers();
     const launch = launchKickoff('failed-launch');
     const root = session('failed-root', 10);
@@ -719,20 +771,20 @@ describe('OpenCode wake target binding', () => {
     await injectInitialKickoff(launch);
     const delivery = injectOpenCodeEntry('wake that fails', 'entry-that-fails');
     await vi.runAllTimersAsync();
-    await expect(delivery).resolves.toBe(false);
+    await expect(delivery).resolves.toBe(true);
 
     expect(api.prompts).toEqual([root.id]);
     expect(getOpenCodeConnectionState()).toMatchObject({
       sessionId: root.id,
-      totalEntriesRetried: 3,
       deliveryStates: {
         'delivered-unconfirmed': 1,
         failed: 0,
       },
     });
+    expect(getOpenCodeConnectionState().totalEntriesRetried).toBeGreaterThanOrEqual(3);
     await expect(
       injectOpenCodeEntry('wake that fails', 'entry-that-fails'),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
     expect(api.prompts).toEqual([root.id]);
   });
 
@@ -762,7 +814,31 @@ describe('OpenCode wake target binding', () => {
     });
   });
 
-  it('waits for delayed post-acceptance visibility without resubmitting', async () => {
+  it('clears failed retry identities when their durable source entry is consumed', async () => {
+    const launch = launchKickoff('settled-failure-launch');
+    const root = session('settled-failure-root', 10);
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      promptStatus: { [root.id]: 500 },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    await expect(injectOpenCodeEntry(
+      'wake retry',
+      'wake-nonce-failed',
+      true,
+      'entry-consumed',
+    )).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().deliveryStates.failed).toBe(1);
+
+    settleOpenCodeEntry('entry-consumed');
+
+    expect(getOpenCodeConnectionState().deliveryStates.failed).toBe(0);
+  });
+
+  it('reconciles visibility after the initial confirmation budget without resubmitting', async () => {
     vi.useFakeTimers();
     const launch = launchKickoff('post-acceptance-loss');
     const root = session('loss-root', 10);
@@ -794,7 +870,7 @@ describe('OpenCode wake target binding', () => {
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         promptBodies.push(body);
         storedParts.push(...(Array.isArray(body.parts) ? body.parts : []));
-        if (!Number.isFinite(visibleAt)) visibleAt = Date.now() + 500;
+        if (!Number.isFinite(visibleAt)) visibleAt = Date.now() + 6_000;
         return new Response(null, { status: 204 });
       }
       throw new Error(`Unhandled OpenCode API request: ${init?.method ?? 'GET'} ${path}`);
@@ -807,8 +883,25 @@ describe('OpenCode wake target binding', () => {
       'wake after acceptance',
       'entry-post-acceptance-loss',
     );
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(4_250);
     await expect(delivery).resolves.toBe(true);
+
+    expect(promptBodies).toHaveLength(1);
+    expect(getOpenCodeConnectionState().deliveryStates).toMatchObject({
+      'delivered-unconfirmed': 1,
+      failed: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.waitFor(() => expect(getOpenCodeConnectionState()).toMatchObject({
+      totalEntriesInjected: 1,
+      deliveryStates: {
+        queued: 0,
+        'delivered-unconfirmed': 0,
+        retried: 0,
+        failed: 0,
+      },
+    }));
 
     expect(promptBodies).toHaveLength(1);
     expect(promptBodies[0]).not.toHaveProperty('messageID');

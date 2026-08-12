@@ -69,6 +69,7 @@ export interface LocalManageAuthority {
 export declare function resolveLocalManageAuthority(active: ActiveCube, operation: LocalManageOperation): Promise<LocalManageAuthority>;
 interface PendingWakePage {
     entries: Array<{
+        id?: unknown;
         drone_id?: unknown;
         message?: unknown;
         visibility?: unknown;
@@ -84,6 +85,18 @@ interface PendingWakePage {
  * paginated scan prevents a run of skipped entries from hiding later real work.
  */
 export declare function hasPendingWakeActivity(active: ActiveCube, deps?: {
+    getCursor?: typeof getLocalServerCursor;
+    readPage?: (active: ActiveCube, opts: {
+        cursor: LocalServerCursor | null;
+        limit: number;
+    }) => Promise<PendingWakePage>;
+}): Promise<boolean>;
+/**
+ * Inspect the durable unread window for one specific SSE entry without
+ * advancing the agent-owned cursor. Wake nonces are retries of that entry, so
+ * the entry itself remains the authority for whether another wake is owed.
+ */
+export declare function hasPendingWakeEntry(active: ActiveCube, entryId: string, deps?: {
     getCursor?: typeof getLocalServerCursor;
     readPage?: (active: ActiveCube, opts: {
         cursor: LocalServerCursor | null;

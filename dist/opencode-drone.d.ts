@@ -27,9 +27,14 @@ export declare function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Pro
  * Queue one durable inbox entry for delivery into the bound OpenCode session.
  * The delivery identity is stored in TextPart metadata, so retries and replay
  * can confirm an earlier ambiguous submission without supplying an
- * ordering-breaking caller message ID or exposing the identity in delivered text.
+ * ordering-breaking caller message ID or exposing the identity in delivered
+ * text. Retry nonces also carry their durable source entry ID so they reconcile
+ * one submission instead of creating a second prompt.
  */
-export declare function injectOpenCodeEntry(text: string, entryId?: string, allowSubmit?: boolean): Promise<boolean>;
+export declare function injectOpenCodeEntry(text: string, entryId?: string, allowSubmit?: boolean, sourceEntryId?: string): Promise<boolean>;
+/** Stop retrying every delivery identity derived from a durable entry that the
+ * agent has already consumed. Confirmed history stays available for dedup. */
+export declare function settleOpenCodeEntry(sourceEntryId: string): void;
 export declare function probeOpenCodeDroneArmed(): Promise<boolean | null>;
 export declare function disconnectOpenCodeDrone(): void;
 export interface OpenCodeConnectionState {

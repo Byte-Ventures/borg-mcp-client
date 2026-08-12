@@ -133,6 +133,7 @@ import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import {
   connectOpenCodeDrone,
   injectOpenCodeEntry,
+  settleOpenCodeEntry,
   configuredOpenCodePort,
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
   openCodeLaunchBinding,
@@ -314,7 +315,9 @@ export async function main() {
       installBorgPlugin();
       const active = await getActiveCube();
       if (active && openCodeRuntime) {
-        if (await connectOpenCodeRuntime(active)) setModuleInjectOpenCode(injectOpenCodeEntry);
+        if (await connectOpenCodeRuntime(active)) {
+          setModuleInjectOpenCode(injectOpenCodeEntry, settleOpenCodeEntry);
+        }
       }
     },
   };

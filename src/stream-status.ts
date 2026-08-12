@@ -272,6 +272,9 @@ export function renderStreamStatus(inputs: RenderInputs): string {
     );
     lines.push(`- **OpenCode retried**: ${delivery.retried}`);
     lines.push(`- **OpenCode failed**: ${delivery.failed}`);
+    lines.push(
+      '- **OpenCode delivery-state meaning**: delivered-unconfirmed counts accepted prompts awaiting history visibility; failed counts definite prompt rejections until the durable source entry is observed consumed.'
+    );
   }
 
   // Runtime-specific wake-path warning. The wire-down case takes
