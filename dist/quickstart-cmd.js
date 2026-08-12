@@ -338,7 +338,9 @@ export async function runQuickstart(args, deps) {
     if (launchCode !== 0) {
         if (launchOutput)
             deps.stderr(launchOutput);
-        deps.stderr('The drones were created, but one or more sessions did not launch. Fix the cause above, then run `borg launch-all`.\n');
+        deps.stderr(launchOutput.includes('pastelist mode prints commands for manual use but does not launch sessions')
+            ? 'No sessions were launched: this environment has no terminal or tmux backend. Run `borg launch-all` to print the commands, then paste them.\n'
+            : 'The drones were created, but one or more sessions did not launch. Fix the cause above, then run `borg launch-all`.\n');
         return 1;
     }
     deps.stdout(`✓ Cube \`${cubeName}\` is staffed. ${droneIds.length} ${droneIds.length === 1 ? 'drone' : 'drones'} launched.\n`);

@@ -231,19 +231,27 @@ describe('runQuickstart', () => {
     expect(await runQuickstart({
       template: 'software-dev', roles: [{ slug: 'builder', count: 1 }], yes: true,
     }, rig.deps)).toBe(1);
-    expect(rig.errors.join('')).toContain('run `borg launch-all`');
+    expect(rig.errors.join('')).toContain(
+      'The drones were created, but one or more sessions did not launch. ' +
+      'Fix the cause above, then run `borg launch-all`.',
+    );
+    expect(rig.errors.join('')).not.toContain('No sessions were launched');
   });
 
   it('propagates strict pastelist no-dispatch as failure without launched copy', async () => {
     const rig = makeDeps({
       launchCode: 1,
-      launchOutput: 'borg launch-all: pastelist mode does not launch sessions; nothing was launched.\n',
+      launchOutput: 'borg launch-all: pastelist mode prints commands for manual use but does not launch sessions; nothing was launched.\n',
     });
     expect(await runQuickstart({
       template: 'software-dev', roles: [{ slug: 'builder', count: 1 }], yes: true,
     }, rig.deps)).toBe(1);
     expect(rig.runLaunchAll.mock.calls[0][2]).toEqual(expect.objectContaining({ requireAllRequested: true }));
-    expect(rig.errors.join('')).toContain('pastelist mode does not launch sessions');
+    expect(rig.errors.join('')).toContain(
+      'No sessions were launched: this environment has no terminal or tmux backend. ' +
+      'Run `borg launch-all` to print the commands, then paste them.',
+    );
+    expect(rig.errors.join('')).not.toContain('Fix the cause above');
     expect(rig.output.join('')).not.toContain('drone launched');
     expect(rig.output.join('')).not.toContain('is staffed');
   });
