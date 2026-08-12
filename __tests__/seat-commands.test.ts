@@ -92,7 +92,7 @@ function depsFor(cubes: ActiveCube[], overrides: Partial<SeatCommandDeps> = {}) 
 }
 
 describe('seat command parsers', () => {
-  it('accepts borg seats without arguments and rejects extras', () => {
+  it('accepts borg drones without arguments and rejects extras', () => {
     expect(parseSeatsArgs([])).toEqual({ ok: true });
     expect(parseSeatsArgs(['extra'])).toEqual({ ok: false, error: 'takes no arguments' });
   });
@@ -144,7 +144,7 @@ describe('launch-seat identity handoff', () => {
   });
 });
 
-describe('borg seats', () => {
+describe('borg drones', () => {
   it('lists every local active seat with label, cube, registered worktree, CLI, and state', async () => {
     const linked = activeCube({ worktree: '/linked/a' });
     const second = activeCube({
@@ -197,7 +197,7 @@ describe('borg seats', () => {
     const { deps, stdout } = depsFor([]);
     expect(await runSeats(deps)).toBe(0);
     expect(stdout.join('')).toBe(
-      'No drone seats are registered on this machine. Run `borg assimilate` in a project repository to create one.\n',
+      'No drones are registered on this machine. Run `borg assimilate` in a project repository to create one.\n',
     );
   });
 });
@@ -303,9 +303,9 @@ describe('production local-registry wiring', () => {
       stderr: (line) => stderr.push(line),
     })).toBe(1);
     expect(stderr.join('')).toBe(
-      "borg launch: drone 'builder-pending' has a pending seat (shown as `pending` in `borg seats`) — " +
+      "borg launch: drone 'builder-pending' is not fully assimilated (shown as `pending` in `borg drones`) — " +
       'its assimilation did not complete, so launching now would start an unattached session. ' +
-      `To complete the seat, run \`borg assimilate\` in ${pendingWorktree}, then run ` +
+      `To finish it, run \`borg assimilate\` in ${pendingWorktree}, then run ` +
       '`borg launch builder-pending` again.\n',
     );
     expect(launchBareBorg).not.toHaveBeenCalled();
@@ -336,7 +336,7 @@ describe('production local-registry wiring', () => {
     expect(stderr.join('')).toBe(
       `borg launch: did not launch 'builder-active' — the worktree at ${activeWorktree} would resume ` +
       "'builder-sibling' (cube 'beta') instead. To resume 'builder-sibling', run `borg` in that worktree. " +
-      "To review this machine's seats, run `borg seats`.\n",
+      "To review this machine's drones, run `borg drones`.\n",
     );
     expect(conflictingLaunchBareBorg).not.toHaveBeenCalled();
 
@@ -360,8 +360,8 @@ describe('production local-registry wiring', () => {
         await expect(cubes.getActiveCubeForWorktree(worktree)).rejects.toMatchObject({
           name: 'LaunchSeatIdentityChangedError',
           message:
-            "borg launch: did not launch 'builder-sibling' — its seat registration changed before the launch could start. " +
-            'Run `borg seats` to see the current state, then try again.',
+            "borg launch: did not launch 'builder-sibling' — its registration changed before the launch could start. " +
+            'Run `borg drones` to see the current state, then try again.',
         });
         return 1;
       } finally {
@@ -444,7 +444,7 @@ describe('borg launch', () => {
     expect(await runLaunchSeat({ target: cube.droneLabel, cube: 'typo-cube' }, deps)).toBe(1);
     expect(stderr.join('')).toBe(
       "borg launch: no cube named 'typo-cube' is registered on this machine. " +
-      "Run `borg seats` to list this machine's cubes and drones.\n",
+      "Run `borg drones` to list this machine's cubes and drones.\n",
     );
     expect(launchBareBorg).not.toHaveBeenCalled();
   });
@@ -463,18 +463,18 @@ describe('borg launch', () => {
     expect(await runLaunchSeat({ target: first.droneLabel, cube: 'beta' }, deps)).toBe(1);
     expect(stderr.join('')).toBe(
       "borg launch: no drone matches 'builder-aaaaaaaa' in cube 'beta'. " +
-      "Run `borg seats` to list the drones you can launch.\n",
+      "Run `borg drones` to list the drones you can launch.\n",
     );
     expect(launchBareBorg).not.toHaveBeenCalled();
   });
 
-  it('reports an unknown target and points to borg seats', async () => {
+  it('reports an unknown target and points to borg drones', async () => {
     const { deps, stderr, launchBareBorg } = depsFor([activeCube()]);
 
     expect(await runLaunchSeat({ target: 'builder-deadbeef' }, deps)).toBe(1);
     const output = stderr.join('');
     expect(output).toBe(
-      "borg launch: no drone matches 'builder-deadbeef' on this machine. Run `borg seats` to list the drones you can launch.\n",
+      "borg launch: no drone matches 'builder-deadbeef' on this machine. Run `borg drones` to list the drones you can launch.\n",
     );
     expect(launchBareBorg).not.toHaveBeenCalled();
   });
@@ -487,8 +487,8 @@ describe('borg launch', () => {
 
     expect(await runLaunchSeat({ target: cube.droneLabel }, deps)).toBe(1);
     expect(stderr.join('')).toBe(
-      "borg launch: did not launch 'builder-aaaaaaaa' — its seat registration changed before the launch could start. " +
-      'Run `borg seats` to see the current state, then try again.\n',
+      "borg launch: did not launch 'builder-aaaaaaaa' — its registration changed before the launch could start. " +
+      'Run `borg drones` to see the current state, then try again.\n',
     );
     expect(launchBareBorg).not.toHaveBeenCalled();
   });
@@ -497,9 +497,9 @@ describe('borg launch', () => {
     const { deps, stderr } = depsFor([]);
     expect(await runLaunchSeat({ target: 'builder-deadbeef' }, deps)).toBe(1);
     expect(stderr.join('')).toBe(
-      "borg launch: drone 'builder-deadbeef' is not in this machine's seat registry. " +
+      "borg launch: drone 'builder-deadbeef' is not in this machine's registry. " +
       'The registry is local to each machine and lists only drones assimilated here. ' +
-      'Run `borg seats` on the machine where the drone was created.\n',
+      'Run `borg drones` on the machine where the drone was created.\n',
     );
   });
 

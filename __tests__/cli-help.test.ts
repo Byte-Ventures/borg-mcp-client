@@ -6,6 +6,7 @@
  * the pure decision (isHelpFlag) + the help text; the claude.ts wiring is thin
  * glue (print + exit before the wizard import).
  */
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { NEW_CUBE_TEMPLATE_PRESENTATIONS } from 'borgmcp-shared/templates';
 import {
@@ -69,7 +70,7 @@ describe('client subcommand help', () => {
     ['reset-local-connection', resetLocalSeatHelpText],
     ['recover-enrollment', recoverEnrollmentHelpText],
     ['cleanup', cleanupHelpText],
-    ['seats', seatsHelpText],
+    ['drones', seatsHelpText],
     ['launch', launchSeatHelpText],
     ['launch-all', launchAllHelpText],
     ['doctor', doctorHelpText],
@@ -102,17 +103,30 @@ describe('client subcommand help', () => {
 
   it('documents local drone discovery and relaunch without bypassing the worktree', () => {
     const top = topLevelHelpText('9.9.9');
-    expect(top).toContain('borg seats');
+    expect(top).toContain('borg drones');
     expect(top).toContain('borg launch <drone-label-or-id-prefix>');
 
     const seats = seatsHelpText('9.9.9');
-    expect(seats).toContain('borg seats');
+    expect(seats).toBe(
+      `borg drones (borgmcp 9.9.9) — list this machine's registered drones\n\n` +
+      `Usage:\n` +
+      `  borg drones         Show drone, cube, worktree, agent CLI, and local state\n` +
+      `  borg drones --help  Show this help\n\n` +
+      `The local registry belongs to this machine only.\n`,
+    );
     expect(seats).toMatch(/local.*registry/i);
 
     const launch = launchSeatHelpText('9.9.9');
     expect(launch).toContain('borg launch <drone-label-or-id-prefix>');
     expect(launch).toContain('--cube');
     expect(launch).toMatch(/worktree/i);
+  });
+
+  it('routes the renamed argv token without keeping a borg seats alias', () => {
+    const source = readFileSync(new URL('../src/claude.ts', import.meta.url), 'utf8');
+    expect(source).toContain("process.argv[2] === 'drones'");
+    expect(source).not.toContain("process.argv[2] === 'seats'");
+    expect(clientSubcommandHelpText('seats', ['--help'], '9.9.9')).toBeNull();
   });
 
   it('describes journal-aware enrollment recovery and its exact scope', () => {

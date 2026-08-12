@@ -143,7 +143,7 @@ function oneLine(value: string): string {
 
 export function formatLocalSeatRows(rows: readonly LocalSeatRow[]): string {
   if (rows.length === 0) {
-    return 'No drone seats are registered on this machine. Run `borg assimilate` in a project repository to create one.\n';
+    return 'No drones are registered on this machine. Run `borg assimilate` in a project repository to create one.\n';
   }
   const headings = ['DRONE', 'CUBE', 'STATE', 'CLI', 'WORKTREE'];
   const values = rows.map((row) => [
@@ -176,7 +176,7 @@ export async function runSeats(deps: SeatCommandDeps): Promise<number> {
     deps.stdout(formatLocalSeatRows(await readLocalSeatRows(deps)));
     return 0;
   } catch (error) {
-    deps.stderr(`borg seats: could not read the local registry: ${error instanceof Error ? error.message : String(error)}\n`);
+    deps.stderr(`borg drones: could not read the local registry: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
 }
@@ -198,7 +198,7 @@ export async function runLaunchSeat(
     if (cubeIds.size === 0) {
       deps.stderr(
         `borg launch: no cube named '${args.cube}' is registered on this machine. ` +
-        `Run \`borg seats\` to list this machine's cubes and drones.\n`,
+        `Run \`borg drones\` to list this machine's cubes and drones.\n`,
       );
       return 1;
     }
@@ -212,19 +212,19 @@ export async function runLaunchSeat(
   if (matches.length === 0) {
     if (rows.length === 0) {
       deps.stderr(
-        `borg launch: drone '${args.target}' is not in this machine's seat registry. ` +
+        `borg launch: drone '${args.target}' is not in this machine's registry. ` +
         `The registry is local to each machine and lists only drones assimilated here. ` +
-        `Run \`borg seats\` on the machine where the drone was created.\n`,
+        `Run \`borg drones\` on the machine where the drone was created.\n`,
       );
     } else if (args.cube) {
       deps.stderr(
         `borg launch: no drone matches '${args.target}' in cube '${args.cube}'. ` +
-        `Run \`borg seats\` to list the drones you can launch.\n`,
+        `Run \`borg drones\` to list the drones you can launch.\n`,
       );
     } else {
       deps.stderr(
         `borg launch: no drone matches '${args.target}' on this machine. ` +
-        `Run \`borg seats\` to list the drones you can launch.\n`,
+        `Run \`borg drones\` to list the drones you can launch.\n`,
       );
     }
     return 1;
@@ -248,9 +248,9 @@ export async function runLaunchSeat(
   }
   if (selected.state !== 'active') {
     deps.stderr(
-      `borg launch: drone '${selected.droneLabel}' has a pending seat (shown as \`pending\` in \`borg seats\`) — ` +
+      `borg launch: drone '${selected.droneLabel}' is not fully assimilated (shown as \`pending\` in \`borg drones\`) — ` +
       `its assimilation did not complete, so launching now would start an unattached session. ` +
-      `To complete the seat, run \`borg assimilate\` in ${selected.worktree}, then run ` +
+      `To finish it, run \`borg assimilate\` in ${selected.worktree}, then run ` +
       `\`borg launch ${selected.droneLabel}\` again.\n`,
     );
     return 1;
@@ -264,8 +264,8 @@ export async function runLaunchSeat(
   }
   if (!preferred) {
     deps.stderr(
-      `borg launch: did not launch '${selected.droneLabel}' — its seat registration changed before the launch could start. ` +
-      `Run \`borg seats\` to see the current state, then try again.\n`,
+      `borg launch: did not launch '${selected.droneLabel}' — its registration changed before the launch could start. ` +
+      `Run \`borg drones\` to see the current state, then try again.\n`,
     );
     return 1;
   }
@@ -277,7 +277,7 @@ export async function runLaunchSeat(
     deps.stderr(
       `borg launch: did not launch '${selected.droneLabel}' — the worktree at ${selected.worktree} would resume ` +
       `'${preferred.droneLabel}' (cube '${preferred.name}') instead. To resume '${preferred.droneLabel}', run \`borg\` ` +
-      `in that worktree. To review this machine's seats, run \`borg seats\`.\n`,
+      `in that worktree. To review this machine's drones, run \`borg drones\`.\n`,
     );
     return 1;
   }

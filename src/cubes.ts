@@ -91,8 +91,8 @@ export class LaunchSeatIdentityChangedError extends Error {
 
   constructor(droneLabel: string) {
     super(
-      `borg launch: did not launch '${droneLabel}' — its seat registration changed before the launch could start. ` +
-      'Run `borg seats` to see the current state, then try again.',
+      `borg launch: did not launch '${droneLabel}' — its registration changed before the launch could start. ` +
+      'Run `borg drones` to see the current state, then try again.',
     );
     this.name = 'LaunchSeatIdentityChangedError';
   }
