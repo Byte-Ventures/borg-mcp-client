@@ -126,7 +126,7 @@ test('GitHub Release body frames authorities and preserves the merged PR body ve
     pullRequest: RELEASE_PR,
   });
   assert.match(body, /^## Package\n/u);
-  assert.match(body, /borgmcp@3\.9\.0/);
+  assert.match(body, /borgmcp@3\.10\.0/);
   assert.match(body, /sha512-Y2FuZGlkYXRl/);
   assert.match(body, /Published with npm Trusted Publishing/);
   assert.match(body, /## Source/);
