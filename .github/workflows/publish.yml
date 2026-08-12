@@ -190,7 +190,7 @@ jobs:
           EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
           NPM_EXPECTED_OWNER: ${{ vars.NPM_EXPECTED_OWNER }}
 
-      - name: Publish same-run tarball with Trusted Publishing provenance
+      - name: Stage exact verified tarball with Trusted Publishing provenance
         shell: bash
         run: |
           set -euo pipefail
@@ -198,4 +198,4 @@ jobs:
           test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
           test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
           test -z "${NODE_AUTH_TOKEN:-}"
-          npm publish "./release/${{ needs.verify.outputs.tarball }}" --ignore-scripts --access public --provenance --registry=https://registry.npmjs.org
+          npm stage publish "./release/${{ needs.verify.outputs.tarball }}" --ignore-scripts --access public --provenance --registry=https://registry.npmjs.org

@@ -4,4 +4,4 @@ Report vulnerabilities through [GitHub private vulnerability reporting](https://
 
 Security fixes are supported on the latest reviewed client revision and, after publication, the latest published version. Reports should include affected versions, impact, reproduction steps, and suggested remediation. Avoid including live credentials or customer data.
 
-GitHub Actions publishes only an immutable reviewed tag through the protected npm environment and Trusted Publishing. Successful `npm publish` completion is the terminal workflow boundary; no post-publication registry readback can invalidate an accepted immutable version.
+GitHub Actions submits only an immutable reviewed tag to npm staged publishing through the protected npm environment and Trusted Publishing. Workflow success means npm accepted the private stage, not that the version is live. The terminal release boundary is interactive stage approval followed by canonical registry visibility and integrity verification.
