@@ -9,6 +9,8 @@
 export declare function isHelpFlag(arg: string | undefined): boolean;
 export declare function cleanupHelpText(version: string): string;
 export declare function launchAllHelpText(version: string): string;
+export declare function quickstartHelpText(version: string): string;
+export declare function cloneHelpText(version: string): string;
 export declare function seatsHelpText(version: string): string;
 export declare function launchSeatHelpText(version: string): string;
 export declare function doctorHelpText(version: string): string;

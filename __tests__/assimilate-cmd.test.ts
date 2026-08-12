@@ -4707,6 +4707,27 @@ describe('runAssimilate: temporary Claude model compatibility', () => {
       ...overrides,
     });
 
+  it('prepares and persists a drone without terminal handoff for quickstart composition', async () => {
+    const exec = vi.fn(async () => 0);
+    const onPrepared = vi.fn();
+    const deps = successDeps({ exec });
+
+    expect(await runAssimilate(
+      { role: 'builder', flags: { yes: true } },
+      deps,
+      { launch: false, onPrepared },
+    )).toBe(0);
+
+    expect(exec).not.toHaveBeenCalled();
+    expect(deps.probeMcpReady).not.toHaveBeenCalled();
+    expect(deps.installProjectSessionHook).toHaveBeenCalled();
+    expect(onPrepared).toHaveBeenCalledWith(expect.objectContaining({
+      cubeId: 'cube-1',
+      droneId: 'drone-x',
+      roleName: 'Builder',
+    }));
+  });
+
   it('forwards an explicit Claude descriptor and sets only ANTHROPIC_MODEL', async () => {
     const assimilate = vi.fn(async () => ({
       cube_id: 'cube-1',

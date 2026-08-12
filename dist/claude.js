@@ -30,8 +30,12 @@ import { runSpawn } from './spawn.js';
 import { buildClaudeLaunchArgs } from './claude-launch-args.js';
 import { parseCleanupArgs, runCleanup } from './cleanup-cmd.js';
 import { parseAssimilateArgs } from './parse-assimilate-args.js';
+import { parseQuickstartArgs } from './parse-quickstart-args.js';
+import { parseCloneArgs, safeCloneParseError } from './parse-clone-args.js';
 import { runAssimilate } from './assimilate-cmd.js';
 import { buildDefaultAssimilateDeps } from './assimilate-deps.js';
+import { buildDefaultQuickstartDeps, runQuickstart } from './quickstart-cmd.js';
+import { buildDefaultCloneDeps, runClone } from './clone-cmd.js';
 import { parseResetLocalSeatArgs, runResetLocalSeat, buildDefaultResetLocalSeatDeps, } from './reset-local-seat-cmd.js';
 import { parseLaunchAllArgs } from './parse-launch-all-args.js';
 import { unknownSubcommand } from './unknown-subcommand.js';
@@ -155,6 +159,24 @@ async function main() {
     if (process.argv[2] === 'assimilate') {
         const code = await runAssimilateEntry(process.argv.slice(3));
         process.exit(code);
+    }
+    if (process.argv[2] === 'clone') {
+        const parsed = parseCloneArgs(process.argv.slice(3));
+        if (!parsed.ok) {
+            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg clone: ${safeCloneParseError(parsed)}\n`));
+            process.stderr.write(`Run \`borg clone --help\` for usage.\n`);
+            process.exit(1);
+        }
+        process.exit(await runClone(parsed.args, buildDefaultCloneDeps()));
+    }
+    if (process.argv[2] === 'quickstart') {
+        const parsed = parseQuickstartArgs(process.argv.slice(3));
+        if (!parsed.ok) {
+            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg quickstart: ${parsed.error}\n`));
+            process.stderr.write(`Run \`borg quickstart --help\` for usage.\n`);
+            process.exit(1);
+        }
+        process.exit(await runQuickstart(parsed.args, buildDefaultQuickstartDeps()));
     }
     if (process.argv[2] === 'reset-local-connection') {
         const parsed = parseResetLocalSeatArgs(process.argv.slice(3));

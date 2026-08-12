@@ -51,6 +51,35 @@ export function launchAllHelpText(version: string): string {
   );
 }
 
+export function quickstartHelpText(version: string): string {
+  return (
+    `borg quickstart (borgmcp ${version}) — create, staff, and launch this repository's cube\n\n` +
+    `Usage:\n` +
+    `  borg quickstart [options]\n\n` +
+    `Options:\n` +
+    `  --template ${NEW_CUBE_TEMPLATE_OPTIONS}  Choose the new-cube template without prompting\n` +
+    `  --role <slug>[:<count>]            Fully specify the roster (repeatable)\n` +
+    `  --yes, -y                          Accept the displayed plan\n` +
+    `  --help, -h                         Show this help\n\n` +
+    `Quickstart requires a running Borg server and never starts one. Rerun the same\n` +
+    `command after a partial failure; existing drones are kept and skipped.\n`
+  );
+}
+
+export function cloneHelpText(version: string): string {
+  return (
+    `borg clone (borgmcp ${version}) — clone a repository and run quickstart\n\n` +
+    `Usage:\n` +
+    `  borg clone <repository-url> [directory] [--no-launch]\n\n` +
+    `Options:\n` +
+    `  --no-launch  Stop after the checkout is ready; do not create or launch a cube\n` +
+    `  --help, -h   Show this help\n\n` +
+    `A repeated command reuses a checkout only when its origin matches. Default\n` +
+    `destination names avoid non-repository collisions. Credential-bearing URLs are\n` +
+    `refused; use a Git credential helper or SSH configuration instead.\n`
+  );
+}
+
 export function seatsHelpText(version: string): string {
   return (
     `borg drones (borgmcp ${version}) — list this machine's registered drones\n\n` +
@@ -91,7 +120,9 @@ export function clientSubcommandHelpText(
   if (!args.some(isHelpFlag)) return null;
   switch (command) {
     case 'setup': return setupHelpText(version);
+    case 'clone': return cloneHelpText(version);
     case 'assimilate': return assimilateHelpText(version);
+    case 'quickstart': return quickstartHelpText(version);
     case 'reset-local-connection': return resetLocalSeatHelpText(version);
     case 'recover-enrollment': return recoverEnrollmentHelpText(version);
     case 'cleanup': return cleanupHelpText(version);
@@ -107,7 +138,7 @@ export function setupNextStepsText(): string {
   return (
     `◼ Next steps:\n` +
     `1. Run \`borg server start\` and leave that terminal open.\n` +
-    `2. In a second terminal, cd into your project's Git repository and run \`borg assimilate\`.\n`
+    `2. In a second terminal, cd into your project's Git repository and run \`borg quickstart\`.\n`
   );
 }
 
@@ -129,6 +160,8 @@ export function topLevelHelpText(version: string): string {
     `  borg setup               Set up borg MCP server + agent CLI integration\n` +
     `  borg update              Update the client and installed local server together\n` +
     `  borg doctor              Check agent hook commands, versions, configs, and the OpenCode plugin\n` +
+    `  borg clone <url> [dir]   Clone a repository, then create and launch its cube\n` +
+    `  borg quickstart          Create a cube and a drone for every role, then launch them\n` +
     `  borg assimilate [role]   Join or create a cube\n` +
     `  borg assimilate --host <host>   Join or create on an explicit server\n` +
     `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +

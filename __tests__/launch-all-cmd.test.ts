@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runLaunchAll, resolveLaunchDelayMs, DEFAULT_LAUNCH_DELAY_MS } from '../src/launch-all-cmd';
+import {
+  runLaunchAll,
+  resolveLaunchDelayMs,
+  DEFAULT_LAUNCH_DELAY_MS,
+  LAUNCH_ALL_NO_DISPATCH_EXIT_CODE,
+} from '../src/launch-all-cmd';
 import type { LaunchAllDeps } from '../src/launch-all-deps';
 import type { ActiveCube } from '../src/cubes';
 
@@ -186,6 +191,59 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect((deps.runSync as any).mock.calls.some((c: any[]) => c[1]?.[0] === 'new-session')).toBe(false);
   });
 
+  it('an internal quickstart roster filter excludes other saved cube drones', async () => {
+    const { paths, identities } = fleet(2);
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
+      runSync: vi.fn(() => porcelainFor(paths)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+    });
+    expect(await runLaunchAll(
+      { flags: { dryRun: true } },
+      deps,
+      { ...OPTS, droneIds: [did(2)] },
+    )).toBe(0);
+    expect(stdoutOf(deps)).toContain('drone-2');
+    expect(stdoutOf(deps)).not.toContain('drone-1');
+  });
+
+  it('a strict internal roster filter fails instead of misreporting a missing registration as launched', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
+      runSync: vi.fn(() => porcelainFor(paths)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+    });
+    expect(await runLaunchAll(
+      { flags: { dryRun: true } },
+      deps,
+      { ...OPTS, droneIds: [did(1), did(2)], requireAllRequested: true },
+    )).toBe(1);
+    expect(stderrOf(deps)).toContain('found 1 of 2 requested registered drone worktrees');
+    expect(stdoutOf(deps)).not.toContain('would launch');
+  });
+
+  it('a strict internal roster fails when a requested saved drone is terminally unlaunchable', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      runSync: vi.fn(() => porcelainFor(paths)),
+      readAllProjectIdentities: vi.fn(async () => identities),
+      probeSeat: vi.fn(async () => 'evicted' as const),
+    });
+    expect(await runLaunchAll(
+      { flags: {} },
+      deps,
+      {
+        ...OPTS,
+        droneIds: [did(1)],
+        requireAllRequested: true,
+        targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
+      },
+    )).toBe(1);
+    expect(stderrOf(deps)).toContain('1 requested registered drone(s) are not launchable');
+    expect(stdoutOf(deps)).not.toContain('launched');
+  });
+
   it('roster reconcile: seen_since true → VERIFIED in summary', async () => {
     const { paths, identities } = fleet(1);
     identities[0].cube.serverTrustIdentity = 'spki-sha256:local-server';
@@ -279,6 +337,27 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect(stdoutOf(deps)).toContain(`launch '${did(1)}'`);
   });
 
+  it('strict quickstart launch fails instead of treating native-Windows pastelist as dispatch', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      runSync: vi.fn((cmd: string) => cmd === 'git' ? porcelainFor(paths) : ''),
+      readAllProjectIdentities: vi.fn(async () => identities),
+      platform: vi.fn(() => 'win32'),
+    });
+    expect(await runLaunchAll(
+      { flags: { mode: 'tmux' } },
+      deps,
+      {
+        ...OPTS,
+        droneIds: [did(1)],
+        requireAllRequested: true,
+        targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
+      },
+    )).toBe(LAUNCH_ALL_NO_DISPATCH_EXIT_CODE);
+    expect(stderrOf(deps)).toContain('pastelist mode prints commands for manual use but does not launch sessions');
+    expect(stdoutOf(deps)).not.toContain(`launch '${did(1)}'`);
+  });
+
   it.each([
     '/Applications/iTerm.app',
     '/System/Applications/Utilities/Terminal.app',
@@ -313,6 +392,31 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(false);
     expect(stdoutOf(deps)).toContain(`launch '${did(1)}'`);
     expect(stderrOf(deps)).toContain('Falling back to pastelist mode');
+  });
+
+  it('strict quickstart launch fails when auto selection falls back to pastelist', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      readAllProjectIdentities: vi.fn(async () => identities),
+      isTTY: vi.fn(() => false),
+      runSync: vi.fn((cmd: string, args: string[]) => {
+        if (cmd === 'git') return porcelainFor(paths);
+        if (cmd === 'tmux' && args[0] === '-V') throw new Error('ENOENT');
+        return '';
+      }),
+    });
+    expect(await runLaunchAll(
+      { flags: {} },
+      deps,
+      {
+        ...OPTS,
+        droneIds: [did(1)],
+        requireAllRequested: true,
+        targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
+      },
+    )).toBe(LAUNCH_ALL_NO_DISPATCH_EXIT_CODE);
+    expect(stderrOf(deps)).toContain('pastelist mode prints commands for manual use but does not launch sessions');
+    expect(stdoutOf(deps)).not.toContain(`launch '${did(1)}'`);
   });
 
   it('explicit --mode terminals wins over tmux availability', async () => {

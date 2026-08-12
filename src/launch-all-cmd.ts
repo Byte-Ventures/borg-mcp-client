@@ -16,6 +16,9 @@ import { runPastelistBackend } from './backends/launch-all-pastelist.js';
 
 type Backend = 'tmux' | 'terminals' | 'pastelist';
 
+/** Internal strict-seam result: requested sessions were not dispatched. */
+export const LAUNCH_ALL_NO_DISPATCH_EXIT_CODE = 2;
+
 const TMUX_INSTALL_HINT =
   'borg launch-all: tmux not found.\n' +
   '  macOS:  brew install tmux\n' +
@@ -239,6 +242,12 @@ export interface RunLaunchAllOptions {
   sleep?: (ms: number) => Promise<void>;
   nowISO?: () => string;
   borgPath?: string;
+  /** Internal quickstart filter: launch only the requested staffed roster. */
+  droneIds?: readonly string[];
+  /** Fail when any requested registered drone cannot be discovered or launched. */
+  requireAllRequested?: boolean;
+  /** Internal resolved target avoids ambiguous same-name lookup during composition. */
+  targetCube?: { cubeId: string; name: string };
 }
 
 export async function runLaunchAll(
@@ -253,7 +262,7 @@ export async function runLaunchAll(
   const launchDelayMs = resolveLaunchDelayMs(args.flags.launchDelayMs, deps.getEnv('BORG_LAUNCH_DELAY_MS'));
 
   // 1. resolve target cube
-  const resolved = await resolveTargetCube(args, deps);
+  const resolved = opts.targetCube ?? await resolveTargetCube(args, deps);
   if ('error' in resolved) {
     deps.stderr(`borg launch-all: ${resolved.error}\n`);
     return 1;
@@ -264,7 +273,18 @@ export async function runLaunchAll(
   sweepStaleLocks(deps, cubeId, now());
 
   // 3. discover candidates
-  const discovered = await discoverDroneCandidates({ targetCubeId: cubeId, only: args.flags.only }, deps);
+  let discovered = await discoverDroneCandidates({ targetCubeId: cubeId, only: args.flags.only }, deps);
+  if (opts.droneIds !== undefined) {
+    const requested = new Set(opts.droneIds);
+    discovered = discovered.filter((candidate) => requested.has(candidate.droneId));
+    if (opts.requireAllRequested && discovered.length !== requested.size) {
+      deps.stderr(
+        `borg launch-all: found ${discovered.length} of ${requested.size} requested registered drone worktrees; ` +
+        'nothing was launched. Run `borg drones` to inspect the missing local registration.\n',
+      );
+      return 1;
+    }
+  }
   if (discovered.length === 0) {
     if (args.flags.only !== undefined) {
       deps.stdout(`No worktrees matched --only '${args.flags.only}' for cube '${cubeName}'\n`);
@@ -392,6 +412,14 @@ export async function runLaunchAll(
     }
     launchable.push(c);
   }
+  const terminalSkipCount = evictedCount + revokedCount + rejectedCount + trustMismatchCount + credentialRejectedCount;
+  if (opts.requireAllRequested && terminalSkipCount > 0) {
+    deps.stderr(
+      `borg launch-all: ${terminalSkipCount} requested registered drone(s) are not launchable; ` +
+      'nothing was launched. Resolve the cause reported above, then retry.\n',
+    );
+    return 1;
+  }
   if (launchable.length === 0) {
     // Accurate cause counts — an all-rejected sweep must NOT claim "evicted"
     // (and vice-versa). Only name a cause when at least one seat hit it.
@@ -440,6 +468,13 @@ export async function runLaunchAll(
   if ('hardFail' in sel) {
     deps.stderr(sel.hardFail);
     return 1;
+  }
+  if (sel.backend === 'pastelist' && opts.requireAllRequested) {
+    deps.stderr(
+      'borg launch-all: pastelist mode prints commands for manual use but does not launch sessions; ' +
+      'nothing was launched. Run `borg launch-all` separately to print the commands.\n',
+    );
+    return LAUNCH_ALL_NO_DISPATCH_EXIT_CODE;
   }
   const sessionName = sanitizeSessionName(cubeName);
   const launchStartISO = nowISO();

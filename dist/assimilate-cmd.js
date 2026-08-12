@@ -274,7 +274,7 @@ function diagnoseSessionTermination(deps, apiUrl, outcome, mode = 'assimilate') 
         `Next: run borg reset-local-connection, then ${recovery}.\n`);
     return 1;
 }
-export async function runAssimilate(args, deps) {
+export async function runAssimilate(args, deps, options = {}) {
     const mode = args.mode ?? 'assimilate';
     // ----- Input validation (before any subprocess work) -----
     // A role is a lookup key, not a path component. matchRoleByName() below
@@ -1451,6 +1451,24 @@ export async function runAssimilate(args, deps) {
     catch {
         /* gh#793: orphan GC is best-effort — never block or fail the assimilate */
     }
+    // The project hook belongs to a prepared drone, not to the terminal handoff.
+    // Quickstart suppresses only that handoff and later launches through launch-all.
+    try {
+        deps.installProjectSessionHook(agentCwd);
+    }
+    catch {
+        deps.stderr(`warning: could not install the project-local SessionStart hook in ${agentCwd}; it will be re-attempted on the next borg launch\n`);
+    }
+    options.onPrepared?.({
+        cubeId: result.cube_id,
+        cubeName: cubeDetail.name,
+        droneId: result.drone_id,
+        droneLabel: result.drone_label,
+        roleName: assignedRole.name,
+        worktree: seatWorktree,
+    });
+    if (options.launch === false)
+        return 0;
     // ----- Step 8: Launch selected agent CLI -----
     // Mirrors the kickoff invocation from claude.ts (no-args path): the agent
     // picks up the newly-persisted ActiveCube via the MCP stdio server on
@@ -1468,17 +1486,6 @@ export async function runAssimilate(args, deps) {
     // itself is cube-agnostic so non-default templates render identically.
     const useColor = deps.isTTY() && !process.env.NO_COLOR && !process.env.CI;
     deps.stdout(renderAssimilationWelcome(result.drone_label, assignedRole.name, cubeDetail.name, useColor, authority.kind === 'server' ? authority.apiUrl : undefined));
-    // gh#673 P2 (WI-1): install the project-local SessionStart orientation
-    // hook into the launch root — covers BOTH the freshly-spawned sibling
-    // worktree (agentCwd = the new worktree post-chdir) and the in-place /
-    // --here path. Best-effort: a hook-install failure must never block
-    // the assimilate (the bare-`borg` launcher re-ensures it).
-    try {
-        deps.installProjectSessionHook(agentCwd);
-    }
-    catch {
-        deps.stderr(`warning: could not install the project-local SessionStart hook in ${agentCwd}; it will be re-attempted on the next borg launch\n`);
-    }
     // BUG-5 / v0.9.3: probe MCP readiness before launching claude so
     // the launched session sees tools at startup. Non-blocking: probe
     // failure surfaces a stderr warning but the launch proceeds (the
