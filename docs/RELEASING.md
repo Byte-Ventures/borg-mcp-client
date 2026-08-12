@@ -370,9 +370,10 @@ No separate checksum file is needed: the tarball verifier records canonical
 SHA-512 SRI in the artifact report. GitHub's same-run artifact transport and the
 report bind the reviewed candidate without repeated SHA512 choreography.
 
-Rely on npm Trusted Publishing. Do not perform post-publication provenance
-readback or reconstruct DSSE, in-toto, SLSA, workflow-ref, or builder statements
-locally.
+Rely on npm Trusted Publishing. Perform the one authoritative registry
+provenance-attestation inspection at the approved-live boundary; do not
+reconstruct DSSE, in-toto, SLSA, workflow-ref, or builder statements locally or
+add redundant provenance readback.
 Do not add cross-run tuple variables, cross-run artifact selection, duplicate
 builds, duplicate package verification, checksum bundles, or SBOM ceremony.
 
