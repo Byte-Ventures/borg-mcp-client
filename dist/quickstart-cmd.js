@@ -283,10 +283,16 @@ export async function runQuickstart(args, deps) {
         catch (error) {
             diagnostic += `${error instanceof Error ? error.message : String(error)}\n`;
         }
-        if (code !== 0 || !prepared) {
+        const assignedRoleSlug = prepared ? roleSlug(prepared.roleName) : null;
+        const roleMismatch = assignedRoleSlug !== null && assignedRoleSlug !== target.role.slug;
+        if (code !== 0 || !prepared || roleMismatch) {
             deps.stderr(`✗ ${target.role.slug}\n`);
             if (diagnostic)
                 deps.stderr(diagnostic);
+            if (roleMismatch) {
+                deps.stderr(`borg quickstart: requested ${target.role.slug}, but the server assigned ${assignedRoleSlug}. ` +
+                    `The assigned drone was kept; it does not fill the requested ${target.role.slug} slot.\n`);
+            }
             const completed = targets.filter((item) => item.existing).length;
             const remaining = targets.filter((item) => !item.existing).map((item) => item.role);
             deps.stderr(`Stopped. ${completed} of ${requested.length} drones exist; ${remaining.map((role) => role.slug).join(', ')} ${remaining.length === 1 ? 'is' : 'are'} missing.\n` +

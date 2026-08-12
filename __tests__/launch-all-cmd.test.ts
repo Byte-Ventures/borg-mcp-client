@@ -332,6 +332,27 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect(stdoutOf(deps)).toContain(`launch '${did(1)}'`);
   });
 
+  it('strict quickstart launch fails instead of treating native-Windows pastelist as dispatch', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      runSync: vi.fn((cmd: string) => cmd === 'git' ? porcelainFor(paths) : ''),
+      readAllProjectIdentities: vi.fn(async () => identities),
+      platform: vi.fn(() => 'win32'),
+    });
+    expect(await runLaunchAll(
+      { flags: { mode: 'tmux' } },
+      deps,
+      {
+        ...OPTS,
+        droneIds: [did(1)],
+        requireAllRequested: true,
+        targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
+      },
+    )).toBe(1);
+    expect(stderrOf(deps)).toContain('pastelist mode prints commands for manual use but does not launch sessions');
+    expect(stdoutOf(deps)).not.toContain(`launch '${did(1)}'`);
+  });
+
   it.each([
     '/Applications/iTerm.app',
     '/System/Applications/Utilities/Terminal.app',
@@ -366,6 +387,31 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     expect((deps.runSync as any).mock.calls.some((c: any[]) => c[0] === 'osascript')).toBe(false);
     expect(stdoutOf(deps)).toContain(`launch '${did(1)}'`);
     expect(stderrOf(deps)).toContain('Falling back to pastelist mode');
+  });
+
+  it('strict quickstart launch fails when auto selection falls back to pastelist', async () => {
+    const { paths, identities } = fleet(1);
+    const deps = makeStubDeps({
+      readAllProjectIdentities: vi.fn(async () => identities),
+      isTTY: vi.fn(() => false),
+      runSync: vi.fn((cmd: string, args: string[]) => {
+        if (cmd === 'git') return porcelainFor(paths);
+        if (cmd === 'tmux' && args[0] === '-V') throw new Error('ENOENT');
+        return '';
+      }),
+    });
+    expect(await runLaunchAll(
+      { flags: {} },
+      deps,
+      {
+        ...OPTS,
+        droneIds: [did(1)],
+        requireAllRequested: true,
+        targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
+      },
+    )).toBe(1);
+    expect(stderrOf(deps)).toContain('pastelist mode prints commands for manual use but does not launch sessions');
+    expect(stdoutOf(deps)).not.toContain(`launch '${did(1)}'`);
   });
 
   it('explicit --mode terminals wins over tmux availability', async () => {

@@ -18,7 +18,9 @@ function makeDeps(options: {
   identities?: Array<{ projectPath: string; cube: ActiveCube }>;
   prompts?: string[];
   assimilateCodes?: number[];
+  assignedRoles?: string[];
   launchCode?: number;
+  launchOutput?: string;
   tty?: boolean;
 } = {}) {
   const output: string[] = [];
@@ -46,7 +48,8 @@ function makeDeps(options: {
     const code = options.assimilateCodes?.[sequence] ?? 0;
     sequence += 1;
     if (code === 0) {
-      const roleName = _args.role === 'coordinator' ? 'Coordinator' : _args.role === 'builder' ? 'Builder' : _args.role!;
+      const roleName = options.assignedRoles?.[sequence - 1]
+        ?? (_args.role === 'coordinator' ? 'Coordinator' : _args.role === 'builder' ? 'Builder' : _args.role!);
       const prepared: PreparedAssimilation = {
         cubeId: 'cube-1',
         cubeName: 'borg-mcp',
@@ -59,7 +62,10 @@ function makeDeps(options: {
     }
     return code;
   });
-  const runLaunchAll = vi.fn(async () => options.launchCode ?? 0);
+  const runLaunchAll = vi.fn(async (_args, launchDeps) => {
+    if (options.launchOutput) launchDeps.stderr(options.launchOutput);
+    return options.launchCode ?? 0;
+  });
   const deps: QuickstartDeps = {
     buildAssimilateDeps: () => assimilateDeps,
     buildLaunchAllDeps: () => ({}) as LaunchAllDeps,
@@ -181,11 +187,64 @@ describe('runQuickstart', () => {
     expect(rig.runLaunchAll).not.toHaveBeenCalled();
   });
 
+  it('keeps a fallback-assigned drone but does not count it as the requested role on retry', async () => {
+    const identities: Array<{ projectPath: string; cube: ActiveCube }> = [];
+    const rig = makeDeps({ identities, assignedRoles: ['Builder', 'Coordinator'] });
+    const args = {
+      template: 'software-dev',
+      roles: [{ slug: 'coordinator', count: 1 }, { slug: 'builder', count: 1 }],
+      yes: true,
+    };
+
+    expect(await runQuickstart(args, rig.deps)).toBe(1);
+    expect(rig.errors.join('')).toContain(
+      'requested coordinator, but the server assigned builder. The assigned drone was kept; ' +
+      'it does not fill the requested coordinator slot.',
+    );
+    expect(rig.output.join('')).not.toContain('is staffed');
+    expect(rig.runLaunchAll).not.toHaveBeenCalled();
+
+    identities.push({
+      projectPath: '/worktrees/coordinator-1',
+      cube: {
+        cubeId: 'cube-1',
+        droneId: '00000000-0000-4000-8000-000000000001',
+        name: 'borg-mcp',
+        sessionToken: 'token',
+        droneLabel: 'builder-fallback',
+        apiUrl: 'https://127.0.0.1:7091',
+        roleName: 'Builder',
+      },
+    });
+    rig.assimilateDeps.getRepositoryAssociation = vi.fn(async () => ({
+      cubeId: 'cube-1', name: 'borg-mcp', workingRepoName: 'borg-mcp', template: 'software-dev',
+    }));
+
+    expect(await runQuickstart(args, rig.deps)).toBe(0);
+    expect(rig.runAssimilate).toHaveBeenCalledTimes(2);
+    expect(rig.runAssimilate.mock.calls[1][0].role).toBe('coordinator');
+    expect(rig.runLaunchAll).toHaveBeenCalledOnce();
+  });
+
   it('leaves the staffed roster and points launch failures to launch-all', async () => {
     const rig = makeDeps({ launchCode: 1 });
     expect(await runQuickstart({
       template: 'software-dev', roles: [{ slug: 'builder', count: 1 }], yes: true,
     }, rig.deps)).toBe(1);
     expect(rig.errors.join('')).toContain('run `borg launch-all`');
+  });
+
+  it('propagates strict pastelist no-dispatch as failure without launched copy', async () => {
+    const rig = makeDeps({
+      launchCode: 1,
+      launchOutput: 'borg launch-all: pastelist mode does not launch sessions; nothing was launched.\n',
+    });
+    expect(await runQuickstart({
+      template: 'software-dev', roles: [{ slug: 'builder', count: 1 }], yes: true,
+    }, rig.deps)).toBe(1);
+    expect(rig.runLaunchAll.mock.calls[0][2]).toEqual(expect.objectContaining({ requireAllRequested: true }));
+    expect(rig.errors.join('')).toContain('pastelist mode does not launch sessions');
+    expect(rig.output.join('')).not.toContain('drone launched');
+    expect(rig.output.join('')).not.toContain('is staffed');
   });
 });

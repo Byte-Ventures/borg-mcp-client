@@ -466,6 +466,13 @@ export async function runLaunchAll(
     deps.stderr(sel.hardFail);
     return 1;
   }
+  if (sel.backend === 'pastelist' && opts.requireAllRequested) {
+    deps.stderr(
+      'borg launch-all: pastelist mode prints commands for manual use but does not launch sessions; ' +
+      'nothing was launched. Run `borg launch-all` separately to print the commands.\n',
+    );
+    return 1;
+  }
   const sessionName = sanitizeSessionName(cubeName);
   const launchStartISO = nowISO();
 
