@@ -51,6 +51,47 @@ const RELEASE_PR = {
   body: 'Release identity.\n\n## Ships\n\nExact shipped work.',
 };
 
+const RELEASE_COMMIT = 'f'.repeat(40);
+const RELEASE_RUN = {
+  id: 31571341231,
+  run_attempt: 1,
+  status: 'completed',
+  conclusion: 'success',
+  head_sha: RELEASE_COMMIT,
+  head_branch: 'v3.9.0',
+  event: 'push',
+};
+
+function githubReleaseBindingDeps({
+  tagType = 'tag',
+  tagMessage = 'borgmcp 3.9.0',
+  workflowPath = 'publish.yml',
+  workflowRuns = [RELEASE_RUN],
+} = {}) {
+  return {
+    allowMissingToken: true,
+    git: (args) => {
+      const command = args.join(' ');
+      if (command.includes('cat-file -t')) return tagType;
+      if (command.includes('rev-parse')) return RELEASE_COMMIT;
+      if (command.includes('for-each-ref')) return tagMessage;
+      if (command.includes('show -s')) return 'Merge pull request #443 from Byte-Ventures/release/3.9.0';
+      throw new Error(`unexpected git command: ${command}`);
+    },
+    ghJson: (path) => {
+      if (path.endsWith(`/commits/${RELEASE_COMMIT}/pulls`)) return [RELEASE_PR];
+      if (path.includes(`/actions/workflows/${workflowPath}/runs?`)) {
+        return { workflow_runs: workflowRuns };
+      }
+      if (path.includes('/actions/workflows/')) return { workflow_runs: [] };
+      throw new Error(`unexpected API path: ${path}`);
+    },
+    downloadArtifact: () => {
+      throw new Error('invalid source binding reached artifact download');
+    },
+  };
+}
+
 test('GitHub Release binding fails closed on every release PR mismatch', () => {
   const options = {
     version: '3.9.0',
@@ -100,6 +141,44 @@ test('release runbook pins the operator GitHub Release invocation', async () => 
     runbook.match(/GITHUB_TOKEN="\$\(gh auth token\)" node scripts\/create-github-release\.mjs <version>/g)?.length,
     1,
   );
+});
+
+test('GitHub Release creation rejects invalid tag bindings', async (t) => {
+  for (const { name, options, pattern } of [
+    { name: 'non-annotated tag', options: { tagType: 'commit' }, pattern: /annotated tag/ },
+    { name: 'empty annotated-tag message', options: { tagMessage: '' }, pattern: /must have a message/ },
+  ]) {
+    await t.test(name, async () => {
+      await assert.rejects(
+        () => createGithubRelease('3.9.0', githubReleaseBindingDeps(options)),
+        pattern,
+      );
+    });
+  }
+});
+
+test('GitHub Release creation rejects every invalid publish-run binding', async (t) => {
+  const cases = [
+    { name: 'wrong workflow path', options: { workflowPath: 'release.yml' } },
+    { name: 'wrong head SHA', run: { head_sha: 'a'.repeat(40) } },
+    { name: 'wrong v-tag branch', run: { head_branch: 'v3.9.1' } },
+    { name: 'non-first attempt', run: { run_attempt: 2 } },
+    { name: 'incomplete status', run: { status: 'in_progress' } },
+    { name: 'unsuccessful conclusion', run: { conclusion: 'failure' } },
+    { name: 'wrong event', run: { event: 'workflow_dispatch' } },
+    { name: 'zero matching runs', options: { workflowRuns: [] } },
+    { name: 'multiple matching runs', options: { workflowRuns: [RELEASE_RUN, { ...RELEASE_RUN, id: 31571341232 }] } },
+  ];
+
+  for (const { name, run, options = {} } of cases) {
+    await t.test(name, async () => {
+      const workflowRuns = run ? [{ ...RELEASE_RUN, ...run }] : options.workflowRuns;
+      await assert.rejects(
+        () => createGithubRelease('3.9.0', githubReleaseBindingDeps({ ...options, workflowRuns })),
+        /exactly one successful attempt-1 publish workflow run/,
+      );
+    });
+  }
 });
 
 test('GitHub Release creation gates on the tag-run artifact and live npm integrity', async () => {
