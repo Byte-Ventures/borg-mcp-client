@@ -335,7 +335,7 @@ async function packedFixture(mutator) {
   return { directory, tarball };
 }
 
-test('release workflow uses one package authority and one protected publish with no post-publish readback', async () => {
+test('release workflow uses one package authority and one protected stage with no post-stage readback', async () => {
   const workflow = await readFile(join(root, '.github', 'workflows', 'publish.yml'), 'utf8');
   const [verification = '', afterVerify = ''] = workflow.split('\n  publish:\n');
   const publication = afterVerify;
@@ -349,7 +349,10 @@ test('release workflow uses one package authority and one protected publish with
   assert.doesNotMatch(workflow, /\n  registry-verification:\n/);
   assert.equal((workflow.match(/id-token: write/g) ?? []).length, 1);
   assert.doesNotMatch(workflow, /secrets\.NPM_TOKEN|NPM_TOKEN_PRESENT/);
-  assert.equal((workflow.match(/npm publish "\.\/release\//g) ?? []).length, 1);
+  const stagedPublish = 'npm stage publish "./release/${{ needs.verify.outputs.tarball }}" --ignore-scripts --access public --provenance --registry=https://registry.npmjs.org';
+  assert.equal(workflow.split(stagedPublish).length - 1, 1);
+  assert.doesNotMatch(workflow, /^\s*npm publish\b/m);
+  assert.doesNotMatch(workflow, /--tag[= ]staging|npm dist-tag\b/);
   assert.equal((workflow.match(/--provenance/g) ?? []).length, 1);
   assert.doesNotMatch(workflow, /SHA512SUMS|sha512sum|DSSE|in-toto|SLSA/);
   assert.equal((workflow.match(/verify-release-trigger\.mjs/g) ?? []).length, 1);
@@ -391,6 +394,7 @@ test('release workflow uses one package authority and one protected publish with
   assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_URL:-\}"/);
   assert.match(publication, /test -n "\$\{ACTIONS_ID_TOKEN_REQUEST_TOKEN:-\}"/);
   assert.match(publication, /test -z "\$\{NODE_AUTH_TOKEN:-\}"/);
+  assert.ok(publication.indexOf('verify-registry-release.mjs prepublish') < publication.indexOf(stagedPublish));
   assert.doesNotMatch(workflow, /verify-registry-release\.mjs postpublish/);
   assert.doesNotMatch(workflow, /npm audit signatures/);
   assert.doesNotMatch(workflow, /CLIENT_NPM_PUBLICATION|Confirm publication remains deferred/);

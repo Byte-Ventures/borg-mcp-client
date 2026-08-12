@@ -1,8 +1,9 @@
 # Publishing `borgmcp`
 
-The GitHub Actions workflow publishes one immutable, reviewed `borgmcp` version
-from a protected annotated tag. The protected publish job uses npm Trusted
-Publishing; no long-lived npm token is stored or exposed.
+The GitHub Actions workflow submits one immutable, reviewed `borgmcp` tarball to
+npm staged publishing from a protected annotated tag. A designated operator
+later approves that stage to make the version live. The protected stage job uses
+npm Trusted Publishing; no long-lived npm token is stored or exposed.
 
 ## Release Integrity
 
@@ -22,9 +23,9 @@ Before creating the release tag, independently verify all of these conditions:
 - the exact audited registry dependency `borgmcp-shared@0.11.0` remains locked to
   its canonical tarball and integrity
   `sha512-I8mixCbSrLKyOAAyqEI/HZJ8cML2rz3r812Up8pr547OdAk9LxZevdCo7ojG42ZwrUmS5u7iKQPg7Vk1XvtX1g==`;
-- the coupled client/server release is published only after the server artifact
-  is rebuilt against `borgmcp-shared@0.11.0` and both pass the complete local
-  dogfood gate;
+- the coupled shared/server/client candidates have all been built against the
+  same exact `borgmcp-shared` version and passed the complete local dogfood gate
+  before any stage is approved;
 - the selected stable client version is unused and the exact release commit is
   on protected `main`;
 - the repository and protected npm environment settings pass an operator audit;
@@ -54,7 +55,9 @@ Before preparing a candidate, independently verify:
    existing `borgmcp` package. It must contain no npm token.
 2. npm Trusted Publishing is configured for organization `Byte-Ventures`,
    repository `borg-mcp-client`, workflow `publish.yml`, and environment
-   `npm-publish`.
+   `npm-publish`. Its allowed actions enable `npm stage publish` and disable
+   direct `npm publish`; package publishing requires two-factor authentication
+   and disallows tokens.
 3. `refs/tags/v*.*.*` cannot be updated, deleted, or force-moved. Release tags
    are annotated, match the package version, and point to a commit on protected
    `main`.
@@ -292,32 +295,71 @@ The unprivileged `verify` job performs one sequence:
    release artifact.
 
 After `verify` succeeds, the designated Queen operator alone approves the
-`npm-publish` environment. There is no separate pre-publication exact-artifact
+`npm-publish` environment. There is no separate pre-stage exact-artifact
 Security gate: the verify job is the mechanical authority for the exact bytes
-that the publish job consumes. Environment approval authorizes publication; it
-does not permit a rerun, a rebuilt artifact, or approval by another actor.
+that the stage job consumes. Environment approval authorizes submitting those
+bytes to npm's private staged-publishing service; it does not make the version
+public, permit a rerun or rebuilt artifact, or authorize approval by another
+actor.
 
 The protected `publish` job alone receives `id-token: write`. It downloads the
 same-run artifact and rejects a report whose package name or version differs
 from the release, a version that already exists, an unclaimed package, or an
 owner set that differs from `NPM_EXPECTED_OWNER`. It requires the GitHub OIDC
-request context, rejects a legacy `NODE_AUTH_TOKEN`, and publishes the exact
-tarball path once with lifecycle scripts disabled and provenance enabled. It
+request context, rejects a legacy `NODE_AUTH_TOKEN`, and stages the exact tarball
+path once with lifecycle scripts disabled and provenance enabled. It
 does not install project dependencies, rebuild, retest, repack, or reverify the
 package.
 
-Successful completion of `npm publish` is the terminal release boundary. There
-is no post-publication registry readback job: registry metadata and install
-visibility propagate asynchronously and cannot invalidate an immutable
-publication after npm accepts it.
+Successful completion of the workflow means npm accepted the immutable staged
+tarball. It does not mean the version is public. Stage acceptance consumes the
+tagged attempt and version under the burned-version rule, but must not trigger
+release announcements, issue closure, consumer pins, site synchronization, or
+claims that the version was published. There is no workflow registry readback:
+stage inspection and approval require an interactive npm identity and cannot use
+the workflow's OIDC credential.
+
+### Coupled stage approval
+
+Before approving anything, the operator requires successful stage workflows for
+`borgmcp-shared`, `borgmcp-server`, and `borgmcp`. Use authenticated
+`npm stage list` and `npm stage view <UUID>` to record and inspect all three stage
+UUIDs. Verify each package, version, eventual `latest` tag, source tag/run/commit,
+artifact identity, and provenance. Download the staged tarballs when needed to
+exercise the exact coupled set. Confirm that public `latest`, public `versions`,
+and client update resolution still expose the prior coherent release set. If a
+pending stage appears on any public surface, approve nothing and halt this
+mechanism before consumers can observe it.
+
+Approve the verified UUIDs in one operator session, using interactive 2FA, in
+this exact order:
+
+1. `npm stage approve <shared-stage-uuid>`
+2. `npm stage approve <server-stage-uuid>`
+3. `npm stage approve <client-stage-uuid>`
+
+The approvals are not atomic. Shared approval leaves existing client and server
+pins coherent. Server approval opens a bounded mismatch window between public
+server `latest` and client `latest`; client approval closes it. After an approval
+returns successfully, continue only while the next stage remains valid. For an
+ambiguous result, inspect authenticated stage state and canonical public package
+version/integrity before acting; never repeat an approval blindly.
+
+The terminal release boundary is successful interactive stage approval followed
+by canonical registry visibility and integrity verification. Only then may the
+release be announced, issues closed, consumer pins or site data synchronized, or
+the version described as published. Provenance created by Trusted Publishing is
+carried from the stage to the live package.
 
 Separately, once the release is installable from the canonical registry, install
 it into an isolated prefix and exercise the real user update path end to end.
-This is product verification, not publication validation: failure routes a new
+This is product verification, not candidate validation: failure routes a new
 reviewed fix and never invalidates, rebuilds, retags, or reruns the immutable
-release. Do not repeat byte comparisons, integrity/SRI checks, packed-version
-checks, source-tree verification, dist-tag readback, or provenance readback that
-the exact-artifact `verify` and publish jobs already completed.
+release. Do not repeat byte comparisons, packed-version checks, source-tree
+verification, dist-tag readback, or provenance reconstruction that the
+exact-artifact `verify` and stage jobs already completed. The canonical
+live-version integrity check is required because it establishes the approval
+boundary; it is not a duplicate candidate verification.
 
 No separate checksum file is needed: the tarball verifier records canonical
 SHA-512 SRI in the artifact report. GitHub's same-run artifact transport and the
@@ -336,3 +378,14 @@ authorization evidence is missing or inconsistent. Never move or reuse a failed
 tag, rerun a failed release workflow, overwrite an npm version, unpublish to hide
 a failure, or substitute a local rebuild. Recovery starts from a fresh reviewed
 source change and, after any registry mutation, a separately authorized version.
+
+Before any approval, missing or inconsistent stage evidence means approve none.
+Reject all three stages only when abandoning the coupled candidate; Borg treats
+every rejected or unusable tagged stage as burned, even though npm permits some
+re-staging. Replacement versions require fresh review, tags, and stage runs.
+After shared approval but before server approval, stopping is compatibility-safe
+for the existing client/server pair, but shared is immutable and any repair uses
+fresh versions. After server approval, prioritize the already-verified client
+approval because the public pair is mismatched. If that client stage cannot be
+approved, do not reject it or rerun the tag; prepare newly reviewed matching
+server/client recovery versions and state the live mismatch window explicitly.
