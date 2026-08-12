@@ -324,12 +324,15 @@ the workflow's OIDC credential.
 Before approving anything, the operator requires successful stage workflows for
 `borgmcp-shared`, `borgmcp-server`, and `borgmcp`. Use authenticated
 `npm stage list` and `npm stage view <UUID>` to record and inspect all three stage
-UUIDs. Verify each package, version, eventual `latest` tag, source tag/run/commit,
-artifact identity, and provenance. Download the staged tarballs when needed to
-exercise the exact coupled set. Confirm that public `latest`, public `versions`,
-and client update resolution still expose the prior coherent release set. If a
-pending stage appears on any public surface, approve nothing and halt this
-mechanism before consumers can observe it.
+UUIDs and verify each package, version, and eventual `latest` tag. For every
+package, `npm stage download <UUID>` is mandatory; compute its SHA-512 SRI and
+require an exact match with that workflow run's same-run artifact report. Bind
+the source annotated tag object, commit, and workflow run separately from GitHub
+evidence, because npm stage inspection does not expose them. Exercise the exact
+downloaded coupled set before approval. Confirm that public `latest`, public
+`versions`, and client update resolution still expose the prior coherent release
+set. If a pending stage appears on any public surface, approve nothing and halt
+this mechanism before consumers can observe it.
 
 Approve the verified UUIDs in one operator session, using interactive 2FA, in
 this exact order:
@@ -346,10 +349,12 @@ ambiguous result, inspect authenticated stage state and canonical public package
 version/integrity before acting; never repeat an approval blindly.
 
 The terminal release boundary is successful interactive stage approval followed
-by canonical registry visibility and integrity verification. Only then may the
-release be announced, issues closed, consumer pins or site data synchronized, or
-the version described as published. Provenance created by Trusted Publishing is
-carried from the stage to the live package.
+by canonical registry visibility, integrity verification, and registry
+provenance-attestation inspection. Stage inspection cannot establish provenance
+before approval; Trusted Publishing carries it to the live package, where the
+registry attestation is authoritative. Only then may the release be announced,
+issues closed, consumer pins or site data synchronized, or the version described
+as published.
 
 Separately, once the release is installable from the canonical registry, install
 it into an isolated prefix and exercise the real user update path end to end.
