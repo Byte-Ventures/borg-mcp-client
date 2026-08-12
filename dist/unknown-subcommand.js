@@ -20,7 +20,7 @@ export const KNOWN_SUBCOMMANDS = [
     'recover-enrollment',
     'spawn',
     'cleanup',
-    'seats',
+    'drones',
     'launch',
     'launch-all',
     'server',

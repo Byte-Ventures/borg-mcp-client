@@ -207,11 +207,11 @@ async function main() {
         const code = await runCleanup({}, parsed.options);
         process.exit(code);
     }
-    if (process.argv[2] === 'seats') {
+    if (process.argv[2] === 'drones') {
         const parsed = parseSeatsArgs(process.argv.slice(3));
         if (!parsed.ok) {
-            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg seats: ${parsed.error}\n`));
-            process.stderr.write(`Run \`borg seats --help\` for usage.\n`);
+            process.stderr.write(chalk.red(`${consolePrefix()}◼ borg drones: ${parsed.error}\n`));
+            process.stderr.write(`Run \`borg drones --help\` for usage.\n`);
             process.exit(1);
         }
         process.exit(await runSeats(buildDefaultSeatCommandDeps()));
