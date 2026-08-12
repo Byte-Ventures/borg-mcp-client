@@ -12,11 +12,13 @@ import { NEW_CUBE_TEMPLATE_PRESENTATIONS } from 'borgmcp-shared/templates';
 import {
   assimilateHelpText,
   cleanupHelpText,
+  cloneHelpText,
   clientSubcommandHelpText,
   cubeInitHelpText,
   isHelpFlag,
   launchSeatHelpText,
   launchAllHelpText,
+  quickstartHelpText,
   doctorHelpText,
   resetLocalSeatHelpText,
   recoverEnrollmentHelpText,
@@ -66,6 +68,8 @@ describe('gh#611 — top-level borg --help', () => {
 describe('client subcommand help', () => {
   it.each([
     ['setup', setupHelpText],
+    ['clone', cloneHelpText],
+    ['quickstart', quickstartHelpText],
     ['assimilate', assimilateHelpText],
     ['reset-local-connection', resetLocalSeatHelpText],
     ['recover-enrollment', recoverEnrollmentHelpText],
@@ -145,7 +149,7 @@ describe('setup completion copy', () => {
     const text = setupNextStepsText();
     expect(text).not.toContain('`borg server setup`');
     expect(text).toContain('`borg server start`');
-    expect(text).toContain('`borg assimilate`');
+    expect(text).toContain('`borg quickstart`');
     expect(text).toMatch(/second terminal/i);
     expect(text).not.toMatch(/--host|--enroll|borg-mcp-server/);
   });

@@ -14,6 +14,15 @@ export interface RunLaunchAllOptions {
     sleep?: (ms: number) => Promise<void>;
     nowISO?: () => string;
     borgPath?: string;
+    /** Internal quickstart filter: launch only the requested staffed roster. */
+    droneIds?: readonly string[];
+    /** Fail when any requested registered drone cannot be discovered or launched. */
+    requireAllRequested?: boolean;
+    /** Internal resolved target avoids ambiguous same-name lookup during composition. */
+    targetCube?: {
+        cubeId: string;
+        name: string;
+    };
 }
 export declare function runLaunchAll(args: LaunchAllArgs, deps: LaunchAllDeps, opts?: RunLaunchAllOptions): Promise<number>;
 //# sourceMappingURL=launch-all-cmd.d.ts.map

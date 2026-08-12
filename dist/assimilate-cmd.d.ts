@@ -31,6 +31,19 @@ export interface AssimilateArgs {
     flags: AssimilateFlags;
     mode?: 'assimilate' | 'cube-init';
 }
+export interface PreparedAssimilation {
+    cubeId: string;
+    cubeName: string;
+    droneId: string;
+    droneLabel: string;
+    roleName: string;
+    worktree: string;
+}
+export interface RunAssimilateOptions {
+    /** Internal composition seam for quickstart; the public assimilate command always launches. */
+    launch?: boolean;
+    onPrepared?: (prepared: PreparedAssimilation) => void;
+}
 export interface CubeSummary {
     id: string;
     name: string;
@@ -233,7 +246,7 @@ type AssimilationAuthority = {
     kind: 'server';
     apiUrl: string;
 };
-export declare function runAssimilate(args: AssimilateArgs, deps: AssimilateDeps): Promise<number>;
+export declare function runAssimilate(args: AssimilateArgs, deps: AssimilateDeps, options?: RunAssimilateOptions): Promise<number>;
 /**
  * Sprint 4 / gh#147 (drone-8 SR-PE-FINDING-1): strip ASCII control
  * characters before interpolating subprocess stderr into operator-

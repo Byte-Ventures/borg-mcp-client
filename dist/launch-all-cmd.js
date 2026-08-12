@@ -206,7 +206,7 @@ export async function runLaunchAll(args, deps, opts = {}) {
     const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     const launchDelayMs = resolveLaunchDelayMs(args.flags.launchDelayMs, deps.getEnv('BORG_LAUNCH_DELAY_MS'));
     // 1. resolve target cube
-    const resolved = await resolveTargetCube(args, deps);
+    const resolved = opts.targetCube ?? await resolveTargetCube(args, deps);
     if ('error' in resolved) {
         deps.stderr(`borg launch-all: ${resolved.error}\n`);
         return 1;
@@ -215,7 +215,16 @@ export async function runLaunchAll(args, deps, opts = {}) {
     // 2. sweep stale locks before discovery
     sweepStaleLocks(deps, cubeId, now());
     // 3. discover candidates
-    const discovered = await discoverDroneCandidates({ targetCubeId: cubeId, only: args.flags.only }, deps);
+    let discovered = await discoverDroneCandidates({ targetCubeId: cubeId, only: args.flags.only }, deps);
+    if (opts.droneIds !== undefined) {
+        const requested = new Set(opts.droneIds);
+        discovered = discovered.filter((candidate) => requested.has(candidate.droneId));
+        if (opts.requireAllRequested && discovered.length !== requested.size) {
+            deps.stderr(`borg launch-all: found ${discovered.length} of ${requested.size} requested registered drone worktrees; ` +
+                'nothing was launched. Run `borg drones` to inspect the missing local registration.\n');
+            return 1;
+        }
+    }
     if (discovered.length === 0) {
         if (args.flags.only !== undefined) {
             deps.stdout(`No worktrees matched --only '${args.flags.only}' for cube '${cubeName}'\n`);
@@ -323,6 +332,12 @@ export async function runLaunchAll(args, deps, opts = {}) {
             deps.stderr(`note: could not confirm ${c.droneLabel} is live (network/transient) — launching anyway.\n`);
         }
         launchable.push(c);
+    }
+    const terminalSkipCount = evictedCount + revokedCount + rejectedCount + trustMismatchCount + credentialRejectedCount;
+    if (opts.requireAllRequested && terminalSkipCount > 0) {
+        deps.stderr(`borg launch-all: ${terminalSkipCount} requested registered drone(s) are not launchable; ` +
+            'nothing was launched. Resolve the cause reported above, then retry.\n');
+        return 1;
     }
     if (launchable.length === 0) {
         // Accurate cause counts — an all-rejected sweep must NOT claim "evicted"
