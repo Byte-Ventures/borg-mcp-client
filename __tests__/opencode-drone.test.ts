@@ -483,6 +483,61 @@ describe('OpenCode wake target binding', () => {
     });
   });
 
+  it('preserves one durable submission across a session switch and MCP-child reconnect', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('pending-session-switch');
+    const initial = session('pending-switch-initial', 10);
+    const switched = session('pending-switch-new', 20);
+    let sessions = [initial];
+    const api = installOpenCodeApi({
+      sessions: () => sessions,
+      messages: {
+        [initial.id]: kickoffMessages(launch.prompt),
+        [switched.id]: [],
+      },
+      // Model a successful prompt_async whose generated message is not yet
+      // visible in either session history.
+      messageListResponse: ({ sessionId }) => new Response(JSON.stringify(
+        sessionId === initial.id ? kickoffMessages(launch.prompt) : [],
+      ), { status: 200 }),
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const first = injectOpenCodeEntry(
+      'one durable wake',
+      'wake-before-switch',
+      true,
+      'source-session-switch',
+    );
+    await vi.advanceTimersByTimeAsync(4_250);
+    await expect(first).resolves.toBe(true);
+    expect(api.promptBodies).toHaveLength(1);
+
+    sessions = [initial, switched];
+    const afterSwitch = injectOpenCodeEntry(
+      'one durable wake',
+      'wake-after-switch',
+      true,
+      'source-session-switch',
+    );
+    await vi.advanceTimersByTimeAsync(4_250);
+    await expect(afterSwitch).resolves.toBe(true);
+
+    disconnectOpenCodeDrone();
+    await connect();
+    const afterReconnect = injectOpenCodeEntry(
+      'one durable wake',
+      'wake-after-reconnect',
+      true,
+      'source-session-switch',
+    );
+    await vi.advanceTimersByTimeAsync(4_250);
+    await expect(afterReconnect).resolves.toBe(true);
+
+    expect(api.promptBodies).toHaveLength(1);
+  });
+
   it('confirms a delayed prior-process submission on replay without posting again', async () => {
     vi.useFakeTimers();
     const launch = launchKickoff('prior-process-replay');

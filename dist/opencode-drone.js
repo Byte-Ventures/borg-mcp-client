@@ -172,7 +172,9 @@ function bindingMatchesState(binding) {
         && Array.isArray(binding.knownRootSessionIds)
         && binding.knownRootSessionIds.every((id) => typeof id === 'string')
         && Array.isArray(binding.pendingSubmissions)
-        && binding.pendingSubmissions.every((pending) => typeof pending?.entryId === 'string' && typeof pending?.sourceEntryId === 'string');
+        && binding.pendingSubmissions.every((pending) => typeof pending?.entryId === 'string'
+            && typeof pending?.sourceEntryId === 'string'
+            && (pending.sessionId === undefined || typeof pending.sessionId === 'string'));
 }
 function readBinding() {
     try {
@@ -193,7 +195,11 @@ function clearBinding() {
     state.sessionId = null;
     state.sessionCreatedAt = null;
     state.knownRootSessionIds = [];
-    state.pendingSubmissions.clear();
+    // A missing/replaced target does not prove that an earlier prompt_async was
+    // rejected. Keep its durable submission marker (and origin session) so a
+    // replacement binding and later MCP-child reconnect remain confirmation-only.
+    if (state.pendingSubmissions.size > 0)
+        return;
     try {
         unlinkSync(path);
     }
@@ -220,9 +226,6 @@ function writeBinding(binding) {
 }
 function saveBinding(session, knownRootSessionIds) {
     const current = state;
-    if (current.sessionId !== null && current.sessionId !== session.id) {
-        current.pendingSubmissions.clear();
-    }
     const binding = {
         version: 3,
         sessionId: session.id,
@@ -232,9 +235,10 @@ function saveBinding(session, knownRootSessionIds) {
         directory: current.directory,
         droneLabel: current.droneLabel,
         cubeName: current.cubeName,
-        pendingSubmissions: [...current.pendingSubmissions].map(([entryId, sourceEntryId]) => ({
+        pendingSubmissions: [...current.pendingSubmissions].map(([entryId, pending]) => ({
             entryId,
-            sourceEntryId,
+            sourceEntryId: pending.sourceEntryId,
+            sessionId: pending.sessionId,
         })),
     };
     writeBinding(binding);
@@ -252,9 +256,10 @@ function persistCurrentBinding() {
         directory: current.directory,
         droneLabel: current.droneLabel,
         cubeName: current.cubeName,
-        pendingSubmissions: [...current.pendingSubmissions].map(([entryId, sourceEntryId]) => ({
+        pendingSubmissions: [...current.pendingSubmissions].map(([entryId, pending]) => ({
             entryId,
-            sourceEntryId,
+            sourceEntryId: pending.sourceEntryId,
+            sessionId: pending.sessionId,
         })),
     });
 }
@@ -271,9 +276,10 @@ function restoreBinding() {
             directory: state.directory,
             droneLabel: state.droneLabel,
             cubeName: state.cubeName,
-            pendingSubmissions: [...state.pendingSubmissions].map(([entryId, sourceEntryId]) => ({
+            pendingSubmissions: [...state.pendingSubmissions].map(([entryId, pending]) => ({
                 entryId,
-                sourceEntryId,
+                sourceEntryId: pending.sourceEntryId,
+                sessionId: pending.sessionId,
             })),
         };
     }
@@ -285,7 +291,10 @@ function restoreBinding() {
     state.knownRootSessionIds = binding.knownRootSessionIds;
     state.pendingSubmissions = new Map(binding.pendingSubmissions.map((pending) => [
         pending.entryId,
-        pending.sourceEntryId,
+        {
+            sourceEntryId: pending.sourceEntryId,
+            sessionId: pending.sessionId ?? binding.sessionId,
+        },
     ]));
     return binding;
 }
@@ -478,12 +487,15 @@ async function deliverOpenCodeEntry(owner, delivery) {
             }
             delivery.sessionId = target.id;
         }
+        const pendingSubmission = owner.pendingSubmissions.get(delivery.entryId);
+        const confirmationSessionId = pendingSubmission?.sessionId ?? target.id;
+        delivery.sessionId = confirmationSessionId;
         try {
-            const deliveredIdentity = await findInjectedMessage(target.id, delivery.entryId) ?? (delivery.sourceEntryId === delivery.entryId
+            const deliveredIdentity = await findInjectedMessage(confirmationSessionId, delivery.entryId) ?? (delivery.sourceEntryId === delivery.entryId
                 ? null
-                : await findInjectedMessage(target.id, delivery.sourceEntryId));
+                : await findInjectedMessage(confirmationSessionId, delivery.sourceEntryId));
             if (deliveredIdentity) {
-                log(`entry ${delivery.entryId} already present in session ${target.id}`);
+                log(`entry ${delivery.entryId} already present in session ${confirmationSessionId}`);
                 clearPendingSubmission(owner, delivery.entryId);
                 return 'delivered';
             }
@@ -492,7 +504,7 @@ async function deliverOpenCodeEntry(owner, delivery) {
             log(`entry ${delivery.entryId} confirmation unavailable: ${err}`);
             continue;
         }
-        const submittedBefore = owner.pendingSubmissions.has(delivery.entryId);
+        const submittedBefore = pendingSubmission !== undefined;
         if (!delivery.allowSubmit && !submittedBefore) {
             continue;
         }
@@ -503,7 +515,10 @@ async function deliverOpenCodeEntry(owner, delivery) {
         else {
             if (delivery.settled)
                 return 'delivered';
-            owner.pendingSubmissions.set(delivery.entryId, delivery.sourceEntryId);
+            owner.pendingSubmissions.set(delivery.entryId, {
+                sourceEntryId: delivery.sourceEntryId,
+                sessionId: target.id,
+            });
             if (!persistCurrentBinding()) {
                 owner.pendingSubmissions.delete(delivery.entryId);
                 log(`entry ${delivery.entryId} submission skipped: pending intent was not durable`);
@@ -548,7 +563,7 @@ async function deliverOpenCodeEntry(owner, delivery) {
                 delivery.state = 'delivered-unconfirmed';
             }
             try {
-                if (await findInjectedMessage(target.id, delivery.entryId)) {
+                if (await findInjectedMessage(delivery.sessionId, delivery.entryId)) {
                     clearPendingSubmission(owner, delivery.entryId);
                     return 'delivered';
                 }
@@ -663,7 +678,12 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
         log(`entry ${entryId} rejected: OpenCode is not connected`);
         return Promise.resolve(false);
     }
-    const pendingSource = [...owner.pendingSubmissions].find(([pendingEntryId, pendingSourceEntryId]) => pendingEntryId !== entryId && pendingSourceEntryId === sourceEntryId);
+    // Rehydrate durable source markers before source-level deduplication. A
+    // freshly connected MCP child starts with an empty in-memory map; waiting
+    // until target resolution would let a different wake nonce queue a second
+    // submission before the prior source identity is visible locally.
+    restoreBinding();
+    const pendingSource = [...owner.pendingSubmissions].find(([pendingEntryId, pending]) => pendingEntryId !== entryId && pending.sourceEntryId === sourceEntryId);
     if (pendingSource) {
         log(`entry ${entryId} reconciles pending source ${sourceEntryId}`);
         return injectOpenCodeEntry(text, pendingSource[0], false, sourceEntryId);
@@ -710,15 +730,16 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
             return Promise.resolve(false);
         }
         log(`entry ${entryId} replay remains unconfirmed`);
-        const accepted = owner.pendingSubmissions.has(entryId);
-        if (accepted && owner.sessionId) {
+        const pending = owner.pendingSubmissions.get(entryId);
+        const accepted = pending !== undefined;
+        if (pending) {
             scheduleOpenCodeReconciliation(owner, {
                 entryId,
                 sourceEntryId,
                 text,
                 allowSubmit: false,
                 acceptedSubmission: true,
-                sessionId: owner.sessionId,
+                sessionId: pending.sessionId,
                 settled: false,
                 state: 'delivered-unconfirmed',
                 resolve: () => { },
