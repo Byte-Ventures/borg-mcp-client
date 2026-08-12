@@ -162,7 +162,7 @@ function bindingPath() {
 }
 function bindingMatchesState(binding) {
     const current = state;
-    return binding.version === 3
+    return binding.version === 4
         && binding.serverUrl === current.serverUrl
         && binding.directory === current.directory
         && binding.droneLabel === current.droneLabel
@@ -174,7 +174,7 @@ function bindingMatchesState(binding) {
         && Array.isArray(binding.pendingSubmissions)
         && binding.pendingSubmissions.every((pending) => typeof pending?.entryId === 'string'
             && typeof pending?.sourceEntryId === 'string'
-            && (pending.sessionId === undefined || typeof pending.sessionId === 'string'));
+            && typeof pending.sessionId === 'string');
 }
 function readBinding() {
     try {
@@ -227,7 +227,7 @@ function writeBinding(binding) {
 function saveBinding(session, knownRootSessionIds) {
     const current = state;
     const binding = {
-        version: 3,
+        version: 4,
         sessionId: session.id,
         sessionCreatedAt: session.time.created,
         knownRootSessionIds,
@@ -248,7 +248,7 @@ function persistCurrentBinding() {
     if (!current?.sessionId || current.sessionCreatedAt === null)
         return false;
     return writeBinding({
-        version: 3,
+        version: 4,
         sessionId: current.sessionId,
         sessionCreatedAt: current.sessionCreatedAt,
         knownRootSessionIds: current.knownRootSessionIds,
@@ -268,7 +268,7 @@ function restoreBinding() {
         return null;
     if (state.sessionId && state.sessionCreatedAt !== null) {
         return {
-            version: 3,
+            version: 4,
             sessionId: state.sessionId,
             sessionCreatedAt: state.sessionCreatedAt,
             knownRootSessionIds: state.knownRootSessionIds,
@@ -293,7 +293,7 @@ function restoreBinding() {
         pending.entryId,
         {
             sourceEntryId: pending.sourceEntryId,
-            sessionId: pending.sessionId ?? binding.sessionId,
+            sessionId: pending.sessionId,
         },
     ]));
     return binding;

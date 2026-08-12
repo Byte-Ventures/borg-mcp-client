@@ -107,7 +107,7 @@ const OPEN_CODE_RECONCILIATION_ATTEMPTS = 20;
 const OPEN_CODE_DELIVERY_HISTORY_LIMIT = 256;
 
 interface SessionBinding {
-  version: 3;
+  version: 4;
   sessionId: string;
   sessionCreatedAt: number;
   knownRootSessionIds: string[];
@@ -118,8 +118,7 @@ interface SessionBinding {
   pendingSubmissions: Array<{
     entryId: string;
     sourceEntryId: string;
-    /** Optional only for compatibility with an earlier version-3 binding. */
-    sessionId?: string;
+    sessionId: string;
   }>;
 }
 
@@ -287,7 +286,7 @@ function bindingPath(): string {
 
 function bindingMatchesState(binding: SessionBinding): boolean {
   const current = state!;
-  return binding.version === 3
+  return binding.version === 4
     && binding.serverUrl === current.serverUrl
     && binding.directory === current.directory
     && binding.droneLabel === current.droneLabel
@@ -300,7 +299,7 @@ function bindingMatchesState(binding: SessionBinding): boolean {
     && binding.pendingSubmissions.every((pending) =>
       typeof pending?.entryId === 'string'
         && typeof pending?.sourceEntryId === 'string'
-        && (pending.sessionId === undefined || typeof pending.sessionId === 'string')
+        && typeof pending.sessionId === 'string'
     );
 }
 
@@ -353,7 +352,7 @@ function writeBinding(binding: SessionBinding): boolean {
 function saveBinding(session: OCSession, knownRootSessionIds: string[]): void {
   const current = state!;
   const binding: SessionBinding = {
-    version: 3,
+    version: 4,
     sessionId: session.id,
     sessionCreatedAt: session.time.created,
     knownRootSessionIds,
@@ -374,7 +373,7 @@ function persistCurrentBinding(): boolean {
   const current = state;
   if (!current?.sessionId || current.sessionCreatedAt === null) return false;
   return writeBinding({
-    version: 3,
+    version: 4,
     sessionId: current.sessionId,
     sessionCreatedAt: current.sessionCreatedAt,
     knownRootSessionIds: current.knownRootSessionIds,
@@ -394,7 +393,7 @@ function restoreBinding(): SessionBinding | null {
   if (!state) return null;
   if (state.sessionId && state.sessionCreatedAt !== null) {
     return {
-      version: 3,
+      version: 4,
       sessionId: state.sessionId,
       sessionCreatedAt: state.sessionCreatedAt,
       knownRootSessionIds: state.knownRootSessionIds,
@@ -419,7 +418,7 @@ function restoreBinding(): SessionBinding | null {
     pending.entryId,
     {
       sourceEntryId: pending.sourceEntryId,
-      sessionId: pending.sessionId ?? binding.sessionId,
+      sessionId: pending.sessionId,
     },
   ]));
   return binding;
