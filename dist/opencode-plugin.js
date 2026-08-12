@@ -102,8 +102,18 @@ export function createOpenCodePluginCore(deps, options) {
             try {
                 const history = await deps.listMessages(input.sessionID);
                 const nudge = deps.audit([...history, current]);
-                if (nudge)
-                    output.parts.push({ type: 'text', text: nudge });
+                if (nudge) {
+                    // OpenCode's chat.message hook receives resolved parts after their
+                    // id/sessionID/messageID fields have been assigned. A newly pushed
+                    // part skips that assignment and fails the durable PartUpdated
+                    // aggregate in Session.updatePart. Preserve the resolved identity by
+                    // replacing an existing text part with an augmented copy instead.
+                    const index = output.parts.findIndex((part) => part?.type === 'text' && typeof part.text === 'string');
+                    if (index >= 0) {
+                        const part = output.parts[index];
+                        output.parts[index] = { ...part, text: `${part.text}\n\n${nudge}` };
+                    }
+                }
             }
             catch {
                 // Audit is advisory and must never block a prompt.
