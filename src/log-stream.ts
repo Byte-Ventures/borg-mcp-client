@@ -1240,9 +1240,12 @@ export async function streamOnce(
           if (
             wakeNonce !== undefined &&
             await shouldDeliverWakeRetry(event.id) &&
-            !(await injectOpenCode(formatOpenCodeWakePrompt(line), wakeNonce, true, event.id))
+            !(await injectOpenCode(
+              formatOpenCodeWakePrompt(line), wakeNonce, true, event.id,
+              () => hasPendingWakeEntry(active, event.id),
+            ))
           ) {
-            wakeCodex(formatCodexWakePrompt(line), wakeNonce);
+            wakeCodex(formatCodexWakePrompt(line), wakeNonce, event.id);
           }
           continue;
         }

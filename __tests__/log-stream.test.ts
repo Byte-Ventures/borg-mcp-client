@@ -542,7 +542,10 @@ describe('streamOnce', () => {
       'wake-same',
       true,
       'e-same',
+      expect.any(Function),
     );
+    const pendingCheck = injectOpenCode.mock.calls[1]?.[4];
+    expect(await pendingCheck()).toBe(true);
   });
 
   it('does not wake an unaddressed direct recipient on a nonce replay', async () => {
