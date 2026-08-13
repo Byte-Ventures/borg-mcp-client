@@ -20,7 +20,7 @@
  * agent CLIs. Paths mirror `config-utils.ts`:
  *   Claude Code: ~/.claude.json (MCP server) + ~/.claude/settings.json (hook)
  *   Codex:       ~/.codex/config.toml (MCP server) + ~/.codex/hooks.json (hooks)
- *   OpenCode:    ~/.config/opencode/opencode.json (MCP server)
+ *   OpenCode:    effective global config under ~/.config/opencode/ (MCP server)
  */
 export function configMutationTargets(deps) {
     const targets = [];
@@ -46,8 +46,8 @@ export function configMutationTargets(deps) {
     }
     if (deps.opencode) {
         targets.push({
-            file: '~/.config/opencode/opencode.json',
-            change: 'registers the borg MCP server (with BORG_SESSION activation)',
+            file: '~/.config/opencode/',
+            change: 'updates the effective global OpenCode configuration to register the borg MCP server (with BORG_SESSION activation)',
         });
     }
     return targets;
