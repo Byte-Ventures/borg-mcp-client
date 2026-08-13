@@ -33,7 +33,7 @@ function defaultCreateRelease(path, body) {
   });
 }
 
-export function assertReleasePullRequest(pullRequests, { version, commit, mergeSubject }) {
+export function assertReleasePullRequest(pullRequests, { version, commit }) {
   if (!Array.isArray(pullRequests) || pullRequests.length !== 1) {
     throw new Error('Release commit must resolve to exactly one pull request.');
   }
@@ -41,8 +41,9 @@ export function assertReleasePullRequest(pullRequests, { version, commit, mergeS
   if (pullRequest.state !== 'closed' || typeof pullRequest.merged_at !== 'string') {
     throw new Error('Release pull request must be closed and merged.');
   }
+  const expectedUrl = `https://github.com/${OWNER}/${REPOSITORY}/pull/${pullRequest.number}`;
   if (!Number.isSafeInteger(pullRequest.number) || pullRequest.number < 1 ||
-      typeof pullRequest.html_url !== 'string' || typeof pullRequest.body !== 'string') {
+      pullRequest.html_url !== expectedUrl || typeof pullRequest.body !== 'string') {
     throw new Error('Release pull request identity and body must be complete.');
   }
   if (pullRequest.base?.ref !== 'main') {
@@ -54,11 +55,6 @@ export function assertReleasePullRequest(pullRequests, { version, commit, mergeS
   }
   if (pullRequest.merge_commit_sha !== commit) {
     throw new Error('Release pull request merge commit must equal the tagged commit.');
-  }
-  const subjectMatch = /^Merge pull request #(\d+) from (.+)$/u.exec(mergeSubject);
-  if (!subjectMatch || Number(subjectMatch[1]) !== pullRequest.number ||
-      !subjectMatch[2].endsWith(`/${expectedHead}`)) {
-    throw new Error('Tagged commit subject must identify the same release pull request.');
   }
   return pullRequest;
 }
@@ -108,9 +104,8 @@ export async function createGithubRelease(version, deps = {}) {
   const commit = runGit(['rev-parse', `${tag}^{commit}`]);
   const tagMessage = runGit(['for-each-ref', `refs/tags/${tag}`, '--format=%(contents:subject)']);
   if (!tagMessage) throw new Error('Annotated release tag must have a message.');
-  const mergeSubject = runGit(['show', '-s', '--format=%s', commit]);
   const pullRequests = api(`repos/${OWNER}/${REPOSITORY}/commits/${commit}/pulls`);
-  const pullRequest = assertReleasePullRequest(pullRequests, { version, commit, mergeSubject });
+  const pullRequest = assertReleasePullRequest(pullRequests, { version, commit });
 
   const runs = api(
     `repos/${OWNER}/${REPOSITORY}/actions/workflows/publish.yml/runs?event=push&branch=${encodeURIComponent(tag)}&per_page=100`,
