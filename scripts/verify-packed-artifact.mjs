@@ -11,7 +11,7 @@ const MAX_PACKED_BYTES = 8 * 1024 * 1024;
 const MAX_UNPACKED_BYTES = 30 * 1024 * 1024;
 const MAX_FILES = 2048;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
-const REQUIRED_FILES = ['CONTRIBUTING.md', 'LICENSE', 'NOTICE', 'README.md', 'SECURITY.md', 'package.json'];
+const REQUIRED_FILES = ['CONTRIBUTING.md', 'LICENSE', 'NOTICE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md', 'package.json'];
 const LOCAL_DASHBOARD_OCCURRENCES = JSON.parse(
   readFileSync(new URL('./local-dashboard-occurrences.json', import.meta.url), 'utf8'),
 );
@@ -27,6 +27,7 @@ const ALLOWED_ROOTS = new Set([
   'NOTICE',
   'README.md',
   'SECURITY.md',
+  'THIRD_PARTY_NOTICES.md',
   'dist',
   'docs',
   'package.json',

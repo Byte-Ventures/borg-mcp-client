@@ -9,7 +9,7 @@
  * There is no hosted-authority path: every request must carry verified local
  * server trust or it fails closed before any network or credential use.
  */
-import { type AgentKind, type EvictDroneResult, type ReassignDroneResult } from 'borgmcp-shared/protocol';
+import { decodeAppendLogResult, type AgentKind, type EvictDroneResult, type ReassignDroneResult } from 'borgmcp-shared/protocol';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import type { NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
@@ -253,26 +253,7 @@ export declare function appendLog(sessionToken: string, apiUrl: string, message:
     class?: string;
     to?: string[];
     serverTrustIdentity?: string;
-}): Promise<{
-    entry: {
-        id: string;
-        cube_id: string;
-        drone_id: string;
-        message: string;
-        visibility: 'broadcast' | 'direct';
-        created_at: string;
-    };
-    routing?: {
-        class: string | null;
-        recipients: string[];
-        fellOpen: boolean;
-        message: string | null;
-    } | null;
-    unreachableRecipients?: {
-        id: string;
-        label: string;
-    }[];
-}>;
+}): Promise<ReturnType<typeof decodeAppendLogResult>>;
 /**
  * List cubes readable by the local client's live grants.
  */

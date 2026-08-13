@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -38,6 +37,10 @@ describe('local owner enrollment to restart flow', () => {
     const logId = '77777777-7777-4777-8777-777777777777';
     const invitation = 'i'.repeat(43);
     const sessionId = '88888888-8888-4888-8888-888888888888';
+    const initialLogCursor = {
+      id: '99999999-9999-4999-8999-999999999999',
+      created_at: '2026-07-14T14:59:59.000Z',
+    };
     const operation = { projectRoot: project, kind: 'seat' as const, operationKey: 'current-worktree' };
     const keychain = new Map<string, string>();
     const backend = {
@@ -52,7 +55,7 @@ describe('local owner enrollment to restart flow', () => {
       delete: async (account: string) => { keychain.delete(account); },
     };
     const response = (payload: unknown, status = 200) => new Response(JSON.stringify({
-      protocol_version: '8',
+      protocol_version: '9',
       request_id: 'restart-response-1',
       payload,
     }), { status });
@@ -68,7 +71,7 @@ describe('local owner enrollment to restart flow', () => {
       }
       if (path === '/api/protocol') {
         // Credential-free tag-only preflight: bare exact tag, not enveloped.
-        return new Response(JSON.stringify({ protocol_version: '8' }), { status: 200 });
+        return new Response(JSON.stringify({ protocol_version: '9' }), { status: 200 });
       }
       if (path === '/api/cubes' && method === 'POST') {
         return response({
@@ -86,6 +89,7 @@ describe('local owner enrollment to restart flow', () => {
       if (path === '/api/client/attach') {
         return response({
           result: 'created',
+          initial_log_cursor: initialLogCursor,
           cube: { id: cubeId, name: 'local-cube' },
           role: { id: roleId, name: 'Builder', role_class: 'worker', is_human_seat: false },
           drone: { id: droneId, label: 'builder-1', ...UNREPORTED_ATTACH_RUNTIME_METADATA },
@@ -105,14 +109,15 @@ describe('local owner enrollment to restart flow', () => {
         return response({ entries: [], cursor: null, behind_by: 0, has_more: false, claims: [] });
       }
       if (path === `/api/cubes/${cubeId}/logs` && method === 'POST') {
-        return response({ entry: {
-          id: logId,
-          cube_id: cubeId,
-          drone_id: droneId,
-          message: 'post-restart log',
-          visibility: 'broadcast',
-          created_at: '2026-07-14T15:00:00.000Z',
-        } });
+        return response({
+          entry: {
+            id: logId, cube_id: cubeId, drone_id: droneId,
+            drone_label: 'builder-1', role_name: 'Builder',
+            message: 'post-restart log', visibility: 'broadcast',
+            recipient_drone_ids: [], created_at: '2026-07-14T15:00:00.000Z',
+          },
+          deduplicated: false,
+        });
       }
       if (path === `/api/cubes/${cubeId}/stream`) {
         return new Response([
@@ -148,7 +153,7 @@ describe('local owner enrollment to restart flow', () => {
       vi.resetModules();
       const config = await import('../src/config.js');
       config.__setServerCredentialBackendForTest(backend);
-      const { sendBorgServerAttach, createBorgServerCube, enrollBorgServer } =
+      const { createBorgServerCube, enrollBorgServer } =
         await import('../src/server-handshake.js');
       const enrolled = await enrollBorgServer(origin, trustIdentity, invitation, {
         fetchImpl: fetchImpl as typeof fetch,
@@ -168,33 +173,33 @@ describe('local owner enrollment to restart flow', () => {
         { fetchImpl: fetchImpl as typeof fetch },
       );
       expect(created).toMatchObject({ cube_id: cubeId, default_worker_role_id: roleId });
-      // Single-store path: mint the pending bearer (prepareSeat/mint), send it, then
-      // the merged activate+bind stamps ACTIVE + binds the worktree in ONE commit.
       const seats = await import('../src/seats.js');
-      const bearer = randomBytes(32).toString('base64url');
-      await seats.mintPendingSeat({ origin, trustIdentity, cubeId, roleId, operation, credential: bearer });
-      const prepared = await sendBorgServerAttach(
+      const { buildDefaultAssimilateDeps } = await import('../src/assimilate-deps.js');
+      const assimilated = await buildDefaultAssimilateDeps().assimilate(
         origin,
-        trustIdentity,
         enrolled.token,
-        { cubeId, roleId, operation },
-        bearer,
-        { fetchImpl: fetchImpl as typeof fetch },
+        { cube_id: cubeId, role_id: roleId, session_operation: operation },
+        trustIdentity,
       );
-      const outcome = await prepared.activate({
+      const outcome = await assimilated.finalize!.activate({
         worktree: project,
-        name: prepared.cube.name,
-        droneLabel: prepared.drone.label,
-        roleName: prepared.role.name,
-        ...(prepared.role.role_class ? { roleClass: prepared.role.role_class } : {}),
-        ...(prepared.role.is_human_seat !== undefined ? { isHumanSeat: prepared.role.is_human_seat } : {}),
+        name: 'local-cube',
+        droneLabel: 'builder-1',
+        roleName: 'Builder',
+        roleClass: 'worker',
+        isHumanSeat: false,
       });
       expect(outcome).toBe('activated');
-      const credentialRef = prepared.credentialRef;
+      const credentialRef = assimilated.local_session!.credential_ref;
+      const { getLocalServerCursor } = await import('../src/local-server-cursor.js');
+      const cursorBinding = { origin, trustIdentity, cubeId, droneId };
+      await expect(getLocalServerCursor(cursorBinding)).resolves.toEqual(initialLogCursor);
+      await expect(getLocalServerCursor({ ...cursorBinding, purpose: 'stream' })).resolves.toEqual(initialLogCursor);
       // The bearer rests only in the 0600 seat store; hydrate it back via the sole
       // raw-bearer reader for the post-restart checks.
       const hydrated = await seats.getActiveSeatCredential(credentialRef, { origin, trustIdentity, cubeId });
-      expect(hydrated).toBe(bearer);
+      expect(hydrated).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      const bearer = hydrated!;
 
       vi.resetModules();
       const restartedConfig = await import('../src/config.js');

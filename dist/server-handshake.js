@@ -198,6 +198,7 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
                 sessionId: decoded.session.id,
             },
             result: decoded.result,
+            initialLogCursor: decoded.initial_log_cursor,
             credentialRef,
             pendingBearerDigest,
             // The single-store ATOMIC activate+bind — invoked by FINALIZE with the decided

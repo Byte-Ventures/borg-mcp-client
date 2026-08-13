@@ -23,7 +23,7 @@ const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '8', request_id: requestId, payload };
+  return { protocol_version: '9', request_id: requestId, payload };
 }
 
 describe('appendLog directed-message request body (local path)', () => {
@@ -48,14 +48,17 @@ describe('appendLog directed-message request body (local path)', () => {
         const request = JSON.parse(String(init?.body)).payload;
         return new Response(JSON.stringify(localEnvelope({
           entry: {
-            id: 'entry-1',
+            id: '44444444-4444-4444-8444-444444444444',
             cube_id: CUBE_ID,
             drone_id: DRONE_ID,
+            drone_label: 'builder-1',
+            role_name: 'Builder',
             message: request.message,
             visibility: request.visibility ?? 'broadcast',
             recipient_drone_ids: request.recipientDroneIds ?? [],
             created_at: '2026-05-29T20:00:00.000Z',
           },
+          deduplicated: false,
         })), { status: 200 });
       }
       throw new Error(`unexpected local request ${method} ${url.pathname}`);
@@ -94,19 +97,19 @@ describe('appendLog directed-message request body (local path)', () => {
   it('omits visibility fields for default broadcast back-compat', async () => {
     const { appendLog } = await import('../src/remote-client.js');
     await appendLog(SESSION, ORIGIN, 'hello');
-    expect(postBody()).toEqual({ message: 'hello' });
+    expect(postBody()).toMatchObject({ message: 'hello', post_id: expect.any(String) });
   });
 
   it('sends direct visibility and recipient ids when requested', async () => {
     const { appendLog } = await import('../src/remote-client.js');
     await appendLog(SESSION, ORIGIN, 'secret', {
       visibility: 'direct',
-      recipientDroneIds: ['drone-2'],
+      recipientDroneIds: ['55555555-5555-4555-8555-555555555555'],
     });
-    expect(postBody()).toEqual({
+    expect(postBody()).toMatchObject({
       message: 'secret',
       visibility: 'direct',
-      recipientDroneIds: ['drone-2'],
+      recipientDroneIds: ['55555555-5555-4555-8555-555555555555'],
     });
   });
 
@@ -115,13 +118,13 @@ describe('appendLog directed-message request body (local path)', () => {
     await appendLog(SESSION, ORIGIN, 'STARTING: work', { class: 'status-claim' });
     // class reaches the request body in the server-expected `class` field, with
     // no visibility/recipients so the server performs class-based routing.
-    expect(postBody()).toEqual({ message: 'STARTING: work', class: 'status-claim' });
+    expect(postBody()).toMatchObject({ message: 'STARTING: work', class: 'status-claim' });
   });
 
   it('resolves an explicit empty to array into a direct send with no recipients', async () => {
     const { appendLog } = await import('../src/remote-client.js');
     await appendLog(SESSION, ORIGIN, 'hello', { to: [] });
-    expect(postBody()).toEqual({
+    expect(postBody()).toMatchObject({
       message: 'hello',
       visibility: 'direct',
       recipientDroneIds: [],

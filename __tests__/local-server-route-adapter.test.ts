@@ -28,7 +28,7 @@ const INITIAL_CURSOR = {
 };
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '8', request_id: requestId, payload };
+  return { protocol_version: '9', request_id: requestId, payload };
 }
 
 function connectionReset(): Error & { code: string } {
@@ -117,15 +117,17 @@ describe('local server route adapter', () => {
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/logs` && method === 'POST') {
         const request = JSON.parse(String(init?.body)).payload;
-        return new Response(JSON.stringify(envelope({ entry: {
-          id: LOG_ID,
-          cube_id: CUBE_ID,
-          drone_id: DRONE_ID,
-          message: request.message,
-          visibility: request.visibility ?? 'broadcast',
-          recipient_drone_ids: request.recipientDroneIds ?? [],
-          created_at: '2026-07-14T14:00:00.000Z',
-        } })), { status: 201 });
+        return new Response(JSON.stringify(envelope({
+          entry: {
+            id: LOG_ID, cube_id: CUBE_ID, drone_id: DRONE_ID,
+            drone_label: 'builder-1', role_name: 'Builder',
+            message: request.message,
+            visibility: request.visibility ?? 'broadcast',
+            recipient_drone_ids: request.recipientDroneIds ?? [],
+            created_at: '2026-07-14T14:00:00.000Z',
+          },
+          deduplicated: false,
+        })), { status: 201 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/acks` && method === 'POST') {
         return new Response(null, { status: 204 });
@@ -351,21 +353,38 @@ describe('local server route adapter', () => {
     }
   });
 
-  it('does not retry the non-idempotent log append after a connection reset', async () => {
+  it('retries a logical log append with one stable post_id after a connection reset', async () => {
     const remote = await import('../src/remote-client.js');
+    let firstBody = '';
     fetchSpy.mockImplementationOnce(async (input, init) => {
       expect(new URL(String(input)).pathname).toBe(`/api/cubes/${CUBE_ID}/logs`);
       expect(init?.method).toBe('POST');
+      firstBody = String(init?.body);
       throw connectionReset();
+    }).mockImplementationOnce(async (_input, init) => {
+      expect(String(init?.body)).toBe(firstBody);
+      const request = JSON.parse(firstBody).payload;
+      return new Response(JSON.stringify(envelope({
+        entry: {
+          id: LOG_ID, cube_id: CUBE_ID, drone_id: DRONE_ID,
+          drone_label: 'builder-1', role_name: 'Builder',
+          message: request.message, visibility: 'broadcast', recipient_drone_ids: [],
+          created_at: '2026-08-13T21:00:00.000Z',
+        },
+        deduplicated: true,
+      })), { status: 200 });
     });
 
     await expect(remote.appendLog(SESSION, ORIGIN, 'must append once'))
-      .rejects.toThrow('ECONNRESET');
+      .resolves.toMatchObject({ entry: { id: LOG_ID }, deduplicated: true });
 
     const postCalls = fetchSpy.mock.calls.filter(([input, init]) =>
       new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` && init?.method === 'POST'
     );
-    expect(postCalls).toHaveLength(1);
+    expect(postCalls).toHaveLength(2);
+    expect(JSON.parse(firstBody).payload.post_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 
   it('uses the parent credential only for pre-attach cube selection', async () => {
@@ -414,7 +433,7 @@ describe('local server route adapter', () => {
       init?.method === 'POST'
     );
     expect(post).toBeDefined();
-    expect(JSON.parse(String(post![1]?.body)).payload).toEqual({
+    expect(JSON.parse(String(post![1]?.body)).payload).toMatchObject({
       message: 'directed locally',
       visibility: 'direct',
       recipientDroneIds: [COORDINATOR_DRONE_ID],

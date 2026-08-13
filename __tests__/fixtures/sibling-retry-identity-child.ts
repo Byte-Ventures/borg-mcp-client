@@ -35,9 +35,10 @@ const seatInput = (operation: { projectRoot: string; kind: 'seat' | 'sibling'; o
 // convergence proof is at the CLIENT: run2 must re-send the IDENTICAL bearer run1 sent.
 const fakeFetch = (result: 'created' | 'reused') =>
   (async () => new Response(JSON.stringify({
-    protocol_version: '8', request_id: 'attach-r',
+    protocol_version: '9', request_id: 'attach-r',
     payload: {
       result,
+      initial_log_cursor: null,
       cube: { id: CUBE_ID, name: 'myrepo' },
       role: { id: ROLE_ID, name: 'Drone', role_class: 'worker' },
       drone: { id: '33333333-3333-4333-8333-333333333333', label: 'one-of-one', ...UNREPORTED_ATTACH_RUNTIME_METADATA },

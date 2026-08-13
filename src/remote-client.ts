@@ -16,6 +16,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import {
   createProtocolEnvelope,
+  decodeAppendLogResult,
   decodeDeleteCubeResponse,
   decodeDeleteRoleRequest,
   decodeDeleteRoleResult,
@@ -90,7 +91,7 @@ const UNREAD_CURSOR_MAX_TRANSPORT_RETRIES = 1;
 // Replay is opt-in: most local requests are mutations or have ambiguous
 // delivery, while unread-log reads carry an explicit cursor and are safe to
 // repeat with the exact same request body.
-type AuthedFetchRetryMode = 'unread-cursor';
+type AuthedFetchRetryMode = 'unread-cursor' | 'append-log';
 export const LOCAL_SERVER_RESPONSE_LIMIT_BYTES = 32 * 1024 * 1024;
 // A typed auth-error envelope is tiny; anything larger is hostile and the
 // bounded read throws → the 401 fails closed to non-destructive CREDENTIAL_REJECTED.
@@ -790,17 +791,17 @@ async function authedFetch(
     return res;
   };
 
-  let transportRetriesRemaining = retryMode === 'unread-cursor'
+  let transportRetriesRemaining = retryMode === 'unread-cursor' || retryMode === 'append-log'
     ? UNREAD_CURSOR_MAX_TRANSPORT_RETRIES
     : 0;
   const requestWithRetry = async (): Promise<Response> => {
     try {
       return await buildRequest(token);
     } catch (error) {
-      if (retryMode !== 'unread-cursor' || !isConnectionReset(error)) throw error;
+      if ((retryMode !== 'unread-cursor' && retryMode !== 'append-log') || !isConnectionReset(error)) throw error;
       if (transportRetriesRemaining === 0) throw unreadLogTransportFailure(error);
       transportRetriesRemaining -= 1;
-      debugLog('↻ retrying unread log read after ECONNRESET');
+      debugLog(`↻ retrying ${retryMode === 'append-log' ? 'log append' : 'unread log read'} after ECONNRESET`);
       try {
         return await buildRequest(token);
       } catch (retryError) {
@@ -1334,31 +1335,14 @@ export async function appendLog(
     to?: string[];
     serverTrustIdentity?: string;
   } = {}
-): Promise<{
-  entry: {
-    id: string;
-    cube_id: string;
-    drone_id: string;
-    message: string;
-    visibility: 'broadcast' | 'direct';
-    created_at: string;
-  };
-  routing?: {
-    class: string | null;
-    recipients: string[];
-    fellOpen: boolean;
-    message: string | null;
-  } | null;
-  // gh#534: directed recipients currently unreachable via the wake path
-  // (wake-path:deaf). Empty/absent for broadcast or all-reachable sends.
-  unreachableRecipients?: { id: string; label: string }[];
-}> {
+): Promise<ReturnType<typeof decodeAppendLogResult>> {
   if (opts.visibility === 'broadcast' && (opts.to?.length ?? 0) > 0) {
     throw new Error(
       "Invalid input: visibility:'broadcast' cannot be combined with non-empty to:. " +
       'Remove visibility to direct to recipients, or remove to: to broadcast.',
     );
   }
+  const postId = randomUUID();
   const local = await localAuthorityContext(
     sessionToken,
     apiUrl,
@@ -1386,11 +1370,12 @@ export async function appendLog(
     } else if (visibility === undefined && recipientDroneIds !== undefined) {
       visibility = 'direct';
     }
-    const payload = await localServerRequest<{ entry: any }>(
+    const payload = await localServerRequest<ReturnType<typeof decodeAppendLogResult>>(
       local,
       `/api/cubes/${local.cubeId}/logs`,
       'POST',
       {
+        post_id: postId,
         message,
         ...(visibility ? { visibility } : {}),
         ...(visibility === 'direct' && recipientDroneIds
@@ -1401,9 +1386,10 @@ export async function appendLog(
         // visibility/recipients override it (server resolveMessageRouting).
         ...(opts.class ? { class: opts.class } : {}),
       },
+      { retryMode: 'append-log', decodePayload: decodeAppendLogResult },
     );
     if (!payload) throw new Error('Local Borg server returned an empty log response');
-  return { entry: payload.entry };
+  return payload;
 }
 
 /**
