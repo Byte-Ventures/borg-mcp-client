@@ -40,13 +40,14 @@ const SHARED_TARBALL = `https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shar
 const SHARED_INTEGRITY = 'sha512-I8mixCbSrLKyOAAyqEI/HZJ8cML2rz3r812Up8pr547OdAk9LxZevdCo7ojG42ZwrUmS5u7iKQPg7Vk1XvtX1g==';
 
 const RELEASE_NOTES = 'Curated tagged release notes.\n\n- Exact shipped work.';
+const RELEASE_INTEGRITY = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;
 
 const RELEASE_COMMIT = 'f'.repeat(40);
 
 function githubReleaseBindingDeps({
   tagType = 'tag',
   tagMessage = 'borgmcp 3.11.1',
-  live = { name: 'borgmcp', version: '3.11.1', integrity: 'sha512-Y2FuZGlkYXRl' },
+  live = { name: 'borgmcp', version: '3.11.1', integrity: RELEASE_INTEGRITY },
 } = {}) {
   return {
     allowMissingToken: true,
@@ -144,7 +145,7 @@ test('GitHub Release creation gates on the live package and Release absence', as
       return {
         name: 'borgmcp',
         version: '3.11.1',
-        integrity: 'sha512-Y2FuZGlkYXRl',
+        integrity: RELEASE_INTEGRITY,
       };
     },
     releaseAbsent: () => events.push('release-404'),
@@ -157,7 +158,7 @@ test('GitHub Release creation gates on the live package and Release absence', as
   assert.deepEqual(result, {
     tag: 'v3.11.1',
     commit,
-    integrity: 'sha512-Y2FuZGlkYXRl',
+    integrity: RELEASE_INTEGRITY,
   });
   assert.equal(created.tag_name, 'v3.11.1');
   assert.equal(created.name, 'borgmcp 3.11.1');
@@ -169,7 +170,7 @@ test('GitHub Release creation gates on the live package and Release absence', as
 test('GitHub Release creation rejects invalid live package identity and integrity', async () => {
   await assert.rejects(
     () => createGithubRelease('3.11.1', githubReleaseBindingDeps({
-      live: { name: 'other', version: '3.11.1', integrity: 'sha512-Y2FuZGlkYXRl' },
+      live: { name: 'other', version: '3.11.1', integrity: RELEASE_INTEGRITY },
     })),
     /must be borgmcp/,
   );
