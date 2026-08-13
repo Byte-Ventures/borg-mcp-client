@@ -6,7 +6,7 @@ import {
 } from './cubes.js';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { checkCodexBridgeHealthy } from './codex-remote.js';
-import { hasPendingWakeActivity } from './remote-client.js';
+import { hasPendingWakeActivity, hasPendingWakeEntry } from './remote-client.js';
 import {
   BORG_CODEX_REMOTE_WAKE_ENV,
   resolveSessionAgentKind,
@@ -98,6 +98,7 @@ let wakeInFlight = false;
 const pendingWakeRequests: Array<{
   reason: string;
   deliveryIdentity?: string;
+  sourceEntryId?: string;
   deps: CodexWakeDeps;
 }> = [];
 const deliveredWakeKeys = new Set<string>();
@@ -108,6 +109,8 @@ const DELIVERED_WAKE_KEY_CAP = 100;
 // (mid-turn thread) or missed (transient error) into ONE retried-until-delivered
 // drain. The coalesce gate means a burst collapses to one poller, not N.
 let retryDrainInFlight = false;
+const retryDrainSourceEntryIds = new Set<string>();
+let retryDrainHasUnscopedWork = false;
 
 // gh#857 WI-2: timestamp of the last SUCCESSFUL wake delivery (per-entry OR
 // retry-drain OR heartbeat). The heartbeat reads this (shouldFireHeartbeat) to
@@ -192,6 +195,7 @@ export interface CodexWakeDeps {
   // Per-entry and retry-drain paths do not use this: their pending obligation is
   // already established by a concrete delivered/deferred event.
   hasPendingWork?: (active: ActiveCube) => Promise<boolean>;
+  hasPendingEntry?: (active: ActiveCube, entryId: string) => Promise<boolean>;
   // gh#861 finding 2: lease-ownership gate for the heartbeat tick — a lease-LOSING
   // duplicate child must NOT tick/inject (symmetry with the per-entry path, which
   // only fires inside an SSE session that holds the stream lease). Heartbeat-only;
@@ -280,10 +284,11 @@ export function wakeCodexViaAppServer(
   env: NodeJS.ProcessEnv = process.env,
   deps: CodexWakeDeps = {},
   deliveryIdentity?: string,
+  sourceEntryId?: string,
 ): void {
   const target = resolveCodexWakeTarget(env);
   if (!target.enabled) return;
-  pendingWakeRequests.push({ reason, deliveryIdentity, deps });
+  pendingWakeRequests.push({ reason, deliveryIdentity, sourceEntryId, deps });
   if (wakeInFlight) return;
 
   wakeInFlight = true;
@@ -295,21 +300,30 @@ export function wakeCodexViaAppServer(
 async function drainCodexWakeQueue(): Promise<void> {
   while (pendingWakeRequests.length > 0) {
     const request = pendingWakeRequests.shift()!;
-    await wakeCodexTargeted(request.reason, request.deliveryIdentity, request.deps);
+    await wakeCodexTargeted(
+      request.reason, request.deliveryIdentity, request.sourceEntryId, request.deps,
+    );
   }
 }
 
-async function wakeCodexTargeted(reason: string, deliveryIdentity: string | undefined, deps: CodexWakeDeps): Promise<void> {
+async function wakeCodexTargeted(
+  reason: string,
+  deliveryIdentity: string | undefined,
+  sourceEntryId: string | undefined,
+  deps: CodexWakeDeps,
+): Promise<void> {
   // gh#861 finding 1: another path (heartbeat/retry-drain) is mid-inject into the
   // same thread — defer to the retry-drain so this entry isn't double-injected nor
   // lost (the drain re-syncs the whole burst via the server read-cursor).
   if (!tryAcquireInjectLock()) {
-    scheduleRetryDrain(deps);
+    scheduleRetryDrain(deps, sourceEntryId);
     return;
   }
   try {
     const active = await (deps.getActiveCube ?? getActiveCube)();
     if (!active) return;
+    const pendingEntry = deps.hasPendingEntry ?? hasPendingWakeEntry;
+    if (sourceEntryId && !(await pendingEntry(active, sourceEntryId))) return;
     // gh#855: resolve FRESH (live env socket + re-resolved thread), falling back
     // to the launch-recorded file only when the env socket is absent.
     const resolved = await resolveFreshCodexWakeTarget(active, deps);
@@ -326,9 +340,10 @@ async function wakeCodexTargeted(reason: string, deliveryIdentity: string | unde
         // now. Schedule the retry-drain (coalesced, retried-until-delivered) so
         // the burst's entries are drained once the thread goes idle; codex has no
         // on-disk tail fallback like Claude's borg-inbox-monitor.
-        scheduleRetryDrain(deps);
+        scheduleRetryDrain(deps, sourceEntryId);
         return;
       }
+      if (sourceEntryId && !(await pendingEntry(active, sourceEntryId))) return;
       await client.startTurn(threadId, reason);
       rememberDeliveredWake(wakeKey);
       markDelivered(deps);
@@ -340,7 +355,7 @@ async function wakeCodexTargeted(reason: string, deliveryIdentity: string | unde
     // swallowed (the old best-effort drop let a single blip lose an entry).
     // Schedule the retry-drain so the wake is retried-until-delivered; the SSE
     // stream is never broken (this is fire-and-forget).
-    scheduleRetryDrain(deps);
+    scheduleRetryDrain(deps, sourceEntryId);
   } finally {
     releaseInjectLock();
   }
@@ -357,7 +372,9 @@ async function wakeCodexTargeted(reason: string, deliveryIdentity: string | unde
  * (wakeRetryExpired); the gh#857 WI-2 heartbeat is the backstop beyond that.
  * Never throws into the SSE path (fire-and-forget).
  */
-function scheduleRetryDrain(deps: CodexWakeDeps): void {
+function scheduleRetryDrain(deps: CodexWakeDeps, sourceEntryId?: string): void {
+  if (sourceEntryId) retryDrainSourceEntryIds.add(sourceEntryId);
+  else retryDrainHasUnscopedWork = true;
   if (retryDrainInFlight) return; // coalesce: one loop covers all deferred/missed wakes
   retryDrainInFlight = true;
   void runRetryDrainLoop(deps).finally(() => {
@@ -383,6 +400,15 @@ async function runRetryDrainLoop(deps: CodexWakeDeps): Promise<void> {
     try {
       const active = await (deps.getActiveCube ?? getActiveCube)();
       if (!active) continue; // no active cube yet → keep retrying (until age cap)
+      const pendingEntry = deps.hasPendingEntry ?? hasPendingWakeEntry;
+      for (const entryId of retryDrainSourceEntryIds) {
+        try {
+          if (!(await pendingEntry(active, entryId))) retryDrainSourceEntryIds.delete(entryId);
+        } catch {
+          // Retain the obligation until unread state can be checked.
+        }
+      }
+      if (!retryDrainHasUnscopedWork && retryDrainSourceEntryIds.size === 0) return;
       // gh#855: same FRESH resolution as the per-entry wake, so a stale launch
       // probe can't defeat the retry-drain either.
       const resolved = await resolveFreshCodexWakeTarget(active, deps);
@@ -395,7 +421,13 @@ async function runRetryDrainLoop(deps: CodexWakeDeps): Promise<void> {
         if (thread?.status?.type === 'active') {
           continue; // re-defer: still mid-turn (backoff before next poll)
         }
+        for (const entryId of retryDrainSourceEntryIds) {
+          if (!(await pendingEntry(active, entryId))) retryDrainSourceEntryIds.delete(entryId);
+        }
+        if (!retryDrainHasUnscopedWork && retryDrainSourceEntryIds.size === 0) return;
         await client.startTurn(threadId, CODEX_CATCHUP_PROMPT);
+        retryDrainSourceEntryIds.clear();
+        retryDrainHasUnscopedWork = false;
         markDelivered(deps);
         return; // drain delivered → server read-cursor drains all unread → done
       } finally {
@@ -515,6 +547,8 @@ export function resetCodexWakeForTests(): void {
   deliveredWakeKeys.clear();
   deliveredWakeKeyOrder.length = 0;
   retryDrainInFlight = false;
+  retryDrainSourceEntryIds.clear();
+  retryDrainHasUnscopedWork = false;
   lastDeliveredAt = null;
   heartbeatInFlight = false;
   injectInFlight = false;

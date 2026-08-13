@@ -47,7 +47,7 @@ export declare const CURSOR_EXPIRED_CODE = "CURSOR_EXPIRED";
 export declare class StreamCursorExpiredError extends Error {
     constructor(message?: string);
 }
-export declare function setModuleInjectOpenCode(fn: (text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string) => Promise<boolean>, settle: (sourceEntryId: string) => void): void;
+export declare function setModuleInjectOpenCode(fn: (text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string, isSourcePending?: () => Promise<boolean>) => Promise<boolean>, settle: (sourceEntryId: string) => void): void;
 export declare const INBOX_TAIL_LINES_CAP = 512;
 export declare const INBOX_TAIL_TRIM_THRESHOLD_LINES: number;
 export type RunLoopHealth = 'connected' | 'reconnecting' | 'silent-inert' | 'never-started';
@@ -121,7 +121,7 @@ export interface StreamDeps {
     /** Override durable inbox-entry dedup (tests avoid real filesystem). */
     hasInboxEntryId?: (cubeId: string, droneId: string, entryId: string, renderedLine: string) => Promise<boolean>;
     /** Optional Codex app-server wake sink; tests inject a spy. */
-    wakeCodex?: (reason: string, deliveryIdentity?: string) => void;
+    wakeCodex?: (reason: string, deliveryIdentity?: string, sourceEntryId?: string) => void;
     /** Override the heartbeat watchdog timeout. */
     heartbeatTimeoutMs?: number;
     /** Override HWM divergence grace for focused tests. */
@@ -133,7 +133,7 @@ export interface StreamDeps {
     /** Override owner stale threshold in focused duplicate-process tests. */
     ownerStaleMs?: number;
     /** Optional OpenCode wake delivery after the durable inbox append. */
-    injectOpenCode?: (text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string) => Promise<boolean>;
+    injectOpenCode?: (text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string, isSourcePending?: () => Promise<boolean>) => Promise<boolean>;
     /** Inspect whether one retry source remains beyond the durable unread cursor. */
     hasPendingWakeEntry?: (active: ActiveCube, entryId: string) => Promise<boolean>;
     /** Clear in-process retry diagnostics after the durable entry is consumed. */

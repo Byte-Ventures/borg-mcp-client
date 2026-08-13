@@ -455,6 +455,8 @@ describe('streamOnce', () => {
       expect.stringContaining('[entry_id: e-durable]'),
       'e-durable',
       true,
+      'e-durable',
+      expect.any(Function),
     );
     expect(wakeCodex).not.toHaveBeenCalled();
   });
@@ -495,6 +497,7 @@ describe('streamOnce', () => {
       'wake-1',
       true,
       'e-reping',
+      expect.any(Function),
     );
   });
 
@@ -539,7 +542,10 @@ describe('streamOnce', () => {
       'wake-same',
       true,
       'e-same',
+      expect.any(Function),
     );
+    const pendingCheck = injectOpenCode.mock.calls[1]?.[4];
+    expect(await pendingCheck()).toBe(true);
   });
 
   it('does not wake an unaddressed direct recipient on a nonce replay', async () => {
@@ -603,6 +609,7 @@ describe('streamOnce', () => {
       'wake-live',
       true,
       'e-live',
+      expect.any(Function),
     );
   });
 
@@ -619,7 +626,7 @@ describe('streamOnce', () => {
       wakeCodex,
     });
 
-    expect(wakeCodex).toHaveBeenCalledWith(expect.any(String), 'wake-codex-1');
+    expect(wakeCodex).toHaveBeenCalledWith(expect.any(String), 'wake-codex-1', 'e-codex-reping');
     expect(wakeCodex.mock.calls[0]?.[0]).not.toContain('borg-wake-nonce');
   });
 
@@ -642,6 +649,8 @@ describe('streamOnce', () => {
       expect.stringContaining('[entry_id: e-unconfirmed]'),
       'e-unconfirmed',
       true,
+      'e-unconfirmed',
+      expect.any(Function),
     );
     expect(wakeCodex).toHaveBeenCalledTimes(1);
   });
@@ -913,10 +922,14 @@ describe('streamOnce', () => {
 
     expect(appendLine).toHaveBeenCalledTimes(1);
     expect(wakeCodex).toHaveBeenCalledTimes(1);
-    expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('Reading cube messages does not end your current task'));
-    expect(wakeCodex).not.toHaveBeenCalledWith(expect.stringContaining('borg_regen'));
-    expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('drone-other'));
-    expect(wakeCodex).toHaveBeenCalledWith(expect.stringContaining('hello'));
+    expect(wakeCodex).toHaveBeenCalledWith(
+      expect.stringContaining('Reading cube messages does not end your current task'),
+      undefined,
+      'e1',
+    );
+    expect(wakeCodex.mock.calls[0]?.[0]).not.toContain('borg_regen');
+    expect(wakeCodex.mock.calls[0]?.[0]).toContain('drone-other');
+    expect(wakeCodex.mock.calls[0]?.[0]).toContain('hello');
   });
 
   it('Codex wake sink does not fire for ordinary own-drone filtered entries', async () => {

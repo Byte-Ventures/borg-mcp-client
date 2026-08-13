@@ -460,6 +460,15 @@ function waitForDeliveryRetry(attempt) {
 }
 async function deliverOpenCodeEntry(owner, delivery) {
     let target = null;
+    const sourcePending = async () => {
+        if (!delivery.isSourcePending)
+            return true;
+        if (await delivery.isSourcePending())
+            return true;
+        delivery.settled = true;
+        settleOpenCodeEntry(delivery.sourceEntryId);
+        return false;
+    };
     // Before the one allowed POST, retries are safe: no submission has happened.
     // OpenCode must generate the message ID: its run loop treats IDs as
     // lexicographically ordered, so arbitrary caller IDs can persist without
@@ -470,6 +479,8 @@ async function deliverOpenCodeEntry(owner, delivery) {
             return 'delivered';
         if (state !== owner || !owner.connected)
             return 'failed';
+        if (!(await sourcePending()))
+            return 'delivered';
         if (attempt > 0) {
             delivery.state = 'retried';
             owner.totalEntriesRetried++;
@@ -520,6 +531,8 @@ async function deliverOpenCodeEntry(owner, delivery) {
         }
         else {
             if (delivery.settled)
+                return 'delivered';
+            if (!(await sourcePending()))
                 return 'delivered';
             owner.pendingSubmissions.set(delivery.entryId, {
                 sourceEntryId: delivery.sourceEntryId,
@@ -682,7 +695,7 @@ export async function injectInitialKickoff(launch) {
  * text. Retry nonces also carry their durable source entry ID so they reconcile
  * one submission instead of creating a second prompt.
  */
-export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(text).digest('hex'), allowSubmit = true, sourceEntryId = entryId) {
+export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(text).digest('hex'), allowSubmit = true, sourceEntryId = entryId, isSourcePending) {
     const owner = state;
     if (!owner?.connected) {
         log(`entry ${entryId} rejected: OpenCode is not connected`);
@@ -696,7 +709,7 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
     const pendingSource = [...owner.pendingSubmissions].find(([pendingEntryId, pending]) => pendingEntryId !== entryId && pending.sourceEntryId === sourceEntryId);
     if (pendingSource) {
         log(`entry ${entryId} reconciles pending source ${sourceEntryId}`);
-        return injectOpenCodeEntry(text, pendingSource[0], false, sourceEntryId);
+        return injectOpenCodeEntry(text, pendingSource[0], false, sourceEntryId, isSourcePending);
     }
     for (const [deliveredEntryId, record] of owner.deliveredEntries) {
         if (deliveredEntryId !== entryId && record.sourceEntryId === sourceEntryId) {
@@ -780,6 +793,7 @@ export function injectOpenCodeEntry(text, entryId = createHash('sha256').update(
         acceptedSubmission: false,
         sessionId: null,
         settled: false,
+        isSourcePending,
         state: 'queued',
         resolve: resolveDelivery,
         promise,

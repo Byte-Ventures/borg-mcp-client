@@ -1,3 +1,3 @@
-export declare const CUBE_ACTIVITY_RESUME_WAKE_MESSAGE = "Borg cube activity arrived while you were busy. Reading cube messages does not end your current task. Drain `borg_read-log unread_only=true` until caught up, handle actionable entries, then RESUME the interrupted work.";
+export declare const CUBE_ACTIVITY_RESUME_WAKE_MESSAGE = "Borg cube activity arrived while you were busy. Reading cube messages does not end your current task. Drain `borg_read-log unread_only=true` until caught up, handle actionable entries, then RESUME the interrupted work. If the unread drain is empty, resume silently without a liveness post or full regen.";
 export declare function formatCubeActivityWakeMessage(detail: string): string;
 //# sourceMappingURL=cube-activity-wake-copy.d.ts.map

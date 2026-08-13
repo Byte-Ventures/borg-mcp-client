@@ -125,12 +125,14 @@ function isProcessAlive(pid: number): boolean {
  * Used by defaultDeps when no explicit injectOpenCode is supplied.
  */
 let _moduleInjectOpenCode:
-  | ((text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string) => Promise<boolean>)
+  | ((text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string,
+      isSourcePending?: () => Promise<boolean>) => Promise<boolean>)
   | undefined;
 let _moduleSettleOpenCodeEntry: ((sourceEntryId: string) => void) | undefined;
 
 export function setModuleInjectOpenCode(
-  fn: (text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string) => Promise<boolean>,
+  fn: (text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string,
+    isSourcePending?: () => Promise<boolean>) => Promise<boolean>,
   settle: (sourceEntryId: string) => void,
 ): void {
   _moduleInjectOpenCode = fn;
@@ -392,7 +394,7 @@ export interface StreamDeps {
     renderedLine: string
   ) => Promise<boolean>;
   /** Optional Codex app-server wake sink; tests inject a spy. */
-  wakeCodex?: (reason: string, deliveryIdentity?: string) => void;
+  wakeCodex?: (reason: string, deliveryIdentity?: string, sourceEntryId?: string) => void;
   /** Override the heartbeat watchdog timeout. */
   heartbeatTimeoutMs?: number;
   /** Override HWM divergence grace for focused tests. */
@@ -409,6 +411,7 @@ export interface StreamDeps {
     entryId: string,
     allowSubmit: boolean,
     sourceEntryId?: string,
+    isSourcePending?: () => Promise<boolean>,
   ) => Promise<boolean>;
   /** Inspect whether one retry source remains beyond the durable unread cursor. */
   hasPendingWakeEntry?: (active: ActiveCube, entryId: string) => Promise<boolean>;
@@ -422,16 +425,16 @@ const defaultDeps: Required<StreamDeps> = {
   getCursor: getLocalServerCursor,
   appendLine: defaultAppendLine,
   hasInboxEntryId: defaultHasInboxEntryId,
-  wakeCodex: (reason, deliveryIdentity) =>
-    wakeCodexViaAppServer(reason, process.env, {}, deliveryIdentity),
+  wakeCodex: (reason, deliveryIdentity, sourceEntryId) =>
+    wakeCodexViaAppServer(reason, process.env, {}, deliveryIdentity, sourceEntryId),
   heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
   hwmDivergenceGraceMs: HWM_DIVERGENCE_GRACE_MS,
   abortSignal: new AbortController().signal,
   ownerDeps: {},
   ownerStaleMs: 70_000,
-  injectOpenCode: (text, entryId, allowSubmit, sourceEntryId) =>
+  injectOpenCode: (text, entryId, allowSubmit, sourceEntryId, isSourcePending) =>
     _moduleInjectOpenCode
-      ? _moduleInjectOpenCode(text, entryId, allowSubmit, sourceEntryId)
+      ? _moduleInjectOpenCode(text, entryId, allowSubmit, sourceEntryId, isSourcePending)
       : Promise.resolve(false),
   hasPendingWakeEntry: (active, entryId) => hasPendingDurableWakeEntry(
     active as Parameters<typeof hasPendingDurableWakeEntry>[0],
@@ -902,7 +905,10 @@ export async function streamOnce(
       // OpenCode queue. A still-unread re-ping may reconcile the prior attempt;
       // its source entry ID prevents a new nonce from resubmitting that prompt.
       if (isReping) {
-        await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true, ev.id);
+        await injectOpenCode(
+          formatOpenCodeWakePrompt(line), deliveryId, true, ev.id,
+          () => hasPendingWakeEntry(active, ev.id),
+        );
       }
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';
@@ -910,12 +916,12 @@ export async function streamOnce(
     // The inbox append is the durable record. OpenCode injection is only the
     // wake attempt and may return before the agent finishes processing.
     await appendLine(active.cubeId, active.droneId, line);
-    const openCodeDelivered = isReping
-      ? await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true, ev.id)
-      : await injectOpenCode(formatOpenCodeWakePrompt(line), deliveryId, true);
+    const openCodeDelivered = await injectOpenCode(
+      formatOpenCodeWakePrompt(line), deliveryId, true, ev.id,
+      () => hasPendingWakeEntry(active, ev.id),
+    );
     if (!openCodeDelivered) {
-      if (ev.wake_nonce === undefined) wakeCodex(formatCodexWakePrompt(line));
-      else wakeCodex(formatCodexWakePrompt(line), ev.wake_nonce);
+      wakeCodex(formatCodexWakePrompt(line), ev.wake_nonce, ev.id);
     }
     return 'written';
   };
@@ -1234,9 +1240,12 @@ export async function streamOnce(
           if (
             wakeNonce !== undefined &&
             await shouldDeliverWakeRetry(event.id) &&
-            !(await injectOpenCode(formatOpenCodeWakePrompt(line), wakeNonce, true, event.id))
+            !(await injectOpenCode(
+              formatOpenCodeWakePrompt(line), wakeNonce, true, event.id,
+              () => hasPendingWakeEntry(active, event.id),
+            ))
           ) {
-            wakeCodex(formatCodexWakePrompt(line), wakeNonce);
+            wakeCodex(formatCodexWakePrompt(line), wakeNonce, event.id);
           }
           continue;
         }

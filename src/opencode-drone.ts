@@ -89,6 +89,7 @@ interface OpenCodeDelivery {
   acceptedSubmission: boolean;
   sessionId: string | null;
   settled: boolean;
+  isSourcePending?: () => Promise<boolean>;
   state: Exclude<OpenCodeDeliveryState, 'failed'>;
   resolve: (delivered: boolean) => void;
   promise: Promise<boolean>;
@@ -628,6 +629,14 @@ async function deliverOpenCodeEntry(
 ): Promise<OpenCodeDeliveryOutcome> {
   let target: OCSession | null = null;
 
+  const sourcePending = async (): Promise<boolean> => {
+    if (!delivery.isSourcePending) return true;
+    if (await delivery.isSourcePending()) return true;
+    delivery.settled = true;
+    settleOpenCodeEntry(delivery.sourceEntryId);
+    return false;
+  };
+
   // Before the one allowed POST, retries are safe: no submission has happened.
   // OpenCode must generate the message ID: its run loop treats IDs as
   // lexicographically ordered, so arbitrary caller IDs can persist without
@@ -636,6 +645,7 @@ async function deliverOpenCodeEntry(
   for (let attempt = 0; attempt < OPEN_CODE_DELIVERY_RETRY_DELAYS_MS.length; attempt++) {
     if (delivery.settled) return 'delivered';
     if (state !== owner || !owner.connected) return 'failed';
+    if (!(await sourcePending())) return 'delivered';
     if (attempt > 0) {
       delivery.state = 'retried';
       owner.totalEntriesRetried++;
@@ -688,6 +698,7 @@ async function deliverOpenCodeEntry(
       delivery.state = 'delivered-unconfirmed';
     } else {
       if (delivery.settled) return 'delivered';
+      if (!(await sourcePending())) return 'delivered';
       owner.pendingSubmissions.set(delivery.entryId, {
         sourceEntryId: delivery.sourceEntryId,
         sessionId: target.id,
@@ -864,6 +875,7 @@ export function injectOpenCodeEntry(
   entryId: string = createHash('sha256').update(text).digest('hex'),
   allowSubmit: boolean = true,
   sourceEntryId: string = entryId,
+  isSourcePending?: () => Promise<boolean>,
 ): Promise<boolean> {
   const owner = state;
   if (!owner?.connected) {
@@ -882,7 +894,7 @@ export function injectOpenCodeEntry(
   );
   if (pendingSource) {
     log(`entry ${entryId} reconciles pending source ${sourceEntryId}`);
-    return injectOpenCodeEntry(text, pendingSource[0], false, sourceEntryId);
+    return injectOpenCodeEntry(text, pendingSource[0], false, sourceEntryId, isSourcePending);
   }
   for (const [deliveredEntryId, record] of owner.deliveredEntries) {
     if (deliveredEntryId !== entryId && record.sourceEntryId === sourceEntryId) {
@@ -967,6 +979,7 @@ export function injectOpenCodeEntry(
     acceptedSubmission: false,
     sessionId: null,
     settled: false,
+    isSourcePending,
     state: 'queued',
     resolve: resolveDelivery,
     promise,

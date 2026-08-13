@@ -6,7 +6,7 @@
 - Install with `npm ci`.
 - **`dist/` is generated output and it is TRACKED IN GIT** — 464 files, listed in `files`, with no `.gitignore` rule. Never hand-edit it: run `npm run build` and commit the result. `publish.yml` rebuilds it and then runs `git diff --exit-code -- dist`, so committed output that does not match a fresh build fails the release.
 - Run one test file with `npx vitest run test/<name>.test.ts`, or one named test with `-t '<test name>'`.
-- `npm test` is two suites: `test:unit` (Vitest) and `test:release` (`node --test test/release-lane.test.mjs`). Both must pass — the release workflow runs `npm test`, not just the Vitest half.
+- `npm test` is two suites: `test:unit` (Vitest) and `test:release` (`node --test test/release-lane.test.mjs`). Both must pass before merge; CI runs unit tests on the Node floor/current and release policy once.
 - `npm run check` is typecheck only. It does not run tests, and it passes on a tree whose tests fail.
 - There is no lint or formatter command. Do not invent one or reformat unrelated code.
 
@@ -32,7 +32,7 @@
 - **Two files carry the version and must move together:** `package.json` (`version`) and `package-lock.json` (`version` and `packages[""].version`). `npm run verify:release` checks the top-level lockfile version against the manifest.
 
 - `npm run release:check` runs the full release lane: public-source scan, release readiness, lock-registry check, typecheck, tests, build, onboarding smoke, and package verification.
-- Releases are tag-triggered and immutable. A failed run **burns the version** — never re-tag, never rerun, never reuse. Check the registry before naming a version.
+- Releases are tag-triggered and immutable. Never move or reuse a tag. A pre-stage workflow failure may be rerun; npm stage acceptance consumes the version. Check the registry before naming a version.
 - Follow `docs/RELEASING.md`. A merged release-prep PR does not authorize tagging or publication.
 - `docs/EXTRACTION_PROVENANCE.md` ships to npm and records spent versions. Its current-release-identity statements move with a bump. Record a spent version in its table; never append a clause to the entry.
 
