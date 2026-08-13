@@ -26,7 +26,7 @@ export interface ConfigMutationTarget {
  * agent CLIs. Paths mirror `config-utils.ts`:
  *   Claude Code: ~/.claude.json (MCP server) + ~/.claude/settings.json (hook)
  *   Codex:       ~/.codex/config.toml (MCP server) + ~/.codex/hooks.json (hooks)
- *   OpenCode:    ~/.config/opencode/opencode.json (MCP server)
+ *   OpenCode:    effective global config under ~/.config/opencode/ (MCP server)
  */
 export declare function configMutationTargets(deps: {
     claude: boolean;

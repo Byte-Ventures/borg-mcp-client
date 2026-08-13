@@ -82,6 +82,29 @@ describe('configMutationTargets — scoped to detected CLIs', () => {
       '~/.codex/hooks.json',
     ]);
   });
+
+  it('OpenCode names its effective global config directory without promising a filename', () => {
+    const targets = configMutationTargets({ claude: false, codex: false, opencode: true });
+    const disclosure = formatConfigMutationDisclosure(targets);
+
+    const preservesConsentScope = (text: string): boolean =>
+      text.includes('~/.config/opencode/') &&
+      text.includes('effective global OpenCode configuration') &&
+      text.includes('updates') &&
+      text.includes('register the borg MCP server') &&
+      text.includes('BORG_SESSION activation') &&
+      !text.includes('opencode.json') &&
+      !text.includes('opencode.jsonc');
+
+    expect(targets.map((target) => target.file)).toEqual(['~/.config/opencode/']);
+    expect(preservesConsentScope(disclosure)).toBe(true);
+
+    const vagueDisclosure = formatConfigMutationDisclosure([{
+      file: '~/.config/opencode/',
+      change: 'effective global OpenCode configuration',
+    }]);
+    expect(preservesConsentScope(vagueDisclosure)).toBe(false);
+  });
 });
 
 describe('formatConfigMutationDisclosure — SR: paths only, no secret, undo note', () => {
