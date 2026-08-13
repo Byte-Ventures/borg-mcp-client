@@ -139,6 +139,7 @@ import {
   openCodeLaunchBinding,
 } from './opencode-drone.js';
 import { installBorgPlugin } from './opencode-plugin.js';
+import { openCodeApiPasswordFromEnv } from './opencode-launch-trust.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
 import {
   lifecycleSignalForMessage,
@@ -261,9 +262,15 @@ export async function connectOpenCodeRuntime(
     console.error(OPEN_CODE_PORT_MISSING_DIAGNOSTIC);
     return false;
   }
+  const apiPassword = openCodeApiPasswordFromEnv(env);
+  if (apiPassword === null) {
+    console.error('OpenCode API credential is missing or unverifiable; skipping OpenCode entry injection. Relaunch through borg.');
+    return false;
+  }
   const binding = openCodeLaunchBinding(configuredPort);
   await (deps.connect ?? connectOpenCodeDrone)({
     serverUrl: binding.serverUrl,
+    apiPassword,
     directory: active.worktree ?? findProjectRoot(),
     droneLabel: active.droneLabel,
     cubeName: active.name,

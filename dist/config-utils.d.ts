@@ -161,10 +161,10 @@ export declare function isCodexUserPromptSubmitHookRegistered(hooksPath?: string
  */
 export declare function isOpenCodeMcpServerConfigured(configPath?: string): boolean;
 /**
- * Launch-time OpenCode registration check. Ordinary launches retain the
- * existing configured/not-configured behavior. A targeted `borg launch`,
- * identified by its non-empty expected-seat marker, additionally requires the
- * config substitution that carries that marker into OpenCode's MCP child.
+ * Launch-time OpenCode registration check. Every launch requires the exact
+ * password substitution that carries its ephemeral credential into OpenCode's
+ * MCP child. A targeted `borg launch`, identified by its non-empty expected-seat
+ * marker, additionally requires the substitution that carries that marker.
  */
 export declare function isOpenCodeMcpServerConfiguredForLaunch(configPath?: string, env?: NodeJS.ProcessEnv): boolean;
 /**
@@ -175,11 +175,11 @@ export declare function isOpenCodeMcpServerConfiguredForLaunch(configPath?: stri
 export declare function addOpenCodeLaunchAccess(projectRoot: string, paths: LaunchAccessPaths): boolean;
 /**
  * Add borg MCP server to OpenCode using `opencode mcp add` CLI.
- * Pins activation and agent-kind signals plus an OpenCode config substitution
- * for the launch-scoped expected seat. OpenCode resolves `{env:NAME}` from its
- * own launch environment before starting the MCP child, so `borg launch`
- * reaches the identity check without persisting one launch's value. Existing
- * configs with BORG_OPENCODE remain supported by the runtime fallback.
+ * Pins activation and agent-kind signals plus OpenCode config substitutions
+ * for the launch-scoped password and expected seat. OpenCode resolves
+ * `{env:NAME}` from its own launch environment before starting the MCP child,
+ * so no launch credential is persisted. Existing configs with BORG_OPENCODE
+ * remain supported by the runtime fallback after launch-time self-healing.
  */
 export declare function addOpenCodeMcpServer(): void;
 //# sourceMappingURL=config-utils.d.ts.map

@@ -13,6 +13,7 @@ import { resolveRegenPath, resolveClearRewakePath, resolveLogAuditPath, resolveF
 import { shellEscape } from './shell-escape.js';
 import { BORG_STATE_ROOT_ENV, borgAgentConfigEnv, borgHomeRoot } from './private-root.js';
 import { BORG_LAUNCH_EXPECTED_SEAT_ENV } from './cubes.js';
+import { OPENCODE_SERVER_PASSWORD_ENV, OPENCODE_SERVER_PASSWORD_REFERENCE, } from './opencode-launch-trust.js';
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1115,21 +1116,23 @@ export function isOpenCodeMcpServerConfigured(configPath = path.join(borgHomeRoo
     }
 }
 /**
- * Launch-time OpenCode registration check. Ordinary launches retain the
- * existing configured/not-configured behavior. A targeted `borg launch`,
- * identified by its non-empty expected-seat marker, additionally requires the
- * config substitution that carries that marker into OpenCode's MCP child.
+ * Launch-time OpenCode registration check. Every launch requires the exact
+ * password substitution that carries its ephemeral credential into OpenCode's
+ * MCP child. A targeted `borg launch`, identified by its non-empty expected-seat
+ * marker, additionally requires the substitution that carries that marker.
  */
 export function isOpenCodeMcpServerConfiguredForLaunch(configPath = path.join(borgHomeRoot(), '.config', 'opencode', 'opencode.json'), env = process.env) {
     if (!isOpenCodeMcpServerConfigured(configPath))
         return false;
-    if (!env[BORG_LAUNCH_EXPECTED_SEAT_ENV])
-        return true;
     try {
         const borgServer = readJsonFile(configPath)?.mcp?.borg;
         const environment = borgServer?.environment ?? borgServer?.env;
-        return environment?.[BORG_LAUNCH_EXPECTED_SEAT_ENV] ===
-            OPENCODE_LAUNCH_EXPECTED_SEAT_REFERENCE;
+        if (environment?.[OPENCODE_SERVER_PASSWORD_ENV] !== OPENCODE_SERVER_PASSWORD_REFERENCE) {
+            return false;
+        }
+        if (!env[BORG_LAUNCH_EXPECTED_SEAT_ENV])
+            return true;
+        return environment?.[BORG_LAUNCH_EXPECTED_SEAT_ENV] === OPENCODE_LAUNCH_EXPECTED_SEAT_REFERENCE;
     }
     catch {
         return false;
@@ -1208,11 +1211,11 @@ export function addOpenCodeLaunchAccess(projectRoot, paths) {
 }
 /**
  * Add borg MCP server to OpenCode using `opencode mcp add` CLI.
- * Pins activation and agent-kind signals plus an OpenCode config substitution
- * for the launch-scoped expected seat. OpenCode resolves `{env:NAME}` from its
- * own launch environment before starting the MCP child, so `borg launch`
- * reaches the identity check without persisting one launch's value. Existing
- * configs with BORG_OPENCODE remain supported by the runtime fallback.
+ * Pins activation and agent-kind signals plus OpenCode config substitutions
+ * for the launch-scoped password and expected seat. OpenCode resolves
+ * `{env:NAME}` from its own launch environment before starting the MCP child,
+ * so no launch credential is persisted. Existing configs with BORG_OPENCODE
+ * remain supported by the runtime fallback after launch-time self-healing.
  */
 export function addOpenCodeMcpServer() {
     try {
@@ -1224,7 +1227,8 @@ export function addOpenCodeMcpServer() {
             ? ` --env ${BORG_STATE_ROOT_ENV}=${shellQuote(stateRoot)}`
             : '';
         const launchExpectedSeatEnvArg = ` --env ${BORG_LAUNCH_EXPECTED_SEAT_ENV}=${shellQuote(OPENCODE_LAUNCH_EXPECTED_SEAT_REFERENCE)}`;
-        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg}${stateRootEnvArg}${launchExpectedSeatEnvArg} -- ${shellQuote(MCP_COMMAND)}`, { stdio: 'inherit', env: borgAgentConfigEnv(process.env) });
+        const apiPasswordEnvArg = ` --env ${OPENCODE_SERVER_PASSWORD_ENV}=${shellQuote(OPENCODE_SERVER_PASSWORD_REFERENCE)}`;
+        execSync(`opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg}${stateRootEnvArg}${launchExpectedSeatEnvArg}${apiPasswordEnvArg} -- ${shellQuote(MCP_COMMAND)}`, { stdio: 'inherit', env: borgAgentConfigEnv(process.env) });
     }
     catch (error) {
         if (error.message?.includes('command not found')) {

@@ -1,12 +1,19 @@
 import { appendFileSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
-import { createHash, randomUUID } from 'crypto';
+import { createHash } from 'crypto';
 import { createServer } from 'node:net';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   OPENCODE_INJECTED_ENTRY_METADATA_KEY,
   OPENCODE_WAKE_IDENTITY_METADATA_KEY,
+  OPENCODE_LAUNCH_CORRELATION_METADATA_KEY,
 } from './opencode-plugin.js';
+import {
+  createOpenCodeLaunchTrust,
+  isOpenCode256BitIdentity,
+  OPENCODE_SERVER_USERNAME,
+  type OpenCodeLaunchTrust,
+} from './opencode-launch-trust.js';
 
 const LOG_FILE = join(tmpdir(), 'borg-opencode-drone.log');
 function log(msg: string) {
@@ -16,6 +23,7 @@ function log(msg: string) {
 
 interface OpenCodeDroneState {
   serverUrl: string;
+  apiPassword: string;
   sessionId: string | null;
   sessionCreatedAt: number | null;
   knownRootSessionIds: string[];
@@ -39,6 +47,7 @@ let state: OpenCodeDroneState | null = null;
 
 interface ConnectDeps {
   serverUrl: string;
+  apiPassword: string;
   directory: string;
   droneLabel: string;
   cubeName: string;
@@ -124,27 +133,23 @@ interface SessionBinding {
 
 export interface OpenCodeLaunchKickoff {
   prompt: string;
-  nonce: string;
+  apiPassword: string;
+  correlationIdentity: string;
 }
 
-// This is correlation metadata, intentionally not an instruction to the
-// launched agent. A markdown comment keeps it benign in the user-visible
-// kickoff while preserving it in OpenCode's stored message text.
-const OPEN_CODE_LAUNCH_NONCE_MARKER = 'borg-opencode-correlation:';
-
 /**
- * Add a launch-unique identity to the OpenCode-only copy of the shared
- * kickoff. The prompt is what OpenCode records as its first user message, so
- * the launcher can later bind the MCP child to this precise launch instead of
- * guessing from a repeated kickoff's text or timestamp.
+ * Create independent launch trust for OpenCode without changing the shared
+ * kickoff text. The plugin writes the correlation identity to hidden metadata
+ * on the first qualifying human TextPart; the API password stays in env.
  */
 export function createOpenCodeLaunchKickoff(
   kickoff: string,
-  nonce: string = randomUUID(),
+  trust: Partial<OpenCodeLaunchTrust> = {},
 ): OpenCodeLaunchKickoff {
+  const launchTrust = createOpenCodeLaunchTrust(trust);
   return {
-    prompt: `${kickoff}\n\n<!-- ${OPEN_CODE_LAUNCH_NONCE_MARKER}${nonce} -->`,
-    nonce,
+    prompt: kickoff,
+    ...launchTrust,
   };
 }
 
@@ -161,9 +166,13 @@ function abandonOpenCodeDeliveries(current: OpenCodeDroneState | null): void {
 }
 
 export async function connectOpenCodeDrone(deps: ConnectDeps): Promise<void> {
+  if (!isOpenCode256BitIdentity(deps.apiPassword)) {
+    throw new Error('OpenCode API password is missing or unverifiable');
+  }
   abandonOpenCodeDeliveries(state);
   state = {
     serverUrl: deps.serverUrl,
+    apiPassword: deps.apiPassword,
     sessionId: null,
     sessionCreatedAt: null,
     knownRootSessionIds: [],
@@ -194,6 +203,17 @@ function apiUrl(path: string): string {
   return `${base}${path}${path.includes('?') ? '&' : '?'}directory=${encodeURIComponent(state!.directory)}`;
 }
 
+function authenticatedHeaders(headers: Record<string, string> = {}): Record<string, string> {
+  const password = state?.apiPassword;
+  if (!isOpenCode256BitIdentity(password)) {
+    throw new Error('OpenCode API password is missing or unverifiable');
+  }
+  return {
+    ...headers,
+    Authorization: `Basic ${Buffer.from(`${OPENCODE_SERVER_USERNAME}:${password}`).toString('base64')}`,
+  };
+}
+
 const FETCH_TIMEOUT = 10_000;
 
 async function rawGet(path: string): Promise<{ status: number; body: string }> {
@@ -201,7 +221,7 @@ async function rawGet(path: string): Promise<{ status: number; body: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, { headers: authenticatedHeaders(), signal: controller.signal });
     const body = await res.text();
     return { status: res.status, body };
   } finally {
@@ -216,7 +236,7 @@ async function rawPost(path: string, bodyObj: unknown): Promise<{ status: number
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authenticatedHeaders({ 'Content-Type': 'application/json' }),
       signal: controller.signal,
       body: JSON.stringify(bodyObj),
     });
@@ -453,28 +473,29 @@ async function findUnseenTopLevelSession(knownRootSessionIds: string[]): Promise
   }
 }
 
-function kickoffMessageTime(messages: OCMessage[], nonce: string): number | null {
-  let latest: number | null = null;
+function launchCorrelationMatchCount(messages: OCMessage[], correlationIdentity: string): number {
+  let count = 0;
   for (const message of messages) {
-    if (message.info?.role && message.info.role !== 'user') continue;
-    const matchesLaunchNonce = message.parts?.some(
-      (part) => part.type === 'text' && part.text?.includes(`${OPEN_CODE_LAUNCH_NONCE_MARKER}${nonce}`),
-    );
-    if (!matchesLaunchNonce) continue;
-    const created = message.info?.time?.created ?? 0;
-    latest = latest === null ? created : Math.max(latest, created);
+    if (message.info?.role !== 'user') continue;
+    for (const part of message.parts ?? []) {
+      if (
+        part.type === 'text' &&
+        part.metadata?.[OPENCODE_LAUNCH_CORRELATION_METADATA_KEY] === correlationIdentity
+      ) {
+        count++;
+      }
+    }
   }
-  return latest;
+  return count;
 }
 
 /**
  * The launch process is the only place allowed to discover a session from the
- * server. It chooses the session that contains this launch's unique nonce,
- * rather than choosing by repeated kickoff text or session creation time. A
- * fork is therefore allowed only when it was explicitly selected for this
- * launch and received the nonce-bearing kickoff.
+ * server. It chooses the session containing exactly one hidden metadata match,
+ * never repeated prompt text, timestamps, or newest-session order. A fork is
+ * therefore allowed only when it received this launch's correlation metadata.
  */
-async function findLaunchSession(nonce: string): Promise<{
+async function findLaunchSession(correlationIdentity: string): Promise<{
   session: OCSession;
   knownRootSessionIds: string[];
 } | null> {
@@ -485,25 +506,17 @@ async function findLaunchSession(nonce: string): Promise<{
     const knownRootSessionIds = sessions
       .filter(isTopLevelSession)
       .map((session) => session.id);
-    const candidates = await Promise.all(sessions.map(async (session) => {
-      try {
-        const messageTime = kickoffMessageTime(
-          await listSessionMessages(session.id),
-          nonce,
-        );
-        return messageTime === null ? null : { session, messageTime };
-      } catch {
-        return null;
-      }
-    }));
-    const matched = candidates.filter(
-      (candidate): candidate is { session: OCSession; messageTime: number } => candidate !== null,
-    );
-    if (matched.length === 0) return null;
-    const session = matched.reduce((best, candidate) =>
-      candidate.messageTime > best.messageTime ? candidate : best,
-    ).session;
-    return { session, knownRootSessionIds };
+    const candidates = await Promise.all(sessions.map(async (session) => ({
+      session,
+      matchCount: launchCorrelationMatchCount(
+        await listSessionMessages(session.id),
+        correlationIdentity,
+      ),
+    })));
+    const totalMatches = candidates.reduce((total, candidate) => total + candidate.matchCount, 0);
+    if (totalMatches !== 1) return null;
+    const matched = candidates.find((candidate) => candidate.matchCount === 1);
+    return matched ? { session: matched.session, knownRootSessionIds } : null;
   } catch {
     return null;
   }
@@ -795,11 +808,15 @@ async function processOpenCodeDeliveries(owner: OpenCodeDroneState): Promise<voi
 
 /**
  * Wait for the OpenCode HTTP server, then capture the session that received
- * this launch's nonce-bearing `--prompt` kickoff. The binding survives the separate
- * MCP-child process, which must never fall back to a newest-session heuristic.
+ * this launch's metadata-correlated `--prompt` kickoff. The binding survives
+ * the separate MCP-child process, which must never fall back to a newest-session heuristic.
  */
 export async function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promise<boolean> {
   if (!state?.connected) { log('kickoff: not connected'); return false; }
+  if (!isOpenCode256BitIdentity(launch.correlationIdentity)) {
+    log('kickoff: correlation identity missing or unverifiable');
+    return false;
+  }
 
   try {
     // Wait for the server.
@@ -815,9 +832,9 @@ export async function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promi
     }
 
     // Capture the launch-selected session, including explicit resume/fork
-    // targets. Unrelated sessions do not contain this launch's nonce.
+    // targets. Unrelated sessions do not contain this launch's metadata identity.
     for (let i = 0; i < 30; i++) {
-      const binding = await findLaunchSession(launch.nonce);
+      const binding = await findLaunchSession(launch.correlationIdentity);
       if (binding) {
         saveBinding(binding.session, binding.knownRootSessionIds);
         log(`kickoff: bound session ${binding.session.id.slice(0, 8)}…`);

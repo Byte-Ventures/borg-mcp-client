@@ -7,10 +7,14 @@ import {
   createOpenCodePluginCore,
   installBorgPlugin,
   OPENCODE_INJECTED_ENTRY_METADATA_KEY,
+  OPENCODE_LAUNCH_CORRELATION_METADATA_KEY,
   OPENCODE_RECOVERY_METADATA_KEY,
   OPENCODE_WAKE_IDENTITY_METADATA_KEY,
   openCodePluginPath,
 } from '../src/opencode-plugin';
+
+const LAUNCH_CORRELATION_METADATA_KEY = 'borgOpenCodeLaunchCorrelation';
+const LAUNCH_CORRELATION_IDENTITY = Buffer.alloc(32, 0x42).toString('base64url');
 
 const roots: string[] = [];
 afterEach(() => {
@@ -18,7 +22,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function harness(messages: unknown[][] = [[]], enabled = true) {
+function harness(messages: unknown[][] = [[]], enabled = true, launchCorrelationIdentity = '') {
   let read = 0;
   const submitted: Array<{ sessionID: string; text: string; marker: string }> = [];
   const deferred: Array<Promise<void>> = [];
@@ -48,11 +52,29 @@ function harness(messages: unknown[][] = [[]], enabled = true) {
     confirmationPollAttempts: 2,
     pollDelayMs: 1,
     compactFallback: 'compact fallback',
+    launchCorrelationMetadataKey: LAUNCH_CORRELATION_METADATA_KEY,
+    launchCorrelationIdentity,
   });
   return { core, deps, submitted, deferred };
 }
 
 describe('OpenCode plugin core', () => {
+  it('attaches the launch correlation once to hidden metadata without changing prompt text', async () => {
+    const h = harness([[]], true, LAUNCH_CORRELATION_IDENTITY);
+    const first = { message: {}, parts: [{ type: 'text', text: 'operator kickoff' }] as any[] };
+    const second = { message: {}, parts: [{ type: 'text', text: 'later prompt' }] as any[] };
+
+    await h.core['chat.message']({ sessionID: 'launch' }, first);
+    await h.core['chat.message']({ sessionID: 'new-session' }, second);
+
+    expect(first.parts).toEqual([{
+      type: 'text',
+      text: 'operator kickoff',
+      metadata: { [LAUNCH_CORRELATION_METADATA_KEY]: LAUNCH_CORRELATION_IDENTITY },
+    }]);
+    expect(second.parts).toEqual([{ type: 'text', text: 'later prompt' }]);
+  });
+
   it('is inert outside a borg-launched OpenCode process', async () => {
     const h = harness([], false);
     const compact = { context: [] as string[] };
@@ -66,9 +88,9 @@ describe('OpenCode plugin core', () => {
     expect(h.deps.listMessages).not.toHaveBeenCalled();
   });
 
-  it('suppresses recovery for the nonce-bearing launcher kickoff', async () => {
+  it('suppresses recovery for a persisted human launcher kickoff', async () => {
     const h = harness([[], [{ info: { role: 'user' }, parts: [{
-      type: 'text', text: 'kickoff <!-- borg-opencode-correlation:abc -->',
+      type: 'text', text: 'kickoff',
     }] }]]);
     await h.core.event({ event: { type: 'session.created', properties: { info: { id: 'launch' } } } });
     await Promise.all(h.deferred);
@@ -221,6 +243,8 @@ describe('generated OpenCode plugin artifact', () => {
     expect(source).toContain('borg-regen');
     expect(source).toContain('experimental.session.compacting');
     expect(source).toContain('session.created');
+    expect(source).toContain('BORG_OPENCODE_LAUNCH_CORRELATION');
+    expect(source).toContain(OPENCODE_LAUNCH_CORRELATION_METADATA_KEY);
     expect(source).not.toMatch(/\.nvm\/versions\/node|node_modules\/borgmcp\/dist/);
   });
 

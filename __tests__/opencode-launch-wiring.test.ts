@@ -43,12 +43,50 @@ describe('OpenCode production launch wiring', () => {
     expect(connect).toHaveBeenCalledWith(expect.objectContaining({ serverUrl: 'http://127.0.0.1:15555' }));
   });
 
+  it('keeps independent API and correlation secrets out of argv and prompt text', () => {
+    const apiPassword = Buffer.alloc(32, 0x41).toString('base64url');
+    const correlationIdentity = Buffer.alloc(32, 0x42).toString('base64url');
+    const spawnProcess = vi.fn(() => ({}) as any);
+    const connect = vi.fn(async () => {});
+    const kickoff = createOpenCodeLaunchKickoff('operator kickoff', {
+      apiPassword,
+      correlationIdentity,
+    });
+
+    const launched = launchOpenCodeProcess({
+      cwd: '/repo',
+      port: 15555,
+      prompt: kickoff.prompt,
+      passthroughArgs: [],
+      env: { BORG_SESSION: '1' },
+      droneLabel: 'drone-1',
+      cubeName: 'borg',
+      kickoff,
+      spawnProcess,
+      connect,
+    });
+
+    expect(kickoff.prompt).toBe('operator kickoff');
+    expect(launched.launchArgs.join('\0')).not.toContain(apiPassword);
+    expect(launched.launchArgs.join('\0')).not.toContain(correlationIdentity);
+    expect(launched.launchEnv).toMatchObject({
+      OPENCODE_SERVER_USERNAME: 'opencode',
+      OPENCODE_SERVER_PASSWORD: apiPassword,
+      BORG_OPENCODE_LAUNCH_CORRELATION: correlationIdentity,
+    });
+    expect(connect).toHaveBeenCalledWith(expect.objectContaining({ apiPassword }));
+  });
+
   it('index consumer connects to the propagated launch port', async () => {
     const connect = vi.fn(async () => {});
 
     await expect(connectOpenCodeRuntime(
       { name: 'borg', droneLabel: 'drone-1' },
-      { BORG_OPENCODE_PORT: '15555' },
+      {
+        BORG_OPENCODE_PORT: '15555',
+        OPENCODE_SERVER_USERNAME: 'opencode',
+        OPENCODE_SERVER_PASSWORD: Buffer.alloc(32, 0x41).toString('base64url'),
+      },
       { connect },
     )).resolves.toBe(true);
 
@@ -75,5 +113,27 @@ describe('OpenCode production launch wiring', () => {
     expect(connect).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledTimes(2);
     expect(error.mock.calls[0][0]).toContain('Relaunch through borg');
+  });
+
+  it('index consumer fails closed before connect when API authentication is absent or unverifiable', async () => {
+    const connect = vi.fn(async () => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(connectOpenCodeRuntime(
+      { name: 'borg', droneLabel: 'drone-1' },
+      { BORG_OPENCODE_PORT: '15555' },
+      { connect },
+    )).resolves.toBe(false);
+    await expect(connectOpenCodeRuntime(
+      { name: 'borg', droneLabel: 'drone-1' },
+      {
+        BORG_OPENCODE_PORT: '15555',
+        OPENCODE_SERVER_USERNAME: 'other',
+        OPENCODE_SERVER_PASSWORD: 'not-256-bit',
+      },
+      { connect },
+    )).resolves.toBe(false);
+
+    expect(connect).not.toHaveBeenCalled();
   });
 });

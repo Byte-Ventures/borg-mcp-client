@@ -108,6 +108,12 @@ import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { configureResolvedCli } from './resolved-cli-config.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff, openCodeLaunchBinding } from './opencode-drone.js';
+import {
+  BORG_OPENCODE_LAUNCH_CORRELATION_ENV,
+  OPENCODE_SERVER_PASSWORD_ENV,
+  OPENCODE_SERVER_USERNAME,
+  OPENCODE_SERVER_USERNAME_ENV,
+} from './opencode-launch-trust.js';
 import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { isClientOwnedCubeInitArgv, runEarlyServerFacade } from './server-facade.js';
 import { runEarlyUpdate } from './update-cmd.js';
@@ -159,7 +165,13 @@ export function launchOpenCodeProcess(options: {
   process: ReturnType<typeof spawn>;
 } {
   const plan = createOpenCodeLaunchPlan(options.cwd, options.port, options.prompt, options.passthroughArgs);
-  const launchEnv = { ...options.env, BORG_OPENCODE_PORT: plan.envPort };
+  const launchEnv = {
+    ...options.env,
+    BORG_OPENCODE_PORT: plan.envPort,
+    [OPENCODE_SERVER_USERNAME_ENV]: OPENCODE_SERVER_USERNAME,
+    [OPENCODE_SERVER_PASSWORD_ENV]: options.kickoff.apiPassword,
+    [BORG_OPENCODE_LAUNCH_CORRELATION_ENV]: options.kickoff.correlationIdentity,
+  };
   // OpenCode's bind can still race this allocation; client#298 tracks the
   // residual pre-bind window outside this slice.
   const child = (options.spawnProcess ?? spawn)('opencode', plan.launchArgs, {
@@ -169,6 +181,7 @@ export function launchOpenCodeProcess(options: {
   });
   (options.connect ?? connectOpenCodeDrone)({
     serverUrl: plan.serverUrl,
+    apiPassword: options.kickoff.apiPassword,
     directory: options.cwd,
     droneLabel: options.droneLabel,
     cubeName: options.cubeName,
@@ -626,9 +639,8 @@ async function main() {
     monitorClause,
     codexWakePathClause,
   });
-  // This stays separate from the shared kickoff so Claude and Codex preserve
-  // their existing launch prompts. OpenCode records this nonce-bearing copy
-  // and later uses the nonce to bind its separately spawned MCP child.
+  // This stays separate from the shared kickoff so OpenCode can carry
+  // launch-only API and correlation identities outside argv and prompt text.
   let openCodeKickoff: ReturnType<typeof createOpenCodeLaunchKickoff> | null = null;
   let openCodePort: number | undefined;
   let launchArgs: string[];

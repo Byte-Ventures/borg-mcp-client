@@ -18,6 +18,7 @@ import { unlinkSync } from 'node:fs';
 import { gcOrphanInboxesForCube, defaultListInboxLogs, defaultInboxLivenessDeps, isInboxLive, ORPHAN_INBOX_STALE_MS, } from './gc-orphan-inboxes.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
+import { BORG_OPENCODE_LAUNCH_CORRELATION_ENV, OPENCODE_SERVER_PASSWORD_ENV, OPENCODE_SERVER_USERNAME, OPENCODE_SERVER_USERNAME_ENV, } from './opencode-launch-trust.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
@@ -1556,9 +1557,9 @@ export async function runAssimilate(args, deps, options = {}) {
         monitorClause,
         codexWakePathClause,
     });
-    // Keep Claude and Codex on the unmodified shared kickoff. Only OpenCode
-    // receives a nonce-bearing copy so the later MCP connection can identify
-    // this exact launch among same-text sessions.
+    // Keep launch trust separate from the shared kickoff. OpenCode receives the
+    // same prompt text; its plugin adds the correlation identity to hidden
+    // TextPart metadata instead of argv or prompt content.
     let openCodeKickoff = null;
     let dronePort;
     launchArgs = [kickoff];
@@ -1589,6 +1590,9 @@ export async function runAssimilate(args, deps, options = {}) {
         installBorgPlugin();
         const cwd = agentCwd;
         openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
+        childEnv[OPENCODE_SERVER_USERNAME_ENV] = OPENCODE_SERVER_USERNAME;
+        childEnv[OPENCODE_SERVER_PASSWORD_ENV] = openCodeKickoff.apiPassword;
+        childEnv[BORG_OPENCODE_LAUNCH_CORRELATION_ENV] = openCodeKickoff.correlationIdentity;
         launchArgs = buildOpenCodeLaunchArgs(cwd, dronePort, openCodeKickoff.prompt);
     }
     // gh#673 P1: mark the launched agent session as borg-launched so the
@@ -1618,6 +1622,7 @@ export async function runAssimilate(args, deps, options = {}) {
         const serverUrl = `http://127.0.0.1:${dronePort}`;
         connectOpenCodeDrone({
             serverUrl,
+            apiPassword: launchKickoff.apiPassword,
             directory: agentCwd,
             droneLabel: result.drone_label,
             cubeName: cubeDetail.name,

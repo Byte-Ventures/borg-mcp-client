@@ -259,13 +259,57 @@ describe('isCodexMcpServerConfigured', () => {
       `--env ${BORG_LAUNCH_EXPECTED_SEAT_ENV}='{env:${BORG_LAUNCH_EXPECTED_SEAT_ENV}}'`,
     );
   });
+
+  it('persists only the OpenCode API password substitution, never a launch secret', () => {
+    const prior = process.env.OPENCODE_SERVER_PASSWORD;
+    process.env.OPENCODE_SERVER_PASSWORD = 'must-not-be-persisted';
+    try {
+      addOpenCodeMcpServer();
+      const addCall = execSyncMock.mock.calls.find(([command]) =>
+        String(command).startsWith('opencode mcp add borg ')
+      );
+      expect(addCall).toBeDefined();
+      const [command] = addCall! as [string, { env: NodeJS.ProcessEnv }];
+      expect(command).toContain(
+        `--env OPENCODE_SERVER_PASSWORD='{env:OPENCODE_SERVER_PASSWORD}'`,
+      );
+      expect(command).not.toContain('must-not-be-persisted');
+    } finally {
+      if (prior === undefined) delete process.env.OPENCODE_SERVER_PASSWORD;
+      else process.env.OPENCODE_SERVER_PASSWORD = prior;
+    }
+  });
 });
 
 describe('isOpenCodeMcpServerConfiguredForLaunch', () => {
+  it('requires an exact API-password substitution and rejects missing or literal credentials', () => {
+    const p = path.join(tmpDir, 'opencode.json');
+    const write = (value?: string) => fs.writeFileSync(p, JSON.stringify({
+      mcp: {
+        borg: {
+          type: 'local',
+          command: ['borg-mcp'],
+          environment: {
+            BORG_AGENT_KIND: 'opencode',
+            ...(value === undefined ? {} : { OPENCODE_SERVER_PASSWORD: value }),
+          },
+        },
+      },
+    }));
+
+    write();
+    expect(isOpenCodeMcpServerConfiguredForLaunch(p, {})).toBe(false);
+    write('literal-secret');
+    expect(isOpenCodeMcpServerConfiguredForLaunch(p, {})).toBe(false);
+    write('{env:OPENCODE_SERVER_PASSWORD}');
+    expect(isOpenCodeMcpServerConfiguredForLaunch(p, {})).toBe(true);
+  });
+
   it('requires the launch identity marker to be forwarded from the OpenCode process', () => {
     const p = path.join(tmpDir, 'opencode.json');
     const environment: Record<string, string> = {
       BORG_AGENT_KIND: 'opencode',
+      OPENCODE_SERVER_PASSWORD: '{env:OPENCODE_SERVER_PASSWORD}',
       [BORG_LAUNCH_EXPECTED_SEAT_ENV]: `{env:${BORG_LAUNCH_EXPECTED_SEAT_ENV}}`,
     };
     fs.writeFileSync(p, JSON.stringify({
