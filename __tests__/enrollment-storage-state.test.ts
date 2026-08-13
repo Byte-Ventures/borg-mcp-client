@@ -153,11 +153,11 @@ describe('durable enrollment storage state machine', () => {
     const requests: Array<{ payload: { invitation: string; retry_key: string; client_credential: string } }> = [];
     const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       if (init?.method !== 'POST') {
-        return new Response(JSON.stringify({ protocol_version: '8' }), { status: 200 });
+        return new Response(JSON.stringify({ protocol_version: '9' }), { status: 200 });
       }
       requests.push(JSON.parse(String(init.body)));
       return new Response(JSON.stringify({
-        protocol_version: '8',
+        protocol_version: '9',
         request_id: 'resume-storage-state',
         payload: {
           purpose: 'owner',

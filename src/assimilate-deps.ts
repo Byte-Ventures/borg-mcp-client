@@ -40,6 +40,7 @@ import {
   resumeLocalBorgServerEnrollment,
   sendBorgServerAttach,
 } from './server-handshake.js';
+import { advanceLocalServerCursor } from './local-server-cursor.js';
 import {
   findIncompleteSiblingAttempt,
   observeSeat,
@@ -482,6 +483,16 @@ export function buildDefaultAssimilateDeps(
               'Borg server did not reattach the saved connection',
             );
           }
+        }
+        if (prepared.initialLogCursor) {
+          const binding = {
+            origin: apiUrl,
+            trustIdentity: serverTrustIdentity,
+            cubeId: prepared.cube.id,
+            droneId: prepared.drone.id,
+          };
+          await advanceLocalServerCursor(binding, prepared.initialLogCursor);
+          await advanceLocalServerCursor({ ...binding, purpose: 'stream' }, prepared.initialLogCursor);
         }
         return {
           cube_id: prepared.cube.id,

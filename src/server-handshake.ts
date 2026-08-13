@@ -211,10 +211,11 @@ export interface ServerAttachResult {
     sessionId: string;
   };
   result: 'created' | 'reused';
+  initial_log_cursor: { id: string; created_at: string } | null;
 }
 
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v8.
+ * Attach an enrolled client principal to one granted cube/role over protocol v9.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
  * OS keychain (keyed by the stable per-seat identity) BEFORE this request, so an
  * interrupted/lost response is recovered by re-sending the exact same bearer —
@@ -237,6 +238,7 @@ export interface PreparedServerAttach {
   drone: ServerAttachResult['drone'];
   session: { sessionId: string };
   result: 'created' | 'reused';
+  initialLogCursor: ServerAttachResult['initial_log_cursor'];
   credentialRef: string;
   pendingBearerDigest: string;
   /** The single-store ATOMIC activate+bind (CR#2 collapse): given the worktree
@@ -391,6 +393,7 @@ export async function sendBorgServerAttach(
         sessionId: decoded.session.id,
       },
       result: decoded.result,
+      initialLogCursor: decoded.initial_log_cursor,
       credentialRef,
       pendingBearerDigest,
       // The single-store ATOMIC activate+bind — invoked by FINALIZE with the decided

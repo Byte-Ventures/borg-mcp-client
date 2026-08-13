@@ -81,10 +81,11 @@ function fakeDigestCorrelatingServer() {
       bySeatDigest.set(d, seat);
     }
     return new Response(JSON.stringify({
-      protocol_version: '8',
+      protocol_version: '9',
       request_id: 'attach-r',
       payload: {
         result: created ? 'created' : 'reused',
+        initial_log_cursor: null,
         cube: { id: CUBE_ID, name: 'myrepo' },
         role: { id: ROLE_ID, name: 'Drone', role_class: 'worker' },
         drone: { id: seat.droneId, label: 'one-of-one-drone', ...UNREPORTED_ATTACH_RUNTIME_METADATA },

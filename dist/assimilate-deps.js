@@ -20,6 +20,7 @@ import { inspectLiveInboxMonitor } from './seat-reattach-guard.js';
 import { buildDefaultFirstRunServerInstallDeps, offerFirstRunServerInstall, } from './first-run-server.js';
 import { listCubes as remoteListCubes, getCube as remoteGetCube, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, enrollLocalBorgServerArtifact, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
+import { advanceLocalServerCursor } from './local-server-cursor.js';
 import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
 import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
@@ -380,6 +381,16 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                         await prepared.scrubPending();
                         throw new BorgServerError('ATTACH_CONFLICT', 'Borg server did not reattach the saved connection');
                     }
+                }
+                if (prepared.initialLogCursor) {
+                    const binding = {
+                        origin: apiUrl,
+                        trustIdentity: serverTrustIdentity,
+                        cubeId: prepared.cube.id,
+                        droneId: prepared.drone.id,
+                    };
+                    await advanceLocalServerCursor(binding, prepared.initialLogCursor);
+                    await advanceLocalServerCursor({ ...binding, purpose: 'stream' }, prepared.initialLogCursor);
                 }
                 return {
                     cube_id: prepared.cube.id,

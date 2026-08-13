@@ -29,9 +29,9 @@ const DEPENDENCY_FIELDS = [
   'peerDependencies',
   'devDependencies',
 ];
-const SHARED_VERSION = '0.11.0';
-const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.11.0.tgz';
-const SHARED_INTEGRITY = 'sha512-I8mixCbSrLKyOAAyqEI/HZJ8cML2rz3r812Up8pr547OdAk9LxZevdCo7ojG42ZwrUmS5u7iKQPg7Vk1XvtX1g==';
+const SHARED_VERSION = '0.12.2';
+const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.12.2.tgz';
+const SHARED_INTEGRITY = 'sha512-l459XEeqk0cSz1+Z8yk8cCVWik4/CX4OBTRZqj6n1SZYvDpzWJksUz82FA9k4taf//rs43Tfl1tpWXnRHAqxOQ==';
 
 async function exists(path) {
   try {

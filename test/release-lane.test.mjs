@@ -37,7 +37,7 @@ const root = resolve(import.meta.dirname, '..');
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const sharedVersion = packageManifest.dependencies['borgmcp-shared'];
 const SHARED_TARBALL = `https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-${sharedVersion}.tgz`;
-const SHARED_INTEGRITY = 'sha512-I8mixCbSrLKyOAAyqEI/HZJ8cML2rz3r812Up8pr547OdAk9LxZevdCo7ojG42ZwrUmS5u7iKQPg7Vk1XvtX1g==';
+const SHARED_INTEGRITY = 'sha512-l459XEeqk0cSz1+Z8yk8cCVWik4/CX4OBTRZqj6n1SZYvDpzWJksUz82FA9k4taf//rs43Tfl1tpWXnRHAqxOQ==';
 
 const RELEASE_NOTES = 'Curated tagged release notes.\n\n- Exact shipped work.';
 const RELEASE_INTEGRITY = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;
@@ -417,6 +417,7 @@ async function validPackage(directory) {
   }
   await cp(join(root, 'LICENSE'), join(packageRoot, 'LICENSE'));
   await cp(join(root, 'NOTICE'), join(packageRoot, 'NOTICE'));
+  await cp(join(root, 'THIRD_PARTY_NOTICES.md'), join(packageRoot, 'THIRD_PARTY_NOTICES.md'));
   await writeFile(join(packageRoot, 'docs', 'usage.md'), '# Usage\n');
   await writeFile(join(packageRoot, 'src', 'claude.ts'), 'export const cli = true;\n');
   await writeFile(join(packageRoot, 'src', 'index.ts'), 'export const mcp = true;\n');

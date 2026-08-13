@@ -11,7 +11,7 @@
  */
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
+import { createProtocolEnvelope, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, } from './drone-lifecycle.js';
@@ -539,7 +539,7 @@ async function authedFetch(path, init = {}) {
         debugLog(`← ${res.status} ${method} ${path}`);
         return res;
     };
-    let transportRetriesRemaining = retryMode === 'unread-cursor'
+    let transportRetriesRemaining = retryMode === 'unread-cursor' || retryMode === 'append-log'
         ? UNREAD_CURSOR_MAX_TRANSPORT_RETRIES
         : 0;
     const requestWithRetry = async () => {
@@ -547,12 +547,12 @@ async function authedFetch(path, init = {}) {
             return await buildRequest(token);
         }
         catch (error) {
-            if (retryMode !== 'unread-cursor' || !isConnectionReset(error))
+            if ((retryMode !== 'unread-cursor' && retryMode !== 'append-log') || !isConnectionReset(error))
                 throw error;
             if (transportRetriesRemaining === 0)
                 throw unreadLogTransportFailure(error);
             transportRetriesRemaining -= 1;
-            debugLog('↻ retrying unread log read after ECONNRESET');
+            debugLog(`↻ retrying ${retryMode === 'append-log' ? 'log append' : 'unread log read'} after ECONNRESET`);
             try {
                 return await buildRequest(token);
             }
@@ -922,6 +922,7 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
         throw new Error("Invalid input: visibility:'broadcast' cannot be combined with non-empty to:. " +
             'Remove visibility to direct to recipients, or remove to: to broadcast.');
     }
+    const postId = randomUUID();
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     let visibility = opts.visibility;
     let recipientDroneIds = opts.recipientDroneIds;
@@ -943,6 +944,7 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
         visibility = 'direct';
     }
     const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs`, 'POST', {
+        post_id: postId,
         message,
         ...(visibility ? { visibility } : {}),
         ...(visibility === 'direct' && recipientDroneIds
@@ -952,10 +954,10 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
         // so the server can classify/route. It is honored only when no explicit
         // visibility/recipients override it (server resolveMessageRouting).
         ...(opts.class ? { class: opts.class } : {}),
-    });
+    }, { retryMode: 'append-log', decodePayload: decodeAppendLogResult });
     if (!payload)
         throw new Error('Local Borg server returned an empty log response');
-    return { entry: payload.entry };
+    return payload;
 }
 /**
  * List cubes readable by the local client's live grants.
