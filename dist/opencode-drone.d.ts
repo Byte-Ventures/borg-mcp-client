@@ -33,7 +33,7 @@ export declare function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Pro
  * text. Retry nonces also carry their durable source entry ID so they reconcile
  * one submission instead of creating a second prompt.
  */
-export declare function injectOpenCodeEntry(text: string, entryId?: string, allowSubmit?: boolean, sourceEntryId?: string): Promise<boolean>;
+export declare function injectOpenCodeEntry(text: string, entryId?: string, allowSubmit?: boolean, sourceEntryId?: string, isSourcePending?: () => Promise<boolean>): Promise<boolean>;
 /** Stop retrying every delivery identity derived from a durable entry that the
  * agent has already consumed. Confirmed history stays available for dedup. */
 export declare function settleOpenCodeEntry(sourceEntryId: string): void;

@@ -30,7 +30,6 @@ import {
 } from '../scripts/verify-release-readiness.mjs';
 import {
   assembleReleaseBody,
-  assertReleasePullRequest,
   createGithubRelease,
 } from '../scripts/create-github-release.mjs';
 
@@ -40,35 +39,14 @@ const sharedVersion = packageManifest.dependencies['borgmcp-shared'];
 const SHARED_TARBALL = `https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-${sharedVersion}.tgz`;
 const SHARED_INTEGRITY = 'sha512-I8mixCbSrLKyOAAyqEI/HZJ8cML2rz3r812Up8pr547OdAk9LxZevdCo7ojG42ZwrUmS5u7iKQPg7Vk1XvtX1g==';
 
-const RELEASE_PR = {
-  number: 443,
-  state: 'closed',
-  merged_at: '2026-08-12T06:46:59Z',
-  base: { ref: 'main' },
-  head: { ref: 'release/3.11.1' },
-  merge_commit_sha: 'f'.repeat(40),
-  html_url: 'https://github.com/Byte-Ventures/borg-mcp-client/pull/443',
-  body: 'PR-BODY-SENTINEL',
-};
-
 const RELEASE_NOTES = 'Curated tagged release notes.\n\n- Exact shipped work.';
 
 const RELEASE_COMMIT = 'f'.repeat(40);
-const RELEASE_RUN = {
-  id: 31571341231,
-  run_attempt: 1,
-  status: 'completed',
-  conclusion: 'success',
-  head_sha: RELEASE_COMMIT,
-  head_branch: 'v3.11.1',
-  event: 'push',
-};
 
 function githubReleaseBindingDeps({
   tagType = 'tag',
   tagMessage = 'borgmcp 3.11.1',
-  workflowPath = 'publish.yml',
-  workflowRuns = [RELEASE_RUN],
+  live = { name: 'borgmcp', version: '3.11.1', integrity: 'sha512-Y2FuZGlkYXRl' },
 } = {}) {
   return {
     allowMissingToken: true,
@@ -81,44 +59,18 @@ function githubReleaseBindingDeps({
       if (command.includes('show -s')) return 'Merge pull request #443 from Byte-Ventures/release/3.11.1';
       throw new Error(`unexpected git command: ${command}`);
     },
-    ghJson: (path) => {
-      if (path.endsWith(`/commits/${RELEASE_COMMIT}/pulls`)) return [RELEASE_PR];
-      if (path.includes(`/actions/workflows/${workflowPath}/runs?`)) {
-        return { workflow_runs: workflowRuns };
-      }
-      if (path.includes('/actions/workflows/')) return { workflow_runs: [] };
-      throw new Error(`unexpected API path: ${path}`);
-    },
-    downloadArtifact: () => {
-      throw new Error('invalid source binding reached artifact download');
-    },
+    livePackage: async () => live,
+    releaseAbsent: () => {},
+    createRelease: () => {},
   };
 }
 
-test('GitHub Release binding fails closed on every release PR mismatch', () => {
-  const options = {
-    version: '3.11.1',
-    commit: 'f'.repeat(40),
-  };
-  assert.equal(assertReleasePullRequest([RELEASE_PR], options), RELEASE_PR);
-  assert.throws(() => assertReleasePullRequest([], options), /exactly one/);
-  assert.throws(() => assertReleasePullRequest([RELEASE_PR, RELEASE_PR], options), /exactly one/);
-  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, state: 'open' }], options), /closed and merged/);
-  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, merged_at: null }], options), /closed and merged/);
-  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, base: { ref: 'develop' } }], options), /base must be main/);
-  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, head: { ref: 'release/3.11.2' } }], options), /head must be release\/3\.11\.1/);
-  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, merge_commit_sha: 'a'.repeat(40) }], options), /merge commit/);
-  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, number: 442 }], options), /identity/);
-  assert.equal(assertReleasePullRequest([{ ...RELEASE_PR, body: null }], options).body, null);
-});
-
-test('GitHub Release body frames authorities and renders exact tagged notes without the PR body', () => {
+test('GitHub Release body frames tag, live package, and exact tagged notes', () => {
   const body = assembleReleaseBody({
     version: '3.11.1',
     integrity: 'sha512-Y2FuZGlkYXRl',
     tag: 'v3.11.1',
     commit: 'f'.repeat(40),
-    pullRequest: RELEASE_PR,
     releaseNotes: RELEASE_NOTES,
   });
   assert.match(body, /^## Package\n/u);
@@ -126,10 +78,9 @@ test('GitHub Release body frames authorities and renders exact tagged notes with
   assert.match(body, /sha512-Y2FuZGlkYXRl/);
   assert.match(body, /Published with npm Trusted Publishing/);
   assert.match(body, /## Source/);
-  assert.match(body, /#443/);
   assert.match(body, /## News and fixes/);
   assert.ok(body.endsWith(RELEASE_NOTES));
-  assert.doesNotMatch(body, /PR-BODY-SENTINEL/);
+  assert.doesNotMatch(body, /Release PR/);
 });
 
 test('release runbook pins the operator GitHub Release invocation', async () => {
@@ -174,40 +125,10 @@ test('GitHub Release creation fails closed when tagged release notes are missing
   }
 });
 
-test('GitHub Release creation rejects every invalid publish-run binding', async (t) => {
-  const cases = [
-    { name: 'wrong workflow path', options: { workflowPath: 'release.yml' } },
-    { name: 'wrong head SHA', run: { head_sha: 'a'.repeat(40) } },
-    { name: 'wrong v-tag branch', run: { head_branch: 'v3.11.2' } },
-    { name: 'non-first attempt', run: { run_attempt: 2 } },
-    { name: 'incomplete status', run: { status: 'in_progress' } },
-    { name: 'unsuccessful conclusion', run: { conclusion: 'failure' } },
-    { name: 'wrong event', run: { event: 'workflow_dispatch' } },
-    { name: 'zero matching runs', options: { workflowRuns: [] } },
-    { name: 'multiple matching runs', options: { workflowRuns: [RELEASE_RUN, { ...RELEASE_RUN, id: 31571341232 }] } },
-  ];
-
-  for (const { name, run, options = {} } of cases) {
-    await t.test(name, async () => {
-      const workflowRuns = run ? [{ ...RELEASE_RUN, ...run }] : options.workflowRuns;
-      await assert.rejects(
-        () => createGithubRelease('3.11.1', githubReleaseBindingDeps({ ...options, workflowRuns })),
-        /exactly one successful attempt-1 publish workflow run/,
-      );
-    });
-  }
-});
-
-test('GitHub Release creation accepts the protected custom merge title and gates on artifact and live npm integrity', async () => {
+test('GitHub Release creation gates on the live package and Release absence', async () => {
   const events = [];
   let created;
   const commit = '881290edf2047a961c88536451730ff705aaa902';
-  const releasePullRequest = {
-    ...RELEASE_PR,
-    number: 457,
-    merge_commit_sha: commit,
-    html_url: 'https://github.com/Byte-Ventures/borg-mcp-client/pull/457',
-  };
   const result = await createGithubRelease('3.11.1', {
     allowMissingToken: true,
     git: (args) => {
@@ -216,39 +137,15 @@ test('GitHub Release creation accepts the protected custom merge title and gates
       if (command.includes('rev-parse')) return commit;
       if (command.includes('for-each-ref')) return 'borgmcp 3.11.1';
       if (command.includes(`show ${commit}:docs/releases/3.11.1.md`)) return RELEASE_NOTES;
-      if (command.includes('show -s')) return 'Release borgmcp 3.11.1 (#457)';
       throw new Error(`unexpected git command: ${command}`);
     },
-    ghJson: (path) => {
-      if (path.endsWith(`/commits/${commit}/pulls`)) return [releasePullRequest];
-      if (path.includes('/actions/workflows/publish.yml/runs?')) {
-        return {
-          workflow_runs: [{
-            id: 31571341231,
-            run_attempt: 1,
-            status: 'completed',
-            conclusion: 'success',
-            head_sha: commit,
-            head_branch: 'v3.11.1',
-            event: 'push',
-          }],
-        };
-      }
-      throw new Error(`unexpected API path: ${path}`);
-    },
-    downloadArtifact: async (runId, directory) => {
-      events.push(`download:${runId}`);
-      await writeFile(join(directory, 'artifact-report.json'), JSON.stringify({
+    livePackage: async () => {
+      events.push('verify-live');
+      return {
         name: 'borgmcp',
         version: '3.11.1',
         integrity: 'sha512-Y2FuZGlkYXRl',
-      }));
-    },
-    verifyPostpublish: async (report, options) => {
-      events.push('verify-live');
-      assert.equal(options.expectedVersion, '3.11.1');
-      assert.equal(report.integrity, 'sha512-Y2FuZGlkYXRl');
-      return { ...report, registryState: 'verified' };
+      };
     },
     releaseAbsent: () => events.push('release-404'),
     createRelease: (_path, payload) => {
@@ -256,18 +153,32 @@ test('GitHub Release creation accepts the protected custom merge title and gates
       created = payload;
     },
   });
-  assert.deepEqual(events, ['download:31571341231', 'verify-live', 'release-404', 'create']);
+  assert.deepEqual(events, ['verify-live', 'release-404', 'create']);
   assert.deepEqual(result, {
     tag: 'v3.11.1',
     commit,
-    pullRequest: 457,
     integrity: 'sha512-Y2FuZGlkYXRl',
   });
   assert.equal(created.tag_name, 'v3.11.1');
   assert.equal(created.name, 'borgmcp 3.11.1');
   assert.equal(created.make_latest, 'true');
   assert.ok(created.body.endsWith(RELEASE_NOTES));
-  assert.doesNotMatch(created.body, /PR-BODY-SENTINEL/);
+  assert.doesNotMatch(created.body, /Release PR/);
+});
+
+test('GitHub Release creation rejects invalid live package identity and integrity', async () => {
+  await assert.rejects(
+    () => createGithubRelease('3.11.1', githubReleaseBindingDeps({
+      live: { name: 'other', version: '3.11.1', integrity: 'sha512-Y2FuZGlkYXRl' },
+    })),
+    /must be borgmcp/,
+  );
+  await assert.rejects(
+    () => createGithubRelease('3.11.1', githubReleaseBindingDeps({
+      live: { name: 'borgmcp', version: '3.11.1', integrity: 'sha512-short' },
+    })),
+    /full SHA-512 integrity/,
+  );
 });
 
 test('release exercise requires an explicit server artifact identity', () => {
@@ -570,7 +481,7 @@ async function packedFixture(mutator) {
   return { directory, tarball };
 }
 
-test('release workflow uses one package authority and one protected stage with no post-stage readback', async () => {
+test('release workflows run each property once and allow pre-stage retries', async () => {
   const workflow = await readFile(join(root, '.github', 'workflows', 'publish.yml'), 'utf8');
   const [verification = '', afterVerify = ''] = workflow.split('\n  publish:\n');
   const publication = afterVerify;
@@ -591,29 +502,24 @@ test('release workflow uses one package authority and one protected stage with n
   assert.equal((workflow.match(/--provenance/g) ?? []).length, 1);
   assert.doesNotMatch(workflow, /SHA512SUMS|sha512sum|DSSE|in-toto|SLSA/);
   assert.equal((workflow.match(/verify-release-trigger\.mjs/g) ?? []).length, 1);
-  assert.equal((workflow.match(/test "\$\{GITHUB_RUN_ATTEMPT\}" = "1"/g) ?? []).length, 1);
+  assert.doesNotMatch(workflow, /GITHUB_RUN_ATTEMPT/);
   assert.equal((workflow.match(/npm install --global --prefix "\$\{consumer\}"/g) ?? []).length, 1);
   const checkouts = [...workflow.matchAll(/uses: actions\/checkout@/g)].map((match) => match.index);
-  const attemptGuards = [...workflow.matchAll(/run: test "\$\{GITHUB_RUN_ATTEMPT\}" = "1"/g)]
-    .map((match) => match.index);
   const configGuards = [...workflow.matchAll(/run: test ! -e \.npmrc/g)].map((match) => match.index);
   const setupNodes = [...workflow.matchAll(/uses: actions\/setup-node@/g)].map((match) => match.index);
   const bootstraps = [...workflow.matchAll(/npm install --prefix "\$\{npm_prefix\}"/g)].map((match) => match.index);
   assert.equal(checkouts.length, 2);
-  assert.equal(attemptGuards.length, 1);
   assert.equal(configGuards.length, 1);
   assert.equal(setupNodes.length, 2);
   assert.equal(bootstraps.length, 2);
-  assert.ok(checkouts[0] < attemptGuards[0]);
-  assert.ok(attemptGuards[0] < configGuards[0]);
+  assert.ok(checkouts[0] < configGuards[0]);
   assert.ok(configGuards[0] < setupNodes[0]);
   assert.ok(setupNodes[0] < bootstraps[0]);
   assert.doesNotMatch(workflow, /registry-url:/);
   assert.equal((workflow.match(/--registry=https:\/\/registry\.npmjs\.org npm@11\.18\.0/g) ?? []).length, 2);
   assert.equal((workflow.match(/npm ci --ignore-scripts/g) ?? []).length, 1);
   assert.equal((workflow.match(/npm audit --audit-level=high/g) ?? []).length, 1);
-  assert.equal((workflow.match(/npm run check/g) ?? []).length, 1);
-  assert.equal((workflow.match(/npm test/g) ?? []).length, 1);
+  assert.doesNotMatch(verification, /npm run check|npm test|test:unit|test:release/);
   assert.equal((workflow.match(/npm run build/g) ?? []).length, 1);
   assert.equal((workflow.match(/npm pack --ignore-scripts/g) ?? []).length, 1);
   assert.equal((workflow.match(/verify-packed-artifact\.mjs/g) ?? []).length, 1);
@@ -635,19 +541,16 @@ test('release workflow uses one package authority and one protected stage with n
   assert.doesNotMatch(workflow, /CLIENT_NPM_PUBLICATION|Confirm publication remains deferred/);
 
   const ci = await readFile(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.match(ci, /push:\n\s+branches: \[main\]/);
+  assert.match(ci, /pull_request:/);
+  assert.equal((ci.match(/npm run test:unit/g) ?? []).length, 1);
+  assert.doesNotMatch(ci, /timeout 5m npm test(?:\s|$)/);
+  assert.equal((ci.match(/node --test test\/release-lane\.test\.mjs/g) ?? []).length, 1);
+  assert.equal((ci.match(/npm run onboarding:smoke/g) ?? []).length, 1);
+  assert.equal((ci.match(/npm run verify:package/g) ?? []).length, 1);
   for (const line of `${workflow}\n${ci}`.split('\n').filter((value) => value.trim().startsWith('uses:'))) {
     assert.match(line, /@[0-9a-f]{40}(?:\s+#.*)?$/, `Action is not pinned by full SHA: ${line.trim()}`);
   }
-});
-
-test('release attempt guard rejects reruns of an immutable tag workflow', () => {
-  assert.doesNotThrow(() => execFileSync('bash', ['-c', 'test "${GITHUB_RUN_ATTEMPT}" = "1"'], {
-    env: { ...process.env, GITHUB_RUN_ATTEMPT: '1' },
-  }));
-  assert.throws(() => execFileSync('bash', ['-c', 'test "${GITHUB_RUN_ATTEMPT}" = "1"'], {
-    env: { ...process.env, GITHUB_RUN_ATTEMPT: '2' },
-    stdio: 'pipe',
-  }));
 });
 
 test('release trigger rejects non-tag events, malformed tags, and version mismatch', () => {
@@ -737,7 +640,7 @@ test('repository npm config is rejected before any release bootstrap may run', a
   await assert.rejects(() => verifyReleaseReadiness(packageRoot), /Repository-local \.npmrc is forbidden/);
 });
 
-test('workflow guards reruns and hostile source config before trusted npm bootstrap', async (t) => {
+test('workflow rejects hostile source config before trusted npm bootstrap', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'borgmcp-client-npmrc-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const { packageRoot } = await validPackage(directory);
@@ -748,28 +651,24 @@ test('workflow guards reruns and hostile source config before trusted npm bootst
     join(packageRoot, 'scripts', 'verify-release-readiness.mjs'),
   );
   const workflowSteps = `set -euo pipefail
-test "\${GITHUB_RUN_ATTEMPT}" = "1"
-test ! -e .npmrc
+  test ! -e .npmrc
 printf '%s\\n' 'registry=https://registry.npmjs.org/' > "\${NPM_CONFIG_USERCONFIG}"
 node scripts/verify-release-readiness.mjs
 `;
-  const runWorkflowSteps = (attempt) => execFileSync('bash', ['-c', workflowSteps], {
+  const runWorkflowSteps = () => execFileSync('bash', ['-c', workflowSteps], {
     cwd: packageRoot,
-    env: { ...process.env, GITHUB_RUN_ATTEMPT: attempt, NPM_CONFIG_USERCONFIG: runnerConfig },
+    env: { ...process.env, NPM_CONFIG_USERCONFIG: runnerConfig },
     stdio: 'pipe',
   });
 
-  assert.doesNotThrow(() => runWorkflowSteps('1'));
+  assert.doesNotThrow(() => runWorkflowSteps());
   assert.equal(await readFile(runnerConfig, 'utf8'), 'registry=https://registry.npmjs.org/\n');
 
   await writeFile(join(packageRoot, '.npmrc'), 'registry=https://attacker.invalid/\n');
   await writeFile(runnerConfig, 'bootstrap-not-reached\n');
-  assert.throws(() => runWorkflowSteps('1'));
+  assert.throws(() => runWorkflowSteps());
   assert.equal(await readFile(runnerConfig, 'utf8'), 'bootstrap-not-reached\n');
 
-  await rm(join(packageRoot, '.npmrc'));
-  assert.throws(() => runWorkflowSteps('2'));
-  assert.equal(await readFile(runnerConfig, 'utf8'), 'bootstrap-not-reached\n');
 });
 
 test('release readiness rejects source-coupled shared dependencies', async (t) => {

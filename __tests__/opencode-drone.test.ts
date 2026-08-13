@@ -771,6 +771,27 @@ describe('OpenCode wake target binding', () => {
     expect(api.promptBodies.every((body) => !Object.hasOwn(body, 'messageID'))).toBe(true);
   });
 
+  it('drops a queued wake consumed before prompt submission', async () => {
+    const launch = launchKickoff('consumed-queue');
+    const root = session('consumed-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+    });
+    await connect();
+    await injectInitialKickoff(launch);
+
+    await expect(injectOpenCodeEntry(
+      'stale', 'entry-stale', true, 'source-stale', async () => false,
+    )).resolves.toBe(true);
+
+    expect(api.promptBodies).toHaveLength(0);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      totalEntriesInjected: 0,
+      deliveryStates: { 'delivered-unconfirmed': 0, failed: 0 },
+    });
+  });
+
   it('submits once for one durable source across distinct wake nonces and reconnect', async () => {
     const launch = launchKickoff('raw-sse-wake-nonce');
     const root = session('raw-sse-root', 10);

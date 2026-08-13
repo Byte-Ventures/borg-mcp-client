@@ -1,9 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verifyPostpublish } from './verify-registry-release.mjs';
+import { verifyArtifactReport } from './verify-registry-release.mjs';
 
 const OWNER = 'Byte-Ventures';
 const REPOSITORY = 'borg-mcp-client';
@@ -14,8 +12,18 @@ function git(args) {
   return execFileSync('git', args, { encoding: 'utf8' }).trim();
 }
 
-function ghJson(path) {
-  return JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8' }));
+async function defaultLivePackage(version) {
+  const response = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/${version}`, {
+    headers: { accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (!response.ok) throw new Error(`Published version verification returned HTTP ${response.status}.`);
+  const published = await response.json();
+  return verifyArtifactReport({
+    name: published.name,
+    version: published.version,
+    integrity: published.dist?.integrity,
+  }, version);
 }
 
 function defaultReleaseAbsent(path) {
@@ -33,33 +41,7 @@ function defaultCreateRelease(path, body) {
   });
 }
 
-export function assertReleasePullRequest(pullRequests, { version, commit }) {
-  if (!Array.isArray(pullRequests) || pullRequests.length !== 1) {
-    throw new Error('Release commit must resolve to exactly one pull request.');
-  }
-  const pullRequest = pullRequests[0];
-  if (pullRequest.state !== 'closed' || typeof pullRequest.merged_at !== 'string') {
-    throw new Error('Release pull request must be closed and merged.');
-  }
-  const expectedUrl = `https://github.com/${OWNER}/${REPOSITORY}/pull/${pullRequest.number}`;
-  if (!Number.isSafeInteger(pullRequest.number) || pullRequest.number < 1 ||
-      pullRequest.html_url !== expectedUrl) {
-    throw new Error('Release pull request identity must be complete.');
-  }
-  if (pullRequest.base?.ref !== 'main') {
-    throw new Error('Release pull request base must be main.');
-  }
-  const expectedHead = `release/${version}`;
-  if (pullRequest.head?.ref !== expectedHead) {
-    throw new Error(`Release pull request head must be release/${version}.`);
-  }
-  if (pullRequest.merge_commit_sha !== commit) {
-    throw new Error('Release pull request merge commit must equal the tagged commit.');
-  }
-  return pullRequest;
-}
-
-export function assembleReleaseBody({ version, integrity, tag, commit, pullRequest, releaseNotes }) {
+export function assembleReleaseBody({ version, integrity, tag, commit, releaseNotes }) {
   const repositoryUrl = `https://github.com/${OWNER}/${REPOSITORY}`;
   return [
     '## Package',
@@ -72,8 +54,6 @@ export function assembleReleaseBody({ version, integrity, tag, commit, pullReque
     '',
     `- Tag: [${tag}](${repositoryUrl}/releases/tag/${tag})`,
     `- Commit: [\`${commit}\`](${repositoryUrl}/commit/${commit})`,
-    `- Release PR: [#${pullRequest.number}](${pullRequest.html_url})`,
-    '',
     '## News and fixes',
     '',
     releaseNotes,
@@ -87,16 +67,9 @@ export async function createGithubRelease(version, deps = {}) {
   }
   const tag = `v${version}`;
   const runGit = deps.git ?? git;
-  const api = deps.ghJson ?? ghJson;
   const releaseAbsent = deps.releaseAbsent ?? defaultReleaseAbsent;
   const createRelease = deps.createRelease ?? defaultCreateRelease;
-  const verifyLive = deps.verifyPostpublish ?? verifyPostpublish;
-  const downloadArtifact = deps.downloadArtifact ?? ((runId, directory) => {
-    execFileSync('gh', [
-      'run', 'download', String(runId), '--repo', `${OWNER}/${REPOSITORY}`,
-      '--name', `npm-release-${version}`, '--dir', directory,
-    ], { stdio: 'inherit' });
-  });
+  const livePackage = deps.livePackage ?? defaultLivePackage;
 
   if (runGit(['cat-file', '-t', `refs/tags/${tag}`]) !== 'tag') {
     throw new Error(`${tag} must be an annotated tag.`);
@@ -111,43 +84,16 @@ export async function createGithubRelease(version, deps = {}) {
     throw new Error(`Tagged commit must contain docs/releases/${version}.md.`);
   }
   if (!releaseNotes.trim()) throw new Error('Tagged release notes must not be blank.');
-  const pullRequests = api(`repos/${OWNER}/${REPOSITORY}/commits/${commit}/pulls`);
-  const pullRequest = assertReleasePullRequest(pullRequests, { version, commit });
-
-  const runs = api(
-    `repos/${OWNER}/${REPOSITORY}/actions/workflows/publish.yml/runs?event=push&branch=${encodeURIComponent(tag)}&per_page=100`,
-  ).workflow_runs ?? [];
-  const matchingRuns = runs.filter((run) =>
-    run.run_attempt === 1 && run.status === 'completed' && run.conclusion === 'success' &&
-    run.head_sha === commit && run.head_branch === tag && run.event === 'push');
-  if (matchingRuns.length !== 1) {
-    throw new Error('Tagged commit must have exactly one successful attempt-1 publish workflow run.');
-  }
-
-  const temporary = await mkdtemp(join(tmpdir(), 'borgmcp-github-release-'));
-  try {
-    await downloadArtifact(matchingRuns[0].id, temporary);
-    const report = JSON.parse(await readFile(join(temporary, 'artifact-report.json'), 'utf8'));
-    const live = await verifyLive(report, { expectedVersion: version });
-    releaseAbsent(`repos/${OWNER}/${REPOSITORY}/releases/tags/${tag}`);
-    const body = assembleReleaseBody({
-      version,
-      integrity: live.integrity,
-      tag,
-      commit,
-      pullRequest,
-      releaseNotes,
-    });
-    createRelease(`repos/${OWNER}/${REPOSITORY}/releases`, {
-      tag_name: tag,
-      name: tagMessage,
-      make_latest: 'true',
-      body,
-    });
-    return { tag, commit, pullRequest: pullRequest.number, integrity: live.integrity };
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
+  const live = verifyArtifactReport(await livePackage(version), version);
+  releaseAbsent(`repos/${OWNER}/${REPOSITORY}/releases/tags/${tag}`);
+  const body = assembleReleaseBody({ version, integrity: live.integrity, tag, commit, releaseNotes });
+  createRelease(`repos/${OWNER}/${REPOSITORY}/releases`, {
+    tag_name: tag,
+    name: tagMessage,
+    make_latest: 'true',
+    body,
+  });
+  return { tag, commit, integrity: live.integrity };
 }
 
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';

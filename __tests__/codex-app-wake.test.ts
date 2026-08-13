@@ -338,6 +338,38 @@ describe('codex app-server wake gating', () => {
     expect(client.connect).toHaveBeenCalledTimes(2);
   });
 
+  it('drops a queued wake after its durable entry is consumed', async () => {
+    const client = {
+      connect: vi.fn(async () => {}),
+      readThread: vi.fn(async () => ({
+        id: 'thread-123', cwd: '/repo', preview: 'preview',
+        status: { type: 'idle' }, updatedAt: 1,
+      })),
+      startTurn: vi.fn(async () => {}),
+      close: vi.fn(),
+    };
+    const deps = {
+      getActiveCube: vi.fn(async () => ({
+        cubeId: 'cube', droneId: 'drone', name: 'cube', sessionToken: 'token',
+        droneLabel: 'drone', apiUrl: 'https://api.example.test',
+      })),
+      getCodexWakeTarget: vi.fn(async () => ({
+        threadId: 'thread-123', socketPath: '/tmp/codex.sock',
+        updatedAt: '2026-05-28T10:00:00.000Z',
+      })),
+      createClient: vi.fn(() => client),
+      hasPendingEntry: vi.fn(async () => false),
+    };
+
+    wakeCodexViaAppServer(
+      'stale', { BORG_CODEX_REMOTE_WAKE: '1' } as any, deps, undefined, 'entry-stale',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(client.startTurn).not.toHaveBeenCalled();
+    expect(deps.hasPendingEntry).toHaveBeenCalledWith(expect.objectContaining({ cubeId: 'cube' }), 'entry-stale');
+  });
+
   it('still deduplicates identical pending wake prompts after delivery', async () => {
     let release: (() => void) | null = null;
     const client = {

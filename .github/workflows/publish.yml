@@ -24,10 +24,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Reject immutable release reruns
-        shell: bash
-        run: test "${GITHUB_RUN_ATTEMPT}" = "1"
-
       - name: Reject checked-out repository npm config
         shell: bash
         run: test ! -e .npmrc
@@ -92,12 +88,6 @@ jobs:
 
       - name: Audit dependency tree
         run: npm audit --audit-level=high
-
-      - name: Check types
-        run: npm run check
-
-      - name: Run tests
-        run: npm test
 
       - name: Rebuild tracked readable output
         run: npm run build

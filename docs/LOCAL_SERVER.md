@@ -167,14 +167,10 @@ Each assimilated seat also receives a disposable scratch root at
 that seat's scratch root: Claude Code uses the worktree's
 `.claude/settings.local.json`, OpenCode uses the worktree's
 `.opencode/opencode.json`, and Codex receives native `--add-dir` flags at
-launch. Use the scratch root for detached review checkouts, clean-environment
-rigs, unpacked artifacts, and fake-home directories; nothing durable belongs
-there. For a rig, follow the named workspace, npm manifest-anchor, container
-label, listing, and teardown convention in
-[`docs/RELEASING.md`](RELEASING.md#clean-environment-rig-lifecycle) before
-delivering a verification result. Claude Code and Codex may also print a
-non-blocking reminder when a tool targets a path outside those two roots. The
-permission layer remains the enforcement mechanism.
+launch. Use the scratch root for detached review checkouts, unpacked artifacts,
+and fake-home directories; nothing durable belongs there. Claude Code and Codex
+may also print a non-blocking reminder when a tool targets a path outside those
+two roots. The permission layer remains the enforcement mechanism.
 
 ## Updating Borg
 
