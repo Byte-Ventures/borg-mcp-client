@@ -195,7 +195,7 @@ function readOpenCodeGlobalConfig(configPath: string): Record<string, unknown> {
   for (const candidate of paths) {
     if (!fs.existsSync(candidate)) continue;
     const text = fs.readFileSync(candidate, 'utf-8');
-    if (!text.trim()) continue;
+    if (text.length === 0) continue;
     const parsed = parseJsonc(text);
     if (!isPlainRecord(parsed)) throw new TypeError(`OpenCode config is not an object: ${candidate}`);
     merged = mergeOpenCodeConfigValue(merged, parsed);

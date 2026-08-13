@@ -343,6 +343,28 @@ describe('isOpenCodeMcpServerConfiguredForLaunch', () => {
     expect(isOpenCodeMcpServerConfiguredForLaunch(jsonPath, {})).toBe(false);
   });
 
+  it('skips an exact empty layer but rejects a whitespace-only loaded layer like OpenCode 1.18.15', () => {
+    const jsonPath = path.join(tmpDir, 'opencode.json');
+    const legacyPath = path.join(tmpDir, 'config.json');
+    fs.writeFileSync(path.join(tmpDir, 'opencode.jsonc'), JSON.stringify({
+      mcp: {
+        borg: {
+          type: 'local',
+          command: ['borg-mcp'],
+          environment: { OPENCODE_SERVER_PASSWORD: '{env:OPENCODE_SERVER_PASSWORD}' },
+        },
+      },
+    }));
+
+    fs.writeFileSync(legacyPath, '');
+    expect(isOpenCodeMcpServerConfigured(jsonPath)).toBe(true);
+    expect(isOpenCodeMcpServerConfiguredForLaunch(jsonPath, {})).toBe(true);
+
+    fs.writeFileSync(legacyPath, ' \n\t');
+    expect(isOpenCodeMcpServerConfigured(jsonPath)).toBe(false);
+    expect(isOpenCodeMcpServerConfiguredForLaunch(jsonPath, {})).toBe(false);
+  });
+
   it('requires an exact API-password substitution and rejects missing or literal credentials', () => {
     const p = path.join(tmpDir, 'opencode.json');
     const write = (value?: string) => fs.writeFileSync(p, JSON.stringify({
