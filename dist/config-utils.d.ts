@@ -153,10 +153,11 @@ export declare function isCodexSessionStartHookRegistered(hooksPath?: string): b
  */
 export declare function isCodexUserPromptSubmitHookRegistered(hooksPath?: string): boolean;
 /**
- * Detect whether the borg MCP server is already registered in the opencode
- * config (`~/.config/opencode/opencode.json` `mcp.borg`).
+ * Detect whether the borg MCP server is registered in OpenCode's effective
+ * global config. OpenCode 1.18.15 loads `config.json`, `opencode.json`, then
+ * `opencode.jsonc`, merging later files over earlier ones.
  *
- * Reads the config as JSON and checks for a `mcp.borg` entry with
+ * Reads JSON or JSONC and checks the effective `mcp.borg` entry for
  * `type: "local"`. Safe-default: any read error returns `false`.
  */
 export declare function isOpenCodeMcpServerConfigured(configPath?: string): boolean;

@@ -55,7 +55,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
-const configPath = path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'opencode.json');
+// OpenCode 1.18.15 seeds opencode.jsonc before mcp add, so the command
+// updates that existing global file rather than creating opencode.json.
+const configPath = path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'opencode.jsonc');
 if (args[0] === 'mcp' && args[1] === 'add') {
   const environment = {};
   for (let i = 3; i < args.length; i++) {
@@ -106,7 +108,7 @@ fs.writeFileSync(process.env.BORG_TEST_CAPTURE, JSON.stringify({
     };
     process.env.BORG_LAUNCH_EXPECTED_SEAT =
       withLaunchSeatExpectationEnv({}, expectation).BORG_LAUNCH_EXPECTED_SEAT;
-    const configPath = path.join(root, '.config', 'opencode', 'opencode.json');
+    const configPath = path.join(root, '.config', 'opencode', 'opencode.jsonc');
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({
       mcp: { borg: { type: 'local', command: ['borg-mcp'], environment: { BORG_SESSION: '1' } } },
@@ -167,7 +169,7 @@ process.exit(process.env.BORG_TEST_OPENCODE_MODE === 'failed' ? 2 : 0);
       };
       process.env.BORG_LAUNCH_EXPECTED_SEAT =
         withLaunchSeatExpectationEnv({}, expectation).BORG_LAUNCH_EXPECTED_SEAT;
-      const configPath = path.join(root, '.config', 'opencode', 'opencode.json');
+      const configPath = path.join(root, '.config', 'opencode', 'opencode.jsonc');
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.writeFileSync(configPath, JSON.stringify({
         mcp: { borg: { type: 'local', command: ['borg-mcp'], environment: { BORG_SESSION: '1' } } },

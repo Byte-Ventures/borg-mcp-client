@@ -40,6 +40,7 @@ const CLAUDE_CONFIG_PATH = path.join(CONFIG_HOME, '.claude.json');
 const CODEX_CONFIG_PATH = path.join(CONFIG_HOME, '.codex', 'config.toml');
 const CODEX_HOOKS_PATH = path.join(CONFIG_HOME, '.codex', 'hooks.json');
 const OPENCODE_CONFIG_PATH = path.join(CONFIG_HOME, '.config', 'opencode', 'opencode.json');
+const OPENCODE_GLOBAL_CONFIG_FILENAMES = ['config.json', 'opencode.json', 'opencode.jsonc'];
 const MCP_SERVER_NAME = 'borg';
 function settingsPath() {
     return path.join(CONFIG_HOME, '.claude', 'settings.json');
@@ -65,6 +66,131 @@ function readJsonFile(p) {
     if (!text.trim())
         return {};
     return JSON.parse(text);
+}
+function parseJsonc(text) {
+    let stripped = '';
+    let inString = false;
+    let escaped = false;
+    let lineComment = false;
+    let blockComment = false;
+    for (let index = 0; index < text.length; index++) {
+        const char = text[index];
+        const next = text[index + 1];
+        if (lineComment) {
+            if (char === '\n' || char === '\r') {
+                lineComment = false;
+                stripped += char;
+            }
+            else {
+                stripped += ' ';
+            }
+            continue;
+        }
+        if (blockComment) {
+            if (char === '*' && next === '/') {
+                stripped += '  ';
+                index++;
+                blockComment = false;
+            }
+            else {
+                stripped += char === '\n' || char === '\r' ? char : ' ';
+            }
+            continue;
+        }
+        if (inString) {
+            stripped += char;
+            if (escaped)
+                escaped = false;
+            else if (char === '\\')
+                escaped = true;
+            else if (char === '"')
+                inString = false;
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            stripped += char;
+            continue;
+        }
+        if (char === '/' && next === '/') {
+            stripped += '  ';
+            index++;
+            lineComment = true;
+            continue;
+        }
+        if (char === '/' && next === '*') {
+            stripped += '  ';
+            index++;
+            blockComment = true;
+            continue;
+        }
+        stripped += char;
+    }
+    if (inString || blockComment)
+        throw new SyntaxError('unterminated JSONC token');
+    let withoutTrailingCommas = '';
+    inString = false;
+    escaped = false;
+    for (let index = 0; index < stripped.length; index++) {
+        const char = stripped[index];
+        if (inString) {
+            withoutTrailingCommas += char;
+            if (escaped)
+                escaped = false;
+            else if (char === '\\')
+                escaped = true;
+            else if (char === '"')
+                inString = false;
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            withoutTrailingCommas += char;
+            continue;
+        }
+        if (char === ',') {
+            let lookahead = index + 1;
+            while (/\s/.test(stripped[lookahead] ?? ''))
+                lookahead++;
+            if (stripped[lookahead] === '}' || stripped[lookahead] === ']')
+                continue;
+        }
+        withoutTrailingCommas += char;
+    }
+    return JSON.parse(withoutTrailingCommas.replace(/^\uFEFF/, ''));
+}
+function isPlainRecord(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+function mergeOpenCodeConfigValue(target, source) {
+    if (!isPlainRecord(target) || !isPlainRecord(source))
+        return source;
+    const merged = Object.assign(Object.create(null), target);
+    for (const [key, value] of Object.entries(source)) {
+        merged[key] = key in merged ? mergeOpenCodeConfigValue(merged[key], value) : value;
+    }
+    return merged;
+}
+function readOpenCodeGlobalConfig(configPath) {
+    const basename = path.basename(configPath);
+    const paths = OPENCODE_GLOBAL_CONFIG_FILENAMES.includes(basename)
+        ? OPENCODE_GLOBAL_CONFIG_FILENAMES.map((filename) => path.join(path.dirname(configPath), filename))
+        : [configPath];
+    let merged = {};
+    for (const candidate of paths) {
+        if (!fs.existsSync(candidate))
+            continue;
+        const text = fs.readFileSync(candidate, 'utf-8');
+        if (!text.trim())
+            continue;
+        const parsed = parseJsonc(text);
+        if (!isPlainRecord(parsed))
+            throw new TypeError(`OpenCode config is not an object: ${candidate}`);
+        merged = mergeOpenCodeConfigValue(merged, parsed);
+    }
+    if (!isPlainRecord(merged))
+        throw new TypeError('OpenCode global config is not an object');
+    return merged;
 }
 function writeJsonFile(p, data) {
     fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -1090,23 +1216,16 @@ export function isCodexUserPromptSubmitHookRegistered(hooksPath = CODEX_HOOKS_PA
 }
 // ─── OpenCode MCP integration ────────────────────────────────────────────
 /**
- * Detect whether the borg MCP server is already registered in the opencode
- * config (`~/.config/opencode/opencode.json` `mcp.borg`).
+ * Detect whether the borg MCP server is registered in OpenCode's effective
+ * global config. OpenCode 1.18.15 loads `config.json`, `opencode.json`, then
+ * `opencode.jsonc`, merging later files over earlier ones.
  *
- * Reads the config as JSON and checks for a `mcp.borg` entry with
+ * Reads JSON or JSONC and checks the effective `mcp.borg` entry for
  * `type: "local"`. Safe-default: any read error returns `false`.
  */
 export function isOpenCodeMcpServerConfigured(configPath = path.join(borgHomeRoot(), '.config', 'opencode', 'opencode.json')) {
     try {
-        if (!fs.existsSync(configPath))
-            return false;
-        const text = fs.readFileSync(configPath, 'utf-8');
-        if (!text.trim())
-            return false;
-        const parsed = JSON.parse(text);
-        if (!parsed || typeof parsed !== 'object')
-            return false;
-        const borgServer = parsed.mcp?.borg;
+        const borgServer = readOpenCodeGlobalConfig(configPath).mcp?.borg;
         if (!borgServer || typeof borgServer !== 'object')
             return false;
         return borgServer.type === 'local';
@@ -1125,7 +1244,7 @@ export function isOpenCodeMcpServerConfiguredForLaunch(configPath = path.join(bo
     if (!isOpenCodeMcpServerConfigured(configPath))
         return false;
     try {
-        const borgServer = readJsonFile(configPath)?.mcp?.borg;
+        const borgServer = readOpenCodeGlobalConfig(configPath).mcp?.borg;
         const environment = borgServer?.environment ?? borgServer?.env;
         if (environment?.[OPENCODE_SERVER_PASSWORD_ENV] !== OPENCODE_SERVER_PASSWORD_REFERENCE) {
             return false;
