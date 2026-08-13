@@ -1,5 +1,7 @@
+import { type OpenCodeLaunchTrust } from './opencode-launch-trust.js';
 interface ConnectDeps {
     serverUrl: string;
+    apiPassword: string;
     directory: string;
     droneLabel: string;
     cubeName: string;
@@ -7,20 +9,20 @@ interface ConnectDeps {
 export type OpenCodeDeliveryState = 'queued' | 'delivered-unconfirmed' | 'retried' | 'failed';
 export interface OpenCodeLaunchKickoff {
     prompt: string;
-    nonce: string;
+    apiPassword: string;
+    correlationIdentity: string;
 }
 /**
- * Add a launch-unique identity to the OpenCode-only copy of the shared
- * kickoff. The prompt is what OpenCode records as its first user message, so
- * the launcher can later bind the MCP child to this precise launch instead of
- * guessing from a repeated kickoff's text or timestamp.
+ * Create independent launch trust for OpenCode without changing the shared
+ * kickoff text. The plugin writes the correlation identity to hidden metadata
+ * on the first qualifying human TextPart; the API password stays in env.
  */
-export declare function createOpenCodeLaunchKickoff(kickoff: string, nonce?: string): OpenCodeLaunchKickoff;
+export declare function createOpenCodeLaunchKickoff(kickoff: string, trust?: Partial<OpenCodeLaunchTrust>): OpenCodeLaunchKickoff;
 export declare function connectOpenCodeDrone(deps: ConnectDeps): Promise<void>;
 /**
  * Wait for the OpenCode HTTP server, then capture the session that received
- * this launch's nonce-bearing `--prompt` kickoff. The binding survives the separate
- * MCP-child process, which must never fall back to a newest-session heuristic.
+ * this launch's metadata-correlated `--prompt` kickoff. The binding survives
+ * the separate MCP-child process, which must never fall back to a newest-session heuristic.
  */
 export declare function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promise<boolean>;
 /**

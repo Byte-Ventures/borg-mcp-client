@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
@@ -22,6 +23,8 @@ import {
 const DIRECTORY = '/repo';
 const SERVER_URL = 'http://127.0.0.1:15113';
 const KICKOFF = 'Call borg_regen and follow the playbook.';
+const API_PASSWORD = Buffer.alloc(32, 0x41).toString('base64url');
+const CORRELATION_METADATA_KEY = 'borgOpenCodeLaunchCorrelation';
 
 interface Session {
   id: string;
@@ -34,14 +37,21 @@ function session(id: string, created: number, parentID?: string): Session {
   return { id, directory: DIRECTORY, time: { created }, ...(parentID ? { parentID } : {}) };
 }
 
-function launchKickoff(nonce: string) {
-  return createOpenCodeLaunchKickoff(KICKOFF, nonce);
+function launchKickoff(correlationIdentity: string) {
+  return createOpenCodeLaunchKickoff(KICKOFF, {
+    apiPassword: API_PASSWORD,
+    correlationIdentity: createHash('sha256').update(correlationIdentity).digest('base64url'),
+  });
 }
 
-function kickoffMessages(kickoff: string, created = Date.now()) {
+function kickoffMessages(launch: ReturnType<typeof createOpenCodeLaunchKickoff>, created = Date.now()) {
   return [{
     info: { role: 'user', time: { created } },
-    parts: [{ type: 'text', text: kickoff }],
+    parts: [{
+      type: 'text',
+      text: launch.prompt,
+      metadata: { [CORRELATION_METADATA_KEY]: launch.correlationIdentity },
+    }],
   }];
 }
 
@@ -134,6 +144,7 @@ function installOpenCodeApi(options: {
 async function connect(droneLabel = 'drone-7') {
   await connectOpenCodeDrone({
     serverUrl: SERVER_URL,
+    apiPassword: API_PASSWORD,
     directory: DIRECTORY,
     droneLabel,
     cubeName: 'borg-mcp',
@@ -183,14 +194,126 @@ describe('OpenCode wake target binding', () => {
     expect(OPEN_CODE_PORT_MISSING_DIAGNOSTIC).toContain('Relaunch through borg');
   });
 
-  it('adds a unique launch nonce without changing the shared kickoff text', () => {
+  it('generates independent 256-bit launch trust without changing the shared kickoff text', () => {
     const first = createOpenCodeLaunchKickoff(KICKOFF);
     const second = createOpenCodeLaunchKickoff(KICKOFF);
 
-    expect(first.nonce).not.toBe(second.nonce);
-    expect(first.prompt).toContain(KICKOFF);
-    expect(first.prompt).toContain(`<!-- borg-opencode-correlation:${first.nonce} -->`);
+    expect(first.apiPassword).not.toBe(first.correlationIdentity);
+    expect(first.apiPassword).not.toBe(second.apiPassword);
+    expect(first.correlationIdentity).not.toBe(second.correlationIdentity);
+    expect(Buffer.from(first.apiPassword, 'base64url')).toHaveLength(32);
+    expect(Buffer.from(first.correlationIdentity, 'base64url')).toHaveLength(32);
+    expect(first.prompt).toBe(KICKOFF);
     expect(KICKOFF).toBe('Call borg_regen and follow the playbook.');
+  });
+
+  it('rejects malformed or reused launch trust identities', () => {
+    expect(() => createOpenCodeLaunchKickoff(KICKOFF, {
+      apiPassword: 'short',
+      correlationIdentity: Buffer.alloc(32, 0x42).toString('base64url'),
+    })).toThrow('256-bit identities');
+    expect(() => createOpenCodeLaunchKickoff(KICKOFF, {
+      apiPassword: API_PASSWORD,
+      correlationIdentity: API_PASSWORD,
+    })).toThrow('must be independent');
+  });
+
+  it('authenticates every OpenCode API request with the per-launch password', async () => {
+    const launch = launchKickoff('authenticated-launch');
+    const root = session('authenticated-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: [{
+        info: { role: 'user' },
+        parts: [{
+          type: 'text',
+          text: KICKOFF,
+          metadata: { [CORRELATION_METADATA_KEY]: launch.correlationIdentity },
+        }],
+      }] },
+    });
+
+    await connect();
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    await expect(injectOpenCodeEntry('authenticated wake')).resolves.toBe(true);
+
+    const expected = `Basic ${Buffer.from(`opencode:${API_PASSWORD}`).toString('base64')}`;
+    expect(api.fetchMock).toHaveBeenCalled();
+    for (const [, init] of api.fetchMock.mock.calls) {
+      expect(new Headers(init?.headers).get('Authorization')).toBe(expected);
+    }
+  });
+
+  it('binds only one exact hidden correlation match and rejects duplicates', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('exact-hidden-match');
+    const first = session('first', 10);
+    const second = session('second', 20);
+    const correlated = {
+      info: { role: 'user', time: { created: 999 } },
+      parts: [{
+        type: 'text',
+        text: KICKOFF,
+        metadata: { [CORRELATION_METADATA_KEY]: launch.correlationIdentity },
+      }],
+    };
+    installOpenCodeApi({
+      sessions: () => [first, second],
+      messages: { [first.id]: [correlated], [second.id]: [correlated] },
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(binding).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().sessionId).toBeNull();
+  });
+
+  it('does not claim an exact match while another candidate is unverifiable', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('unverifiable-candidate');
+    const matched = session('matched', 10);
+    const unverifiable = session('unverifiable', 20);
+    installOpenCodeApi({
+      sessions: () => [matched, unverifiable],
+      messages: { [matched.id]: kickoffMessages(launch) },
+      messageListResponse: ({ sessionId, messages }) => new Response(
+        sessionId === unverifiable.id ? 'unavailable' : JSON.stringify(messages),
+        { status: sessionId === unverifiable.id ? 503 : 200 },
+      ),
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(binding).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().sessionId).toBeNull();
+  });
+
+  it('never binds by prompt text, timestamp, or newest-session fallback', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('metadata-only');
+    const older = session('older-text-match', 10);
+    const newest = session('newest-text-match', 20);
+    installOpenCodeApi({
+      sessions: () => [older, newest],
+      messages: {
+        [older.id]: [{
+          info: { role: 'user', time: { created: 999 } },
+          parts: [{ type: 'text', text: launch.prompt }],
+        }],
+        [newest.id]: [{
+          info: { role: 'user', time: { created: 1_000 } },
+          parts: [{ type: 'text', text: launch.prompt }],
+        }],
+      },
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(binding).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().sessionId).toBeNull();
   });
 
   it('binds a fresh launch to the kickoff-owning root session, not a newer child', async () => {
@@ -199,7 +322,7 @@ describe('OpenCode wake target binding', () => {
     const child = session('newer-child', 20, root.id);
     const api = installOpenCodeApi({
       sessions: () => [root, child],
-      messages: { [root.id]: kickoffMessages(launch.prompt), [child.id]: [] },
+      messages: { [root.id]: kickoffMessages(launch), [child.id]: [] },
     });
 
     await connect();
@@ -222,11 +345,11 @@ describe('OpenCode wake target binding', () => {
       sessions: () => [previous, current],
       messages: {
         // This prior kickoff is only two seconds old: well inside the former
-        // timestamp grace window. Its shared text is identical, but its nonce
-        // proves it belongs to a different OpenCode launch.
-        [previous.id]: kickoffMessages(previousLaunch.prompt, now - 2_000),
+        // timestamp grace window. Its shared text is identical, but its hidden
+        // metadata proves it belongs to a different OpenCode launch.
+        [previous.id]: kickoffMessages(previousLaunch, now - 2_000),
         get [current.id]() {
-          return currentPromptVisible ? kickoffMessages(currentLaunch.prompt, now) : [];
+          return currentPromptVisible ? kickoffMessages(currentLaunch, now) : [];
         },
       },
     });
@@ -251,7 +374,7 @@ describe('OpenCode wake target binding', () => {
     const newerUnrelated = session('other-root', 99);
     const api = installOpenCodeApi({
       sessions: () => [root, newerUnrelated],
-      messages: { [root.id]: kickoffMessages(launch.prompt), [newerUnrelated.id]: [] },
+      messages: { [root.id]: kickoffMessages(launch), [newerUnrelated.id]: [] },
     });
 
     await connect();
@@ -267,7 +390,7 @@ describe('OpenCode wake target binding', () => {
     const fork = session('explicit-fork', 11, root.id);
     const api = installOpenCodeApi({
       sessions: () => [root, fork],
-      messages: { [root.id]: [], [fork.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: [], [fork.id]: kickoffMessages(launch) },
     });
 
     await connect();
@@ -283,7 +406,7 @@ describe('OpenCode wake target binding', () => {
     const child = session('completed-child', 20, root.id);
     const api = installOpenCodeApi({
       sessions: () => [root, child],
-      messages: { [root.id]: kickoffMessages(launch.prompt), [child.id]: [] },
+      messages: { [root.id]: kickoffMessages(launch), [child.id]: [] },
     });
 
     await connect();
@@ -302,7 +425,7 @@ describe('OpenCode wake target binding', () => {
     let sessions = [initial];
     const api = installOpenCodeApi({
       sessions: () => sessions,
-      messages: { [initial.id]: kickoffMessages(launch.prompt), [switched.id]: [] },
+      messages: { [initial.id]: kickoffMessages(launch), [switched.id]: [] },
     });
 
     await connect();
@@ -321,7 +444,7 @@ describe('OpenCode wake target binding', () => {
     const missing = new Set<string>();
     const api = installOpenCodeApi({
       sessions: () => [root, child],
-      messages: { [root.id]: kickoffMessages(launch.prompt), [child.id]: [] },
+      messages: { [root.id]: kickoffMessages(launch), [child.id]: [] },
       missing,
     });
 
@@ -339,7 +462,7 @@ describe('OpenCode wake target binding', () => {
     const root = session('other-drone-root', 10);
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
     });
 
     await connect('drone-7');
@@ -356,7 +479,7 @@ describe('OpenCode wake target binding', () => {
     const root = session('moved-root', 10);
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
     });
 
     await connect();
@@ -375,7 +498,7 @@ describe('OpenCode wake target binding', () => {
     let lookupCount = 0;
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
       messageListResponse: ({ messages }) => {
         lookupCount++;
         if (lookupCount === 2) throw new Error('OpenCode process unavailable');
@@ -412,7 +535,7 @@ describe('OpenCode wake target binding', () => {
     let lookupCount = 0;
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
       messageListResponse: ({ promptBodies, messages }) => {
         if (promptBodies.length === 0) {
           return new Response(JSON.stringify(messages), { status: 200 });
@@ -442,7 +565,7 @@ describe('OpenCode wake target binding', () => {
     let storedParts: unknown[] = [];
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
       messageListResponse: ({ messages }) => new Response(JSON.stringify(
         Date.now() >= visibleAt
           ? [...messages, {
@@ -492,13 +615,13 @@ describe('OpenCode wake target binding', () => {
     const api = installOpenCodeApi({
       sessions: () => sessions,
       messages: {
-        [initial.id]: kickoffMessages(launch.prompt),
+        [initial.id]: kickoffMessages(launch),
         [switched.id]: [],
       },
       // Model a successful prompt_async whose generated message is not yet
       // visible in either session history.
       messageListResponse: ({ sessionId }) => new Response(JSON.stringify(
-        sessionId === initial.id ? kickoffMessages(launch.prompt) : [],
+        sessionId === initial.id ? kickoffMessages(launch) : [],
       ), { status: 200 }),
     });
 
@@ -547,7 +670,7 @@ describe('OpenCode wake target binding', () => {
       sessions: () => [root],
       messages: {
         [root.id]: [
-          ...kickoffMessages(launch.prompt),
+          ...kickoffMessages(launch),
           {
             info: { id: 'msg_000000000001prior', role: 'user' },
             parts: [{
@@ -586,7 +709,7 @@ describe('OpenCode wake target binding', () => {
     const root = session('unverifiable-prior-process-root', 10);
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
     });
 
     await connect();
@@ -615,7 +738,7 @@ describe('OpenCode wake target binding', () => {
     const root = session('burst-root', 10);
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
     });
 
     await connect();
@@ -653,7 +776,7 @@ describe('OpenCode wake target binding', () => {
     const root = session('raw-sse-root', 10);
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
     });
     const active = {
       cubeId: '11111111-1111-4111-8111-111111111111',
@@ -732,7 +855,7 @@ describe('OpenCode wake target binding', () => {
     });
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
       messageListResponse: ({ promptBodies, messages }) => {
         if (promptBodies.length === 0) {
           return new Response(JSON.stringify(messages), { status: 200 });
@@ -776,13 +899,13 @@ describe('OpenCode wake target binding', () => {
     const root = session('stripped-metadata-root', 10);
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
       messageListResponse: ({ promptBodies, messages }) => {
         if (promptBodies.length === 0) {
           return new Response(JSON.stringify(messages), { status: 200 });
         }
         return new Response(JSON.stringify([
-          ...kickoffMessages(launch.prompt),
+          ...kickoffMessages(launch),
           {
             info: { id: 'msg_000000000001stripped', role: 'user' },
             parts: [{ type: 'text', text: 'metadata stripped after delivery' }],
@@ -816,7 +939,7 @@ describe('OpenCode wake target binding', () => {
     const root = session('failed-root', 10);
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
       promptResponse: () => {
         throw new Error('connection closed after submission');
       },
@@ -848,7 +971,7 @@ describe('OpenCode wake target binding', () => {
     const root = session('failed-root', 10);
     const api = installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
       promptStatus: { [root.id]: 500 },
     });
 
@@ -874,7 +997,7 @@ describe('OpenCode wake target binding', () => {
     const root = session('settled-failure-root', 10);
     installOpenCodeApi({
       sessions: () => [root],
-      messages: { [root.id]: kickoffMessages(launch.prompt) },
+      messages: { [root.id]: kickoffMessages(launch) },
       promptStatus: { [root.id]: 500 },
     });
 
@@ -909,7 +1032,7 @@ describe('OpenCode wake target binding', () => {
       }
       if (path === `/session/${root.id}/message`) {
         messageListCount++;
-        const messages = kickoffMessages(launch.prompt);
+        const messages = kickoffMessages(launch);
         if (promptBodies.length > 0 && Date.now() >= visibleAt) {
           messages.push({
             info: { id: 'msg_000000000001generated', role: 'user', time: { created: Date.now() } },

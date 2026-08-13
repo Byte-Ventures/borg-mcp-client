@@ -20,8 +20,9 @@ const openCodeDroneMocks = vi.hoisted(() => ({
   allocateOpenCodePort: vi.fn(async () => 15555),
   connectOpenCodeDrone: vi.fn(async () => {}),
   createOpenCodeLaunchKickoff: vi.fn((kickoff: string) => ({
-    prompt: `${kickoff}\n\n<!-- borg-opencode-correlation:nonce-for-test -->`,
-    nonce: 'nonce-for-test',
+    prompt: kickoff,
+    apiPassword: 'api-password-for-test',
+    correlationIdentity: 'correlation-for-test',
   })),
   injectInitialKickoff: vi.fn(async () => true),
 }));
@@ -765,8 +766,9 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     expect(kickoff).not.toContain('borg-opencode-correlation:');
   });
 
-  it('adds the nonce only to the OpenCode launch prompt', async () => {
+  it('keeps OpenCode API and correlation trust in launch env, not argv or prompt text', async () => {
     openCodeDroneMocks.createOpenCodeLaunchKickoff.mockClear();
+    openCodeDroneMocks.connectOpenCodeDrone.mockClear();
     openCodeDroneMocks.injectInitialKickoff.mockClear();
     const exec = vi.fn(async () => 0);
     const deps = makeStubDeps({
@@ -792,16 +794,27 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     expect(portIndex).toBeGreaterThanOrEqual(0);
     expect(launchArgs[portIndex + 1]).toBe('15555');
     expect(exec.mock.calls[0][3]).toEqual(expect.objectContaining({ BORG_OPENCODE_PORT: '15555' }));
-    expect(exec.mock.calls[0][3]).not.toHaveProperty('BORG_OPENCODE_LAUNCH_NONCE');
+    expect(exec.mock.calls[0][3]).toEqual(expect.objectContaining({
+      OPENCODE_SERVER_USERNAME: 'opencode',
+      OPENCODE_SERVER_PASSWORD: 'api-password-for-test',
+      BORG_OPENCODE_LAUNCH_CORRELATION: 'correlation-for-test',
+    }));
     expect(openCodePrompt).toContain('Call borg_regen and follow the playbook');
-    expect(openCodePrompt).toContain('<!-- borg-opencode-correlation:nonce-for-test -->');
+    expect(openCodePrompt).not.toContain('api-password-for-test');
+    expect(openCodePrompt).not.toContain('correlation-for-test');
+    expect(launchArgs.join('\0')).not.toContain('api-password-for-test');
+    expect(launchArgs.join('\0')).not.toContain('correlation-for-test');
     expect(openCodeDroneMocks.createOpenCodeLaunchKickoff).toHaveBeenCalledWith(
       expect.not.stringContaining('borg-opencode-correlation:'),
     );
     expect(openCodeDroneMocks.injectInitialKickoff).toHaveBeenCalledWith({
       prompt: openCodePrompt,
-      nonce: 'nonce-for-test',
+      apiPassword: 'api-password-for-test',
+      correlationIdentity: 'correlation-for-test',
     });
+    expect(openCodeDroneMocks.connectOpenCodeDrone).toHaveBeenCalledWith(expect.objectContaining({
+      apiPassword: 'api-password-for-test',
+    }));
   });
 
   // BUG-5 / v0.9.3 regression (drone-1 DISPATCH-FIX 2026-05-18T11:43Z):

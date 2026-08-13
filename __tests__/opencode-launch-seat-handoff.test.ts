@@ -55,7 +55,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
-const configPath = path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'opencode.json');
+// OpenCode 1.18.15 seeds opencode.jsonc before mcp add, so the command
+// updates that existing global file rather than creating opencode.json.
+const configPath = path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'opencode.jsonc');
 if (args[0] === 'mcp' && args[1] === 'add') {
   const environment = {};
   for (let i = 3; i < args.length; i++) {
@@ -88,7 +90,11 @@ process.exit(child.status ?? 1);
 `);
     writeExecutable(path.join(bin, 'borg-mcp'), String.raw`
 const fs = require('node:fs');
-fs.writeFileSync(process.env.BORG_TEST_CAPTURE, process.env.BORG_LAUNCH_EXPECTED_SEAT ?? '<missing>');
+fs.writeFileSync(process.env.BORG_TEST_CAPTURE, JSON.stringify({
+  expectedSeat: process.env.BORG_LAUNCH_EXPECTED_SEAT ?? '<missing>',
+  apiUsername: process.env.OPENCODE_SERVER_USERNAME ?? '<missing>',
+  apiPassword: process.env.OPENCODE_SERVER_PASSWORD ?? '<missing>',
+}));
 `);
 
     process.env.PATH = `${bin}${path.delimiter}${originalPath ?? ''}`;
@@ -102,7 +108,7 @@ fs.writeFileSync(process.env.BORG_TEST_CAPTURE, process.env.BORG_LAUNCH_EXPECTED
     };
     process.env.BORG_LAUNCH_EXPECTED_SEAT =
       withLaunchSeatExpectationEnv({}, expectation).BORG_LAUNCH_EXPECTED_SEAT;
-    const configPath = path.join(root, '.config', 'opencode', 'opencode.json');
+    const configPath = path.join(root, '.config', 'opencode', 'opencode.jsonc');
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({
       mcp: { borg: { type: 'local', command: ['borg-mcp'], environment: { BORG_SESSION: '1' } } },
@@ -128,9 +134,12 @@ fs.writeFileSync(process.env.BORG_TEST_CAPTURE, process.env.BORG_LAUNCH_EXPECTED
     const [exitCode] = await once(launched.process, 'exit');
 
     expect(exitCode).toBe(0);
-    expect(fs.readFileSync(capture, 'utf8')).toBe(
-      Buffer.from(JSON.stringify(expectation), 'utf8').toString('base64url'),
-    );
+    expect(JSON.parse(fs.readFileSync(capture, 'utf8'))).toEqual({
+      expectedSeat: Buffer.from(JSON.stringify(expectation), 'utf8').toString('base64url'),
+      apiUsername: 'opencode',
+      apiPassword: launched.launchEnv.OPENCODE_SERVER_PASSWORD,
+    });
+    expect(Buffer.from(String(launched.launchEnv.OPENCODE_SERVER_PASSWORD), 'base64url')).toHaveLength(32);
   });
 
   it.each(['failed', 'ineffective'] as const)(
@@ -160,7 +169,7 @@ process.exit(process.env.BORG_TEST_OPENCODE_MODE === 'failed' ? 2 : 0);
       };
       process.env.BORG_LAUNCH_EXPECTED_SEAT =
         withLaunchSeatExpectationEnv({}, expectation).BORG_LAUNCH_EXPECTED_SEAT;
-      const configPath = path.join(root, '.config', 'opencode', 'opencode.json');
+      const configPath = path.join(root, '.config', 'opencode', 'opencode.jsonc');
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.writeFileSync(configPath, JSON.stringify({
         mcp: { borg: { type: 'local', command: ['borg-mcp'], environment: { BORG_SESSION: '1' } } },
@@ -185,7 +194,9 @@ process.exit(process.env.BORG_TEST_OPENCODE_MODE === 'failed' ? 2 : 0);
       delete process.env.BORG_LAUNCH_EXPECTED_SEAT;
       vi.spyOn(console, 'error').mockImplementation(() => {});
       expect(() => ensureResolvedCliConfigured('opencode')).not.toThrow();
-      expect(fs.readFileSync(calls, 'utf8').trim().split('\n')).toHaveLength(1);
+      // The targeted marker is optional for an ordinary launch, but the API
+      // password substitution is mandatory for every OpenCode MCP child.
+      expect(fs.readFileSync(calls, 'utf8').trim().split('\n')).toHaveLength(2);
     },
   );
 });

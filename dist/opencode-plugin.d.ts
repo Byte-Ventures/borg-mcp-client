@@ -5,6 +5,7 @@ export declare const OPENCODE_COMPATIBILITY: {
 export declare const OPENCODE_INJECTED_ENTRY_METADATA_KEY = "borgOpenCodeInjectedEntry";
 export declare const OPENCODE_WAKE_IDENTITY_METADATA_KEY = "borgOpenCodeWakeIdentity";
 export declare const OPENCODE_RECOVERY_METADATA_KEY = "borgOpenCodeSessionOrientation";
+export declare const OPENCODE_LAUNCH_CORRELATION_METADATA_KEY = "borgOpenCodeLaunchCorrelation";
 export interface OpenCodePluginCoreDeps {
     defer(task: () => Promise<void>): void;
     wait(milliseconds: number): Promise<void>;
@@ -22,6 +23,8 @@ export interface OpenCodePluginCoreOptions {
     confirmationPollAttempts: number;
     pollDelayMs: number;
     compactFallback: string;
+    launchCorrelationMetadataKey: string;
+    launchCorrelationIdentity: string;
 }
 /** Pure, dependency-injected behavior core. Its emitted JavaScript function
  * body is also embedded in the installed self-contained plugin. */

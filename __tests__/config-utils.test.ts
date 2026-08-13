@@ -259,13 +259,140 @@ describe('isCodexMcpServerConfigured', () => {
       `--env ${BORG_LAUNCH_EXPECTED_SEAT_ENV}='{env:${BORG_LAUNCH_EXPECTED_SEAT_ENV}}'`,
     );
   });
+
+  it('persists only the OpenCode API password substitution, never a launch secret', () => {
+    const prior = process.env.OPENCODE_SERVER_PASSWORD;
+    process.env.OPENCODE_SERVER_PASSWORD = 'must-not-be-persisted';
+    try {
+      addOpenCodeMcpServer();
+      const addCall = execSyncMock.mock.calls.find(([command]) =>
+        String(command).startsWith('opencode mcp add borg ')
+      );
+      expect(addCall).toBeDefined();
+      const [command] = addCall! as [string, { env: NodeJS.ProcessEnv }];
+      expect(command).toContain(
+        `--env OPENCODE_SERVER_PASSWORD='{env:OPENCODE_SERVER_PASSWORD}'`,
+      );
+      expect(command).not.toContain('must-not-be-persisted');
+    } finally {
+      if (prior === undefined) delete process.env.OPENCODE_SERVER_PASSWORD;
+      else process.env.OPENCODE_SERVER_PASSWORD = prior;
+    }
+  });
 });
 
 describe('isOpenCodeMcpServerConfiguredForLaunch', () => {
+  it('verifies the fresh OpenCode 1.18.15 global JSONC path and syntax', () => {
+    const jsonPath = path.join(tmpDir, 'opencode.json');
+    const jsoncPath = path.join(tmpDir, 'opencode.jsonc');
+    fs.writeFileSync(jsoncPath, `{
+      // OpenCode 1.18.15 seeds this file before mcp add writes into it.
+      "$schema": "https://opencode.ai/config.json",
+      "mcp": {
+        "borg": {
+          "type": "local",
+          "command": ["borg-mcp"],
+          "environment": {
+            "OPENCODE_SERVER_PASSWORD": "{env:OPENCODE_SERVER_PASSWORD}",
+          },
+        },
+      },
+    }`);
+
+    expect(fs.existsSync(jsonPath)).toBe(false);
+    expect(isOpenCodeMcpServerConfigured(jsonPath)).toBe(true);
+    expect(isOpenCodeMcpServerConfiguredForLaunch(jsonPath, {})).toBe(true);
+  });
+
+  it('mirrors OpenCode global precedence instead of accepting a stale lower layer', () => {
+    const jsonPath = path.join(tmpDir, 'opencode.json');
+    const jsoncPath = path.join(tmpDir, 'opencode.jsonc');
+    const config = (password: string) => JSON.stringify({
+      mcp: {
+        borg: {
+          type: 'local',
+          command: ['borg-mcp'],
+          environment: { OPENCODE_SERVER_PASSWORD: password },
+        },
+      },
+    });
+
+    fs.writeFileSync(jsonPath, config('{env:OPENCODE_SERVER_PASSWORD}'));
+    fs.writeFileSync(jsoncPath, config('stale-literal-secret'));
+    expect(isOpenCodeMcpServerConfiguredForLaunch(jsonPath, {})).toBe(false);
+
+    fs.writeFileSync(jsonPath, config('stale-literal-secret'));
+    fs.writeFileSync(jsoncPath, config('{env:OPENCODE_SERVER_PASSWORD}'));
+    expect(isOpenCodeMcpServerConfiguredForLaunch(jsonPath, {})).toBe(true);
+  });
+
+  it('fails closed when any loaded global config layer is unreadable', () => {
+    const jsonPath = path.join(tmpDir, 'opencode.json');
+    fs.writeFileSync(path.join(tmpDir, 'config.json'), '{ invalid legacy config');
+    fs.writeFileSync(path.join(tmpDir, 'opencode.jsonc'), JSON.stringify({
+      mcp: {
+        borg: {
+          type: 'local',
+          command: ['borg-mcp'],
+          environment: { OPENCODE_SERVER_PASSWORD: '{env:OPENCODE_SERVER_PASSWORD}' },
+        },
+      },
+    }));
+
+    expect(isOpenCodeMcpServerConfigured(jsonPath)).toBe(false);
+    expect(isOpenCodeMcpServerConfiguredForLaunch(jsonPath, {})).toBe(false);
+  });
+
+  it('skips an exact empty layer but rejects a whitespace-only loaded layer like OpenCode 1.18.15', () => {
+    const jsonPath = path.join(tmpDir, 'opencode.json');
+    const legacyPath = path.join(tmpDir, 'config.json');
+    fs.writeFileSync(path.join(tmpDir, 'opencode.jsonc'), JSON.stringify({
+      mcp: {
+        borg: {
+          type: 'local',
+          command: ['borg-mcp'],
+          environment: { OPENCODE_SERVER_PASSWORD: '{env:OPENCODE_SERVER_PASSWORD}' },
+        },
+      },
+    }));
+
+    fs.writeFileSync(legacyPath, '');
+    expect(isOpenCodeMcpServerConfigured(jsonPath)).toBe(true);
+    expect(isOpenCodeMcpServerConfiguredForLaunch(jsonPath, {})).toBe(true);
+
+    fs.writeFileSync(legacyPath, ' \n\t');
+    expect(isOpenCodeMcpServerConfigured(jsonPath)).toBe(false);
+    expect(isOpenCodeMcpServerConfiguredForLaunch(jsonPath, {})).toBe(false);
+  });
+
+  it('requires an exact API-password substitution and rejects missing or literal credentials', () => {
+    const p = path.join(tmpDir, 'opencode.json');
+    const write = (value?: string) => fs.writeFileSync(p, JSON.stringify({
+      mcp: {
+        borg: {
+          type: 'local',
+          command: ['borg-mcp'],
+          environment: {
+            BORG_AGENT_KIND: 'opencode',
+            ...(value === undefined ? {} : { OPENCODE_SERVER_PASSWORD: value }),
+          },
+        },
+      },
+    }));
+
+    write();
+    expect(isOpenCodeMcpServerConfiguredForLaunch(p, {})).toBe(false);
+    write('literal-secret');
+    expect(isOpenCodeMcpServerConfiguredForLaunch(p, {})).toBe(false);
+    write('{env:OPENCODE_SERVER_PASSWORD}');
+    expect(isOpenCodeMcpServerConfiguredForLaunch(p, {})).toBe(true);
+  });
+
   it('requires the launch identity marker to be forwarded from the OpenCode process', () => {
     const p = path.join(tmpDir, 'opencode.json');
     const environment: Record<string, string> = {
       BORG_AGENT_KIND: 'opencode',
+      OPENCODE_SERVER_PASSWORD: '{env:OPENCODE_SERVER_PASSWORD}',
       [BORG_LAUNCH_EXPECTED_SEAT_ENV]: `{env:${BORG_LAUNCH_EXPECTED_SEAT_ENV}}`,
     };
     fs.writeFileSync(p, JSON.stringify({
@@ -563,7 +690,7 @@ describe('native agent registration roots', () => {
       let target: string | undefined;
       if (String(command).startsWith('claude mcp add')) target = path.join(env.HOME ?? '', '.claude.json');
       if (String(command).startsWith('codex mcp add')) target = path.join(env.CODEX_HOME ?? '', 'config.toml');
-      if (String(command).startsWith('opencode mcp add')) target = path.join(env.XDG_CONFIG_HOME ?? '', 'opencode', 'opencode.json');
+      if (String(command).startsWith('opencode mcp add')) target = path.join(env.XDG_CONFIG_HOME ?? '', 'opencode', 'opencode.jsonc');
       if (target) {
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.writeFileSync(target, 'registered\n');
@@ -576,10 +703,10 @@ describe('native agent registration roots', () => {
 
       expect(fs.existsSync(path.join(stateRoot, '.claude.json'))).toBe(true);
       expect(fs.existsSync(path.join(stateRoot, '.codex', 'config.toml'))).toBe(true);
-      expect(fs.existsSync(path.join(stateRoot, '.config', 'opencode', 'opencode.json'))).toBe(true);
+      expect(fs.existsSync(path.join(stateRoot, '.config', 'opencode', 'opencode.jsonc'))).toBe(true);
       expect(fs.existsSync(path.join(ambientHome, '.claude.json'))).toBe(false);
       expect(fs.existsSync(path.join(ambientHome, '.codex', 'config.toml'))).toBe(false);
-      expect(fs.existsSync(path.join(ambientHome, '.config', 'opencode', 'opencode.json'))).toBe(false);
+      expect(fs.existsSync(path.join(ambientHome, '.config', 'opencode', 'opencode.jsonc'))).toBe(false);
 
       const registrationCalls = execSyncMock.mock.calls.filter(([command]) =>
         /^(claude|codex|opencode) mcp (remove|add)/.test(String(command)),

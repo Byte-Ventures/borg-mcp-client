@@ -17,12 +17,14 @@ const COMPACT_FALLBACK = '## Borg Cube\nYou are in a Borg MCP multi-agent coordi
 export const OPENCODE_INJECTED_ENTRY_METADATA_KEY = 'borgOpenCodeInjectedEntry';
 export const OPENCODE_WAKE_IDENTITY_METADATA_KEY = 'borgOpenCodeWakeIdentity';
 export const OPENCODE_RECOVERY_METADATA_KEY = 'borgOpenCodeSessionOrientation';
+export const OPENCODE_LAUNCH_CORRELATION_METADATA_KEY = 'borgOpenCodeLaunchCorrelation';
 const PLUGIN_REL_PATH = path.join('.config', 'opencode', 'plugins', 'borg-orient.js');
 /** Pure, dependency-injected behavior core. Its emitted JavaScript function
  * body is also embedded in the installed self-contained plugin. */
 export function createOpenCodePluginCore(deps, options) {
     const claimedSessions = new Set();
     const humanPromptSessions = new Set();
+    let launchCorrelationAttached = false;
     const textParts = (message) => Array.isArray(message?.parts)
         ? message.parts.filter((part) => part?.type === 'text' && typeof part.text === 'string')
         : [];
@@ -93,7 +95,25 @@ export function createOpenCodePluginCore(deps, options) {
         'chat.message': async (input, output) => {
             if (!options.enabled)
                 return;
-            const current = { info: { role: 'user' }, parts: [...output.parts] };
+            let current = { info: { role: 'user' }, parts: [...output.parts] };
+            if (!launchCorrelationAttached &&
+                options.launchCorrelationIdentity &&
+                !isInjectedEntry(current) &&
+                !isOwnedRecovery(current)) {
+                const index = output.parts.findIndex((part) => part?.type === 'text' && typeof part.text === 'string');
+                if (index >= 0) {
+                    const part = output.parts[index];
+                    output.parts[index] = {
+                        ...part,
+                        metadata: {
+                            ...(part.metadata && typeof part.metadata === 'object' ? part.metadata : {}),
+                            [options.launchCorrelationMetadataKey]: options.launchCorrelationIdentity,
+                        },
+                    };
+                    launchCorrelationAttached = true;
+                    current = { info: { role: 'user' }, parts: [...output.parts] };
+                }
+            }
             if (!isInjectedEntry(current) && !isOwnedRecovery(current)) {
                 // chat.message fires before the user message is persisted. Record the
                 // human turn synchronously so recovery cannot race that short gap.
@@ -128,6 +148,7 @@ export function buildBorgPluginSource(version) {
 const createCore = ${createOpenCodePluginCore.toString()};
 const evaluateAudit = ${evaluateLogAudit.toString()};
 export default async function (ctx) {
+  const launchCorrelationIdentity = process.env.BORG_OPENCODE_LAUNCH_CORRELATION || '';
   const runRegen = async (source) => {
     const input = JSON.stringify({ source });
     const result = await ctx.$\`printf '%s' \${input} | borg-regen\`.quiet().nothrow();
@@ -167,8 +188,12 @@ export default async function (ctx) {
         confirmationPollAttempts: 6,
         pollDelayMs: 200,
         compactFallback: COMPACT_FALLBACK,
+        launchCorrelationMetadataKey: OPENCODE_LAUNCH_CORRELATION_METADATA_KEY,
     })},
     enabled: process.env.BORG_SESSION === '1',
+    launchCorrelationIdentity: /^[A-Za-z0-9_-]{43}$/.test(launchCorrelationIdentity)
+      ? launchCorrelationIdentity
+      : '',
   });
 }
 `;

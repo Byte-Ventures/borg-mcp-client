@@ -24,6 +24,10 @@ import { shellEscape } from './shell-escape.js';
 import { BORG_STATE_ROOT_ENV, borgAgentConfigEnv, borgHomeRoot } from './private-root.js';
 import type { LaunchAccessPaths } from './launch-access.js';
 import { BORG_LAUNCH_EXPECTED_SEAT_ENV } from './cubes.js';
+import {
+  OPENCODE_SERVER_PASSWORD_ENV,
+  OPENCODE_SERVER_PASSWORD_REFERENCE,
+} from './opencode-launch-trust.js';
 
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -53,6 +57,7 @@ const CLAUDE_CONFIG_PATH = path.join(CONFIG_HOME, '.claude.json');
 const CODEX_CONFIG_PATH = path.join(CONFIG_HOME, '.codex', 'config.toml');
 const CODEX_HOOKS_PATH = path.join(CONFIG_HOME, '.codex', 'hooks.json');
 const OPENCODE_CONFIG_PATH = path.join(CONFIG_HOME, '.config', 'opencode', 'opencode.json');
+const OPENCODE_GLOBAL_CONFIG_FILENAMES = ['config.json', 'opencode.json', 'opencode.jsonc'] as const;
 const MCP_SERVER_NAME = 'borg';
 
 function settingsPath(): string {
@@ -78,6 +83,125 @@ function readJsonFile(p: string): any {
   const text = fs.readFileSync(p, 'utf-8');
   if (!text.trim()) return {};
   return JSON.parse(text);
+}
+
+function parseJsonc(text: string): unknown {
+  let stripped = '';
+  let inString = false;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (lineComment) {
+      if (char === '\n' || char === '\r') {
+        lineComment = false;
+        stripped += char;
+      } else {
+        stripped += ' ';
+      }
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        stripped += '  ';
+        index++;
+        blockComment = false;
+      } else {
+        stripped += char === '\n' || char === '\r' ? char : ' ';
+      }
+      continue;
+    }
+    if (inString) {
+      stripped += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      stripped += char;
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      stripped += '  ';
+      index++;
+      lineComment = true;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      stripped += '  ';
+      index++;
+      blockComment = true;
+      continue;
+    }
+    stripped += char;
+  }
+
+  if (inString || blockComment) throw new SyntaxError('unterminated JSONC token');
+
+  let withoutTrailingCommas = '';
+  inString = false;
+  escaped = false;
+  for (let index = 0; index < stripped.length; index++) {
+    const char = stripped[index];
+    if (inString) {
+      withoutTrailingCommas += char;
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      withoutTrailingCommas += char;
+      continue;
+    }
+    if (char === ',') {
+      let lookahead = index + 1;
+      while (/\s/.test(stripped[lookahead] ?? '')) lookahead++;
+      if (stripped[lookahead] === '}' || stripped[lookahead] === ']') continue;
+    }
+    withoutTrailingCommas += char;
+  }
+
+  return JSON.parse(withoutTrailingCommas.replace(/^\uFEFF/, ''));
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeOpenCodeConfigValue(target: unknown, source: unknown): unknown {
+  if (!isPlainRecord(target) || !isPlainRecord(source)) return source;
+  const merged = Object.assign(Object.create(null) as Record<string, unknown>, target);
+  for (const [key, value] of Object.entries(source)) {
+    merged[key] = key in merged ? mergeOpenCodeConfigValue(merged[key], value) : value;
+  }
+  return merged;
+}
+
+function readOpenCodeGlobalConfig(configPath: string): Record<string, unknown> {
+  const basename = path.basename(configPath);
+  const paths = OPENCODE_GLOBAL_CONFIG_FILENAMES.includes(
+    basename as typeof OPENCODE_GLOBAL_CONFIG_FILENAMES[number],
+  )
+    ? OPENCODE_GLOBAL_CONFIG_FILENAMES.map((filename) => path.join(path.dirname(configPath), filename))
+    : [configPath];
+  let merged: unknown = {};
+  for (const candidate of paths) {
+    if (!fs.existsSync(candidate)) continue;
+    const text = fs.readFileSync(candidate, 'utf-8');
+    if (text.length === 0) continue;
+    const parsed = parseJsonc(text);
+    if (!isPlainRecord(parsed)) throw new TypeError(`OpenCode config is not an object: ${candidate}`);
+    merged = mergeOpenCodeConfigValue(merged, parsed);
+  }
+  if (!isPlainRecord(merged)) throw new TypeError('OpenCode global config is not an object');
+  return merged;
 }
 
 function writeJsonFile(p: string, data: any): void {
@@ -1162,22 +1286,18 @@ export function isCodexUserPromptSubmitHookRegistered(hooksPath: string = CODEX_
 // ─── OpenCode MCP integration ────────────────────────────────────────────
 
 /**
- * Detect whether the borg MCP server is already registered in the opencode
- * config (`~/.config/opencode/opencode.json` `mcp.borg`).
+ * Detect whether the borg MCP server is registered in OpenCode's effective
+ * global config. OpenCode 1.18.15 loads `config.json`, `opencode.json`, then
+ * `opencode.jsonc`, merging later files over earlier ones.
  *
- * Reads the config as JSON and checks for a `mcp.borg` entry with
+ * Reads JSON or JSONC and checks the effective `mcp.borg` entry for
  * `type: "local"`. Safe-default: any read error returns `false`.
  */
 export function isOpenCodeMcpServerConfigured(
   configPath: string = path.join(borgHomeRoot(), '.config', 'opencode', 'opencode.json')
 ): boolean {
   try {
-    if (!fs.existsSync(configPath)) return false;
-    const text = fs.readFileSync(configPath, 'utf-8');
-    if (!text.trim()) return false;
-    const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== 'object') return false;
-    const borgServer = (parsed as any).mcp?.borg;
+    const borgServer = (readOpenCodeGlobalConfig(configPath) as any).mcp?.borg;
     if (!borgServer || typeof borgServer !== 'object') return false;
     return borgServer.type === 'local';
   } catch {
@@ -1186,22 +1306,24 @@ export function isOpenCodeMcpServerConfigured(
 }
 
 /**
- * Launch-time OpenCode registration check. Ordinary launches retain the
- * existing configured/not-configured behavior. A targeted `borg launch`,
- * identified by its non-empty expected-seat marker, additionally requires the
- * config substitution that carries that marker into OpenCode's MCP child.
+ * Launch-time OpenCode registration check. Every launch requires the exact
+ * password substitution that carries its ephemeral credential into OpenCode's
+ * MCP child. A targeted `borg launch`, identified by its non-empty expected-seat
+ * marker, additionally requires the substitution that carries that marker.
  */
 export function isOpenCodeMcpServerConfiguredForLaunch(
   configPath: string = path.join(borgHomeRoot(), '.config', 'opencode', 'opencode.json'),
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (!isOpenCodeMcpServerConfigured(configPath)) return false;
-  if (!env[BORG_LAUNCH_EXPECTED_SEAT_ENV]) return true;
   try {
-    const borgServer = readJsonFile(configPath)?.mcp?.borg;
+    const borgServer = (readOpenCodeGlobalConfig(configPath) as any).mcp?.borg;
     const environment = borgServer?.environment ?? borgServer?.env;
-    return environment?.[BORG_LAUNCH_EXPECTED_SEAT_ENV] ===
-      OPENCODE_LAUNCH_EXPECTED_SEAT_REFERENCE;
+    if (environment?.[OPENCODE_SERVER_PASSWORD_ENV] !== OPENCODE_SERVER_PASSWORD_REFERENCE) {
+      return false;
+    }
+    if (!env[BORG_LAUNCH_EXPECTED_SEAT_ENV]) return true;
+    return environment?.[BORG_LAUNCH_EXPECTED_SEAT_ENV] === OPENCODE_LAUNCH_EXPECTED_SEAT_REFERENCE;
   } catch {
     return false;
   }
@@ -1278,11 +1400,11 @@ export function addOpenCodeLaunchAccess(
 
 /**
  * Add borg MCP server to OpenCode using `opencode mcp add` CLI.
- * Pins activation and agent-kind signals plus an OpenCode config substitution
- * for the launch-scoped expected seat. OpenCode resolves `{env:NAME}` from its
- * own launch environment before starting the MCP child, so `borg launch`
- * reaches the identity check without persisting one launch's value. Existing
- * configs with BORG_OPENCODE remain supported by the runtime fallback.
+ * Pins activation and agent-kind signals plus OpenCode config substitutions
+ * for the launch-scoped password and expected seat. OpenCode resolves
+ * `{env:NAME}` from its own launch environment before starting the MCP child,
+ * so no launch credential is persisted. Existing configs with BORG_OPENCODE
+ * remain supported by the runtime fallback after launch-time self-healing.
  */
 export function addOpenCodeMcpServer(): void {
   try {
@@ -1295,8 +1417,10 @@ export function addOpenCodeMcpServer(): void {
       : '';
     const launchExpectedSeatEnvArg =
       ` --env ${BORG_LAUNCH_EXPECTED_SEAT_ENV}=${shellQuote(OPENCODE_LAUNCH_EXPECTED_SEAT_REFERENCE)}`;
+    const apiPasswordEnvArg =
+      ` --env ${OPENCODE_SERVER_PASSWORD_ENV}=${shellQuote(OPENCODE_SERVER_PASSWORD_REFERENCE)}`;
     execSync(
-      `opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg}${stateRootEnvArg}${launchExpectedSeatEnvArg} -- ${shellQuote(MCP_COMMAND)}`,
+      `opencode mcp add borg --env BORG_SESSION=1 --env BORG_AGENT_KIND=opencode --env BORG_OPENCODE=1${apiUrlEnvArg}${stateRootEnvArg}${launchExpectedSeatEnvArg}${apiPasswordEnvArg} -- ${shellQuote(MCP_COMMAND)}`,
       { stdio: 'inherit', env: borgAgentConfigEnv(process.env) }
     );
   } catch (error: any) {
