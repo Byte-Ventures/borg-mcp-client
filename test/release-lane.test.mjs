@@ -96,7 +96,6 @@ test('GitHub Release binding fails closed on every release PR mismatch', () => {
   const options = {
     version: '3.11.1',
     commit: 'f'.repeat(40),
-    mergeSubject: 'Merge pull request #443 from Byte-Ventures/release/3.11.1',
   };
   assert.equal(assertReleasePullRequest([RELEASE_PR], options), RELEASE_PR);
   assert.throws(() => assertReleasePullRequest([], options), /exactly one/);
@@ -106,14 +105,7 @@ test('GitHub Release binding fails closed on every release PR mismatch', () => {
   assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, base: { ref: 'develop' } }], options), /base must be main/);
   assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, head: { ref: 'release/3.11.2' } }], options), /head must be release\/3\.11\.1/);
   assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, merge_commit_sha: 'a'.repeat(40) }], options), /merge commit/);
-  assert.throws(() => assertReleasePullRequest([RELEASE_PR], {
-    ...options,
-    mergeSubject: 'Merge pull request #442 from Byte-Ventures/other',
-  }), /same release pull request/);
-  assert.throws(() => assertReleasePullRequest([RELEASE_PR], {
-    ...options,
-    mergeSubject: 'Merge pull request #443 from Byte-Ventures/other',
-  }), /same release pull request/);
+  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, number: 442 }], options), /identity and body/);
   assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, body: null }], options), /identity and body/);
 });
 
@@ -181,10 +173,16 @@ test('GitHub Release creation rejects every invalid publish-run binding', async 
   }
 });
 
-test('GitHub Release creation gates on the tag-run artifact and live npm integrity', async () => {
+test('GitHub Release creation accepts the protected custom merge title and gates on artifact and live npm integrity', async () => {
   const events = [];
   let created;
-  const commit = 'f'.repeat(40);
+  const commit = '881290edf2047a961c88536451730ff705aaa902';
+  const releasePullRequest = {
+    ...RELEASE_PR,
+    number: 457,
+    merge_commit_sha: commit,
+    html_url: 'https://github.com/Byte-Ventures/borg-mcp-client/pull/457',
+  };
   const result = await createGithubRelease('3.11.1', {
     allowMissingToken: true,
     git: (args) => {
@@ -192,11 +190,11 @@ test('GitHub Release creation gates on the tag-run artifact and live npm integri
       if (command.includes('cat-file -t')) return 'tag';
       if (command.includes('rev-parse')) return commit;
       if (command.includes('for-each-ref')) return 'borgmcp 3.11.1';
-      if (command.includes('show -s')) return 'Merge pull request #443 from Byte-Ventures/release/3.11.1';
+      if (command.includes('show -s')) return 'Release borgmcp 3.11.1 (#457)';
       throw new Error(`unexpected git command: ${command}`);
     },
     ghJson: (path) => {
-      if (path.endsWith(`/commits/${commit}/pulls`)) return [RELEASE_PR];
+      if (path.endsWith(`/commits/${commit}/pulls`)) return [releasePullRequest];
       if (path.includes('/actions/workflows/publish.yml/runs?')) {
         return {
           workflow_runs: [{
@@ -236,7 +234,7 @@ test('GitHub Release creation gates on the tag-run artifact and live npm integri
   assert.deepEqual(result, {
     tag: 'v3.11.1',
     commit,
-    pullRequest: 443,
+    pullRequest: 457,
     integrity: 'sha512-Y2FuZGlkYXRl',
   });
   assert.equal(created.tag_name, 'v3.11.1');
