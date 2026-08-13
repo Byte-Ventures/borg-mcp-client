@@ -48,8 +48,10 @@ const RELEASE_PR = {
   head: { ref: 'release/3.11.1' },
   merge_commit_sha: 'f'.repeat(40),
   html_url: 'https://github.com/Byte-Ventures/borg-mcp-client/pull/443',
-  body: 'Release identity.\n\n## Ships\n\nExact shipped work.',
+  body: 'PR-BODY-SENTINEL',
 };
+
+const RELEASE_NOTES = 'Curated tagged release notes.\n\n- Exact shipped work.';
 
 const RELEASE_COMMIT = 'f'.repeat(40);
 const RELEASE_RUN = {
@@ -75,6 +77,7 @@ function githubReleaseBindingDeps({
       if (command.includes('cat-file -t')) return tagType;
       if (command.includes('rev-parse')) return RELEASE_COMMIT;
       if (command.includes('for-each-ref')) return tagMessage;
+      if (command.includes(`show ${RELEASE_COMMIT}:docs/releases/3.11.1.md`)) return RELEASE_NOTES;
       if (command.includes('show -s')) return 'Merge pull request #443 from Byte-Ventures/release/3.11.1';
       throw new Error(`unexpected git command: ${command}`);
     },
@@ -105,17 +108,18 @@ test('GitHub Release binding fails closed on every release PR mismatch', () => {
   assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, base: { ref: 'develop' } }], options), /base must be main/);
   assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, head: { ref: 'release/3.11.2' } }], options), /head must be release\/3\.11\.1/);
   assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, merge_commit_sha: 'a'.repeat(40) }], options), /merge commit/);
-  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, number: 442 }], options), /identity and body/);
-  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, body: null }], options), /identity and body/);
+  assert.throws(() => assertReleasePullRequest([{ ...RELEASE_PR, number: 442 }], options), /identity/);
+  assert.equal(assertReleasePullRequest([{ ...RELEASE_PR, body: null }], options).body, null);
 });
 
-test('GitHub Release body frames authorities and preserves the merged PR body verbatim', () => {
+test('GitHub Release body frames authorities and renders exact tagged notes without the PR body', () => {
   const body = assembleReleaseBody({
     version: '3.11.1',
     integrity: 'sha512-Y2FuZGlkYXRl',
     tag: 'v3.11.1',
     commit: 'f'.repeat(40),
     pullRequest: RELEASE_PR,
+    releaseNotes: RELEASE_NOTES,
   });
   assert.match(body, /^## Package\n/u);
   assert.match(body, /borgmcp@3\.11\.1/);
@@ -123,8 +127,9 @@ test('GitHub Release body frames authorities and preserves the merged PR body ve
   assert.match(body, /Published with npm Trusted Publishing/);
   assert.match(body, /## Source/);
   assert.match(body, /#443/);
-  assert.ok(body.endsWith(RELEASE_PR.body));
-  assert.equal(body.split(RELEASE_PR.body).length - 1, 1);
+  assert.match(body, /## News and fixes/);
+  assert.ok(body.endsWith(RELEASE_NOTES));
+  assert.doesNotMatch(body, /PR-BODY-SENTINEL/);
 });
 
 test('release runbook pins the operator GitHub Release invocation', async () => {
@@ -145,6 +150,26 @@ test('GitHub Release creation rejects invalid tag bindings', async (t) => {
         () => createGithubRelease('3.11.1', githubReleaseBindingDeps(options)),
         pattern,
       );
+    });
+  }
+});
+
+test('GitHub Release creation fails closed when tagged release notes are missing or blank', async (t) => {
+  for (const { name, notes, pattern } of [
+    { name: 'missing', notes: null, pattern: /must contain docs\/releases\/3\.11\.1\.md/ },
+    { name: 'blank', notes: ' \n\t', pattern: /must not be blank/ },
+  ]) {
+    await t.test(name, async () => {
+      const deps = githubReleaseBindingDeps();
+      const baseGit = deps.git;
+      deps.git = (args) => {
+        if (args[0] === 'show') {
+          if (notes === null) throw new Error('missing');
+          return notes;
+        }
+        return baseGit(args);
+      };
+      await assert.rejects(() => createGithubRelease('3.11.1', deps), pattern);
     });
   }
 });
@@ -190,6 +215,7 @@ test('GitHub Release creation accepts the protected custom merge title and gates
       if (command.includes('cat-file -t')) return 'tag';
       if (command.includes('rev-parse')) return commit;
       if (command.includes('for-each-ref')) return 'borgmcp 3.11.1';
+      if (command.includes(`show ${commit}:docs/releases/3.11.1.md`)) return RELEASE_NOTES;
       if (command.includes('show -s')) return 'Release borgmcp 3.11.1 (#457)';
       throw new Error(`unexpected git command: ${command}`);
     },
@@ -240,7 +266,8 @@ test('GitHub Release creation accepts the protected custom merge title and gates
   assert.equal(created.tag_name, 'v3.11.1');
   assert.equal(created.name, 'borgmcp 3.11.1');
   assert.equal(created.make_latest, 'true');
-  assert.ok(created.body.endsWith(RELEASE_PR.body));
+  assert.ok(created.body.endsWith(RELEASE_NOTES));
+  assert.doesNotMatch(created.body, /PR-BODY-SENTINEL/);
 });
 
 test('release exercise requires an explicit server artifact identity', () => {

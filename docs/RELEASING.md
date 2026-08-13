@@ -365,8 +365,11 @@ GITHUB_TOKEN="$(gh auth token)" node scripts/create-github-release.mjs <version>
 ```
 
 The script binds the annotated tag, merged release pull request, successful tag
-workflow artifact, and live npm integrity before creating the Release. It copies
-the merged release pull request body verbatim and refuses an existing Release.
+workflow artifact, and live npm integrity before creating the Release. It reads
+the curated `docs/releases/<version>.md` notes from the exact tagged commit,
+renders them under `News and fixes`, retains the release pull request link, and
+refuses missing or blank notes and an existing Release. The release pull request
+body is neither required nor rendered.
 
 Separately, once the release is installable from the canonical registry, install
 it into an isolated prefix and exercise the real user update path end to end.

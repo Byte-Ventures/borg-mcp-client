@@ -43,8 +43,8 @@ export function assertReleasePullRequest(pullRequests, { version, commit }) {
   }
   const expectedUrl = `https://github.com/${OWNER}/${REPOSITORY}/pull/${pullRequest.number}`;
   if (!Number.isSafeInteger(pullRequest.number) || pullRequest.number < 1 ||
-      pullRequest.html_url !== expectedUrl || typeof pullRequest.body !== 'string') {
-    throw new Error('Release pull request identity and body must be complete.');
+      pullRequest.html_url !== expectedUrl) {
+    throw new Error('Release pull request identity must be complete.');
   }
   if (pullRequest.base?.ref !== 'main') {
     throw new Error('Release pull request base must be main.');
@@ -59,7 +59,7 @@ export function assertReleasePullRequest(pullRequests, { version, commit }) {
   return pullRequest;
 }
 
-export function assembleReleaseBody({ version, integrity, tag, commit, pullRequest }) {
+export function assembleReleaseBody({ version, integrity, tag, commit, pullRequest, releaseNotes }) {
   const repositoryUrl = `https://github.com/${OWNER}/${REPOSITORY}`;
   return [
     '## Package',
@@ -74,9 +74,9 @@ export function assembleReleaseBody({ version, integrity, tag, commit, pullReque
     `- Commit: [\`${commit}\`](${repositoryUrl}/commit/${commit})`,
     `- Release PR: [#${pullRequest.number}](${pullRequest.html_url})`,
     '',
-    '## Release PR body (as merged)',
+    '## News and fixes',
     '',
-    pullRequest.body ?? '',
+    releaseNotes,
   ].join('\n');
 }
 
@@ -104,6 +104,13 @@ export async function createGithubRelease(version, deps = {}) {
   const commit = runGit(['rev-parse', `${tag}^{commit}`]);
   const tagMessage = runGit(['for-each-ref', `refs/tags/${tag}`, '--format=%(contents:subject)']);
   if (!tagMessage) throw new Error('Annotated release tag must have a message.');
+  let releaseNotes;
+  try {
+    releaseNotes = runGit(['show', `${commit}:docs/releases/${version}.md`]);
+  } catch {
+    throw new Error(`Tagged commit must contain docs/releases/${version}.md.`);
+  }
+  if (!releaseNotes.trim()) throw new Error('Tagged release notes must not be blank.');
   const pullRequests = api(`repos/${OWNER}/${REPOSITORY}/commits/${commit}/pulls`);
   const pullRequest = assertReleasePullRequest(pullRequests, { version, commit });
 
@@ -129,6 +136,7 @@ export async function createGithubRelease(version, deps = {}) {
       tag,
       commit,
       pullRequest,
+      releaseNotes,
     });
     createRelease(`repos/${OWNER}/${REPOSITORY}/releases`, {
       tag_name: tag,
