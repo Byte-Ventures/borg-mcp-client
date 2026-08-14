@@ -55,11 +55,11 @@ async function runServerFacadeSmoke(generatedBin, timeoutMs, version, env) {
   const fakeServer = join(directory, 'borg-mcp-server');
   const expected = 'status\0--json';
   const expectedInvite = 'invite\0--server-owned';
-  const expectedStop = 'stop\0--server-owned';
+  const expectedServiceInstall = 'service\0install\0--server-owned';
   await writeFile(fakeServer, `#!/usr/bin/env node
 const args = process.argv.slice(2).join('\\0');
 process.stdout.write(args);
-process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringify(expectedInvite)} ? 41 : args === ${JSON.stringify(expectedStop)} ? 43 : 96);
+process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringify(expectedInvite)} ? 41 : args === ${JSON.stringify(expectedServiceInstall)} ? 43 : 96);
 `);
   await chmod(fakeServer, 0o755);
 
@@ -146,6 +146,27 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
       );
     }
 
+    const serviceInstall = spawnSync(generatedBin, ['server', 'service', 'install', '--server-owned'], {
+      env: {
+        ...env,
+        PATH: `${directory}${delimiter}${env.PATH ?? ''}`,
+        CI: '1',
+        NO_COLOR: '1',
+      },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    if (
+      serviceInstall.error ||
+      serviceInstall.status !== 43 ||
+      serviceInstall.stdout !== expectedServiceInstall ||
+      serviceInstall.stderr !== ''
+    ) {
+      throw new Error(
+        `Packed service-install facade failed: status=${serviceInstall.status}, stdout=${JSON.stringify(serviceInstall.stdout)}, stderr=${JSON.stringify(serviceInstall.stderr)}, error=${serviceInstall.error?.message ?? ''}`,
+      );
+    }
+
     const stop = spawnSync(generatedBin, ['server', 'stop', '--server-owned'], {
       env: {
         ...env,
@@ -156,9 +177,13 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
       encoding: 'utf8',
       timeout: timeoutMs,
     });
-    if (stop.error || stop.status !== 43 || stop.stdout !== expectedStop || stop.stderr !== '') {
+    const expectedStopError =
+      `Unknown server command: stop.\n` +
+      `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+      `Next: run borg server --help.\n`;
+    if (stop.error || stop.status !== 1 || stop.stdout !== '' || stop.stderr !== expectedStopError) {
       throw new Error(
-        `Packed stop facade failed: status=${stop.status}, stdout=${JSON.stringify(stop.stdout)}, stderr=${JSON.stringify(stop.stderr)}, error=${stop.error?.message ?? ''}`,
+        `Packed removed-stop rejection failed: status=${stop.status}, stdout=${JSON.stringify(stop.stdout)}, stderr=${JSON.stringify(stop.stderr)}, error=${stop.error?.message ?? ''}`,
       );
     }
 
@@ -196,7 +221,8 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
     return {
       serverFacadeExitCode: code,
       serverFacadeInviteExitCode: invite.status,
-      serverFacadeStopExitCode: stop.status,
+      serverFacadeServiceInstallExitCode: serviceInstall.status,
+      serverFacadeRemovedStopExitCode: stop.status,
       serverFacadeStartupFailureExitCode: unavailable.status,
       serverFacadeMissingExitCode: missing.status,
       updateHelpExitCode: updateHelp.status,
