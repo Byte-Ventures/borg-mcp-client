@@ -18,6 +18,7 @@ describe('built borg server facade', () => {
   it.each([
     ['client-list', []],
     ['client-grant', ['client-handle', 'cube-id', 'manage']],
+    ['service', ['install', '--json']],
   ] as const)('forwards %s through the production entrypoint', async (command, args) => {
     const directory = await mkdtemp(join(tmpdir(), 'borg-server-grant-facade-'));
     temporaryDirectories.push(directory);

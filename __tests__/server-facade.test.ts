@@ -78,7 +78,6 @@ describe('parseServerFacadeArgs', () => {
   it.each([
     'setup',
     'start',
-    'stop',
     'status',
     'update',
     'invite',
@@ -96,6 +95,31 @@ describe('parseServerFacadeArgs', () => {
       });
     },
   );
+
+  it('accepts only nested service install and preserves server-owned arguments', () => {
+    expect(parseServerFacadeArgs(['service', 'install', '--json'])).toEqual({
+      kind: 'command',
+      command: 'service install',
+      args: ['--json'],
+    });
+    expect(parseServerFacadeArgs(['service', 'uninstall'])).toEqual({
+      kind: 'error',
+      reason: 'unknown-command',
+      command: 'service uninstall',
+    });
+  });
+
+  it.each([[], ['--help'], ['-h']] as const)('routes service namespace help for %j', (...args) => {
+    expect(parseServerFacadeArgs(['service', ...args])).toEqual({ kind: 'service-help' });
+  });
+
+  it('rejects the removed stop command without forwarding it', () => {
+    expect(parseServerFacadeArgs(['stop'])).toEqual({
+      kind: 'error',
+      reason: 'unknown-command',
+      command: 'stop',
+    });
+  });
 
   it.each(['--help', '-h'])('routes lifecycle command %s before server execution', (helpFlag) => {
     expect(parseServerFacadeArgs(['start', '--future-server-option', helpFlag])).toEqual({
@@ -225,8 +249,8 @@ describe('runEarlyServerFacade', () => {
         `Usage: borg server <command> [arguments]\n\n` +
         `Commands:\n` +
         `  setup    Prepare local server identity and data; does not start the server.\n` +
-        `  start    Start the verified server in the foreground.\n` +
-        `  stop     Stop the managed local server.\n` +
+        `  start    Start the verified server in the foreground; press Ctrl-C to stop.\n` +
+        `  service install  Install and start the loopback-only per-user service so it continues after the terminal closes.\n` +
         `  status   Report verified runtime evidence.\n` +
         `  update   Verify and activate a local server artifact.\n` +
         `  invite   Create a single-use invitation in an interactive terminal.\n` +
@@ -235,6 +259,7 @@ describe('runEarlyServerFacade', () => {
         `  client-grant  Grant a client read, write, or manage access to a cube while the server is live; committed changes take effect on the next request.\n` +
         `  dashboard   View the running local server dashboard.\n` +
         `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
+        `Managed-service stop and removal are server-owned and are not exposed by this client.\n\n` +
         `Run borg server <command> --help for server command options.\n`,
       );
       expect(output.stderr()).toBe('');
@@ -268,6 +293,21 @@ describe('runEarlyServerFacade', () => {
     }
   });
 
+  it.each([[], ['--help'], ['-h']] as const)('prints service namespace help for %j', async (...args) => {
+    const output = outputDeps();
+    await expect(runEarlyServerFacade(
+      ['node', 'borg', 'server', 'service', ...args],
+      processDeps().deps,
+      output.output,
+    )).resolves.toBe(0);
+    expect(output.stdout()).toBe(
+      `Usage: borg server service <command> [arguments]\n\n` +
+      `Commands:\n` +
+      `  install  Install and start the loopback-only per-user service.\n`,
+    );
+    expect(output.stderr()).toBe('');
+  });
+
   it('renders an unknown command as inert text without forwarding trailing arguments', async () => {
     const child = new FakeChild();
     const { deps } = processDeps(child);
@@ -281,7 +321,7 @@ describe('runEarlyServerFacade', () => {
     expect(output.stdout()).toBe('');
     expect(output.stderr()).toBe(
       `Unknown server command: bad??[31m.\n` +
-      `Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+      `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     expect(output.stderr()).not.toContain('--secret');
@@ -301,7 +341,7 @@ describe('runEarlyServerFacade', () => {
     )).resolves.toBe(1);
     expect(output.stderr()).toBe(
       `Unknown server command: ${'😀'.repeat(77)}....\n` +
-      `Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+      `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     const renderedToken = output.stderr().split('\n', 1)[0]
@@ -372,19 +412,19 @@ describe('runEarlyServerFacade', () => {
     expect(output.stderr()).toBe('');
   });
 
-  it('forwards stop and its server-owned arguments without interpreting runtime state', async () => {
+  it('forwards service install and its server-owned arguments without interpreting service behavior', async () => {
     const child = new FakeChild();
     const { deps } = processDeps(child);
     const output = outputDeps();
     const pending = runEarlyServerFacade(
-      ['node', 'borg', 'server', 'stop', '--future-server-option'],
+      ['node', 'borg', 'server', 'service', 'install', '--json'],
       deps,
       output.output,
     );
 
     expect(deps.spawn).toHaveBeenCalledWith(
       'borg-mcp-server',
-      ['stop', '--future-server-option'],
+      ['service', 'install', '--json'],
       { shell: false, stdio: 'inherit' },
     );
     child.emit('exit', 42, null);
@@ -491,7 +531,7 @@ describe('approved server facade copy', () => {
   it('renders the exact bounded unknown-command text', () => {
     expect(unknownServerCommandText('daemonize')).toBe(
       `Unknown server command: daemonize.\n` +
-      `Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+      `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
   });

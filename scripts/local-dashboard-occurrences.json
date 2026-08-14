@@ -13,7 +13,7 @@
   },
   {
     "file": "src/server-facade.ts",
-    "line": "`Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
+    "line": "`Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
   },
   {
     "file": "dist/cli-help.js",
@@ -25,7 +25,7 @@
   },
   {
     "file": "dist/server-facade.d.ts",
-    "line": "export declare const SERVER_LIFECYCLE_COMMANDS: readonly [\"setup\", \"start\", \"stop\", \"status\", \"update\", \"invite\", \"cert-reissue\", \"client-list\", \"client-grant\", \"dashboard\"];"
+    "line": "export declare const SERVER_LIFECYCLE_COMMANDS: readonly [\"setup\", \"start\", \"status\", \"update\", \"invite\", \"cert-reissue\", \"client-list\", \"client-grant\", \"dashboard\"];"
   },
   {
     "file": "dist/server-facade.js",
@@ -33,6 +33,6 @@
   },
   {
     "file": "dist/server-facade.js",
-    "line": "`Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
+    "line": "`Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
   }
 ]

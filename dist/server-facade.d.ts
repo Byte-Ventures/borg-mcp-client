@@ -1,8 +1,11 @@
 import { type SpawnOptions } from 'node:child_process';
-export declare const SERVER_LIFECYCLE_COMMANDS: readonly ["setup", "start", "stop", "status", "update", "invite", "cert-reissue", "client-list", "client-grant", "dashboard"];
+export declare const SERVER_LIFECYCLE_COMMANDS: readonly ["setup", "start", "status", "update", "invite", "cert-reissue", "client-list", "client-grant", "dashboard"];
 export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
+export type ServerFacadeCommand = ServerLifecycleCommand | 'service install';
 export type ParsedServerFacadeArgs = {
     kind: 'help';
+} | {
+    kind: 'service-help';
 } | {
     kind: 'cube-init-help';
 } | {
@@ -10,10 +13,10 @@ export type ParsedServerFacadeArgs = {
     args: string[];
 } | {
     kind: 'command-help';
-    command: ServerLifecycleCommand;
+    command: ServerFacadeCommand;
 } | {
     kind: 'command';
-    command: ServerLifecycleCommand;
+    command: ServerFacadeCommand;
     args: string[];
 } | {
     kind: 'error';
@@ -54,11 +57,11 @@ export type ServerFacadeProcessResult = {
 export declare function buildDefaultServerFacadeClientDeps(buildDeps?: AssimilateDepsBuilder): ServerFacadeClientDeps;
 export declare function cubeInitUsageErrorText(reason: string): string;
 export declare function unknownServerCommandText(command: string): string;
-export declare function serverLifecycleHelpText(command: ServerLifecycleCommand): string;
-export declare function missingServerExecutableText(command: ServerLifecycleCommand): string;
-export declare function serverCommandStartupFailureText(command: ServerLifecycleCommand): string;
+export declare function serverLifecycleHelpText(command: ServerFacadeCommand): string;
+export declare function missingServerExecutableText(command: ServerFacadeCommand): string;
+export declare function serverCommandStartupFailureText(command: ServerFacadeCommand): string;
 export declare function runServerFacadeProcess(input: {
-    command: ServerLifecycleCommand;
+    command: ServerFacadeCommand;
     args: readonly string[];
 }, deps?: ServerFacadeProcessDeps): Promise<ServerFacadeProcessResult>;
 /** Routes every facade outcome before client initialization or network work. */

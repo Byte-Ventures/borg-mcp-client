@@ -1,13 +1,12 @@
 import { spawn as spawnChild } from 'node:child_process';
 import { constants } from 'node:os';
 import chalk from 'chalk';
-import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
+import { cubeInitHelpText, isHelpFlag, serverHelpText, serverServiceHelpText, } from './cli-help.js';
 import { consolePrefix } from './console-prefix.js';
 import { getPackageVersion } from './version.js';
 export const SERVER_LIFECYCLE_COMMANDS = [
     'setup',
     'start',
-    'stop',
     'status',
     'update',
     'invite',
@@ -29,6 +28,22 @@ export function parseServerFacadeArgs(args) {
         return args.some(isHelpFlag)
             ? { kind: 'cube-init-help' }
             : { kind: 'cube-init', args };
+    }
+    if (command === 'service') {
+        const [subcommand, ...args] = rest;
+        if (subcommand === undefined || isHelpFlag(subcommand)) {
+            return { kind: 'service-help' };
+        }
+        if (subcommand !== 'install') {
+            return {
+                kind: 'error',
+                reason: 'unknown-command',
+                command: subcommand === undefined ? command : `${command} ${subcommand}`,
+            };
+        }
+        return args.some(isHelpFlag)
+            ? { kind: 'command-help', command: 'service install' }
+            : { kind: 'command', command: 'service install', args };
     }
     if (!SERVER_LIFECYCLE_COMMANDS.includes(command)) {
         return { kind: 'error', reason: 'unknown-command', command };
@@ -104,7 +119,7 @@ function inertCommand(command) {
 }
 export function unknownServerCommandText(command) {
     return (`Unknown server command: ${inertCommand(command)}.\n` +
-        `Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+        `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
         `Next: run borg server --help.\n`);
 }
 export function serverLifecycleHelpText(command) {
@@ -125,7 +140,8 @@ function isMissingServerExecutable(error) {
     return error.code === 'ENOENT';
 }
 export function runServerFacadeProcess(input, deps = defaultProcessDeps) {
-    const child = deps.spawn('borg-mcp-server', [input.command, ...input.args], { shell: false, stdio: 'inherit' });
+    const command = input.command.split(' ');
+    const child = deps.spawn('borg-mcp-server', [...command, ...input.args], { shell: false, stdio: 'inherit' });
     return new Promise((resolve) => {
         let settled = false;
         const forwarders = new Map();
@@ -179,6 +195,10 @@ export async function runEarlyServerFacade(argv, deps = defaultProcessDeps, outp
     const parsed = parseServerFacadeArgs(argv.slice(3));
     if (parsed.kind === 'help') {
         output.writeStdout(serverHelpText());
+        return 0;
+    }
+    if (parsed.kind === 'service-help') {
+        output.writeStdout(serverServiceHelpText());
         return 0;
     }
     if (parsed.kind === 'cube-init-help') {

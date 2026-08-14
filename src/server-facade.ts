@@ -1,14 +1,18 @@
 import { spawn as spawnChild, type SpawnOptions } from 'node:child_process';
 import { constants } from 'node:os';
 import chalk from 'chalk';
-import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
+import {
+  cubeInitHelpText,
+  isHelpFlag,
+  serverHelpText,
+  serverServiceHelpText,
+} from './cli-help.js';
 import { consolePrefix } from './console-prefix.js';
 import { getPackageVersion } from './version.js';
 
 export const SERVER_LIFECYCLE_COMMANDS = [
   'setup',
   'start',
-  'stop',
   'status',
   'update',
   'invite',
@@ -18,13 +22,15 @@ export const SERVER_LIFECYCLE_COMMANDS = [
   'dashboard',
 ] as const;
 export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
+export type ServerFacadeCommand = ServerLifecycleCommand | 'service install';
 
 export type ParsedServerFacadeArgs =
   | { kind: 'help' }
+  | { kind: 'service-help' }
   | { kind: 'cube-init-help' }
   | { kind: 'cube-init'; args: string[] }
-  | { kind: 'command-help'; command: ServerLifecycleCommand }
-  | { kind: 'command'; command: ServerLifecycleCommand; args: string[] }
+  | { kind: 'command-help'; command: ServerFacadeCommand }
+  | { kind: 'command'; command: ServerFacadeCommand; args: string[] }
   | { kind: 'error'; reason: 'unknown-command'; command: string };
 
 export function isClientOwnedCubeInitArgv(argv: readonly string[]): boolean {
@@ -41,6 +47,22 @@ export function parseServerFacadeArgs(args: readonly string[]): ParsedServerFaca
     return args.some(isHelpFlag)
       ? { kind: 'cube-init-help' }
       : { kind: 'cube-init', args };
+  }
+  if (command === 'service') {
+    const [subcommand, ...args] = rest;
+    if (subcommand === undefined || isHelpFlag(subcommand)) {
+      return { kind: 'service-help' };
+    }
+    if (subcommand !== 'install') {
+      return {
+        kind: 'error',
+        reason: 'unknown-command',
+        command: subcommand === undefined ? command : `${command} ${subcommand}`,
+      };
+    }
+    return args.some(isHelpFlag)
+      ? { kind: 'command-help', command: 'service install' }
+      : { kind: 'command', command: 'service install', args };
   }
   if (!(SERVER_LIFECYCLE_COMMANDS as readonly string[]).includes(command)) {
     return { kind: 'error', reason: 'unknown-command', command };
@@ -173,19 +195,19 @@ function inertCommand(command: string): string {
 export function unknownServerCommandText(command: string): string {
   return (
     `Unknown server command: ${inertCommand(command)}.\n` +
-    `Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+    `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
     `Next: run borg server --help.\n`
   );
 }
 
-export function serverLifecycleHelpText(command: ServerLifecycleCommand): string {
+export function serverLifecycleHelpText(command: ServerFacadeCommand): string {
   return (
     `Usage: borg server ${command} [arguments]\n\n` +
     `Command arguments are server-owned and pass to the verified borg-mcp-server executable when run.\n`
   );
 }
 
-export function missingServerExecutableText(command: ServerLifecycleCommand): string {
+export function missingServerExecutableText(command: ServerFacadeCommand): string {
   return (
     `Local server command is unavailable: borg-mcp-server was not found.\n` +
     `Next: install a verified borgmcp-server release, then rerun borg server ${command}.\n` +
@@ -193,7 +215,7 @@ export function missingServerExecutableText(command: ServerLifecycleCommand): st
   );
 }
 
-export function serverCommandStartupFailureText(command: ServerLifecycleCommand): string {
+export function serverCommandStartupFailureText(command: ServerFacadeCommand): string {
   return (
     `Local server command could not be started.\n` +
     `Next: check local permissions and system resources, then rerun borg server ${inertCommand(command)}.\n` +
@@ -206,12 +228,13 @@ function isMissingServerExecutable(error: Error): boolean {
 }
 
 export function runServerFacadeProcess(
-  input: { command: ServerLifecycleCommand; args: readonly string[] },
+  input: { command: ServerFacadeCommand; args: readonly string[] },
   deps: ServerFacadeProcessDeps = defaultProcessDeps,
 ): Promise<ServerFacadeProcessResult> {
+  const command = input.command.split(' ');
   const child = deps.spawn(
     'borg-mcp-server',
-    [input.command, ...input.args],
+    [...command, ...input.args],
     { shell: false, stdio: 'inherit' },
   );
 
@@ -272,6 +295,10 @@ export async function runEarlyServerFacade(
   const parsed = parseServerFacadeArgs(argv.slice(3));
   if (parsed.kind === 'help') {
     output.writeStdout(serverHelpText());
+    return 0;
+  }
+  if (parsed.kind === 'service-help') {
+    output.writeStdout(serverServiceHelpText());
     return 0;
   }
   if (parsed.kind === 'cube-init-help') {

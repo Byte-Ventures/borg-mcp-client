@@ -26,6 +26,18 @@ must never imply that a daemon, LaunchAgent, or systemd service was installed.
 Ctrl-C stops the foreground process. Managed persistence is a separate explicit
 handoff.
 
+To install and start the server as a loopback-only per-user service, run:
+
+```bash
+borg server service install
+```
+
+Add `--json` for machine-readable server output. The client passes this command
+to the verified `borg-mcp-server` executable; service definitions, validation,
+startup, replacement, and rollback remain server-owned. The service continues
+after the terminal closes. Stopping or removing the managed service is also
+server-owned and is not exposed by this client.
+
 Use installed help for the command set and exact options for your version:
 
 ```text
