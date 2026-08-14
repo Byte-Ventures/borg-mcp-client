@@ -1,7 +1,12 @@
 import { spawn as spawnChild, type SpawnOptions } from 'node:child_process';
 import { constants } from 'node:os';
 import chalk from 'chalk';
-import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
+import {
+  cubeInitHelpText,
+  isHelpFlag,
+  serverHelpText,
+  serverServiceHelpText,
+} from './cli-help.js';
 import { consolePrefix } from './console-prefix.js';
 import { getPackageVersion } from './version.js';
 
@@ -21,6 +26,7 @@ export type ServerFacadeCommand = ServerLifecycleCommand | 'service install';
 
 export type ParsedServerFacadeArgs =
   | { kind: 'help' }
+  | { kind: 'service-help' }
   | { kind: 'cube-init-help' }
   | { kind: 'cube-init'; args: string[] }
   | { kind: 'command-help'; command: ServerFacadeCommand }
@@ -44,6 +50,9 @@ export function parseServerFacadeArgs(args: readonly string[]): ParsedServerFaca
   }
   if (command === 'service') {
     const [subcommand, ...args] = rest;
+    if (subcommand === undefined || isHelpFlag(subcommand)) {
+      return { kind: 'service-help' };
+    }
     if (subcommand !== 'install') {
       return {
         kind: 'error',
@@ -286,6 +295,10 @@ export async function runEarlyServerFacade(
   const parsed = parseServerFacadeArgs(argv.slice(3));
   if (parsed.kind === 'help') {
     output.writeStdout(serverHelpText());
+    return 0;
+  }
+  if (parsed.kind === 'service-help') {
+    output.writeStdout(serverServiceHelpText());
     return 0;
   }
   if (parsed.kind === 'cube-init-help') {

@@ -1,7 +1,7 @@
 import { spawn as spawnChild } from 'node:child_process';
 import { constants } from 'node:os';
 import chalk from 'chalk';
-import { cubeInitHelpText, isHelpFlag, serverHelpText } from './cli-help.js';
+import { cubeInitHelpText, isHelpFlag, serverHelpText, serverServiceHelpText, } from './cli-help.js';
 import { consolePrefix } from './console-prefix.js';
 import { getPackageVersion } from './version.js';
 export const SERVER_LIFECYCLE_COMMANDS = [
@@ -31,6 +31,9 @@ export function parseServerFacadeArgs(args) {
     }
     if (command === 'service') {
         const [subcommand, ...args] = rest;
+        if (subcommand === undefined || isHelpFlag(subcommand)) {
+            return { kind: 'service-help' };
+        }
         if (subcommand !== 'install') {
             return {
                 kind: 'error',
@@ -192,6 +195,10 @@ export async function runEarlyServerFacade(argv, deps = defaultProcessDeps, outp
     const parsed = parseServerFacadeArgs(argv.slice(3));
     if (parsed.kind === 'help') {
         output.writeStdout(serverHelpText());
+        return 0;
+    }
+    if (parsed.kind === 'service-help') {
+        output.writeStdout(serverServiceHelpText());
         return 0;
     }
     if (parsed.kind === 'cube-init-help') {

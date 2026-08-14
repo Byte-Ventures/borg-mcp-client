@@ -28,6 +28,8 @@ export declare function recoverEnrollmentHelpText(version: string): string;
 export declare function updateHelpText(version: string): string;
 /** Product Design-approved client-owned copy for `borg server --help`. */
 export declare function serverHelpText(): string;
+/** Client-owned help for the server-owned service command namespace. */
+export declare function serverServiceHelpText(): string;
 /** Client-owned help for repository cube initialization without a drone. */
 export declare function cubeInitHelpText(version: string): string;
 /**

@@ -5,6 +5,8 @@ export type ServerFacadeCommand = ServerLifecycleCommand | 'service install';
 export type ParsedServerFacadeArgs = {
     kind: 'help';
 } | {
+    kind: 'service-help';
+} | {
     kind: 'cube-init-help';
 } | {
     kind: 'cube-init';

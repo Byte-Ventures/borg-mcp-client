@@ -34,7 +34,9 @@ borg server service install
 
 Add `--json` for machine-readable server output. The client passes this command
 to the verified `borg-mcp-server` executable; service definitions, validation,
-startup, replacement, and rollback remain server-owned.
+startup, replacement, and rollback remain server-owned. The service continues
+after the terminal closes. Stopping or removing the managed service is also
+server-owned and is not exposed by this client.
 
 Use installed help for the command set and exact options for your version:
 
