@@ -13,7 +13,7 @@
   },
   {
     "file": "src/server-facade.ts",
-    "line": "`Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
+    "line": "`Available commands: setup, start, service install, service uninstall, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
   },
   {
     "file": "dist/cli-help.js",
@@ -33,6 +33,6 @@
   },
   {
     "file": "dist/server-facade.js",
-    "line": "`Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
+    "line": "`Available commands: setup, start, service install, service uninstall, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\\n` +"
   }
 ]

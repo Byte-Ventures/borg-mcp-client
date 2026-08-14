@@ -22,7 +22,7 @@ export const SERVER_LIFECYCLE_COMMANDS = [
   'dashboard',
 ] as const;
 export type ServerLifecycleCommand = typeof SERVER_LIFECYCLE_COMMANDS[number];
-export type ServerFacadeCommand = ServerLifecycleCommand | 'service install';
+export type ServerFacadeCommand = ServerLifecycleCommand | 'service install' | 'service uninstall';
 
 export type ParsedServerFacadeArgs =
   | { kind: 'help' }
@@ -53,16 +53,17 @@ export function parseServerFacadeArgs(args: readonly string[]): ParsedServerFaca
     if (subcommand === undefined || isHelpFlag(subcommand)) {
       return { kind: 'service-help' };
     }
-    if (subcommand !== 'install') {
+    if (subcommand !== 'install' && subcommand !== 'uninstall') {
       return {
         kind: 'error',
         reason: 'unknown-command',
         command: subcommand === undefined ? command : `${command} ${subcommand}`,
       };
     }
+    const serviceCommand = subcommand === 'install' ? 'service install' : 'service uninstall';
     return args.some(isHelpFlag)
-      ? { kind: 'command-help', command: 'service install' }
-      : { kind: 'command', command: 'service install', args };
+      ? { kind: 'command-help', command: serviceCommand }
+      : { kind: 'command', command: serviceCommand, args };
   }
   if (!(SERVER_LIFECYCLE_COMMANDS as readonly string[]).includes(command)) {
     return { kind: 'error', reason: 'unknown-command', command };
@@ -195,7 +196,7 @@ function inertCommand(command: string): string {
 export function unknownServerCommandText(command: string): string {
   return (
     `Unknown server command: ${inertCommand(command)}.\n` +
-    `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+    `Available commands: setup, start, service install, service uninstall, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
     `Next: run borg server --help.\n`
   );
 }
