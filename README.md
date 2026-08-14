@@ -18,6 +18,21 @@ Continue with the [Get Started guide](https://borgmcp.ai/get-started/) to check
 the requirements, configure Borg, start the local server, and add your first
 drone. Borg has no hosted account or subscription.
 
+## Choose A Command
+
+- `borg clone <repository-url>` checks out a new repository and delegates its
+  complete cube, roster, and launch setup to `borg quickstart`. Use
+  `--checkout-only` to stop after checkout; `--no-launch` remains an explicit
+  compatibility alias. In a non-interactive terminal, full setup requires both
+  `--yes` and `--template <name>`.
+- `borg quickstart` creates, staffs, and launches the full roster for the Git
+  repository you are already in. Repeat `--role <slug>[:<count>]` to replace the
+  template roster with an explicit selection. Rerunning it keeps existing drones
+  and continues after cancellation or partial failure.
+- `borg assimilate [role]` adds or resumes one drone under one role. Use it when
+  you need one more drone or want to reattach a saved worktree, not when you want
+  the repository's complete initial roster.
+
 ## Documentation
 
 - [Core concepts](https://borgmcp.ai/docs/concepts/) defines cubes, drones,

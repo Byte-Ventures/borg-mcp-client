@@ -39,6 +39,12 @@ export interface QuickstartDeps {
   runLaunchAll?: typeof runLaunchAll;
 }
 
+export type QuickstartCancellation = 'declined' | 'interrupted';
+
+export interface QuickstartRunOptions {
+  onCancelled?: (kind: QuickstartCancellation) => void;
+}
+
 export function buildDefaultQuickstartDeps(): QuickstartDeps {
   const io = buildDefaultAssimilateDeps();
   return {
@@ -92,7 +98,25 @@ function renderTemplateMenu(): string {
   return `${rows.join('\n')}\n`;
 }
 
-async function selectTemplate(args: QuickstartArgs, deps: QuickstartDeps): Promise<string | null> {
+function reportCancellation(
+  kind: QuickstartCancellation,
+  deps: QuickstartDeps,
+  options: QuickstartRunOptions,
+): void {
+  if (options.onCancelled) {
+    options.onCancelled(kind);
+  } else if (kind === 'interrupted') {
+    deps.stderr('\nborg quickstart: cancelled before anything was created.\n');
+  } else {
+    deps.stdout('Cancelled. Nothing was created.\n');
+  }
+}
+
+async function selectTemplate(
+  args: QuickstartArgs,
+  deps: QuickstartDeps,
+  options: QuickstartRunOptions,
+): Promise<string | null> {
   if (args.template) return args.template;
   if (!deps.isTTY()) return NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
   deps.stdout(renderTemplateMenu());
@@ -101,7 +125,7 @@ async function selectTemplate(args: QuickstartArgs, deps: QuickstartDeps): Promi
     try {
       answer = (await deps.prompt('Choose [1]: ')).trim();
     } catch {
-      deps.stderr('\nborg quickstart: cancelled before anything was created.\n');
+      reportCancellation('interrupted', deps, options);
       return null;
     }
     const index = answer === '' ? 0 : /^\d+$/.test(answer) ? Number(answer) - 1 : -1;
@@ -145,7 +169,11 @@ function affirmative(value: string): boolean {
   return answer === '' || answer === 'y' || answer === 'yes';
 }
 
-export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps): Promise<number> {
+export async function runQuickstart(
+  args: QuickstartArgs,
+  deps: QuickstartDeps,
+  options: QuickstartRunOptions = {},
+): Promise<number> {
   const assimilate = deps.buildAssimilateDeps();
   let context;
   try {
@@ -207,7 +235,7 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
   }
 
   deps.stdout(`Repository  ${context.derivedName}${context.publicRepository ? ` (origin: ${context.publicRepository.value})` : ''}\n`);
-  const template = existing?.template ?? await selectTemplate(args, deps);
+  const template = existing?.template ?? await selectTemplate(args, deps, options);
   if (!template) return 130;
   const availableRoles = existing?.roles ?? plannedTemplateRoles(template);
   const humanSeatRole = availableRoles.find((role) => role.isHumanSeat);
@@ -278,11 +306,11 @@ export async function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps):
     try {
       answer = await deps.prompt(prompt);
     } catch {
-      deps.stderr('\nborg quickstart: cancelled before anything was created.\n');
+      reportCancellation('interrupted', deps, options);
       return 130;
     }
     if (!affirmative(answer)) {
-      deps.stdout('Cancelled. Nothing was created.\n');
+      reportCancellation('declined', deps, options);
       return 0;
     }
   }
