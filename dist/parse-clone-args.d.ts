@@ -1,7 +1,8 @@
-export interface CloneArgs {
+import { type QuickstartArgs } from './parse-quickstart-args.js';
+export interface CloneArgs extends QuickstartArgs {
     repositoryUrl: string;
     destination?: string;
-    noLaunch: boolean;
+    checkoutOnly: boolean;
 }
 export type ParseCloneResult = {
     ok: true;

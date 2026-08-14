@@ -50,16 +50,24 @@ export function quickstartHelpText(version) {
         `  --role <slug>[:<count>]            Fully specify the roster (repeatable)\n` +
         `  --yes, -y                          Accept the displayed plan\n` +
         `  --help, -h                         Show this help\n\n` +
-        `Quickstart requires a running Borg server and never starts one. Rerun the same\n` +
+        `For the current repository, quickstart creates and launches a full roster; use\n` +
+        `--role to replace that roster with an explicit selection. It requires a running\n` +
+        `Borg server and never starts one. Rerun the same\n` +
         `command after a partial failure; existing drones are kept and skipped.\n`);
 }
 export function cloneHelpText(version) {
     return (`borg clone (borgmcp ${version}) — clone a repository and run quickstart\n\n` +
         `Usage:\n` +
-        `  borg clone <repository-url> [directory] [--no-launch]\n\n` +
+        `  borg clone <repository-url> [directory] [options]\n\n` +
         `Options:\n` +
-        `  --no-launch  Stop after the checkout is ready; do not create or launch a cube\n` +
-        `  --help, -h   Show this help\n\n` +
+        `  --template ${NEW_CUBE_TEMPLATE_OPTIONS}  Choose the new-cube template without prompting\n` +
+        `  --role <slug>[:<count>]            Fully specify the roster (repeatable)\n` +
+        `  --yes, -y                          Accept the displayed plan\n` +
+        `  --checkout-only                    Stop after the checkout is ready\n` +
+        `  --no-launch                        Compatibility alias for --checkout-only\n` +
+        `  --help, -h                         Show this help\n\n` +
+        `Clone checks out a new repository, then delegates the complete setup directly to\n` +
+        `quickstart. Non-interactive full setup requires both --yes and --template.\n` +
         `A repeated command reuses a checkout only when its origin matches. Default\n` +
         `destination names avoid non-repository collisions. Credential-bearing URLs are\n` +
         `refused; use a Git credential helper or SSH configuration instead.\n`);
@@ -129,7 +137,7 @@ export function topLevelHelpText(version) {
         `  borg doctor              Check agent hook commands, versions, configs, and the OpenCode plugin\n` +
         `  borg clone <url> [dir]   Clone a repository, then create and launch its cube\n` +
         `  borg quickstart          Create a cube and a drone for every role, then launch them\n` +
-        `  borg assimilate [role]   Join or create a cube\n` +
+        `  borg assimilate [role]   Join or create a cube with one drone under one role\n` +
         `  borg assimilate --host <host>   Join or create on an explicit server\n` +
         `  borg assimilate --worktree <name>   Spawn a worktree drone (in ~/.borg/worktrees/<repo>/<name>)\n` +
         `  borg server cube init    Initialize this repository's cube without creating a drone\n` +
@@ -232,6 +240,8 @@ export function assimilateHelpText(version) {
         `  --cli claude|codex|opencode         Agent CLI to launch\n` +
         `  --model claude:<model>   Legacy Claude model override (configure models in the agent CLI)\n` +
         `  --yes, -y                  Accept new-cube defaults; never adopt by name\n\n` +
+        `Assimilate adds or resumes one drone under one role; use quickstart when you want\n` +
+        `the repository's full roster.\n` +
         `Creation shows repository context, name, template, and one confirmation. An existing\n` +
         `repository association skips all prompts. One accessible exact-name legacy cube requires\n` +
         `explicit interactive adoption; ambiguous matches fail closed. An enrolled owner client may\n` +

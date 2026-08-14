@@ -1,4 +1,5 @@
 import type { CloneArgs } from './parse-clone-args.js';
+import type { QuickstartArgs } from './parse-quickstart-args.js';
 export interface GitRunResult {
     status: number | null;
     stdout: string;
@@ -13,7 +14,8 @@ export interface CloneDeps {
     readDirectory: (path: string) => string[];
     createDirectory: (path: string) => boolean;
     removeTree: (path: string) => void;
-    quickstart: (cwd: string) => Promise<number>;
+    isTTY: () => boolean;
+    quickstart: (cwd: string, args: QuickstartArgs) => Promise<number>;
     stdout: (text: string) => void;
     stderr: (text: string) => void;
 }

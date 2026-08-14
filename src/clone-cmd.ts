@@ -4,6 +4,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasCloneCredentials, redactCloneSecrets } from './clone-security.js';
 import type { CloneArgs } from './parse-clone-args.js';
+import type { QuickstartArgs } from './parse-quickstart-args.js';
 import { buildDefaultQuickstartDeps, runQuickstart } from './quickstart-cmd.js';
 import { shellEscape } from './shell-escape.js';
 
@@ -22,7 +23,8 @@ export interface CloneDeps {
   readDirectory: (path: string) => string[];
   createDirectory: (path: string) => boolean;
   removeTree: (path: string) => void;
-  quickstart: (cwd: string) => Promise<number>;
+  isTTY: () => boolean;
+  quickstart: (cwd: string, args: QuickstartArgs) => Promise<number>;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
 }
@@ -61,9 +63,10 @@ export function buildDefaultCloneDeps(): CloneDeps {
       }
     },
     removeTree: (path) => rmSync(path, { recursive: true, force: true }),
-    quickstart: async (cwd) => {
+    isTTY: () => process.stdin.isTTY === true,
+    quickstart: async (cwd, args) => {
       process.chdir(cwd);
-      return runQuickstart({ roles: [], yes: false }, buildDefaultQuickstartDeps());
+      return runQuickstart(args, buildDefaultQuickstartDeps());
     },
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
@@ -177,6 +180,10 @@ export async function runClone(args: CloneArgs, rawDeps: CloneDeps): Promise<num
     deps.stderr(`borg clone: ${valid.error}.\n`);
     return 1;
   }
+  if (!args.checkoutOnly && !deps.isTTY() && (!args.yes || !args.template)) {
+    deps.stderr('borg clone: non-interactive full setup requires both --yes and --template before checkout begins.\n');
+    return 1;
+  }
   const selected = chooseDestination(deps, args);
   if ('error' in selected) {
     deps.stderr(`borg clone: ${selected.error}.\n`);
@@ -224,7 +231,7 @@ export async function runClone(args: CloneArgs, rawDeps: CloneDeps): Promise<num
     deps.stdout(`Cloned ${sourceName(args.repositoryUrl)} into ${destination}.\n`);
   }
 
-  if (args.noLaunch) {
+  if (args.checkoutOnly) {
     deps.stdout(
       `Checkout ready at ${destination}. No cube or drone was created.\n` +
       `Next: cd ${shellEscape(destination)} && borg quickstart\n`,
@@ -232,7 +239,12 @@ export async function runClone(args: CloneArgs, rawDeps: CloneDeps): Promise<num
     return 0;
   }
   deps.chdir(destination);
-  const code = await deps.quickstart(destination);
+  const quickstartArgs: QuickstartArgs = {
+    ...(args.template === undefined ? {} : { template: args.template }),
+    roles: args.roles,
+    yes: args.yes,
+  };
+  const code = await deps.quickstart(destination, quickstartArgs);
   if (code !== 0) {
     deps.stderr(
       `The checkout${cloned ? '' : ' you already had'} is ready at ${destination}, but quickstart did not finish. ` +

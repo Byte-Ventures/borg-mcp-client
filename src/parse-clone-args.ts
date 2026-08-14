@@ -1,9 +1,10 @@
 import { redactCloneSecrets } from './clone-security.js';
+import { parseQuickstartArgs, type QuickstartArgs } from './parse-quickstart-args.js';
 
-export interface CloneArgs {
+export interface CloneArgs extends QuickstartArgs {
   repositoryUrl: string;
   destination?: string;
-  noLaunch: boolean;
+  checkoutOnly: boolean;
 }
 
 export type ParseCloneResult =
@@ -13,28 +14,49 @@ export type ParseCloneResult =
 export function parseCloneArgs(rawArgs: readonly string[]): ParseCloneResult {
   let repositoryUrl: string | undefined;
   let destination: string | undefined;
-  let noLaunch = false;
-  for (const arg of rawArgs) {
-    if (arg === '--no-launch') {
-      if (noLaunch) return { ok: false, error: '--no-launch was provided more than once' };
-      noLaunch = true;
+  let checkoutOnly = false;
+  const quickstartArgs: string[] = [];
+  for (let i = 0; i < rawArgs.length; i += 1) {
+    const arg = rawArgs[i];
+    if (arg === '--checkout-only' || arg === '--no-launch') {
+      if (checkoutOnly) return { ok: false, error: 'checkout-only mode was provided more than once' };
+      checkoutOnly = true;
+      continue;
+    }
+    if (arg === '--yes' || arg === '-y') {
+      quickstartArgs.push(arg);
+      continue;
+    }
+    if (arg === '--template' || arg === '--role') {
+      quickstartArgs.push(arg);
+      const value = rawArgs[++i];
+      if (value !== undefined) quickstartArgs.push(value);
       continue;
     }
     if (arg.startsWith('-')) {
       const option = arg.startsWith('--') ? arg.split('=', 1)[0] : arg.slice(0, 2);
-      return { ok: false, error: `unknown option ${option}; the only option is --no-launch` };
+      return {
+        ok: false,
+        error: `unknown option ${option}; supported: --template, --role, --yes/-y, --checkout-only, --no-launch`,
+      };
     }
     if (repositoryUrl === undefined) repositoryUrl = arg;
     else if (destination === undefined) destination = arg;
     else return { ok: false, error: 'unexpected extra argument' };
   }
   if (!repositoryUrl) return { ok: false, error: 'a repository URL is required' };
+  const parsedQuickstart = parseQuickstartArgs(quickstartArgs);
+  if (!parsedQuickstart.ok) return parsedQuickstart;
+  if (checkoutOnly && quickstartArgs.length > 0) {
+    return { ok: false, error: '--checkout-only/--no-launch cannot be combined with --template, --role, or --yes/-y' };
+  }
   return {
     ok: true,
     args: {
       repositoryUrl,
       ...(destination === undefined ? {} : { destination }),
-      noLaunch,
+      checkoutOnly,
+      ...parsedQuickstart.args,
     },
   };
 }

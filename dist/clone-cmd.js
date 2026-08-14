@@ -44,9 +44,10 @@ export function buildDefaultCloneDeps() {
             }
         },
         removeTree: (path) => rmSync(path, { recursive: true, force: true }),
-        quickstart: async (cwd) => {
+        isTTY: () => process.stdin.isTTY === true,
+        quickstart: async (cwd, args) => {
             process.chdir(cwd);
-            return runQuickstart({ roles: [], yes: false }, buildDefaultQuickstartDeps());
+            return runQuickstart(args, buildDefaultQuickstartDeps());
         },
         stdout: (text) => process.stdout.write(text),
         stderr: (text) => process.stderr.write(text),
@@ -166,6 +167,10 @@ export async function runClone(args, rawDeps) {
         deps.stderr(`borg clone: ${valid.error}.\n`);
         return 1;
     }
+    if (!args.checkoutOnly && !deps.isTTY() && (!args.yes || !args.template)) {
+        deps.stderr('borg clone: non-interactive full setup requires both --yes and --template before checkout begins.\n');
+        return 1;
+    }
     const selected = chooseDestination(deps, args);
     if ('error' in selected) {
         deps.stderr(`borg clone: ${selected.error}.\n`);
@@ -211,13 +216,18 @@ export async function runClone(args, rawDeps) {
         cloned = true;
         deps.stdout(`Cloned ${sourceName(args.repositoryUrl)} into ${destination}.\n`);
     }
-    if (args.noLaunch) {
+    if (args.checkoutOnly) {
         deps.stdout(`Checkout ready at ${destination}. No cube or drone was created.\n` +
             `Next: cd ${shellEscape(destination)} && borg quickstart\n`);
         return 0;
     }
     deps.chdir(destination);
-    const code = await deps.quickstart(destination);
+    const quickstartArgs = {
+        ...(args.template === undefined ? {} : { template: args.template }),
+        roles: args.roles,
+        yes: args.yes,
+    };
+    const code = await deps.quickstart(destination, quickstartArgs);
     if (code !== 0) {
         deps.stderr(`The checkout${cloned ? '' : ' you already had'} is ready at ${destination}, but quickstart did not finish. ` +
             `It was left untouched; cd there and run \`borg quickstart\` again.\n`);

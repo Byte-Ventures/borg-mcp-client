@@ -106,6 +106,17 @@ describe('client subcommand help', () => {
     );
   });
 
+  it('defines the clone, quickstart, and assimilate responsibilities and clone flags', () => {
+    const clone = cloneHelpText('9.9.9');
+    for (const flag of ['--template', '--role', '--yes', '-y', '--checkout-only', '--no-launch']) {
+      expect(clone).toContain(flag);
+    }
+    expect(clone).toMatch(/clone.*quickstart/is);
+    expect(clone).toMatch(/non-interactive.*--yes.*--template/is);
+    expect(quickstartHelpText('9.9.9')).toMatch(/current repository.*full roster/is);
+    expect(assimilateHelpText('9.9.9')).toMatch(/one drone.*one role/is);
+  });
+
   it('documents local drone discovery and relaunch without bypassing the worktree', () => {
     const top = topLevelHelpText('9.9.9');
     expect(top).toContain('borg drones');
