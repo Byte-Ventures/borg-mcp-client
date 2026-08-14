@@ -131,6 +131,19 @@ describe('runQuickstart', () => {
     expect(rig.output.join('')).toContain('Start a Coordinator session later with: borg assimilate coordinator');
   });
 
+  it('keeps standalone declined-confirmation copy truthful', async () => {
+    const rig = makeDeps({ prompts: ['1', 'n'] });
+    expect(await runQuickstart({ roles: [], yes: false }, rig.deps)).toBe(0);
+    expect(rig.output.join('')).toContain('Cancelled. Nothing was created.');
+  });
+
+  it('keeps standalone interruption copy truthful', async () => {
+    const rig = makeDeps();
+    rig.deps.prompt = vi.fn(async () => { throw new Error('interrupted'); });
+    expect(await runQuickstart({ roles: [], yes: false }, rig.deps)).toBe(130);
+    expect(rig.errors.join('')).toContain('borg quickstart: cancelled before anything was created.');
+  });
+
   it('derives fallback human-session guidance from the selected template', async () => {
     const rig = makeDeps();
     expect(await runQuickstart({

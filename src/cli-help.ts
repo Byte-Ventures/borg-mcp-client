@@ -57,14 +57,15 @@ export function quickstartHelpText(version: string): string {
     `Usage:\n` +
     `  borg quickstart [options]\n\n` +
     `Options:\n` +
-    `  --template ${NEW_CUBE_TEMPLATE_OPTIONS}  Choose the new-cube template without prompting\n` +
+    `  --template <name>                  Choose without prompting:\n` +
+    `                                     ${NEW_CUBE_TEMPLATE_OPTIONS}\n` +
     `  --role <slug>[:<count>]            Fully specify the roster (repeatable)\n` +
     `  --yes, -y                          Accept the displayed plan\n` +
     `  --help, -h                         Show this help\n\n` +
-    `For the current repository, quickstart creates and launches a full roster; use\n` +
-    `--role to replace that roster with an explicit selection. It requires a running\n` +
-    `Borg server and never starts one. Rerun the same\n` +
-    `command after a partial failure; existing drones are kept and skipped.\n`
+    `For the current repository, quickstart creates and launches a full roster.\n` +
+    `Use --role to replace that roster with an explicit selection. Quickstart\n` +
+    `requires a running Borg server and never starts one. Rerun the same command\n` +
+    `after a partial failure; existing drones are kept and skipped.\n`
   );
 }
 
@@ -74,11 +75,12 @@ export function cloneHelpText(version: string): string {
     `Usage:\n` +
     `  borg clone <repository-url> [directory] [options]\n\n` +
     `Options:\n` +
-    `  --template ${NEW_CUBE_TEMPLATE_OPTIONS}  Choose the new-cube template without prompting\n` +
+    `  --template <name>                  Choose without prompting:\n` +
+    `                                     ${NEW_CUBE_TEMPLATE_OPTIONS}\n` +
     `  --role <slug>[:<count>]            Fully specify the roster (repeatable)\n` +
     `  --yes, -y                          Accept the displayed plan\n` +
     `  --checkout-only                    Stop after the checkout is ready\n` +
-    `  --no-launch                        Compatibility alias for --checkout-only\n` +
+    `  --no-launch                        Same as --checkout-only\n` +
     `  --help, -h                         Show this help\n\n` +
     `Clone checks out a new repository, then delegates the complete setup directly to\n` +
     `quickstart. Non-interactive full setup requires both --yes and --template.\n` +

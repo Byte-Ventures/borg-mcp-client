@@ -35,16 +35,24 @@ describe('parseCloneArgs', () => {
     const result = parseCloneArgs(['https://example.com/org/repo.git', '--token=SECRET']);
     expect(result).toEqual({
       ok: false,
-      error: 'unknown option --token; supported: --template, --role, --yes/-y, --checkout-only, --no-launch',
+      error: 'unknown option --token=<redacted>; supported: --template, --role, --yes/-y, --checkout-only, --no-launch',
     });
     expect(JSON.stringify(result)).not.toContain('SECRET');
+  });
+
+  it.each(['--template=software-dev', '-yq'])('echoes the full unsupported token %s', (option) => {
+    const result = parseCloneArgs(['https://example.com/org/repo.git', option]);
+    expect(result).toEqual({
+      ok: false,
+      error: `unknown option ${option}; supported: --template, --role, --yes/-y, --checkout-only, --no-launch`,
+    });
   });
 
   it.each([
     [[], 'repository URL'],
     [['url', 'one', 'two'], 'unexpected extra'],
     [['url', '--checkout-only', '--no-launch'], 'more than once'],
-    [['url', '--checkout-only', '--template', 'starter'], 'cannot be combined'],
+    [['url', '--checkout-only', '--template', 'bogus'], 'cannot be combined'],
     [['url', '--no-launch', '--role', 'builder'], 'cannot be combined'],
     [['url', '--checkout-only', '--yes'], 'cannot be combined'],
     [['url', '--role', 'Builder'], 'invalid role'],

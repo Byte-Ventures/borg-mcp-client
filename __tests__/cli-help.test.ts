@@ -113,6 +113,8 @@ describe('client subcommand help', () => {
     }
     expect(clone).toMatch(/clone.*quickstart/is);
     expect(clone).toMatch(/non-interactive.*--yes.*--template/is);
+    expect(clone).toContain('--no-launch                        Same as --checkout-only');
+    expect(clone).toMatch(/--checkout-only.*non-interactive/is);
     expect(quickstartHelpText('9.9.9')).toMatch(/current repository.*full roster/is);
     expect(assimilateHelpText('9.9.9')).toMatch(/one drone.*one role/is);
   });

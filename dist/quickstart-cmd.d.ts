@@ -18,6 +18,10 @@ export interface QuickstartDeps {
     runAssimilate?: typeof runAssimilate;
     runLaunchAll?: typeof runLaunchAll;
 }
+export type QuickstartCancellation = 'declined' | 'interrupted';
+export interface QuickstartRunOptions {
+    onCancelled?: (kind: QuickstartCancellation) => void;
+}
 export declare function buildDefaultQuickstartDeps(): QuickstartDeps;
-export declare function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps): Promise<number>;
+export declare function runQuickstart(args: QuickstartArgs, deps: QuickstartDeps, options?: QuickstartRunOptions): Promise<number>;
 //# sourceMappingURL=quickstart-cmd.d.ts.map

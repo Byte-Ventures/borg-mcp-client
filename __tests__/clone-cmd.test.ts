@@ -136,7 +136,7 @@ describe('runClone', () => {
     expect(await runClone(cloneArgs(source, { checkoutOnly: false }), testRig.deps)).toBe(0);
     const destination = join(base, 'checkouts', 'repo');
     expect(readFileSync(join(destination, 'README.md'), 'utf8')).toBe('ready\n');
-    expect(testRig.quickstart).toHaveBeenCalledWith(destination, { roles: [], yes: false });
+    expect(testRig.quickstart.mock.calls[0].slice(0, 2)).toEqual([destination, { roles: [], yes: false }]);
     expect(testRig.cwd()).toBe(destination);
   });
 
@@ -150,11 +150,11 @@ describe('runClone', () => {
       roles: [{ slug: 'builder', count: 1 }],
       yes: true,
     }), testRig.deps)).toBe(0);
-    expect(testRig.quickstart).toHaveBeenCalledWith(join(base, 'checkouts', 'repo'), {
+    expect(testRig.quickstart.mock.calls[0].slice(0, 2)).toEqual([join(base, 'checkouts', 'repo'), {
       template: 'software-dev',
       roles: [{ slug: 'builder', count: 1 }],
       yes: true,
-    });
+    }]);
   });
 
   it.each([
@@ -252,6 +252,26 @@ describe('runClone', () => {
     expect(await runClone(cloneArgs(source, { checkoutOnly: false }), testRig.deps)).toBe(1);
     expect(existsSync(join(base, 'checkouts', 'repo', '.git'))).toBe(true);
     expect(testRig.errors.join('')).toContain('run `borg quickstart` again');
+  });
+
+  it.each([
+    ['declined', 0],
+    ['interrupted', 130],
+  ] as const)('reports the retained checkout and resume action when quickstart is %s', async (kind, code) => {
+    const base = root();
+    const source = sourceRepository(base);
+    const quickstart = vi.fn(async (_cwd, _args, options) => {
+      options.onCancelled?.(kind);
+      return code;
+    });
+    const testRig = rig(base, quickstart);
+    expect(await runClone(cloneArgs(source, { checkoutOnly: false }), testRig.deps)).toBe(code);
+    const text = testRig.output.join('') + testRig.errors.join('');
+    const destination = join(base, 'checkouts', 'repo');
+    expect(text).toContain(`Checkout remains at ${destination}`);
+    expect(text).toContain(`cd '${destination}' && borg quickstart`);
+    expect(text).not.toContain('Nothing was created');
+    expect(text).not.toContain('quickstart did not finish');
   });
 
   it.each([

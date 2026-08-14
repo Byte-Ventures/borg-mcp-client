@@ -25,10 +25,9 @@ export function parseCloneArgs(rawArgs) {
             continue;
         }
         if (arg.startsWith('-')) {
-            const option = arg.startsWith('--') ? arg.split('=', 1)[0] : arg.slice(0, 2);
             return {
                 ok: false,
-                error: `unknown option ${option}; supported: --template, --role, --yes/-y, --checkout-only, --no-launch`,
+                error: `unknown option ${redactCloneSecrets(arg)}; supported: --template, --role, --yes/-y, --checkout-only, --no-launch`,
             };
         }
         if (repositoryUrl === undefined)
@@ -40,12 +39,12 @@ export function parseCloneArgs(rawArgs) {
     }
     if (!repositoryUrl)
         return { ok: false, error: 'a repository URL is required' };
-    const parsedQuickstart = parseQuickstartArgs(quickstartArgs);
-    if (!parsedQuickstart.ok)
-        return parsedQuickstart;
     if (checkoutOnly && quickstartArgs.length > 0) {
         return { ok: false, error: '--checkout-only/--no-launch cannot be combined with --template, --role, or --yes/-y' };
     }
+    const parsedQuickstart = parseQuickstartArgs(quickstartArgs);
+    if (!parsedQuickstart.ok)
+        return parsedQuickstart;
     return {
         ok: true,
         args: {

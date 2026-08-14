@@ -57,7 +57,18 @@ function renderTemplateMenu() {
     rows[0] = `Template    ${rows[0].trimStart()}`;
     return `${rows.join('\n')}\n`;
 }
-async function selectTemplate(args, deps) {
+function reportCancellation(kind, deps, options) {
+    if (options.onCancelled) {
+        options.onCancelled(kind);
+    }
+    else if (kind === 'interrupted') {
+        deps.stderr('\nborg quickstart: cancelled before anything was created.\n');
+    }
+    else {
+        deps.stdout('Cancelled. Nothing was created.\n');
+    }
+}
+async function selectTemplate(args, deps, options) {
     if (args.template)
         return args.template;
     if (!deps.isTTY())
@@ -69,7 +80,7 @@ async function selectTemplate(args, deps) {
             answer = (await deps.prompt('Choose [1]: ')).trim();
         }
         catch {
-            deps.stderr('\nborg quickstart: cancelled before anything was created.\n');
+            reportCancellation('interrupted', deps, options);
             return null;
         }
         const index = answer === '' ? 0 : /^\d+$/.test(answer) ? Number(answer) - 1 : -1;
@@ -116,7 +127,7 @@ function affirmative(value) {
     const answer = value.trim().toLowerCase();
     return answer === '' || answer === 'y' || answer === 'yes';
 }
-export async function runQuickstart(args, deps) {
+export async function runQuickstart(args, deps, options = {}) {
     const assimilate = deps.buildAssimilateDeps();
     let context;
     try {
@@ -172,7 +183,7 @@ export async function runQuickstart(args, deps) {
         return 1;
     }
     deps.stdout(`Repository  ${context.derivedName}${context.publicRepository ? ` (origin: ${context.publicRepository.value})` : ''}\n`);
-    const template = existing?.template ?? await selectTemplate(args, deps);
+    const template = existing?.template ?? await selectTemplate(args, deps, options);
     if (!template)
         return 130;
     const availableRoles = existing?.roles ?? plannedTemplateRoles(template);
@@ -245,11 +256,11 @@ export async function runQuickstart(args, deps) {
             answer = await deps.prompt(prompt);
         }
         catch {
-            deps.stderr('\nborg quickstart: cancelled before anything was created.\n');
+            reportCancellation('interrupted', deps, options);
             return 130;
         }
         if (!affirmative(answer)) {
-            deps.stdout('Cancelled. Nothing was created.\n');
+            reportCancellation('declined', deps, options);
             return 0;
         }
     }
