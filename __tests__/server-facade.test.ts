@@ -96,29 +96,37 @@ describe('parseServerFacadeArgs', () => {
     },
   );
 
-  it('accepts only nested service install and preserves server-owned arguments', () => {
-    expect(parseServerFacadeArgs(['service', 'install', '--json'])).toEqual({
-      kind: 'command',
-      command: 'service install',
-      args: ['--json'],
-    });
-    expect(parseServerFacadeArgs(['service', 'uninstall'])).toEqual({
+  it.each(['install', 'uninstall'] as const)(
+    'accepts nested service %s and preserves server-owned arguments',
+    (subcommand) => {
+      expect(parseServerFacadeArgs(['service', subcommand, '--json'])).toEqual({
+        kind: 'command',
+        command: `service ${subcommand}`,
+        args: ['--json'],
+      });
+    },
+  );
+
+  it('rejects unknown nested service commands', () => {
+    expect(parseServerFacadeArgs(['service', 'remove'])).toEqual({
       kind: 'error',
       reason: 'unknown-command',
-      command: 'service uninstall',
+      command: 'service remove',
     });
+  });
+
+  it('does not expose top-level stop, remove, or uninstall aliases', () => {
+    for (const command of ['stop', 'remove', 'uninstall']) {
+      expect(parseServerFacadeArgs([command])).toEqual({
+        kind: 'error',
+        reason: 'unknown-command',
+        command,
+      });
+    }
   });
 
   it.each([[], ['--help'], ['-h']] as const)('routes service namespace help for %j', (...args) => {
     expect(parseServerFacadeArgs(['service', ...args])).toEqual({ kind: 'service-help' });
-  });
-
-  it('rejects the removed stop command without forwarding it', () => {
-    expect(parseServerFacadeArgs(['stop'])).toEqual({
-      kind: 'error',
-      reason: 'unknown-command',
-      command: 'stop',
-    });
   });
 
   it.each(['--help', '-h'])('routes lifecycle command %s before server execution', (helpFlag) => {
@@ -251,6 +259,7 @@ describe('runEarlyServerFacade', () => {
         `  setup    Prepare local server identity and data; does not start the server.\n` +
         `  start    Start the verified server in the foreground; press Ctrl-C to stop.\n` +
         `  service install  Install and start the loopback-only per-user service so it continues after the terminal closes.\n` +
+        `  service uninstall  Remove the managed service and preserve local state.\n` +
         `  status   Report verified runtime evidence.\n` +
         `  update   Verify and activate a local server artifact.\n` +
         `  invite   Create a single-use invitation in an interactive terminal.\n` +
@@ -259,7 +268,7 @@ describe('runEarlyServerFacade', () => {
         `  client-grant  Grant a client read, write, or manage access to a cube while the server is live; committed changes take effect on the next request.\n` +
         `  dashboard   View the running local server dashboard.\n` +
         `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
-        `Managed-service stop and removal are server-owned and are not exposed by this client.\n\n` +
+        `Managed-service behavior is server-owned. This client forwards install and uninstall but does not expose stop.\n\n` +
         `Run borg server <command> --help for server command options.\n`,
       );
       expect(output.stderr()).toBe('');
@@ -303,7 +312,8 @@ describe('runEarlyServerFacade', () => {
     expect(output.stdout()).toBe(
       `Usage: borg server service <command> [arguments]\n\n` +
       `Commands:\n` +
-      `  install  Install and start the loopback-only per-user service.\n`,
+      `  install    Install and start the loopback-only per-user service.\n` +
+      `  uninstall  Remove the managed service and preserve local state.\n`,
     );
     expect(output.stderr()).toBe('');
   });
@@ -321,7 +331,7 @@ describe('runEarlyServerFacade', () => {
     expect(output.stdout()).toBe('');
     expect(output.stderr()).toBe(
       `Unknown server command: bad??[31m.\n` +
-      `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+      `Available commands: setup, start, service install, service uninstall, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     expect(output.stderr()).not.toContain('--secret');
@@ -341,7 +351,7 @@ describe('runEarlyServerFacade', () => {
     )).resolves.toBe(1);
     expect(output.stderr()).toBe(
       `Unknown server command: ${'😀'.repeat(77)}....\n` +
-      `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+      `Available commands: setup, start, service install, service uninstall, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
     const renderedToken = output.stderr().split('\n', 1)[0]
@@ -412,26 +422,29 @@ describe('runEarlyServerFacade', () => {
     expect(output.stderr()).toBe('');
   });
 
-  it('forwards service install and its server-owned arguments without interpreting service behavior', async () => {
-    const child = new FakeChild();
-    const { deps } = processDeps(child);
-    const output = outputDeps();
-    const pending = runEarlyServerFacade(
-      ['node', 'borg', 'server', 'service', 'install', '--json'],
-      deps,
-      output.output,
-    );
+  it.each(['install', 'uninstall'] as const)(
+    'forwards service %s and its server-owned arguments without interpreting service behavior',
+    async (subcommand) => {
+      const child = new FakeChild();
+      const { deps } = processDeps(child);
+      const output = outputDeps();
+      const pending = runEarlyServerFacade(
+        ['node', 'borg', 'server', 'service', subcommand, '--json'],
+        deps,
+        output.output,
+      );
 
-    expect(deps.spawn).toHaveBeenCalledWith(
-      'borg-mcp-server',
-      ['service', 'install', '--json'],
-      { shell: false, stdio: 'inherit' },
-    );
-    child.emit('exit', 42, null);
-    await expect(pending).resolves.toBe(42);
-    expect(output.stdout()).toBe('');
-    expect(output.stderr()).toBe('');
-  });
+      expect(deps.spawn).toHaveBeenCalledWith(
+        'borg-mcp-server',
+        ['service', subcommand, '--json'],
+        { shell: false, stdio: 'inherit' },
+      );
+      child.emit('exit', 42, null);
+      await expect(pending).resolves.toBe(42);
+      expect(output.stdout()).toBe('');
+      expect(output.stderr()).toBe('');
+    },
+  );
 
   it('maps a signal-terminated server to the conventional process exit status', async () => {
     const child = new FakeChild();
@@ -531,7 +544,7 @@ describe('approved server facade copy', () => {
   it('renders the exact bounded unknown-command text', () => {
     expect(unknownServerCommandText('daemonize')).toBe(
       `Unknown server command: daemonize.\n` +
-      `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+      `Available commands: setup, start, service install, service uninstall, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`,
     );
   });

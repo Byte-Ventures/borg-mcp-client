@@ -32,11 +32,17 @@ To install and start the server as a loopback-only per-user service, run:
 borg server service install
 ```
 
-Add `--json` for machine-readable server output. The client passes this command
-to the verified `borg-mcp-server` executable; service definitions, validation,
-startup, replacement, and rollback remain server-owned. The service continues
-after the terminal closes. Stopping or removing the managed service is also
-server-owned and is not exposed by this client.
+The service continues after the terminal closes. To remove it while preserving
+local server state, run:
+
+```bash
+borg server service uninstall
+```
+
+Add `--json` to either command for machine-readable server output. The client
+passes these commands to the verified `borg-mcp-server` executable; service
+definitions, validation, startup, replacement, rollback, removal, and recovery
+remain server-owned. Stopping the managed service without removing it belongs to your platform's service manager — `launchctl bootout gui/$(id -u)/ai.borgmcp.server` on macOS, `systemctl --user stop ai.borgmcp.server` on Linux. The server has no stop command and this client does not add one.
 
 Use installed help for the command set and exact options for your version:
 

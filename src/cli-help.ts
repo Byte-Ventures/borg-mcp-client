@@ -231,6 +231,7 @@ export function serverHelpText(): string {
     `  setup    Prepare local server identity and data; does not start the server.\n` +
     `  start    Start the verified server in the foreground; press Ctrl-C to stop.\n` +
     `  service install  Install and start the loopback-only per-user service so it continues after the terminal closes.\n` +
+    `  service uninstall  Remove the managed service and preserve local state.\n` +
     `  status   Report verified runtime evidence.\n` +
     `  update   Verify and activate a local server artifact.\n` +
     `  invite   Create a single-use invitation in an interactive terminal.\n` +
@@ -239,7 +240,7 @@ export function serverHelpText(): string {
     `  client-grant  Grant a client read, write, or manage access to a cube while the server is live; committed changes take effect on the next request.\n` +
     `  dashboard   View the running local server dashboard.\n` +
     `  cube init   Initialize this Git repository's cube; does not create a drone.\n\n` +
-    `Managed-service stop and removal are server-owned and are not exposed by this client.\n\n` +
+    `Managed-service behavior is server-owned. This client forwards install and uninstall but does not expose stop.\n\n` +
     `Run borg server <command> --help for server command options.\n`
   );
 }
@@ -249,7 +250,8 @@ export function serverServiceHelpText(): string {
   return (
     `Usage: borg server service <command> [arguments]\n\n` +
     `Commands:\n` +
-    `  install  Install and start the loopback-only per-user service.\n`
+    `  install    Install and start the loopback-only per-user service.\n` +
+    `  uninstall  Remove the managed service and preserve local state.\n`
   );
 }
 

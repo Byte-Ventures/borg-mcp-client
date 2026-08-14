@@ -56,10 +56,11 @@ async function runServerFacadeSmoke(generatedBin, timeoutMs, version, env) {
   const expected = 'status\0--json';
   const expectedInvite = 'invite\0--server-owned';
   const expectedServiceInstall = 'service\0install\0--server-owned';
+  const expectedServiceUninstall = 'service\0uninstall\0--json';
   await writeFile(fakeServer, `#!/usr/bin/env node
 const args = process.argv.slice(2).join('\\0');
 process.stdout.write(args);
-process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringify(expectedInvite)} ? 41 : args === ${JSON.stringify(expectedServiceInstall)} ? 43 : 96);
+process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringify(expectedInvite)} ? 41 : args === ${JSON.stringify(expectedServiceInstall)} ? 43 : args === ${JSON.stringify(expectedServiceUninstall)} ? 44 : 96);
 `);
   await chmod(fakeServer, 0o755);
 
@@ -167,6 +168,27 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
       );
     }
 
+    const serviceUninstall = spawnSync(generatedBin, ['server', 'service', 'uninstall', '--json'], {
+      env: {
+        ...env,
+        PATH: `${directory}${delimiter}${env.PATH ?? ''}`,
+        CI: '1',
+        NO_COLOR: '1',
+      },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    if (
+      serviceUninstall.error ||
+      serviceUninstall.status !== 44 ||
+      serviceUninstall.stdout !== expectedServiceUninstall ||
+      serviceUninstall.stderr !== ''
+    ) {
+      throw new Error(
+        `Packed service-uninstall facade failed: status=${serviceUninstall.status}, stdout=${JSON.stringify(serviceUninstall.stdout)}, stderr=${JSON.stringify(serviceUninstall.stderr)}, error=${serviceUninstall.error?.message ?? ''}`,
+      );
+    }
+
     const stop = spawnSync(generatedBin, ['server', 'stop', '--server-owned'], {
       env: {
         ...env,
@@ -179,7 +201,7 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
     });
     const expectedStopError =
       `Unknown server command: stop.\n` +
-      `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+      `Available commands: setup, start, service install, service uninstall, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
       `Next: run borg server --help.\n`;
     if (stop.error || stop.status !== 1 || stop.stdout !== '' || stop.stderr !== expectedStopError) {
       throw new Error(
@@ -222,6 +244,7 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
       serverFacadeExitCode: code,
       serverFacadeInviteExitCode: invite.status,
       serverFacadeServiceInstallExitCode: serviceInstall.status,
+      serverFacadeServiceUninstallExitCode: serviceUninstall.status,
       serverFacadeRemovedStopExitCode: stop.status,
       serverFacadeStartupFailureExitCode: unavailable.status,
       serverFacadeMissingExitCode: missing.status,

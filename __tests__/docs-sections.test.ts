@@ -16,6 +16,16 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     }
   });
 
+  it('routes managed-service stop to the platform without inventing a client or server command', () => {
+    const docs = readFileSync(new URL('../docs/LOCAL_SERVER.md', import.meta.url), 'utf8');
+    expect(docs).toContain(
+      "Stopping the managed service without removing it belongs to your platform's service manager — " +
+      '`launchctl bootout gui/$(id -u)/ai.borgmcp.server` on macOS, ' +
+      '`systemctl --user stop ai.borgmcp.server` on Linux. ' +
+      'The server has no stop command and this client does not add one.',
+    );
+  });
+
   it('every section is well-formed and routes to a public documentation URL', () => {
     expect(DOCS_SECTIONS.length).toBeGreaterThan(0);
     for (const s of DOCS_SECTIONS) {
