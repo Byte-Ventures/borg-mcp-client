@@ -42,8 +42,7 @@ borg server service uninstall
 Add `--json` to either command for machine-readable server output. The client
 passes these commands to the verified `borg-mcp-server` executable; service
 definitions, validation, startup, replacement, rollback, removal, and recovery
-remain server-owned. Stopping the managed service without removing it is also
-server-owned and is not exposed by this client.
+remain server-owned. Stopping the managed service without removing it belongs to your platform's service manager — `launchctl bootout gui/$(id -u)/ai.borgmcp.server` on macOS, `systemctl --user stop ai.borgmcp.server` on Linux. The server has no stop command and this client does not add one.
 
 Use installed help for the command set and exact options for your version:
 
