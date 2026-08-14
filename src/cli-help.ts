@@ -230,7 +230,7 @@ export function serverHelpText(): string {
     `Commands:\n` +
     `  setup    Prepare local server identity and data; does not start the server.\n` +
     `  start    Start the verified server in the foreground.\n` +
-    `  stop     Stop the managed local server.\n` +
+    `  service install  Install and start the loopback-only user service.\n` +
     `  status   Report verified runtime evidence.\n` +
     `  update   Verify and activate a local server artifact.\n` +
     `  invite   Create a single-use invitation in an interactive terminal.\n` +

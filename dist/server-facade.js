@@ -7,7 +7,6 @@ import { getPackageVersion } from './version.js';
 export const SERVER_LIFECYCLE_COMMANDS = [
     'setup',
     'start',
-    'stop',
     'status',
     'update',
     'invite',
@@ -29,6 +28,19 @@ export function parseServerFacadeArgs(args) {
         return args.some(isHelpFlag)
             ? { kind: 'cube-init-help' }
             : { kind: 'cube-init', args };
+    }
+    if (command === 'service') {
+        const [subcommand, ...args] = rest;
+        if (subcommand !== 'install') {
+            return {
+                kind: 'error',
+                reason: 'unknown-command',
+                command: subcommand === undefined ? command : `${command} ${subcommand}`,
+            };
+        }
+        return args.some(isHelpFlag)
+            ? { kind: 'command-help', command: 'service install' }
+            : { kind: 'command', command: 'service install', args };
     }
     if (!SERVER_LIFECYCLE_COMMANDS.includes(command)) {
         return { kind: 'error', reason: 'unknown-command', command };
@@ -104,7 +116,7 @@ function inertCommand(command) {
 }
 export function unknownServerCommandText(command) {
     return (`Unknown server command: ${inertCommand(command)}.\n` +
-        `Available commands: setup, start, stop, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
+        `Available commands: setup, start, service install, status, update, invite, cert-reissue, client-list, client-grant, dashboard, cube init.\n` +
         `Next: run borg server --help.\n`);
 }
 export function serverLifecycleHelpText(command) {
@@ -125,7 +137,8 @@ function isMissingServerExecutable(error) {
     return error.code === 'ENOENT';
 }
 export function runServerFacadeProcess(input, deps = defaultProcessDeps) {
-    const child = deps.spawn('borg-mcp-server', [input.command, ...input.args], { shell: false, stdio: 'inherit' });
+    const command = input.command.split(' ');
+    const child = deps.spawn('borg-mcp-server', [...command, ...input.args], { shell: false, stdio: 'inherit' });
     return new Promise((resolve) => {
         let settled = false;
         const forwarders = new Map();
