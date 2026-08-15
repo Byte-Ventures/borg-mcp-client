@@ -48,8 +48,8 @@ const RELEASE_COMMIT = 'f'.repeat(40);
 
 function githubReleaseBindingDeps({
   tagType = 'tag',
-  tagMessage = 'borgmcp 3.15.1',
-  live = { name: 'borgmcp', version: '3.15.1', integrity: RELEASE_INTEGRITY },
+  tagMessage = 'borgmcp 3.15.2',
+  live = { name: 'borgmcp', version: '3.15.2', integrity: RELEASE_INTEGRITY },
 } = {}) {
   return {
     allowMissingToken: true,
@@ -58,8 +58,8 @@ function githubReleaseBindingDeps({
       if (command.includes('cat-file -t')) return tagType;
       if (command.includes('rev-parse')) return RELEASE_COMMIT;
       if (command.includes('for-each-ref')) return tagMessage;
-      if (command.includes(`show ${RELEASE_COMMIT}:docs/releases/3.15.1.md`)) return RELEASE_NOTES;
-      if (command.includes('show -s')) return 'Merge pull request #443 from Byte-Ventures/release/3.15.1';
+      if (command.includes(`show ${RELEASE_COMMIT}:docs/releases/3.15.2.md`)) return RELEASE_NOTES;
+      if (command.includes('show -s')) return 'Merge pull request #443 from Byte-Ventures/release/3.15.2';
       throw new Error(`unexpected git command: ${command}`);
     },
     livePackage: async () => live,
@@ -70,14 +70,14 @@ function githubReleaseBindingDeps({
 
 test('GitHub Release body frames tag, live package, and exact tagged notes', () => {
   const body = assembleReleaseBody({
-    version: '3.15.1',
+    version: '3.15.2',
     integrity: 'sha512-Y2FuZGlkYXRl',
-    tag: 'v3.15.1',
+    tag: 'v3.15.2',
     commit: 'f'.repeat(40),
     releaseNotes: RELEASE_NOTES,
   });
   assert.match(body, /^## Package\n/u);
-  assert.match(body, /borgmcp@3\.15\.1/);
+  assert.match(body, /borgmcp@3\.15\.2/);
   assert.match(body, /sha512-Y2FuZGlkYXRl/);
   assert.match(body, /Published with npm Trusted Publishing/);
   assert.match(body, /## Source/);
@@ -101,7 +101,7 @@ test('GitHub Release creation rejects invalid tag bindings', async (t) => {
   ]) {
     await t.test(name, async () => {
       await assert.rejects(
-        () => createGithubRelease('3.15.1', githubReleaseBindingDeps(options)),
+        () => createGithubRelease('3.15.2', githubReleaseBindingDeps(options)),
         pattern,
       );
     });
@@ -110,7 +110,7 @@ test('GitHub Release creation rejects invalid tag bindings', async (t) => {
 
 test('GitHub Release creation fails closed when tagged release notes are missing or blank', async (t) => {
   for (const { name, notes, pattern } of [
-    { name: 'missing', notes: null, pattern: /must contain docs\/releases\/3\.15\.1\.md/ },
+    { name: 'missing', notes: null, pattern: /must contain docs\/releases\/3\.15\.2\.md/ },
     { name: 'blank', notes: ' \n\t', pattern: /must not be blank/ },
   ]) {
     await t.test(name, async () => {
@@ -123,7 +123,7 @@ test('GitHub Release creation fails closed when tagged release notes are missing
         }
         return baseGit(args);
       };
-      await assert.rejects(() => createGithubRelease('3.15.1', deps), pattern);
+      await assert.rejects(() => createGithubRelease('3.15.2', deps), pattern);
     });
   }
 });
@@ -132,21 +132,21 @@ test('GitHub Release creation gates on the live package and Release absence', as
   const events = [];
   let created;
   const commit = '881290edf2047a961c88536451730ff705aaa902';
-  const result = await createGithubRelease('3.15.1', {
+  const result = await createGithubRelease('3.15.2', {
     allowMissingToken: true,
     git: (args) => {
       const command = args.join(' ');
       if (command.includes('cat-file -t')) return 'tag';
       if (command.includes('rev-parse')) return commit;
-      if (command.includes('for-each-ref')) return 'borgmcp 3.15.1';
-      if (command.includes(`show ${commit}:docs/releases/3.15.1.md`)) return RELEASE_NOTES;
+      if (command.includes('for-each-ref')) return 'borgmcp 3.15.2';
+      if (command.includes(`show ${commit}:docs/releases/3.15.2.md`)) return RELEASE_NOTES;
       throw new Error(`unexpected git command: ${command}`);
     },
     livePackage: async () => {
       events.push('verify-live');
       return {
         name: 'borgmcp',
-        version: '3.15.1',
+        version: '3.15.2',
         integrity: RELEASE_INTEGRITY,
       };
     },
@@ -158,12 +158,12 @@ test('GitHub Release creation gates on the live package and Release absence', as
   });
   assert.deepEqual(events, ['verify-live', 'release-404', 'create']);
   assert.deepEqual(result, {
-    tag: 'v3.15.1',
+    tag: 'v3.15.2',
     commit,
     integrity: RELEASE_INTEGRITY,
   });
-  assert.equal(created.tag_name, 'v3.15.1');
-  assert.equal(created.name, 'borgmcp 3.15.1');
+  assert.equal(created.tag_name, 'v3.15.2');
+  assert.equal(created.name, 'borgmcp 3.15.2');
   assert.equal(created.make_latest, 'true');
   assert.ok(created.body.endsWith(RELEASE_NOTES));
   assert.doesNotMatch(created.body, /Release PR/);
@@ -171,14 +171,14 @@ test('GitHub Release creation gates on the live package and Release absence', as
 
 test('GitHub Release creation rejects invalid live package identity and integrity', async () => {
   await assert.rejects(
-    () => createGithubRelease('3.15.1', githubReleaseBindingDeps({
-      live: { name: 'other', version: '3.15.1', integrity: RELEASE_INTEGRITY },
+    () => createGithubRelease('3.15.2', githubReleaseBindingDeps({
+      live: { name: 'other', version: '3.15.2', integrity: RELEASE_INTEGRITY },
     })),
     /must be borgmcp/,
   );
   await assert.rejects(
-    () => createGithubRelease('3.15.1', githubReleaseBindingDeps({
-      live: { name: 'borgmcp', version: '3.15.1', integrity: 'sha512-short' },
+    () => createGithubRelease('3.15.2', githubReleaseBindingDeps({
+      live: { name: 'borgmcp', version: '3.15.2', integrity: 'sha512-short' },
     })),
     /full SHA-512 integrity/,
   );
@@ -615,7 +615,7 @@ test('release preflight refuses a client before publication when the current ser
         }),
       }),
     }),
-    /borgmcp@3\.15\.1 pins borgmcp-shared@0\.12\.3.*borgmcp-server@0\.20\.0 pins borgmcp-shared@0\.12\.2.*Publish the compatible server before tagging this client/s,
+    /borgmcp@3\.15\.2 pins borgmcp-shared@0\.12\.3.*borgmcp-server@0\.20\.0 pins borgmcp-shared@0\.12\.2.*Publish the compatible server before tagging this client/s,
   );
 });
 
