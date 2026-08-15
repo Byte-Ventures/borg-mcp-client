@@ -55,6 +55,9 @@ describe('codex launch helpers', () => {
     // STRIPPED (gh#929): the playbook-duplicated read-log-triage paragraph
     // (loopFreshnessClause — the playbook owns it post-gh#914)…
     for (const out of [claude, codex, opencodePrompt]) {
+      expect(out).toContain('one recovery attempt');
+      expect(out).toContain('escalate to the operator');
+      expect(out).toContain('Never start, stop, restart, update, or recover the Borg server');
       expect(out).not.toContain('On every Monitor wake and every ScheduleWakeup heartbeat, triage');
       expect(out).not.toContain('DRAIN');
       expect(out).not.toContain('Do NOT triage with a manual since cursor');

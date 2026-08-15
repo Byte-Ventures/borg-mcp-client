@@ -257,6 +257,18 @@ export async function runLaunchAll(args, deps, opts = {}) {
         deps.stdout(`All ${discovered.length} drone(s) for cube '${cubeName}' appear live; nothing to launch (use --force to re-launch).\n`);
         return 0;
     }
+    // Confirm the one configured authority is accepting pinned protocol requests
+    // before any agent process starts. Per-seat checks below remain authoritative
+    // for each saved session only after this fleet-wide readiness boundary passes.
+    try {
+        await deps.probeAuthority(lockLaunchable[0].seat);
+    }
+    catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        deps.stderr(`borg launch-all: configured Borg authority is unavailable (${reason}); ` +
+            'nothing was launched. Ask the server operator to restore it, then retry.\n');
+        return 1;
+    }
     // 4b. server-liveness skip — drop seats the server reports EVICTED (gone).
     //     Reuses the gh#882 per-seat probe (each seat's OWN token → 410
     //     DRONE_EVICTED). Relaunching an evicted seat silently re-mints a fresh

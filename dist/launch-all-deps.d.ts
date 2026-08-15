@@ -50,6 +50,8 @@ export interface LaunchAllDeps {
             name: string;
         }>;
     }>;
+    /** Verify the configured pinned authority is accepting protocol requests. */
+    probeAuthority: (seat: ActiveCube) => Promise<void>;
     /**
      * Probe ONE saved seat's server-side liveness using ITS OWN token (gh#877
      * reuse via seat-probe.ts). Lets launch-all skip evicted seats instead
