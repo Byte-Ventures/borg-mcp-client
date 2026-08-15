@@ -63,7 +63,7 @@ export interface UpdateDeps {
     options?: { ignoreScripts?: boolean },
   ): Promise<void>;
   reenter(binPath: string, args: readonly string[]): Promise<number>;
-  serverJson(binPath: string, command: 'update' | 'status'): Promise<unknown>;
+  serverJson(binPath: string, command: 'update' | 'status'): Promise<ServerJsonExecution>;
   verifyRunningProtocol(origin: string): Promise<void>;
   refreshAgentIntegrations(): Promise<void>;
   confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
@@ -71,6 +71,11 @@ export interface UpdateDeps {
   stdout(text: string): void;
   stderr(text: string): void;
   calls?: string[];
+}
+
+export interface ServerJsonExecution {
+  exitCode: number;
+  value: unknown;
 }
 
 interface ServerStatus {
@@ -85,6 +90,10 @@ interface ServerStatus {
   mode: 'foreground' | 'managed' | 'legacy' | 'stopped';
   serviceAdapter: 'launchd' | 'systemd' | null;
   serviceRecovery: { command: string[] } | null;
+  runtimeLock:
+    | { state: 'clear' }
+    | { state: 'stale'; recoveryAction: 'borg-mcp-server recover-stale-lock' }
+    | null;
   dataIdentity: 'available' | 'unavailable';
   nextAction: string | null;
 }
@@ -375,6 +384,27 @@ function decodeManagedServiceRecovery(value: unknown): { command: string[] } | n
   return { command: record.command as string[] };
 }
 
+function decodeStoppedRuntimeLock(value: unknown): Exclude<ServerStatus['runtimeLock'], null> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.state === 'clear') return { state: 'clear' };
+  if (
+    record.state !== 'stale' ||
+    !Number.isSafeInteger(record.pid) || (record.pid as number) <= 0 ||
+    record.process_state !== 'absent' ||
+    typeof record.runtime !== 'string' || record.runtime.length === 0 ||
+    (record.runtime_integrity !== null &&
+      (typeof record.runtime_integrity !== 'string' || !isCanonicalSha512Integrity(record.runtime_integrity))) ||
+    (record.build_identity !== null && typeof record.build_identity !== 'string') ||
+    (record.endpoint !== null && typeof record.endpoint !== 'string') ||
+    !['foreground', 'managed', 'legacy'].includes(record.mode as string) ||
+    record.recovery_action !== 'borg-mcp-server recover-stale-lock'
+  ) {
+    return null;
+  }
+  return { state: 'stale', recoveryAction: record.recovery_action };
+}
+
 function decodeServerStatus(value: unknown): ServerStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('server returned invalid JSON status');
@@ -414,12 +444,24 @@ function decodeServerStatus(value: unknown): ServerStatus {
   ) {
     throw new Error('server returned inconsistent JSON status');
   }
-  const managedRecovery = record.status === 'stopped' && record.service_adapter !== null
-    ? decodeManagedServiceRecovery(record.service_recovery)
-    : null;
-  if (record.status === 'stopped' && record.service_adapter !== null &&
-      (record.service_state !== 'inactive' || managedRecovery === null)) {
-    throw new Error('server returned invalid managed-service recovery status');
+  let managedRecovery: { command: string[] } | null = null;
+  let runtimeLock: ServerStatus['runtimeLock'] = null;
+  if (record.status === 'stopped') {
+    runtimeLock = decodeStoppedRuntimeLock(record.runtime_lock);
+    if (runtimeLock === null) throw new Error('server returned invalid JSON status runtime lock');
+    if (!['active', 'inactive', 'absent'].includes(record.service_state as string)) {
+      throw new Error('server returned invalid managed-service recovery status');
+    }
+    managedRecovery = record.service_adapter !== null && record.service_state === 'inactive'
+      ? decodeManagedServiceRecovery(record.service_recovery)
+      : null;
+    if (
+      (record.service_adapter !== null && record.service_state === 'inactive' && managedRecovery === null) ||
+      (record.service_state !== 'inactive' && record.service_recovery !== null) ||
+      (record.service_adapter === null && record.service_state !== 'absent')
+    ) {
+      throw new Error('server returned invalid managed-service recovery status');
+    }
   }
   return {
     state: record.status,
@@ -433,9 +475,19 @@ function decodeServerStatus(value: unknown): ServerStatus {
     mode: record.mode as ServerStatus['mode'],
     serviceAdapter: record.service_adapter,
     serviceRecovery: managedRecovery,
+    runtimeLock,
     dataIdentity: record.data_identity,
     nextAction: record.next_action,
   };
+}
+
+function decodeServerStatusExecution(execution: ServerJsonExecution): ServerStatus {
+  const status = decodeServerStatus(execution.value);
+  const stale = status.state === 'stopped' && status.runtimeLock?.state === 'stale';
+  if ((stale && execution.exitCode !== 1) || (!stale && execution.exitCode !== 0)) {
+    throw new Error(`server returned invalid JSON status exit pairing (${execution.exitCode})`);
+  }
+  return status;
 }
 
 function decodeServerUpdate(value: unknown): ServerUpdateResult {
@@ -551,6 +603,9 @@ function renderServerFailureRecovery(
 }
 
 function renderStoppedServiceRecovery(status: ServerStatus): string {
+  if (status.runtimeLock?.state === 'stale') {
+    return `Local server runtime lock is stale.\nRecover it with: borg-mcp-server recover-stale-lock\n`;
+  }
   if (status.serviceRecovery !== null) {
     const command = status.serviceRecovery.command.map(shellEscape).join(' ');
     return `Local server service is stopped.\nRestart it with: ${command}\n`;
@@ -754,13 +809,13 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
   const observeStatusAfterFailure = async (): Promise<void> => {
     recoveryStatusAttempted = true;
     try {
-      observedStatus = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+      observedStatus = decodeServerStatusExecution(await deps.serverJson(server.binPath, 'status'));
     } catch {
       observedStatus = null;
     }
   };
   try {
-    let status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+    let status = decodeServerStatusExecution(await deps.serverJson(server.binPath, 'status'));
     observedStatus = status;
     initialServerState = status.state;
     if (status.installedController !== exactServerIdentity(pair.server.version)) {
@@ -775,7 +830,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       updateAttempted = true;
       failureStage = 'server runtime activation';
       retryCommand = 'borg server update';
-      const update = decodeServerUpdate(await deps.serverJson(server.binPath, 'update'));
+      const update = decodeServerUpdate((await deps.serverJson(server.binPath, 'update')).value);
       observedUpdate = update;
       if (update.status === 'failed') {
         await observeStatusAfterFailure();
@@ -794,7 +849,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       failureStage = 'post-update server status check';
       retryCommand = 'borg server status';
       recoveryStatusAttempted = true;
-      status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+      status = decodeServerStatusExecution(await deps.serverJson(server.binPath, 'status'));
       observedStatus = status;
     }
     failureStage = 'final server state verification';
@@ -1221,12 +1276,7 @@ export function buildDefaultUpdateDeps(): UpdateDeps {
       } catch {
         throw new Error(`server ${command} returned invalid JSON${serverCommandStderr(result.stderr)}`);
       }
-      if (result.code !== 0 && command !== 'update') {
-        throw new Error(
-          `server ${command} exited ${result.code}${serverCommandStderr(result.stderr)}`,
-        );
-      }
-      return parsed;
+      return { exitCode: result.code, value: parsed };
     },
     verifyRunningProtocol: async (origin) => {
       const trust = await loadBorgServerTrust(origin);

@@ -11,6 +11,9 @@ import { readAllProjectIdentities as cubesReadAllProjectIdentities, getProjectCl
 import { getRoster, getCube } from './remote-client.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { borgHomeRoot } from './private-root.js';
+import { preflightBorgServerTag } from './server-handshake.js';
+import { loadBorgServerTrust } from './server-trust.js';
+import { BorgServerTrustError } from './server-errors.js';
 /** Real-IO factory wiring production modules (spec §10). Test code stubs LaunchAllDeps directly. */
 export function buildDefaultLaunchAllDeps() {
     return {
@@ -71,6 +74,16 @@ export function buildDefaultLaunchAllDeps() {
         getRoster: (seat, since) => getRoster(seat, since),
         // getCube uses the drone session token via authedFetch (cubeId-only); apiUrl/token unused.
         getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
+        probeAuthority: async (seat) => {
+            if (!seat.serverTrustIdentity) {
+                throw new BorgServerTrustError('Saved Borg server trust identity is missing');
+            }
+            const trust = await loadBorgServerTrust(seat.apiUrl);
+            if (trust.identity !== seat.serverTrustIdentity) {
+                throw new BorgServerTrustError('Saved Borg server trust identity changed');
+            }
+            await preflightBorgServerTag(seat.apiUrl, trust.fetchImpl);
+        },
         probeSeat: (seat) => defaultProbeSeat(seat),
         getCliPreferenceForPath: (projectPath) => getProjectCliPreferenceForPath(projectPath),
         readAllProjectIdentities: () => cubesReadAllProjectIdentities(),

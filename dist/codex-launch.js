@@ -42,10 +42,11 @@ export function buildAgentKickoffPrompt(options) {
         codexNonceClause +
         `Note: at session start the borg MCP server is still spinning up in ` +
         `parallel — if a system reminder claims "MCP server disconnected" or ` +
-        `the borg tools are not yet registered, do NOT bail. Recover via ` +
+        `the borg tools are not yet registered, do NOT bail. Make one recovery attempt via ` +
         `\`ToolSearch({query: "select:mcp__borg__borg_regen,mcp__borg__borg_log,Monitor", max_results: 3})\` ` +
         `to load the bootstrap tools in one call, then call borg_regen. ` +
-        `The server typically becomes available within a few seconds. ` +
+        `If that bounded attempt fails, stop and escalate to the operator. ` +
+        `Never start, stop, restart, update, or recover the Borg server. ` +
         wakeClause);
 }
 export function socketPathFromRemoteArgs(args) {

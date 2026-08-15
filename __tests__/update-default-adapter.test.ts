@@ -72,18 +72,21 @@ function updateDeps(
       name === 'borgmcp' ? [CLIENT_TARGET.version] : [SERVER_TARGET.version]),
     reenter: vi.fn(async () => 0),
     serverJson: vi.fn(async () => ({
-      status: 'running',
-      installed_controller: 'borgmcp-server@0.4.0',
-      prepared_runtime: 'borgmcp-server@0.4.0',
-      prepared_integrity: SERVER_TARGET.integrity,
-      running_runtime: 'borgmcp-server@0.4.0',
-      running_integrity: SERVER_TARGET.integrity,
-      build_identity: 'a'.repeat(40),
-      endpoint: 'https://127.0.0.1:7091',
-      mode: 'managed',
-      service_adapter: 'launchd',
-      data_identity: 'available',
-      next_action: null,
+      exitCode: 0,
+      value: {
+        status: 'running',
+        installed_controller: 'borgmcp-server@0.4.0',
+        prepared_runtime: 'borgmcp-server@0.4.0',
+        prepared_integrity: SERVER_TARGET.integrity,
+        running_runtime: 'borgmcp-server@0.4.0',
+        running_integrity: SERVER_TARGET.integrity,
+        build_identity: 'a'.repeat(40),
+        endpoint: 'https://127.0.0.1:7091',
+        mode: 'managed',
+        service_adapter: 'launchd',
+        data_identity: 'available',
+        next_action: null,
+      },
     })),
     verifyRunningProtocol: vi.fn(async () => undefined),
     refreshAgentIntegrations: vi.fn(async () => undefined),
@@ -143,6 +146,54 @@ else process.exit(91);
     fetch,
   };
 }
+
+function fakeServerJson(stdout: string, exitCode: number): string {
+  const root = mkdtempSync(join(tmpdir(), 'borg-update-server-json-'));
+  roots.push(root);
+  const server = join(root, 'borg-mcp-server');
+  writeFileSync(server, `#!/usr/bin/env node
+process.stdout.write(${JSON.stringify(stdout)});
+process.exit(${exitCode});
+`);
+  chmodSync(server, 0o755);
+  return server;
+}
+
+function stoppedStatus(runtimeLock: Record<string, unknown>) {
+  const stale = runtimeLock.state === 'stale';
+  return {
+    status: 'stopped',
+    installed_controller: 'borgmcp-server@0.4.0',
+    prepared_runtime: 'borgmcp-server@0.4.0',
+    prepared_integrity: SERVER_TARGET.integrity,
+    running_runtime: null,
+    running_integrity: null,
+    build_identity: null,
+    endpoint: null,
+    mode: 'stopped',
+    service_adapter: 'launchd',
+    service_state: stale ? 'active' : 'inactive',
+    service_recovery: stale ? null : {
+      kind: 'run-platform-command',
+      command: ['launchctl', 'kickstart', 'gui/501/ai.borgmcp.server'],
+    },
+    runtime_lock: runtimeLock,
+    data_identity: 'available',
+    next_action: null,
+  };
+}
+
+const staleRuntimeLock = {
+  state: 'stale',
+  pid: 4242,
+  process_state: 'absent',
+  runtime: 'borgmcp-server@0.4.0',
+  runtime_integrity: SERVER_TARGET.integrity,
+  build_identity: 'a'.repeat(40),
+  endpoint: 'https://127.0.0.1:7091',
+  mode: 'managed',
+  recovery_action: 'borg-mcp-server recover-stale-lock',
+};
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -247,6 +298,43 @@ process.exit(1);
     await expect(deps.serverJson(server, 'status')).rejects.toThrow(
       /server status returned invalid JSON[\s\S]*Migration 17 does not match its recorded checksum/,
     );
+  });
+
+  it('carries status exit 1 to strict decoding and renders valid stale-lock recovery', async () => {
+    const server = fakeServerJson(JSON.stringify(stoppedStatus(staleRuntimeLock)), 1);
+    const adapter = buildDefaultUpdateDeps();
+    const d = updateDeps(adapter, {
+      currentServer: vi.fn(async () => ({ ...installed(SERVER_TARGET), binPath: server })),
+      serverJson: adapter.serverJson,
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
+    }, d)).resolves.toBe(0);
+    expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining(
+      'Recover it with: borg-mcp-server recover-stale-lock',
+    ));
+  });
+
+  it.each([
+    ['malformed JSON on exit 1', 'not-json', 1],
+    ['stale status on exit 0', JSON.stringify(stoppedStatus(staleRuntimeLock)), 0],
+    ['clear status on exit 1', JSON.stringify(stoppedStatus({ state: 'clear' })), 1],
+    ['clear status on another nonzero exit', JSON.stringify(stoppedStatus({ state: 'clear' })), 2],
+  ])('rejects the invalid default-adapter status pairing: %s', async (_name, stdout, exitCode) => {
+    const server = fakeServerJson(stdout, exitCode);
+    const adapter = buildDefaultUpdateDeps();
+    const d = updateDeps(adapter, {
+      currentServer: vi.fn(async () => ({ ...installed(SERVER_TARGET), binPath: server })),
+      serverJson: adapter.serverJson,
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
+    }, d)).resolves.toBe(1);
+    expect(d.stdout).not.toHaveBeenCalledWith(expect.stringContaining('recover-stale-lock'));
   });
 
   it('rejects a configured alternate registry before lookup or mutation', async () => {

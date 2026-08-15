@@ -26,6 +26,9 @@ import {
 import { getRoster, getCube } from './remote-client.js';
 import { defaultProbeSeat, type SeatStatus } from './seat-probe.js';
 import { borgHomeRoot } from './private-root.js';
+import { preflightBorgServerTag } from './server-handshake.js';
+import { loadBorgServerTrust } from './server-trust.js';
+import { BorgServerTrustError } from './server-errors.js';
 
 /** Subprocess runner — sync, returns stdout, THROWS on non-zero exit or ENOENT. */
 export type RunSyncFn = (cmd: string, args: string[]) => string;
@@ -71,6 +74,8 @@ export interface LaunchAllDeps {
     token: string,
     cubeId: string
   ) => Promise<{ id: string; name: string; roles: Array<{ id: string; name: string }> }>;
+  /** Verify the configured pinned authority is accepting protocol requests. */
+  probeAuthority: (seat: ActiveCube) => Promise<void>;
   /**
    * Probe ONE saved seat's server-side liveness using ITS OWN token (gh#877
    * reuse via seat-probe.ts). Lets launch-all skip evicted seats instead
@@ -156,6 +161,16 @@ export function buildDefaultLaunchAllDeps(): LaunchAllDeps {
     getRoster: (seat, since) => getRoster(seat, since),
     // getCube uses the drone session token via authedFetch (cubeId-only); apiUrl/token unused.
     getCube: (_apiUrl, _token, cubeId) => getCube(cubeId),
+    probeAuthority: async (seat) => {
+      if (!seat.serverTrustIdentity) {
+        throw new BorgServerTrustError('Saved Borg server trust identity is missing');
+      }
+      const trust = await loadBorgServerTrust(seat.apiUrl);
+      if (trust.identity !== seat.serverTrustIdentity) {
+        throw new BorgServerTrustError('Saved Borg server trust identity changed');
+      }
+      await preflightBorgServerTag(seat.apiUrl, trust.fetchImpl);
+    },
     probeSeat: (seat) => defaultProbeSeat(seat),
     getCliPreferenceForPath: (projectPath) => getProjectCliPreferenceForPath(projectPath),
     readAllProjectIdentities: () => cubesReadAllProjectIdentities(),

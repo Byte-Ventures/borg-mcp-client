@@ -74,9 +74,24 @@ const stoppedManagedStatus = {
     kind: 'run-platform-command',
     command: ['launchctl', 'kickstart', 'gui/501/ai.borgmcp.server'],
   },
+  runtime_lock: { state: 'clear' },
   data_identity: 'available',
   next_action: null,
 };
+
+function staleRuntimeLock(recoveryAction = 'borg-mcp-server recover-stale-lock') {
+  return {
+    state: 'stale',
+    pid: 4242,
+    process_state: 'absent',
+    runtime: 'borgmcp-server@0.4.0',
+    runtime_integrity: SERVER_TARGET.integrity,
+    build_identity: 'a'.repeat(40),
+    endpoint: 'https://127.0.0.1:7091',
+    mode: 'managed',
+    recovery_action: recoveryAction,
+  };
+}
 
 function outdatedRunningStatus(integrity: string) {
   return {
@@ -89,12 +104,21 @@ function outdatedRunningStatus(integrity: string) {
   };
 }
 
-function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
+type TestUpdateOverrides = Omit<Partial<UpdateDeps>, 'serverJson'> & {
+  serverJson?: (binPath: string, command: 'update' | 'status') => Promise<unknown>;
+};
+
+function deps(overrides: TestUpdateOverrides = {}): UpdateDeps {
   const calls: string[] = [];
   let clientVersion = '2.2.0';
   let clientShared = '0.6.4';
   let serverVersion = '0.3.0';
   let serverShared = '0.6.4';
+  const { serverJson: serverJsonOverride, ...otherOverrides } = overrides;
+  const rawServerJson = serverJsonOverride ?? (async (_bin: string, command: 'update' | 'status') => {
+    calls.push(`server:${command}`);
+    return command === 'update' ? updatedResult : runningStatus;
+  });
   return {
     currentClient: vi.fn(async () => ({
       name: 'borgmcp',
@@ -125,11 +149,12 @@ function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
       }
     }),
     reenter: vi.fn(async () => { calls.push('reenter'); return 0; }),
-    serverJson: vi.fn(async (_bin, command) => {
-      calls.push(`server:${command}`);
-      return command === 'update'
-        ? updatedResult
-        : runningStatus;
+    serverJson: vi.fn(async (binPath, command) => {
+      const value = await rawServerJson(binPath, command);
+      const stale = command === 'status' &&
+        typeof value === 'object' && value !== null &&
+        (value as { runtime_lock?: { state?: unknown } }).runtime_lock?.state === 'stale';
+      return { exitCode: stale ? 1 : 0, value };
     }),
     verifyRunningProtocol: vi.fn(async () => { calls.push('protocol'); }),
     refreshAgentIntegrations: vi.fn(async () => { calls.push('refresh-agent-integrations'); }),
@@ -138,11 +163,11 @@ function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
     stdout: vi.fn(),
     stderr: vi.fn(),
     calls,
-    ...overrides,
+    ...otherOverrides,
   };
 }
 
-function targetDeps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
+function targetDeps(overrides: TestUpdateOverrides = {}): UpdateDeps {
   return deps({
     currentClient: vi.fn(async () => ({
       name: 'borgmcp', version: '2.3.0', sharedVersion: '0.6.5',
@@ -498,6 +523,66 @@ describe('runUpdate', () => {
     expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining(
       `Restart it with: 'systemctl' '--user' 'restart' 'borgmcp-server.service'\n`,
     ));
+  });
+
+  it('reports the exact stale runtime-lock recovery for an active managed service', async () => {
+    const d = targetDeps({
+      serverJson: vi.fn(async () => ({
+        ...stoppedManagedStatus,
+        service_state: 'active',
+        service_recovery: null,
+        runtime_lock: staleRuntimeLock(),
+      })),
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
+    }, d)).resolves.toBe(0);
+    expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining(
+      `Recover it with: borg-mcp-server recover-stale-lock\n`,
+    ));
+    expect(d.stdout).not.toHaveBeenCalledWith(expect.stringContaining('borg server start'));
+  });
+
+  it('rejects unsafe or malformed stale runtime-lock recovery status', async () => {
+    const d = targetDeps({
+      serverJson: vi.fn(async () => ({
+        ...stoppedManagedStatus,
+        service_state: 'active',
+        service_recovery: null,
+        runtime_lock: staleRuntimeLock('borg-mcp-server recover-stale-lock; rm -rf /'),
+      })),
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
+    }, d)).resolves.toBe(1);
+    expect(d.stdout).not.toHaveBeenCalledWith(expect.stringContaining('recover-stale-lock'));
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('server returned invalid JSON status'));
+  });
+
+  it('prints stale-lock recovery before the failed-stage retry', async () => {
+    const d = targetDeps({
+      serverJson: vi.fn(async () => ({
+        ...stoppedManagedStatus,
+        installed_controller: 'borgmcp-server@0.3.0',
+        service_state: 'active',
+        service_recovery: null,
+        runtime_lock: staleRuntimeLock(),
+      })),
+    });
+
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
+    }, d)).resolves.toBe(1);
+    const output = vi.mocked(d.stderr).mock.calls.map(([text]) => text).join('');
+    expect(output.indexOf('Recover it with: borg-mcp-server recover-stale-lock')).toBeGreaterThan(-1);
+    expect(output.indexOf('Then retry the failed stage with: borg update --yes')).toBeGreaterThan(
+      output.indexOf('Recover it with: borg-mcp-server recover-stale-lock'),
+    );
   });
 
   it('rechecks service state after activation failure and gives stage-specific recovery', async () => {

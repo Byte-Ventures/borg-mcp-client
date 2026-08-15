@@ -50,6 +50,7 @@ function makeStubDeps(over: Partial<LaunchAllDeps> = {}): LaunchAllDeps {
     getCachedAuth: vi.fn(async () => ({ token: 't', apiUrl: 'http://api.test' })),
     getRoster: vi.fn(async () => ({ drones: [] })),
     getCube: vi.fn(async () => ({ id: CUBE_ID, name: 'myrepo', roles: [] })),
+    probeAuthority: vi.fn(async () => {}),
     probeSeat: vi.fn(async () => 'live' as const), // server-liveness gate: default live
     getCliPreferenceForPath: vi.fn(async () => null),
     readAllProjectIdentities: vi.fn(async () => []),
@@ -549,6 +550,33 @@ describe('runLaunchAll server-liveness gate (gh#877 follow-up — skip evicted s
     const seats = (deps.probeSeat as any).mock.calls.map((c: any[]) => c[0]);
     expect(seats).toContain(identities[0].cube);
     expect(seats).toContain(identities[1].cube);
+  });
+
+  it('launches zero sessions when one readiness check finds a 9-drone authority unavailable', async () => {
+    const { paths, identities } = fleet(9);
+    const deps = makeStubDeps({
+      getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
+      runSync: vi.fn((cmd: string) => cmd === 'git' ? porcelainFor(paths) : ''),
+      readAllProjectIdentities: vi.fn(async () => identities),
+      probeAuthority: vi.fn(async () => { throw new Error('connect ECONNREFUSED'); }),
+    });
+
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(1);
+    expect(deps.probeAuthority).toHaveBeenCalledOnce();
+    expect(deps.probeSeat).not.toHaveBeenCalled();
+    expect(dispatched(deps)).toBe(false);
+    expect(stderrOf(deps)).toContain('configured Borg authority is unavailable');
+    expect(stderrOf(deps)).toContain('nothing was launched');
+  });
+
+  it('retains per-seat terminal refusals after the authority readiness check succeeds', async () => {
+    const { identities } = twoSeats();
+    const deps = depsFor(identities, async (seat) => seat.sessionToken === 'tok-b' ? 'revoked' : 'live');
+
+    expect(await runLaunchAll({ flags: { yes: true } }, deps, OPTS)).toBe(0);
+    expect(deps.probeAuthority).toHaveBeenCalledOnce();
+    expect(dispatched(deps)).toBe(true);
+    expect(stderrOf(deps)).toContain('Local session was revoked.');
   });
 
   it('ALL seats evicted → nothing to launch (the 4b post-server-gate early-return), exit 0, backend never invoked', async () => {

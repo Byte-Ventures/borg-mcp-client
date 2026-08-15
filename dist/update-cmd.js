@@ -225,6 +225,26 @@ function decodeManagedServiceRecovery(value) {
     }
     return { command: record.command };
 }
+function decodeStoppedRuntimeLock(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const record = value;
+    if (record.state === 'clear')
+        return { state: 'clear' };
+    if (record.state !== 'stale' ||
+        !Number.isSafeInteger(record.pid) || record.pid <= 0 ||
+        record.process_state !== 'absent' ||
+        typeof record.runtime !== 'string' || record.runtime.length === 0 ||
+        (record.runtime_integrity !== null &&
+            (typeof record.runtime_integrity !== 'string' || !isCanonicalSha512Integrity(record.runtime_integrity))) ||
+        (record.build_identity !== null && typeof record.build_identity !== 'string') ||
+        (record.endpoint !== null && typeof record.endpoint !== 'string') ||
+        !['foreground', 'managed', 'legacy'].includes(record.mode) ||
+        record.recovery_action !== 'borg-mcp-server recover-stale-lock') {
+        return null;
+    }
+    return { state: 'stale', recoveryAction: record.recovery_action };
+}
 function decodeServerStatus(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new Error('server returned invalid JSON status');
@@ -256,12 +276,23 @@ function decodeServerStatus(value) {
         (record.status === 'running' && record.mode === 'stopped')) {
         throw new Error('server returned inconsistent JSON status');
     }
-    const managedRecovery = record.status === 'stopped' && record.service_adapter !== null
-        ? decodeManagedServiceRecovery(record.service_recovery)
-        : null;
-    if (record.status === 'stopped' && record.service_adapter !== null &&
-        (record.service_state !== 'inactive' || managedRecovery === null)) {
-        throw new Error('server returned invalid managed-service recovery status');
+    let managedRecovery = null;
+    let runtimeLock = null;
+    if (record.status === 'stopped') {
+        runtimeLock = decodeStoppedRuntimeLock(record.runtime_lock);
+        if (runtimeLock === null)
+            throw new Error('server returned invalid JSON status runtime lock');
+        if (!['active', 'inactive', 'absent'].includes(record.service_state)) {
+            throw new Error('server returned invalid managed-service recovery status');
+        }
+        managedRecovery = record.service_adapter !== null && record.service_state === 'inactive'
+            ? decodeManagedServiceRecovery(record.service_recovery)
+            : null;
+        if ((record.service_adapter !== null && record.service_state === 'inactive' && managedRecovery === null) ||
+            (record.service_state !== 'inactive' && record.service_recovery !== null) ||
+            (record.service_adapter === null && record.service_state !== 'absent')) {
+            throw new Error('server returned invalid managed-service recovery status');
+        }
     }
     return {
         state: record.status,
@@ -275,9 +306,18 @@ function decodeServerStatus(value) {
         mode: record.mode,
         serviceAdapter: record.service_adapter,
         serviceRecovery: managedRecovery,
+        runtimeLock,
         dataIdentity: record.data_identity,
         nextAction: record.next_action,
     };
+}
+function decodeServerStatusExecution(execution) {
+    const status = decodeServerStatus(execution.value);
+    const stale = status.state === 'stopped' && status.runtimeLock?.state === 'stale';
+    if ((stale && execution.exitCode !== 1) || (!stale && execution.exitCode !== 0)) {
+        throw new Error(`server returned invalid JSON status exit pairing (${execution.exitCode})`);
+    }
+    return status;
 }
 function decodeServerUpdate(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -372,6 +412,9 @@ function renderServerFailureRecovery(status, updateAttempted, retryCommand) {
     return text;
 }
 function renderStoppedServiceRecovery(status) {
+    if (status.runtimeLock?.state === 'stale') {
+        return `Local server runtime lock is stale.\nRecover it with: borg-mcp-server recover-stale-lock\n`;
+    }
     if (status.serviceRecovery !== null) {
         const command = status.serviceRecovery.command.map(shellEscape).join(' ');
         return `Local server service is stopped.\nRestart it with: ${command}\n`;
@@ -544,14 +587,14 @@ export async function runUpdate(options, deps) {
     const observeStatusAfterFailure = async () => {
         recoveryStatusAttempted = true;
         try {
-            observedStatus = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+            observedStatus = decodeServerStatusExecution(await deps.serverJson(server.binPath, 'status'));
         }
         catch {
             observedStatus = null;
         }
     };
     try {
-        let status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+        let status = decodeServerStatusExecution(await deps.serverJson(server.binPath, 'status'));
         observedStatus = status;
         initialServerState = status.state;
         if (status.installedController !== exactServerIdentity(pair.server.version)) {
@@ -567,7 +610,7 @@ export async function runUpdate(options, deps) {
             updateAttempted = true;
             failureStage = 'server runtime activation';
             retryCommand = 'borg server update';
-            const update = decodeServerUpdate(await deps.serverJson(server.binPath, 'update'));
+            const update = decodeServerUpdate((await deps.serverJson(server.binPath, 'update')).value);
             observedUpdate = update;
             if (update.status === 'failed') {
                 await observeStatusAfterFailure();
@@ -584,7 +627,7 @@ export async function runUpdate(options, deps) {
             failureStage = 'post-update server status check';
             retryCommand = 'borg server status';
             recoveryStatusAttempted = true;
-            status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+            status = decodeServerStatusExecution(await deps.serverJson(server.binPath, 'status'));
             observedStatus = status;
         }
         failureStage = 'final server state verification';
@@ -976,10 +1019,7 @@ export function buildDefaultUpdateDeps() {
             catch {
                 throw new Error(`server ${command} returned invalid JSON${serverCommandStderr(result.stderr)}`);
             }
-            if (result.code !== 0 && command !== 'update') {
-                throw new Error(`server ${command} exited ${result.code}${serverCommandStderr(result.stderr)}`);
-            }
-            return parsed;
+            return { exitCode: result.code, value: parsed };
         },
         verifyRunningProtocol: async (origin) => {
             const trust = await loadBorgServerTrust(origin);
