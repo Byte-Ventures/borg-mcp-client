@@ -4,6 +4,7 @@ import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile }
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { verifyPackedArtifact } from '../scripts/verify-packed-artifact.mjs';
 import { verifyLockRegistry, verifyRegistryMetadata } from '../scripts/verify-lock-registry.mjs';
 import {
@@ -26,6 +27,7 @@ import {
   lockRegistryEntries,
   registryCompatible,
   verifyManifest,
+  verifyReleasePreflight,
   verifyReleaseReadiness,
 } from '../scripts/verify-release-readiness.mjs';
 import {
@@ -37,7 +39,7 @@ const root = resolve(import.meta.dirname, '..');
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const sharedVersion = packageManifest.dependencies['borgmcp-shared'];
 const SHARED_TARBALL = `https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-${sharedVersion}.tgz`;
-const SHARED_INTEGRITY = 'sha512-l459XEeqk0cSz1+Z8yk8cCVWik4/CX4OBTRZqj6n1SZYvDpzWJksUz82FA9k4taf//rs43Tfl1tpWXnRHAqxOQ==';
+const SHARED_INTEGRITY = 'sha512-3GPQ1U7tBxg8Jp1Uac31CKKXQjMv4UNPhs5P6N83CyDXGJvkI88yowVJZGlLuo30eEk6jhERZ9AQWOjHst/sFA==';
 
 const RELEASE_NOTES = 'Curated tagged release notes.\n\n- Exact shipped work.';
 const RELEASE_INTEGRITY = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;
@@ -569,6 +571,54 @@ test('release readiness accepts the extracted standalone client', async () => {
   assert.deepEqual(report, { name: 'borgmcp', version: packageManifest.version, shared: sharedVersion });
 });
 
+test('release preflight accepts the current published server when exact shared pins match', async () => {
+  const requests = [];
+  const report = await verifyReleasePreflight(root, {
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        json: async () => ({
+          name: 'borgmcp-server',
+          version: '0.20.0',
+          dependencies: { 'borgmcp-shared': '0.12.3' },
+        }),
+      };
+    },
+  });
+
+  assert.deepEqual(report, {
+    name: 'borgmcp',
+    version: packageManifest.version,
+    shared: '0.12.3',
+    server: '0.20.0',
+  });
+  assert.deepEqual(requests, [{
+    url: 'https://registry.npmjs.org/borgmcp-server/latest',
+    options: {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+      redirect: 'error',
+    },
+  }]);
+});
+
+test('release preflight refuses a client before publication when the current server shared pin differs', async () => {
+  await assert.rejects(
+    () => verifyReleasePreflight(root, {
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          name: 'borgmcp-server',
+          version: '0.20.0',
+          dependencies: { 'borgmcp-shared': '0.12.2' },
+        }),
+      }),
+    }),
+    /borgmcp@3\.15\.0 pins borgmcp-shared@0\.12\.3.*borgmcp-server@0\.20\.0 pins borgmcp-shared@0\.12\.2.*Publish the compatible server before tagging this client/s,
+  );
+});
+
 test('public-source scan ignores a linked-worktree .git file', async (t) => {
   const worktree = await mkdtemp(join(tmpdir(), 'borgmcp-client-linked-worktree-'));
   t.after(() => rm(worktree, { recursive: true, force: true }));
@@ -652,6 +702,16 @@ test('workflow rejects hostile source config before trusted npm bootstrap', asyn
     join(root, 'scripts', 'verify-release-readiness.mjs'),
     join(packageRoot, 'scripts', 'verify-release-readiness.mjs'),
   );
+  const fetchMock = join(directory, 'fetch-mock.mjs');
+  await writeFile(fetchMock, `globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({
+    name: 'borgmcp-server',
+    version: '0.20.0',
+    dependencies: { 'borgmcp-shared': ${JSON.stringify(sharedVersion)} },
+  }),
+});
+`);
   const workflowSteps = `set -euo pipefail
   test ! -e .npmrc
 printf '%s\\n' 'registry=https://registry.npmjs.org/' > "\${NPM_CONFIG_USERCONFIG}"
@@ -659,7 +719,11 @@ node scripts/verify-release-readiness.mjs
 `;
   const runWorkflowSteps = () => execFileSync('bash', ['-c', workflowSteps], {
     cwd: packageRoot,
-    env: { ...process.env, NPM_CONFIG_USERCONFIG: runnerConfig },
+    env: {
+      ...process.env,
+      NODE_OPTIONS: `--import=${pathToFileURL(fetchMock).href}`,
+      NPM_CONFIG_USERCONFIG: runnerConfig,
+    },
     stdio: 'pipe',
   });
 

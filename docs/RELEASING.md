@@ -21,19 +21,21 @@ Before creating the release tag, independently verify all of these conditions:
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- the exact audited registry dependency `borgmcp-shared@0.12.2` remains locked to
+- the exact audited registry dependency `borgmcp-shared@0.12.3` remains locked to
   its canonical tarball and integrity
-  `sha512-l459XEeqk0cSz1+Z8yk8cCVWik4/CX4OBTRZqj6n1SZYvDpzWJksUz82FA9k4taf//rs43Tfl1tpWXnRHAqxOQ==`;
-- the coupled shared/server/client candidates use the same exact
-  `borgmcp-shared` version;
+  `sha512-3GPQ1U7tBxg8Jp1Uac31CKKXQjMv4UNPhs5P6N83CyDXGJvkI88yowVJZGlLuo30eEk6jhERZ9AQWOjHst/sFA==`;
+- the current published server and the client candidate use the same exact
+  `borgmcp-shared` version; publish a compatible server before tagging the
+  client when that pin changes;
 - the selected stable client version is unused and the exact release commit is
   on protected `main`;
 - the repository and protected npm environment settings pass an operator audit;
 - the exact release source passes exact-SHA CI and one Code Review.
 
 `scripts/verify-release-readiness.mjs` makes the source-side blockers
-machine-checkable. A release tag created before they are resolved fails before
-dependency installation or publication.
+machine-checkable and compares the client pin with the current published server.
+A release tag created before they are resolved fails before dependency
+installation or publication.
 
 ### Release branches
 
