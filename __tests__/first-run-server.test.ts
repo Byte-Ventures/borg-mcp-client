@@ -281,6 +281,41 @@ describe('offerFirstRunServerInstall', () => {
     );
   });
 
+  it('selects current server 0.20.0 instead of the older 0.18.0 shared pairing', async () => {
+    const releases: Record<string, PublishedPackage> = {
+      '0.20.0': { ...SERVER, version: '0.20.0', sharedVersion: '0.12.3' },
+      '0.19.0': { ...SERVER, version: '0.19.0', sharedVersion: '0.12.3' },
+      '0.18.0': { ...SERVER, version: '0.18.0', sharedVersion: '0.12.2' },
+    };
+    let installed: InstalledPackage | null = null;
+    const d = deps({
+      currentServer: vi.fn(async () => installed),
+      clientSharedVersion: vi.fn(() => '0.12.3'),
+      publishedVersions: vi.fn(async () => ['0.18.0', '0.19.0', '0.20.0']),
+      publishedPackage: vi.fn(async (_name, version) => releases[version]),
+      installGlobal: vi.fn(async (_name, version) => {
+        const target = releases[version];
+        installed = {
+          ...INSTALLED,
+          version: target.version,
+          sharedVersion: target.sharedVersion,
+        };
+      }),
+    });
+
+    await expect(offerFirstRunServerInstall(d.value)).resolves.toEqual({
+      kind: 'installed',
+      server: { ...INSTALLED, version: '0.20.0', sharedVersion: '0.12.3' },
+    });
+    expect(d.value.publishedPackage).toHaveBeenCalledTimes(1);
+    expect(d.value.publishedPackage).toHaveBeenCalledWith('borgmcp-server', '0.20.0');
+    expect(d.value.installGlobal).toHaveBeenCalledWith(
+      'borgmcp-server',
+      '0.20.0',
+      { ignoreScripts: true },
+    );
+  });
+
   it('fails closed with actionable direction when no compatible server release exists', async () => {
     const d = deps({
       publishedVersions: vi.fn(async () => ['0.7.0']),

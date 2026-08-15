@@ -29,9 +29,10 @@ const DEPENDENCY_FIELDS = [
   'peerDependencies',
   'devDependencies',
 ];
-const SHARED_VERSION = '0.12.2';
-const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.12.2.tgz';
-const SHARED_INTEGRITY = 'sha512-l459XEeqk0cSz1+Z8yk8cCVWik4/CX4OBTRZqj6n1SZYvDpzWJksUz82FA9k4taf//rs43Tfl1tpWXnRHAqxOQ==';
+const SHARED_VERSION = '0.12.3';
+const SHARED_TARBALL = 'https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-0.12.3.tgz';
+const SHARED_INTEGRITY = 'sha512-3GPQ1U7tBxg8Jp1Uac31CKKXQjMv4UNPhs5P6N83CyDXGJvkI88yowVJZGlLuo30eEk6jhERZ9AQWOjHst/sFA==';
+const SERVER_LATEST_URL = 'https://registry.npmjs.org/borgmcp-server/latest';
 
 async function exists(path) {
   try {
@@ -224,8 +225,50 @@ export async function verifyReleaseReadiness(rootPath = '.') {
   };
 }
 
+export async function verifyReleasePreflight(rootPath = '.', options = {}) {
+  const report = await verifyReleaseReadiness(rootPath);
+  const fetchImpl = options.fetchImpl ?? fetch;
+  let response;
+  try {
+    response = await fetchImpl(SERVER_LATEST_URL, {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+      redirect: 'error',
+    });
+  } catch (error) {
+    throw new Error(
+      `Could not read the current published borgmcp-server manifest: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  assert(response.ok, `Current borgmcp-server metadata returned HTTP ${response.status}.`);
+  let server;
+  try {
+    server = await response.json();
+  } catch (error) {
+    throw new Error(
+      `Current borgmcp-server metadata is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  assert(
+    server?.name === 'borgmcp-server' && validSemver(server.version),
+    'Current borgmcp-server metadata has an invalid package identity.',
+  );
+  const serverShared = server.dependencies?.['borgmcp-shared'];
+  assert(
+    validSemver(serverShared),
+    'Current borgmcp-server must pin borgmcp-shared to an exact semantic version.',
+  );
+  assert(
+    serverShared === report.shared,
+    `Published pair is incompatible: borgmcp@${report.version} pins borgmcp-shared@${report.shared}; ` +
+      `borgmcp-server@${server.version} pins borgmcp-shared@${serverShared}. ` +
+      'Publish the compatible server before tagging this client.',
+  );
+  return { ...report, server: server.version };
+}
+
 const invokedPath = process.argv[1] ? resolve(process.argv[1]) : '';
 if (invokedPath === fileURLToPath(import.meta.url)) {
-  const report = await verifyReleaseReadiness(process.argv[2] ?? '.');
+  const report = await verifyReleasePreflight(process.argv[2] ?? '.');
   console.log(JSON.stringify(report, null, 2));
 }
