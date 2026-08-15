@@ -38,7 +38,7 @@ export interface UpdateDeps {
         ignoreScripts?: boolean;
     }): Promise<void>;
     reenter(binPath: string, args: readonly string[]): Promise<number>;
-    serverJson(binPath: string, command: 'update' | 'status'): Promise<unknown>;
+    serverJson(binPath: string, command: 'update' | 'status'): Promise<ServerJsonExecution>;
     verifyRunningProtocol(origin: string): Promise<void>;
     refreshAgentIntegrations(): Promise<void>;
     confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
@@ -46,6 +46,10 @@ export interface UpdateDeps {
     stdout(text: string): void;
     stderr(text: string): void;
     calls?: string[];
+}
+export interface ServerJsonExecution {
+    exitCode: number;
+    value: unknown;
 }
 export declare function isExactSemver(value: unknown): value is string;
 export declare function parseUpdateArgs(args: readonly string[], reentryAuthorized?: boolean): ParsedUpdateArgs;

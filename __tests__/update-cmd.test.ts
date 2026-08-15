@@ -104,12 +104,21 @@ function outdatedRunningStatus(integrity: string) {
   };
 }
 
-function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
+type TestUpdateOverrides = Omit<Partial<UpdateDeps>, 'serverJson'> & {
+  serverJson?: (binPath: string, command: 'update' | 'status') => Promise<unknown>;
+};
+
+function deps(overrides: TestUpdateOverrides = {}): UpdateDeps {
   const calls: string[] = [];
   let clientVersion = '2.2.0';
   let clientShared = '0.6.4';
   let serverVersion = '0.3.0';
   let serverShared = '0.6.4';
+  const { serverJson: serverJsonOverride, ...otherOverrides } = overrides;
+  const rawServerJson = serverJsonOverride ?? (async (_bin: string, command: 'update' | 'status') => {
+    calls.push(`server:${command}`);
+    return command === 'update' ? updatedResult : runningStatus;
+  });
   return {
     currentClient: vi.fn(async () => ({
       name: 'borgmcp',
@@ -140,11 +149,12 @@ function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
       }
     }),
     reenter: vi.fn(async () => { calls.push('reenter'); return 0; }),
-    serverJson: vi.fn(async (_bin, command) => {
-      calls.push(`server:${command}`);
-      return command === 'update'
-        ? updatedResult
-        : runningStatus;
+    serverJson: vi.fn(async (binPath, command) => {
+      const value = await rawServerJson(binPath, command);
+      const stale = command === 'status' &&
+        typeof value === 'object' && value !== null &&
+        (value as { runtime_lock?: { state?: unknown } }).runtime_lock?.state === 'stale';
+      return { exitCode: stale ? 1 : 0, value };
     }),
     verifyRunningProtocol: vi.fn(async () => { calls.push('protocol'); }),
     refreshAgentIntegrations: vi.fn(async () => { calls.push('refresh-agent-integrations'); }),
@@ -153,11 +163,11 @@ function deps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
     stdout: vi.fn(),
     stderr: vi.fn(),
     calls,
-    ...overrides,
+    ...otherOverrides,
   };
 }
 
-function targetDeps(overrides: Partial<UpdateDeps> = {}): UpdateDeps {
+function targetDeps(overrides: TestUpdateOverrides = {}): UpdateDeps {
   return deps({
     currentClient: vi.fn(async () => ({
       name: 'borgmcp', version: '2.3.0', sharedVersion: '0.6.5',

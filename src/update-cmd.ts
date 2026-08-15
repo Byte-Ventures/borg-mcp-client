@@ -63,7 +63,7 @@ export interface UpdateDeps {
     options?: { ignoreScripts?: boolean },
   ): Promise<void>;
   reenter(binPath: string, args: readonly string[]): Promise<number>;
-  serverJson(binPath: string, command: 'update' | 'status'): Promise<unknown>;
+  serverJson(binPath: string, command: 'update' | 'status'): Promise<ServerJsonExecution>;
   verifyRunningProtocol(origin: string): Promise<void>;
   refreshAgentIntegrations(): Promise<void>;
   confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
@@ -71,6 +71,11 @@ export interface UpdateDeps {
   stdout(text: string): void;
   stderr(text: string): void;
   calls?: string[];
+}
+
+export interface ServerJsonExecution {
+  exitCode: number;
+  value: unknown;
 }
 
 interface ServerStatus {
@@ -476,6 +481,15 @@ function decodeServerStatus(value: unknown): ServerStatus {
   };
 }
 
+function decodeServerStatusExecution(execution: ServerJsonExecution): ServerStatus {
+  const status = decodeServerStatus(execution.value);
+  const stale = status.state === 'stopped' && status.runtimeLock?.state === 'stale';
+  if ((stale && execution.exitCode !== 1) || (!stale && execution.exitCode !== 0)) {
+    throw new Error(`server returned invalid JSON status exit pairing (${execution.exitCode})`);
+  }
+  return status;
+}
+
 function decodeServerUpdate(value: unknown): ServerUpdateResult {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('server returned invalid JSON update result');
@@ -795,13 +809,13 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
   const observeStatusAfterFailure = async (): Promise<void> => {
     recoveryStatusAttempted = true;
     try {
-      observedStatus = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+      observedStatus = decodeServerStatusExecution(await deps.serverJson(server.binPath, 'status'));
     } catch {
       observedStatus = null;
     }
   };
   try {
-    let status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+    let status = decodeServerStatusExecution(await deps.serverJson(server.binPath, 'status'));
     observedStatus = status;
     initialServerState = status.state;
     if (status.installedController !== exactServerIdentity(pair.server.version)) {
@@ -816,7 +830,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       updateAttempted = true;
       failureStage = 'server runtime activation';
       retryCommand = 'borg server update';
-      const update = decodeServerUpdate(await deps.serverJson(server.binPath, 'update'));
+      const update = decodeServerUpdate((await deps.serverJson(server.binPath, 'update')).value);
       observedUpdate = update;
       if (update.status === 'failed') {
         await observeStatusAfterFailure();
@@ -835,7 +849,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       failureStage = 'post-update server status check';
       retryCommand = 'borg server status';
       recoveryStatusAttempted = true;
-      status = decodeServerStatus(await deps.serverJson(server.binPath, 'status'));
+      status = decodeServerStatusExecution(await deps.serverJson(server.binPath, 'status'));
       observedStatus = status;
     }
     failureStage = 'final server state verification';
@@ -1262,12 +1276,7 @@ export function buildDefaultUpdateDeps(): UpdateDeps {
       } catch {
         throw new Error(`server ${command} returned invalid JSON${serverCommandStderr(result.stderr)}`);
       }
-      if (result.code !== 0 && command !== 'update') {
-        throw new Error(
-          `server ${command} exited ${result.code}${serverCommandStderr(result.stderr)}`,
-        );
-      }
-      return parsed;
+      return { exitCode: result.code, value: parsed };
     },
     verifyRunningProtocol: async (origin) => {
       const trust = await loadBorgServerTrust(origin);
