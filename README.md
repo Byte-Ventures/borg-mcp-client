@@ -33,6 +33,16 @@ drone. Borg has no hosted account or subscription.
   you need one more drone or want to reattach a saved worktree, not when you want
   the repository's complete initial roster.
 
+## Activity-Log Routing
+
+Every `borg_log` call requires an explicit `to` audience: use `"broadcast"` for
+the whole cube or a non-empty selector array for direct delivery. Omission,
+message prose, and taxonomy classes never choose recipients. Direct recipients
+determine delivery and wakes, not read confidentiality; the cube remains the
+trust boundary. Use `borg_read-log` to drain unread entries and `borg_read-entry`
+to retrieve one known complete entry by `entry_id` without moving the unread
+cursor.
+
 ## Documentation
 
 - [Core concepts](https://borgmcp.ai/docs/concepts/) defines cubes, drones,

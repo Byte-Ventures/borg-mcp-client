@@ -107,6 +107,36 @@ describe('formatLogEntryMarkdown', () => {
       '\n  Documents:\n  - doc_01jz7example (superseded, 2048 UTF-8 bytes): Architecture notes'
     );
   });
+
+  it('renders directed recipients with current labels and stable id fallbacks', () => {
+    const known = '11111111-1111-4111-8111-111111111111';
+    const removed = '22222222-2222-4222-8222-222222222222';
+    const rendered = formatLogEntryMarkdown({
+      id: 'entry-123',
+      drone_id: 'drone-1',
+      created_at: '2026-05-28T12:00:00.000Z',
+      message: 'Directed result',
+      visibility: 'direct',
+      recipient_drone_ids: [known, removed],
+    }, new Map([
+      [known, { id: known, label: 'reviewer-1' }],
+    ]), new Map());
+
+    expect(rendered).toContain('\n  Recipients: reviewer-1, `id:22222222`');
+  });
+
+  it('does not add a recipient line to broadcasts', () => {
+    const rendered = formatLogEntryMarkdown({
+      id: 'entry-123',
+      drone_id: 'drone-1',
+      created_at: '2026-05-28T12:00:00.000Z',
+      message: 'Broadcast result',
+      visibility: 'broadcast',
+      recipient_drone_ids: [],
+    }, new Map(), new Map());
+
+    expect(rendered).not.toContain('Recipients:');
+  });
 });
 
 describe('#921 de-template — universal layer is template-agnostic (STARTER contrast-render, PM leak-detector)', () => {
@@ -226,18 +256,19 @@ describe('getDronePlaybook', () => {
     expect(playbook).toContain('The human seat is excluded');
   });
 
-  it('documents the directed-default override discipline (gh#16 / gh#675)', () => {
+  it('requires an explicit audience for every post (gh#16 / gh#675)', () => {
     const playbook = getDronePlaybook();
-    // to:[author] rule — a waited-on recipient must be WOKEN, not left unaware
-    expect(playbook).toContain('to:[that drone]');
-    expect(playbook).toContain('UNAWARE of their own merge or feedback');
-    // gh#675 — multi-seat deliverables widen to broadcast/to:[seats]
+    // Structured to rule — a waited-on recipient must be WOKEN, not left unaware.
+    expect(playbook).toContain('Every `borg_log` call must choose its audience');
+    expect(playbook).toContain('to: "broadcast"');
+    expect(playbook).toContain('non-empty selector array');
+    // gh#675 — multi-seat deliverables widen through structured routing.
     expect(playbook).toContain('multi-seat DELIVERABLE');
-    expect(playbook).toContain('visibility:broadcast');
+    expect(playbook).toContain('Never rely on the signal prefix or class to choose recipients');
     // SR/CR-verified security model: directed routing is a WAKE mechanism, NOT confidentiality
     expect(playbook).toContain('NOT read-confidentiality');
     expect(playbook).toContain('the cube is the trust boundary');
-    expect(playbook).toContain('never post secrets relying on');
+    expect(playbook).toContain('never post secrets relying on direct routing');
   });
 
   it('always points every template to the stable worktree mechanism', () => {
@@ -270,7 +301,7 @@ describe('nullTaxonomyTip (gh#479)', () => {
 
   it('returns the verbatim UX-locked tip when taxonomy is null', () => {
     expect(nullTaxonomyTip(null)).toBe(
-      'Tip: no message taxonomy declared — set one to enable intent-based smart routing (#468). Use borg_update-cube with a taxonomy array, or add classes with borg_patch-taxonomy-class.'
+      'Tip: no message taxonomy declared — set one to classify signal prefixes and dispatch/completion lifecycle. Every borg_log call still requires an explicit to audience. Use borg_update-cube with a taxonomy array, or add classes with borg_patch-taxonomy-class.'
     );
   });
 
@@ -280,7 +311,7 @@ describe('nullTaxonomyTip (gh#479)', () => {
   });
 
   it('returns empty string once a taxonomy exists (self-removing)', () => {
-    expect(nullTaxonomyTip([{ class: 'status-claim', routing: 'directed' }])).toBe('');
+    expect(nullTaxonomyTip([{ class: 'status-claim' }])).toBe('');
   });
 });
 
@@ -304,12 +335,12 @@ describe('formatRegenMarkdown — taxonomy tip (gh#479)', () => {
   });
 
   it('omits the tip when a taxonomy is declared (self-removing)', () => {
-    const out = formatRegenMarkdown(baseResult([{ class: 'status-claim', routing: 'directed' }]));
+    const out = formatRegenMarkdown(baseResult([{ class: 'status-claim' }]));
     expect(out).not.toContain('no message taxonomy declared');
   });
 
   it('uses the fresh regen drone label for wake-path warning labels', () => {
-    const result = baseResult([{ class: 'status-claim', routing: 'directed' }]);
+    const result = baseResult([{ class: 'status-claim' }]);
     result.drone.label = 'fresh-server-label';
 
     const warning = formatWakePathPrefix({
@@ -325,7 +356,7 @@ describe('formatRegenMarkdown — taxonomy tip (gh#479)', () => {
   });
 
   it('shows agent_kind in the connected-drone roster when known', () => {
-    const result = baseResult([{ class: 'status-claim', routing: 'directed' }]);
+    const result = baseResult([{ class: 'status-claim' }]);
     result.drones = [
       {
         id: 'd1',
@@ -378,7 +409,7 @@ describe('formatRegenMarkdown — first-cube getting started', () => {
     const gettingStarted = out.slice(0, out.indexOf('# Cube:'));
 
     expect(gettingStarted).toContain('**You (this agent):**');
-    expect(gettingStarted).toContain('post `borg_log message="<task>"`');
+    expect(gettingStarted).toContain('post `borg_log message="<task>" to="broadcast"`');
     expect(gettingStarted).toContain('`borg_roster`');
     expect(gettingStarted).toContain('**Your user:** in a new terminal in the repository');
     expect(gettingStarted).toContain('`borg assimilate <role>`');
@@ -394,7 +425,7 @@ describe('formatRegenMarkdown — lite mode (gh#496-B)', () => {
       name: 'borg-mcp',
       cube_directive: 'directive body',
       directive_hash: 'directive-hash-1',
-      message_taxonomy: [{ class: 'status-claim', routing: 'directed' }],
+      message_taxonomy: [{ class: 'status-claim' }],
     },
     role: {
       name: 'Builder',
@@ -563,7 +594,7 @@ describe('formatRegenMarkdown — lite mode (gh#496-B)', () => {
 describe('formatRegenMarkdown — cube log out of regen (gh#886)', () => {
   const LOG_ENTRY_TEXT = 'DISPATCH: drone-b — do the thing';
   const result = (over: { behind_by?: number; recentLog?: any[] }) => ({
-    cube: { name: 'borg-mcp', cube_directive: 'do things', message_taxonomy: [{ class: 'status-claim', routing: 'directed' }] },
+    cube: { name: 'borg-mcp', cube_directive: 'do things', message_taxonomy: [{ class: 'status-claim' }] },
     role: { name: 'Builder', detailed_description: 'build' },
     drone: { label: 'two-of-ten-builder' },
     roles: [{ id: 'r1', name: 'Builder', short_description: 'builds', is_default: true }],
@@ -615,7 +646,7 @@ describe('formatRegenMarkdown — cube log out of regen (gh#886)', () => {
 describe('cube directive → borg_cube pointer (gh#912-followup directive-chapter)', () => {
   const DIRECTIVE_BODY = 'SECRET-DIRECTIVE-BODY: build the widget per these opaque user conventions.';
   const result = (over: { mode?: 'full' | 'lite' } = {}) => formatRegenMarkdown({
-    cube: { name: 'borg-mcp', cube_directive: DIRECTIVE_BODY, message_taxonomy: [{ class: 'status-claim', routing: 'directed' }] },
+    cube: { name: 'borg-mcp', cube_directive: DIRECTIVE_BODY, message_taxonomy: [{ class: 'status-claim' }] },
     role: { name: 'Builder', detailed_description: 'build' },
     drone: { label: 'two-of-ten-builder' },
     roles: [{ id: 'r1', name: 'Builder', short_description: 'builds', is_default: true }],
@@ -664,7 +695,8 @@ describe('DRONE_PLAYBOOK core/chapter split (gh#912)', () => {
     expect(core).toContain('ARRIVAL:');
     expect(core).toContain('borg_ack');
     expect(core).toContain('availability signal'); // gh#921: de-templated from the literal `READY:` to generic anti-passive phrasing
-    expect(core).toContain('to:[that drone]');
+    expect(core).toContain('to: "broadcast"');
+    expect(core).toContain('non-empty selector array');
     expect(core).toContain('multi-seat DELIVERABLE');
     expect(core).toContain('NOT read-confidentiality');
     // verification rule-spine stays inline (the RULE, not the depth)
@@ -734,7 +766,7 @@ describe('ARRIVAL instruction process state (gh#136)', () => {
     const initial = getDronePlaybook();
     expect(initial).toContain('ARRIVAL:');
     expect(initial).toContain(
-      `post one \`ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}\`.`
+      `borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"`
     );
     expect(initial).not.toContain('(run `hostname`)');
     expect(initial).not.toContain('<project-path>');

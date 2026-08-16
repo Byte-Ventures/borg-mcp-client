@@ -121,15 +121,15 @@ describe('renderSyncRolesResult — conflict surfacing', () => {
           key: 'taxonomy:class:status-claim',
           kind: 'conflict',
           label: 'status-claim',
-          cubeValue: '{"class":"status-claim","default_to":["coordinator","queen"]}',
-          templateValue: '{"class":"status-claim","default_to":["coordinator"]}',
+          cubeValue: '{"class":"status-claim","prefixes":["STARTING","PROGRESS"]}',
+          templateValue: '{"class":"status-claim","prefixes":["STARTING"]}',
         },
       ],
     });
     const out = renderSyncRolesResult(result, 'software-dev');
     expect(out).toContain('status-claim');
     expect(out).toContain('taxonomy:class:status-claim');
-    expect(out).toContain('queen'); // the evolved cube value is shown
+    expect(out).toContain('PROGRESS'); // the evolved cube value is shown
   });
 
   it('reports the no-clobber default explicitly when conflicts exist', () => {

@@ -107,6 +107,12 @@ describe('published package artifact', () => {
 
       expect(packedReadme.match(/^npm install -g borgmcp$/gm)).toHaveLength(1);
       expect(packedReadme).not.toMatch(/^npm install -g borgmcp@/gm);
+      expect(packedReadme).toContain('`borg_read-entry`');
+      expect(packedReadme).toContain('Every `borg_log` call requires an explicit `to` audience');
+      expect(packedReadme).toContain('`"broadcast"`');
+      expect(packedReadme).toContain('non-empty selector array');
+      expect(packedReadme).toContain('not read confidentiality');
+      expect(packedReadme).toContain('Omission,');
       const relativeLinks = [...packedReadme.matchAll(/\[[^\]]+\]\((?!https?:|#)([^)#]+)(?:#[^)]+)?\)/g)]
         .map((match) => match[1].replace(/^\.\//, ''));
       expect(relativeLinks.length).toBeGreaterThan(0);

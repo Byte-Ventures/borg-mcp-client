@@ -164,7 +164,10 @@ export function topLevelHelpText(version: string): string {
     `              They coordinate through a shared log (a "cube"). For Claude Code, Codex & OpenCode.\n\n` +
     `Docs & quickstart: https://github.com/Byte-Ventures/borg-mcp-client#readme\n\n` +
     `Install Claude Code, Codex, or OpenCode first. Type \`borg ...\` in your terminal;\n` +
-    `type \`borg_...\` inside your agent session once you've joined a cube ("assimilate").\n\n` +
+    `type \`borg_...\` inside your agent session once you've joined a cube ("assimilate").\n` +
+    `Inside a cube, every log message requires \`to: "broadcast"\` or a non-empty selector list.\n` +
+    `There is no omitted or taxonomy-selected audience.\n` +
+    `Direct routing controls delivery and wakes, not secrecy from other cube members.\n\n` +
     `Usage:\n` +
     `  borg                     Show the launch menu in a repository root; resume directly in a linked worktree\n` +
     `  borg setup               Set up borg MCP server + agent CLI integration\n` +

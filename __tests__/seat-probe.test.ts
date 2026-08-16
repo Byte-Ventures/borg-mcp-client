@@ -24,7 +24,7 @@ const DRONE_ID = '33333333-3333-4333-8333-333333333333';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 
 function envelope(payload: unknown, requestId = 'request-1') {
-  return { protocol_version: '11', request_id: requestId, payload };
+  return { protocol_version: '12', request_id: requestId, payload };
 }
 
 const ACTIVE_CUBE = {
@@ -60,7 +60,7 @@ function wireMocks(opts: {
 // A bounded shared-v2 typed error envelope. Only the exact SESSION_REJECTED code
 // (on a drone-session request) may trigger the destructive reset.
 function errorEnvelope(code: string, message = 'rejected') {
-  return JSON.stringify({ protocol_version: '11', error: { code, message } });
+  return JSON.stringify({ protocol_version: '12', error: { code, message } });
 }
 const sessionRejected401 = () => vi.fn(async () => new Response(
   errorEnvelope('SESSION_REJECTED', 'the seat is bound to another session'),
@@ -285,7 +285,7 @@ describe('authedFetch 401 typed-code + credential-class classification', () => {
     // > 64 KiB (the auth-error envelope cap). Wrap a real SESSION_REJECTED code in
     // megabytes of padding, delivered as a CHUNKED stream (no Content-Length).
     const huge = 'x'.repeat(200 * 1024);
-    const bodyText = JSON.stringify({ protocol_version: '11', pad: huge, error: { code: 'SESSION_REJECTED', message: 'rejected' } });
+    const bodyText = JSON.stringify({ protocol_version: '12', pad: huge, error: { code: 'SESSION_REJECTED', message: 'rejected' } });
     const chunkedStream = () => new ReadableStream<Uint8Array>({
       start(controller) {
         const bytes = new TextEncoder().encode(bodyText);

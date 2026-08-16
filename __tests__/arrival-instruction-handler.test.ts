@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   handlers: [] as Array<(request: any) => Promise<any>>,
   appendLog: vi.fn(),
+  getRoster: vi.fn(),
+  shouldSuppressLifecycleLog: vi.fn(),
   whoami: vi.fn(),
 }));
 
@@ -47,11 +49,12 @@ vi.mock('../src/cubes.js', async (importOriginal) => ({
 vi.mock('../src/remote-client.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/remote-client.js')>()),
   appendLog: state.appendLog,
+  getRoster: state.getRoster,
   whoami: state.whoami,
 }));
 vi.mock('../src/lifecycle-log-guard.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/lifecycle-log-guard.js')>()),
-  shouldSuppressLifecycleLog: vi.fn(async () => ({ suppress: false, signal: 'arrival' })),
+  shouldSuppressLifecycleLog: state.shouldSuppressLifecycleLog,
   recordLifecycleLog: vi.fn(async () => {}),
 }));
 
@@ -65,6 +68,11 @@ describe('borg_log ARRIVAL instruction ordering', () => {
   beforeEach(() => {
     delete process.env.BORG_OPENCODE;
     delete process.env.BORG_AGENT_KIND;
+    state.appendLog.mockReset();
+    state.getRoster.mockReset();
+    state.shouldSuppressLifecycleLog.mockReset();
+    state.shouldSuppressLifecycleLog.mockResolvedValue({ suppress: false, signal: 'arrival' });
+    state.whoami.mockReset();
   });
 
   afterEach(() => {
@@ -93,6 +101,7 @@ describe('borg_log ARRIVAL instruction ordering', () => {
         name: 'borg_log',
         arguments: {
           message: 'ARRIVAL: builder-test (Builder) online on test-host',
+          to: 'broadcast',
         },
       },
     });
@@ -128,7 +137,7 @@ describe('borg_log ARRIVAL instruction ordering', () => {
     const result = await callTool({
       params: {
         name: 'borg_log',
-        arguments: { message: 'ARRIVAL: online' },
+        arguments: { message: 'ARRIVAL: online', to: 'broadcast' },
       },
     });
 
@@ -154,11 +163,54 @@ describe('borg_log ARRIVAL instruction ordering', () => {
     const result = await callTool({
       params: {
         name: 'borg_log',
-        arguments: { message: 'ARRIVAL: online' },
+        arguments: { message: 'ARRIVAL: online', to: 'broadcast' },
       },
     });
     expect(result.content[0].text).toContain(
       'Logged to cube "test-cube (last confirmed)" as builder-test (last confirmed).',
     );
+  });
+
+  it('renders confirmed directed recipients with labels and stable fallbacks', async () => {
+    const known = '11111111-1111-4111-8111-111111111111';
+    const removed = '22222222-2222-4222-8222-222222222222';
+    state.handlers.length = 0;
+    state.appendLog.mockResolvedValueOnce({
+      entry: {
+        id: 'entry-test',
+        visibility: 'direct',
+        recipient_drone_ids: [known, removed],
+      },
+      routing: null,
+      unreachableRecipients: [],
+    });
+    state.getRoster.mockResolvedValueOnce({
+      drones: [{ id: known, label: 'reviewer-1' }],
+      roles: [],
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main();
+    const result = await state.handlers[1]({
+      params: { name: 'borg_log', arguments: { message: 'REVIEW-READY', to: [known, removed] } },
+    });
+
+    expect(result.content[0].text).toContain('Recipients: reviewer-1, `id:22222222`');
+  });
+
+  it('rejects a missing audience before lifecycle duplicate suppression', async () => {
+    state.handlers.length = 0;
+    state.shouldSuppressLifecycleLog.mockResolvedValueOnce({ suppress: true, signal: 'arrival' });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main();
+    const result = await state.handlers[1]({
+      params: { name: 'borg_log', arguments: { message: 'ARRIVAL: online' } },
+    });
+
+    expect(result).toMatchObject({ isError: true });
+    expect(result.content[0].text).toContain('to is required');
+    expect(state.shouldSuppressLifecycleLog).not.toHaveBeenCalled();
+    expect(state.appendLog).not.toHaveBeenCalled();
   });
 });

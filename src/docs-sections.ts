@@ -39,8 +39,8 @@ export const DOCS_SECTIONS: DocsSection[] = [
     slug: "concepts",
     title: "Core concepts",
     url: `${SITE_URL}/docs/concepts/`,
-    summary: "Cubes, drones, roles, the activity log + signals, claims, decisions.",
-    keywords: ["cube", "drone", "role", "log", "signal", "claim", "decision", "coordinate", "coordination"],
+    summary: "Cubes, drones, roles, activity-log signals, explicit audiences, claims, and decisions.",
+    keywords: ["cube", "drone", "role", "log", "signal", "claim", "decision", "coordinate", "coordination", "routing", "recipient", "audience", "selector", "direct", "broadcast"],
   },
   {
     slug: "install",
@@ -96,7 +96,7 @@ export const DOCS_SECTIONS: DocsSection[] = [
     title: "Tool reference",
     url: `${SITE_URL}/docs/tools/`,
     summary: "Every borg_* tool — name, description, params.",
-    keywords: ["tool", "tools", "api", "reference", "param", "borg_"],
+    keywords: ["tool", "tools", "api", "reference", "param", "borg_", "borg_read-entry", "entry_id", "exact entry"],
   },
   {
     slug: "faq",

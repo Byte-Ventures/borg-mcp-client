@@ -9,12 +9,13 @@
  * There is no hosted-authority path: every request must carry verified local
  * server trust or it fails closed before any network or credential use.
  */
-import { decodeAppendLogResult, type AckStatusResult, type AgentKind, type EvictDroneResult, type ReassignDroneResult, type PutDocumentResult, type GetDocumentResult, type ListDocumentsResult, type RemoveDocumentResult } from 'borgmcp-shared/protocol';
+import { decodeAppendLogResult, type AckStatusResult, type AgentKind, type EntryQueryResult, type EvictDroneResult, type ReassignDroneResult, type PutDocumentResult, type GetDocumentResult, type ListDocumentsResult, type RemoveDocumentResult } from 'borgmcp-shared/protocol';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import type { NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
 import { type ActiveCube } from './cubes.js';
 import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
+import { type LogAudience } from './direct-log.js';
 export interface RemoteConnection {
     apiUrl: string;
     authToken: string;
@@ -172,6 +173,12 @@ export declare function readLog(sessionToken: string, apiUrl: string, opts?: {
     behind_by?: number;
     has_more?: boolean;
 }>;
+/** Read one complete log entry without consulting or advancing the unread cursor. */
+export declare function readLogEntry(sessionToken: string, apiUrl: string, input: unknown, serverTrustIdentity?: string): Promise<{
+    entry: EntryQueryResult['entry'];
+    drones: any[];
+    roles: any[];
+}>;
 /**
  * Sprint 25 log substrate refactor: explicit ack on a log entry.
  *
@@ -253,11 +260,9 @@ export declare function removeDocument(sessionToken: string, apiUrl: string, inp
 /**
  * Append a message to the cube's shared activity log.
  */
-export declare function appendLog(sessionToken: string, apiUrl: string, message: string, opts?: {
-    visibility?: 'broadcast' | 'direct';
-    recipientDroneIds?: string[];
+export declare function appendLog(sessionToken: string, apiUrl: string, message: string, opts: {
+    to: LogAudience;
     class?: string;
-    to?: string[];
     documents?: string[];
     serverTrustIdentity?: string;
 }): Promise<ReturnType<typeof decodeAppendLogResult>>;

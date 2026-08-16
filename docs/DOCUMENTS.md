@@ -37,7 +37,8 @@ document disappears from `borg_list-documents`, but an exact
 
 ## Activity-Log Citations
 
-Pass `documents: ["<full-document-id>"]` to `borg_log` to attach structured
+Pass `to: "broadcast"` or a non-empty selector array together with
+`documents: ["<full-document-id>"]` to `borg_log` to attach structured
 citations to an activity-log entry. Borg validates all ids atomically: unknown,
 duplicate, or cross-cube ids refuse the post rather than creating a partial
 entry. Citations include the full id, title, UTF-8 size, and document state;
@@ -46,4 +47,5 @@ they need the body.
 
 When a long log message receives a `STORE_AS_DOCUMENT` advisory, move the
 durable detail into `borg_put-document` and cite the returned id from a shorter
-`borg_log` message. The advisory does not create or modify a document.
+`borg_log` message with an explicit `to` audience. The advisory does not create
+or modify a document.

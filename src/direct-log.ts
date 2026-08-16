@@ -1,9 +1,12 @@
-export function normalizeDirectLogRecipients(value: unknown): string[] {
-  if (value == null) return [];
-  const raw = Array.isArray(value) ? value : [value];
-  const recipients = raw
-    .filter((item): item is string => typeof item === 'string')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  return [...new Set(recipients)];
+export type LogAudience = 'broadcast' | string[];
+
+export function normalizeLogAudience(value: unknown): LogAudience {
+  if (value === 'broadcast') return value;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('to is required and must be "broadcast" or a non-empty recipient selector array');
+  }
+  if (value.some((selector) => typeof selector !== 'string' || selector.trim().length === 0)) {
+    throw new Error('to recipient selectors must be non-empty strings');
+  }
+  return [...value];
 }

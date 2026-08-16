@@ -55,7 +55,7 @@ describe('local owner enrollment to restart flow', () => {
       delete: async (account: string) => { keychain.delete(account); },
     };
     const response = (payload: unknown, status = 200) => new Response(JSON.stringify({
-      protocol_version: '11',
+      protocol_version: '12',
       request_id: 'restart-response-1',
       payload,
     }), { status });
@@ -71,7 +71,7 @@ describe('local owner enrollment to restart flow', () => {
       }
       if (path === '/api/protocol') {
         // Credential-free tag-only preflight: bare exact tag, not enveloped.
-        return new Response(JSON.stringify({ protocol_version: '11' }), { status: 200 });
+        return new Response(JSON.stringify({ protocol_version: '12' }), { status: 200 });
       }
       if (path === '/api/cubes' && method === 'POST') {
         return response({
@@ -215,7 +215,7 @@ describe('local owner enrollment to restart flow', () => {
         drone: { id: droneId },
         behind_by: 0,
       });
-      await expect(remote.appendLog(bearer!, origin, 'post-restart log')).resolves
+      await expect(remote.appendLog(bearer!, origin, 'post-restart log', { to: 'broadcast' })).resolves
         .toMatchObject({ entry: { id: logId, message: 'post-restart log' } });
 
       vi.doMock('../src/local-server-cursor.js', () => ({

@@ -11,7 +11,7 @@
  */
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeAckStatusRequest, decodeAckStatusResult, decodeAppendLogRequest, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeReadLogResult, decodePutDocumentRequest, decodePutDocumentResult, decodeGetDocumentRequest, decodeGetDocumentResult, decodeListDocumentsRequest, decodeListDocumentsResult, decodeRemoveDocumentRequest, decodeRemoveDocumentResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
+import { createProtocolEnvelope, decodeAckStatusRequest, decodeAckStatusResult, decodeAppendLogRequest, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEntryQueryRequest, decodeEntryQueryResult, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeReadLogResult, decodePutDocumentRequest, decodePutDocumentResult, decodeGetDocumentRequest, decodeGetDocumentResult, decodeListDocumentsRequest, decodeListDocumentsResult, decodeRemoveDocumentRequest, decodeRemoveDocumentResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, } from './drone-lifecycle.js';
@@ -25,7 +25,7 @@ import { getActiveCube } from './cubes.js';
 import { markSeatRejected } from './seats.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { resolveLocalLogRecipients } from './local-log-routing.js';
+import { normalizeLogAudience } from './direct-log.js';
 import { RoleSectionConflictError } from './local-manage-tool-result.js';
 // gh#330: honor the server's Retry-After on 429 instead of failing the
 // (often required) coordination signal outright. Bounded so a CLI call
@@ -784,6 +784,21 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
         has_more: page.has_more,
     };
 }
+/** Read one complete log entry without consulting or advancing the unread cursor. */
+export async function readLogEntry(sessionToken, apiUrl, input, serverTrustIdentity) {
+    const request = decodeEntryQueryRequest(input);
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs/${encodeURIComponent(request.entry_id)}`, 'GET', undefined, { decodePayload: decodeEntryQueryResult });
+    if (!result)
+        throw new Error('Local Borg server returned an empty log-entry response');
+    if (request.entry_id.length === 36
+        ? result.entry.id !== request.entry_id
+        : !result.entry.id.startsWith(request.entry_id)) {
+        throw new ProtocolContractError('Log-entry response id does not match the requested selector.');
+    }
+    const composed = await localCubeComposition(local);
+    return { entry: result.entry, drones: composed.drones, roles: composed.roles };
+}
 /**
  * Sprint 25 log substrate refactor: explicit ack on a log entry.
  *
@@ -961,42 +976,14 @@ export async function removeDocument(sessionToken, apiUrl, input, serverTrustIde
 /**
  * Append a message to the cube's shared activity log.
  */
-export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
-    if (opts.visibility === 'broadcast' && (opts.to?.length ?? 0) > 0) {
-        throw new Error("Invalid input: visibility:'broadcast' cannot be combined with non-empty to:. " +
-            'Remove visibility to direct to recipients, or remove to: to broadcast.');
-    }
-    if (opts.to?.length === 0) {
-        throw new Error('Direct log recipient list must contain at least one recipient');
-    }
+export async function appendLog(sessionToken, apiUrl, message, opts) {
+    const to = normalizeLogAudience(opts?.to);
     const postId = randomUUID();
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
-    let visibility = opts.visibility;
-    let recipientDroneIds = opts.recipientDroneIds;
-    if (visibility !== 'broadcast' &&
-        (!recipientDroneIds || recipientDroneIds.length === 0) &&
-        opts.to !== undefined) {
-        const base = `/api/cubes/${local.cubeId}`;
-        const [rolePayload, dronePayload] = await Promise.all([
-            localServerRequest(local, `${base}/roles`, 'GET'),
-            localServerRequest(local, `${base}/drones`, 'GET'),
-        ]);
-        if (!rolePayload || !dronePayload) {
-            throw new Error('Local Borg server returned an incomplete cube roster');
-        }
-        recipientDroneIds = resolveLocalLogRecipients(opts.to, dronePayload.drones, rolePayload.roles);
-        visibility = 'direct';
-    }
-    else if (visibility === undefined && recipientDroneIds !== undefined) {
-        visibility = 'direct';
-    }
     const request = decodeAppendLogRequest({
         post_id: postId,
         message,
-        ...(visibility ? { visibility } : {}),
-        ...(visibility === 'direct' && recipientDroneIds
-            ? { recipientDroneIds }
-            : {}),
+        to,
         ...(opts.class ? { class: opts.class } : {}),
         ...(opts.documents ? { documents: opts.documents } : {}),
     });

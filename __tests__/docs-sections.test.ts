@@ -68,6 +68,8 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(matchDocsSections('what is a cube').map((s) => s.slug)).toContain('concepts');
     expect(matchDocsSections('codex').map((s) => s.slug)).toContain('faq');
     expect(matchDocsSections('document citation revision')[0]?.slug).toBe('documents');
+    expect(matchDocsSections('explicit audience recipient selector broadcast').map((s) => s.slug)).toContain('concepts');
+    expect(matchDocsSections('borg_read-entry entry_id')[0]?.slug).toBe('tools');
     expect(matchDocsSections('zzzznotarealtopic')).toEqual([]);
     expect(matchDocsSections('')).toEqual([]);
   });

@@ -20,6 +20,7 @@ export const UNIVERSAL_TOOLS = [
   'borg_regen',
   'borg_log',
   'borg_read-log',
+  'borg_read-entry',
   'borg_roster',
   'borg_stream-status',
   'borg_whoami',

@@ -1,13 +1,15 @@
 export const LOG_AUDIT_NUDGE = (count) => `Heads up: ${count}+ state-changing tool calls since the last \`borg_log\` post. ` +
     'If that work was a substantive unit (a change that ships, a blocker hit, a finding ' +
-    "worth sharing), post to the cube log per your role's conventions before continuing.";
+    "worth sharing), post to the cube log per your role's conventions before continuing. " +
+    'Choose `to: "broadcast"` or a non-empty selector array; never omit `to`.';
 /**
  * Pure transcript scan shared by the Claude hook and the OpenCode plugin.
  * Accepts both Claude JSONL entries and OpenCode SDK message records.
  */
 export function evaluateLogAudit(entries, renderNudge = (count) => `Heads up: ${count}+ state-changing tool calls since the last \`borg_log\` post. ` +
     'If that work was a substantive unit (a change that ships, a blocker hit, a finding ' +
-    "worth sharing), post to the cube log per your role's conventions before continuing.") {
+    "worth sharing), post to the cube log per your role's conventions before continuing. " +
+    'Choose `to: "broadcast"` or a non-empty selector array; never omit `to`.') {
     const materialTools = new Set([
         'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash',
         'edit', 'write', 'bash', 'apply_patch', 'exec_command',

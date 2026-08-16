@@ -21,7 +21,6 @@ import {
   resolveMessageTaxonomyForCreate,
   type Template,
 } from 'borgmcp-shared/templates';
-import { roleSlug } from '../src/role-resolver';
 
 describe('Template.cube_directive field', () => {
   it('all shipped templates reserve rerouting and reassignment for explicit operator approval', () => {
@@ -278,29 +277,16 @@ describe('Template.cube_directive field', () => {
     expect(byName.get('Worker')?.can_broadcast).not.toBe(true);
   });
 
-  it('software-dev ships a default message taxonomy with directed status defaults', () => {
+  it('software-dev ships a classification/lifecycle taxonomy without routing defaults', () => {
     const t = getTemplate('software-dev')!;
     const byClass = new Map(t.message_taxonomy?.map((entry) => [entry.class, entry]));
-    expect(byClass.get('status-claim')).toMatchObject({
-      routing: 'directed',
-      default_to: ['coordinator', 'queen'],
-    });
     expect(byClass.get('status-claim')?.prefixes).toContain('STARTING');
-    // REVIEW-READY wakes only the coordinating seat, which routes the first gate.
-    expect(byClass.get('review-request')).toMatchObject({ routing: 'directed' });
     expect(byClass.get('review-request')?.prefixes).toContain('REVIEW-READY');
-    expect(byClass.get('review-request')?.default_to).toEqual(['coordinator', 'queen']);
-    // DECISION / HALT / MERGED stay genuinely cube-wide.
-    expect(byClass.get('cube-wide')).toMatchObject({ routing: 'broadcast' });
     expect(byClass.get('cube-wide')?.prefixes).toEqual(['DECISION', 'HALT', 'MERGED']);
     expect(byClass.has('merge-status')).toBe(false);
     for (const className of ['peer-question', 'peer-answer', 'peer-heads-up']) {
-      expect(byClass.get(className)).toMatchObject({
-        routing: 'directed',
-        default_to: ['coordinator', 'queen'],
-      });
+      expect(byClass.get(className), className).toBeDefined();
     }
-    // The legacy broadcast 'gate-signal' / 'coordination' classes are gone.
     expect(byClass.has('gate-signal')).toBe(false);
     expect(byClass.has('coordination')).toBe(false);
   });
@@ -335,43 +321,20 @@ describe('Template.cube_directive field', () => {
     }
   });
 
-  it('every template taxonomy recipient resolves to an emitted role or platform seat', () => {
+  it('every built-in taxonomy is classification-only', () => {
     for (const template of Object.values(TEMPLATES)) {
-      const emittedRecipients = new Set([
-        'coordinator',
-        'queen',
-        ...template.roles.map((role) => roleSlug(role.name)),
-      ]);
       for (const messageClass of template.message_taxonomy ?? []) {
-        for (const recipient of messageClass.default_to ?? []) {
-          expect(
-            emittedRecipients.has(roleSlug(recipient)),
-            `${template.name}.${messageClass.class} recipient ${recipient}`
-          ).toBe(true);
-        }
-      }
-    }
-    for (const template of Object.values(TEMPLATES)) {
-      const coordinatingRecipient = template.name === 'local-model' ? 'director' : 'coordinator';
-      for (const className of ['peer-question', 'peer-answer', 'peer-heads-up']) {
-        const peerClass = template.message_taxonomy?.find((entry) => entry.class === className);
-        expect(
-          peerClass,
-          `${template.name}.${className}`,
-        ).toMatchObject({
-          routing: 'directed',
-          default_to: [coordinatingRecipient, 'queen'],
-        });
+        expect(messageClass, `${template.name}.${messageClass.class}`).not.toHaveProperty('routing');
+        expect(messageClass, `${template.name}.${messageClass.class}`).not.toHaveProperty('default_to');
       }
     }
   });
 
-  it('keeps BLOCKED routed but not lifecycle-completing', () => {
+  it('keeps BLOCKED classified but not lifecycle-completing', () => {
     for (const name of ['software-dev', 'starter'] as const) {
       const taxonomy = getTemplate(name)!.message_taxonomy ?? [];
       const blockedClass = taxonomy.find((entry) => entry.prefixes?.includes('BLOCKED'));
-      // BLOCKED is directed to the Coordinator; it is not a completion.
-      expect(blockedClass, `${name} routes BLOCKED`).toMatchObject({ routing: 'directed' });
+      expect(blockedClass, `${name} classifies BLOCKED`).toBeDefined();
       expect(blockedClass?.lifecycle, `${name} BLOCKED leaves dispatch open`).toBeUndefined();
       expect(
         taxonomy.filter((entry) => entry.lifecycle === 'completion').flatMap((entry) => entry.prefixes ?? []),
@@ -383,36 +346,10 @@ describe('Template.cube_directive field', () => {
   it('starter ships a generic default message taxonomy', () => {
     const t = getTemplate('starter')!;
     const status = t.message_taxonomy?.find((entry) => entry.class === 'status-claim');
-    expect(status).toMatchObject({ routing: 'directed', default_to: ['coordinator', 'queen'] });
     expect(status?.prefixes).toContain('STARTING');
   });
 
-  it('limits broadcasts to each template\'s declared cube-wide events', () => {
-    for (const name of ['software-dev', 'starter'] as const) {
-      const taxonomy = getTemplate(name)!.message_taxonomy ?? [];
-      const broadcastClasses = new Set(
-        ['cube-wide'],
-      );
-      expect(
-        taxonomy.some((entry) => entry.class === 'cube-wide'),
-        `${name} has a cube-wide class`,
-      ).toBe(true);
-      for (const entry of taxonomy) {
-        if (broadcastClasses.has(entry.class)) {
-          expect(entry.routing, `${name} ${entry.class} stays broadcast`).toBe('broadcast');
-        } else {
-          // A class silently regressing to broadcast would reopen broad fan-out.
-          expect(entry.routing, `${name} ${entry.class} stays directed`).toBe('directed');
-          expect(
-            entry.default_to?.length,
-            `${name} ${entry.class} keeps a non-empty default_to`,
-          ).toBeGreaterThan(0);
-        }
-      }
-    }
-  });
-
-  it('Builder and Worker role text describes class-based smart defaults', () => {
+  it('Builder and Worker role text preserves bounded dispatched work', () => {
     const builder = getTemplate('software-dev')!.roles.find((role) => role.name === 'Builder');
     const worker = getTemplate('starter')!.roles.find((role) => role.name === 'Worker');
     expect(builder?.detailed_description).toContain('explicitly assigned');
@@ -538,8 +475,6 @@ describe('resolveMessageTaxonomyForCreate', () => {
     {
       class: 'status-claim',
       prefixes: ['STARTING'],
-      routing: 'directed' as const,
-      default_to: ['coordinator'],
     },
   ];
   const templateWithTaxonomy: Template = {
@@ -550,7 +485,7 @@ describe('resolveMessageTaxonomyForCreate', () => {
   };
 
   it('uses operator-supplied taxonomy when present', () => {
-    const operatorTaxonomy = [{ class: 'custom', routing: 'broadcast' as const }];
+    const operatorTaxonomy = [{ class: 'custom', prefixes: ['CUSTOM'] }];
     expect(resolveMessageTaxonomyForCreate(operatorTaxonomy, templateWithTaxonomy)).toBe(
       operatorTaxonomy
     );

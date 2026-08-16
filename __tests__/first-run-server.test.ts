@@ -281,16 +281,16 @@ describe('offerFirstRunServerInstall', () => {
     );
   });
 
-  it('selects current server 0.22.0 for the shared v11 pairing', async () => {
+  it('selects current server 1.0.0 for the shared v12 pairing', async () => {
     const releases: Record<string, PublishedPackage> = {
+      '1.0.0': { ...SERVER, version: '1.0.0', sharedVersion: '1.0.0' },
       '0.22.0': { ...SERVER, version: '0.22.0', sharedVersion: '0.14.0' },
-      '0.21.1': { ...SERVER, version: '0.21.1', sharedVersion: '0.13.1' },
     };
     let installed: InstalledPackage | null = null;
     const d = deps({
       currentServer: vi.fn(async () => installed),
-      clientSharedVersion: vi.fn(() => '0.14.0'),
-      publishedVersions: vi.fn(async () => ['0.21.1', '0.22.0']),
+      clientSharedVersion: vi.fn(() => '1.0.0'),
+      publishedVersions: vi.fn(async () => ['0.22.0', '1.0.0']),
       publishedPackage: vi.fn(async (_name, version) => releases[version]),
       installGlobal: vi.fn(async (_name, version) => {
         const target = releases[version];
@@ -304,13 +304,13 @@ describe('offerFirstRunServerInstall', () => {
 
     await expect(offerFirstRunServerInstall(d.value)).resolves.toEqual({
       kind: 'installed',
-      server: { ...INSTALLED, version: '0.22.0', sharedVersion: '0.14.0' },
+      server: { ...INSTALLED, version: '1.0.0', sharedVersion: '1.0.0' },
     });
     expect(d.value.publishedPackage).toHaveBeenCalledTimes(1);
-    expect(d.value.publishedPackage).toHaveBeenCalledWith('borgmcp-server', '0.22.0');
+    expect(d.value.publishedPackage).toHaveBeenCalledWith('borgmcp-server', '1.0.0');
     expect(d.value.installGlobal).toHaveBeenCalledWith(
       'borgmcp-server',
-      '0.22.0',
+      '1.0.0',
       { ignoreScripts: true },
     );
   });

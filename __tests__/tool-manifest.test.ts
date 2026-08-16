@@ -34,6 +34,7 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
       'borg_assimilate',
       'borg_log',
       'borg_read-log',
+      'borg_read-entry',
       'borg_ack',
       'borg_ack-status',
       'borg_decide',
@@ -63,6 +64,44 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(tool?.description).toContain('preserves unread cursors');
     expect(clientEntrySource).toContain("case 'borg_ack-status':");
     expect(clientEntrySource).toContain('getAckStatus(');
+  });
+
+  it('exposes exact cursorless entry reads and structured routing guidance', () => {
+    const readEntry = TOOL_MANIFEST.find((entry) => entry.name === 'borg_read-entry');
+    expect(readEntry?.inputSchema.required).toEqual(['entry_id']);
+    expect(readEntry?.inputSchema.properties.entry_id).toMatchObject({
+      type: 'string',
+      pattern: expect.stringContaining('[0-9A-Fa-f]{8}'),
+    });
+    expect(readEntry?.description).toContain('without changing the unread cursor');
+    expect(readEntry?.description).toContain('unique 8-hex prefix');
+    expect(clientEntrySource).toContain("case 'borg_read-entry':");
+    expect(clientEntrySource).toContain('readLogEntry(');
+
+    const log = TOOL_MANIFEST.find((entry) => entry.name === 'borg_log');
+    expect(log?.inputSchema.required).toEqual(['message', 'to']);
+    expect(log?.inputSchema.properties.to.oneOf).toEqual([
+      { type: 'string', enum: ['broadcast'] },
+      {
+        type: 'array',
+        items: { type: 'string', minLength: 1, maxLength: 120 },
+        minItems: 1,
+        maxItems: 100,
+        uniqueItems: true,
+      },
+    ]);
+    expect(log?.description).toContain('Every call must pass `to: "broadcast"`');
+    expect(log?.description).toContain('not read confidentiality');
+    expect(log?.description).toContain('taxonomy classes never choose the audience');
+    expect(log?.inputSchema.properties).not.toHaveProperty('visibility');
+    expect(log?.inputSchema.properties).not.toHaveProperty('recipientDroneIds');
+    expect(log?.inputSchema.properties.class.description).toContain('never changes the required `to` audience');
+
+    for (const name of ['borg_update-cube', 'borg_patch-taxonomy-class']) {
+      const schema = TOOL_MANIFEST.find((entry) => entry.name === name)?.inputSchema;
+      expect(JSON.stringify(schema)).not.toMatch(/default_to|"routing"/);
+      expect(JSON.stringify(schema)).toContain('lifecycle');
+    }
   });
 
   it('exposes strict document schemas and structured log citations', () => {
