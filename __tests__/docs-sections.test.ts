@@ -46,7 +46,7 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(enrollmentGuide).toContain('borg assimilate --host <server> --enroll');
     expect(enrollmentGuide).toContain('grant that enrolled client');
 
-    for (const section of DOCS_SECTIONS.filter(({ slug }) => !['enroll', 'seat-lifecycle'].includes(slug))) {
+    for (const section of DOCS_SECTIONS.filter(({ slug }) => !['enroll', 'seat-lifecycle', 'documents'].includes(slug))) {
       expect(new URL(section.url).hostname).toBe('borgmcp.ai');
     }
   });
@@ -67,6 +67,7 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(matchDocsSections('billing cancel subscription')).toEqual([]);
     expect(matchDocsSections('what is a cube').map((s) => s.slug)).toContain('concepts');
     expect(matchDocsSections('codex').map((s) => s.slug)).toContain('faq');
+    expect(matchDocsSections('document citation revision')[0]?.slug).toBe('documents');
     expect(matchDocsSections('zzzznotarealtopic')).toEqual([]);
     expect(matchDocsSections('')).toEqual([]);
   });

@@ -56,10 +56,11 @@ export interface ServerAttachResult {
     } | null;
 }
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v9.
+ * Attach an enrolled client principal to one granted cube/role over protocol v10.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
- * OS keychain (keyed by the stable per-seat identity) BEFORE this request, so an
- * interrupted/lost response is recovered by re-sending the exact same bearer —
+ * local 0600 credential store (keyed by the stable per-seat identity) BEFORE
+ * this request, so an interrupted/lost response is recovered by re-sending the
+ * exact same bearer —
  * the server binds only its digest. A verified `created`/`reused` response
  * activates that pending record in place; the server never returns a bearer.
  */

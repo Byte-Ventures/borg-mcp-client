@@ -28,7 +28,12 @@ import { Buffer } from 'node:buffer';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { compareBroadcastHwm, type BroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
-import { decodeProtocolErrorEnvelope, ErrorCode } from 'borgmcp-shared/protocol';
+import {
+  decodeDocumentCitations,
+  decodeProtocolErrorEnvelope,
+  ErrorCode,
+  type DocumentCitation,
+} from 'borgmcp-shared/protocol';
 import { getActiveCube, inboxPathForDrone } from './cubes.js';
 import { assertUuidShape } from './evict-drone.js';
 import { loadBorgServerTrust } from './server-trust.js';
@@ -59,6 +64,7 @@ import { formatCubeActivityWakeMessage } from './cube-activity-wake-copy.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { BorgServerError } from './server-errors.js';
 import { markSeatRejected } from './seats.js';
+import { formatDocumentCitations } from './document-render.js';
 import { hasPendingWakeEntry as hasPendingDurableWakeEntry } from './remote-client.js';
 import {
   acquireStreamLease,
@@ -1426,7 +1432,14 @@ function parseEventBlock(block: string): ParsedEvent | null {
     const validCursor = cursor &&
       typeof cursor.id === 'string' &&
       typeof cursor.created_at === 'string';
-    const entry = parsed?.entry ?? parsed;
+    let entry = parsed?.entry ?? parsed;
+    if (entry?.documents !== undefined) {
+      try {
+        entry = { ...entry, documents: decodeDocumentCitations(entry.documents) };
+      } catch {
+        return { type: 'unknown', raw: block };
+      }
+    }
     return {
       type: 'log',
       id,
@@ -1493,6 +1506,7 @@ export interface EnrichedEntry {
   drone_label?: string | null;
   role_name?: string | null;
   message?: string;
+  documents?: DocumentCitation[];
 }
 
 function parseHeartbeatHwm(value: unknown): BroadcastHwm | null {
@@ -1566,7 +1580,11 @@ export function formatInboxLine(entry: EnrichedEntry): string {
   const idPrefix = entryId ? `[entry_id: ${entryId}] ` : '';
   // Normalize \r\n, \r, and \n all to ` ⏎ ` so the entry fits on one
   // physical line regardless of line-ending convention in the source.
-  const message = rawMessage.replace(/\r\n|\r|\n/g, ' ⏎ ');
+  const citations = formatDocumentCitations(entry.documents);
+  const withDocuments = citations.length > 0
+    ? `${rawMessage}\nDocuments: ${citations.join('; ')}`
+    : rawMessage;
+  const message = withDocuments.replace(/\r\n|\r|\n/g, ' ⏎ ');
   return `${ts} ${label} (${role}): ${idPrefix}${message}`;
 }
 

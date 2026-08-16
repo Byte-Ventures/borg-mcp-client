@@ -9,7 +9,7 @@
  * There is no hosted-authority path: every request must carry verified local
  * server trust or it fails closed before any network or credential use.
  */
-import { decodeAppendLogResult, type AgentKind, type EvictDroneResult, type ReassignDroneResult } from 'borgmcp-shared/protocol';
+import { decodeAppendLogResult, type AgentKind, type EvictDroneResult, type ReassignDroneResult, type PutDocumentResult, type GetDocumentResult, type ListDocumentsResult, type RemoveDocumentResult } from 'borgmcp-shared/protocol';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import type { NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
@@ -244,6 +244,10 @@ export declare function roleRationale(sessionToken: string, apiUrl: string, role
     section: string;
     body: string;
 }>;
+export declare function putDocument(sessionToken: string, apiUrl: string, input: unknown, serverTrustIdentity?: string): Promise<PutDocumentResult>;
+export declare function getDocument(sessionToken: string, apiUrl: string, input: unknown, serverTrustIdentity?: string): Promise<GetDocumentResult>;
+export declare function listDocuments(sessionToken: string, apiUrl: string, input: unknown, serverTrustIdentity?: string): Promise<ListDocumentsResult>;
+export declare function removeDocument(sessionToken: string, apiUrl: string, input: unknown, serverTrustIdentity?: string): Promise<RemoveDocumentResult>;
 /**
  * Append a message to the cube's shared activity log.
  */
@@ -252,6 +256,7 @@ export declare function appendLog(sessionToken: string, apiUrl: string, message:
     recipientDroneIds?: string[];
     class?: string;
     to?: string[];
+    documents?: string[];
     serverTrustIdentity?: string;
 }): Promise<ReturnType<typeof decodeAppendLogResult>>;
 /**

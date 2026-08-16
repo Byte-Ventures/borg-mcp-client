@@ -10,6 +10,7 @@ import { ROLE_SCOPED_SAFETY_DISCIPLINES, UNIVERSAL_SAFETY_DISCIPLINES, } from 'b
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { formatDroneAddressToken } from 'borgmcp-shared/drone-address';
 import { RUNTIME_METADATA_ADVISORY, renderRuntimeMetadataLines, } from './roster-render.js';
+import { formatDocumentCitations } from './document-render.js';
 import { shellEscape } from './shell-escape.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
 import { isBorgSession } from './launch-gate.js';
@@ -576,6 +577,10 @@ export function formatLogEntryMarkdown(entry, droneById, roleById) {
     const addr = typeof entry.drone_id === 'string' && entry.drone_id.length > 0
         ? ` ${formatDroneAddressToken(entry.drone_id)}`
         : '';
-    return `**[${ts}]**${entryId}${addr} ${d?.label ?? '?'} (${r?.name ?? '?'}): ${entry.message}`;
+    const citations = formatDocumentCitations(entry.documents);
+    const documents = citations.length > 0
+        ? `\n  Documents:\n${citations.map((citation) => `  - ${citation}`).join('\n')}`
+        : '';
+    return `**[${ts}]**${entryId}${addr} ${d?.label ?? '?'} (${r?.name ?? '?'}): ${entry.message}${documents}`;
 }
 //# sourceMappingURL=regen-format.js.map

@@ -228,6 +228,22 @@ describe('formatInboxLine — newline join', () => {
       '2026-05-26T12:00:00.000Z drone-1 (Coordinator): paragraph one ⏎  ⏎ paragraph two'
     );
   });
+
+  it('appends structured document citations on the same physical wake line', () => {
+    const line = formatInboxLine({
+      ...baseEntry,
+      message: 'See the durable design.',
+      documents: [{
+        id: 'doc_01jz7example',
+        title: 'Architecture notes',
+        size_bytes: 2048,
+        state: 'active',
+      }],
+    });
+    expect(line).toBe(
+      '2026-05-26T12:00:00.000Z drone-1 (Coordinator): See the durable design. ⏎ Documents: doc_01jz7example (active, 2048 UTF-8 bytes): Architecture notes'
+    );
+  });
 });
 
 // ---------------- parseSSE ----------------
@@ -286,6 +302,15 @@ describe('parseSSE', () => {
     }]);
   });
 
+  it('rejects malformed structured document citations as an unknown frame', async () => {
+    const blocks = [
+      'event: log\nid: e1\ndata: {"id":"e1","message":"hi","documents":[{"id":"doc_01jz7example","title":"Notes","size_bytes":1,"state":"invalid"}]}\n\n',
+    ];
+    const events: any[] = [];
+    for await (const event of parseSSE(makeSSEResponse(blocks).body!)) events.push(event);
+    expect(events).toEqual([{ type: 'unknown', raw: blocks[0].trim() }]);
+  });
+
   // gh#877 Path-A: terminal eviction control frame.
   it('parses an eviction event into a typed eviction ParsedEvent', async () => {
     const blocks = [
@@ -301,7 +326,7 @@ describe('parseSSE', () => {
 
   it('parses a protocol error event into a typed terminal error ParsedEvent', async () => {
     const blocks = [
-      'event: error\ndata: {"protocol_version":"9","error":{"code":"CUBE_DELETED","message":"Cube deleted."}}\n\n',
+      'event: error\ndata: {"protocol_version":"10","error":{"code":"CUBE_DELETED","message":"Cube deleted."}}\n\n',
     ];
     const events: any[] = [];
     for await (const event of parseSSE(makeSSEResponse(blocks).body!)) events.push(event);
@@ -325,7 +350,7 @@ describe('parseSSE', () => {
 describe('streamOnce', () => {
   it('treats a CUBE_DELETED error frame as terminal without waiting for reconnect', async () => {
     const deleted = vi.fn(async () => makeSSEResponse([
-      'event: error\ndata: {"protocol_version":"9","error":{"code":"CUBE_DELETED","message":"Cube deleted."}}\n\n',
+      'event: error\ndata: {"protocol_version":"10","error":{"code":"CUBE_DELETED","message":"Cube deleted."}}\n\n',
     ]));
 
     await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(deleted as typeof fetch)))
@@ -357,14 +382,14 @@ describe('streamOnce', () => {
 
   it('treats obsolete AUTH_EXPIRED as a terminal credential rejection', async () => {
     const expired = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '9',
+      protocol_version: '10',
       error: { code: 'AUTH_EXPIRED', message: 'Authentication failed.' },
     }), { status: 401 }));
     await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(expired as typeof fetch)))
       .rejects.toMatchObject({ code: 'CREDENTIAL_REJECTED' });
 
     const stale = vi.fn(async () => new Response(JSON.stringify({
-      protocol_version: '9',
+      protocol_version: '10',
       error: { code: 'SESSION_REJECTED', message: 'Authentication failed.' },
     }), { status: 401 }));
     await expect(streamOnce(ACTIVE_CUBE, null, vi.fn(), makeDeps(stale as typeof fetch)))

@@ -42,6 +42,8 @@ drone. Borg has no hosted account or subscription.
   `borg <command> --help` are the exact reference for its version.
 - [MCP tool reference](https://borgmcp.ai/docs/tools/) lists the `borg_...`
   tools available inside agent sessions.
+- [Cube documents](docs/DOCUMENTS.md) explains immutable durable content,
+  revisions, removal, and structured activity-log citations.
 - [Server operations](https://borgmcp.ai/docs/run-server/) covers loopback and
   private-LAN operation.
 - [Security](https://borgmcp.ai/docs/security/) explains invitations, client

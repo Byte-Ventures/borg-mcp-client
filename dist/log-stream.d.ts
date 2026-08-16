@@ -24,7 +24,7 @@
  * connection, no second auth — just an in-process state snapshot).
  */
 import { type BroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
-import { ErrorCode } from 'borgmcp-shared/protocol';
+import { ErrorCode, type DocumentCitation } from 'borgmcp-shared/protocol';
 import { getActiveCube } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
@@ -219,6 +219,7 @@ export interface EnrichedEntry {
     drone_label?: string | null;
     role_name?: string | null;
     message?: string;
+    documents?: DocumentCitation[];
 }
 /**
  * Format one inbox-file line. Preserves the long-poll inbox.ts prefix

@@ -28,7 +28,7 @@ const INITIAL_CURSOR = {
 };
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '9', request_id: requestId, payload };
+  return { protocol_version: '10', request_id: requestId, payload };
 }
 
 function connectionReset(): Error & { code: string } {
@@ -101,6 +101,8 @@ describe('local server route adapter', () => {
             id: LOG_ID,
             cube_id: CUBE_ID,
             drone_id: DRONE_ID,
+            drone_label: 'builder-1',
+            role_name: 'Builder',
             message: 'local log',
             visibility: 'direct',
             // `to:` is routing/wake metadata, not a client-side read ACL. The

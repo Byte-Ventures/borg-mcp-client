@@ -39,9 +39,27 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
       'borg_remove-decision',
       'borg_decisions',
       'borg_roster',
+      'borg_put-document',
+      'borg_get-document',
+      'borg_list-documents',
+      'borg_remove-document',
     ]) {
       expect(names).toContain(required);
     }
+  });
+
+  it('exposes strict document schemas and structured log citations', () => {
+    const put = TOOL_MANIFEST.find((tool) => tool.name === 'borg_put-document');
+    expect(put?.inputSchema.required).toEqual(['title', 'content_type', 'content']);
+    expect(put?.inputSchema.properties.content_type.enum).toEqual(['text/markdown', 'text/plain']);
+    expect(put?.inputSchema.properties).toHaveProperty('supersedes');
+    for (const name of ['borg_get-document', 'borg_remove-document']) {
+      expect(TOOL_MANIFEST.find((tool) => tool.name === name)?.inputSchema.required).toEqual(['id']);
+    }
+    expect(TOOL_MANIFEST.find((tool) => tool.name === 'borg_list-documents')?.inputSchema.properties)
+      .toEqual({});
+    expect(TOOL_MANIFEST.find((tool) => tool.name === 'borg_log')?.inputSchema.properties.documents)
+      .toMatchObject({ type: 'array', maxItems: 100 });
   });
 
   it('has unique tool names (no duplicate entries)', () => {

@@ -35,7 +35,7 @@ const seatInput = (operation: { projectRoot: string; kind: 'seat' | 'sibling'; o
 // convergence proof is at the CLIENT: run2 must re-send the IDENTICAL bearer run1 sent.
 const fakeFetch = (result: 'created' | 'reused') =>
   (async () => new Response(JSON.stringify({
-    protocol_version: '9', request_id: 'attach-r',
+    protocol_version: '10', request_id: 'attach-r',
     payload: {
       result,
       initial_log_cursor: null,

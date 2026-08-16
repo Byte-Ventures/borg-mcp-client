@@ -16,6 +16,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import {
   createProtocolEnvelope,
+  decodeAppendLogRequest,
   decodeAppendLogResult,
   decodeDeleteCubeResponse,
   decodeDeleteRoleRequest,
@@ -25,6 +26,15 @@ import {
   decodeProtocolEnvelope,
   decodeProtocolErrorEnvelope,
   decodeReassignDroneResult,
+  decodeReadLogResult,
+  decodePutDocumentRequest,
+  decodePutDocumentResult,
+  decodeGetDocumentRequest,
+  decodeGetDocumentResult,
+  decodeListDocumentsRequest,
+  decodeListDocumentsResult,
+  decodeRemoveDocumentRequest,
+  decodeRemoveDocumentResult,
   decodeRoleRationaleRequest,
   decodeRoleRationaleResult,
   decodeUpdateDroneRuntimeMetadataResponse,
@@ -35,6 +45,10 @@ import {
   type EvictDroneResult,
   type ReassignDroneResult,
   type RoleRationaleResult,
+  type PutDocumentResult,
+  type GetDocumentResult,
+  type ListDocumentsResult,
+  type RemoveDocumentResult,
 } from 'borgmcp-shared/protocol';
 import { consolePrefix } from './console-prefix.js';
 import { debugLog } from './debug.js';
@@ -315,7 +329,7 @@ async function decodeLocalProtocolResponse<T>(
 async function localServerRequest<T>(
   active: ActiveCube,
   path: string,
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   payload?: Record<string, unknown>,
   options: {
     retryMode?: AuthedFetchRetryMode;
@@ -549,7 +563,7 @@ async function localReadLogPage(
     retryMode?: AuthedFetchRetryMode;
   } = {},
 ): Promise<any> {
-  const payload = await localServerRequest<any>(
+  const payload = await localServerRequest(
     active,
     `/api/cubes/${active.cubeId}/logs`,
     'PUT',
@@ -557,7 +571,7 @@ async function localReadLogPage(
       cursor: opts.cursor ?? null,
       ...(opts.limit === undefined ? {} : { limit: opts.limit }),
     },
-    { retryMode: opts.retryMode },
+    { retryMode: opts.retryMode, decodePayload: decodeReadLogResult },
   );
   if (!payload) throw new Error('Local Borg server returned an empty log response');
   return payload;
@@ -1321,6 +1335,82 @@ export async function roleRationale(
   };
 }
 
+export async function putDocument(
+  sessionToken: string,
+  apiUrl: string,
+  input: unknown,
+  serverTrustIdentity?: string,
+): Promise<PutDocumentResult> {
+  const request = decodePutDocumentRequest(input);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+  const result = await localServerRequest<PutDocumentResult>(
+    local,
+    `/api/cubes/${local.cubeId}/documents`,
+    'PUT',
+    { ...request },
+    { decodePayload: decodePutDocumentResult },
+  );
+  if (!result) throw new Error('Local Borg server returned an empty document response');
+  return result;
+}
+
+export async function getDocument(
+  sessionToken: string,
+  apiUrl: string,
+  input: unknown,
+  serverTrustIdentity?: string,
+): Promise<GetDocumentResult> {
+  const request = decodeGetDocumentRequest(input);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+  const result = await localServerRequest<GetDocumentResult>(
+    local,
+    `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`,
+    'GET',
+    undefined,
+    { decodePayload: decodeGetDocumentResult },
+  );
+  if (!result) throw new Error('Local Borg server returned an empty document response');
+  return result;
+}
+
+export async function listDocuments(
+  sessionToken: string,
+  apiUrl: string,
+  input: unknown,
+  serverTrustIdentity?: string,
+): Promise<ListDocumentsResult> {
+  decodeListDocumentsRequest(input);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+  const result = await localServerRequest<ListDocumentsResult>(
+    local,
+    `/api/cubes/${local.cubeId}/documents`,
+    'GET',
+    undefined,
+    { decodePayload: decodeListDocumentsResult },
+  );
+  if (!result) throw new Error('Local Borg server returned an empty document-list response');
+  return result;
+}
+
+export async function removeDocument(
+  sessionToken: string,
+  apiUrl: string,
+  input: unknown,
+  serverTrustIdentity?: string,
+): Promise<RemoveDocumentResult> {
+  const request = decodeRemoveDocumentRequest(input);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+  const result = await localServerRequest<RemoveDocumentResult>(
+    local,
+    `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`,
+    'DELETE',
+    undefined,
+    { decodePayload: decodeRemoveDocumentResult },
+  );
+  if (!result) throw new Error('Local Borg server returned an empty document response');
+  return result;
+}
+
 /**
  * Append a message to the cube's shared activity log.
  */
@@ -1333,6 +1423,7 @@ export async function appendLog(
     recipientDroneIds?: string[];
     class?: string;
     to?: string[];
+    documents?: string[];
     serverTrustIdentity?: string;
   } = {}
 ): Promise<ReturnType<typeof decodeAppendLogResult>> {
@@ -1341,6 +1432,9 @@ export async function appendLog(
       "Invalid input: visibility:'broadcast' cannot be combined with non-empty to:. " +
       'Remove visibility to direct to recipients, or remove to: to broadcast.',
     );
+  }
+  if (opts.to?.length === 0) {
+    throw new Error('Direct log recipient list must contain at least one recipient');
   }
   const postId = randomUUID();
   const local = await localAuthorityContext(
@@ -1370,22 +1464,21 @@ export async function appendLog(
     } else if (visibility === undefined && recipientDroneIds !== undefined) {
       visibility = 'direct';
     }
+    const request = decodeAppendLogRequest({
+      post_id: postId,
+      message,
+      ...(visibility ? { visibility } : {}),
+      ...(visibility === 'direct' && recipientDroneIds
+        ? { recipientDroneIds }
+        : {}),
+      ...(opts.class ? { class: opts.class } : {}),
+      ...(opts.documents ? { documents: opts.documents } : {}),
+    });
     const payload = await localServerRequest<ReturnType<typeof decodeAppendLogResult>>(
       local,
       `/api/cubes/${local.cubeId}/logs`,
       'POST',
-      {
-        post_id: postId,
-        message,
-        ...(visibility ? { visibility } : {}),
-        ...(visibility === 'direct' && recipientDroneIds
-          ? { recipientDroneIds }
-          : {}),
-        // server#48 append-time taxonomy routing: forward the requested class
-        // so the server can classify/route. It is honored only when no explicit
-        // visibility/recipients override it (server resolveMessageRouting).
-        ...(opts.class ? { class: opts.class } : {}),
-      },
+      { ...request },
       { retryMode: 'append-log', decodePayload: decodeAppendLogResult },
     );
     if (!payload) throw new Error('Local Borg server returned an empty log response');
