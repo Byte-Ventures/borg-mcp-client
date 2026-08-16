@@ -382,6 +382,33 @@ async function installCandidates(temporary, clientTarball, serverSpec, expectedS
   };
 }
 
+async function verifyInstalledCoordinationTemplates(consumer) {
+  const sharedRoot = await realpath(join(consumer, 'node_modules', 'borgmcp-shared'));
+  const sharedManifest = JSON.parse(await readFile(join(sharedRoot, 'package.json'), 'utf8'));
+  const { TEMPLATES } = await import(pathToFileURL(join(sharedRoot, 'dist', 'templates.js')).href);
+  const templateNames = Object.keys(TEMPLATES);
+  assert.ok(templateNames.length > 0, 'installed shared artifact exposes no coordination templates');
+
+  for (const [name, template] of Object.entries(TEMPLATES)) {
+    const text = [
+      template.cube_directive,
+      ...template.roles.map((role) => role.detailed_description),
+    ].join('\n');
+    assert.match(
+      text,
+      /Silence, delay, stale or disconnected state, and missed milestones never authorize rerouting or reassignment\./,
+      `${name} template permits silence or deadline-derived reassignment authority`,
+    );
+    assert.match(
+      text,
+      /rerouting or reassignment requires explicit human operator approval for the exact work item and recipient\./,
+      `${name} template lacks exact operator approval for reassignment`,
+    );
+  }
+
+  return { sharedVersion: sharedManifest.version, templates: templateNames };
+}
+
 async function runDocumentJourney(installed, temporary, isolatedHome) {
   const dataDirectory = join(temporary, 'document-data');
   await mkdir(dataDirectory, { mode: 0o700 });
@@ -681,6 +708,7 @@ export async function exerciseRelease(options) {
       options.server,
       options.serverIntegrity,
     );
+    const coordinationTemplates = await verifyInstalledCoordinationTemplates(installed.consumer);
     const documents = await runDocumentJourney(installed, temporary, isolatedHome);
     const tracePath = join(temporary, 'server-invocations.tsv');
     const shim = await createServerShim(
@@ -783,6 +811,7 @@ export async function exerciseRelease(options) {
         },
       },
       journeys: {
+        coordinationTemplates,
         documents,
         dashboard: { exitCode: dashboard.report.code, serverHealthyAfterExit: true },
         start: { exitCode: start.report.code, serverStoppedAfterExit: true },
