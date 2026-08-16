@@ -24,6 +24,22 @@ import {
 import { roleSlug } from '../src/role-resolver';
 
 describe('Template.cube_directive field', () => {
+  it('all shipped templates reserve rerouting and reassignment for explicit operator approval', () => {
+    for (const template of Object.values(TEMPLATES)) {
+      const shippedText = [
+        template.cube_directive,
+        ...template.roles.map((role) => role.detailed_description),
+      ].join('\n');
+
+      expect(shippedText, template.name).toContain(
+        'Silence, delay, stale or disconnected state, and missed milestones never authorize rerouting or reassignment.',
+      );
+      expect(shippedText, template.name).toContain(
+        'rerouting or reassignment requires explicit human operator approval for the exact work item and recipient.',
+      );
+    }
+  });
+
   it('software-dev template ships with cube_directive populated', () => {
     const t = getTemplate('software-dev');
     expect(t).not.toBeNull();
@@ -160,7 +176,7 @@ describe('Template.cube_directive field', () => {
     expect(coord?.detailed_description).toContain('Order named drones');
     expect(coord?.detailed_description).toContain('START NOW');
     expect(coord?.detailed_description).toContain('ACK and claim are receipt only');
-    expect(coord?.detailed_description).toContain('within 2 minutes');
+    expect(coord?.detailed_description).toContain('Verify activation and progress against the concrete milestones');
   });
 
   it('Coordinator role-text frames borg_decide as the ratification act', () => {
@@ -185,16 +201,19 @@ describe('Template.cube_directive field', () => {
     expect(coordinator?.detailed_description).toContain('Never manufacture work');
   });
 
-  it('Coordinator guidance preserves exact activation escalation and waiting detection', () => {
+  it('Coordinator guidance uses milestone-based liveness without deadline-derived authority', () => {
     const coordinator = getTemplate('software-dev')!.roles.find(
       (role) => role.name === 'Coordinator'
     );
     const text = coordinator?.detailed_description ?? '';
 
-    expect(text).toContain('within 2 minutes');
-    expect(text).toContain('After 5 more minutes');
-    expect(text).toContain('at least every 10 minutes');
-    expect(text).toContain('immediate BLOCKED');
+    expect(text).toContain('not a fixed elapsed-time cadence');
+    expect(text).toContain('send one direct status request');
+    expect(text).toContain('missed milestones never authorize rerouting or reassignment');
+    expect(text).toContain('requires explicit human operator approval');
+    expect(text).not.toContain('within 2 minutes');
+    expect(text).not.toContain('After 5 more minutes');
+    expect(text).not.toContain('at least every 10 minutes');
     expect(text).toContain('Waiting is valid');
     expect(text).toContain('under active review');
     expect(text).not.toContain('60 min fallback acceptable');

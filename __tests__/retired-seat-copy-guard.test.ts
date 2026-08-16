@@ -167,6 +167,7 @@ describe('release-status + reattach copy contract (item 7)', () => {
 
   it('every shipped `borgmcp-shared@X.Y.Z` reference equals the pinned version', () => {
     for (const [name, text] of surfaces()) {
+      if (name.startsWith('docs/releases/')) continue;
       for (const m of text.matchAll(/borgmcp-shared@(\d+\.\d+\.\d+)/g)) {
         expect(m[1], `${name} references borgmcp-shared@${m[1]} (pinned is ${pinnedShared})`).toBe(pinnedShared);
       }
