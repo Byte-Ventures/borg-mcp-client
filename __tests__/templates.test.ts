@@ -177,6 +177,8 @@ describe('Template.cube_directive field', () => {
     expect(coord?.detailed_description).toContain('START NOW');
     expect(coord?.detailed_description).toContain('ACK and claim are receipt only');
     expect(coord?.detailed_description).toContain('Verify activation and progress against the concrete milestones');
+    expect(coord?.detailed_description).toContain('borg_ack-status');
+    expect(coord?.detailed_description).toContain('without advancing unread cursors');
   });
 
   it('Coordinator role-text frames borg_decide as the ratification act', () => {

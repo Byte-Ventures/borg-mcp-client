@@ -16,6 +16,8 @@ import {
 import { randomUUID } from 'node:crypto';
 import {
   createProtocolEnvelope,
+  decodeAckStatusRequest,
+  decodeAckStatusResult,
   decodeAppendLogRequest,
   decodeAppendLogResult,
   decodeDeleteCubeResponse,
@@ -40,6 +42,7 @@ import {
   decodeUpdateDroneRuntimeMetadataResponse,
   ErrorCode,
   ProtocolContractError,
+  type AckStatusResult,
   type AgentKind,
   type DeleteRoleResult,
   type EvictDroneResult,
@@ -1131,6 +1134,29 @@ export async function ackLogEntry(
     'POST',
     { entry_id: entryId, kind },
   );
+}
+
+/** Read acknowledgement and advisory-claim state without mutating log state. */
+export async function getAckStatus(
+  sessionToken: string,
+  apiUrl: string,
+  input: unknown,
+  serverTrustIdentity?: string,
+): Promise<AckStatusResult> {
+  const request = decodeAckStatusRequest(input);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+  const result = await localServerRequest<AckStatusResult>(
+    local,
+    `/api/cubes/${local.cubeId}/logs/${encodeURIComponent(request.entry_id)}/ack-status`,
+    'GET',
+    { ...request },
+    { decodePayload: decodeAckStatusResult },
+  );
+  if (!result) throw new Error('Local Borg server returned an empty acknowledgement-status response');
+  if (result.entry_id !== request.entry_id) {
+    throw new ProtocolContractError('Acknowledgement-status response entry id does not match the request.');
+  }
+  return result;
 }
 
 /** Record a ratified cube decision using the local client's cube-manage grant. */

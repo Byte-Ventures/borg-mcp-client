@@ -30,6 +30,7 @@ import {
   readLog,
   appendLog,
   ackLogEntry,
+  getAckStatus,
   recordDecision,
   removeDecision,
   listDecisions,
@@ -966,6 +967,17 @@ export async function main() {
               },
             ],
           };
+        }
+
+        case 'borg_ack-status': {
+          const active = await requireActiveCube();
+          const result = await getAckStatus(
+            active.sessionToken,
+            active.apiUrl,
+            args ?? {},
+            active.serverTrustIdentity,
+          );
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
 
         case 'borg_decide': {

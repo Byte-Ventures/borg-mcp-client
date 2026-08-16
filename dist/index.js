@@ -14,7 +14,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
 import { CubeDeletionConfirmationError } from './server-errors.js';
-import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, putDocument, getDocument, listDocuments, removeDocument, } from './remote-client.js';
+import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, getAckStatus, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, putDocument, getDocument, listDocuments, removeDocument, } from './remote-client.js';
 import { formatDocument, formatDocumentCitations, formatDocumentMetadata, } from './document-render.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, getActiveCubeForWorktree, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, pinMcpSeatIdentity, } from './cubes.js';
@@ -768,6 +768,11 @@ export async function main() {
                             },
                         ],
                     };
+                }
+                case 'borg_ack-status': {
+                    const active = await requireActiveCube();
+                    const result = await getAckStatus(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+                    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
                 }
                 case 'borg_decide': {
                     const topic = args?.topic;

@@ -11,7 +11,7 @@
  */
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeAppendLogRequest, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeReadLogResult, decodePutDocumentRequest, decodePutDocumentResult, decodeGetDocumentRequest, decodeGetDocumentResult, decodeListDocumentsRequest, decodeListDocumentsResult, decodeRemoveDocumentRequest, decodeRemoveDocumentResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
+import { createProtocolEnvelope, decodeAckStatusRequest, decodeAckStatusResult, decodeAppendLogRequest, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeReadLogResult, decodePutDocumentRequest, decodePutDocumentResult, decodeGetDocumentRequest, decodeGetDocumentResult, decodeListDocumentsRequest, decodeListDocumentsResult, decodeRemoveDocumentRequest, decodeRemoveDocumentResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, } from './drone-lifecycle.js';
@@ -795,6 +795,18 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
 export async function ackLogEntry(sessionToken, apiUrl, entryId, kind = 'ack', serverTrustIdentity) {
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
     await localServerRequest(local, `/api/cubes/${local.cubeId}/acks`, 'POST', { entry_id: entryId, kind });
+}
+/** Read acknowledgement and advisory-claim state without mutating log state. */
+export async function getAckStatus(sessionToken, apiUrl, input, serverTrustIdentity) {
+    const request = decodeAckStatusRequest(input);
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs/${encodeURIComponent(request.entry_id)}/ack-status`, 'GET', { ...request }, { decodePayload: decodeAckStatusResult });
+    if (!result)
+        throw new Error('Local Borg server returned an empty acknowledgement-status response');
+    if (result.entry_id !== request.entry_id) {
+        throw new ProtocolContractError('Acknowledgement-status response entry id does not match the request.');
+    }
+    return result;
 }
 /** Record a ratified cube decision using the local client's cube-manage grant. */
 export async function recordDecision(sessionToken, apiUrl, input, serverTrustIdentity) {

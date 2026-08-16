@@ -23,7 +23,7 @@ const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '10', request_id: requestId, payload };
+  return { protocol_version: '11', request_id: requestId, payload };
 }
 
 describe('appendLog directed-message request body (local path)', () => {

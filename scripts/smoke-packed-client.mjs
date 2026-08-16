@@ -332,6 +332,15 @@ export async function smokePackedClient(packageRoot, options = {}) {
                 settle(new Error(`Packed MCP tool discovery failed: ${line}`));
                 return;
               }
+              const ackStatus = message.result.tools.find((tool) => tool.name === 'borg_ack-status');
+              if (
+                ackStatus?.inputSchema?.properties?.entry_id?.format !== 'uuid' ||
+                ackStatus.inputSchema?.required?.length !== 1 ||
+                ackStatus.inputSchema.required[0] !== 'entry_id'
+              ) {
+                settle(new Error('Packed MCP tool discovery omitted the strict borg_ack-status schema.'));
+                return;
+              }
               settle(null, {
                 name: manifest.name,
                 version: manifest.version,

@@ -35,6 +35,7 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
       'borg_log',
       'borg_read-log',
       'borg_ack',
+      'borg_ack-status',
       'borg_decide',
       'borg_remove-decision',
       'borg_decisions',
@@ -46,6 +47,22 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     ]) {
       expect(names).toContain(required);
     }
+  });
+
+  it('exposes strict read-only acknowledgement-status discovery', () => {
+    const tool = TOOL_MANIFEST.find((entry) => entry.name === 'borg_ack-status');
+    expect(tool?.inputSchema.required).toEqual(['entry_id']);
+    expect(tool?.inputSchema.properties).toEqual({
+      entry_id: {
+        type: 'string',
+        format: 'uuid',
+        description: 'Full UUID of the activity-log entry to inspect.',
+      },
+    });
+    expect(tool?.description).toContain('Activity-log silence is not evidence');
+    expect(tool?.description).toContain('preserves unread cursors');
+    expect(clientEntrySource).toContain("case 'borg_ack-status':");
+    expect(clientEntrySource).toContain('getAckStatus(');
   });
 
   it('exposes strict document schemas and structured log citations', () => {

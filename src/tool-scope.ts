@@ -24,6 +24,7 @@ export const UNIVERSAL_TOOLS = [
   'borg_stream-status',
   'borg_whoami',
   'borg_ack',
+  'borg_ack-status',
   'borg_version',
   'borg_cube',
   'borg_role',

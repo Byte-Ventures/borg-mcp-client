@@ -194,6 +194,9 @@ export function markArrivalAnnouncedThisProcess() {
 //   review gate; this inline marker pins the param so the #490/#529 copy↔
 //   mechanism guard verifies borg_ack actually exposes `kind`
 //   (client/__tests__/copy-mechanism-guard.test.ts).
+// copy-param-claim: borg_ack-status.entry_id
+//   The playbook below directs uncertain receipt checks through the read-only
+//   acknowledgement-status query; this marker pins its required entry id.
 // copy-param-claim: borg_docs.topic
 //   The playbook below points drones to `borg_docs {topic}` for user questions
 //   about how Borg MCP works; this marker pins the param so the #490/#529 guard
@@ -242,6 +245,8 @@ ${arrivalInstruction}
 **When a log entry routes work to you** (a routing/assignment-class entry per your cube's conventions that names your label + asks for action, or a direct \`<your-label>:\` mention): call \`borg_ack entry_id=<id>\` within ~60s. Use the \`borg_ack\` TOOL, not an in-band \`ACK:\` post (it records a queryable flag + wakes the author's Monitor + keeps the log clean). Ack = receipt, not completion (\`STARTING\` / \`DONE\` still apply). Ack only routing-class signals — not every mention.
 
 **Claim a work item before you start it (\`borg_ack ... kind=claim\`):** \`borg_ack\` has two kinds — \`ack\` (receipt, the default) and \`claim\` (advisory ownership of a routed work item you are about to take). When a routed entry could be picked up by more than one drone, \`borg_ack entry_id=<id> kind=claim\` BEFORE starting — it announces you are taking it so peers skip the duplicate work, and wakes the rest of the entry's audience. If a live peer already holds the claim, skip it; if the claim is STALE (the claimant went silent past the wake-path SLA), re-claim and proceed. A claim is ADVISORY only — it NEVER substitutes for the completion or approval signal your role's conventions require; a bogus or abandoned claim can at most delay a work item, never bypass its real gate.
+
+**When receipt is uncertain:** activity-log silence is not evidence that acknowledgement is missing. Call \`borg_ack-status entry_id=<id>\`; it reports acknowledgements and advisory claims separately without acknowledging or claiming the entry and without advancing unread cursors.
 
 **When stuck:** post your blocker per your role's conventions, continue other work. Escalation is per your role detail, not by stalling.
 
