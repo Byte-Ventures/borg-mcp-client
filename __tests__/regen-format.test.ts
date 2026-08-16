@@ -90,6 +90,23 @@ describe('formatLogEntryMarkdown', () => {
       '**[2026-05-28T12:00:00.000Z]** [entry_id: entry-123] `id:drone-1` drone-a (Builder): DISPATCH: drone-b — fix ack affordance'
     );
   });
+
+  it('renders structured document citations with full ids and metadata', () => {
+    expect(formatLogEntryMarkdown({
+      id: 'entry-123',
+      drone_id: 'drone-1',
+      created_at: '2026-05-28T12:00:00.000Z',
+      message: 'See the durable design.',
+      documents: [{
+        id: 'doc_01jz7example',
+        title: 'Architecture notes',
+        size_bytes: 2048,
+        state: 'superseded',
+      }],
+    }, new Map(), new Map())).toContain(
+      '\n  Documents:\n  - doc_01jz7example (superseded, 2048 UTF-8 bytes): Architecture notes'
+    );
+  });
 });
 
 describe('#921 de-template — universal layer is template-agnostic (STARTER contrast-render, PM leak-detector)', () => {

@@ -11,7 +11,7 @@
  */
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
+import { createProtocolEnvelope, decodeAppendLogRequest, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeReadLogResult, decodePutDocumentRequest, decodePutDocumentResult, decodeGetDocumentRequest, decodeGetDocumentResult, decodeListDocumentsRequest, decodeListDocumentsResult, decodeRemoveDocumentRequest, decodeRemoveDocumentResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, } from './drone-lifecycle.js';
@@ -365,7 +365,7 @@ async function localReadLogPage(active, opts = {}) {
     const payload = await localServerRequest(active, `/api/cubes/${active.cubeId}/logs`, 'PUT', {
         cursor: opts.cursor ?? null,
         ...(opts.limit === undefined ? {} : { limit: opts.limit }),
-    }, { retryMode: opts.retryMode });
+    }, { retryMode: opts.retryMode, decodePayload: decodeReadLogResult });
     if (!payload)
         throw new Error('Local Borg server returned an empty log response');
     return payload;
@@ -914,6 +914,38 @@ export async function roleRationale(sessionToken, apiUrl, role, section, serverT
         body: result.section.body,
     };
 }
+export async function putDocument(sessionToken, apiUrl, input, serverTrustIdentity) {
+    const request = decodePutDocumentRequest(input);
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents`, 'PUT', { ...request }, { decodePayload: decodePutDocumentResult });
+    if (!result)
+        throw new Error('Local Borg server returned an empty document response');
+    return result;
+}
+export async function getDocument(sessionToken, apiUrl, input, serverTrustIdentity) {
+    const request = decodeGetDocumentRequest(input);
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`, 'GET', { ...request }, { decodePayload: decodeGetDocumentResult });
+    if (!result)
+        throw new Error('Local Borg server returned an empty document response');
+    return result;
+}
+export async function listDocuments(sessionToken, apiUrl, input, serverTrustIdentity) {
+    decodeListDocumentsRequest(input);
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents`, 'GET', {}, { decodePayload: decodeListDocumentsResult });
+    if (!result)
+        throw new Error('Local Borg server returned an empty document-list response');
+    return result;
+}
+export async function removeDocument(sessionToken, apiUrl, input, serverTrustIdentity) {
+    const request = decodeRemoveDocumentRequest(input);
+    const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`, 'DELETE', { ...request }, { decodePayload: decodeRemoveDocumentResult });
+    if (!result)
+        throw new Error('Local Borg server returned an empty document response');
+    return result;
+}
 /**
  * Append a message to the cube's shared activity log.
  */
@@ -921,6 +953,9 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
     if (opts.visibility === 'broadcast' && (opts.to?.length ?? 0) > 0) {
         throw new Error("Invalid input: visibility:'broadcast' cannot be combined with non-empty to:. " +
             'Remove visibility to direct to recipients, or remove to: to broadcast.');
+    }
+    if (opts.to?.length === 0) {
+        throw new Error('Direct log recipient list must contain at least one recipient');
     }
     const postId = randomUUID();
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
@@ -943,18 +978,17 @@ export async function appendLog(sessionToken, apiUrl, message, opts = {}) {
     else if (visibility === undefined && recipientDroneIds !== undefined) {
         visibility = 'direct';
     }
-    const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs`, 'POST', {
+    const request = decodeAppendLogRequest({
         post_id: postId,
         message,
         ...(visibility ? { visibility } : {}),
         ...(visibility === 'direct' && recipientDroneIds
             ? { recipientDroneIds }
             : {}),
-        // server#48 append-time taxonomy routing: forward the requested class
-        // so the server can classify/route. It is honored only when no explicit
-        // visibility/recipients override it (server resolveMessageRouting).
         ...(opts.class ? { class: opts.class } : {}),
-    }, { retryMode: 'append-log', decodePayload: decodeAppendLogResult });
+        ...(opts.documents ? { documents: opts.documents } : {}),
+    });
+    const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs`, 'POST', { ...request }, { retryMode: 'append-log', decodePayload: decodeAppendLogResult });
     if (!payload)
         throw new Error('Local Borg server returned an empty log response');
     return payload;

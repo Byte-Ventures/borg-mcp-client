@@ -14,7 +14,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
 import { CubeDeletionConfirmationError } from './server-errors.js';
-import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, } from './remote-client.js';
+import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, putDocument, getDocument, listDocuments, removeDocument, } from './remote-client.js';
+import { formatDocument, formatDocumentCitations, formatDocumentMetadata, } from './document-render.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, getActiveCubeForWorktree, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, pinMcpSeatIdentity, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
@@ -659,6 +660,29 @@ export async function main() {
                     }
                     return { content: [{ type: 'text', text: lines.join('\n') }] };
                 }
+                case 'borg_put-document': {
+                    const active = await requireActiveCube();
+                    const result = await putDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+                    return { content: [{ type: 'text', text: `Created cube document.\n\n${formatDocument(result.document)}` }] };
+                }
+                case 'borg_get-document': {
+                    const active = await requireActiveCube();
+                    const result = await getDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+                    return { content: [{ type: 'text', text: formatDocument(result.document) }] };
+                }
+                case 'borg_list-documents': {
+                    const active = await requireActiveCube();
+                    const result = await listDocuments(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+                    const text = result.documents.length === 0
+                        ? `No active or superseded documents in cube "${active.name}".`
+                        : result.documents.map(formatDocumentMetadata).join('\n\n');
+                    return { content: [{ type: 'text', text }] };
+                }
+                case 'borg_remove-document': {
+                    const active = await requireActiveCube();
+                    const result = await removeDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+                    return { content: [{ type: 'text', text: `Removed cube document.\n\n${formatDocumentMetadata(result.document)}` }] };
+                }
                 case 'borg_log': {
                     const message = args?.message;
                     if (!message || typeof message !== 'string')
@@ -691,6 +715,7 @@ export async function main() {
                     const visibility = args?.visibility === 'broadcast' || args?.visibility === 'direct'
                         ? args.visibility
                         : undefined;
+                    const documents = args?.documents;
                     if (!active.serverTrustIdentity) {
                         throw new Error('Selected Borg server authority state is missing or unreadable');
                     }
@@ -698,6 +723,7 @@ export async function main() {
                         ...(explicitClass ? { class: explicitClass } : {}),
                         ...(hasTo ? { to: recipients ?? [] } : {}),
                         ...(visibility ? { visibility } : {}),
+                        ...(documents ? { documents } : {}),
                         serverTrustIdentity: active.serverTrustIdentity,
                     };
                     const result = await appendLog(active.sessionToken, active.apiUrl, message, appendOpts);
@@ -713,7 +739,12 @@ export async function main() {
                             .map((r) => r.label)
                             .join(', ')}. Message delivered — they'll read it when they return.`
                         : '';
-                    const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${echo}${unreachable}`;
+                    const cited = formatDocumentCitations(result.entry.documents);
+                    const citations = cited.length > 0 ? `\nDocuments: ${cited.join('; ')}` : '';
+                    const advisory = result.advisory?.code === 'STORE_AS_DOCUMENT'
+                        ? `\nAdvisory: this message exceeded ${result.advisory.threshold_bytes} UTF-8 bytes. Store durable detail with borg_put-document and cite its full id in borg_log.documents.`
+                        : '';
+                    const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${echo}${unreachable}${citations}${advisory}`;
                     return { content: [{ type: 'text', text }] };
                 }
                 case 'borg_ack': {

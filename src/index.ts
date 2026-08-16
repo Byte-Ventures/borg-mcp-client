@@ -52,8 +52,17 @@ import {
   applyTemplate,
   whoami,
   roleRationale,
+  putDocument,
+  getDocument,
+  listDocuments,
+  removeDocument,
   type LocalManageAuthority,
 } from './remote-client.js';
+import {
+  formatDocument,
+  formatDocumentCitations,
+  formatDocumentMetadata,
+} from './document-render.js';
 import {
   getTemplate,
   listTemplateNames,
@@ -840,6 +849,33 @@ export async function main() {
           return { content: [{ type: 'text', text: lines.join('\n') }] };
         }
 
+        case 'borg_put-document': {
+          const active = await requireActiveCube();
+          const result = await putDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+          return { content: [{ type: 'text', text: `Created cube document.\n\n${formatDocument(result.document)}` }] };
+        }
+
+        case 'borg_get-document': {
+          const active = await requireActiveCube();
+          const result = await getDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+          return { content: [{ type: 'text', text: formatDocument(result.document) }] };
+        }
+
+        case 'borg_list-documents': {
+          const active = await requireActiveCube();
+          const result = await listDocuments(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+          const text = result.documents.length === 0
+            ? `No active or superseded documents in cube "${active.name}".`
+            : result.documents.map(formatDocumentMetadata).join('\n\n');
+          return { content: [{ type: 'text', text }] };
+        }
+
+        case 'borg_remove-document': {
+          const active = await requireActiveCube();
+          const result = await removeDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+          return { content: [{ type: 'text', text: `Removed cube document.\n\n${formatDocumentMetadata(result.document)}` }] };
+        }
+
         case 'borg_log': {
           const message = args?.message as string;
           if (!message || typeof message !== 'string') throw new Error('message is required');
@@ -870,6 +906,7 @@ export async function main() {
             args?.visibility === 'broadcast' || args?.visibility === 'direct'
               ? args.visibility
               : undefined;
+          const documents = args?.documents as string[] | undefined;
           if (!active.serverTrustIdentity) {
             throw new Error('Selected Borg server authority state is missing or unreadable');
           }
@@ -877,6 +914,7 @@ export async function main() {
             ...(explicitClass ? { class: explicitClass } : {}),
             ...(hasTo ? { to: recipients ?? [] } : {}),
             ...(visibility ? { visibility } : {}),
+            ...(documents ? { documents } : {}),
             serverTrustIdentity: active.serverTrustIdentity,
           };
           const result = await appendLog(active.sessionToken, active.apiUrl, message, appendOpts);
@@ -891,7 +929,12 @@ export async function main() {
                 .map((r) => r.label)
                 .join(', ')}. Message delivered — they'll read it when they return.`
             : '';
-          const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${echo}${unreachable}`;
+          const cited = formatDocumentCitations(result.entry.documents);
+          const citations = cited.length > 0 ? `\nDocuments: ${cited.join('; ')}` : '';
+          const advisory = result.advisory?.code === 'STORE_AS_DOCUMENT'
+            ? `\nAdvisory: this message exceeded ${result.advisory.threshold_bytes} UTF-8 bytes. Store durable detail with borg_put-document and cite its full id in borg_log.documents.`
+            : '';
+          const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${echo}${unreachable}${citations}${advisory}`;
           return { content: [{ type: 'text', text }] };
         }
 

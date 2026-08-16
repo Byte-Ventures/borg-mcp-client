@@ -23,7 +23,7 @@ const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '9', request_id: requestId, payload };
+  return { protocol_version: '10', request_id: requestId, payload };
 }
 
 describe('appendLog directed-message request body (local path)', () => {
@@ -121,14 +121,22 @@ describe('appendLog directed-message request body (local path)', () => {
     expect(postBody()).toMatchObject({ message: 'STARTING: work', class: 'status-claim' });
   });
 
-  it('resolves an explicit empty to array into a direct send with no recipients', async () => {
+  it('forwards full structured document citation ids', async () => {
     const { appendLog } = await import('../src/remote-client.js');
-    await appendLog(SESSION, ORIGIN, 'hello', { to: [] });
-    expect(postBody()).toMatchObject({
-      message: 'hello',
-      visibility: 'direct',
-      recipientDroneIds: [],
+    await appendLog(SESSION, ORIGIN, 'See durable detail.', {
+      documents: ['doc_01jz7example'],
     });
+    expect(postBody()).toMatchObject({
+      message: 'See durable detail.',
+      documents: ['doc_01jz7example'],
+    });
+  });
+
+  it('rejects an explicit empty recipient list before mutation', async () => {
+    const { appendLog } = await import('../src/remote-client.js');
+    await expect(appendLog(SESSION, ORIGIN, 'hello', { to: [] }))
+      .rejects.toThrow(/recipient list must contain at least one recipient/);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('rejects contradictory to: plus broadcast before authority lookup or POST', async () => {

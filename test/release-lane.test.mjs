@@ -39,7 +39,7 @@ const root = resolve(import.meta.dirname, '..');
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const sharedVersion = packageManifest.dependencies['borgmcp-shared'];
 const SHARED_TARBALL = `https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-${sharedVersion}.tgz`;
-const SHARED_INTEGRITY = 'sha512-3GPQ1U7tBxg8Jp1Uac31CKKXQjMv4UNPhs5P6N83CyDXGJvkI88yowVJZGlLuo30eEk6jhERZ9AQWOjHst/sFA==';
+const SHARED_INTEGRITY = 'sha512-6t25in3kpkVZTQqbeP65HgObU8GpOY3ewtY2SoaHDtIcJEtoe1LRwh3rguE6VqcqPWBUtmXdOaTMdtBErx5+oA==';
 
 const RELEASE_NOTES = 'Curated tagged release notes.\n\n- Exact shipped work.';
 const RELEASE_INTEGRITY = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;
@@ -580,8 +580,8 @@ test('release preflight accepts the current published server when exact shared p
         ok: true,
         json: async () => ({
           name: 'borgmcp-server',
-          version: '0.20.0',
-          dependencies: { 'borgmcp-shared': '0.12.3' },
+          version: '0.21.0',
+          dependencies: { 'borgmcp-shared': '0.13.0' },
         }),
       };
     },
@@ -590,8 +590,8 @@ test('release preflight accepts the current published server when exact shared p
   assert.deepEqual(report, {
     name: 'borgmcp',
     version: packageManifest.version,
-    shared: '0.12.3',
-    server: '0.20.0',
+    shared: '0.13.0',
+    server: '0.21.0',
   });
   assert.deepEqual(requests, [{
     url: 'https://registry.npmjs.org/borgmcp-server/latest',
@@ -610,12 +610,12 @@ test('release preflight refuses a client before publication when the current ser
         ok: true,
         json: async () => ({
           name: 'borgmcp-server',
-          version: '0.20.0',
-          dependencies: { 'borgmcp-shared': '0.12.2' },
+          version: '0.21.0',
+          dependencies: { 'borgmcp-shared': '0.12.3' },
         }),
       }),
     }),
-    /borgmcp@3\.15\.2 pins borgmcp-shared@0\.12\.3.*borgmcp-server@0\.20\.0 pins borgmcp-shared@0\.12\.2.*Publish the compatible server before tagging this client/s,
+    /borgmcp@3\.16\.0 pins borgmcp-shared@0\.13\.0.*borgmcp-server@0\.21\.0 pins borgmcp-shared@0\.12\.3.*Publish the compatible server before tagging this client/s,
   );
 });
 

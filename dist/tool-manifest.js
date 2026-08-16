@@ -7,7 +7,7 @@
  * CONTRACT-BACKED DATA — imports only published scalar contract constants, with
  * no client runtime side effects.
  */
-import { DECISION_TEXT_MAX_BYTES } from 'borgmcp-shared/protocol';
+import { DECISION_TEXT_MAX_BYTES, DOCUMENT_CONTENT_TYPES } from 'borgmcp-shared/protocol';
 export const TOOL_MANIFEST = [
     {
         name: 'borg_regen',
@@ -271,8 +271,63 @@ export const TOOL_MANIFEST = [
         },
     },
     {
+        name: 'borg_put-document',
+        description: 'Create an immutable cube document containing Markdown or plain text. Use this for durable material that is too large or detailed for an activity-log message. Pass `supersedes` with the full prior document id to create its next linear revision; content is never edited in place. Requires the selected local client to have a live cube-write or cube-manage grant.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                title: {
+                    type: 'string',
+                    maxLength: 120,
+                    description: 'Document title, trimmed and control-free; max 120 Unicode characters and 480 UTF-8 bytes.',
+                },
+                content_type: {
+                    type: 'string',
+                    enum: [...DOCUMENT_CONTENT_TYPES],
+                    description: 'Exact document content type: text/markdown or text/plain.',
+                },
+                content: {
+                    type: 'string',
+                    description: 'Immutable document content. The server enforces its configured UTF-8 byte limit.',
+                },
+                supersedes: {
+                    type: 'string',
+                    description: 'Optional full opaque id of the active document this new revision supersedes.',
+                },
+            },
+            required: ['title', 'content_type', 'content'],
+        },
+    },
+    {
+        name: 'borg_get-document',
+        description: 'Fetch one cube document by its full opaque id, including immutable content, revision links, state, author, and removal audit metadata. Exact-id reads retain removed content for audit. Requires a live cube-read, cube-write, or cube-manage grant.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', description: 'Full opaque document id. Do not abbreviate it.' },
+            },
+            required: ['id'],
+        },
+    },
+    {
+        name: 'borg_list-documents',
+        description: 'List active and superseded document metadata in the current cube. Removed documents are omitted; use borg_get-document with an exact known id for retained audit content. Document bodies are not included.',
+        inputSchema: { type: 'object', properties: {}, required: [] },
+    },
+    {
+        name: 'borg_remove-document',
+        description: 'Mark one cube document removed while retaining its immutable content and audit metadata. The server permits the document author or a client with a live cube-manage grant; workflow role labels grant no permission. Idempotent for an already removed document.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                id: { type: 'string', description: 'Full opaque document id to remove. Do not abbreviate it.' },
+            },
+            required: ['id'],
+        },
+    },
+    {
         name: 'borg_log',
-        description: 'Append a message to the cube\'s activity log. By default entries broadcast to all drones. When a cube declares a message taxonomy, borg_log applies class-based smart defaults: prefix-matched directed classes route to their default recipients unless you pass `to:`, `class:`, or explicit visibility. Pass `to: [...]` to direct by exact drone label, drone id, the 8-hex short-uuid (the `id:` token shown in roster/read-log — a drone_id prefix that is STABLE across label renumber), role name, or role slug.',
+        description: 'Append a message to the cube\'s activity log. By default entries broadcast to all drones. Cite durable cube documents by passing their full ids in `documents`; citations carry current metadata but do not inline document content. When a cube declares a message taxonomy, borg_log applies class-based smart defaults: prefix-matched directed classes route to their default recipients unless you pass `to:`, `class`, or explicit visibility. Pass `to: [...]` to direct by exact drone label, drone id, the 8-hex short-uuid (the `id:` token shown in roster/read-log — a drone_id prefix that is STABLE across label renumber), role name, or role slug.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -290,6 +345,14 @@ export const TOOL_MANIFEST = [
                     type: 'string',
                     enum: ['broadcast', 'direct'],
                     description: 'Optional explicit visibility. Overrides class-based routing defaults.',
+                },
+                documents: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    minItems: 1,
+                    maxItems: 100,
+                    uniqueItems: true,
+                    description: 'Optional full opaque ids of 1-100 same-cube documents to cite atomically. Unknown, duplicate, or foreign ids are refused.',
                 },
             },
             required: ['message'],

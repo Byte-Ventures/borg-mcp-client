@@ -13,6 +13,7 @@ const SITE_URL = "https://borgmcp.ai";
 const REPOSITORY_URL = "https://github.com/Byte-Ventures/borg-mcp-client";
 const LOCAL_SERVER_URL = `${REPOSITORY_URL}/blob/main/docs/LOCAL_SERVER.md`;
 const SEAT_LIFECYCLE_URL = `${REPOSITORY_URL}/blob/main/docs/SEAT_LIFECYCLE.md`;
+const DOCUMENTS_URL = `${REPOSITORY_URL}/blob/main/docs/DOCUMENTS.md`;
 export const DOCS_SECTIONS = [
     {
         slug: "overview",
@@ -69,6 +70,13 @@ export const DOCS_SECTIONS = [
         url: `${SITE_URL}/docs/cli/`,
         summary: "Client launch, cleanup, worktree maintenance, and launch-all reference.",
         keywords: ["cli", "command", "cleanup", "worktree", "launch", "launch-all", "terminal", "maintenance", "prune"],
+    },
+    {
+        slug: "documents",
+        title: "Cube documents",
+        url: DOCUMENTS_URL,
+        summary: "Immutable cube-local Markdown or plain text, revisions, removal, and structured activity-log citations.",
+        keywords: ["document", "documents", "citation", "cite", "durable content", "supersede", "revision", "borg_put-document", "borg_get-document"],
     },
     {
         slug: "tools",
