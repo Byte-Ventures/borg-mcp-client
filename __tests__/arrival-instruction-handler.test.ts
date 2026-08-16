@@ -198,19 +198,34 @@ describe('borg_log ARRIVAL instruction ordering', () => {
     expect(result.content[0].text).toContain('Recipients: reviewer-1, `id:22222222`');
   });
 
-  it('rejects a missing audience before lifecycle duplicate suppression', async () => {
-    state.handlers.length = 0;
-    state.shouldSuppressLifecycleLog.mockResolvedValueOnce({ suppress: true, signal: 'arrival' });
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+  it.each(([
+    undefined,
+    null,
+    [],
+    'builder-test',
+    ['builder-test', 'builder-test'],
+    [' builder-test'],
+    ['builder-test '],
+    ['builder\u0000test'],
+    Array.from({ length: 101 }, (_, index) => `builder-${index}`),
+    ['a'.repeat(121)],
+    ['é'.repeat(61)],
+  ] as unknown[]).map((value) => [value]))(
+    'rejects invalid audience %# before lifecycle duplicate suppression',
+    async (to) => {
+      state.handlers.length = 0;
+      state.shouldSuppressLifecycleLog.mockResolvedValueOnce({ suppress: true, signal: 'arrival' });
+      vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await main();
-    const result = await state.handlers[1]({
-      params: { name: 'borg_log', arguments: { message: 'ARRIVAL: online' } },
-    });
+      await main();
+      const result = await state.handlers[1]({
+        params: { name: 'borg_log', arguments: { message: 'ARRIVAL: online', to } },
+      });
 
-    expect(result).toMatchObject({ isError: true });
-    expect(result.content[0].text).toContain('to is required');
-    expect(state.shouldSuppressLifecycleLog).not.toHaveBeenCalled();
-    expect(state.appendLog).not.toHaveBeenCalled();
-  });
+      expect(result).toMatchObject({ isError: true });
+      expect(result.content[0].text).toMatch(/to|selector/);
+      expect(state.shouldSuppressLifecycleLog).not.toHaveBeenCalled();
+      expect(state.appendLog).not.toHaveBeenCalled();
+    },
+  );
 });

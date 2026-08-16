@@ -109,7 +109,21 @@ describe('appendLog mandatory explicit audience', () => {
     });
   });
 
-  it.each([undefined, null, [], 'builder-1', ['', 'builder-1'], [42]])(
+  it.each(([
+    undefined,
+    null,
+    [],
+    'builder-1',
+    ['', 'builder-1'],
+    [42],
+    ['builder-1', 'builder-1'],
+    [' builder-1'],
+    ['builder-1 '],
+    ['builder\u0000one'],
+    Array.from({ length: 101 }, (_, index) => `builder-${index}`),
+    ['a'.repeat(121)],
+    ['é'.repeat(61)],
+  ] as unknown[]).map((value) => [value]))(
     'rejects invalid or omitted to before authority or network use %#',
     async (to) => {
       const { appendLog } = await import('../src/remote-client.js');

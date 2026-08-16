@@ -10,7 +10,21 @@ describe('borg_log explicit audience', () => {
       .toEqual(['builder-1', 'id:12345678']);
   });
 
-  it.each([undefined, null, [], 'builder-1', ['', 'builder-1'], [42]])(
+  it.each(([
+    undefined,
+    null,
+    [],
+    'builder-1',
+    ['', 'builder-1'],
+    [42],
+    ['builder-1', 'builder-1'],
+    [' builder-1'],
+    ['builder-1 '],
+    ['builder\u0000one'],
+    Array.from({ length: 101 }, (_, index) => `builder-${index}`),
+    ['a'.repeat(121)],
+    ['é'.repeat(61)],
+  ] as unknown[]).map((value) => [value]))(
     'rejects an invalid or omitted audience %#',
     (value) => {
       expect(() => normalizeLogAudience(value)).toThrow(/to|selector/);
