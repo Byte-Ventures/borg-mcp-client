@@ -28,7 +28,7 @@ const INITIAL_CURSOR = {
 };
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '10', request_id: requestId, payload };
+  return { protocol_version: '11', request_id: requestId, payload };
 }
 
 function connectionReset(): Error & { code: string } {

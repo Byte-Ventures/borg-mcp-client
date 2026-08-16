@@ -251,6 +251,22 @@ export const TOOL_MANIFEST: ToolManifestEntry[] = [
           },
         },
         {
+          name: 'borg_ack-status',
+          description:
+            'Read acknowledgement status for one activity-log entry without changing it. Returns per-recipient acknowledgements and advisory claims separately. Activity-log silence is not evidence that acknowledgement is missing; use this query instead. This read-only query does not acknowledge or claim the entry and preserves unread cursors.',
+          inputSchema: {
+            type: 'object',
+            required: ['entry_id'],
+            properties: {
+              entry_id: {
+                type: 'string',
+                format: 'uuid',
+                description: 'Full UUID of the activity-log entry to inspect.',
+              },
+            },
+          },
+        },
+        {
           name: 'borg_decide',
           description:
             'Record a RATIFIED cube decision in the durable decision registry so drones cite it by topic instead of restating from memory. Coordinator and Queen roles are workflow-eligible to ratify, but role labels grant no server permission; the selected local client must have a live cube-manage grant. Recording IS the ratification act; a decision is not ratified until it is in the registry. Topic-keyed: recording a new decision on an existing topic supersedes the prior (one active per topic). The decision appears in borg_regen and borg_decisions.',

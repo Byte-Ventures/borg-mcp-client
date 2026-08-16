@@ -9,7 +9,7 @@
  * There is no hosted-authority path: every request must carry verified local
  * server trust or it fails closed before any network or credential use.
  */
-import { decodeAppendLogResult, type AgentKind, type EvictDroneResult, type ReassignDroneResult, type PutDocumentResult, type GetDocumentResult, type ListDocumentsResult, type RemoveDocumentResult } from 'borgmcp-shared/protocol';
+import { decodeAppendLogResult, type AckStatusResult, type AgentKind, type EvictDroneResult, type ReassignDroneResult, type PutDocumentResult, type GetDocumentResult, type ListDocumentsResult, type RemoveDocumentResult } from 'borgmcp-shared/protocol';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import type { NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
@@ -180,6 +180,8 @@ export declare function readLog(sessionToken: string, apiUrl: string, opts?: {
  * CONFLICT DO NOTHING. 204 No Content on success.
  */
 export declare function ackLogEntry(sessionToken: string, apiUrl: string, entryId: string, kind?: 'ack' | 'claim', serverTrustIdentity?: string): Promise<void>;
+/** Read acknowledgement and advisory-claim state without mutating log state. */
+export declare function getAckStatus(sessionToken: string, apiUrl: string, input: unknown, serverTrustIdentity?: string): Promise<AckStatusResult>;
 /** Record a ratified cube decision using the local client's cube-manage grant. */
 export declare function recordDecision(sessionToken: string, apiUrl: string, input: {
     topic: string;
