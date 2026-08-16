@@ -925,7 +925,7 @@ export async function putDocument(sessionToken, apiUrl, input, serverTrustIdenti
 export async function getDocument(sessionToken, apiUrl, input, serverTrustIdentity) {
     const request = decodeGetDocumentRequest(input);
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`, 'GET', undefined, { decodePayload: decodeGetDocumentResult });
+    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`, 'GET', { ...request }, { decodePayload: decodeGetDocumentResult });
     if (!result)
         throw new Error('Local Borg server returned an empty document response');
     return result;
@@ -933,7 +933,7 @@ export async function getDocument(sessionToken, apiUrl, input, serverTrustIdenti
 export async function listDocuments(sessionToken, apiUrl, input, serverTrustIdentity) {
     decodeListDocumentsRequest(input);
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents`, 'GET', undefined, { decodePayload: decodeListDocumentsResult });
+    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents`, 'GET', {}, { decodePayload: decodeListDocumentsResult });
     if (!result)
         throw new Error('Local Borg server returned an empty document-list response');
     return result;
@@ -941,7 +941,7 @@ export async function listDocuments(sessionToken, apiUrl, input, serverTrustIden
 export async function removeDocument(sessionToken, apiUrl, input, serverTrustIdentity) {
     const request = decodeRemoveDocumentRequest(input);
     const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`, 'DELETE', undefined, { decodePayload: decodeRemoveDocumentResult });
+    const result = await localServerRequest(local, `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`, 'DELETE', { ...request }, { decodePayload: decodeRemoveDocumentResult });
     if (!result)
         throw new Error('Local Borg server returned an empty document response');
     return result;

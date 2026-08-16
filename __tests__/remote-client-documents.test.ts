@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PROTOCOL_VERSION } from 'borgmcp-shared/protocol';
+import {
+  PROTOCOL_VERSION,
+  decodeGetDocumentRequestEnvelope,
+  decodeListDocumentsRequestEnvelope,
+  decodePutDocumentRequestEnvelope,
+  decodeRemoveDocumentRequestEnvelope,
+} from 'borgmcp-shared/protocol';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
@@ -26,6 +32,23 @@ function envelope(payload: unknown) {
   return { protocol_version: PROTOCOL_VERSION, request_id: 'response-1', payload };
 }
 
+function decodeDocumentWireRequest(pathname: string, method: string, body: unknown) {
+  const parsed = JSON.parse(String(body));
+  const collection = `/api/cubes/${CUBE_ID}/documents`;
+  if (pathname === collection && method === 'PUT') {
+    return decodePutDocumentRequestEnvelope(parsed).payload;
+  }
+  if (pathname === collection && method === 'GET') {
+    return decodeListDocumentsRequestEnvelope(parsed).payload;
+  }
+  const pathId = decodeURIComponent(pathname.slice(`${collection}/`.length));
+  const request = method === 'DELETE'
+    ? decodeRemoveDocumentRequestEnvelope(parsed).payload
+    : decodeGetDocumentRequestEnvelope(parsed).payload;
+  if (request.id !== pathId) throw new Error('Document path and payload ids differ.');
+  return request;
+}
+
 describe('local document transport', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
@@ -36,19 +59,23 @@ describe('local document transport', () => {
       const method = init?.method ?? 'GET';
       const base = `/api/cubes/${CUBE_ID}/documents`;
       if (url.pathname === base && method === 'PUT') {
+        decodeDocumentWireRequest(url.pathname, method, init?.body);
         return new Response(JSON.stringify(envelope({
           document: { ...metadata, content: '# Notes' },
         })), { status: 201 });
       }
       if (url.pathname === base && method === 'GET') {
+        decodeDocumentWireRequest(url.pathname, method, init?.body);
         return new Response(JSON.stringify(envelope({ documents: [metadata] })), { status: 200 });
       }
       if (url.pathname === `${base}/${DOCUMENT_ID}` && method === 'GET') {
+        decodeDocumentWireRequest(url.pathname, method, init?.body);
         return new Response(JSON.stringify(envelope({
           document: { ...metadata, content: '# Notes' },
         })), { status: 200 });
       }
       if (url.pathname === `${base}/${DOCUMENT_ID}` && method === 'DELETE') {
+        decodeDocumentWireRequest(url.pathname, method, init?.body);
         return new Response(JSON.stringify(envelope({
           document: {
             ...metadata,
@@ -92,6 +119,21 @@ describe('local document transport', () => {
 
     const methods = fetchSpy.mock.calls.map(([, init]) => init?.method ?? 'GET');
     expect(methods).toEqual(['PUT', 'GET', 'GET', 'DELETE']);
+    const envelopes = fetchSpy.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+    expect(envelopes.map(({ protocol_version }) => protocol_version)).toEqual([
+      PROTOCOL_VERSION,
+      PROTOCOL_VERSION,
+      PROTOCOL_VERSION,
+      PROTOCOL_VERSION,
+    ]);
+    expect(envelopes.every(({ request_id }) => typeof request_id === 'string' && request_id.length > 0))
+      .toBe(true);
+    expect(envelopes.map(({ payload }) => payload)).toEqual([
+      { title: 'Architecture notes', content_type: 'text/markdown', content: '# Notes' },
+      { id: DOCUMENT_ID },
+      {},
+      { id: DOCUMENT_ID },
+    ]);
   });
 
   it('rejects malformed input before network use', async () => {
@@ -124,5 +166,20 @@ describe('local document transport', () => {
     const { getDocument } = await import('../src/remote-client.js');
     await expect(getDocument(SESSION, ORIGIN, { id: DOCUMENT_ID }, TRUST_IDENTITY))
       .rejects.toMatchObject({ code: 'DOCUMENT_NOT_FOUND' });
+  });
+
+  it('refuses absent, malformed, and path-mismatched request envelopes', () => {
+    const path = `/api/cubes/${CUBE_ID}/documents/${DOCUMENT_ID}`;
+    expect(() => decodeDocumentWireRequest(path, 'GET', undefined)).toThrow();
+    expect(() => decodeDocumentWireRequest(path, 'GET', JSON.stringify({
+      protocol_version: '9',
+      request_id: 'request-1',
+      payload: { id: DOCUMENT_ID },
+    }))).toThrow(/protocol/i);
+    expect(() => decodeDocumentWireRequest(path, 'GET', JSON.stringify({
+      protocol_version: PROTOCOL_VERSION,
+      request_id: 'request-1',
+      payload: { id: 'doc_different' },
+    }))).toThrow(/path and payload ids differ/);
   });
 });

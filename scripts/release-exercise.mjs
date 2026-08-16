@@ -371,6 +371,7 @@ async function installCandidates(temporary, clientTarball, serverSpec, expectedS
   return {
     consumer,
     clientBin,
+    clientRoot,
     clientIntegrity,
     clientVersion: clientManifest.version,
     bootstrapPath,
@@ -379,6 +380,110 @@ async function installCandidates(temporary, clientTarball, serverSpec, expectedS
     serverRoot,
     serverVersion: serverManifest.version,
   };
+}
+
+async function runDocumentJourney(installed, temporary, isolatedHome) {
+  const dataDirectory = join(temporary, 'document-data');
+  await mkdir(dataDirectory, { mode: 0o700 });
+  const serverModule = (name) => pathToFileURL(join(installed.serverRoot, 'dist', name)).href;
+  const clientModule = (name) => pathToFileURL(join(installed.clientRoot, 'dist', name)).href;
+  const [{ bootstrapServer, loadDigestKey }, { CoordinationApi }, credentials, httpsServer, principal, store] =
+    await Promise.all([
+      import(serverModule('bootstrap.js')),
+      import(serverModule('coordination-api.js')),
+      import(serverModule('credentials.js')),
+      import(serverModule('https-server.js')),
+      import(serverModule('principal.js')),
+      import(serverModule('store.js')),
+    ]);
+  const bootstrap = await bootstrapServer(dataDirectory);
+  const runtime = await store.openStore({ path: bootstrap.paths.database });
+  const digester = new credentials.CredentialDigester(await loadDigestKey(bootstrap.paths.digestKey));
+  const authority = new credentials.CredentialAuthority(runtime.credentials, digester);
+  const api = new CoordinationApi(runtime, authority);
+  const operator = principal.operatorPrincipal('00000000-0000-4000-8000-000000000002');
+  const cubeId = '00000000-0000-4000-8000-000000000003';
+  const roleId = '00000000-0000-4000-8000-000000000004';
+  const droneId = '00000000-0000-4000-8000-000000000005';
+  const sessionId = '00000000-0000-4000-8000-000000000006';
+  const sessionToken = 's'.repeat(43);
+  runtime.maintenance.createCube({ id: cubeId, name: 'Installed document journey', directive: '' });
+  const port = await freePort();
+  const server = await httpsServer.startHttpsServer({
+    bind: { host: '127.0.0.1', port },
+    tls: {
+      key: await readFile(bootstrap.paths.serverKey),
+      cert: await readFile(bootstrap.paths.serverCertificate),
+      ca: await readFile(bootstrap.paths.caCertificate),
+    },
+    authorizeCoordination: async () => operator,
+    handleCoordination: (request) => api.handle(request),
+  });
+  const origin = server.origin;
+  const previousStateRoot = process.env.BORG_STATE_ROOT;
+  const previousDataDirectory = process.env.BORG_SERVER_DATA_DIR;
+  process.env.BORG_STATE_ROOT = isolatedHome;
+  process.env.BORG_SERVER_DATA_DIR = dataDirectory;
+  try {
+    const [remote, seats, trust] = await Promise.all([
+      import(clientModule('remote-client.js')),
+      import(clientModule('seats.js')),
+      import(clientModule('server-trust.js')),
+    ]);
+    const pinned = await trust.loadBorgServerTrust(origin, dataDirectory);
+    const operation = { projectRoot: root, kind: 'seat', operationKey: 'release-document-journey' };
+    await seats.mintPendingSeat({
+      origin,
+      trustIdentity: pinned.identity,
+      cubeId,
+      roleId,
+      operation,
+      credential: sessionToken,
+    });
+    assert.equal(await seats.activateAndBindSeat({
+      origin,
+      trustIdentity: pinned.identity,
+      cubeId,
+      roleId,
+      operation,
+      droneId,
+      sessionId,
+      expectedPendingDigest: createHash('sha256').update(sessionToken).digest('hex'),
+      worktree: root,
+      name: 'Installed document journey',
+      droneLabel: 'release-document-client',
+      roleName: 'Release client',
+      roleClass: 'worker',
+      isHumanSeat: false,
+    }), 'activated');
+    const put = await remote.putDocument(sessionToken, origin, {
+      title: 'Installed document evidence',
+      content_type: 'text/markdown',
+      content: '# Installed document evidence\n',
+    }, pinned.identity);
+    const id = put.document.id;
+    const get = await remote.getDocument(sessionToken, origin, { id }, pinned.identity);
+    assert.equal(get.document.content, '# Installed document evidence\n');
+    const list = await remote.listDocuments(sessionToken, origin, {}, pinned.identity);
+    assert.deepEqual(list.documents.map((document) => document.id), [id]);
+    const remove = await remote.removeDocument(sessionToken, origin, { id }, pinned.identity);
+    assert.equal(remove.document.state, 'removed');
+    return {
+      serverVersion: installed.serverVersion,
+      put: put.document.state,
+      get: get.document.state,
+      listed: list.documents.length,
+      remove: remove.document.state,
+    };
+  } finally {
+    if (previousStateRoot === undefined) delete process.env.BORG_STATE_ROOT;
+    else process.env.BORG_STATE_ROOT = previousStateRoot;
+    if (previousDataDirectory === undefined) delete process.env.BORG_SERVER_DATA_DIR;
+    else process.env.BORG_SERVER_DATA_DIR = previousDataDirectory;
+    await server.close();
+    digester.destroy();
+    runtime.close();
+  }
 }
 
 async function bootstrapServerData(bootstrapPath, dataDirectory) {
@@ -576,6 +681,7 @@ export async function exerciseRelease(options) {
       options.server,
       options.serverIntegrity,
     );
+    const documents = await runDocumentJourney(installed, temporary, isolatedHome);
     const tracePath = join(temporary, 'server-invocations.tsv');
     const shim = await createServerShim(
       shimDirectory,
@@ -677,6 +783,7 @@ export async function exerciseRelease(options) {
         },
       },
       journeys: {
+        documents,
         dashboard: { exitCode: dashboard.report.code, serverHealthyAfterExit: true },
         start: { exitCode: start.report.code, serverStoppedAfterExit: true },
       },

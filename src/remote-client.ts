@@ -1366,7 +1366,7 @@ export async function getDocument(
     local,
     `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`,
     'GET',
-    undefined,
+    { ...request },
     { decodePayload: decodeGetDocumentResult },
   );
   if (!result) throw new Error('Local Borg server returned an empty document response');
@@ -1385,7 +1385,7 @@ export async function listDocuments(
     local,
     `/api/cubes/${local.cubeId}/documents`,
     'GET',
-    undefined,
+    {},
     { decodePayload: decodeListDocumentsResult },
   );
   if (!result) throw new Error('Local Borg server returned an empty document-list response');
@@ -1404,7 +1404,7 @@ export async function removeDocument(
     local,
     `/api/cubes/${local.cubeId}/documents/${encodeURIComponent(request.id)}`,
     'DELETE',
-    undefined,
+    { ...request },
     { decodePayload: decodeRemoveDocumentResult },
   );
   if (!result) throw new Error('Local Borg server returned an empty document response');
