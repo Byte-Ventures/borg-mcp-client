@@ -1,32 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-/**
- * appendLog directed-message request body.
- *
- * Adapted to the LOCAL server path (cloud severance): appendLog routes through
- * the verified local authority to POST /api/cubes/:cubeId/logs with a
- * protocol-enveloped body. The default broadcast omits visibility; an explicit
- * direct send carries { visibility, recipientDroneIds }. Two further behaviours:
- *  - `class:` (server#48 taxonomy routing) is now forwarded on the local append
- *    request in the `class` field; the server classifies/routes it. It is only
- *    honored when no explicit visibility/recipients override it.
- *  - an explicit `to:` array is resolved against the local roster into
- *    recipientDroneIds (a direct send), rather than passed through verbatim.
- * The pre-network contradiction guard (broadcast + non-empty to:) is unchanged.
- */
-
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
-const ROLE_ID = '22222222-2222-4222-8222-222222222222';
 const DRONE_ID = '33333333-3333-4333-8333-333333333333';
 const ORIGIN = 'https://localhost:8787';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '11', request_id: requestId, payload };
+  return { protocol_version: '12', request_id: requestId, payload };
 }
 
-describe('appendLog directed-message request body (local path)', () => {
+describe('appendLog mandatory explicit audience', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -34,18 +18,9 @@ describe('appendLog directed-message request body (local path)', () => {
     fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(input.toString());
       const method = init?.method ?? 'GET';
-      if (url.pathname === `/api/cubes/${CUBE_ID}/roles` && method === 'GET') {
-        return new Response(JSON.stringify(localEnvelope({
-          roles: [{ id: ROLE_ID, name: 'Builder', is_human_seat: false }],
-        })), { status: 200 });
-      }
-      if (url.pathname === `/api/cubes/${CUBE_ID}/drones` && method === 'GET') {
-        return new Response(JSON.stringify(localEnvelope({
-          drones: [{ id: DRONE_ID, label: 'builder-1', role_id: ROLE_ID }],
-        })), { status: 200 });
-      }
       if (url.pathname === `/api/cubes/${CUBE_ID}/logs` && method === 'POST') {
         const request = JSON.parse(String(init?.body)).payload;
+        const direct = Array.isArray(request.to);
         return new Response(JSON.stringify(localEnvelope({
           entry: {
             id: '44444444-4444-4444-8444-444444444444',
@@ -54,21 +29,19 @@ describe('appendLog directed-message request body (local path)', () => {
             drone_label: 'builder-1',
             role_name: 'Builder',
             message: request.message,
-            visibility: request.visibility ?? 'broadcast',
-            recipient_drone_ids: request.recipientDroneIds ?? [],
+            visibility: direct ? 'direct' : 'broadcast',
+            recipient_drone_ids: direct ? [DRONE_ID] : [],
             created_at: '2026-05-29T20:00:00.000Z',
           },
           deduplicated: false,
+          routing: { class: request.class ?? null, recipients: direct ? [DRONE_ID] : [] },
         })), { status: 200 });
       }
       throw new Error(`unexpected local request ${method} ${url.pathname}`);
     });
 
     vi.doMock('../src/server-trust.js', () => ({
-      loadBorgServerTrust: vi.fn(async () => ({
-        identity: TRUST_IDENTITY,
-        fetchImpl: fetchSpy,
-      })),
+      loadBorgServerTrust: vi.fn(async () => ({ identity: TRUST_IDENTITY, fetchImpl: fetchSpy })),
     }));
     vi.doMock('../src/cubes.js', () => ({
       getActiveCube: vi.fn(async () => ({
@@ -81,9 +54,7 @@ describe('appendLog directed-message request body (local path)', () => {
     }));
   });
 
-  afterEach(() => {
-    vi.resetModules();
-  });
+  afterEach(() => vi.resetModules());
 
   function postBody() {
     const post = fetchSpy.mock.calls.find(([input, init]) =>
@@ -94,59 +65,83 @@ describe('appendLog directed-message request body (local path)', () => {
     return JSON.parse(String(post![1]?.body)).payload;
   }
 
-  it('omits visibility fields for default broadcast back-compat', async () => {
+  it('sends explicit broadcast without public visibility or recipient ids', async () => {
     const { appendLog } = await import('../src/remote-client.js');
-    await appendLog(SESSION, ORIGIN, 'hello');
-    expect(postBody()).toMatchObject({ message: 'hello', post_id: expect.any(String) });
+    await appendLog(SESSION, ORIGIN, 'hello', { to: 'broadcast' });
+    expect(postBody()).toMatchObject({
+      message: 'hello',
+      post_id: expect.any(String),
+      to: 'broadcast',
+    });
+    expect(postBody()).not.toHaveProperty('visibility');
+    expect(postBody()).not.toHaveProperty('recipientDroneIds');
   });
 
-  it('sends direct visibility and recipient ids when requested', async () => {
+  it('passes non-empty recipient selectors to the server without local resolution', async () => {
     const { appendLog } = await import('../src/remote-client.js');
-    await appendLog(SESSION, ORIGIN, 'secret', {
-      visibility: 'direct',
-      recipientDroneIds: ['55555555-5555-4555-8555-555555555555'],
+    await appendLog(SESSION, ORIGIN, 'direct', { to: ['builder-1', 'id:12345678'] });
+    expect(postBody()).toMatchObject({ to: ['builder-1', 'id:12345678'] });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps class as metadata without changing the explicit audience', async () => {
+    const { appendLog } = await import('../src/remote-client.js');
+    await appendLog(SESSION, ORIGIN, 'STARTING: work', {
+      to: ['coordinator'],
+      class: 'status-claim',
     });
     expect(postBody()).toMatchObject({
-      message: 'secret',
-      visibility: 'direct',
-      recipientDroneIds: ['55555555-5555-4555-8555-555555555555'],
+      message: 'STARTING: work',
+      to: ['coordinator'],
+      class: 'status-claim',
     });
   });
 
-  it('forwards opts.class on the local append for server#48 taxonomy routing', async () => {
-    const { appendLog } = await import('../src/remote-client.js');
-    await appendLog(SESSION, ORIGIN, 'STARTING: work', { class: 'status-claim' });
-    // class reaches the request body in the server-expected `class` field, with
-    // no visibility/recipients so the server performs class-based routing.
-    expect(postBody()).toMatchObject({ message: 'STARTING: work', class: 'status-claim' });
-  });
-
-  it('forwards full structured document citation ids', async () => {
+  it('forwards documents with an explicit audience', async () => {
     const { appendLog } = await import('../src/remote-client.js');
     await appendLog(SESSION, ORIGIN, 'See durable detail.', {
+      to: 'broadcast',
       documents: ['doc_01jz7example'],
     });
     expect(postBody()).toMatchObject({
-      message: 'See durable detail.',
+      to: 'broadcast',
       documents: ['doc_01jz7example'],
     });
   });
 
-  it('rejects an explicit empty recipient list before mutation', async () => {
-    const { appendLog } = await import('../src/remote-client.js');
-    await expect(appendLog(SESSION, ORIGIN, 'hello', { to: [] }))
-      .rejects.toThrow(/recipient list must contain at least one recipient/);
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
+  it.each(([
+    undefined,
+    null,
+    [],
+    'builder-1',
+    ['', 'builder-1'],
+    [42],
+    ['builder-1', 'builder-1'],
+    [' builder-1'],
+    ['builder-1 '],
+    ['builder\u0000one'],
+    Array.from({ length: 101 }, (_, index) => `builder-${index}`),
+    ['a'.repeat(121)],
+    ['é'.repeat(61)],
+  ] as unknown[]).map((value) => [value]))(
+    'rejects invalid or omitted to before authority or network use %#',
+    async (to) => {
+      const { appendLog } = await import('../src/remote-client.js');
+      await expect(appendLog(SESSION, ORIGIN, 'hello', { to } as never)).rejects.toThrow(/to|selector/);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
 
-  it('rejects contradictory to: plus broadcast before authority lookup or POST', async () => {
+  it('preserves a typed server selector refusal', async () => {
+    fetchSpy.mockImplementationOnce(async () => new Response(JSON.stringify({
+      protocol_version: '12',
+      request_id: 'routing-refusal-1',
+      error: { code: 'INVALID_INPUT', message: 'Unknown recipient.' },
+    }), { status: 400 }));
     const { appendLog } = await import('../src/remote-client.js');
-    await expect(appendLog(SESSION, ORIGIN, 'contradictory routing', {
-      to: ['builder-1'],
-      visibility: 'broadcast',
-    })).rejects.toThrow(
-      /Remove visibility to direct to recipients, or remove to: to broadcast/,
-    );
-    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await expect(appendLog(SESSION, ORIGIN, 'REVIEW-READY', { to: ['missing'] }))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_INPUT' });
+    expect(postBody()).toMatchObject({ to: ['missing'] });
   });
 });

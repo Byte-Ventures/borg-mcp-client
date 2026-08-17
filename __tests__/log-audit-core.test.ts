@@ -3,7 +3,7 @@ import { evaluateLogAudit, LOG_AUDIT_NUDGE } from '../src/log-audit-core';
 
 describe('evaluateLogAudit', () => {
   it('nudges after three OpenCode material tool parts', () => {
-    expect(evaluateLogAudit([
+    const nudge = evaluateLogAudit([
       { info: { role: 'user' }, parts: [{ type: 'text', text: 'work' }] },
       { info: { role: 'assistant' }, parts: [
         { type: 'tool', tool: 'bash' },
@@ -11,7 +11,9 @@ describe('evaluateLogAudit', () => {
         { type: 'tool', tool: 'write' },
       ] },
       { info: { role: 'user' }, parts: [{ type: 'text', text: 'next' }] },
-    ])).toBe(LOG_AUDIT_NUDGE(3));
+    ]);
+    expect(nudge).toBe(LOG_AUDIT_NUDGE(3));
+    expect(nudge).toContain('`to: "broadcast"` or a non-empty selector array');
   });
 
   it('treats an OpenCode borg log call as cooldown', () => {

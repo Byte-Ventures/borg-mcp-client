@@ -341,6 +341,19 @@ export async function smokePackedClient(packageRoot, options = {}) {
                 settle(new Error('Packed MCP tool discovery omitted the strict borg_ack-status schema.'));
                 return;
               }
+              const readEntry = message.result.tools.find((tool) => tool.name === 'borg_read-entry');
+              const log = message.result.tools.find((tool) => tool.name === 'borg_log');
+              if (
+                readEntry?.inputSchema?.required?.[0] !== 'entry_id' ||
+                !readEntry.inputSchema?.properties?.entry_id?.pattern ||
+                !log?.inputSchema?.required?.includes('to') ||
+                log.inputSchema?.properties?.visibility !== undefined ||
+                log.inputSchema?.properties?.to?.oneOf?.[0]?.enum?.[0] !== 'broadcast' ||
+                log.inputSchema?.properties?.to?.oneOf?.[1]?.minItems !== 1
+              ) {
+                settle(new Error('Packed MCP tool discovery omitted mandatory explicit log addressing or borg_read-entry.'));
+                return;
+              }
               settle(null, {
                 name: manifest.name,
                 version: manifest.version,

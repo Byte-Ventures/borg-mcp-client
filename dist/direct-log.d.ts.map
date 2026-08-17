@@ -1,1 +1,1 @@
-{"version":3,"file":"direct-log.d.ts","sourceRoot":"","sources":["../src/direct-log.ts"],"names":[],"mappings":"AAAA,wBAAgB,4BAA4B,CAAC,KAAK,EAAE,OAAO,GAAG,MAAM,EAAE,CAQrE"}
+{"version":3,"file":"direct-log.d.ts","sourceRoot":"","sources":["../src/direct-log.ts"],"names":[],"mappings":"AAEA,MAAM,MAAM,WAAW,GAAG,WAAW,GAAG,MAAM,EAAE,CAAC;AAEjD,wBAAgB,oBAAoB,CAAC,KAAK,EAAE,OAAO,GAAG,WAAW,CAqBhE"}

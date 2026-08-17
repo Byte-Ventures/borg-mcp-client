@@ -147,9 +147,9 @@ export declare function humanAgo(date: Date | string): string;
  * include — robustness wins.
  */
 /**
- * gh#479 — discoverability tip for intent-based routing (#468). When a
+ * gh#479 — discoverability tip for message classification. When a
  * cube has no `message_taxonomy` declared, borg_regen + borg_cube append
- * this tip so operators discover how to enable smart routing. Self-
+ * this tip so operators discover how to classify signals and lifecycle. Self-
  * removing: returns '' once a taxonomy exists. Copy is UX-locked
  * (design d45098c1) — keep verbatim.
  */
@@ -202,4 +202,8 @@ export declare function formatRegenMarkdown(result: {
     mode?: RegenMode;
 }): string;
 export declare function formatLogEntryMarkdown(entry: any, droneById: Map<string, any>, roleById: Map<string, any>): string;
+export declare function formatLogRecipients(entry: {
+    visibility?: unknown;
+    recipient_drone_ids?: unknown;
+}, droneById: Map<string, any>): string[];
 //# sourceMappingURL=regen-format.d.ts.map

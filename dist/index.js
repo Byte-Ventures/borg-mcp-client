@@ -14,13 +14,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
 import { CubeDeletionConfirmationError } from './server-errors.js';
-import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, appendLog, ackLogEntry, getAckStatus, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, putDocument, getDocument, listDocuments, removeDocument, } from './remote-client.js';
+import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, readLogEntry, appendLog, ackLogEntry, getAckStatus, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, putDocument, getDocument, listDocuments, removeDocument, } from './remote-client.js';
 import { formatDocument, formatDocumentCitations, formatDocumentMetadata, } from './document-render.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, getActiveCubeForWorktree, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, pinMcpSeatIdentity, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
 import { addUserPromptSubmitHook } from './config-utils.js';
-import { humanAgo, formatLogEntryMarkdown, formatRegenMarkdown, getDronePlaybook, getDronePlaybookChapter, markArrivalAnnouncedThisProcess, nullTaxonomyTip, regenWakePathDroneLabel, } from './regen-format.js';
+import { humanAgo, formatLogEntryMarkdown, formatLogRecipients, formatRegenMarkdown, getDronePlaybook, getDronePlaybookChapter, markArrivalAnnouncedThisProcess, nullTaxonomyTip, regenWakePathDroneLabel, } from './regen-format.js';
 import { startLogStream, getStreamStatus } from './log-stream.js';
 import { isMcpReadinessProbe } from './readiness-probe.js';
 import { runMcpStartupServices } from './startup-services.js';
@@ -46,7 +46,7 @@ import { installBorgPlugin } from './opencode-plugin.js';
 import { openCodeApiPasswordFromEnv } from './opencode-launch-trust.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
 import { lifecycleSignalForMessage, recordLifecycleLog, shouldSuppressLifecycleLog, } from './lifecycle-log-guard.js';
-import { normalizeDirectLogRecipients, } from './direct-log.js';
+import { normalizeLogAudience, } from './direct-log.js';
 import { formatLocalManageToolResult } from './local-manage-tool-result.js';
 import { OpenCodeSeatIdentityError, formatOpenCodeSeatIdentityError, resolveOpenCodeSeatIdentity, } from './opencode-seat-identity.js';
 import { runEvictDroneTool, runReassignDroneTool, } from './drone-management.js';
@@ -660,6 +660,18 @@ export async function main() {
                     }
                     return { content: [{ type: 'text', text: lines.join('\n') }] };
                 }
+                case 'borg_read-entry': {
+                    const active = await requireActiveCube();
+                    const { entry, drones, roles } = await readLogEntry(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
+                    const droneById = new Map(drones.map((drone) => [drone.id, drone]));
+                    const roleById = new Map(roles.map((role) => [role.id, role]));
+                    const text = [
+                        `# Activity log: ${active.name}`,
+                        '',
+                        formatLogEntryMarkdown(entry, droneById, roleById),
+                    ].join('\n');
+                    return { content: [{ type: 'text', text }] };
+                }
                 case 'borg_put-document': {
                     const active = await requireActiveCube();
                     const result = await putDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
@@ -687,6 +699,7 @@ export async function main() {
                     const message = args?.message;
                     if (!message || typeof message !== 'string')
                         throw new Error('message is required');
+                    const to = normalizeLogAudience(args?.to);
                     const active = await getActiveCube();
                     if (!active)
                         throw new Error('Not assimilated to a cube. Use borg_assimilate <cube-name> first.');
@@ -709,20 +722,14 @@ export async function main() {
                             };
                         }
                     }
-                    const hasTo = Object.prototype.hasOwnProperty.call(args ?? {}, 'to');
-                    const recipients = hasTo ? normalizeDirectLogRecipients(args?.to) : undefined;
                     const explicitClass = typeof args?.class === 'string' ? args.class : undefined;
-                    const visibility = args?.visibility === 'broadcast' || args?.visibility === 'direct'
-                        ? args.visibility
-                        : undefined;
                     const documents = args?.documents;
                     if (!active.serverTrustIdentity) {
                         throw new Error('Selected Borg server authority state is missing or unreadable');
                     }
                     const appendOpts = {
+                        to,
                         ...(explicitClass ? { class: explicitClass } : {}),
-                        ...(hasTo ? { to: recipients ?? [] } : {}),
-                        ...(visibility ? { visibility } : {}),
                         ...(documents ? { documents } : {}),
                         serverTrustIdentity: active.serverTrustIdentity,
                     };
@@ -730,7 +737,20 @@ export async function main() {
                     await recordLifecycleLog(active, message);
                     if (lifecycleSignal === 'arrival')
                         markArrivalAnnouncedThisProcess();
-                    const echo = result.routing?.message ? `\n${result.routing.message}` : '';
+                    let recipientDrones = [];
+                    if (result.entry.visibility === 'direct' && result.entry.recipient_drone_ids.length > 0) {
+                        try {
+                            recipientDrones = (await getRoster(active)).drones;
+                        }
+                        catch {
+                            // The log is already persisted; keep success truthful with stable id fallbacks.
+                        }
+                    }
+                    const recipientById = new Map(recipientDrones.map((drone) => [drone.id, drone]));
+                    const routedRecipients = formatLogRecipients(result.entry, recipientById);
+                    const routed = routedRecipients.length > 0
+                        ? `\nRecipients: ${routedRecipients.join(', ')}`
+                        : '';
                     // gh#534: surface to the SENDER which directed recipients are
                     // currently unreachable via the wake path. The message is delivered
                     // regardless (persisted server-side); they read it when they return.
@@ -742,9 +762,9 @@ export async function main() {
                     const cited = formatDocumentCitations(result.entry.documents);
                     const citations = cited.length > 0 ? `\nDocuments: ${cited.join('; ')}` : '';
                     const advisory = result.advisory?.code === 'STORE_AS_DOCUMENT'
-                        ? `\nAdvisory: this message exceeded ${result.advisory.threshold_bytes} UTF-8 bytes. Store durable detail with borg_put-document and cite its full id in borg_log.documents.`
+                        ? `\nAdvisory: this message exceeded ${result.advisory.threshold_bytes} UTF-8 bytes. Store durable detail with borg_put-document, then cite its full id in borg_log.documents with an explicit borg_log.to audience.`
                         : '';
-                    const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${echo}${unreachable}${citations}${advisory}`;
+                    const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${routed}${unreachable}${citations}${advisory}`;
                     return { content: [{ type: 'text', text }] };
                 }
                 case 'borg_ack': {

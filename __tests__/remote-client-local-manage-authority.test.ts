@@ -12,12 +12,12 @@ const SESSION = 's'.repeat(43);
 const PARENT = 'p'.repeat(43);
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '11', request_id: requestId, payload };
+  return { protocol_version: '12', request_id: requestId, payload };
 }
 
 function errorEnvelope(code: string, message = 'server detail must not be surfaced') {
   return {
-    protocol_version: '11',
+    protocol_version: '12',
     request_id: 'local-error-1',
     error: { code, ...(message === undefined ? {} : { message }) },
   };
@@ -126,7 +126,7 @@ describe('local manage-request authority', () => {
     await remote.updateCube(CUBE_ID, { cube_directive: 'local only' });
     await remote.patchTaxonomyClass(CUBE_ID, {
       action: 'add',
-      class_def: { class: 'qa', prefixes: ['QA:'], routing: 'broadcast' },
+      class_def: { class: 'qa', prefixes: ['QA:'] },
     });
     await remote.deleteCube(CUBE_ID, CUBE_ID);
     await remote.createRole(CUBE_ID, {
@@ -165,9 +165,9 @@ describe('local manage-request authority', () => {
     ['config', `update cube settings in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.updateCube(CUBE_ID, { cube_directive: 'local only' })), 'No cube settings were changed.'],
     ['taxonomy add', `add message class "qa" to cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
-      remote.patchTaxonomyClass(CUBE_ID, { action: 'add', class_def: { class: 'qa', prefixes: ['QA:'], routing: 'broadcast' } })), 'No message class was added.'],
+      remote.patchTaxonomyClass(CUBE_ID, { action: 'add', class_def: { class: 'qa', prefixes: ['QA:'] } })), 'No message class was added.'],
     ['taxonomy replace', `replace message class "qa" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
-      remote.patchTaxonomyClass(CUBE_ID, { action: 'replace', class_def: { class: 'qa', prefixes: ['QA:'], routing: 'broadcast' } })), 'No message class was replaced.'],
+      remote.patchTaxonomyClass(CUBE_ID, { action: 'replace', class_def: { class: 'qa', prefixes: ['QA:'] } })), 'No message class was replaced.'],
     ['taxonomy remove', `remove message class "qa" from cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
       remote.patchTaxonomyClass(CUBE_ID, { action: 'remove', class: 'qa' })), 'No message class was removed.'],
     ['role create', `create role "Builder" in cube "local-cube"`, () => import('../src/remote-client.js').then((remote) =>
@@ -301,7 +301,7 @@ describe('local manage-request authority', () => {
 
   it.each([
     ['message-less envelope', JSON.stringify({
-      protocol_version: '11',
+      protocol_version: '12',
       request_id: 'local-error-1',
       error: { code: 'INVALID_INPUT' },
     })],
@@ -413,7 +413,7 @@ describe('local manage-request authority', () => {
     expect(init?.method).toBe('DELETE');
     expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${PARENT}`);
     expect(JSON.parse(String(init?.body))).toMatchObject({
-      protocol_version: '11',
+      protocol_version: '12',
       payload: {},
     });
   });

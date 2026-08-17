@@ -39,7 +39,7 @@ const root = resolve(import.meta.dirname, '..');
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const sharedVersion = packageManifest.dependencies['borgmcp-shared'];
 const SHARED_TARBALL = `https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-${sharedVersion}.tgz`;
-const SHARED_INTEGRITY = 'sha512-rKRMxnxTnW+o3WOqtAFoih9IeRKCZw/lltqz7CbjC1riNq52CsZ871o1Fo7Fdk0WqwuzdFQmRJ7qOzPi08Q/QA==';
+const SHARED_INTEGRITY = 'sha512-c55kxgfpo3GWXQB2pxy65CV4zjgoWRLZKidVfdR7/k8kKX9m5cqV7gUckUJ15BuvkIGrha5PFO7NAz5xPUXaeQ==';
 
 const RELEASE_NOTES = 'Curated tagged release notes.\n\n- Exact shipped work.';
 const RELEASE_INTEGRITY = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;
@@ -571,7 +571,7 @@ test('release readiness accepts the extracted standalone client', async () => {
   assert.deepEqual(report, { name: 'borgmcp', version: packageManifest.version, shared: sharedVersion });
 });
 
-test('release preflight accepts the current published server when exact shared pins match', async () => {
+test('release preflight accepts the published server when exact shared pins match', async () => {
   const requests = [];
   const report = await verifyReleasePreflight(root, {
     fetchImpl: async (url, options) => {
@@ -580,8 +580,8 @@ test('release preflight accepts the current published server when exact shared p
         ok: true,
         json: async () => ({
           name: 'borgmcp-server',
-          version: '0.22.0',
-          dependencies: { 'borgmcp-shared': '0.14.0' },
+          version: '1.0.0',
+          dependencies: { 'borgmcp-shared': '1.0.0' },
         }),
       };
     },
@@ -590,8 +590,8 @@ test('release preflight accepts the current published server when exact shared p
   assert.deepEqual(report, {
     name: 'borgmcp',
     version: packageManifest.version,
-    shared: '0.14.0',
-    server: '0.22.0',
+    shared: '1.0.0',
+    server: '1.0.0',
   });
   assert.deepEqual(requests, [{
     url: 'https://registry.npmjs.org/borgmcp-server/latest',
@@ -610,12 +610,12 @@ test('release preflight refuses a client before publication when the current ser
         ok: true,
         json: async () => ({
           name: 'borgmcp-server',
-          version: '0.22.0',
-          dependencies: { 'borgmcp-shared': '0.13.1' },
+          version: '1.0.0',
+          dependencies: { 'borgmcp-shared': '0.14.0' },
         }),
       }),
     }),
-    /borgmcp@3\.17\.0 pins borgmcp-shared@0\.14\.0.*borgmcp-server@0\.22\.0 pins borgmcp-shared@0\.13\.1.*Publish the compatible server before tagging this client/s,
+    /borgmcp@4\.0\.0 pins borgmcp-shared@1\.0\.0.*borgmcp-server@1\.0\.0 pins borgmcp-shared@0\.14\.0.*Publish the compatible server before tagging this client/s,
   );
 });
 

@@ -28,7 +28,7 @@ const INITIAL_CURSOR = {
 };
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '11', request_id: requestId, payload };
+  return { protocol_version: '12', request_id: requestId, payload };
 }
 
 function connectionReset(): Error & { code: string } {
@@ -119,13 +119,14 @@ describe('local server route adapter', () => {
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/logs` && method === 'POST') {
         const request = JSON.parse(String(init?.body)).payload;
+        const direct = Array.isArray(request.to);
         return new Response(JSON.stringify(envelope({
           entry: {
             id: LOG_ID, cube_id: CUBE_ID, drone_id: DRONE_ID,
             drone_label: 'builder-1', role_name: 'Builder',
             message: request.message,
-            visibility: request.visibility ?? 'broadcast',
-            recipient_drone_ids: request.recipientDroneIds ?? [],
+            visibility: direct ? 'direct' : 'broadcast',
+            recipient_drone_ids: direct ? [COORDINATOR_DRONE_ID] : [],
             created_at: '2026-07-14T14:00:00.000Z',
           },
           deduplicated: false,
@@ -225,7 +226,7 @@ describe('local server route adapter', () => {
         }],
         behind_by: 0,
       });
-    await expect(remote.appendLog(SESSION, ORIGIN, 'posted locally'))
+    await expect(remote.appendLog(SESSION, ORIGIN, 'posted locally', { to: 'broadcast' }))
       .resolves.toMatchObject({ entry: { id: LOG_ID } });
     await remote.ackLogEntry(SESSION, ORIGIN, LOG_ID);
     await expect(remote.listDecisions(SESSION, ORIGIN, 'local'))
@@ -377,7 +378,7 @@ describe('local server route adapter', () => {
       })), { status: 200 });
     });
 
-    await expect(remote.appendLog(SESSION, ORIGIN, 'must append once'))
+    await expect(remote.appendLog(SESSION, ORIGIN, 'must append once', { to: 'broadcast' }))
       .resolves.toMatchObject({ entry: { id: LOG_ID }, deduplicated: true });
 
     const postCalls = fetchSpy.mock.calls.filter(([input, init]) =>
@@ -417,7 +418,7 @@ describe('local server route adapter', () => {
     ['exact label', ['coordinator-1']],
     ['displayed short UUID', ['`id:66666666`']],
     ['role slug', ['release-coordinator']],
-  ])('maps local to: recipients by %s into the directed server contract', async (_case, to) => {
+  ])('passes local to selectors by %s to the authoritative server', async (_case, to) => {
     const remote = await import('../src/remote-client.js');
 
     await expect(remote.appendLog(SESSION, ORIGIN, 'directed locally', {
@@ -437,38 +438,8 @@ describe('local server route adapter', () => {
     expect(post).toBeDefined();
     expect(JSON.parse(String(post![1]?.body)).payload).toMatchObject({
       message: 'directed locally',
-      visibility: 'direct',
-      recipientDroneIds: [COORDINATOR_DRONE_ID],
+      to,
     });
-  });
-
-  it('rejects contradictory local to: plus broadcast before authority lookup or POST', async () => {
-    const remote = await import('../src/remote-client.js');
-    const before = fetchSpy.mock.calls.length;
-
-    await expect(remote.appendLog(SESSION, ORIGIN, 'contradictory routing', {
-      to: ['coordinator-1'],
-      visibility: 'broadcast',
-      serverTrustIdentity: TRUST_IDENTITY,
-    })).rejects.toThrow(
-      /Remove visibility to direct to recipients, or remove to: to broadcast/,
-    );
-
-    expect(fetchSpy.mock.calls).toHaveLength(before);
-  });
-
-  it('fails closed on an unknown local recipient before log mutation', async () => {
-    const remote = await import('../src/remote-client.js');
-
-    await expect(remote.appendLog(SESSION, ORIGIN, 'must not broadcast', {
-      to: ['missing-seat'],
-      serverTrustIdentity: TRUST_IDENTITY,
-    })).rejects.toThrow(/Unknown direct-message recipient: missing-seat/);
-
-    expect(fetchSpy.mock.calls.some(([input, init]) =>
-      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` &&
-      init?.method === 'POST'
-    )).toBe(false);
   });
 
   it("keeps role-management operations and deletion's advertised remedies reachable (#376)", async () => {

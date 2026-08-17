@@ -47,6 +47,10 @@ describe('tool-scope role filtering (gh#899)', () => {
     expect(UNIVERSAL_TOOLS).toContain('borg_ack-status');
   });
 
+  it('single-entry reads are native for every role', () => {
+    expect(UNIVERSAL_TOOLS).toContain('borg_read-entry');
+  });
+
   it('human-seat (Coordinator): full set, nothing hidden', () => {
     expect(filterToolsForRole(ALL, COORDINATOR).length).toBe(ALL.length);
     expect(deferredToolNames(COORDINATOR).size).toBe(0);

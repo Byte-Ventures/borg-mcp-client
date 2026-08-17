@@ -240,6 +240,8 @@ export function markArrivalAnnouncedThisProcess(): void {
 // copy-param-claim: borg_ack-status.entry_id
 //   The playbook below directs uncertain receipt checks through the read-only
 //   acknowledgement-status query; this marker pins its required entry id.
+// copy-param-claim: borg_read-entry.entry_id
+// copy-param-claim: borg_log.to
 // copy-param-claim: borg_docs.topic
 //   The playbook below points drones to `borg_docs {topic}` for user questions
 //   about how Borg MCP works; this marker pins the param so the #490/#529 guard
@@ -247,7 +249,7 @@ export function markArrivalAnnouncedThisProcess(): void {
 export function getDronePlaybook(): string {
   const arrivalInstruction = arrivalAnnouncedThisProcess
     ? ''
-    : `\n**When this MCP session first starts:** post one \`ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}\`. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again.\n`;
+    : `\n**When this MCP session first starts:** call \`borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"\` once. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again.\n`;
   return `## How to operate as a Drone
 
 You're a Drone in a Cube. Coordinate with other drones through the activity log.
@@ -260,10 +262,11 @@ You're a Drone in a Cube. Coordinate with other drones through the activity log.
 - \`borg_role\` — re-read your role's detailed playbook
 - \`borg_roster\` — see who else is connected
 - \`borg_read-log unread_only=true [limit]\` — drain unread log entries from your server-side cursor
-- \`borg_log <message>\` — append to the log
+- \`borg_read-entry entry_id=<id>\` — read one known complete entry without moving the unread cursor
+- \`borg_log message="<message>" to="broadcast"|["<selector>"]\` — append with an explicit audience
 - \`borg_assimilate <cube>\` — switch to a different cube
 
-**How coordination works:** the Cube gives primitives, not workflows. Your role's \`detailed_description\` (above) is your playbook — its conventions + signals come from there, not the system. The log is the coordination channel. Different cubes, different conventions.
+**How coordination works:** the Cube gives primitives, not workflows. Your role's \`detailed_description\` (above) is your playbook — its conventions + signals come from there, not the system. The log is the coordination channel. Different cubes, different conventions. Every \`borg_log\` call must choose its audience with \`to: "broadcast"\` or a non-empty selector array; omission, message text, prefixes, and classes never choose recipients.
 
 **Communication discipline for non-human seats:**
 - **Console:** write nothing except harness-required output. Surface something to the operator only when blocked and needing unblocking; do not narrate plans, progress, method, or results.
@@ -282,7 +285,7 @@ You're a Drone in a Cube. Coordinate with other drones through the activity log.
    or a status reply must never be the last action of a turn while work is outstanding.
 6. Nothing actionable, no prompt, and no work of your own outstanding → done; wait for next wake.
 
-**On a \`<task-notification>\` wake:** the payload is a truncatable preview; the full entry is in the DB. Drain: \`borg_read-log unread_only=true limit=20\`, repeat until \`behind_by=0\`. Do NOT triage with \`since=<notification timestamp>\` (strict-after — skips the boundary entry) or a bare window (skips older-unread during bursts).
+**On a \`<task-notification>\` wake:** the payload is a truncatable preview; the full entry is in the DB. Drain: \`borg_read-log unread_only=true limit=20\`, repeat until \`behind_by=0\`. If you later need one known entry's complete body, call \`borg_read-entry entry_id=<id>\`. Do NOT triage with \`since=<notification timestamp>\` (strict-after — skips the boundary entry) or a bare window (skips older-unread during bursts).
 ${arrivalInstruction}
 
 **When a log entry routes work to you** (a routing/assignment-class entry per your cube's conventions that names your label + asks for action, or a direct \`<your-label>:\` mention): call \`borg_ack entry_id=<id>\` within ~60s. Use the \`borg_ack\` TOOL, not an in-band \`ACK:\` post (it records a queryable flag + wakes the author's Monitor + keeps the log clean). Ack = receipt, not completion (\`STARTING\` / \`DONE\` still apply). Ack only routing-class signals — not every mention.
@@ -303,9 +306,9 @@ ${arrivalInstruction}
 
 **Posting to the log:** post per your role's conventions whenever you start/finish a task, get stuck, answer a drone, or learn something others need — regardless of who initiated (a log signal, your own scan, or a user prompt). Conventions live in your role detail; the system is vocabulary-agnostic.
 
-**Routing posts — widen the directed default:** the taxonomy routes most prefixes DIRECTED to your cube's coordinating role; your \`to:\` / \`visibility:\` overrides it. Widen when a post must reach more than the coordinating role:
-- Posting a verdict / decision / result a specific drone is waiting on: add \`to:[that drone]\` so they're WOKEN — without it they can be left UNAWARE of their own merge or feedback. Directed governs the WAKE; it is NOT read-confidentiality: every member can read every entry — the cube is the trust boundary — so never post secrets relying on \`to:[x]\`.
-- Any drone posting a multi-seat DELIVERABLE (spec / security classification / review artifact 3+ seats build or gate against): pass \`visibility:broadcast\` (or \`to:[the seats]\`) EVEN IF your prefix (\`DONE\` etc.) is a directed status class — else only your coordinating role wakes (taxonomy routes by prefix, not payload) and the building/gating seats miss it.
+**Address every post explicitly:** use \`to: ["<selector>"]\` for one or more intended recipients and \`to: "broadcast"\` for every drone. Prefixes and optional \`class\` values classify and lifecycle-tag entries only; they never route or supply a default audience.
+- Posting a verdict / decision / result a specific drone is waiting on: include that drone in a non-empty \`to\` selector array so they're WOKEN. Direct addressing governs delivery and the WAKE; it is NOT read-confidentiality: every member can read every entry — the cube is the trust boundary, so never post secrets relying on direct routing.
+- Any drone posting a multi-seat DELIVERABLE (spec / security classification / review artifact 3+ seats build or gate against): use \`to: "broadcast"\` or explicitly list every intended selector. Never rely on the signal prefix or class to choose recipients.
 
 **Pre-commit git hygiene (universal):**
 
@@ -361,7 +364,7 @@ The discipline applies at FOUR surfaces. Catches at the surface closest to origi
 - **Surface 1 (brainstorm-proposal time)**: when a brainstorm contribution names specific code identifiers / API field names / enum values / column names / function signatures, the PROPOSING drone source-grep's the referenced file BEFORE composing the proposal. If the proposal cites current \`origin/main\` or a branch/SHA, grep that ref via \`git show <ref>:<path> | grep\`; working-tree grep is only for explicitly local/uncommitted claims. Cheapest catch surface; one drone catches one error.
 - **Surface 2 (comment/JSDoc/docstring writing time)**: when an implementation comment cites cross-file invariants (other modules' thresholds, schema columns, enum values, semantic contracts), the WRITING drone source-grep's the referenced file BEFORE writing the comment. If the comment describes a merged/base/PR-head state, grep the named ref via \`git show <ref>:<path> | grep\`; don't let a stale local checkout stand in for the ref being described. Mid-cost catch; one drone catches one error but downstream reviewers may inherit the wrong mental model from the comment.
 - **Surface 3 (review-time verification)**: the existing review-class discipline (Code Reviewer formal gates + Security Auditor SR gates + PM/UX/QA courtesy reviews). Late catch opportunity; if the error propagated through Surfaces 1 + 2, multiple reviewers may have already trusted the framing instead of source-grepping themselves.
-- **Surface 4 (durable-tracking-artifact-writing time)**: when filing a deferred-tracking issue from a cube event payload, the FILING drone fetches the originating entry's full body from the cube log BEFORE composing the issue body. For routine wake triage, use \`borg_read-log unread_only=true\` and drain until caught up; do not rely on a truncated event preview or a \`since=<same timestamp>\` read, which can skip the boundary entry. Cube event previews can truncate substantive content (mid-paragraph cuts on long entries); filing from the truncated preview trusts a derivative artifact instead of the source-of-truth full entry. Most expensive surface — the filed issue becomes the cube's durable cross-cycle memory; correcting it requires a follow-up correction post, and later pickup drones inherit the incomplete framing if the correction is missed.
+- **Surface 4 (durable-tracking-artifact-writing time)**: when filing a deferred-tracking issue from a cube event payload, the FILING drone fetches the originating entry's full body with \`borg_read-entry entry_id=<id>\` BEFORE composing the issue body. For routine wake triage, use \`borg_read-log unread_only=true\` and drain until caught up; do not rely on a truncated event preview or a \`since=<same timestamp>\` read, which can skip the boundary entry. Cube event previews can truncate substantive content (mid-paragraph cuts on long entries); filing from the truncated preview trusts a derivative artifact instead of the source-of-truth full entry. Most expensive surface — the filed issue becomes the cube's durable cross-cycle memory; correcting it requires a follow-up correction post, and later pickup drones inherit the incomplete framing if the correction is missed.
 
 **Ratified-decision drift is a four-surface drift-class.** A ratified cube decision restated from memory drifts exactly like a code-identifier claim — it propagates dispatch (Surface 1, brainstorm) → copy (Surface 2, comment) → gate (Surface 3, review), and the cheapest catch is at the brainstorm surface. At each surface, a drone restating a ratified decision source-reads \`borg_decisions {topic}\` FIRST: the active registry entry is the source of truth; your memory is a derivative artifact. Core rule — **cite ratified decisions by topic; never restate one from memory.**
 
@@ -403,9 +406,9 @@ export function humanAgo(date: Date | string): string {
  * include — robustness wins.
  */
 /**
- * gh#479 — discoverability tip for intent-based routing (#468). When a
+ * gh#479 — discoverability tip for message classification. When a
  * cube has no `message_taxonomy` declared, borg_regen + borg_cube append
- * this tip so operators discover how to enable smart routing. Self-
+ * this tip so operators discover how to classify signals and lifecycle. Self-
  * removing: returns '' once a taxonomy exists. Copy is UX-locked
  * (design d45098c1) — keep verbatim.
  */
@@ -419,7 +422,7 @@ export function nullTaxonomyTip(messageTaxonomy: unknown): string {
   //   this inline marker pins the real inputSchema param so the #490/#529 guard
   //   (client/__tests__/copy-mechanism-guard.test.ts) verifies the tool actually
   //   exposes it — the #479 miss class, now caught co-located with the copy.
-  return 'Tip: no message taxonomy declared — set one to enable intent-based smart routing (#468). Use borg_update-cube with a taxonomy array, or add classes with borg_patch-taxonomy-class.';
+  return 'Tip: no message taxonomy declared — set one to classify signal prefixes and dispatch/completion lifecycle. Every borg_log call still requires an explicit to audience. Use borg_update-cube with a taxonomy array, or add classes with borg_patch-taxonomy-class.';
 }
 
 export function regenWakePathDroneLabel(
@@ -574,7 +577,7 @@ export function formatRegenMarkdown(
     ? [
         '## Getting started',
         '',
-        '**You (this agent):** post `borg_log message="<task>"`; check `borg_roster`.',
+        '**You (this agent):** post `borg_log message="<task>" to="broadcast"`; check `borg_roster`.',
         '**Your user:** in a new terminal in the repository, add a teammate: `borg assimilate <role>`; optional `--worktree <name>` names its worktree.',
         'For "what do I do next?", use `borg_docs`.',
         '',
@@ -704,8 +707,26 @@ export function formatLogEntryMarkdown(
       ? ` ${formatDroneAddressToken(entry.drone_id)}`
       : '';
   const citations = formatDocumentCitations(entry.documents);
+  const recipients = formatLogRecipients(entry, droneById);
+  const routed = recipients.length > 0
+    ? `\n  Recipients: ${recipients.join(', ')}`
+    : '';
   const documents = citations.length > 0
     ? `\n  Documents:\n${citations.map((citation) => `  - ${citation}`).join('\n')}`
     : '';
-  return `**[${ts}]**${entryId}${addr} ${d?.label ?? '?'} (${r?.name ?? '?'}): ${entry.message}${documents}`;
+  return `**[${ts}]**${entryId}${addr} ${d?.label ?? '?'} (${r?.name ?? '?'}): ${entry.message}${routed}${documents}`;
+}
+
+export function formatLogRecipients(
+  entry: { visibility?: unknown; recipient_drone_ids?: unknown },
+  droneById: Map<string, any>,
+): string[] {
+  if (entry.visibility !== 'direct' || !Array.isArray(entry.recipient_drone_ids)) return [];
+  return entry.recipient_drone_ids.map((droneId) => {
+    if (typeof droneId !== 'string') return '?';
+    const label = droneById.get(droneId)?.label;
+    return typeof label === 'string' && label.length > 0
+      ? label
+      : formatDroneAddressToken(droneId);
+  });
 }

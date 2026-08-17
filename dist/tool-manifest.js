@@ -178,7 +178,8 @@ export const TOOL_MANIFEST = [
             'this reads oldest-unread-first from your server cursor and ' +
             'advances the watermark so bursts are not skipped. Optional `since` is a strict-after ' +
             'cursor for explicit bounded reads only; do not use it with the same timestamp as a ' +
-            'notification preview because it can skip the boundary entry.',
+            'notification preview because it can skip the boundary entry. Use `borg_read-entry` ' +
+            'to fetch one known entry without changing the unread cursor.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -195,6 +196,21 @@ export const TOOL_MANIFEST = [
                     description: 'When true, read only entries posted after this drone last called read-log, oldest-unread-first. Server advances the watermark to the newest returned entry on every call; if has_more=true, call again until has_more=false.',
                 },
             },
+        },
+    },
+    {
+        name: 'borg_read-entry',
+        description: 'Read one complete activity-log entry by its canonical UUID or unique 8-hex prefix without changing the unread cursor. Returns the same entry shape and structured routing recipients as borg_read-log. Use borg_read-log unread_only=true for routine wake drains. Direct routing controls delivery and wakes, not read confidentiality inside the cube.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                entry_id: {
+                    type: 'string',
+                    pattern: '^(?:[0-9A-Fa-f]{8}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-8][0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12})$',
+                    description: 'Canonical activity-log entry UUID or unique 8-hex prefix.',
+                },
+            },
+            required: ['entry_id'],
         },
     },
     {
@@ -342,24 +358,27 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_log',
-        description: 'Append a message to the cube\'s activity log. By default entries broadcast to all drones. Cite durable cube documents by passing their full ids in `documents`; citations carry current metadata but do not inline document content. When a cube declares a message taxonomy, borg_log applies class-based smart defaults: prefix-matched directed classes route to their default recipients unless you pass `to:`, `class`, or explicit visibility. Pass `to: [...]` to direct by exact drone label, drone id, the 8-hex short-uuid (the `id:` token shown in roster/read-log — a drone_id prefix that is STABLE across label renumber), role name, or role slug.',
+        description: 'Append a message to the cube\'s activity log with an explicit audience. Every call must pass `to: "broadcast"` for all drones or a non-empty selector array for direct delivery. Selectors accept an exact drone label, drone id, the stable 8-hex `id:` token shown in roster/read-log, role name, or role slug. Message text and taxonomy classes never choose the audience; optional `class` records classification/lifecycle metadata only. Cite durable cube documents through `documents`; citations carry current metadata but do not inline document content. Direct routing controls delivery and wakes, not read confidentiality inside the cube.',
         inputSchema: {
             type: 'object',
             properties: {
                 message: { type: 'string', description: 'The log message (max 10KB).' },
                 to: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Optional direct-message recipients by exact drone label, drone id, the 8-hex short-uuid (`id:` token from roster/read-log; stable across label renumber), role name, or role slug (resolves to all drones in that role). Omit to let class-based routing or broadcast defaults apply.',
+                    oneOf: [
+                        { type: 'string', enum: ['broadcast'] },
+                        {
+                            type: 'array',
+                            items: { type: 'string', minLength: 1, maxLength: 120 },
+                            minItems: 1,
+                            maxItems: 100,
+                            uniqueItems: true,
+                        },
+                    ],
+                    description: 'Required explicit audience: "broadcast" for every drone, or a non-empty array of exact drone labels, drone ids, stable 8-hex `id:` tokens, role names, or role slugs.',
                 },
                 class: {
                     type: 'string',
-                    description: 'Optional declared message class. Overrides prefix auto-classification when the cube declares a message taxonomy.',
-                },
-                visibility: {
-                    type: 'string',
-                    enum: ['broadcast', 'direct'],
-                    description: 'Optional explicit visibility. Overrides class-based routing defaults.',
+                    description: 'Optional declared message class for classification/lifecycle metadata. It never changes the required `to` audience.',
                 },
                 documents: {
                     type: 'array',
@@ -370,7 +389,7 @@ export const TOOL_MANIFEST = [
                     description: 'Optional full opaque ids of 1-100 same-cube documents to cite atomically. Unknown, duplicate, or foreign ids are refused.',
                 },
             },
-            required: ['message'],
+            required: ['message', 'to'],
         },
     },
     {
@@ -410,14 +429,12 @@ export const TOOL_MANIFEST = [
                 cube_directive: { type: 'string', description: 'New cube directive markdown (optional).' },
                 message_taxonomy: {
                     type: 'array',
-                    description: 'New message-class taxonomy (optional). REPLACES the whole taxonomy; the worker re-validates the full array (non-overlapping prefixes, unique class names, directed classes need default_to). Pass [] to clear. To change ONE class without resending the whole array, use borg_patch-taxonomy-class instead. In default_to, pass @human-seat to route to drones in the cube human-seat role(s); literal role names/slugs/labels still work. Optional lifecycle tags mark dispatch/completion classes for stuck-dispatch detection.',
+                    description: 'New classification/lifecycle taxonomy (optional). REPLACES the whole taxonomy; the server re-validates non-overlapping prefixes and unique class names. Pass [] to clear. To change ONE class without resending the whole array, use borg_patch-taxonomy-class instead. Optional lifecycle tags mark dispatch/completion classes for stuck-dispatch detection. Taxonomy never chooses log recipients.',
                     items: {
                         type: 'object',
                         properties: {
                             class: { type: 'string', description: 'Unique class name.' },
-                            prefixes: { type: 'array', items: { type: 'string' }, description: 'Message prefixes routed by this class.' },
-                            routing: { type: 'string', enum: ['broadcast', 'directed'], description: 'Routing mode.' },
-                            default_to: { type: 'array', items: { type: 'string' }, description: 'Default recipients (role name/slug/label, or @human-seat) for a directed class.' },
+                            prefixes: { type: 'array', items: { type: 'string' }, description: 'Message prefixes classified by this class.' },
                             lifecycle: { type: 'string', enum: ['dispatch', 'completion'], description: 'Optional lifecycle marker for stuck-dispatch detection.' },
                         },
                     },
@@ -428,7 +445,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_patch-taxonomy-class',
-        description: "Patch ONE message-class in a cube's message_taxonomy without resending the whole taxonomy (avoids clobbering). action=add|replace|remove (replace/remove match name case-insensitively). The full taxonomy is re-validated after the patch (non-overlapping prefixes, unique names, directed classes need default_to) — a patch that breaks a rule against an untouched class is rejected. In default_to, @human-seat routes to the cube's human-seat role(s); literal names/slugs/labels also work. Optional lifecycle tags mark dispatch/completion classes for stuck-dispatch detection.",
+        description: "Patch ONE classification/lifecycle class in a cube's message_taxonomy without resending the whole taxonomy (avoids clobbering). action=add|replace|remove (replace/remove match name case-insensitively). The full taxonomy is re-validated for non-overlapping prefixes and unique names. Optional lifecycle tags mark dispatch/completion classes for stuck-dispatch detection. Taxonomy never chooses log recipients.",
         inputSchema: {
             type: 'object',
             properties: {
@@ -436,15 +453,13 @@ export const TOOL_MANIFEST = [
                 action: { type: 'string', enum: ['add', 'replace', 'remove'], description: 'add / replace / remove a single class.' },
                 class_def: {
                     type: 'object',
-                    description: 'The class definition (for add/replace). Shape: { class, prefixes?, routing: "broadcast"|"directed", default_to?, lifecycle? }.',
+                    description: 'The class definition (for add/replace). Shape: { class, prefixes?, lifecycle? }.',
                     properties: {
                         class: { type: 'string', description: 'Unique class name.' },
-                        prefixes: { type: 'array', items: { type: 'string' }, description: 'Message prefixes routed by this class.' },
-                        routing: { type: 'string', enum: ['broadcast', 'directed'], description: 'Routing mode.' },
-                        default_to: { type: 'array', items: { type: 'string' }, description: 'Default recipients (required for directed classes): role name/slug/label, or @human-seat.' },
+                        prefixes: { type: 'array', items: { type: 'string' }, description: 'Message prefixes classified by this class.' },
                         lifecycle: { type: 'string', enum: ['dispatch', 'completion'], description: 'Optional lifecycle marker for stuck-dispatch detection.' },
                     },
-                    required: ['class', 'routing'],
+                    required: ['class'],
                 },
                 class: { type: 'string', description: 'For remove only: the name of the class to drop (case-insensitive).' },
             },
@@ -477,7 +492,7 @@ export const TOOL_MANIFEST = [
                 is_mandatory: { type: 'boolean', description: 'If true, role-less assimilation prioritizes this unoccupied role before ordinary worker roles. Platform-wide management roles are never auto-assigned; a mandatory human-operator role is selected first until occupied.' },
                 is_human_seat: { type: 'boolean', description: 'If true, this role represents the cube\'s human-occupied seat (where the human Queen sits directly). The class-hierarchy guard in reassign-drone allows promotion FROM a human-seat role TO the platform Queen role; promotion from non-human-seat roles is rejected.' },
                 can_broadcast: { type: 'boolean', description: 'If true, drones in this role may post broadcast log entries when strict broadcast gating is enabled.' },
-                receives_all_direct: { type: 'boolean', description: 'If true, drones in this role can see direct log entries as observer/audit recipients.' },
+                receives_all_direct: { type: 'boolean', description: 'If true, drones in this role are included as observer/audit recipients for every direct route.' },
             },
             required: ['cube_id', 'name', 'short_description', 'detailed_description'],
         },
@@ -496,7 +511,7 @@ export const TOOL_MANIFEST = [
                 is_mandatory: { type: 'boolean', description: 'Set true/false to prioritize this unoccupied role during role-less assimilation. Platform-wide management roles are never auto-assigned.' },
                 is_human_seat: { type: 'boolean', description: 'Set true/false to mark/unmark this as the cube\'s human-occupied seat (the elevation source for the platform Queen role).' },
                 can_broadcast: { type: 'boolean', description: 'Set true/false to allow or deny broadcast log entries when strict broadcast gating is enabled.' },
-                receives_all_direct: { type: 'boolean', description: 'Set true/false to grant or remove observer visibility into direct log entries.' },
+                receives_all_direct: { type: 'boolean', description: 'Set true/false to include or remove this role as observer/audit recipients for every direct route.' },
             },
             required: ['role_id'],
         },
@@ -518,7 +533,7 @@ export const TOOL_MANIFEST = [
     },
     {
         name: 'borg_delete-role',
-        description: 'Delete a role using the selected local client\'s cube-management grant. Unknown or inaccessible roles refuse. Also refuses for the default, mandatory, or human-seat role; a role referenced by message-taxonomy routing; or a role assigned to an active drone. Reassign active drones with borg_reassign-drone or remove them with borg_evict-drone first. Evicted drones that held the deleted role are reassigned to the cube\'s default role; their activity-log attribution is unaffected.',
+        description: 'Delete a role using the selected local client\'s cube-management grant. Unknown or inaccessible roles refuse. Also refuses for the default, mandatory, or human-seat role, or a role assigned to an active drone. Reassign active drones with borg_reassign-drone or remove them with borg_evict-drone first. Evicted drones that held the deleted role are reassigned to the cube\'s default role; their activity-log attribution is unaffected.',
         inputSchema: {
             type: 'object',
             properties: {

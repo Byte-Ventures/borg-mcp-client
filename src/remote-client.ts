@@ -24,6 +24,8 @@ import {
   decodeDeleteRoleRequest,
   decodeDeleteRoleResult,
   decodeDroneRuntimeMetadataState,
+  decodeEntryQueryRequest,
+  decodeEntryQueryResult,
   decodeEvictDroneResult,
   decodeProtocolEnvelope,
   decodeProtocolErrorEnvelope,
@@ -45,6 +47,7 @@ import {
   type AckStatusResult,
   type AgentKind,
   type DeleteRoleResult,
+  type EntryQueryResult,
   type EvictDroneResult,
   type ReassignDroneResult,
   type RoleRationaleResult,
@@ -89,7 +92,7 @@ import {
   type LocalServerCursor,
 } from './local-server-cursor.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { resolveLocalLogRecipients } from './local-log-routing.js';
+import { normalizeLogAudience, type LogAudience } from './direct-log.js';
 import { RoleSectionConflictError } from './local-manage-tool-result.js';
 
 export interface RemoteConnection {
@@ -1112,6 +1115,32 @@ export async function readLog(
   };
 }
 
+/** Read one complete log entry without consulting or advancing the unread cursor. */
+export async function readLogEntry(
+  sessionToken: string,
+  apiUrl: string,
+  input: unknown,
+  serverTrustIdentity?: string,
+): Promise<{ entry: EntryQueryResult['entry']; drones: any[]; roles: any[] }> {
+  const request = decodeEntryQueryRequest(input);
+  const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
+  const result = await localServerRequest<EntryQueryResult>(
+    local,
+    `/api/cubes/${local.cubeId}/logs/${encodeURIComponent(request.entry_id)}`,
+    'GET',
+    undefined,
+    { decodePayload: decodeEntryQueryResult },
+  );
+  if (!result) throw new Error('Local Borg server returned an empty log-entry response');
+  if (request.entry_id.length === 36
+    ? result.entry.id !== request.entry_id
+    : !result.entry.id.startsWith(request.entry_id)) {
+    throw new ProtocolContractError('Log-entry response id does not match the requested selector.');
+  }
+  const composed = await localCubeComposition(local);
+  return { entry: result.entry, drones: composed.drones, roles: composed.roles };
+}
+
 /**
  * Sprint 25 log substrate refactor: explicit ack on a log entry.
  *
@@ -1445,69 +1474,34 @@ export async function appendLog(
   apiUrl: string,
   message: string,
   opts: {
-    visibility?: 'broadcast' | 'direct';
-    recipientDroneIds?: string[];
+    to: LogAudience;
     class?: string;
-    to?: string[];
     documents?: string[];
     serverTrustIdentity?: string;
-  } = {}
+  },
 ): Promise<ReturnType<typeof decodeAppendLogResult>> {
-  if (opts.visibility === 'broadcast' && (opts.to?.length ?? 0) > 0) {
-    throw new Error(
-      "Invalid input: visibility:'broadcast' cannot be combined with non-empty to:. " +
-      'Remove visibility to direct to recipients, or remove to: to broadcast.',
-    );
-  }
-  if (opts.to?.length === 0) {
-    throw new Error('Direct log recipient list must contain at least one recipient');
-  }
+  const to = normalizeLogAudience(opts?.to);
   const postId = randomUUID();
   const local = await localAuthorityContext(
     sessionToken,
     apiUrl,
     opts.serverTrustIdentity,
   );
-  let visibility = opts.visibility;
-  let recipientDroneIds = opts.recipientDroneIds;
-    if (visibility !== 'broadcast' &&
-        (!recipientDroneIds || recipientDroneIds.length === 0) &&
-        opts.to !== undefined) {
-      const base = `/api/cubes/${local.cubeId}`;
-      const [rolePayload, dronePayload] = await Promise.all([
-        localServerRequest<{ roles: any[] }>(local, `${base}/roles`, 'GET'),
-        localServerRequest<{ drones: any[] }>(local, `${base}/drones`, 'GET'),
-      ]);
-      if (!rolePayload || !dronePayload) {
-        throw new Error('Local Borg server returned an incomplete cube roster');
-      }
-      recipientDroneIds = resolveLocalLogRecipients(
-        opts.to,
-        dronePayload.drones,
-        rolePayload.roles,
-      );
-      visibility = 'direct';
-    } else if (visibility === undefined && recipientDroneIds !== undefined) {
-      visibility = 'direct';
-    }
-    const request = decodeAppendLogRequest({
-      post_id: postId,
-      message,
-      ...(visibility ? { visibility } : {}),
-      ...(visibility === 'direct' && recipientDroneIds
-        ? { recipientDroneIds }
-        : {}),
-      ...(opts.class ? { class: opts.class } : {}),
-      ...(opts.documents ? { documents: opts.documents } : {}),
-    });
-    const payload = await localServerRequest<ReturnType<typeof decodeAppendLogResult>>(
-      local,
-      `/api/cubes/${local.cubeId}/logs`,
-      'POST',
-      { ...request },
-      { retryMode: 'append-log', decodePayload: decodeAppendLogResult },
-    );
-    if (!payload) throw new Error('Local Borg server returned an empty log response');
+  const request = decodeAppendLogRequest({
+    post_id: postId,
+    message,
+    to,
+    ...(opts.class ? { class: opts.class } : {}),
+    ...(opts.documents ? { documents: opts.documents } : {}),
+  });
+  const payload = await localServerRequest<ReturnType<typeof decodeAppendLogResult>>(
+    local,
+    `/api/cubes/${local.cubeId}/logs`,
+    'POST',
+    { ...request },
+    { retryMode: 'append-log', decodePayload: decodeAppendLogResult },
+  );
+  if (!payload) throw new Error('Local Borg server returned an empty log response');
   return payload;
 }
 
