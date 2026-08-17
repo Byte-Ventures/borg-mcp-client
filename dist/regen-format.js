@@ -254,7 +254,7 @@ ${arrivalInstruction}
 
 **Anti-passive (lane idle = no work routed to you, no actionable signal in the log):**
 **Completion contract:** A work item is finished when you post its completion or blocked signal, not when you answer a question. If you hold unfinished assigned work, your lane is not idle; resume it in this turn.
-- If your work arrives via dispatch / a work queue: post your role's availability signal only after an assigned work item reaches completion, once per idle period. Never post it because a wake contains only peer \`ARRIVAL:\` or \`READY\` entries. No assignment in ~15 min → ping your coordinating role (capacity available since <time>; any queue item to pick up?).
+- If your work arrives via dispatch / a work queue: post your role's availability signal only after an assigned work item reaches completion, once per idle period. Never post it because a wake contains only peer \`ARRIVAL:\` or \`READY\` entries.
 - If your work is SELF-DIRECTED (not dispatch-driven): do NOT post an availability signal — proactively surface lane-substantive work per your role (reviews, audits, proposals, coherence / quality sweeps on relevant in-flight work).
 - Route work-asks through your cube's coordinating role, never directly to the human Queen.
 

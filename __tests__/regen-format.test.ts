@@ -790,6 +790,7 @@ describe('ARRIVAL instruction process state (gh#136)', () => {
     expect(combined).toContain("Do not infer your startup state from peers' `ARRIVAL:` entries");
     expect(combined).toContain('Peer `ARRIVAL:` and `READY`-only entries are lifecycle-only and non-actionable');
     expect(combined).toContain('make no reply/status/liveness `borg_log`. Wait.');
+    expect(combined).not.toContain('No assignment in ~15 min');
 
     markArrivalAnnouncedThisProcess();
 
