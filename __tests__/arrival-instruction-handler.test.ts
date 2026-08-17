@@ -198,6 +198,36 @@ describe('borg_log ARRIVAL instruction ordering', () => {
     expect(result.content[0].text).toContain('Recipients: reviewer-1, `id:22222222`');
   });
 
+  it('routes a directed audience identically through the direct tool and dispatcher', async () => {
+    const audience = ['shaper-b211c127'];
+    state.handlers.length = 0;
+    state.appendLog.mockResolvedValue({
+      entry: { id: 'entry-test', visibility: 'direct', recipient_drone_ids: [] },
+      routing: null,
+      unreachableRecipients: [],
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main();
+    const callTool = state.handlers[1];
+    await callTool({
+      params: { name: 'borg_log', arguments: { message: 'direct', to: audience } },
+    });
+    await callTool({
+      params: {
+        name: 'borg_tool',
+        arguments: {
+          name: 'borg_log',
+          arguments: { message: 'dispatched', to: audience },
+        },
+      },
+    });
+
+    expect(state.appendLog).toHaveBeenCalledTimes(2);
+    expect(state.appendLog.mock.calls[0][3].to).toEqual(audience);
+    expect(state.appendLog.mock.calls[1][3].to).toEqual(audience);
+  });
+
   it.each(([
     undefined,
     null,

@@ -104,6 +104,7 @@ describe('published package artifact', () => {
       ) as Array<{ filename: string }>;
       const tarball = join(packDir, packResult[0].filename);
       const packedReadme = readTarEntry(tarball, 'package/README.md');
+      const packedToolManifest = readTarEntry(tarball, 'package/dist/tool-manifest.js');
 
       expect(packedReadme.match(/^npm install -g borgmcp$/gm)).toHaveLength(1);
       expect(packedReadme).not.toMatch(/^npm install -g borgmcp@/gm);
@@ -113,6 +114,12 @@ describe('published package artifact', () => {
       expect(packedReadme).toContain('non-empty selector array');
       expect(packedReadme).toContain('not read confidentiality');
       expect(packedReadme).toContain('Omission,');
+      const packedLogSchema = packedToolManifest.slice(
+        packedToolManifest.indexOf("name: 'borg_log'"),
+        packedToolManifest.indexOf("name: 'borg_list-cubes'"),
+      );
+      expect(packedLogSchema).toContain('Required explicit audience');
+      expect(packedLogSchema).not.toContain('oneOf');
       const relativeLinks = [...packedReadme.matchAll(/\[[^\]]+\]\((?!https?:|#)([^)#]+)(?:#[^)]+)?\)/g)]
         .map((match) => match[1].replace(/^\.\//, ''));
       expect(relativeLinks.length).toBeGreaterThan(0);

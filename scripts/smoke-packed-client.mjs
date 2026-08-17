@@ -343,13 +343,19 @@ export async function smokePackedClient(packageRoot, options = {}) {
               }
               const readEntry = message.result.tools.find((tool) => tool.name === 'borg_read-entry');
               const log = message.result.tools.find((tool) => tool.name === 'borg_log');
+              const logAudience = log?.inputSchema?.properties?.to;
               if (
                 readEntry?.inputSchema?.required?.[0] !== 'entry_id' ||
                 !readEntry.inputSchema?.properties?.entry_id?.pattern ||
                 !log?.inputSchema?.required?.includes('to') ||
                 log.inputSchema?.properties?.visibility !== undefined ||
-                log.inputSchema?.properties?.to?.oneOf?.[0]?.enum?.[0] !== 'broadcast' ||
-                log.inputSchema?.properties?.to?.oneOf?.[1]?.minItems !== 1
+                typeof logAudience?.description !== 'string' ||
+                !logAudience.description.includes('"broadcast"') ||
+                !logAudience.description.includes('non-empty array') ||
+                logAudience.type !== undefined ||
+                logAudience.oneOf !== undefined ||
+                logAudience.anyOf !== undefined ||
+                logAudience.allOf !== undefined
               ) {
                 settle(new Error('Packed MCP tool discovery omitted mandatory explicit log addressing or borg_read-entry.'));
                 return;
