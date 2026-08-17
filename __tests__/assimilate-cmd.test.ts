@@ -686,6 +686,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
       expect(provisionLaunchAccess).toHaveBeenCalledWith(cli, '/work/myrepo', {
         worktree: '/work/myrepo',
         scratch: '/home/test/.borg/scratch/drone-1',
+        commonDir: '/work/myrepo/.git',
       });
       const [, launchArgs, launchCwd, launchEnv] = exec.mock.calls[0] as [string, string[], string, Record<string, string>];
       expect(launchCwd).toBe('/work/myrepo');
@@ -696,6 +697,10 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
           '--add-dir', '/work/myrepo',
           '--add-dir', '/home/test/.borg/scratch/drone-1',
         ]));
+        const addDirValues = launchArgs.flatMap((arg, index) =>
+          arg === '--add-dir' ? [launchArgs[index + 1]] : []
+        );
+        expect(addDirValues).not.toContain('/work/myrepo/.git');
       }
     },
   );
@@ -719,6 +724,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
       expect(provisionLaunchAccess).toHaveBeenCalledWith(cli, '/work/myrepo', {
         worktree: '/work/myrepo',
         scratch: '/home/test/.borg/scratch/drone-1',
+        commonDir: '/work/myrepo/.git',
       });
       const [, launchArgs, launchCwd, launchEnv] = exec.mock.calls[0] as [string, string[], string, Record<string, string>];
       expect(launchCwd).toBe('/work/myrepo/packages/client');
@@ -736,6 +742,39 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
       }
     },
   );
+
+  it('adds only the linked repository common directory to the Codex launch argv', async () => {
+    const exec = vi.fn(async () => 0);
+    const provisionLaunchAccess = vi.fn();
+    const deps = makeStubDeps({
+      exec,
+      provisionLaunchAccess,
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/linked tree',
+        commonDir: '/work/origin checkout/.git',
+        derivedName: 'linked-tree',
+        publicRepository: { kind: 'origin', value: 'https://github.com/org/myrepo' },
+        publicRepositoryName: 'org/myrepo',
+      })),
+      cwd: () => '/work/linked tree',
+      findProjectRoot: () => '/work/linked tree',
+    });
+
+    await expect(runAssimilate({ role: undefined, flags: { yes: true, cli: 'codex' } }, deps)).resolves.toBe(0);
+
+    expect(provisionLaunchAccess).toHaveBeenCalledWith('codex', '/work/linked tree', {
+      worktree: '/work/linked tree',
+      scratch: '/home/test/.borg/scratch/drone-1',
+      commonDir: '/work/origin checkout/.git',
+    });
+    const [, launchArgs] = exec.mock.calls[0] as [string, string[]];
+    expect(launchArgs).toEqual(expect.arrayContaining([
+      '--add-dir', '/work/linked tree',
+      '--add-dir', '/home/test/.borg/scratch/drone-1',
+      '--add-dir', '/work/origin checkout/.git',
+    ]));
+    expect(launchArgs).not.toContain('/work/origin checkout');
+  });
 
   // CR-PE-F1 regression (drone-2 Phase E review 2026-05-18T04:59Z):
   // kickoff prompt must include the borg-inbox-monitor clause so the

@@ -10,15 +10,17 @@ import {
   isCodexHookRegistered,
 } from '../src/config-utils';
 import { codexLaunchDirectoryArgs, scratchRootForSeat } from '../src/launch-access';
+import { codexLaunchDirectoryArgs as builtCodexLaunchDirectoryArgs } from '../dist/launch-access.js';
 
 let root: string;
-let paths: { worktree: string; scratch: string };
+let paths: { worktree: string; scratch: string; commonDir: string };
 
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'borg-launch-access-')));
   paths = {
     worktree: path.join(root, 'worktree'),
     scratch: path.join(root, 'scratch', 'drone-1'),
+    commonDir: path.join(root, 'worktree', '.git'),
   };
 });
 
@@ -27,7 +29,7 @@ afterEach(() => {
 });
 
 describe('per-seat launch paths', () => {
-  it('uses the seat label under the Borg scratch parent and emits Codex flags', () => {
+  it('uses the seat label and omits an ordinary checkout common directory nested under the worktree', () => {
     expect(scratchRootForSeat('/home/test', 'drone-1', 'drone-id')).toBe(
       '/home/test/.borg/scratch/drone-1',
     );
@@ -35,6 +37,43 @@ describe('per-seat launch paths', () => {
       '--add-dir', paths.worktree,
       '--add-dir', paths.scratch,
     ]);
+  });
+
+  it('adds a linked worktree common directory as one argv-safe Codex grant', () => {
+    const linkedPaths = {
+      ...paths,
+      worktree: path.join(root, 'worktree with spaces'),
+      commonDir: path.join(root, 'origin checkout', '.git'),
+    };
+
+    expect(codexLaunchDirectoryArgs(linkedPaths)).toEqual([
+      '--add-dir', linkedPaths.worktree,
+      '--add-dir', linkedPaths.scratch,
+      '--add-dir', linkedPaths.commonDir,
+    ]);
+  });
+
+  it('canonicalizes and deduplicates Codex launch grants', () => {
+    expect(codexLaunchDirectoryArgs({
+      worktree: path.join(root, 'repo', '..', 'repo'),
+      scratch: path.join(root, 'repo'),
+      commonDir: path.join(root, 'origin', '.git'),
+    })).toEqual([
+      '--add-dir', path.join(root, 'repo'),
+      '--add-dir', path.join(root, 'origin', '.git'),
+    ]);
+  });
+
+  it('ships the linked-worktree common directory behavior in the built artifact', () => {
+    const linkedPaths = {
+      ...paths,
+      commonDir: path.join(root, 'origin', '.git'),
+    };
+
+    expect(builtCodexLaunchDirectoryArgs(linkedPaths)).toEqual(
+      codexLaunchDirectoryArgs(linkedPaths),
+    );
+    expect(builtCodexLaunchDirectoryArgs(linkedPaths)).toContain(linkedPaths.commonDir);
   });
 });
 
@@ -148,8 +187,10 @@ describe('OpenCode launch access', () => {
 });
 
 describe('Codex launch hook', () => {
-  it('adds a native PreToolUse hook without touching other events', () => {
-    const hooksPath = path.join(root, 'hooks.json');
+  it('adds a native PreToolUse hook without touching other events or config.toml', () => {
+    const codexHome = path.join(root, '.codex');
+    const hooksPath = path.join(codexHome, 'hooks.json');
+    fs.mkdirSync(codexHome, { recursive: true });
     fs.writeFileSync(hooksPath, JSON.stringify({
       hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'existing' }] }] },
     }));
@@ -161,6 +202,7 @@ describe('Codex launch hook', () => {
       hooks: [{ type: 'command', command: 'borg-foreign-path-reminder' }],
     });
     expect(isCodexHookRegistered('PreToolUse', 'borg-foreign-path-reminder', hooksPath)).toBe(true);
+    expect(fs.existsSync(path.join(codexHome, 'config.toml'))).toBe(false);
   });
 });
 

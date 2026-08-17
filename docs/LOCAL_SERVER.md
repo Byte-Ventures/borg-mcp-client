@@ -181,8 +181,11 @@ orientation once after OpenCode creates a new session and preserves it across
 compaction.
 
 Each assimilated seat also receives a disposable scratch root at
-`~/.borg/scratch/<seat>/`. Borg pre-authorizes exactly the launched worktree and
-that seat's scratch root: Claude Code uses the worktree's
+`~/.borg/scratch/<seat>/`. Borg pre-authorizes the launched worktree and that
+seat's scratch root. For Codex in a linked worktree, Borg also grants the exact
+Git common directory when it is outside the worktree; ordinary checkouts do not
+receive that redundant nested grant, and the origin checkout is never granted.
+Claude Code uses the worktree's
 `.claude/settings.local.json`, OpenCode uses the worktree's
 `.opencode/opencode.json`, and Codex receives native `--add-dir` flags at
 launch. Use the scratch root for detached review checkouts, unpacked artifacts,

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { validateName } from './name-validator.js';
 /** Environment names consumed by the optional foreign-path reminder hooks. */
 export const BORG_LAUNCH_WORKTREE_ENV = 'BORG_LAUNCH_WORKTREE';
@@ -21,7 +21,16 @@ export function scratchRootForSeat(homeDir, droneLabel, droneId) {
 }
 /** Build Codex's native launch-time additional-directory flags. */
 export function codexLaunchDirectoryArgs(paths) {
-    const directories = [...new Set([paths.worktree, paths.scratch].map((path) => resolve(path)))];
+    const worktree = resolve(paths.worktree);
+    const relativeCommonDir = relative(worktree, paths.commonDir);
+    const commonDirIsOutsideWorktree = relativeCommonDir === '..'
+        || relativeCommonDir.startsWith(`..${sep}`)
+        || isAbsolute(relativeCommonDir);
+    const directories = [...new Set([
+            worktree,
+            resolve(paths.scratch),
+            ...(commonDirIsOutsideWorktree ? [paths.commonDir] : []),
+        ])];
     return directories.flatMap((directory) => ['--add-dir', directory]);
 }
 //# sourceMappingURL=launch-access.js.map

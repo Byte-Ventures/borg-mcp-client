@@ -1254,9 +1254,10 @@ export async function runAssimilate(args, deps, options = {}) {
         spawnedWorktreePath = deps.cwd();
     }
     // ----- Step 7b: provision launch access before persisting/launching -----
-    // The launched process gets exactly its current worktree plus a stable,
-    // disposable per-seat scratch root. Provision this before FINALIZE so a
-    // failed config write cannot produce a saved seat that launches without
+    // The launched process gets its current worktree plus a stable, disposable
+    // per-seat scratch root. Codex also receives an external Git common directory
+    // at launch so linked worktrees can update shared repository metadata.
+    // Provision before FINALIZE so a failure cannot leave a saved seat without
     // its promised path grants.
     const agentCwd = deps.cwd(); // post-chdir if step 3 spawned a worktree
     const seatWorktree = deps.findProjectRoot(agentCwd);
@@ -1267,6 +1268,7 @@ export async function runAssimilate(args, deps, options = {}) {
         // a nested package. The launch cwd remains the operator's chosen subdir.
         worktree: seatWorktree,
         scratch: scratchRoot,
+        commonDir: repositoryContext.commonDir,
     };
     // ----- Step 8: persist the binding (narrow rollback — worktree exists if spawned) -----
     const activeCube = {
