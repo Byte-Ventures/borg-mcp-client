@@ -13,6 +13,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
 import {
   acquireInboxLock,
   claimModernMonitorSafely,
@@ -618,8 +619,7 @@ describe('formatFreshEventLine — tail -F re-read dedup (gh#643)', () => {
     const deduper = new RecentLineDeduper();
     const line = '2026-05-17T13:34:32.823Z drone-1 (Coordinator): DISPATCH: feat/x';
     const rendered = formatFreshEventLine(line, deduper, true);
-    expect(rendered).toContain('Reading cube messages does not end your current task');
-    expect(rendered).toContain('RESUME the interrupted work');
+    expect(rendered).toContain(CUBE_ACTIVITY_RESUME_WAKE_MESSAGE);
     expect(rendered).toContain('drone-1 (Coordinator): DISPATCH: feat/x');
   });
 
