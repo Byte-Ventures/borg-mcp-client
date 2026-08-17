@@ -7,6 +7,8 @@ export interface LaunchAccessPaths {
     worktree: string;
     /** The disposable scratch root reserved for this seat. */
     scratch: string;
+    /** The canonical Git common directory shared by linked worktrees. */
+    commonDir: string;
 }
 /**
  * Resolve the canonical per-seat scratch root.
