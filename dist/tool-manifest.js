@@ -363,17 +363,9 @@ export const TOOL_MANIFEST = [
             type: 'object',
             properties: {
                 message: { type: 'string', description: 'The log message (max 10KB).' },
+                // Keep this required value schema combinator-free for flat tool
+                // serializers. normalizeLogAudience remains the strict boundary.
                 to: {
-                    oneOf: [
-                        { type: 'string', enum: ['broadcast'] },
-                        {
-                            type: 'array',
-                            items: { type: 'string', minLength: 1, maxLength: 120 },
-                            minItems: 1,
-                            maxItems: 100,
-                            uniqueItems: true,
-                        },
-                    ],
                     description: 'Required explicit audience: "broadcast" for every drone, or a non-empty array of exact drone labels, drone ids, stable 8-hex `id:` tokens, role names, or role slugs.',
                 },
                 class: {

@@ -8,6 +8,31 @@ const clientEntrySource = readFileSync(
   'utf8',
 );
 
+function serializeWithFlatPropertyAdapter(
+  inputSchema: { properties: Record<string, any>; required?: string[] },
+  argumentsValue: Record<string, unknown>,
+): Record<string, unknown> {
+  for (const required of inputSchema.required ?? []) {
+    if (!(required in argumentsValue)) throw new Error(`missing required property: ${required}`);
+  }
+  for (const [name, value] of Object.entries(argumentsValue)) {
+    const property = inputSchema.properties[name] ?? {};
+    if (property.oneOf || property.anyOf || property.allOf) {
+      throw new Error(`unsupported property combinator: ${name}`);
+    }
+    if (property.type === 'string' && typeof value !== 'string') {
+      throw new Error(`expected string: ${name}`);
+    }
+    if (property.type === 'array' && !Array.isArray(value)) {
+      throw new Error(`expected array: ${name}`);
+    }
+    if (property.type === 'object' && (value === null || typeof value !== 'object' || Array.isArray(value))) {
+      throw new Error(`expected object: ${name}`);
+    }
+  }
+  return JSON.parse(JSON.stringify(argumentsValue)) as Record<string, unknown>;
+}
+
 
 /**
  * gh#docs-site — the auto-generated /docs/tools page renders TOOL_MANIFEST, and
@@ -80,16 +105,10 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
 
     const log = TOOL_MANIFEST.find((entry) => entry.name === 'borg_log');
     expect(log?.inputSchema.required).toEqual(['message', 'to']);
-    expect(log?.inputSchema.properties.to.oneOf).toEqual([
-      { type: 'string', enum: ['broadcast'] },
-      {
-        type: 'array',
-        items: { type: 'string', minLength: 1, maxLength: 120 },
-        minItems: 1,
-        maxItems: 100,
-        uniqueItems: true,
-      },
-    ]);
+    expect(log?.inputSchema.properties.to).toEqual({
+      description:
+        'Required explicit audience: "broadcast" for every drone, or a non-empty array of exact drone labels, drone ids, stable 8-hex `id:` tokens, role names, or role slugs.',
+    });
     expect(log?.description).toContain('Every call must pass `to: "broadcast"`');
     expect(log?.description).toContain('not read confidentiality');
     expect(log?.description).toContain('taxonomy classes never choose the audience');
@@ -102,6 +121,22 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
       expect(JSON.stringify(schema)).not.toMatch(/default_to|"routing"/);
       expect(JSON.stringify(schema)).toContain('lifecycle');
     }
+  });
+
+  it('serializes direct and broadcast audiences through a flat-property tool adapter', () => {
+    const log = TOOL_MANIFEST.find((entry) => entry.name === 'borg_log')!;
+    const dispatcher = TOOL_MANIFEST.find((entry) => entry.name === 'borg_tool')!;
+    const directed = { message: 'DISPATCH: draw a pelican', to: ['shaper-b211c127'] };
+
+    expect(serializeWithFlatPropertyAdapter(log.inputSchema, directed)).toEqual(directed);
+    expect(serializeWithFlatPropertyAdapter(log.inputSchema, {
+      message: 'STATUS: ready',
+      to: 'broadcast',
+    })).toEqual({ message: 'STATUS: ready', to: 'broadcast' });
+    expect(serializeWithFlatPropertyAdapter(dispatcher.inputSchema, {
+      name: 'borg_log',
+      arguments: directed,
+    })).toEqual({ name: 'borg_log', arguments: directed });
   });
 
   it('exposes strict document schemas and structured log citations', () => {
