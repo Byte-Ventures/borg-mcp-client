@@ -1,1 +1,1 @@
-{"version":3,"file":"cube-activity-wake-copy.js","sourceRoot":"","sources":["../src/cube-activity-wake-copy.ts"],"names":[],"mappings":"AAAA,MAAM,CAAC,MAAM,iCAAiC,GAC5C,iTAAiT,CAAC;AAEpT,MAAM,UAAU,6BAA6B,CAAC,MAAc;IAC1D,OAAO,GAAG,iCAAiC,KAAK,MAAM,EAAE,CAAC;AAC3D,CAAC"}
+{"version":3,"file":"cube-activity-wake-copy.js","sourceRoot":"","sources":["../src/cube-activity-wake-copy.ts"],"names":[],"mappings":"AAAA,MAAM,CAAC,MAAM,iCAAiC,GAC5C,8VAA8V,CAAC;AAEjW,MAAM,UAAU,6BAA6B,CAAC,MAAc;IAC1D,OAAO,GAAG,iCAAiC,KAAK,MAAM,EAAE,CAAC;AAC3D,CAAC"}

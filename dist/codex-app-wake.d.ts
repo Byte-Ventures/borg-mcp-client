@@ -1,7 +1,7 @@
 import { getActiveCube, getCodexWakeTarget, setCodexWakeTarget, type ActiveCube } from './cubes.js';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { checkCodexBridgeHealthy } from './codex-remote.js';
-export declare const CODEX_WAKE_PROMPT = "Borg cube activity arrived while you were busy. Reading cube messages does not end your current task. Drain `borg_read-log unread_only=true` until caught up, handle actionable entries, then RESUME the interrupted work. If the unread drain is empty, resume silently without a liveness post or full regen.";
+export declare const CODEX_WAKE_PROMPT = "Borg cube activity arrived while you were busy.\n1. Drain `borg_read-log unread_only=true` until caught up.\n2. Peer `ARRIVAL:` and `READY`-only entries are lifecycle-only and non-actionable. Do not reply to them.\n3. Resume interrupted or assigned work.\n4. If none remains, do not run a full regen. Make no reply/status/liveness `borg_log`. Wait.";
 export declare function formatCodexWakePrompt(inboxLine: string): string;
 export declare const CODEX_CATCHUP_PROMPT: string;
 export declare function isCodexRemoteWakeEnabled(env?: NodeJS.ProcessEnv): boolean;

@@ -15,6 +15,7 @@ import {
   wakeCodexViaAppServer,
 } from '../src/codex-app-wake';
 import { wakeRetryBackoffMs } from '../src/codex-wake-resolve';
+import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
 
 describe('codex app-server wake gating', () => {
   beforeEach(() => {
@@ -67,8 +68,7 @@ describe('codex app-server wake gating', () => {
 
   it('formats a lightweight wake prompt without forcing regen', () => {
     const prompt = formatCodexWakePrompt('2026-05-28T10:00:00.000Z drone-1 (Coordinator): DISPATCH: drone-2');
-    expect(prompt).toContain('Reading cube messages does not end your current task');
-    expect(prompt).toContain('RESUME the interrupted work');
+    expect(prompt).toContain(CUBE_ACTIVITY_RESUME_WAKE_MESSAGE);
     expect(prompt).toContain('drone-1 (Coordinator): DISPATCH: drone-2');
     expect(prompt).not.toContain('Call borg_regen');
     expect(prompt).not.toContain('follow the playbook');
@@ -601,7 +601,7 @@ describe('gh#708: coalesced catch-up wake on a mid-turn-active thread', () => {
   it('CODEX_CATCHUP_PROMPT is static — carries no token/secret/PII interpolation', () => {
     expect(CODEX_CATCHUP_PROMPT).toContain('borg_read-log unread_only=true');
     expect(CODEX_CATCHUP_PROMPT).toContain('Wake triage');
-    expect(CODEX_CATCHUP_PROMPT).toContain('handle actionable entries');
+    expect(CODEX_CATCHUP_PROMPT).toContain(CUBE_ACTIVITY_RESUME_WAKE_MESSAGE);
     expect(CODEX_CATCHUP_PROMPT).toContain('resume the prior interrupted work');
     expect(CODEX_CATCHUP_PROMPT).not.toContain('${');
     expect(CODEX_CATCHUP_PROMPT).not.toMatch(/token|secret|session|bearer/i);

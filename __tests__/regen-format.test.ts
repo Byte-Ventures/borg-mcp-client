@@ -22,6 +22,7 @@ import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { formatWakePathPrefix } from '../src/stream-status';
 import { shellEscape } from '../src/shell-escape';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from '../src/opencode-wake-copy';
+import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
 import {
   GIT_OPERATIONAL_DISCIPLINE_BUILDER,
   GIT_OPERATIONAL_DISCIPLINE_COORDINATOR,
@@ -217,10 +218,10 @@ describe('getDronePlaybook', () => {
       'or a status reply must never be the last action of a turn while work is outstanding.'
     );
     expect(playbook).toContain(
-      '6. Nothing actionable, no prompt, and no work of your own outstanding → done; wait for next wake.'
+      '6. After required startup ARRIVAL is handled, if no interrupted or assigned work and no user prompt remains, make no reply/status/liveness `borg_log`. Wait.'
     );
     expect(playbook).not.toContain(
-      '5. Nothing actionable + no prompt → done; wait for next wake.'
+      'Nothing actionable + no prompt → done; wait for next wake.'
     );
     expect(playbook).toContain(
       'A work item is finished when you post its completion or blocked signal, not when you answer a question.'
@@ -775,6 +776,32 @@ describe('DRONE_PLAYBOOK core/chapter split (gh#912)', () => {
 });
 
 describe('ARRIVAL instruction process state (gh#136)', () => {
+  it('orders required own ARRIVAL before wake triage and silences lifecycle-only wakes', () => {
+    __resetRegenSessionState();
+    const playbook = getDronePlaybook();
+    const combined = `${playbook}\n${CUBE_ACTIVITY_RESUME_WAKE_MESSAGE}`;
+    const startupIndex = combined.indexOf('**Required one-time startup setup:**');
+    const wakeDrainIndex = combined.indexOf('1. Drain `borg_read-log unread_only=true`');
+
+    expect(startupIndex).toBeGreaterThanOrEqual(0);
+    expect(wakeDrainIndex).toBeGreaterThan(startupIndex);
+    expect(combined).toContain('before unread-log triage');
+    expect(combined).toContain('sole exception to no-work log silence');
+    expect(combined).toContain("Do not infer your startup state from peers' `ARRIVAL:` entries");
+    expect(combined).toContain('Peer `ARRIVAL:` and `READY`-only entries are lifecycle-only and non-actionable');
+    expect(combined).toContain('make no reply/status/liveness `borg_log`. Wait.');
+    expect(combined).not.toContain('No assignment in ~15 min');
+
+    markArrivalAnnouncedThisProcess();
+
+    const suppressed = getDronePlaybook();
+    expect(suppressed).not.toContain('**Required one-time startup setup:**');
+    expect(suppressed).not.toContain(
+      `borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"`
+    );
+    __resetRegenSessionState();
+  });
+
   it('suppresses the canonical instruction only after a successful ARRIVAL is recorded', () => {
     __resetRegenSessionState();
     const initial = getDronePlaybook();
@@ -790,7 +817,7 @@ describe('ARRIVAL instruction process state (gh#136)', () => {
 
     markArrivalAnnouncedThisProcess();
 
-    expect(getDronePlaybook()).not.toContain('ARRIVAL:');
+    expect(getDronePlaybook()).not.toContain('**Required one-time startup setup:**');
     __resetRegenSessionState();
   });
 
@@ -818,14 +845,14 @@ describe('ARRIVAL instruction process state (gh#136)', () => {
 
     expect(orientation).toContain('borg_regen mode="full"');
     expect(regen).toContain('## How to operate as a Drone');
-    expect(regen).not.toContain('ARRIVAL:');
+    expect(regen).not.toContain('**Required one-time startup setup:**');
     __resetRegenSessionState();
   });
 
   it('shows the instruction again after process state resets', () => {
     __resetRegenSessionState();
     markArrivalAnnouncedThisProcess();
-    expect(getDronePlaybook()).not.toContain('ARRIVAL:');
+    expect(getDronePlaybook()).not.toContain('**Required one-time startup setup:**');
 
     __resetRegenSessionState();
 
