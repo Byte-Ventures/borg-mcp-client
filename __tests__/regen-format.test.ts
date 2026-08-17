@@ -271,6 +271,20 @@ describe('getDronePlaybook', () => {
     expect(playbook).toContain('never post secrets relying on direct routing');
   });
 
+  it('acknowledges only explicitly addressed action requests', () => {
+    const playbook = getDronePlaybook();
+
+    expect(playbook).toContain(
+      'if its explicit `to` audience includes your drone and its message assigns you work or directly asks you to act'
+    );
+    expect(playbook).toContain('call `borg_ack entry_id=<id>` within ~60s');
+    expect(playbook).toContain('Use the `borg_ack` TOOL, not an in-band `ACK:` post');
+    expect(playbook).toContain('Ack actionable assignments and direct action requests only');
+    expect(playbook).toContain('not every addressed entry or mention');
+    expect(playbook).not.toContain('routing/assignment-class');
+    expect(playbook).not.toContain('routing-class signals');
+  });
+
   it('always points every template to the stable worktree mechanism', () => {
     const playbook = getDronePlaybook();
     expect(playbook).toContain('One seat uses one stable worktree');
