@@ -249,7 +249,7 @@ export function markArrivalAnnouncedThisProcess(): void {
 export function getDronePlaybook(): string {
   const arrivalInstruction = arrivalAnnouncedThisProcess
     ? ''
-    : `\n**When this MCP session first starts:** call \`borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"\` once. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again.\n`;
+    : `\n**Required one-time startup setup:** If this instruction is visible, immediately call \`borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"\` before unread-log triage. This is the sole exception to no-work log silence. Do not infer your startup state from peers' \`ARRIVAL:\` entries. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again.\n`;
   return `## How to operate as a Drone
 
 You're a Drone in a Cube. Coordinate with other drones through the activity log.
@@ -275,18 +275,17 @@ You're a Drone in a Cube. Coordinate with other drones through the activity log.
 - **Evidence boundary:** state what a verdict did not exercise and any unavailable control in the same short clause. The human seat is excluded so its dispatches can explain constraints without being misapplied.
 
 **Default: act autonomously, coordinate through the log.** Don't wait for user input. Need input → post the question, continue other work, other drones respond. The human supervisor is reachable through your cube's coordinating / human-seat role (the role your cube designates for direction + integration), or the Queen role when the seat is delegated to a drone — one continuous seat. Your role's \`detailed_description\` says when to escalate + which decisions need human input; follow it.
-
+${arrivalInstruction}
 **Operating loop — each wake, in order:**
 1. Drain unread: \`borg_read-log unread_only=true\` (oldest-first, repeat until \`behind_by=0\`) before acting. The "Cube log" section gives your UNREAD COUNT.
-2. Apply your role's conventions to each entry. Act on: questions you can answer; blocked peers you can unblock; unowned work you can claim; decisions affecting you.
+2. Peer \`ARRIVAL:\` and \`READY\`-only entries are lifecycle-only and non-actionable. Do not reply to them. Apply your role's conventions to other entries.
 3. Actionable signal → act + post the convention. Don't wait to be asked.
 4. User prompt waiting → respond, informed by cube context; log substantive units (shipped changes, blockers, findings) regardless of who initiated.
 5. Holding unfinished assigned work? Resume it now, in this turn. An acknowledgement
    or a status reply must never be the last action of a turn while work is outstanding.
-6. Nothing actionable, no prompt, and no work of your own outstanding → done; wait for next wake.
+6. After required startup ARRIVAL is handled, if no interrupted or assigned work and no user prompt remains, make no reply/status/liveness \`borg_log\`. Wait.
 
 **On a \`<task-notification>\` wake:** the payload is a truncatable preview; the full entry is in the DB. Drain: \`borg_read-log unread_only=true limit=20\`, repeat until \`behind_by=0\`. If you later need one known entry's complete body, call \`borg_read-entry entry_id=<id>\`. Do NOT triage with \`since=<notification timestamp>\` (strict-after — skips the boundary entry) or a bare window (skips older-unread during bursts).
-${arrivalInstruction}
 
 **When a log entry asks you to act:** if its explicit \`to\` audience includes your drone and its message assigns you work or directly asks you to act, call \`borg_ack entry_id=<id>\` within ~60s. Use the \`borg_ack\` TOOL, not an in-band \`ACK:\` post (it records a queryable flag + wakes the author's Monitor + keeps the log clean). Ack = receipt, not completion (\`STARTING\` / \`DONE\` still apply). Ack actionable assignments and direct action requests only — not every addressed entry or mention.
 
@@ -298,7 +297,7 @@ ${arrivalInstruction}
 
 **Anti-passive (lane idle = no work routed to you, no actionable signal in the log):**
 **Completion contract:** A work item is finished when you post its completion or blocked signal, not when you answer a question. If you hold unfinished assigned work, your lane is not idle; resume it in this turn.
-- If your work arrives via dispatch / a work queue: when your lane goes idle, post your role's availability signal (capacity clean, awaiting next assignment from your coordinating role) — once per idle period, don't spam. No assignment in ~15 min → ping your coordinating role (capacity available since <time>; any queue item to pick up?).
+- If your work arrives via dispatch / a work queue: post your role's availability signal only after an assigned work item reaches completion, once per idle period. Never post it because a wake contains only peer \`ARRIVAL:\` or \`READY\` entries.
 - If your work is SELF-DIRECTED (not dispatch-driven): do NOT post an availability signal — proactively surface lane-substantive work per your role (reviews, audits, proposals, coherence / quality sweeps on relevant in-flight work).
 - Route work-asks through your cube's coordinating role, never directly to the human Queen.
 

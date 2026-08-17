@@ -456,8 +456,7 @@ describe('streamOnce', () => {
       allowSubmit: boolean,
     ) => {
       expect(order).toEqual(['append']);
-      expect(line).toContain('Reading cube messages does not end your current task');
-      expect(line).toContain('RESUME the interrupted work');
+      expect(line).toContain(CUBE_ACTIVITY_RESUME_WAKE_MESSAGE);
       expect(entryId).toBe('e-durable');
       expect(allowSubmit).toBe(true);
       order.push('inject');
@@ -948,7 +947,7 @@ describe('streamOnce', () => {
     expect(appendLine).toHaveBeenCalledTimes(1);
     expect(wakeCodex).toHaveBeenCalledTimes(1);
     expect(wakeCodex).toHaveBeenCalledWith(
-      expect.stringContaining('Reading cube messages does not end your current task'),
+      expect.stringContaining(CUBE_ACTIVITY_RESUME_WAKE_MESSAGE),
       undefined,
       'e1',
     );
