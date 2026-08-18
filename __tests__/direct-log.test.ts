@@ -36,3 +36,32 @@ describe('borg_log explicit audience', () => {
     expect(normalizeLogAudience(audience)).not.toBe(audience);
   });
 });
+
+// gh#491: hosts normalize the manifest's type-less `to` property (kept
+// combinator-free by gh#485) to a string and deliver a directed audience
+// JSON-encoded. The boundary decodes exactly that shape; nothing else loosens.
+describe('borg_log host-serialized audience', () => {
+  it('accepts a directed audience delivered as a JSON-encoded array string', () => {
+    expect(normalizeLogAudience('["builder-1"]')).toEqual(['builder-1']);
+    expect(normalizeLogAudience('["builder-1","id:12345678"]'))
+      .toEqual(['builder-1', 'id:12345678']);
+    expect(normalizeLogAudience(' ["builder-1"] ')).toEqual(['builder-1']);
+  });
+
+  it.each(([
+    '[]',
+    '"broadcast"',
+    '[42]',
+    '["builder-1","builder-1"]',
+    '[" builder-1"]',
+    '["builder-1"',
+    '[["builder-1"]]',
+    `["${'a'.repeat(121)}"]`,
+    JSON.stringify(Array.from({ length: 101 }, (_, index) => `builder-${index}`)),
+  ] as string[]).map((value) => [value]))(
+    'refuses an invalid serialized audience %#',
+    (value) => {
+      expect(() => normalizeLogAudience(value)).toThrow(/to|selector/);
+    },
+  );
+});
