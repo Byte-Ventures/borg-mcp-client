@@ -36,6 +36,15 @@ export declare function formatUpdatedRoleResult(role: {
     is_default?: boolean;
     is_mandatory?: boolean;
 }, advisory?: unknown): string;
+export declare function buildReadLogStructuredContent(input: {
+    entries: unknown[];
+    behind_by: unknown;
+    has_more: unknown;
+}): {
+    entries: unknown[];
+    behind_by: number | null;
+    has_more: boolean;
+};
 export declare function formatPatchedRoleSectionResult(action: 'replace' | 'insert' | 'delete', heading: string, role: {
     name: string;
     id: string;
