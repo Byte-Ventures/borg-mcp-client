@@ -25,6 +25,8 @@ export interface RunLaunchAllOptions {
         cubeId: string;
         name: string;
     };
+    /** Internal quickstart dispatch order: workers first, persisted human seats last. */
+    humanSeatLast?: boolean;
 }
 export declare function runLaunchAll(args: LaunchAllArgs, deps: LaunchAllDeps, opts?: RunLaunchAllOptions): Promise<number>;
 //# sourceMappingURL=launch-all-cmd.d.ts.map
