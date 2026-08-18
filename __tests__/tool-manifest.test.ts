@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DECISION_TEXT_MAX_BYTES } from 'borgmcp-shared/protocol';
 import { TOOL_MANIFEST } from '../src/tool-manifest';
+import { normalizeLogAudience } from '../src/direct-log';
 const clientEntrySource = readFileSync(
   fileURLToPath(new URL('../src/index.ts', import.meta.url)),
   'utf8',
@@ -31,6 +32,23 @@ function serializeWithFlatPropertyAdapter(
     }
   }
   return JSON.parse(JSON.stringify(argumentsValue)) as Record<string, unknown>;
+}
+
+// gh#491: both observed harnesses (Claude Code + Codex) normalize a property
+// that declares NO type to a string when relaying model tool calls, so a
+// directed audience arrives JSON-encoded at the direct wrapper.
+function serializeWithStringNormalizingAdapter(
+  inputSchema: { properties: Record<string, any> },
+  argumentsValue: Record<string, unknown>,
+): Record<string, unknown> {
+  const delivered: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(argumentsValue)) {
+    const property = inputSchema.properties[name] ?? {};
+    delivered[name] = property.type === undefined && typeof value !== 'string'
+      ? JSON.stringify(value)
+      : value;
+  }
+  return delivered;
 }
 
 
@@ -137,6 +155,20 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
       name: 'borg_log',
       arguments: directed,
     })).toEqual({ name: 'borg_log', arguments: directed });
+  });
+
+  it('round-trips a directed audience through a string-normalizing host adapter (gh#491)', () => {
+    const log = TOOL_MANIFEST.find((entry) => entry.name === 'borg_log')!;
+    const directed = { message: 'DISPATCH: draw a pelican', to: ['shaper-b211c127'] };
+
+    const delivered = serializeWithStringNormalizingAdapter(log.inputSchema, directed);
+    expect(delivered.to).toBe(JSON.stringify(directed.to));
+    expect(normalizeLogAudience(delivered.to)).toEqual(directed.to);
+
+    expect(serializeWithStringNormalizingAdapter(log.inputSchema, {
+      message: 'STATUS: ready',
+      to: 'broadcast',
+    })).toEqual({ message: 'STATUS: ready', to: 'broadcast' });
   });
 
   it('exposes strict document schemas and structured log citations', () => {

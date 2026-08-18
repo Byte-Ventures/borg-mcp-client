@@ -1,7 +1,23 @@
 import { Buffer } from 'node:buffer';
-export function normalizeLogAudience(value) {
-    if (value === 'broadcast')
+// gh#491: hosts normalize the manifest's type-less `to` property (kept
+// combinator-free by gh#485) to a string and deliver a directed audience
+// JSON-encoded. Decode that one shape; any other string falls through to the
+// unchanged refusals below.
+function decodeSerializedAudience(value) {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith('['))
         return value;
+    try {
+        return JSON.parse(trimmed);
+    }
+    catch {
+        return value;
+    }
+}
+export function normalizeLogAudience(rawValue) {
+    if (rawValue === 'broadcast')
+        return rawValue;
+    const value = typeof rawValue === 'string' ? decodeSerializedAudience(rawValue) : rawValue;
     if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
         throw new Error('to is required and must be "broadcast" or contain 1-100 recipient selectors');
     }
