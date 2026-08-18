@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { TOOL_MANIFEST, TOOL_OUTPUT_SCHEMAS } from '../src/tool-manifest';
 
 /**
@@ -111,6 +112,68 @@ describe('tool output classification — complete registry', () => {
       // Additive server fields must never invalidate a conforming result.
       expect(JSON.stringify(entry.outputSchema)).not.toContain('"additionalProperties":false');
     }
+  });
+
+  // The server's contextAdvisory for these three mutations is a SENTENCE
+  // (string) when present, or absent — never an object. Validated with the
+  // SDK's own outputSchema validator, the same mechanism real MCP clients
+  // apply to structuredContent, so a schema that rejects the real success
+  // shape goes red here.
+  it('accepts the real string-advisory success shape for cube/role mutations', () => {
+    const validator = new AjvJsonSchemaValidator();
+    const byName = new Map(TOOL_MANIFEST.map((entry) => [entry.name, entry]));
+    const cube = {
+      id: 'e6b8f0a2-1111-4222-8333-444455556666',
+      name: 'borg-mcp',
+      cube_directive: 'directive',
+      created_at: '2026-08-18T00:00:00.000Z',
+      updated_at: '2026-08-18T00:00:00.000Z',
+    };
+    const role = { id: 'e6b8f0a2-7777-4888-8999-000011112222', name: 'Builder' };
+    const advisorySentence = 'The cube Directive is 9000 bytes — consider trimming it toward the 8192-byte guideline.';
+
+    const conforming: Array<[string, Record<string, unknown>]> = [
+      ['borg_update-cube', { cube, advisory: advisorySentence }],
+      ['borg_update-cube', { cube, advisory: null }],
+      ['borg_update-role', { role, advisory: advisorySentence }],
+      ['borg_update-role', { role, advisory: null }],
+      ['borg_patch-role-section', { action: 'replace', heading: 'Workflow', role, advisory: advisorySentence }],
+    ];
+    for (const [name, result] of conforming) {
+      const validate = validator.getValidator(byName.get(name)!.outputSchema as never);
+      const verdict = validate(result);
+      expect(verdict.valid, `${name} rejected a real success shape: ${verdict.errorMessage}`).toBe(true);
+    }
+
+    // Control: the object-shaped advisory (the log-append shape) must NOT
+    // conform on these endpoints — that was the original schema defect.
+    for (const name of ['borg_update-cube', 'borg_update-role', 'borg_patch-role-section']) {
+      const validate = validator.getValidator(byName.get(name)!.outputSchema as never);
+      const base = name === 'borg_update-cube'
+        ? { cube }
+        : name === 'borg_update-role'
+          ? { role }
+          : { action: 'replace', heading: 'Workflow', role };
+      const verdict = validate({ ...base, advisory: { code: 'STORE_AS_DOCUMENT', threshold_bytes: 1024 } });
+      expect(verdict.valid, `${name} accepted an object advisory`).toBe(false);
+    }
+
+    // The log-append advisory IS an object — its own schema must keep
+    // accepting it.
+    const logValidate = validator.getValidator(byName.get('borg_log')!.outputSchema as never);
+    const logVerdict = logValidate({
+      suppressed: false,
+      entry: {
+        id: 'e6b8f0a2-3333-4444-8555-666677778888',
+        message: 'DONE',
+        visibility: 'broadcast',
+        created_at: '2026-08-18T00:00:00.000Z',
+      },
+      recipients: [],
+      unreachable_recipients: [],
+      advisory: { code: 'STORE_AS_DOCUMENT', threshold_bytes: 1024 },
+    });
+    expect(logVerdict.valid, `borg_log rejected its object advisory: ${logVerdict.errorMessage}`).toBe(true);
   });
 
   it('keeps the high-risk orchestration contracts explicit', () => {

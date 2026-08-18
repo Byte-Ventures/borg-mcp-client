@@ -827,9 +827,12 @@ const DECISION_OUTPUT = {
   required: ['topic', 'decision'],
 };
 
+// The server's contextAdvisory for cube update, role update, and role-section
+// patch is a SENTENCE (string) when present — never an object. Only the
+// log-append advisory is an object; borg_log declares that shape separately.
 const ADVISORY_OUTPUT = {
-  description: 'Server advisory attached to the mutation result, when present.',
-  type: ['object', 'null'],
+  description: 'Server advisory sentence attached to the mutation result; null when the server sent none.',
+  type: ['string', 'null'],
 };
 
 export const TOOL_OUTPUT_SCHEMAS: Record<string, OutputSchema> = {
