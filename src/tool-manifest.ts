@@ -890,9 +890,9 @@ export const TOOL_OUTPUT_SCHEMAS: Record<string, OutputSchema> = {
   'borg_read-log': {
     type: 'object',
     properties: {
+      // gh#496: no roster block — the per-wake drain payload stays
+      // proportional to its entry count; entries carry drone_label/role_name.
       entries: { type: 'array', items: LOG_ENTRY_OUTPUT },
-      drones: { type: 'array', items: DRONE_OUTPUT },
-      roles: { type: 'array', items: ROLE_OUTPUT },
       behind_by: { type: ['number', 'null'], description: 'Visible entries still unread after this read; null when the server did not report it.' },
       has_more: { type: 'boolean' },
     },

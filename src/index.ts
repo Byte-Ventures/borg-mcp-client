@@ -253,6 +253,22 @@ export function formatUpdatedRoleResult(role: { name: string; id: string; role_c
   return appendServerAdvisory(`Updated role **${role.name}**${tag} (id: ${role.id}).`, advisory);
 }
 
+// gh#496: the unread drain runs on every wake, so its structured payload must
+// stay proportional to the entries it returns. Rosters are deliberately NOT
+// included — entries already carry drone_label/role_name, and borg_roster
+// serves identity mapping when a consumer needs it.
+export function buildReadLogStructuredContent(input: {
+  entries: unknown[];
+  behind_by: unknown;
+  has_more: unknown;
+}): { entries: unknown[]; behind_by: number | null; has_more: boolean } {
+  return {
+    entries: input.entries,
+    behind_by: typeof input.behind_by === 'number' ? input.behind_by : null,
+    has_more: input.has_more === true,
+  };
+}
+
 export function formatPatchedRoleSectionResult(action: 'replace' | 'insert' | 'delete', heading: string, role: { name: string; id: string }, advisory?: unknown): string {
   const verb = action === 'replace' ? 'Replaced' : action === 'insert' ? 'Inserted' : 'Deleted';
   return appendServerAdvisory(`${verb} section **${heading}** in role **${role.name}** (id: ${role.id}).`, advisory);
@@ -913,13 +929,7 @@ export async function main() {
           }
           return {
             content: [{ type: 'text', text: lines.join('\n') }],
-            structuredContent: {
-              entries,
-              drones,
-              roles,
-              behind_by: typeof behind_by === 'number' ? behind_by : null,
-              has_more: has_more === true,
-            },
+            structuredContent: buildReadLogStructuredContent({ entries, behind_by, has_more }),
           };
         }
 
