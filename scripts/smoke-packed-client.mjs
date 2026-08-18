@@ -289,6 +289,8 @@ export async function smokePackedClient(packageRoot, options = {}) {
     let stderr = '';
     let initialized = false;
     let settled = false;
+    let toolCount = 0;
+    let directVersionResult;
 
     let result;
     try {
@@ -360,10 +362,67 @@ export async function smokePackedClient(packageRoot, options = {}) {
                 settle(new Error('Packed MCP tool discovery omitted mandatory explicit log addressing or borg_read-entry.'));
                 return;
               }
+              // gh#492: the packed artifact must expose the typed output
+              // contract — outputSchema on typed tools, none on the dynamic
+              // dispatcher or the text-only playbook chapter.
+              const playbook = message.result.tools.find((tool) => tool.name === 'borg_playbook');
+              const dispatcher = message.result.tools.find((tool) => tool.name === 'borg_tool');
+              const readLog = message.result.tools.find((tool) => tool.name === 'borg_read-log');
+              const logOutputRequired = log?.outputSchema?.required ?? [];
+              if (
+                playbook?.outputSchema !== undefined ||
+                dispatcher?.outputSchema !== undefined ||
+                !['suppressed', 'entry', 'recipients', 'unreachable_recipients', 'advisory'].every((field) => logOutputRequired.includes(field)) ||
+                !['entries', 'behind_by', 'has_more'].every((field) => (readLog?.outputSchema?.required ?? []).includes(field))
+              ) {
+                settle(new Error('Packed MCP tool discovery omitted the typed structuredContent output contract.'));
+                return;
+              }
+              toolCount = message.result.tools.length;
+              child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'borg_version', arguments: {} } })}\n`);
+            } else if (message.id === 3) {
+              const text = message.result?.content?.[0]?.text;
+              const structured = message.result?.structuredContent;
+              if (
+                message.error ||
+                message.result?.isError === true ||
+                typeof text !== 'string' ||
+                !text.startsWith('borgmcp ') ||
+                typeof structured?.version !== 'string' ||
+                text !== `borgmcp ${structured.version}`
+              ) {
+                settle(new Error(`Packed borg_version call omitted matching text + structuredContent: ${line.slice(0, 300)}`));
+                return;
+              }
+              directVersionResult = structured;
+              child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'borg_tool', arguments: { name: 'borg_version', arguments: {} } } })}\n`);
+            } else if (message.id === 4) {
+              const structured = message.result?.structuredContent;
+              if (
+                message.error ||
+                message.result?.isError === true ||
+                JSON.stringify(structured) !== JSON.stringify(directVersionResult)
+              ) {
+                settle(new Error(`Packed borg_tool dispatcher dropped the inner structuredContent: ${line.slice(0, 300)}`));
+                return;
+              }
+              child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'borg_describe-tool', arguments: { name: 'borg_read-log' } } })}\n`);
+            } else if (message.id === 5) {
+              const structured = message.result?.structuredContent;
+              const requiredFields = structured?.outputSchema?.required ?? [];
+              if (
+                message.error ||
+                message.result?.isError === true ||
+                structured?.name !== 'borg_read-log' ||
+                !['entries', 'behind_by', 'has_more'].every((field) => requiredFields.includes(field))
+              ) {
+                settle(new Error(`Packed borg_describe-tool omitted the described outputSchema: ${line.slice(0, 300)}`));
+                return;
+              }
               settle(null, {
                 name: manifest.name,
                 version: manifest.version,
-                toolCount: message.result.tools.length,
+                toolCount,
               });
             }
           }

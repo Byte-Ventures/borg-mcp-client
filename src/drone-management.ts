@@ -63,10 +63,26 @@ async function requireActiveCube(deps: DroneManagementDeps): Promise<ActiveCube>
   return active;
 }
 
+// gh#492: tool helpers return the mutation receipt data alongside the rendered
+// text so the MCP handler can emit structuredContent from the same source.
+export interface ReassignDroneToolResult {
+  text: string;
+  drone: { id: string; cube_id: string; role_id: string; label: string };
+  roleName: string;
+  cubeName: string;
+}
+
+export interface EvictDroneToolResult {
+  text: string;
+  droneId: string;
+  label: string;
+  cubeName: string;
+}
+
 export async function runReassignDroneTool(
   input: { droneId: unknown; roleId: unknown },
   deps: DroneManagementDeps = defaultDeps,
-): Promise<string> {
+): Promise<ReassignDroneToolResult> {
   if (typeof input.droneId !== 'string' || input.droneId.length === 0) {
     throw new Error('drone_id is required');
   }
@@ -113,19 +129,24 @@ export async function runReassignDroneTool(
     }
   }
 
-  return formatReassignDroneSuccess({
-    droneLabel: drone.label,
-    cubeName: cube.name,
+  return {
+    text: formatReassignDroneSuccess({
+      droneLabel: drone.label,
+      cubeName: cube.name,
+      roleName: role.name,
+      droneId: drone.id,
+      roleId: drone.role_id,
+    }) + warning,
+    drone: { id: drone.id, cube_id: drone.cube_id, role_id: drone.role_id, label: drone.label },
     roleName: role.name,
-    droneId: drone.id,
-    roleId: drone.role_id,
-  }) + warning;
+    cubeName: cube.name,
+  };
 }
 
 export async function runEvictDroneTool(
   args: Record<string, unknown> | undefined,
   deps: DroneManagementDeps = defaultDeps,
-): Promise<string> {
+): Promise<EvictDroneToolResult> {
   const droneIdInput = typeof args?.drone_id === 'string' ? args.drone_id : undefined;
   const labelInput = typeof args?.label === 'string' ? args.label.trim() : undefined;
   const cubeIdInput = typeof args?.cube_id === 'string' ? args.cube_id : undefined;
@@ -164,5 +185,10 @@ export async function runEvictDroneTool(
       '[LOCAL-MANAGE-COMMIT-UNCONFIRMED] The server returned a successful eviction response for an unexpected drone. The eviction may already be committed. Do not retry blindly; inspect the cube roster first.',
     );
   }
-  return formatEvictDroneSuccess(priorDrone.label, cube.name);
+  return {
+    text: formatEvictDroneSuccess(priorDrone.label, cube.name),
+    droneId: priorDrone.id,
+    label: priorDrone.label,
+    cubeName: cube.name,
+  };
 }

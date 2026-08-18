@@ -99,9 +99,13 @@ describe('local drone management orchestration', () => {
 
   it('looks up names before reassignment and performs no post-commit network read', async () => {
     const { calls, deps } = fixture();
-    const text = await runReassignDroneTool({ droneId: DRONE_ID, roleId: ROLE_ID }, deps);
+    const { text, drone, roleName, cubeName } = await runReassignDroneTool({ droneId: DRONE_ID, roleId: ROLE_ID }, deps);
     expect(calls).toEqual(['active', 'lookup', 'reassign', 'refresh']);
     expect(text).toContain('Reassigned builder-1 in cube borg-mcp to role Code Reviewer.');
+    // gh#492: the receipt carries the same identifiers the text renders.
+    expect(drone).toEqual({ id: DRONE_ID, cube_id: CUBE_ID, role_id: ROLE_ID, label: 'builder-1' });
+    expect(roleName).toBe('Code Reviewer');
+    expect(cubeName).toBe('borg-mcp');
     expect(deps.getCubeForManagement).toHaveBeenCalledTimes(1);
     expect(deps.reassignDrone).toHaveBeenCalledTimes(1);
   });
@@ -112,7 +116,7 @@ describe('local drone management orchestration', () => {
         throw new Error('local store unavailable');
       }),
     });
-    const text = await runReassignDroneTool({ droneId: DRONE_ID, roleId: ROLE_ID }, deps);
+    const { text } = await runReassignDroneTool({ droneId: DRONE_ID, roleId: ROLE_ID }, deps);
     expect(text).toContain('Reassigned builder-1 in cube borg-mcp to role Code Reviewer.');
     expect(text).toContain(STALE_ROLE_DISPLAY_WARNING);
     expect(text).toContain('Do not retry the reassignment.');
@@ -126,7 +130,7 @@ describe('local drone management orchestration', () => {
     const { deps } = fixture({
       refreshActiveCubeMetadata: vi.fn(async () => false),
     });
-    const text = await runReassignDroneTool({ droneId: DRONE_ID, roleId: ROLE_ID }, deps);
+    const { text } = await runReassignDroneTool({ droneId: DRONE_ID, roleId: ROLE_ID }, deps);
     expect(text).toContain('Reassigned builder-1 in cube borg-mcp to role Code Reviewer.');
     expect(text).toContain(STALE_ROLE_DISPLAY_WARNING);
     expect(deps.reassignDrone).toHaveBeenCalledTimes(1);
@@ -134,9 +138,13 @@ describe('local drone management orchestration', () => {
 
   it('looks up a label before eviction and performs no post-commit network read', async () => {
     const { calls, deps } = fixture();
-    const text = await runEvictDroneTool({ label: 'builder-2', cube_id: CUBE_ID }, deps);
+    const { text, droneId, label, cubeName } = await runEvictDroneTool({ label: 'builder-2', cube_id: CUBE_ID }, deps);
     expect(calls).toEqual(['active', 'lookup', 'evict']);
     expect(text).toContain('Removed builder-2 from cube borg-mcp.');
+    // gh#492: the receipt carries the evicted seat's identifiers.
+    expect(droneId).toBe(OTHER_DRONE_ID);
+    expect(label).toBe('builder-2');
+    expect(cubeName).toBe('borg-mcp');
     expect(deps.getCubeForManagement).toHaveBeenCalledTimes(1);
     expect(deps.evictDrone).toHaveBeenCalledWith(OTHER_DRONE_ID, {
       cubeId: CUBE_ID,
