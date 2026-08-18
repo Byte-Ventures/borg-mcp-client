@@ -76,6 +76,28 @@ function stderrOf(deps: LaunchAllDeps): string {
   return (deps.stderr as any).mock.calls.map((c: any[]) => c[0]).join('');
 }
 
+function backendLaunchOrder(deps: LaunchAllDeps): string[] {
+  return (deps.runSync as any).mock.calls
+    .filter((call: any[]) => call[0] === 'tmux' && call[1]?.[0] === 'rename-window')
+    .map((call: any[]) => call[1][3]);
+}
+
+function makeTmuxFleetDeps(
+  paths: string[],
+  identities: Array<{ projectPath: string; cube: ActiveCube }>,
+  over: Partial<LaunchAllDeps> = {},
+): LaunchAllDeps {
+  return makeStubDeps({
+    runSync: vi.fn((cmd: string, args: string[]) => {
+      if (cmd === 'git') return porcelainFor(paths);
+      if (cmd === 'tmux' && (args[0] === 'new-session' || args[0] === 'new-window')) return '@7\n';
+      return '';
+    }),
+    readAllProjectIdentities: vi.fn(async () => identities),
+    ...over,
+  });
+}
+
 describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
   it('no cube argument + no active cube + no repo drone worktrees → cause-accurate error, exit 1', async () => {
     const deps = makeStubDeps({ getActiveCube: vi.fn(async () => null) });
@@ -206,6 +228,86 @@ describe('runLaunchAll (gh#556 Part 2 §11.5)', () => {
     )).toBe(0);
     expect(stdoutOf(deps)).toContain('drone-2');
     expect(stdoutOf(deps)).not.toContain('drone-1');
+  });
+
+  it('quickstart dispatches the default human seat after every worker without changing worker order', async () => {
+    const { paths, identities } = fleet(4);
+    identities[0].cube.droneLabel = 'coordinator-1';
+    identities[0].cube.roleName = 'Coordinator';
+    identities[0].cube.isHumanSeat = true;
+    identities[1].cube.droneLabel = 'builder-1';
+    identities[1].cube.isHumanSeat = false;
+    identities[2].cube.droneLabel = 'code-reviewer-1';
+    identities[2].cube.isHumanSeat = false;
+    identities[3].cube.droneLabel = 'release-quality-1';
+    identities[3].cube.isHumanSeat = false;
+    const deps = makeTmuxFleetDeps(paths, identities);
+
+    expect(await runLaunchAll(
+      { flags: { mode: 'tmux' } },
+      deps,
+      {
+        ...OPTS,
+        droneIds: identities.map(({ cube }) => cube.droneId),
+        requireAllRequested: true,
+        targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
+        humanSeatLast: true,
+      },
+    )).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual(['builder-1', 'code-reviewer-1', 'release-quality-1', 'coordinator-1']);
+    expect(deps.getRoster).toHaveBeenCalledWith(identities[0].cube, '2026-06-13T12:00:00.000Z');
+    expect(stdoutOf(deps).indexOf('coordinator-1')).toBeLessThan(stdoutOf(deps).indexOf('builder-1'));
+  });
+
+  it('quickstart uses persisted human-seat metadata rather than role or label conventions', async () => {
+    const { paths, identities } = fleet(3);
+    identities[1].cube.droneLabel = 'custom-authority';
+    identities[1].cube.roleName = 'Builder';
+    identities[1].cube.isHumanSeat = true;
+    const deps = makeTmuxFleetDeps(paths, identities);
+
+    expect(await runLaunchAll(
+      { flags: { mode: 'tmux' } },
+      deps,
+      {
+        ...OPTS,
+        droneIds: identities.map(({ cube }) => cube.droneId),
+        requireAllRequested: true,
+        targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
+        humanSeatLast: true,
+      },
+    )).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual(['drone-1', 'drone-3', 'custom-authority']);
+  });
+
+  it('quickstart preserves discovery order when no persisted human seat exists', async () => {
+    const { paths, identities } = fleet(3);
+    for (const { cube } of identities) cube.isHumanSeat = false;
+    const deps = makeTmuxFleetDeps(paths, identities);
+
+    expect(await runLaunchAll(
+      { flags: { mode: 'tmux' } },
+      deps,
+      {
+        ...OPTS,
+        droneIds: identities.map(({ cube }) => cube.droneId),
+        requireAllRequested: true,
+        targetCube: { cubeId: CUBE_ID, name: 'myrepo' },
+        humanSeatLast: true,
+      },
+    )).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual(['drone-1', 'drone-2', 'drone-3']);
+  });
+
+  it('ordinary launch-all preserves discovery order even when a persisted human seat is first', async () => {
+    const { paths, identities } = fleet(3);
+    identities[0].cube.isHumanSeat = true;
+    const deps = makeTmuxFleetDeps(paths, identities, {
+      getActiveCube: vi.fn(async () => ({ cubeId: CUBE_ID, name: 'myrepo' } as ActiveCube)),
+    });
+
+    expect(await runLaunchAll({ flags: { mode: 'tmux' } }, deps, OPTS)).toBe(0);
+    expect(backendLaunchOrder(deps)).toEqual(['drone-1', 'drone-2', 'drone-3']);
   });
 
   it('a strict internal roster filter fails instead of misreporting a missing registration as launched', async () => {

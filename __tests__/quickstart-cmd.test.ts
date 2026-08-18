@@ -187,6 +187,7 @@ describe('runQuickstart', () => {
       droneIds: [existingBuilder.droneId],
       requireAllRequested: true,
       targetCube: { cubeId: 'cube-1', name: 'borg-mcp' },
+      humanSeatLast: true,
     });
   });
 

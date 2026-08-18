@@ -248,6 +248,8 @@ export interface RunLaunchAllOptions {
   requireAllRequested?: boolean;
   /** Internal resolved target avoids ambiguous same-name lookup during composition. */
   targetCube?: { cubeId: string; name: string };
+  /** Internal quickstart dispatch order: workers first, persisted human seats last. */
+  humanSeatLast?: boolean;
 }
 
 export async function runLaunchAll(
@@ -492,12 +494,18 @@ export async function runLaunchAll(
   }
   const sessionName = sanitizeSessionName(cubeName);
   const launchStartISO = nowISO();
+  const backendLaunchable = opts.humanSeatLast
+    ? [
+        ...launchable.filter((candidate) => candidate.seat.isHumanSeat !== true),
+        ...launchable.filter((candidate) => candidate.seat.isHumanSeat === true),
+      ]
+    : launchable;
 
   // 8. dispatch
   try {
     if (sel.backend === 'tmux') {
       const attachMode = resolveAttachMode(args, deps);
-      await runTmuxBackend(launchable, { sessionName, borgPath, attachMode, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+      await runTmuxBackend(backendLaunchable, { sessionName, borgPath, attachMode, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
       if (attachMode === 'none') {
         if (!deps.isTTY()) {
           deps.stderr(`Launching in detached mode — stdout is non-TTY. Attach manually with: tmux attach -t ${sessionName}\n`);
@@ -505,7 +513,7 @@ export async function runLaunchAll(
         printCheatSheet(sessionName, deps);
       }
     } else if (sel.backend === 'terminals') {
-      await runTerminalsBackend(launchable, { borgPath, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
+      await runTerminalsBackend(backendLaunchable, { borgPath, platform: deps.platform(), cubeName, launchedAtISO: launchStartISO, launchDelayMs, sleep }, deps);
     } else {
       runPastelistBackend(launchable, borgPath, deps);
       return 0; // pastelist: nothing to reconcile (operator pastes manually)

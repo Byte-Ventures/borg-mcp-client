@@ -397,7 +397,7 @@ export async function runQuickstart(
         stdout: (text) => { launchOutput += text; },
         stderr: (text) => { launchOutput += text; },
       },
-      { droneIds, requireAllRequested: true, targetCube: { cubeId, name: cubeName } },
+      { droneIds, requireAllRequested: true, targetCube: { cubeId, name: cubeName }, humanSeatLast: true },
     );
   } catch (error) {
     launchOutput += `${error instanceof Error ? error.message : String(error)}\n`;
