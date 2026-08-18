@@ -8,7 +8,7 @@
  * no client runtime side effects.
  */
 import { DECISION_TEXT_MAX_BYTES, DOCUMENT_CONTENT_TYPES } from 'borgmcp-shared/protocol';
-export const TOOL_MANIFEST = [
+const BASE_TOOL_MANIFEST = [
     {
         name: 'borg_regen',
         description: "Refresh your context as a Drone. Returns the active cube's directive, " +
@@ -643,4 +643,520 @@ export const TOOL_MANIFEST = [
         },
     },
 ];
+// ---------------------------------------------------------------------------
+// gh#492: outputSchema per typed tool. Shapes mirror the borgmcp-shared
+// protocol result contracts (protocol/coordination, protocol/types,
+// protocol/documents); the client builds structuredContent from the same
+// source objects its text renderer consumes. `borg_tool` declares no schema
+// (its output is the selected inner tool's result) and `borg_playbook` is a
+// deliberate text-only prose chapter.
+// ---------------------------------------------------------------------------
+const DOCUMENT_CITATION_OUTPUT = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        title: { type: 'string' },
+        size_bytes: { type: 'number' },
+        state: { type: 'string' },
+    },
+    required: ['id', 'title'],
+};
+const DOCUMENT_METADATA_OUTPUT = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        title: { type: 'string' },
+        size_bytes: { type: 'number' },
+        state: { type: 'string' },
+        content_type: { type: 'string' },
+        supersedes: { type: ['string', 'null'] },
+        superseded_by: { type: ['string', 'null'] },
+        author: { type: 'object' },
+        created_at: { type: 'string' },
+        removed_by: { type: ['object', 'null'] },
+        removed_at: { type: ['string', 'null'] },
+    },
+    required: ['id', 'title', 'state'],
+};
+const DOCUMENT_OUTPUT = {
+    ...DOCUMENT_METADATA_OUTPUT,
+    properties: { ...DOCUMENT_METADATA_OUTPUT.properties, content: { type: 'string' } },
+};
+const LOG_ENTRY_OUTPUT = {
+    type: 'object',
+    description: 'Enriched activity-log entry.',
+    properties: {
+        id: { type: 'string' },
+        cube_id: { type: 'string' },
+        drone_id: { type: ['string', 'null'] },
+        message: { type: 'string' },
+        visibility: { type: 'string', enum: ['broadcast', 'direct'] },
+        created_at: { type: 'string' },
+        drone_label: { type: ['string', 'null'] },
+        role_name: { type: ['string', 'null'] },
+        recipient_drone_ids: { type: 'array', items: { type: 'string' } },
+        documents: { type: 'array', items: DOCUMENT_CITATION_OUTPUT },
+    },
+    required: ['id', 'message', 'visibility', 'created_at'],
+};
+const DRONE_OUTPUT = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        cube_id: { type: 'string' },
+        role_id: { type: 'string' },
+        label: { type: 'string' },
+        last_seen: { type: 'string' },
+        hostname: { type: ['string', 'null'] },
+    },
+    required: ['id', 'label'],
+};
+const ROLE_OUTPUT = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        cube_id: { type: 'string' },
+        name: { type: 'string' },
+        short_description: { type: 'string' },
+        is_default: { type: 'boolean' },
+        is_human_seat: { type: 'boolean' },
+        created_at: { type: 'string' },
+    },
+    required: ['id', 'name'],
+};
+const CUBE_OUTPUT = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        cube_directive: { type: 'string' },
+        created_at: { type: 'string' },
+        updated_at: { type: 'string' },
+    },
+    required: ['id', 'name'],
+};
+const DECISION_OUTPUT = {
+    type: 'object',
+    properties: {
+        id: { type: 'string' },
+        cube_id: { type: 'string' },
+        topic: { type: 'string' },
+        decision: { type: 'string' },
+        rationale: { type: ['string', 'null'] },
+        supersedes: { type: ['string', 'null'] },
+        created_at: { type: 'string' },
+    },
+    required: ['topic', 'decision'],
+};
+const ADVISORY_OUTPUT = {
+    description: 'Server advisory attached to the mutation result, when present.',
+    type: ['object', 'null'],
+};
+export const TOOL_OUTPUT_SCHEMAS = {
+    // --- Machine-state queries and discovery ---
+    'borg_version': {
+        type: 'object',
+        properties: { version: { type: 'string' } },
+        required: ['version'],
+    },
+    'borg_whoami': {
+        type: 'object',
+        properties: {
+            cube_id: { type: 'string' },
+            cube_name: { type: 'string' },
+            drone_id: { type: 'string' },
+            drone_label: { type: 'string' },
+            role_id: { type: 'string' },
+            role_name: { type: 'string' },
+            runtime_metadata: { type: 'object' },
+            runtime_metadata_reported: { type: 'boolean' },
+        },
+        required: ['cube_id', 'cube_name', 'drone_id', 'drone_label', 'role_id', 'role_name'],
+    },
+    'borg_roster': {
+        type: 'object',
+        properties: {
+            cube_name: { type: 'string' },
+            drones: { type: 'array', items: DRONE_OUTPUT },
+            roles: { type: 'array', items: ROLE_OUTPUT },
+            since: { type: ['string', 'null'], description: 'Resolved since-cursor, or null for the default window.' },
+        },
+        required: ['cube_name', 'drones', 'roles', 'since'],
+    },
+    'borg_stream-status': {
+        type: 'object',
+        properties: {
+            status: {
+                type: 'object',
+                description: 'In-process SSE consumer snapshot.',
+                properties: {
+                    connected: { type: 'boolean' },
+                    reconnectAttempts: { type: 'number' },
+                    runLoopHealth: { type: 'string' },
+                },
+            },
+            wake_path: { type: 'object', description: 'Runtime-specific wake-path inspection.' },
+            inbox_monitor_healthy: { type: 'boolean' },
+            inbox_path: { type: ['string', 'null'] },
+            monitor_state_root: { type: ['string', 'null'] },
+            drone_label: { type: ['string', 'null'] },
+            cube_name: { type: ['string', 'null'] },
+        },
+        required: ['status', 'inbox_monitor_healthy'],
+    },
+    'borg_read-log': {
+        type: 'object',
+        properties: {
+            entries: { type: 'array', items: LOG_ENTRY_OUTPUT },
+            drones: { type: 'array', items: DRONE_OUTPUT },
+            roles: { type: 'array', items: ROLE_OUTPUT },
+            behind_by: { type: ['number', 'null'], description: 'Visible entries still unread after this read; null when the server did not report it.' },
+            has_more: { type: 'boolean' },
+        },
+        required: ['entries', 'behind_by', 'has_more'],
+    },
+    'borg_read-entry': {
+        type: 'object',
+        properties: {
+            entry: LOG_ENTRY_OUTPUT,
+            drones: { type: 'array', items: DRONE_OUTPUT },
+            roles: { type: 'array', items: ROLE_OUTPUT },
+        },
+        required: ['entry'],
+    },
+    'borg_ack-status': {
+        type: 'object',
+        properties: {
+            entry_id: { type: 'string' },
+            visibility: { type: 'string', enum: ['broadcast', 'direct'] },
+            recipients: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: {
+                        drone_id: { type: 'string' },
+                        drone_label: { type: ['string', 'null'] },
+                        drone_role: { type: ['string', 'null'] },
+                        acknowledged_at: { type: ['string', 'null'] },
+                    },
+                    required: ['drone_id', 'acknowledged_at'],
+                },
+            },
+            claims: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: {
+                        drone_id: { type: 'string' },
+                        drone_label: { type: ['string', 'null'] },
+                        drone_role: { type: ['string', 'null'] },
+                        claimed_at: { type: 'string' },
+                    },
+                    required: ['drone_id', 'claimed_at'],
+                },
+            },
+        },
+        required: ['entry_id', 'visibility', 'recipients', 'claims'],
+    },
+    'borg_decisions': {
+        type: 'object',
+        properties: { decisions: { type: 'array', items: DECISION_OUTPUT } },
+        required: ['decisions'],
+    },
+    'borg_get-document': {
+        type: 'object',
+        properties: { document: DOCUMENT_OUTPUT },
+        required: ['document'],
+    },
+    'borg_list-documents': {
+        type: 'object',
+        properties: { documents: { type: 'array', items: DOCUMENT_METADATA_OUTPUT } },
+        required: ['documents'],
+    },
+    'borg_list-cubes': {
+        type: 'object',
+        properties: { cubes: { type: 'array', items: CUBE_OUTPUT } },
+        required: ['cubes'],
+    },
+    'borg_list-drones': {
+        type: 'object',
+        properties: {
+            cube_id: { type: 'string' },
+            drones: { type: 'array', items: DRONE_OUTPUT },
+            roles: { type: 'array', items: ROLE_OUTPUT },
+        },
+        required: ['cube_id', 'drones'],
+    },
+    'borg_list-roles': {
+        type: 'object',
+        properties: {
+            cube_id: { type: 'string' },
+            roles: { type: 'array', items: ROLE_OUTPUT },
+        },
+        required: ['cube_id', 'roles'],
+    },
+    'borg_list-templates': {
+        type: 'object',
+        properties: {
+            templates: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: { name: { type: 'string' }, description: { type: 'string' } },
+                    required: ['name', 'description'],
+                },
+            },
+        },
+        required: ['templates'],
+    },
+    'borg_describe-tool': {
+        type: 'object',
+        properties: {
+            name: { type: 'string' },
+            description: { type: 'string' },
+            inputSchema: { type: 'object' },
+            outputSchema: { type: ['object', 'null'], description: 'The described tool\'s structuredContent contract, or null for text-only and dynamic tools.' },
+        },
+        required: ['name', 'description', 'inputSchema', 'outputSchema'],
+    },
+    // --- Mutation receipts ---
+    'borg_ack': {
+        type: 'object',
+        properties: {
+            entry_id: { type: 'string' },
+            kind: { type: 'string', enum: ['ack', 'claim'] },
+            cube_name: { type: 'string' },
+        },
+        required: ['entry_id', 'kind', 'cube_name'],
+    },
+    'borg_decide': {
+        type: 'object',
+        properties: {
+            decision: DECISION_OUTPUT,
+            superseded: { type: 'boolean', description: 'True when this ratification superseded a prior decision on the topic.' },
+            cube_name: { type: 'string' },
+        },
+        required: ['decision', 'superseded', 'cube_name'],
+    },
+    'borg_remove-decision': {
+        type: 'object',
+        properties: { decision: DECISION_OUTPUT, cube_name: { type: 'string' } },
+        required: ['decision', 'cube_name'],
+    },
+    'borg_put-document': {
+        type: 'object',
+        properties: { document: DOCUMENT_OUTPUT },
+        required: ['document'],
+    },
+    'borg_remove-document': {
+        type: 'object',
+        properties: { document: DOCUMENT_METADATA_OUTPUT },
+        required: ['document'],
+    },
+    'borg_log': {
+        type: 'object',
+        properties: {
+            suppressed: { type: 'boolean', description: 'True when a duplicate lifecycle signal was suppressed instead of persisted.' },
+            entry: { ...LOG_ENTRY_OUTPUT, type: ['object', 'null'], description: 'The persisted entry; null when suppressed.' },
+            recipients: { type: 'array', items: { type: 'string' }, description: 'Resolved directed-recipient display labels.' },
+            unreachable_recipients: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: { id: { type: 'string' }, label: { type: 'string' } },
+                    required: ['id', 'label'],
+                },
+            },
+            advisory: {
+                type: ['object', 'null'],
+                properties: { code: { type: 'string' }, threshold_bytes: { type: 'number' } },
+            },
+        },
+        required: ['suppressed', 'entry', 'recipients', 'unreachable_recipients', 'advisory'],
+    },
+    'borg_create-cube': {
+        type: 'object',
+        properties: {
+            cube: CUBE_OUTPUT,
+            template: { type: ['string', 'null'] },
+            roles_created: { type: ['number', 'null'] },
+            roles_updated: { type: ['number', 'null'] },
+        },
+        required: ['cube', 'template'],
+    },
+    'borg_update-cube': {
+        type: 'object',
+        properties: { cube: CUBE_OUTPUT, advisory: ADVISORY_OUTPUT },
+        required: ['cube'],
+    },
+    'borg_patch-taxonomy-class': {
+        type: 'object',
+        properties: {
+            action: { type: 'string', enum: ['add', 'replace', 'remove'] },
+            class: { type: 'string' },
+            cube: CUBE_OUTPUT,
+        },
+        required: ['action', 'class', 'cube'],
+    },
+    'borg_delete-cube': {
+        type: 'object',
+        properties: { cube_id: { type: 'string' }, deleted: { type: 'boolean' } },
+        required: ['cube_id', 'deleted'],
+    },
+    'borg_create-role': {
+        type: 'object',
+        properties: { role: ROLE_OUTPUT, cube_id: { type: 'string' } },
+        required: ['role', 'cube_id'],
+    },
+    'borg_update-role': {
+        type: 'object',
+        properties: { role: ROLE_OUTPUT, advisory: ADVISORY_OUTPUT },
+        required: ['role'],
+    },
+    'borg_patch-role-section': {
+        type: 'object',
+        properties: {
+            action: { type: 'string', enum: ['replace', 'insert', 'delete'] },
+            heading: { type: 'string' },
+            role: ROLE_OUTPUT,
+            advisory: ADVISORY_OUTPUT,
+        },
+        required: ['action', 'heading', 'role'],
+    },
+    'borg_delete-role': {
+        type: 'object',
+        properties: { role_id: { type: 'string' }, deleted: { type: 'boolean' } },
+        required: ['role_id', 'deleted'],
+    },
+    'borg_reassign-drone': {
+        type: 'object',
+        properties: {
+            drone: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string' },
+                    cube_id: { type: 'string' },
+                    role_id: { type: 'string' },
+                    label: { type: 'string' },
+                },
+                required: ['id', 'cube_id', 'role_id', 'label'],
+            },
+            role_name: { type: 'string' },
+            cube_name: { type: 'string' },
+        },
+        required: ['drone', 'role_name', 'cube_name'],
+    },
+    'borg_evict-drone': {
+        type: 'object',
+        properties: {
+            drone_id: { type: 'string' },
+            label: { type: 'string' },
+            cube_name: { type: 'string' },
+            evicted: { type: 'boolean' },
+        },
+        required: ['drone_id', 'evicted'],
+    },
+    'borg_apply-template': {
+        type: 'object',
+        properties: {
+            cube_id: { type: 'string' },
+            template: { type: 'string' },
+            roles_created: { type: 'number' },
+            roles_updated: { type: 'number' },
+            cube_directive_applied: { type: 'boolean' },
+        },
+        required: ['cube_id', 'template', 'roles_created', 'roles_updated'],
+    },
+    'borg_sync-roles': {
+        type: 'object',
+        properties: {
+            cube_id: { type: 'string' },
+            template: { type: 'string' },
+            apply: { type: 'boolean' },
+            result: { type: 'object', description: 'The sync plan or apply summary exactly as the server returned it.' },
+        },
+        required: ['cube_id', 'template', 'apply', 'result'],
+    },
+    // --- Context/domain results ---
+    'borg_regen': {
+        type: 'object',
+        properties: {
+            connected: { type: 'boolean', description: 'False when no cube is active; other fields are then absent.' },
+            mode: { type: 'string', enum: ['full', 'lite'] },
+            cube: CUBE_OUTPUT,
+            drone: DRONE_OUTPUT,
+            role: ROLE_OUTPUT,
+            behind_by: { type: ['number', 'null'], description: 'Unread-entry count, null when the server did not report it.' },
+            decision_topics: { type: 'array', items: { type: 'string' } },
+            running_version: { type: 'string' },
+            on_disk_version: { type: ['string', 'null'] },
+            wake_path_healthy: { type: 'boolean' },
+        },
+        required: ['connected'],
+    },
+    'borg_assimilate': {
+        type: 'object',
+        properties: {
+            reattached: { type: 'boolean' },
+            cube_name: { type: 'string' },
+            drone_label: { type: 'string' },
+        },
+        required: ['reattached', 'cube_name', 'drone_label'],
+    },
+    'borg_cube': {
+        type: 'object',
+        properties: {
+            cube: {
+                ...CUBE_OUTPUT,
+                properties: { ...CUBE_OUTPUT.properties, message_taxonomy: { type: ['array', 'null'] } },
+            },
+            roles: { type: 'array', items: ROLE_OUTPUT },
+        },
+        required: ['cube', 'roles'],
+    },
+    'borg_role': {
+        type: 'object',
+        properties: {
+            role: {
+                ...ROLE_OUTPUT,
+                properties: { ...ROLE_OUTPUT.properties, detailed_description: { type: 'string' } },
+            },
+        },
+        required: ['role'],
+    },
+    'borg_docs': {
+        type: 'object',
+        properties: {
+            topic: { type: ['string', 'null'] },
+            matched: { type: 'boolean', description: 'True when the topic matched specific sections; false when the full index is returned.' },
+            sections: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: {
+                        slug: { type: 'string' },
+                        title: { type: 'string' },
+                        url: { type: 'string' },
+                        summary: { type: 'string' },
+                    },
+                    required: ['slug', 'title', 'url', 'summary'],
+                },
+            },
+        },
+        required: ['topic', 'matched', 'sections'],
+    },
+    'borg_role-rationale': {
+        type: 'object',
+        properties: {
+            role: { type: 'string' },
+            section: { type: 'string' },
+            body: { type: 'string' },
+        },
+        required: ['role', 'section', 'body'],
+    },
+};
+export const TOOL_MANIFEST = BASE_TOOL_MANIFEST.map((entry) => {
+    const outputSchema = TOOL_OUTPUT_SCHEMAS[entry.name];
+    return outputSchema ? { ...entry, outputSchema } : entry;
+});
 //# sourceMappingURL=tool-manifest.js.map

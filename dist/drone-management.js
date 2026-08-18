@@ -64,13 +64,18 @@ export async function runReassignDroneTool(input, deps = defaultDeps) {
             warning = `\n\n${STALE_ROLE_DISPLAY_WARNING}`;
         }
     }
-    return formatReassignDroneSuccess({
-        droneLabel: drone.label,
-        cubeName: cube.name,
+    return {
+        text: formatReassignDroneSuccess({
+            droneLabel: drone.label,
+            cubeName: cube.name,
+            roleName: role.name,
+            droneId: drone.id,
+            roleId: drone.role_id,
+        }) + warning,
+        drone: { id: drone.id, cube_id: drone.cube_id, role_id: drone.role_id, label: drone.label },
         roleName: role.name,
-        droneId: drone.id,
-        roleId: drone.role_id,
-    }) + warning;
+        cubeName: cube.name,
+    };
 }
 export async function runEvictDroneTool(args, deps = defaultDeps) {
     const droneIdInput = typeof args?.drone_id === 'string' ? args.drone_id : undefined;
@@ -110,6 +115,11 @@ export async function runEvictDroneTool(args, deps = defaultDeps) {
     if (result.drone_id !== priorDrone.id || result.evicted !== true) {
         throw new Error('[LOCAL-MANAGE-COMMIT-UNCONFIRMED] The server returned a successful eviction response for an unexpected drone. The eviction may already be committed. Do not retry blindly; inspect the cube roster first.');
     }
-    return formatEvictDroneSuccess(priorDrone.label, cube.name);
+    return {
+        text: formatEvictDroneSuccess(priorDrone.label, cube.name),
+        droneId: priorDrone.id,
+        label: priorDrone.label,
+        cubeName: cube.name,
+    };
 }
 //# sourceMappingURL=drone-management.js.map

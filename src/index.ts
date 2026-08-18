@@ -419,8 +419,15 @@ export async function main() {
           isError: true,
         };
       }
+      const described = {
+        name: def.name,
+        description: def.description,
+        inputSchema: def.inputSchema,
+        outputSchema: def.outputSchema ?? null,
+      };
       return {
-        content: [{ type: 'text', text: JSON.stringify({ name: def.name, description: def.description, inputSchema: def.inputSchema }, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(described, null, 2) }],
+        structuredContent: described,
       };
     }
 
@@ -471,6 +478,7 @@ export async function main() {
                   text: 'Not connected to a cube. Use `borg_assimilate cube_name="<name>"` to join one.',
                 },
               ],
+              structuredContent: { connected: false },
             };
           }
           seedDisplayIdentity(active);
@@ -524,10 +532,12 @@ export async function main() {
 
           // gh#285: version-mismatch nudge when on-disk package is newer.
           let versionHeader = '';
+          let onDiskVersion: string | null = null;
           try {
             const running = getPackageVersion();
             const onDisk = getOnDiskVersion();
             if (running !== 'unknown' && onDisk !== 'unknown' && onDisk !== running) {
+              onDiskVersion = onDisk;
               const [rMaj, rMin, rPat] = running.split('.').map(Number);
               const [dMaj, dMin, dPat] = onDisk.split('.').map(Number);
               const onDiskNewer = dMaj > rMaj || (dMaj === rMaj && dMin > rMin) || (dMaj === rMaj && dMin === rMin && dPat > rPat);
@@ -537,7 +547,21 @@ export async function main() {
             }
           } catch { /* never break regen */ }
 
-          return { content: [{ type: 'text', text: versionHeader + prefix + formatRegenMarkdown(displayedResult, { mode }) }] };
+          return {
+            content: [{ type: 'text', text: versionHeader + prefix + formatRegenMarkdown(displayedResult, { mode }) }],
+            structuredContent: {
+              connected: true,
+              mode,
+              cube: displayedResult.cube,
+              drone: displayedResult.drone,
+              role: displayedResult.role,
+              behind_by: typeof displayedResult.behind_by === 'number' ? displayedResult.behind_by : null,
+              decision_topics: (displayedResult.decisions ?? []).map((d: any) => d.topic),
+              running_version: getPackageVersion(),
+              on_disk_version: onDiskVersion,
+              wake_path_healthy: inboxMonitorHealthy,
+            },
+          };
         }
 
         case 'borg_assimilate': {
@@ -583,6 +607,11 @@ export async function main() {
             ].join('\n');
             return {
               content: [{ type: 'text', text: header + formatRegenMarkdown(displayedResult, { mode: 'full' }) }],
+              structuredContent: {
+                reattached: true,
+                cube_name: displayIdentity.cubeName,
+                drone_label: displayIdentity.droneLabel,
+              },
             };
           } catch (err: any) {
             markDisplayIdentityReadFailed(active!);
@@ -592,7 +621,10 @@ export async function main() {
         }
 
         case 'borg_version': {
-          return { content: [{ type: 'text', text: `borgmcp ${getPackageVersion()}` }] };
+          return {
+            content: [{ type: 'text', text: `borgmcp ${getPackageVersion()}` }],
+            structuredContent: { version: getPackageVersion() },
+          };
         }
 
         case 'borg_playbook': {
@@ -615,7 +647,14 @@ export async function main() {
               : topic
                 ? `No exact match for "${topic}". Full Borg MCP docs index — WebFetch the URL you need:`
                 : `Borg MCP docs index — WebFetch the URL of the section you need:`;
-          return { content: [{ type: 'text', text: `${header}\n\n${formatDocsIndex(sections)}` }] };
+          return {
+            content: [{ type: 'text', text: `${header}\n\n${formatDocsIndex(sections)}` }],
+            structuredContent: {
+              topic: topic || null,
+              matched: matched.length > 0,
+              sections: sections.map((s) => ({ slug: s.slug, title: s.title, url: s.url, summary: s.summary })),
+            },
+          };
         }
 
         case 'borg_whoami': {
@@ -644,7 +683,10 @@ export async function main() {
             // The invocation-local server truth remains authoritative even if
             // the display-only persistence refresh cannot be written.
           }
-          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+            structuredContent: { ...result },
+          };
         }
 
         case 'borg_cube': {
@@ -697,7 +739,10 @@ export async function main() {
           }
           lines.push('');
           lines.push(getDronePlaybook());
-          return { content: [{ type: 'text', text: lines.join('\n') }] };
+          return {
+            content: [{ type: 'text', text: lines.join('\n') }],
+            structuredContent: { cube, roles },
+          };
         }
 
         case 'borg_role': {
@@ -718,7 +763,7 @@ export async function main() {
               ``,
               role.detailed_description || '_(no detailed description set)_',
             ].join('\n');
-            return { content: [{ type: 'text', text }] };
+            return { content: [{ type: 'text', text }], structuredContent: { role } };
           }
           const { role } = await getRoleInfo(
             active.sessionToken,
@@ -730,7 +775,7 @@ export async function main() {
             ``,
             role.detailed_description || '_(no detailed description set)_',
           ].join('\n');
-          return { content: [{ type: 'text', text }] };
+          return { content: [{ type: 'text', text }], structuredContent: { role } };
         }
 
         case 'borg_role-rationale': {
@@ -749,7 +794,10 @@ export async function main() {
             '',
             result.body || '_(empty)_',
           ].join('\n');
-          return { content: [{ type: 'text', text }] };
+          return {
+            content: [{ type: 'text', text }],
+            structuredContent: { role: result.role, section: result.section, body: result.body },
+          };
         }
 
         case 'borg_roster': {
@@ -763,7 +811,10 @@ export async function main() {
             resolvedSince: resolvedSince ?? null,
             humanAgo,
           });
-          return { content: [{ type: 'text', text }] };
+          return {
+            content: [{ type: 'text', text }],
+            structuredContent: { cube_name: active.name, drones, roles, since: resolvedSince ?? null },
+          };
         }
 
         case 'borg_stream-status': {
@@ -803,7 +854,18 @@ export async function main() {
             cubeName: active?.name ?? null,
             humanAgo,
           });
-          return { content: [{ type: 'text', text: silentInertWarning + text }] };
+          return {
+            content: [{ type: 'text', text: silentInertWarning + text }],
+            structuredContent: {
+              status,
+              wake_path: wakePath,
+              inbox_monitor_healthy: inboxMonitorHealthy,
+              inbox_path: inboxPath,
+              monitor_state_root: monitorStateRoot,
+              drone_label: active?.droneLabel ?? null,
+              cube_name: active?.name ?? null,
+            },
+          };
         }
 
         case 'borg_read-log': {
@@ -849,7 +911,16 @@ export async function main() {
               `⚠ behind_by: ${behind_by} more unread ${behind_by === 1 ? 'entry' : 'entries'} addressed to you — call \`borg_read-log unread_only=true\` again until behind_by=0 so you don't skip messages.`
             );
           }
-          return { content: [{ type: 'text', text: lines.join('\n') }] };
+          return {
+            content: [{ type: 'text', text: lines.join('\n') }],
+            structuredContent: {
+              entries,
+              drones,
+              roles,
+              behind_by: typeof behind_by === 'number' ? behind_by : null,
+              has_more: has_more === true,
+            },
+          };
         }
 
         case 'borg_read-entry': {
@@ -867,19 +938,28 @@ export async function main() {
             '',
             formatLogEntryMarkdown(entry, droneById, roleById),
           ].join('\n');
-          return { content: [{ type: 'text', text }] };
+          return {
+            content: [{ type: 'text', text }],
+            structuredContent: { entry, drones, roles },
+          };
         }
 
         case 'borg_put-document': {
           const active = await requireActiveCube();
           const result = await putDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
-          return { content: [{ type: 'text', text: `Created cube document.\n\n${formatDocument(result.document)}` }] };
+          return {
+            content: [{ type: 'text', text: `Created cube document.\n\n${formatDocument(result.document)}` }],
+            structuredContent: { document: result.document },
+          };
         }
 
         case 'borg_get-document': {
           const active = await requireActiveCube();
           const result = await getDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
-          return { content: [{ type: 'text', text: formatDocument(result.document) }] };
+          return {
+            content: [{ type: 'text', text: formatDocument(result.document) }],
+            structuredContent: { document: result.document },
+          };
         }
 
         case 'borg_list-documents': {
@@ -888,13 +968,19 @@ export async function main() {
           const text = result.documents.length === 0
             ? `No active or superseded documents in cube "${active.name}".`
             : result.documents.map(formatDocumentMetadata).join('\n\n');
-          return { content: [{ type: 'text', text }] };
+          return {
+            content: [{ type: 'text', text }],
+            structuredContent: { documents: result.documents },
+          };
         }
 
         case 'borg_remove-document': {
           const active = await requireActiveCube();
           const result = await removeDocument(active.sessionToken, active.apiUrl, args ?? {}, active.serverTrustIdentity);
-          return { content: [{ type: 'text', text: `Removed cube document.\n\n${formatDocumentMetadata(result.document)}` }] };
+          return {
+            content: [{ type: 'text', text: `Removed cube document.\n\n${formatDocumentMetadata(result.document)}` }],
+            structuredContent: { document: result.document },
+          };
         }
 
         case 'borg_log': {
@@ -918,6 +1004,13 @@ export async function main() {
                     text: `Suppressed duplicate ${decision.signal?.toUpperCase()} lifecycle log for ${displayIdentity.droneLabel}; recent cube log already contains this signal.`,
                   },
                 ],
+                structuredContent: {
+                  suppressed: true,
+                  entry: null,
+                  recipients: [],
+                  unreachable_recipients: [],
+                  advisory: null,
+                },
               };
             }
           }
@@ -962,7 +1055,16 @@ export async function main() {
             ? `\nAdvisory: this message exceeded ${result.advisory.threshold_bytes} UTF-8 bytes. Store durable detail with borg_put-document, then cite its full id in borg_log.documents with an explicit borg_log.to audience.`
             : '';
           const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${routed}${unreachable}${citations}${advisory}`;
-          return { content: [{ type: 'text', text }] };
+          return {
+            content: [{ type: 'text', text }],
+            structuredContent: {
+              suppressed: false,
+              entry: result.entry,
+              recipients: routedRecipients,
+              unreachable_recipients: result.unreachableRecipients ?? [],
+              advisory: result.advisory ?? null,
+            },
+          };
         }
 
         case 'borg_ack': {
@@ -992,6 +1094,7 @@ export async function main() {
                     : `Acked entry ${entryId} in cube "${active.name}".`,
               },
             ],
+            structuredContent: { entry_id: entryId, kind, cube_name: active.name },
           };
         }
 
@@ -1003,7 +1106,10 @@ export async function main() {
             args ?? {},
             active.serverTrustIdentity,
           );
-          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+            structuredContent: { ...result },
+          };
         }
 
         case 'borg_decide': {
@@ -1031,6 +1137,7 @@ export async function main() {
                 text: `Recorded ratified decision on "${topic}" in cube "${active.name}"${superseded}. Cite it via borg_decisions; it surfaces in borg_regen.`,
               },
             ],
+            structuredContent: { decision: row, superseded: Boolean(row?.supersedes), cube_name: active.name },
           };
         }
 
@@ -1051,7 +1158,10 @@ export async function main() {
               : decisions
                   .map((d: any) => `**${d.topic}:** ${d.decision}${d.rationale ? ` — ${d.rationale}` : ''}`)
                   .join('\n');
-          return { content: [{ type: 'text', text }] };
+          return {
+            content: [{ type: 'text', text }],
+            structuredContent: { decisions },
+          };
         }
 
         case 'borg_remove-decision': {
@@ -1073,18 +1183,25 @@ export async function main() {
               type: 'text',
               text: `Removed the active ratified decision on "${decision.topic}" from cube "${active.name}".`,
             }],
+            structuredContent: { decision, cube_name: active.name },
           };
         }
 
         case 'borg_list-cubes': {
           const { cubes } = await listCubes();
           if (!cubes.length) {
-            return { content: [{ type: 'text', text: 'No cubes yet. Use borg_create-cube to make your first one.' }] };
+            return {
+              content: [{ type: 'text', text: 'No cubes yet. Use borg_create-cube to make your first one.' }],
+              structuredContent: { cubes: [] },
+            };
           }
           const lines = cubes.map((c: any) =>
             `- **${c.name}** (id: ${c.id})\n  ${(c.cube_directive || '_(no directive set)_').split('\n')[0].slice(0, 120)}`
           );
-          return { content: [{ type: 'text', text: `Your cubes (${cubes.length}):\n\n${lines.join('\n\n')}` }] };
+          return {
+            content: [{ type: 'text', text: `Your cubes (${cubes.length}):\n\n${lines.join('\n\n')}` }],
+            structuredContent: { cubes },
+          };
         }
 
         case 'borg_create-cube': {
@@ -1126,10 +1243,21 @@ export async function main() {
               ? ' Template cube directive applied (operator passed empty).'
               : '';
             const text = `Created cube **${cube.name}** (id: ${cube.id}) with template **${templateName}** applied — ${summary.created} role(s) created, ${summary.updated} updated.${cubeDirectiveNote} Use borg_assimilate ${cube.name} to join as a drone.`;
-            return { content: [{ type: 'text', text }] };
+            return {
+              content: [{ type: 'text', text }],
+              structuredContent: {
+                cube,
+                template: templateName,
+                roles_created: summary.created,
+                roles_updated: summary.updated,
+              },
+            };
           }
           const text = `Created cube **${cube.name}** (id: ${cube.id}). A default "Drone" role was seeded — rename or replace it via borg_update-role / borg_create-role / borg_delete-role. Use borg_assimilate ${cube.name} to join as a drone.`;
-          return { content: [{ type: 'text', text }] };
+          return {
+            content: [{ type: 'text', text }],
+            structuredContent: { cube, template: null, roles_created: null, roles_updated: null },
+          };
         }
 
         case 'borg_update-cube': {
@@ -1141,7 +1269,10 @@ export async function main() {
           if (Array.isArray(args?.message_taxonomy)) updates.message_taxonomy = args.message_taxonomy as MessageTaxonomy;
           if (Object.keys(updates).length === 0) throw new Error('Pass at least one of: cube_directive, message_taxonomy.');
           const { cube, advisory } = await updateCube(cubeId, updates);
-          return { content: [{ type: 'text', text: formatUpdatedCubeResult(cube, advisory) }] };
+          return {
+            content: [{ type: 'text', text: formatUpdatedCubeResult(cube, advisory) }],
+            structuredContent: { cube, advisory: advisory ?? null },
+          };
         }
 
         case 'borg_patch-taxonomy-class': {
@@ -1167,7 +1298,10 @@ export async function main() {
             label = String(classDef.class ?? '');
           }
           const verb = action === 'add' ? 'Added' : action === 'replace' ? 'Replaced' : 'Removed';
-          return { content: [{ type: 'text', text: `${verb} taxonomy class **${label}** in cube **${cube.name}** (id: ${cube.id}).` }] };
+          return {
+            content: [{ type: 'text', text: `${verb} taxonomy class **${label}** in cube **${cube.name}** (id: ${cube.id}).` }],
+            structuredContent: { action, class: label, cube },
+          };
         }
 
         case 'borg_delete-cube': {
@@ -1178,7 +1312,10 @@ export async function main() {
             throw new CubeDeletionConfirmationError(cubeId, confirmCubeId);
           }
           await deleteCube(cubeId, confirmCubeId);
-          return { content: [{ type: 'text', text: `Deleted cube ${cubeId} (and all its roles, drones, log entries).` }] };
+          return {
+            content: [{ type: 'text', text: `Deleted cube ${cubeId} (and all its roles, drones, log entries).` }],
+            structuredContent: { cube_id: cubeId, deleted: true },
+          };
         }
 
         case 'borg_create-role': {
@@ -1213,7 +1350,10 @@ export async function main() {
             role.is_mandatory ? 'mandatory' : null,
           ].filter(Boolean).join(', ');
           const tag = tags ? ` (${tags})` : '';
-          return { content: [{ type: 'text', text: `Created role **${role.name}**${tag} (id: ${role.id}) in cube ${cubeId}.` }] };
+          return {
+            content: [{ type: 'text', text: `Created role **${role.name}**${tag} (id: ${role.id}) in cube ${cubeId}.` }],
+            structuredContent: { role, cube_id: cubeId },
+          };
         }
 
         case 'borg_update-role': {
@@ -1231,7 +1371,10 @@ export async function main() {
           if (typeof args?.default_model === 'string') updates.default_model = args.default_model as string;
           if (Object.keys(updates).length === 0) throw new Error('Pass at least one of: name, short_description, detailed_description, is_default, is_mandatory, is_human_seat, can_broadcast, receives_all_direct.');
           const { role, advisory } = await updateRole(roleId, updates);
-          return { content: [{ type: 'text', text: formatUpdatedRoleResult(role, advisory) }] };
+          return {
+            content: [{ type: 'text', text: formatUpdatedRoleResult(role, advisory) }],
+            structuredContent: { role, advisory: advisory ?? null },
+          };
         }
 
         case 'borg_patch-role-section': {
@@ -1259,28 +1402,47 @@ export async function main() {
               ({ role, advisory } = await patchRoleSection(roleId, { action, heading, body }));
             }
           }
-          return { content: [{ type: 'text', text: formatPatchedRoleSectionResult(action, heading, role, advisory) }] };
+          return {
+            content: [{ type: 'text', text: formatPatchedRoleSectionResult(action, heading, role, advisory) }],
+            structuredContent: { action, heading, role, advisory: advisory ?? null },
+          };
         }
 
         case 'borg_delete-role': {
           const roleId = args?.role_id as string;
           if (!roleId) throw new Error('role_id is required');
           await deleteRole(roleId);
-          return { content: [{ type: 'text', text: `Deleted role ${roleId}.` }] };
+          return {
+            content: [{ type: 'text', text: `Deleted role ${roleId}.` }],
+            structuredContent: { role_id: roleId, deleted: true },
+          };
         }
 
         case 'borg_reassign-drone': {
+          const reassigned = await runReassignDroneTool({
+            droneId: args?.drone_id,
+            roleId: args?.role_id,
+          });
           return {
-            content: [{ type: 'text', text: await runReassignDroneTool({
-              droneId: args?.drone_id,
-              roleId: args?.role_id,
-            }) }],
+            content: [{ type: 'text', text: reassigned.text }],
+            structuredContent: {
+              drone: reassigned.drone,
+              role_name: reassigned.roleName,
+              cube_name: reassigned.cubeName,
+            },
           };
         }
 
         case 'borg_evict-drone': {
+          const evicted = await runEvictDroneTool(args);
           return {
-            content: [{ type: 'text', text: await runEvictDroneTool(args) }],
+            content: [{ type: 'text', text: evicted.text }],
+            structuredContent: {
+              drone_id: evicted.droneId,
+              label: evicted.label,
+              cube_name: evicted.cubeName,
+              evicted: true,
+            },
           };
         }
 
@@ -1289,7 +1451,10 @@ export async function main() {
           if (!cubeId) throw new Error('cube_id is required');
           const { drones, roles } = await getCube(cubeId);
           if (!drones.length) {
-            return { content: [{ type: 'text', text: 'No drones in this cube yet.' }] };
+            return {
+              content: [{ type: 'text', text: 'No drones in this cube yet.' }],
+              structuredContent: { cube_id: cubeId, drones: [], roles },
+            };
           }
           const rolesById = new Map(roles.map((r: any) => [r.id, r]));
            const lines = drones.map((d: any) => {
@@ -1303,7 +1468,10 @@ export async function main() {
               ...renderRuntimeMetadataLines(d),
             ].join('\n');
            });
-          return { content: [{ type: 'text', text: `Drones in cube ${cubeId} (${drones.length}):\n\n_${RUNTIME_METADATA_ADVISORY}_\n\n${lines.join('\n')}` }] };
+          return {
+            content: [{ type: 'text', text: `Drones in cube ${cubeId} (${drones.length}):\n\n_${RUNTIME_METADATA_ADVISORY}_\n\n${lines.join('\n')}` }],
+            structuredContent: { cube_id: cubeId, drones, roles },
+          };
         }
 
         case 'borg_list-roles': {
@@ -1318,7 +1486,10 @@ export async function main() {
           const cubeId = args?.cube_id as string;
           if (!cubeId) throw new Error('cube_id is required');
           const roles = await listRoles(cubeId);
-          return { content: [{ type: 'text', text: renderRoleList(roles, cubeId) }] };
+          return {
+            content: [{ type: 'text', text: renderRoleList(roles, cubeId) }],
+            structuredContent: { cube_id: cubeId, roles },
+          };
         }
 
         case 'borg_list-templates': {
@@ -1327,7 +1498,12 @@ export async function main() {
             const t = getTemplate(n)!;
             return `- **${n}**: ${t.description}`;
           });
-          return { content: [{ type: 'text', text: `Available templates:\n\n${lines.join('\n')}` }] };
+          return {
+            content: [{ type: 'text', text: `Available templates:\n\n${lines.join('\n')}` }],
+            structuredContent: {
+              templates: names.map((n) => ({ name: n, description: getTemplate(n)!.description })),
+            },
+          };
         }
 
         case 'borg_sync-roles': {
@@ -1344,7 +1520,10 @@ export async function main() {
               : undefined;
           if (!cubeId) throw new Error('cube_id is required');
           const result = await syncRoles(cubeId, templateName, apply, decisions);
-          return { content: [{ type: 'text', text: renderSyncRolesResult(result, templateName) }] };
+          return {
+            content: [{ type: 'text', text: renderSyncRolesResult(result, templateName) }],
+            structuredContent: { cube_id: cubeId, template: templateName, apply, result },
+          };
         }
 
         case 'borg_apply-template': {
@@ -1364,7 +1543,16 @@ export async function main() {
            });
            const { summary, cubeDirectiveNote } = await runApplyTemplateTool(cubeId, template, authority);
 
-          return { content: [{ type: 'text', text: `Applied template **${templateName}** to cube ${cubeId} — ${summary.created} role(s) created, ${summary.updated} updated.${cubeDirectiveNote}` }] };
+          return {
+            content: [{ type: 'text', text: `Applied template **${templateName}** to cube ${cubeId} — ${summary.created} role(s) created, ${summary.updated} updated.${cubeDirectiveNote}` }],
+            structuredContent: {
+              cube_id: cubeId,
+              template: templateName,
+              roles_created: summary.created,
+              roles_updated: summary.updated,
+              cube_directive_applied: cubeDirectiveNote !== '',
+            },
+          };
         }
 
         default:

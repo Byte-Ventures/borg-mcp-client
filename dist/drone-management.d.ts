@@ -20,10 +20,27 @@ export interface DroneManagementDeps {
     refreshActiveCubeMetadata: (active: ActiveCube) => Promise<boolean>;
 }
 export declare const STALE_ROLE_DISPLAY_WARNING: string;
+export interface ReassignDroneToolResult {
+    text: string;
+    drone: {
+        id: string;
+        cube_id: string;
+        role_id: string;
+        label: string;
+    };
+    roleName: string;
+    cubeName: string;
+}
+export interface EvictDroneToolResult {
+    text: string;
+    droneId: string;
+    label: string;
+    cubeName: string;
+}
 export declare function runReassignDroneTool(input: {
     droneId: unknown;
     roleId: unknown;
-}, deps?: DroneManagementDeps): Promise<string>;
-export declare function runEvictDroneTool(args: Record<string, unknown> | undefined, deps?: DroneManagementDeps): Promise<string>;
+}, deps?: DroneManagementDeps): Promise<ReassignDroneToolResult>;
+export declare function runEvictDroneTool(args: Record<string, unknown> | undefined, deps?: DroneManagementDeps): Promise<EvictDroneToolResult>;
 export {};
 //# sourceMappingURL=drone-management.d.ts.map
