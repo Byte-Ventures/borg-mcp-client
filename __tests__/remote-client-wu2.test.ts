@@ -39,10 +39,17 @@ describe('Sprint 10 WU2 local adapter', () => {
       const resource = cubeMatch?.[2];
 
       if (url.pathname === '/api/cubes' && method === 'POST') {
+        // client#499: the client strictly decodes CreateCubeResponse (result required).
         return new Response(envelope({
+          result: 'created',
           cube_id: CUBE_ID,
+          name: 'adopted',
+          working_repo_name: 'adopted',
+          repository: { kind: 'origin', value: 'https://github.com/owner/adopted' },
+          template: 'default',
           human_seat_role_id: ROLE_ID,
           default_worker_role_id: ROLE_ID,
+          access: 'manage',
         }), { status: 201 });
       }
       if (requestedCubeId && !resource && method === 'GET') {

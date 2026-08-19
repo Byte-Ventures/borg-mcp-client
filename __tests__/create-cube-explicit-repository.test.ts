@@ -37,6 +37,23 @@ describe('normalizeExplicitRepository', () => {
       expect(() => normalizeExplicitRepository(bad as unknown)).toThrow(/repository/i);
     }
   });
+
+  it('refuses a PRESENT non-string working_repo_name (no silent coercion) — both kinds', () => {
+    const uuid = '11111111-2222-4333-8444-555566667777';
+    for (const bad of [42, {}, [], true]) {
+      expect(() => normalizeExplicitRepository('https://github.com/owner/repo', bad as unknown)).toThrow(/working_repo_name must be a string/);
+      expect(() => normalizeExplicitRepository(uuid, bad as unknown)).toThrow(/working_repo_name must be a string/);
+    }
+  });
+
+  it('refuses a working_repo_name that violates the wire pattern/limit — both kinds', () => {
+    const uuid = '11111111-2222-4333-8444-555566667777';
+    const tooLong = 'a'.repeat(121);
+    for (const bad of [tooLong, 'bad/slash', 'no*stars', 'name#hash', '-leading-dash']) {
+      expect(() => normalizeExplicitRepository('https://github.com/owner/repo', bad)).toThrow(/working_repo_name must start/);
+      expect(() => normalizeExplicitRepository(uuid, bad)).toThrow(/working_repo_name must start/);
+    }
+  });
 });
 
 // createCube created-vs-resolved boundary: 'created' PATCHes the directive;
@@ -47,6 +64,18 @@ const TRUST = 'spki-sha256:test';
 const CONN = { apiUrl: ORIGIN, authToken: 's'.repeat(43), serverTrustIdentity: TRUST };
 const REPO = { repository: { kind: 'origin' as const, value: 'https://github.com/owner/repo' }, workingRepoName: 'repo' };
 const env = (payload: unknown) => ({ protocol_version: '12', request_id: 'local-response-1', payload });
+// The full CreateCubeResponse the shared contract requires (client strictly decodes it).
+const CREATE_RESPONSE = (result: 'created' | 'resolved') => ({
+  result,
+  cube_id: CUBE_ID,
+  name: 'c',
+  working_repo_name: 'repo',
+  repository: { kind: 'origin', value: 'https://github.com/owner/repo' },
+  template: 'default',
+  human_seat_role_id: '22222222-2222-4222-8222-222222222222',
+  default_worker_role_id: '33333333-3333-4333-8333-333333333333',
+  access: 'manage',
+});
 
 describe('createCube created-vs-resolved boundary', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
@@ -58,11 +87,8 @@ describe('createCube created-vs-resolved boundary', () => {
       const url = new URL(input.toString());
       const method = init?.method ?? 'GET';
       if (url.pathname === '/api/cubes' && method === 'POST') {
-        return new Response(JSON.stringify(env({
-          result, cube_id: CUBE_ID,
-          human_seat_role_id: '22222222-2222-4222-8222-222222222222',
-          default_worker_role_id: '33333333-3333-4333-8333-333333333333',
-        })), { status: 200 });
+        // Full CreateCubeResponse shape (strictly decoded client-side).
+        return new Response(JSON.stringify(env(CREATE_RESPONSE(result))), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}` && method === 'PATCH') {
         patched = true;
@@ -106,5 +132,26 @@ describe('createCube created-vs-resolved boundary', () => {
     stub('created');
     const { createCube } = await import('../src/remote-client.js');
     await expect(createCube('c', 'd', { message_taxonomy: null } as any, CONN)).rejects.toThrow(/explicit repository/);
+  });
+
+  it('fails closed on a missing/invalid response result — never PATCHes (client#499 CR)', async () => {
+    // The POST response omits `result`; the strict CreateCubeResponse decode
+    // must reject it rather than falling through to a 'created' PATCH.
+    patched = false;
+    fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input.toString());
+      const method = init?.method ?? 'GET';
+      if (url.pathname === '/api/cubes' && method === 'POST') {
+        const noResult = { ...CREATE_RESPONSE('created') } as Record<string, unknown>;
+        delete noResult.result; // missing required result
+        return new Response(JSON.stringify(env(noResult)), { status: 200 });
+      }
+      if (url.pathname === `/api/cubes/${CUBE_ID}` && method === 'PATCH') { patched = true; return new Response(JSON.stringify(env({ cube: { id: CUBE_ID } })), { status: 200 }); }
+      throw new Error(`unexpected ${method} ${url.pathname}`);
+    });
+    vi.doMock('../src/server-trust.js', () => ({ loadBorgServerTrust: vi.fn(async () => ({ identity: TRUST, fetchImpl: fetchSpy })) }));
+    const { createCube } = await import('../src/remote-client.js');
+    await expect(createCube('c', 'directive', REPO, CONN)).rejects.toThrow();
+    expect(patched).toBe(false); // fail-closed: no directive PATCH on an undecodable response
   });
 });

@@ -11,7 +11,8 @@
  */
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
-import { createProtocolEnvelope, decodeAckStatusRequest, decodeAckStatusResult, decodeAppendLogRequest, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEntryQueryRequest, decodeEntryQueryResult, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeReadLogResult, decodePutDocumentRequest, decodePutDocumentResult, decodeGetDocumentRequest, decodeGetDocumentResult, decodeListDocumentsRequest, decodeListDocumentsResult, decodeRemoveDocumentRequest, decodeRemoveDocumentResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
+import { createProtocolEnvelope, decodeAckStatusRequest, decodeAckStatusResult, decodeAppendLogRequest, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEntryQueryRequest, decodeEntryQueryResult, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeReadLogResult, decodePutDocumentRequest, decodePutDocumentResult, decodeGetDocumentRequest, decodeGetDocumentResult, decodeListDocumentsRequest, decodeListDocumentsResult, decodeRemoveDocumentRequest, decodeRemoveDocumentResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, decodeCreateCubeResponse, } from 'borgmcp-shared/protocol';
+import { Buffer } from 'node:buffer';
 import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
@@ -1014,6 +1015,17 @@ export async function listCubes(connection) {
  * Existing callers that read `body.cube` keep working (forward-compat).
  */
 const REPOSITORY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The wire's working_repo_name rule (borgmcp-shared decodeWorkingRepositoryName,
+// which the package does not export): 1-120 UTF-8 bytes, must start with a
+// letter or digit, then letters/digits/spaces/dots/underscores/hyphens.
+const WORKING_REPO_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/;
+function assertValidWorkingRepoName(name) {
+    const bytes = Buffer.byteLength(name, 'utf8');
+    if (bytes < 1 || bytes > 120 || !WORKING_REPO_NAME_RE.test(name)) {
+        throw new Error('working_repo_name must start with a letter or digit and contain only letters, digits, spaces, dots, underscores, or hyphens (1-120 UTF-8 bytes).');
+    }
+    return name;
+}
 /**
  * client#499: normalize the EXPLICIT repository argument into the wire's
  * `{ repository, working_repo_name }` pair — no cwd inference. A canonical git
@@ -1026,18 +1038,28 @@ export function normalizeExplicitRepository(repositoryArg, workingRepoNameArg) {
     if (typeof repositoryArg !== 'string' || repositoryArg.trim().length === 0) {
         throw new Error('repository is required: pass a canonical git remote URL (e.g. https://github.com/owner/repo) or a UUID identifying a local repository.');
     }
+    // client#499 CR: a PRESENT working_repo_name must be a string; reject a
+    // present non-string rather than silently coercing it to the derived name.
+    if (workingRepoNameArg !== undefined && workingRepoNameArg !== null && typeof workingRepoNameArg !== 'string') {
+        throw new Error('working_repo_name must be a string when provided.');
+    }
     const repoInput = repositoryArg.trim();
     const nameArg = typeof workingRepoNameArg === 'string' ? workingRepoNameArg.trim() : '';
     const canonical = canonicalizeWorkingRepoIdentity(repoInput);
     if (canonical?.origin && canonical.name) {
         const derivedName = canonical.name.split('/').pop() || canonical.name;
-        return { repository: { kind: 'origin', value: canonical.origin }, workingRepoName: nameArg || derivedName };
+        // Validate the FINAL name (explicit or derived) against the wire rule
+        // before any network use, for both repository kinds — fail closed.
+        return {
+            repository: { kind: 'origin', value: canonical.origin },
+            workingRepoName: assertValidWorkingRepoName(nameArg || derivedName),
+        };
     }
     if (REPOSITORY_UUID_RE.test(repoInput)) {
         if (!nameArg) {
             throw new Error('working_repo_name is required when repository is a local UUID — there is no origin URL to derive a name from.');
         }
-        return { repository: { kind: 'local', value: repoInput }, workingRepoName: nameArg };
+        return { repository: { kind: 'local', value: repoInput }, workingRepoName: assertValidWorkingRepoName(nameArg) };
     }
     throw new Error('repository must be a canonical git remote URL (e.g. https://github.com/owner/repo) or a UUID identifying a local repository.');
 }
@@ -1051,15 +1073,17 @@ export async function createCube(name, cubeDirective, opts, connection) {
         throw new Error('Local Borg server cube creation requires an explicit repository identity');
     }
     const resolved = await localOwnerConnection(connection);
-    const created = await localConnectionMutation(resolved, '/api/cubes', 'POST', {
+    // client#499 CR: strictly decode the response against the shared
+    // CreateCubeResponse contract — `result` MUST be 'created' or 'resolved'. A
+    // missing/unknown result FAILS CLOSED (throws) rather than falling through to
+    // 'created' and PATCHing an existing cube's directive.
+    const created = decodeCreateCubeResponse(await localConnectionMutation(resolved, '/api/cubes', 'POST', {
         retry_key: randomUUID(),
         name: name.trim(),
         working_repo_name: opts.workingRepoName,
         repository: opts.repository,
         template: 'default',
-    });
-    if (!created?.cube_id)
-        throw new Error('Local Borg server returned an invalid cube creation response');
+    }));
     // client#499: the server homes one cube per repository. A 'resolved' result
     // means this repository already has a cube — report it honestly and DO NOT
     // PATCH its directive over the existing settings (the round-1 stomp defect).
