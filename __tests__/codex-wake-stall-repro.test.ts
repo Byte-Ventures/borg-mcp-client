@@ -160,8 +160,8 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
 
   it('the HEARTBEAT path reports DEGRADED when it finds pending work + a mid-turn thread', async () => {
     // gh#89 round-2 blocker: the heartbeat tick sees authoritative pending work
-    // and an active thread, then skips without queueing — it must still record
-    // the deferred delivery so health reads degraded, not armed/healthy.
+    // and an active thread, then skips without queueing — it must mark the
+    // deferral live so health reads degraded, not armed/healthy.
     const client = midTurnClient();
     await fireCodexHeartbeatTick({
       getActiveCube: vi.fn(async () => ACTIVE),
@@ -173,24 +173,55 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
 
     // Mid-turn → no catch-up turn injected (skip semantics unchanged).
     expect(client.startTurn).not.toHaveBeenCalled();
-    const d = getCodexDeliveryState();
-    expect(d.lastInjectionResult).toBe('deferred');
+    expect(getCodexDeliveryState().heartbeatDeliveryPending).toBe(true);
     // RED pre-fix (health was true during a heartbeat-deferred wake) → degraded.
     const snap = await inspectCodex();
     expect(snap.healthy).toBe(null);
   });
 
-  it('codexWakePathHealthy folds delivery state (unit): armed dominates, deferral degrades, failure fails', () => {
+  it('round-3 blocker: a recovered seat (authoritative unread empty) clears the degraded marker — not permanently stuck', async () => {
+    // First: a heartbeat that finds pending work + a mid-turn thread → degraded.
+    const busy = midTurnClient();
+    await fireCodexHeartbeatTick({
+      getActiveCube: vi.fn(async () => ACTIVE),
+      getCodexWakeTarget: vi.fn(async () => TARGET),
+      createClient: vi.fn(() => busy),
+      hasPendingWork: vi.fn(async () => true),
+      now: vi.fn(() => 1000),
+    });
+    expect((await inspectCodex()).healthy).toBe(null); // degraded
+
+    // The work is then drained by ANOTHER path (manual read / server read-cursor
+    // recovery), so the next heartbeat authoritatively finds NO pending work.
+    // The historical lastInjectionRes:'deferred' stays for reporting, but the
+    // LIVE marker clears → health returns to healthy (RED without the clear:
+    // stuck at null forever).
+    await fireCodexHeartbeatTick({
+      getActiveCube: vi.fn(async () => ACTIVE),
+      hasPendingWork: vi.fn(async () => false), // authoritative unread now empty
+      now: vi.fn(() => 2_000_000), // past the cadence so the tick fires
+    });
+    const d = getCodexDeliveryState();
+    expect(d.heartbeatDeliveryPending).toBe(false);
+    expect(d.lastInjectionResult).toBe('deferred'); // historical reporting is retained
+    expect((await inspectCodex()).healthy).toBe(true);
+  });
+
+  it('codexWakePathHealthy keys off LIVE signals only, not historical last-attempt results (unit)', () => {
     const base = {
       lastTargetThreadId: 't', lastInjectionAt: 1, lastInjectionResult: null as any,
-      lastInjectionFailureCode: null, deferredEntryCount: 0, retryDrainActive: false, lastDeliveredAt: null,
+      lastInjectionFailureCode: null, deferredEntryCount: 0, retryDrainActive: false,
+      heartbeatDeliveryPending: false, lastDeliveredAt: null,
     };
     expect(codexWakePathHealthy(false, base)).toBe(false); // positively-dead bridge dominates
     expect(codexWakePathHealthy(null, base)).toBe(null); // could not probe → indeterminate
-    expect(codexWakePathHealthy(true, base)).toBe(true); // armed, nothing pending
-    expect(codexWakePathHealthy(true, { ...base, deferredEntryCount: 1 })).toBe(null); // deferred → degraded
-    expect(codexWakePathHealthy(true, { ...base, retryDrainActive: true })).toBe(null); // retrying → degraded
-    expect(codexWakePathHealthy(true, { ...base, lastInjectionResult: 'deferred' })).toBe(null); // heartbeat-deferred → degraded
-    expect(codexWakePathHealthy(true, { ...base, lastInjectionResult: 'failed' })).toBe(false); // failed, no recovery → unhealthy
+    expect(codexWakePathHealthy(true, base)).toBe(true); // armed, nothing live-pending
+    expect(codexWakePathHealthy(true, { ...base, deferredEntryCount: 1 })).toBe(null); // live queue → degraded
+    expect(codexWakePathHealthy(true, { ...base, retryDrainActive: true })).toBe(null); // live retry → degraded
+    expect(codexWakePathHealthy(true, { ...base, heartbeatDeliveryPending: true })).toBe(null); // live heartbeat pending → degraded
+    // HISTORICAL results with NO live signal do NOT degrade — a recovered seat
+    // is healthy (this is the round-3 fix; keying off these would stick).
+    expect(codexWakePathHealthy(true, { ...base, lastInjectionResult: 'deferred' })).toBe(true);
+    expect(codexWakePathHealthy(true, { ...base, lastInjectionResult: 'failed' })).toBe(true);
   });
 });
