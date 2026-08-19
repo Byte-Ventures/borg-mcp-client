@@ -114,11 +114,12 @@ export function formatUpdatedRoleResult(role, advisory) {
 }
 // gh#501: the borg_tool dispatcher only requires its inner arguments to be an
 // object, so the direct-tool enum schema does not guard borg_ack.kind. Resolve
-// it explicitly: an absent kind defaults to 'ack' (the documented default), a
-// valid kind passes through, and any present invalid value is REFUSED rather
+// it explicitly: ONLY a missing kind (undefined) defaults to 'ack' (the
+// documented default). A valid kind passes through; every present value —
+// including an explicit null — that is not 'ack'/'claim' is REFUSED rather
 // than silently coerced into a state-changing acknowledgement.
 export function resolveAckKind(raw) {
-    if (raw === undefined || raw === null)
+    if (raw === undefined)
         return 'ack';
     if (raw === 'ack' || raw === 'claim')
         return raw;
