@@ -327,6 +327,40 @@ describe('renderStreamStatus — body shape (drone-4 diagnostic-completeness con
     expect(out).toContain('- **last content event**: _(none yet)_');
     expect(out).toContain('- **last heartbeat at**: _(none)_');
   });
+
+  it('renders the Codex deferred state recovery-neutrally when the marker is set but the retry-drain is INACTIVE (client#89)', () => {
+    // deliveryDeferred is path-agnostic: a heartbeat / no-fresh-target deferral
+    // has retryDrainActive=false and no retry-drain. The render must NOT claim
+    // recovery happens "until the retry-drain lands" (there is none), and must
+    // NOT print "retry-drain active".
+    const out = renderStreamStatus({
+      status: freshStatus({ connected: true, lastWireActivityAt: '2026-05-11T12:00:00.000Z' }),
+      inboxMonitorHealthy: null,
+      wakePath: {
+        agentKind: 'codex',
+        healthy: null,
+        openCode: null,
+        codex: {
+          lastTargetThreadId: 'thread-123',
+          lastInjectionAt: 1,
+          lastInjectionResult: 'deferred',
+          lastInjectionFailureCode: null,
+          deferredEntryCount: 0,
+          retryDrainActive: false,
+          deliveryDeferred: true,
+          lastDeliveredAt: null,
+        },
+      },
+      droneLabel: 'd',
+      cubeName: 'c',
+      humanAgo: fakeHumanAgo,
+    });
+    expect(out).toContain('undelivered wake pending');
+    expect(out).not.toContain('retry-drain active');
+    // Recovery-neutral copy — never names retry-drain as the recovery mechanism.
+    expect(out).not.toContain('until the retry-drain lands');
+    expect(out).toContain('until the wake is delivered or the unread log is drained');
+  });
 });
 
 describe('formatWakePathPrefix (gh#43 — regen self-heal)', () => {
