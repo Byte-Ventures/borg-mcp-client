@@ -123,8 +123,116 @@ export function getLastDeliveredAt(): number | null {
   return lastDeliveredAt;
 }
 
+// client#89: delivery-state observability. The Codex wake-path health surface
+// must distinguish "bridge armed" from "delivery healthy" — a wake deferred
+// (mid-turn) or failed and being retried is NOT a healthy wake path, even
+// though the app-server socket is alive. These module-scoped fields track the
+// last injection attempt/result and the last failure (a secret-free error
+// code/class only — never message contents); the deferred-queue state is read
+// live from the existing retry-drain fields. Same process as the health probe
+// (the wake path and stream-status run in the same MCP-client child), so the
+// snapshot is directly visible. NONE of this changes the wake mechanism.
+type CodexInjectionResult = 'delivered' | 'deferred' | 'failed';
+// HISTORICAL reporting — the last injection attempt/result/failure. These are
+// surfaced on the status surface for diagnosis; they are NOT used to decide
+// health, because a historical result does not self-clear when work is drained
+// by another path (manual read, server read-cursor recovery). Health keys off
+// the LIVE signals below.
+let lastInjectionAt: number | null = null;
+let lastInjectionResult: CodexInjectionResult | null = null;
+let lastInjectionFailureCode: string | null = null;
+let lastTargetThreadId: string | null = null;
+// client#89: a LIVE marker for undelivered directed wakes NOT tracked by the
+// retry-drain queue (retryDrainActive / deferredEntryCount cover that queue and
+// self-clear on prune/deliver). SET at every injection exit where an
+// authoritatively-pending wake could not be delivered and is not queued: the
+// heartbeat mid-turn skip / no-target return / transient failure, the per-entry
+// no-target return for a still-pending scoped entry, and the retry-drain age-out
+// hand-off. CLEARED when any delivery lands (markDelivered) and when the
+// heartbeat authoritatively finds no pending work. It is a LIVE signal, not a
+// historical result, so a seat that recovers by any path returns to healthy.
+let deliveryDeferred = false;
+
+export interface CodexDeliveryState {
+  /** Opaque thread id of the last-resolved wake target (never a socket path). */
+  lastTargetThreadId: string | null;
+  /** HISTORICAL last attempt time (reporting only; not a health input). */
+  lastInjectionAt: number | null;
+  /** HISTORICAL last attempt result (reporting only; not a health input). */
+  lastInjectionResult: CodexInjectionResult | null;
+  /** Secret-free error code/class of the last failed injection; never contents. */
+  lastInjectionFailureCode: string | null;
+  /** LIVE: entries currently deferred/retrying (not yet confirmed delivered). */
+  deferredEntryCount: number;
+  /** LIVE: a coalesced retry-drain loop is currently retrying deferred/missed wakes. */
+  retryDrainActive: boolean;
+  /** LIVE: an undelivered directed wake not tracked by the retry-drain queue. */
+  deliveryDeferred: boolean;
+  lastDeliveredAt: number | null;
+}
+
+/** Snapshot of the Codex wake-path delivery state for the health/status surface. */
+export function getCodexDeliveryState(): CodexDeliveryState {
+  return {
+    lastTargetThreadId,
+    lastInjectionAt,
+    lastInjectionResult,
+    lastInjectionFailureCode,
+    deferredEntryCount: retryDrainSourceEntryIds.size + (retryDrainHasUnscopedWork ? 1 : 0),
+    retryDrainActive: retryDrainInFlight,
+    deliveryDeferred,
+    lastDeliveredAt,
+  };
+}
+
+/** Reduce a caught error to a secret-free code/class — never its message. */
+function injectionFailureCode(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && code.length > 0) return code;
+  if (err instanceof Error && err.name) return err.name;
+  return 'unknown';
+}
+
+function recordInjectionResult(
+  result: CodexInjectionResult,
+  now: () => number,
+  failureCode?: string,
+): void {
+  lastInjectionAt = now();
+  lastInjectionResult = result;
+  lastInjectionFailureCode = result === 'failed' ? (failureCode ?? 'unknown') : null;
+}
+
+/**
+ * client#89: pure wake-path health for Codex, folding the LIVE delivery state
+ * into the raw "bridge armed" probe. A wake still pending redelivery — a live
+ * retry-drain, a non-empty deferred queue, or an undelivered heartbeat pending
+ * — is NOT a confirmed-healthy path (returns null = degraded). A positively-
+ * dead bridge dominates (false). Historical last-attempt results are NOT used
+ * here: they do not self-clear when work is drained by another path, so keying
+ * health off them would leave a recovered seat permanently degraded.
+ */
+export function codexWakePathHealthy(
+  armed: boolean | null,
+  state: CodexDeliveryState,
+): boolean | null {
+  if (armed === false) return false; // positively-dead bridge
+  if (armed === null) return null; // could not probe → indeterminate
+  // Bridge armed. Degraded while any LIVE signal shows an unconfirmed delivery.
+  if (
+    state.retryDrainActive ||
+    state.deferredEntryCount > 0 ||
+    state.deliveryDeferred
+  ) {
+    return null;
+  }
+  return true;
+}
+
 function markDelivered(deps: CodexWakeDeps): void {
   lastDeliveredAt = (deps.now ?? Date.now)();
+  // client#89: any confirmed delivery clears the live heartbeat-pending marker.
+  deliveryDeferred = false;
 }
 
 // gh#857 WI-2: a single-in-flight guard for the heartbeat tick (mirrors
@@ -327,8 +435,18 @@ async function wakeCodexTargeted(
     // gh#855: resolve FRESH (live env socket + re-resolved thread), falling back
     // to the launch-recorded file only when the env socket is absent.
     const resolved = await resolveFreshCodexWakeTarget(active, deps);
-    if (!resolved) return;
+    if (!resolved) {
+      // client#89: a scoped entry passed the pending check above but no target
+      // resolves — undeliverable, and this path does NOT schedule a retry-drain
+      // (the design leaves it to the next wake / the heartbeat backstop). Mark
+      // the deferral live so health reads degraded rather than armed. An
+      // unscoped wake carries no authoritative pending signal, so it does not
+      // set the marker. Retry behavior is unchanged.
+      if (sourceEntryId) deliveryDeferred = true;
+      return;
+    }
     const { socketPath, threadId } = resolved;
+    lastTargetThreadId = threadId; // client#89: record the selected target
     const wakeKey = `${threadId}\0${deliveryIdentity ?? reason}`;
     if (deliveredWakeKeys.has(wakeKey)) return; // dedup before opening the wake socket
     const client = makeCodexClient(socketPath, deps);
@@ -340,21 +458,24 @@ async function wakeCodexTargeted(
         // now. Schedule the retry-drain (coalesced, retried-until-delivered) so
         // the burst's entries are drained once the thread goes idle; codex has no
         // on-disk tail fallback like Claude's borg-inbox-monitor.
+        recordInjectionResult('deferred', deps.now ?? Date.now); // client#89
         scheduleRetryDrain(deps, sourceEntryId);
         return;
       }
       if (sourceEntryId && !(await pendingEntry(active, sourceEntryId))) return;
       await client.startTurn(threadId, reason);
       rememberDeliveredWake(wakeKey);
+      recordInjectionResult('delivered', deps.now ?? Date.now); // client#89
       markDelivered(deps);
     } finally {
       client.close();
     }
-  } catch {
+  } catch (err) {
     // gh#857: a transient connect/read/startTurn failure must NOT be silently
     // swallowed (the old best-effort drop let a single blip lose an entry).
     // Schedule the retry-drain so the wake is retried-until-delivered; the SSE
     // stream is never broken (this is fire-and-forget).
+    recordInjectionResult('failed', deps.now ?? Date.now, injectionFailureCode(err)); // client#89
     scheduleRetryDrain(deps, sourceEntryId);
   } finally {
     releaseInjectLock();
@@ -414,11 +535,13 @@ async function runRetryDrainLoop(deps: CodexWakeDeps): Promise<void> {
       const resolved = await resolveFreshCodexWakeTarget(active, deps);
       if (!resolved) continue; // thread not loaded yet → retry (age-capped)
       const { socketPath, threadId } = resolved;
+      lastTargetThreadId = threadId; // client#89: record the selected target
       const client = makeCodexClient(socketPath, deps);
       await client.connect();
       try {
         const thread = await client.readThread(threadId);
         if (thread?.status?.type === 'active') {
+          recordInjectionResult('deferred', now); // client#89
           continue; // re-defer: still mid-turn (backoff before next poll)
         }
         for (const entryId of retryDrainSourceEntryIds) {
@@ -428,19 +551,31 @@ async function runRetryDrainLoop(deps: CodexWakeDeps): Promise<void> {
         await client.startTurn(threadId, CODEX_CATCHUP_PROMPT);
         retryDrainSourceEntryIds.clear();
         retryDrainHasUnscopedWork = false;
+        recordInjectionResult('delivered', now); // client#89
         markDelivered(deps);
         return; // drain delivered → server read-cursor drains all unread → done
       } finally {
         client.close();
       }
-    } catch {
+    } catch (err) {
       // transient socket/read error must not abort the loop — keep retrying with
       // backoff until reachable+idle or the age cap; never throws into SSE.
+      recordInjectionResult('failed', now, injectionFailureCode(err)); // client#89
     } finally {
       releaseInjectLock();
     }
   }
   // aged out: the gh#857 WI-2 periodic heartbeat is the ultimate backstop.
+  // client#89: if obligations remain unfinished (the thread stayed mid-turn
+  // through the age cap), the loop is gone but the entries are still pending.
+  // Hand off to the live marker and clear the retry-drain set, so health stays
+  // degraded (not stuck via a stale deferredEntryCount after the loop exits)
+  // and clears when a delivery lands or the unread authoritatively empties.
+  if (retryDrainSourceEntryIds.size > 0 || retryDrainHasUnscopedWork) {
+    retryDrainSourceEntryIds.clear();
+    retryDrainHasUnscopedWork = false;
+    deliveryDeferred = true;
+  }
 }
 
 /**
@@ -484,16 +619,41 @@ export async function fireCodexHeartbeatTick(
     // authoritative unread state without advancing its cursor; only then touch
     // the app-server socket or resolve a thread.
     const hasPendingWork = deps.hasPendingWork ?? hasPendingWakeActivity;
-    if (!(await hasPendingWork(active))) return;
+    if (!(await hasPendingWork(active))) {
+      // client#89: authoritative unread is empty → no undelivered wake remains.
+      // Clear the live heartbeat-pending marker so a seat that recovered by any
+      // path (manual read, server read-cursor drain) returns to healthy.
+      deliveryDeferred = false;
+      return;
+    }
     const resolved = await resolveFreshCodexWakeTarget(active, deps);
-    if (!resolved) return; // thread not loaded yet → next tick retries
+    if (!resolved) {
+      // client#89: authoritative pending work exists but no fresh target/thread
+      // resolves — the wake is UNDELIVERABLE this tick. The persisted-target
+      // probe can still read armed, so mark the deferral live (health degraded)
+      // until a target resolves and delivers, or the unread authoritatively
+      // clears. Cadence/retry behavior is unchanged (the next tick still tries).
+      deliveryDeferred = true;
+      return; // thread not loaded yet → next tick retries
+    }
+    lastTargetThreadId = resolved.threadId; // client#89: record the selected target
     const client = makeCodexClient(resolved.socketPath, deps);
     await client.connect();
     try {
       const thread = await client.readThread(resolved.threadId);
-      if (thread?.status?.type === 'active') return; // mid-turn → skip; next tick retries
+      if (thread?.status?.type === 'active') {
+        // client#89: we passed hasPendingWork above, so a mid-turn thread here
+        // means a directed entry is deferred. Mark it LIVE-pending (the heartbeat
+        // does not queue into the retry-drain) so the health surface reads
+        // degraded until a delivery lands or the unread authoritatively clears.
+        // Skip semantics are unchanged — the next tick still retries.
+        recordInjectionResult('deferred', deps.now ?? Date.now);
+        deliveryDeferred = true;
+        return; // mid-turn → skip; next tick retries
+      }
       await client.startTurn(resolved.threadId, CODEX_CATCHUP_PROMPT);
-      // markDelivered updates local heartbeat-gating state only.
+      // markDelivered clears the live heartbeat-pending marker.
+      recordInjectionResult('delivered', deps.now ?? Date.now); // client#89
       markDelivered(deps);
     } finally {
       client.close();
@@ -503,6 +663,11 @@ export async function fireCodexHeartbeatTick(
     // path is gone; signal teardown so the timer stops ticking against a dead
     // socket (re-armed when an active cube returns). Other (transient) errors are
     // best-effort skips — never break the SSE stream; next tick retries.
+    // client#89: we passed hasPendingWork, so a failure here leaves pending work
+    // undelivered → mark it live-pending (a dead bridge is separately false via
+    // the armed probe). Clears on the next authoritative-empty tick or delivery.
+    recordInjectionResult('failed', deps.now ?? Date.now, injectionFailureCode(err)); // client#89
+    deliveryDeferred = true;
     if (isAppServerDeadError(err)) deps.onAppServerSocketDead?.();
   } finally {
     heartbeatInFlight = false;
@@ -552,6 +717,12 @@ export function resetCodexWakeForTests(): void {
   lastDeliveredAt = null;
   heartbeatInFlight = false;
   injectInFlight = false;
+  // client#89 delivery-state observability
+  lastInjectionAt = null;
+  lastInjectionResult = null;
+  lastInjectionFailureCode = null;
+  lastTargetThreadId = null;
+  deliveryDeferred = false;
 }
 
 function rememberDeliveredWake(key: string): void {

@@ -34,6 +34,36 @@ export declare function probeCodexBridgeArmed(active: {
 }): Promise<boolean | null>;
 /** gh#857 WI-2: last successful wake delivery time (for the heartbeat gate). */
 export declare function getLastDeliveredAt(): number | null;
+type CodexInjectionResult = 'delivered' | 'deferred' | 'failed';
+export interface CodexDeliveryState {
+    /** Opaque thread id of the last-resolved wake target (never a socket path). */
+    lastTargetThreadId: string | null;
+    /** HISTORICAL last attempt time (reporting only; not a health input). */
+    lastInjectionAt: number | null;
+    /** HISTORICAL last attempt result (reporting only; not a health input). */
+    lastInjectionResult: CodexInjectionResult | null;
+    /** Secret-free error code/class of the last failed injection; never contents. */
+    lastInjectionFailureCode: string | null;
+    /** LIVE: entries currently deferred/retrying (not yet confirmed delivered). */
+    deferredEntryCount: number;
+    /** LIVE: a coalesced retry-drain loop is currently retrying deferred/missed wakes. */
+    retryDrainActive: boolean;
+    /** LIVE: an undelivered directed wake not tracked by the retry-drain queue. */
+    deliveryDeferred: boolean;
+    lastDeliveredAt: number | null;
+}
+/** Snapshot of the Codex wake-path delivery state for the health/status surface. */
+export declare function getCodexDeliveryState(): CodexDeliveryState;
+/**
+ * client#89: pure wake-path health for Codex, folding the LIVE delivery state
+ * into the raw "bridge armed" probe. A wake still pending redelivery — a live
+ * retry-drain, a non-empty deferred queue, or an undelivered heartbeat pending
+ * — is NOT a confirmed-healthy path (returns null = degraded). A positively-
+ * dead bridge dominates (false). Historical last-attempt results are NOT used
+ * here: they do not self-clear when work is drained by another path, so keying
+ * health off them would leave a recovered seat permanently degraded.
+ */
+export declare function codexWakePathHealthy(armed: boolean | null, state: CodexDeliveryState): boolean | null;
 export interface CodexWakeDeps {
     getActiveCube?: typeof getActiveCube;
     getCodexWakeTarget?: typeof getCodexWakeTarget;

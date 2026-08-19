@@ -122,6 +122,14 @@ describe('runtime wake-path health', () => {
 
   it('uses the real Codex bridge probe instead of granting health by CLI kind', async () => {
     const probeCodex = vi.fn(async () => false);
+    // client#89: the codex branch also folds the delivery state; inject a
+    // healthy-but-idle delivery snapshot so this test isolates the probe path.
+    const idleDelivery = {
+      lastTargetThreadId: null, lastInjectionAt: null, lastInjectionResult: null,
+      lastInjectionFailureCode: null, deferredEntryCount: 0, retryDrainActive: false,
+      deliveryDeferred: false, lastDeliveredAt: null,
+    };
+    const getCodexDelivery = vi.fn(() => idleDelivery);
     const wakePath = await inspectWakePath(
       {
         agentKind: 'codex',
@@ -129,17 +137,19 @@ describe('runtime wake-path health', () => {
         inboxPath: '/tmp/inbox.log',
         monitorStateRoot: '/tmp/monitor',
       },
-      { probeCodex },
+      { probeCodex, getCodexDelivery },
     );
 
     expect(probeCodex).toHaveBeenCalledWith({
       cubeId: 'cube-1',
       droneId: 'drone-1',
     });
+    // A positively-dead bridge dominates the delivery state → unhealthy.
     expect(wakePath).toEqual({
       agentKind: 'codex',
       healthy: false,
       openCode: null,
+      codex: idleDelivery,
     });
   });
 

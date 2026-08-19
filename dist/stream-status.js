@@ -219,6 +219,17 @@ export function renderStreamStatus(inputs) {
         lines.push(`- **OpenCode failed**: ${delivery.failed}`);
         lines.push('- **OpenCode delivery-state meaning**: delivered-unconfirmed counts entries that may have been submitted but are not visible in session history; failed counts entries that could not be submitted or were rejected, until the durable source entry is observed consumed.');
     }
+    // client#89: Codex remote-control delivery state — distinct from SSE health.
+    // Surfaces the selected target, last bounded injection attempt/result,
+    // deferred-queue state, and last failure (a secret-free code/class only).
+    if (wakePath.agentKind === 'codex' && wakePath.codex) {
+        const d = wakePath.codex;
+        lines.push(`- **Codex wake target thread**: ${d.lastTargetThreadId ?? '_(none resolved yet)_'}`);
+        lines.push(`- **Codex last injection**: ${d.lastInjectionResult ?? '_(none yet)_'}${d.lastInjectionAt ? ` at ${new Date(d.lastInjectionAt).toISOString()}` : ''}`);
+        lines.push(`- **Codex deferred/retrying entries**: ${d.deferredEntryCount}${d.retryDrainActive ? ' (retry-drain active)' : ''}${d.deliveryDeferred ? ' — undelivered wake pending' : ''}`);
+        lines.push(`- **Codex last failure code**: ${d.lastInjectionFailureCode ?? '_(none)_'}`);
+        lines.push('- **Codex delivery-state meaning**: a deferred or retrying wake means a directed entry has not yet been confirmed delivered to the model — the wake path reads degraded (not healthy) until the wake is delivered or the unread log is drained, even though the app-server bridge is armed.');
+    }
     // Runtime-specific wake-path warning. The wire-down case takes
     // precedence above; an indeterminate signal remains honest and silent.
     if (status.connected && wakePathHealthy === false) {
