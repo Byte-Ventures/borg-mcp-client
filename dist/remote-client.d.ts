@@ -9,7 +9,7 @@
  * There is no hosted-authority path: every request must carry verified local
  * server trust or it fails closed before any network or credential use.
  */
-import { decodeAppendLogResult, type AckStatusResult, type AgentKind, type EntryQueryResult, type EvictDroneResult, type ReassignDroneResult, type PutDocumentResult, type GetDocumentResult, type ListDocumentsResult, type RemoveDocumentResult } from 'borgmcp-shared/protocol';
+import { decodeAppendLogResult, type AckStatusResult, type AgentKind, type EntryQueryResult, type EvictDroneResult, type ReassignDroneResult, type PutDocumentResult, type GetDocumentResult, type ListDocumentsResult, type RemoveDocumentResult, type CreateCubeRepository } from 'borgmcp-shared/protocol';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import type { NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
@@ -272,30 +272,34 @@ export declare function appendLog(sessionToken: string, apiUrl: string, message:
 export declare function listCubes(connection?: RemoteConnection): Promise<{
     cubes: any[];
 }>;
+export interface NormalizedCreateCubeRepository {
+    repository: CreateCubeRepository;
+    workingRepoName: string;
+}
 /**
- * List bundled cube templates. Used by the `borg assimilate` orchestrator
- * to surface the interactive template prompt on first-drone bootstrap.
+ * client#499: normalize the EXPLICIT repository argument into the wire's
+ * `{ repository, working_repo_name }` pair — no cwd inference. A canonical git
+ * remote URL becomes an `origin` identity (reusing the shared canonicalizer,
+ * the same encoding the CLI create path uses); a UUID becomes a `local`
+ * identity (the server requires a UUID for local repositories). The optional
+ * working-repo display name defaults to the origin's repository segment.
  */
-/**
- * Create a new cube. Server-side seeds a default "Drone" role atomically
- * so the cube is assimilatable immediately, OR applies the named template
- * atomically when `opts.template` is set (single-withUserId transaction —
- * skips the auto-Drone insert to avoid is_default partial-index conflict).
- *
- * Returns `{ cube, roles }` — the roles array lets the assimilate
- * orchestrator pick a default role without a follow-up `getCube` call.
- * Existing callers that read `body.cube` keep working (forward-compat).
- */
+export declare function normalizeExplicitRepository(repositoryArg: unknown, workingRepoNameArg?: unknown): NormalizedCreateCubeRepository;
 export declare function createCube(name: string | undefined, cubeDirective: string, opts?: {
     template?: string;
     message_taxonomy?: MessageTaxonomy | null;
+    repository?: CreateCubeRepository;
+    workingRepoName?: string;
 }, connection?: RemoteConnection): Promise<{
-    id: string;
-    name: string;
-    cube_directive?: string;
-    roles: any[];
-    drones?: any[];
-    [k: string]: any;
+    result: 'created' | 'resolved';
+    cube: {
+        id: string;
+        name: string;
+        cube_directive?: string;
+        roles: any[];
+        drones?: any[];
+        [k: string]: any;
+    };
 }>;
 /**
  * Update a cube's directive and/or message taxonomy. Rename is not supported

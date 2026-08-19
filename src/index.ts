@@ -38,6 +38,7 @@ import {
   regen,
   listCubes,
   createCube,
+  normalizeExplicitRepository,
   updateCube,
   deleteCube,
   createRole,
@@ -1243,18 +1244,36 @@ export async function main() {
             }
           }
 
+          // client#499: the cube binds to an EXPLICIT repository (no cwd
+          // inference). Normalize the argument client-side and fail with a
+          // clear message when it is absent/malformed — no working-directory
+          // fallback.
+          const { repository, workingRepoName } = normalizeExplicitRepository(
+            args?.repository,
+            args?.working_repo_name,
+          );
+
           // Sprint 14: template cube_directive fills empty operator input.
           // Operator-supplied text takes precedence — templates fill
           // the blank, never stomp.
           const resolvedCubeDirective = resolveCubeDirectiveForCreate(cubeDirective, template);
-
-          // v0.9.2: createCube now returns the flat shape directly
-          // (see remote-client unwrap). `cube.id` / `cube.name` work
-          // verbatim on the returned object.
           const resolvedMessageTaxonomy = resolveMessageTaxonomyForCreate(undefined, template);
-          const cube = await createCube(name, resolvedCubeDirective, {
+          const { result, cube } = await createCube(name, resolvedCubeDirective, {
             message_taxonomy: resolvedMessageTaxonomy,
+            repository,
+            workingRepoName,
           });
+
+          // client#499: the server homed this repository to an EXISTING cube —
+          // report it honestly, apply no template, and leave its directive
+          // untouched.
+          if (result === 'resolved') {
+            const text = `A cube already exists for this repository: **${cube.name}** (id: ${cube.id}). The local Borg server homes one cube per repository; its directive was left unchanged. Use borg_assimilate ${cube.name} to join it, or borg_update-cube to change its settings.`;
+            return {
+              content: [{ type: 'text', text }],
+              structuredContent: { cube, result: 'resolved', template: null, roles_created: null, roles_updated: null },
+            };
+          }
 
           // Apply template roles if requested. Merges by name: any role the
           // server auto-seeded (e.g. "Drone") that the template doesn't
@@ -1269,6 +1288,7 @@ export async function main() {
               content: [{ type: 'text', text }],
               structuredContent: {
                 cube,
+                result: 'created',
                 template: templateName,
                 roles_created: summary.created,
                 roles_updated: summary.updated,
@@ -1278,7 +1298,7 @@ export async function main() {
           const text = `Created cube **${cube.name}** (id: ${cube.id}). A default "Drone" role was seeded — rename or replace it via borg_update-role / borg_create-role / borg_delete-role. Use borg_assimilate ${cube.name} to join as a drone.`;
           return {
             content: [{ type: 'text', text }],
-            structuredContent: { cube, template: null, roles_created: null, roles_updated: null },
+            structuredContent: { cube, result: 'created', template: null, roles_created: null, roles_updated: null },
           };
         }
 

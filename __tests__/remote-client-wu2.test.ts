@@ -39,10 +39,17 @@ describe('Sprint 10 WU2 local adapter', () => {
       const resource = cubeMatch?.[2];
 
       if (url.pathname === '/api/cubes' && method === 'POST') {
+        // client#499: the client strictly decodes CreateCubeResponse (result required).
         return new Response(envelope({
+          result: 'created',
           cube_id: CUBE_ID,
+          name: 'adopted',
+          working_repo_name: 'adopted',
+          repository: { kind: 'origin', value: 'https://github.com/owner/adopted' },
+          template: 'default',
           human_seat_role_id: ROLE_ID,
           default_worker_role_id: ROLE_ID,
+          access: 'manage',
         }), { status: 201 });
       }
       if (requestedCubeId && !resource && method === 'GET') {
@@ -86,17 +93,23 @@ describe('Sprint 10 WU2 local adapter', () => {
   it('creates a default-seed cube through the retry-safe local route and reads it back', async () => {
     const { createCube } = await import('../src/remote-client.js');
 
-    await expect(createCube('adopted', 'directive', undefined, {
+    await expect(createCube('adopted', 'directive', {
+      // client#499: an explicit repository binding is now required.
+      repository: { kind: 'origin', value: 'https://github.com/owner/adopted' },
+      workingRepoName: 'adopted',
+    }, {
       apiUrl: ORIGIN,
       authToken: 'owner-token',
       serverTrustIdentity: TRUST_IDENTITY,
-    })).resolves.toMatchObject({ id: CUBE_ID, name: 'adopted' });
+    })).resolves.toMatchObject({ result: 'created', cube: { id: CUBE_ID, name: 'adopted' } });
 
     const [input, init] = fetchSpy.mock.calls.find(([, request]) => request?.method === 'POST')!;
     expect(new URL(String(input)).pathname).toBe('/api/cubes');
     expect(JSON.parse(String(init.body)).payload).toMatchObject({
       name: 'adopted',
       template: 'default',
+      working_repo_name: 'adopted',
+      repository: { kind: 'origin', value: 'https://github.com/owner/adopted' },
     });
   });
 
