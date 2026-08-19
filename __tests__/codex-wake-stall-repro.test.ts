@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   wakeCodexViaAppServer,
+  fireCodexHeartbeatTick,
   probeCodexBridgeArmed,
   getCodexDeliveryState,
   codexWakePathHealthy,
@@ -157,6 +158,28 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
     expect(snap.healthy).toBe(true);
   });
 
+  it('the HEARTBEAT path reports DEGRADED when it finds pending work + a mid-turn thread', async () => {
+    // gh#89 round-2 blocker: the heartbeat tick sees authoritative pending work
+    // and an active thread, then skips without queueing — it must still record
+    // the deferred delivery so health reads degraded, not armed/healthy.
+    const client = midTurnClient();
+    await fireCodexHeartbeatTick({
+      getActiveCube: vi.fn(async () => ACTIVE),
+      getCodexWakeTarget: vi.fn(async () => TARGET),
+      createClient: vi.fn(() => client),
+      hasPendingWork: vi.fn(async () => true), // authoritative unread work exists
+      now: vi.fn(() => 1000),
+    });
+
+    // Mid-turn → no catch-up turn injected (skip semantics unchanged).
+    expect(client.startTurn).not.toHaveBeenCalled();
+    const d = getCodexDeliveryState();
+    expect(d.lastInjectionResult).toBe('deferred');
+    // RED pre-fix (health was true during a heartbeat-deferred wake) → degraded.
+    const snap = await inspectCodex();
+    expect(snap.healthy).toBe(null);
+  });
+
   it('codexWakePathHealthy folds delivery state (unit): armed dominates, deferral degrades, failure fails', () => {
     const base = {
       lastTargetThreadId: 't', lastInjectionAt: 1, lastInjectionResult: null as any,
@@ -167,6 +190,7 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
     expect(codexWakePathHealthy(true, base)).toBe(true); // armed, nothing pending
     expect(codexWakePathHealthy(true, { ...base, deferredEntryCount: 1 })).toBe(null); // deferred → degraded
     expect(codexWakePathHealthy(true, { ...base, retryDrainActive: true })).toBe(null); // retrying → degraded
+    expect(codexWakePathHealthy(true, { ...base, lastInjectionResult: 'deferred' })).toBe(null); // heartbeat-deferred → degraded
     expect(codexWakePathHealthy(true, { ...base, lastInjectionResult: 'failed' })).toBe(false); // failed, no recovery → unhealthy
   });
 });

@@ -198,7 +198,16 @@ export function codexWakePathHealthy(
   if (armed === false) return false; // positively-dead bridge
   if (armed === null) return null; // could not probe → indeterminate
   // Bridge armed. A wake pending redelivery means delivery is unconfirmed.
-  if (state.retryDrainActive || state.deferredEntryCount > 0) return null;
+  // The retry-drain fields cover the per-entry / retry-drain paths; the last
+  // result being 'deferred' additionally covers the heartbeat path, which sees
+  // a mid-turn thread and skips without queueing into the retry-drain.
+  if (
+    state.retryDrainActive ||
+    state.deferredEntryCount > 0 ||
+    state.lastInjectionResult === 'deferred'
+  ) {
+    return null;
+  }
   // The last injection failed and nothing has delivered since (no active retry).
   if (state.lastInjectionResult === 'failed') return false;
   return true;
@@ -581,7 +590,14 @@ export async function fireCodexHeartbeatTick(
     await client.connect();
     try {
       const thread = await client.readThread(resolved.threadId);
-      if (thread?.status?.type === 'active') return; // mid-turn → skip; next tick retries
+      if (thread?.status?.type === 'active') {
+        // client#89: we passed hasPendingWork above, so a mid-turn thread here
+        // means a directed entry is deferred. Record it (same as the per-entry
+        // and retry-drain paths) so the health surface reads degraded, not
+        // healthy. Skip semantics are unchanged — the next tick still retries.
+        recordInjectionResult('deferred', deps.now ?? Date.now);
+        return; // mid-turn → skip; next tick retries
+      }
       await client.startTurn(resolved.threadId, CODEX_CATCHUP_PROMPT);
       // markDelivered updates local heartbeat-gating state only.
       recordInjectionResult('delivered', deps.now ?? Date.now); // client#89
