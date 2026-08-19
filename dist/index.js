@@ -112,6 +112,19 @@ export function formatUpdatedRoleResult(role, advisory) {
     const tag = tags ? ` (${tags})` : '';
     return appendServerAdvisory(`Updated role **${role.name}**${tag} (id: ${role.id}).`, advisory);
 }
+// gh#501: the borg_tool dispatcher only requires its inner arguments to be an
+// object, so the direct-tool enum schema does not guard borg_ack.kind. Resolve
+// it explicitly: ONLY a missing kind (undefined) defaults to 'ack' (the
+// documented default). A valid kind passes through; every present value —
+// including an explicit null — that is not 'ack'/'claim' is REFUSED rather
+// than silently coerced into a state-changing acknowledgement.
+export function resolveAckKind(raw) {
+    if (raw === undefined)
+        return 'ack';
+    if (raw === 'ack' || raw === 'claim')
+        return raw;
+    throw new Error('kind must be "ack" or "claim" when provided');
+}
 // gh#496: the unread drain runs on every wake, so its structured payload must
 // stay proportional to the entries it returns. Rosters are deliberately NOT
 // included — entries already carry drone_label/role_name, and borg_roster
@@ -879,10 +892,10 @@ export async function main() {
                     if (!entryId || typeof entryId !== 'string') {
                         throw new Error('entry_id is required');
                     }
-                    // gh#418: default 'ack'. Only 'claim' is the other allowed kind; the
-                    // worker re-validates at the Zod boundary so an unknown value is
-                    // rejected server-side, but normalize here to keep the wire clean.
-                    const kind = args?.kind === 'claim' ? 'claim' : 'ack';
+                    // gh#418/gh#501: absent kind defaults to 'ack'; a present invalid
+                    // value is refused here (not coerced) so a dispatcher call cannot
+                    // turn a typo into a state-changing acknowledgement.
+                    const kind = resolveAckKind(args?.kind);
                     const active = await requireActiveCube();
                     await ackLogEntry(active.sessionToken, active.apiUrl, entryId, kind, active.serverTrustIdentity);
                     return {
