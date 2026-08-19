@@ -133,6 +133,12 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(log?.inputSchema.properties).not.toHaveProperty('visibility');
     expect(log?.inputSchema.properties).not.toHaveProperty('recipientDroneIds');
     expect(log?.inputSchema.properties.class.description).toContain('never changes the required `to` audience');
+    // gh#502: the message-limit copy must state the enforced shared-contract
+    // default (4096 bytes), not the DB ceiling (10 KB) the shipped config
+    // never enforces.
+    expect(log?.inputSchema.properties.message.description).toContain('4096');
+    expect(log?.inputSchema.properties.message.description).not.toContain('10KB');
+    expect(log?.inputSchema.properties.message.description).not.toContain('10 KB');
 
     for (const name of ['borg_update-cube', 'borg_patch-taxonomy-class']) {
       const schema = TOOL_MANIFEST.find((entry) => entry.name === name)?.inputSchema;

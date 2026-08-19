@@ -7,7 +7,7 @@
  * CONTRACT-BACKED DATA — imports only published scalar contract constants, with
  * no client runtime side effects.
  */
-import { DECISION_TEXT_MAX_BYTES, DOCUMENT_CONTENT_TYPES } from 'borgmcp-shared/protocol';
+import { DECISION_TEXT_MAX_BYTES, DEFAULT_MAX_LOG_ENTRY_BYTES, DOCUMENT_CONTENT_TYPES } from 'borgmcp-shared/protocol';
 const BASE_TOOL_MANIFEST = [
     {
         name: 'borg_regen',
@@ -362,7 +362,7 @@ const BASE_TOOL_MANIFEST = [
         inputSchema: {
             type: 'object',
             properties: {
-                message: { type: 'string', description: 'The log message (max 10KB).' },
+                message: { type: 'string', description: `The log message. Default limit ${DEFAULT_MAX_LOG_ENTRY_BYTES} bytes (server-configurable); a longer post is refused — store the detail as a document and cite it.` },
                 // Keep this required value schema combinator-free for flat tool
                 // serializers. normalizeLogAudience remains the strict boundary.
                 to: {
@@ -799,7 +799,9 @@ export const TOOL_OUTPUT_SCHEMAS = {
                 },
             },
             wake_path: { type: 'object', description: 'Runtime-specific wake-path inspection.' },
-            inbox_monitor_healthy: { type: 'boolean' },
+            // gh#500: null when wake-path health is indeterminate (a real state,
+            // distinct from false=determined-unhealthy); the source is boolean|null.
+            inbox_monitor_healthy: { type: ['boolean', 'null'] },
             inbox_path: { type: ['string', 'null'] },
             monitor_state_root: { type: ['string', 'null'] },
             drone_label: { type: ['string', 'null'] },
@@ -1093,7 +1095,8 @@ export const TOOL_OUTPUT_SCHEMAS = {
             decision_topics: { type: 'array', items: { type: 'string' } },
             running_version: { type: 'string' },
             on_disk_version: { type: ['string', 'null'] },
-            wake_path_healthy: { type: 'boolean' },
+            // gh#500: null when wake-path health is indeterminate (boolean|null source).
+            wake_path_healthy: { type: ['boolean', 'null'] },
         },
         required: ['connected'],
     },

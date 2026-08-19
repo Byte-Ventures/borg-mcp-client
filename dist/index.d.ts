@@ -36,6 +36,7 @@ export declare function formatUpdatedRoleResult(role: {
     is_default?: boolean;
     is_mandatory?: boolean;
 }, advisory?: unknown): string;
+export declare function resolveAckKind(raw: unknown): 'ack' | 'claim';
 export declare function buildReadLogStructuredContent(input: {
     entries: unknown[];
     behind_by: unknown;

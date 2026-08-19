@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { createProtocolEnvelope, decodeAckStatusRequest, decodeAckStatusResult, decodeAppendLogRequest, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEntryQueryRequest, decodeEntryQueryResult, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeReadLogResult, decodePutDocumentRequest, decodePutDocumentResult, decodeGetDocumentRequest, decodeGetDocumentResult, decodeListDocumentsRequest, decodeListDocumentsResult, decodeRemoveDocumentRequest, decodeRemoveDocumentResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
+import { resolveGitRepositoryContext, getOrCreateRepositoryIdentity, } from './repository-identity.js';
 import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, } from './drone-lifecycle.js';
 import { getTemplate } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
@@ -1018,14 +1019,36 @@ export async function createCube(name, cubeDirective, opts, connection) {
     if (opts?.template !== undefined && opts.template !== 'default') {
         throw new Error('Local Borg server supports only the default cube seed');
     }
+    // gh#499: the server binds every cube to the caller's repository, so the
+    // create request requires working_repo_name + repository. Resolve them from
+    // the caller's git context exactly as the CLI create path does. A tool
+    // invoked outside a git repository is refused client-side with a clear
+    // message instead of an opaque server HTTP 400.
+    const repoContext = await resolveGitRepositoryContext(process.cwd());
+    if (!repoContext) {
+        throw new Error('Local Borg server cube creation must run inside a git repository — the cube is homed to the caller\'s repository. Run borg_create-cube from a repository worktree.');
+    }
+    const repository = await getOrCreateRepositoryIdentity(repoContext);
+    // Parity with the CLI create path: working_repo_name is the context's
+    // derivedName (repository-cube-init.ts uses derivedName unconditionally,
+    // and the server validates the echoed name against it).
+    const workingRepoName = repoContext.derivedName;
     const resolved = await localOwnerConnection(connection);
     const created = await localConnectionMutation(resolved, '/api/cubes', 'POST', {
         retry_key: randomUUID(),
         name: name.trim(),
+        working_repo_name: workingRepoName,
+        repository,
         template: 'default',
     });
     if (!created?.cube_id)
         throw new Error('Local Borg server returned an invalid cube creation response');
+    // The server homes one cube per repository. A 'resolved' result means this
+    // repository already has a cube; return that identity as an error rather
+    // than PATCHing the new directive over the existing cube's settings.
+    if (created.result === 'resolved') {
+        throw new Error(`A cube already exists for this repository (id: ${created.cube_id}). The local Borg server homes one cube per repository; use borg_assimilate to join it or borg_update-cube to change its settings.`);
+    }
     const patch = { cube_directive: cubeDirective };
     if (opts?.message_taxonomy !== undefined)
         patch.message_taxonomy = opts.message_taxonomy;
