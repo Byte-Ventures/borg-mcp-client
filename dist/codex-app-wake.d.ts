@@ -48,8 +48,8 @@ export interface CodexDeliveryState {
     deferredEntryCount: number;
     /** LIVE: a coalesced retry-drain loop is currently retrying deferred/missed wakes. */
     retryDrainActive: boolean;
-    /** LIVE: the heartbeat backstop is holding an undelivered pending wake. */
-    heartbeatDeliveryPending: boolean;
+    /** LIVE: an undelivered directed wake not tracked by the retry-drain queue. */
+    deliveryDeferred: boolean;
     lastDeliveredAt: number | null;
 }
 /** Snapshot of the Codex wake-path delivery state for the health/status surface. */

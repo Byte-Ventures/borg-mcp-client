@@ -284,7 +284,7 @@ export function renderStreamStatus(inputs: RenderInputs): string {
     const d = wakePath.codex;
     lines.push(`- **Codex wake target thread**: ${d.lastTargetThreadId ?? '_(none resolved yet)_'}`);
     lines.push(`- **Codex last injection**: ${d.lastInjectionResult ?? '_(none yet)_'}${d.lastInjectionAt ? ` at ${new Date(d.lastInjectionAt).toISOString()}` : ''}`);
-    lines.push(`- **Codex deferred/retrying entries**: ${d.deferredEntryCount}${d.retryDrainActive ? ' (retry-drain active)' : ''}`);
+    lines.push(`- **Codex deferred/retrying entries**: ${d.deferredEntryCount}${d.retryDrainActive ? ' (retry-drain active)' : ''}${d.deliveryDeferred ? ' — undelivered wake pending' : ''}`);
     lines.push(`- **Codex last failure code**: ${d.lastInjectionFailureCode ?? '_(none)_'}`);
     lines.push(
       '- **Codex delivery-state meaning**: a deferred or retrying wake means a directed entry has not yet been confirmed delivered to the model — the wake path reads degraded (not healthy) until the retry-drain lands, even though the app-server bridge is armed.'

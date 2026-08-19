@@ -109,10 +109,13 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
 
     const d = getCodexDeliveryState();
     expect(d.lastTargetThreadId).toBe('thread-123'); // opaque id, not a socket path
-    expect(d.lastInjectionResult).toBe('deferred');
-    expect(d.deferredEntryCount).toBeGreaterThan(0);
+    expect(d.lastInjectionResult).toBe('deferred'); // historical reporting
+    // A LIVE degraded signal is set (once the retry-drain ages out it hands off
+    // from deferredEntryCount to the deliveryDeferred marker — either is live).
+    expect(d.deliveryDeferred || d.deferredEntryCount > 0).toBe(true);
     // The status snapshot carries the same delivery block for stream-status.
     const snap = await inspectCodex();
+    expect(snap.healthy).toBe(null); // degraded
     expect(snap.codex).toMatchObject({ lastInjectionResult: 'deferred', lastTargetThreadId: 'thread-123' });
     // No socket path or message contents leak into the delivery state.
     expect(JSON.stringify(d)).not.toContain('/tmp/codex.sock');
@@ -173,7 +176,7 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
 
     // Mid-turn → no catch-up turn injected (skip semantics unchanged).
     expect(client.startTurn).not.toHaveBeenCalled();
-    expect(getCodexDeliveryState().heartbeatDeliveryPending).toBe(true);
+    expect(getCodexDeliveryState().deliveryDeferred).toBe(true);
     // RED pre-fix (health was true during a heartbeat-deferred wake) → degraded.
     const snap = await inspectCodex();
     expect(snap.healthy).toBe(null);
@@ -202,23 +205,80 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
       now: vi.fn(() => 2_000_000), // past the cadence so the tick fires
     });
     const d = getCodexDeliveryState();
-    expect(d.heartbeatDeliveryPending).toBe(false);
+    expect(d.deliveryDeferred).toBe(false);
     expect(d.lastInjectionResult).toBe('deferred'); // historical reporting is retained
     expect((await inspectCodex()).healthy).toBe(true);
+  });
+
+  // No-loaded-thread client: resolveFreshCodexWakeTarget goes through the env
+  // socket path and returns null (pickFreshThread finds no thread), while the
+  // persisted-target probe can still read armed.
+  function noThreadClient() {
+    return {
+      connect: vi.fn(async () => {}),
+      loadedThreadIds: vi.fn(async () => [] as string[]),
+      readThread: vi.fn(async () => null),
+      startTurn: vi.fn(async () => {}),
+      close: vi.fn(),
+    };
+  }
+  const ENV_SOCKET = { BORG_CODEX_REMOTE_WAKE: '1', BORG_CODEX_APP_SERVER_SOCKET: '/tmp/x.sock' } as any;
+
+  it('round-4 blocker: the HEARTBEAT reports DEGRADED when pending work exists but no fresh target resolves', async () => {
+    const client = noThreadClient();
+    await fireCodexHeartbeatTick({
+      getActiveCube: vi.fn(async () => ACTIVE),
+      hasPendingWork: vi.fn(async () => true),
+      env: ENV_SOCKET,
+      createClient: vi.fn(() => client),
+      now: vi.fn(() => 1000),
+    });
+    expect(client.startTurn).not.toHaveBeenCalled();
+    expect(getCodexDeliveryState().deliveryDeferred).toBe(true); // RED pre-fix
+    expect((await inspectCodex()).healthy).toBe(null);
+  });
+
+  it('the PER-ENTRY wake reports DEGRADED when a still-pending scoped entry has no resolvable target', async () => {
+    const client = noThreadClient();
+    wakeCodexViaAppServer(CODEX_WAKE_PROMPT, ENV_SOCKET, {
+      getActiveCube: vi.fn(async () => ACTIVE),
+      hasPendingEntry: vi.fn(async () => true), // the scoped entry is still pending
+      env: ENV_SOCKET,
+      createClient: vi.fn(() => client),
+      now: vi.fn(() => 1000),
+    }, 'delivery-nt', 'entry-nt');
+    await flush();
+    expect(client.startTurn).not.toHaveBeenCalled();
+    expect(getCodexDeliveryState().deliveryDeferred).toBe(true); // RED pre-fix
+    expect((await inspectCodex()).healthy).toBe(null);
+  });
+
+  it('the retry-drain age-out hands off to the live marker (no stale deferredEntryCount)', async () => {
+    // deferDeps ages the retry-drain out (thread active, maxAttempts:5). After
+    // the loop exits, the source set is cleared and the live marker is set, so
+    // health stays degraded via deliveryDeferred rather than a stale count.
+    const client = midTurnClient();
+    wakeCodexViaAppServer(CODEX_WAKE_PROMPT, WAKE_ENV, deferDeps(client), 'delivery-ao', 'entry-ao');
+    await flush();
+    const d = getCodexDeliveryState();
+    expect(d.retryDrainActive).toBe(false); // loop has exited (aged out)
+    expect(d.deferredEntryCount).toBe(0); // set cleared at hand-off (not stale)
+    expect(d.deliveryDeferred).toBe(true); // handed off to the live marker
+    expect((await inspectCodex()).healthy).toBe(null);
   });
 
   it('codexWakePathHealthy keys off LIVE signals only, not historical last-attempt results (unit)', () => {
     const base = {
       lastTargetThreadId: 't', lastInjectionAt: 1, lastInjectionResult: null as any,
       lastInjectionFailureCode: null, deferredEntryCount: 0, retryDrainActive: false,
-      heartbeatDeliveryPending: false, lastDeliveredAt: null,
+      deliveryDeferred: false, lastDeliveredAt: null,
     };
     expect(codexWakePathHealthy(false, base)).toBe(false); // positively-dead bridge dominates
     expect(codexWakePathHealthy(null, base)).toBe(null); // could not probe → indeterminate
     expect(codexWakePathHealthy(true, base)).toBe(true); // armed, nothing live-pending
     expect(codexWakePathHealthy(true, { ...base, deferredEntryCount: 1 })).toBe(null); // live queue → degraded
     expect(codexWakePathHealthy(true, { ...base, retryDrainActive: true })).toBe(null); // live retry → degraded
-    expect(codexWakePathHealthy(true, { ...base, heartbeatDeliveryPending: true })).toBe(null); // live heartbeat pending → degraded
+    expect(codexWakePathHealthy(true, { ...base, deliveryDeferred: true })).toBe(null); // live heartbeat pending → degraded
     // HISTORICAL results with NO live signal do NOT degrade — a recovered seat
     // is healthy (this is the round-3 fix; keying off these would stick).
     expect(codexWakePathHealthy(true, { ...base, lastInjectionResult: 'deferred' })).toBe(true);

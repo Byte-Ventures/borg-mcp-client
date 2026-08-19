@@ -126,7 +126,8 @@ describe('runtime wake-path health', () => {
     // healthy-but-idle delivery snapshot so this test isolates the probe path.
     const idleDelivery = {
       lastTargetThreadId: null, lastInjectionAt: null, lastInjectionResult: null,
-      lastInjectionFailureCode: null, deferredEntryCount: 0, retryDrainActive: false, lastDeliveredAt: null,
+      lastInjectionFailureCode: null, deferredEntryCount: 0, retryDrainActive: false,
+      deliveryDeferred: false, lastDeliveredAt: null,
     };
     const getCodexDelivery = vi.fn(() => idleDelivery);
     const wakePath = await inspectWakePath(
