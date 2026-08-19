@@ -76,6 +76,57 @@ let lastDeliveredAt = null;
 export function getLastDeliveredAt() {
     return lastDeliveredAt;
 }
+let lastInjectionAt = null;
+let lastInjectionResult = null;
+let lastInjectionFailureCode = null;
+let lastTargetThreadId = null;
+/** Snapshot of the Codex wake-path delivery state for the health/status surface. */
+export function getCodexDeliveryState() {
+    return {
+        lastTargetThreadId,
+        lastInjectionAt,
+        lastInjectionResult,
+        lastInjectionFailureCode,
+        deferredEntryCount: retryDrainSourceEntryIds.size + (retryDrainHasUnscopedWork ? 1 : 0),
+        retryDrainActive: retryDrainInFlight,
+        lastDeliveredAt,
+    };
+}
+/** Reduce a caught error to a secret-free code/class — never its message. */
+function injectionFailureCode(err) {
+    const code = err?.code;
+    if (typeof code === 'string' && code.length > 0)
+        return code;
+    if (err instanceof Error && err.name)
+        return err.name;
+    return 'unknown';
+}
+function recordInjectionResult(result, now, failureCode) {
+    lastInjectionAt = now();
+    lastInjectionResult = result;
+    lastInjectionFailureCode = result === 'failed' ? (failureCode ?? 'unknown') : null;
+}
+/**
+ * client#89: pure wake-path health for Codex, folding the delivery state into
+ * the raw "bridge armed" probe. A wake that is deferred or being retried is
+ * NOT a confirmed-healthy path (returns null = degraded/indeterminate); a
+ * last injection that FAILED with no recovery since is unhealthy (false). A
+ * positively-dead bridge dominates. Mirrors openCodeWakePathHealthy so a
+ * deferred/failed injection can never surface as armed/healthy.
+ */
+export function codexWakePathHealthy(armed, state) {
+    if (armed === false)
+        return false; // positively-dead bridge
+    if (armed === null)
+        return null; // could not probe → indeterminate
+    // Bridge armed. A wake pending redelivery means delivery is unconfirmed.
+    if (state.retryDrainActive || state.deferredEntryCount > 0)
+        return null;
+    // The last injection failed and nothing has delivered since (no active retry).
+    if (state.lastInjectionResult === 'failed')
+        return false;
+    return true;
+}
 function markDelivered(deps) {
     lastDeliveredAt = (deps.now ?? Date.now)();
 }
@@ -217,6 +268,7 @@ async function wakeCodexTargeted(reason, deliveryIdentity, sourceEntryId, deps) 
         if (!resolved)
             return;
         const { socketPath, threadId } = resolved;
+        lastTargetThreadId = threadId; // client#89: record the selected target
         const wakeKey = `${threadId}\0${deliveryIdentity ?? reason}`;
         if (deliveredWakeKeys.has(wakeKey))
             return; // dedup before opening the wake socket
@@ -229,6 +281,7 @@ async function wakeCodexTargeted(reason, deliveryIdentity, sourceEntryId, deps) 
                 // now. Schedule the retry-drain (coalesced, retried-until-delivered) so
                 // the burst's entries are drained once the thread goes idle; codex has no
                 // on-disk tail fallback like Claude's borg-inbox-monitor.
+                recordInjectionResult('deferred', deps.now ?? Date.now); // client#89
                 scheduleRetryDrain(deps, sourceEntryId);
                 return;
             }
@@ -236,17 +289,19 @@ async function wakeCodexTargeted(reason, deliveryIdentity, sourceEntryId, deps) 
                 return;
             await client.startTurn(threadId, reason);
             rememberDeliveredWake(wakeKey);
+            recordInjectionResult('delivered', deps.now ?? Date.now); // client#89
             markDelivered(deps);
         }
         finally {
             client.close();
         }
     }
-    catch {
+    catch (err) {
         // gh#857: a transient connect/read/startTurn failure must NOT be silently
         // swallowed (the old best-effort drop let a single blip lose an entry).
         // Schedule the retry-drain so the wake is retried-until-delivered; the SSE
         // stream is never broken (this is fire-and-forget).
+        recordInjectionResult('failed', deps.now ?? Date.now, injectionFailureCode(err)); // client#89
         scheduleRetryDrain(deps, sourceEntryId);
     }
     finally {
@@ -314,11 +369,13 @@ async function runRetryDrainLoop(deps) {
             if (!resolved)
                 continue; // thread not loaded yet → retry (age-capped)
             const { socketPath, threadId } = resolved;
+            lastTargetThreadId = threadId; // client#89: record the selected target
             const client = makeCodexClient(socketPath, deps);
             await client.connect();
             try {
                 const thread = await client.readThread(threadId);
                 if (thread?.status?.type === 'active') {
+                    recordInjectionResult('deferred', now); // client#89
                     continue; // re-defer: still mid-turn (backoff before next poll)
                 }
                 for (const entryId of retryDrainSourceEntryIds) {
@@ -330,6 +387,7 @@ async function runRetryDrainLoop(deps) {
                 await client.startTurn(threadId, CODEX_CATCHUP_PROMPT);
                 retryDrainSourceEntryIds.clear();
                 retryDrainHasUnscopedWork = false;
+                recordInjectionResult('delivered', now); // client#89
                 markDelivered(deps);
                 return; // drain delivered → server read-cursor drains all unread → done
             }
@@ -337,9 +395,10 @@ async function runRetryDrainLoop(deps) {
                 client.close();
             }
         }
-        catch {
+        catch (err) {
             // transient socket/read error must not abort the loop — keep retrying with
             // backoff until reachable+idle or the age cap; never throws into SSE.
+            recordInjectionResult('failed', now, injectionFailureCode(err)); // client#89
         }
         finally {
             releaseInjectLock();
@@ -394,6 +453,7 @@ export async function fireCodexHeartbeatTick(deps = {}, cadenceMs = CODEX_HEARTB
         const resolved = await resolveFreshCodexWakeTarget(active, deps);
         if (!resolved)
             return; // thread not loaded yet → next tick retries
+        lastTargetThreadId = resolved.threadId; // client#89: record the selected target
         const client = makeCodexClient(resolved.socketPath, deps);
         await client.connect();
         try {
@@ -402,6 +462,7 @@ export async function fireCodexHeartbeatTick(deps = {}, cadenceMs = CODEX_HEARTB
                 return; // mid-turn → skip; next tick retries
             await client.startTurn(resolved.threadId, CODEX_CATCHUP_PROMPT);
             // markDelivered updates local heartbeat-gating state only.
+            recordInjectionResult('delivered', deps.now ?? Date.now); // client#89
             markDelivered(deps);
         }
         finally {
@@ -413,6 +474,7 @@ export async function fireCodexHeartbeatTick(deps = {}, cadenceMs = CODEX_HEARTB
         // path is gone; signal teardown so the timer stops ticking against a dead
         // socket (re-armed when an active cube returns). Other (transient) errors are
         // best-effort skips — never break the SSE stream; next tick retries.
+        recordInjectionResult('failed', deps.now ?? Date.now, injectionFailureCode(err)); // client#89
         if (isAppServerDeadError(err))
             deps.onAppServerSocketDead?.();
     }
@@ -456,6 +518,11 @@ export function resetCodexWakeForTests() {
     lastDeliveredAt = null;
     heartbeatInFlight = false;
     injectInFlight = false;
+    // client#89 delivery-state observability
+    lastInjectionAt = null;
+    lastInjectionResult = null;
+    lastInjectionFailureCode = null;
+    lastTargetThreadId = null;
 }
 function rememberDeliveredWake(key) {
     if (deliveredWakeKeys.has(key))

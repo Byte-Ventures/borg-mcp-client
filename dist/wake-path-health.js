@@ -1,4 +1,4 @@
-import { probeCodexBridgeArmed } from './codex-app-wake.js';
+import { probeCodexBridgeArmed, getCodexDeliveryState, codexWakePathHealthy, } from './codex-app-wake.js';
 import { checkInboxMonitorHealthy } from './stream-status.js';
 import { getOpenCodeConnectionState, } from './opencode-drone.js';
 export function openCodeWakePathHealthy(state) {
@@ -33,11 +33,18 @@ export async function inspectWakePath(inputs, deps = {}) {
         };
     }
     if (inputs.agentKind === 'codex') {
+        // client#89: fold the delivery state into health so a deferred, retrying,
+        // or failed injection surfaces as degraded — never as armed/healthy — even
+        // while the app-server socket is alive. SSE health is not the discriminator.
         const probe = deps.probeCodex ?? probeCodexBridgeArmed;
+        const getDelivery = deps.getCodexDelivery ?? getCodexDeliveryState;
+        const armed = await probe(inputs.active);
+        const codex = getDelivery();
         return {
             agentKind: inputs.agentKind,
-            healthy: await probe(inputs.active),
+            healthy: codexWakePathHealthy(armed, codex),
             openCode: null,
+            codex,
         };
     }
     const getState = deps.getOpenCodeState ?? getOpenCodeConnectionState;

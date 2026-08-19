@@ -34,6 +34,31 @@ export declare function probeCodexBridgeArmed(active: {
 }): Promise<boolean | null>;
 /** gh#857 WI-2: last successful wake delivery time (for the heartbeat gate). */
 export declare function getLastDeliveredAt(): number | null;
+type CodexInjectionResult = 'delivered' | 'deferred' | 'failed';
+export interface CodexDeliveryState {
+    /** Opaque thread id of the last-resolved wake target (never a socket path). */
+    lastTargetThreadId: string | null;
+    lastInjectionAt: number | null;
+    lastInjectionResult: CodexInjectionResult | null;
+    /** Secret-free error code/class of the last failed injection; never contents. */
+    lastInjectionFailureCode: string | null;
+    /** Entries currently deferred/retrying (not yet confirmed delivered). */
+    deferredEntryCount: number;
+    /** A coalesced retry-drain loop is currently retrying deferred/missed wakes. */
+    retryDrainActive: boolean;
+    lastDeliveredAt: number | null;
+}
+/** Snapshot of the Codex wake-path delivery state for the health/status surface. */
+export declare function getCodexDeliveryState(): CodexDeliveryState;
+/**
+ * client#89: pure wake-path health for Codex, folding the delivery state into
+ * the raw "bridge armed" probe. A wake that is deferred or being retried is
+ * NOT a confirmed-healthy path (returns null = degraded/indeterminate); a
+ * last injection that FAILED with no recovery since is unhealthy (false). A
+ * positively-dead bridge dominates. Mirrors openCodeWakePathHealthy so a
+ * deferred/failed injection can never surface as armed/healthy.
+ */
+export declare function codexWakePathHealthy(armed: boolean | null, state: CodexDeliveryState): boolean | null;
 export interface CodexWakeDeps {
     getActiveCube?: typeof getActiveCube;
     getCodexWakeTarget?: typeof getCodexWakeTarget;
