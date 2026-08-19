@@ -452,7 +452,7 @@ const BASE_TOOL_MANIFEST: ToolManifestEntry[] = [
         {
           name: 'borg_create-cube',
           description:
-            'Create a new cube. The server seeds a default "Drone" role atomically so the cube is assimilatable immediately. ' +
+            'Create a new cube bound to an explicit repository. The server homes ONE cube per repository: if the given repository already has a cube, this reports that existing cube and leaves its directive unchanged (it never overwrites it). The server seeds a default "Drone" role atomically so a newly-created cube is assimilatable immediately. ' +
             'Pass an optional `template` name to apply a richer role set instead (see borg_list-templates / borg_apply-template).',
           inputSchema: {
             type: 'object',
@@ -464,12 +464,22 @@ const BASE_TOOL_MANIFEST: ToolManifestEntry[] = [
                 maxLength: 120,
               },
               cube_directive: { type: 'string', description: 'Project-specific Markdown shown to every drone when it refreshes cube context.' },
+              repository: {
+                type: 'string',
+                description: 'The repository this cube binds to (explicit — not inferred from the working directory). Pass a canonical git remote URL (e.g. https://github.com/owner/repo) for a hosted repository, or a UUID identifying a local (no-remote) repository. The cube is homed to this repository; if it already has one, that existing cube is reported and its directive is left unchanged.',
+              },
+              working_repo_name: {
+                type: 'string',
+                description: 'Optional short display name for the repository (starts with a letter or digit; letters, digits, spaces, dots, underscores, or hyphens; max 120 bytes). Defaults to the repository segment of the URL; required when `repository` is a local UUID.',
+                pattern: '^[A-Za-z0-9][A-Za-z0-9 ._-]*$',
+                maxLength: 120,
+              },
               template: {
                 type: 'string',
-                description: 'Optional template name to apply after cube creation (e.g. "software-dev"). Roles are merged by name; the default Drone role gets overwritten by the template if a same-named role is in the template.',
+                description: 'Optional template name to apply after cube creation (e.g. "software-dev"). Roles are merged by name; the default Drone role gets overwritten by the template if a same-named role is in the template. Only applied when a cube is newly created — never to an already-existing repository cube.',
               },
             },
-            required: ['name', 'cube_directive'],
+            required: ['name', 'cube_directive', 'repository'],
           },
         },
         {
@@ -1063,11 +1073,14 @@ export const TOOL_OUTPUT_SCHEMAS: Record<string, OutputSchema> = {
     type: 'object',
     properties: {
       cube: CUBE_OUTPUT,
+      // client#499: 'created' = a new cube; 'resolved' = the repository already
+      // had a cube (reported, directive left unchanged).
+      result: { type: 'string', enum: ['created', 'resolved'] },
       template: { type: ['string', 'null'] },
       roles_created: { type: ['number', 'null'] },
       roles_updated: { type: ['number', 'null'] },
     },
-    required: ['cube', 'template'],
+    required: ['cube', 'result', 'template'],
   },
   'borg_update-cube': {
     type: 'object',

@@ -12,6 +12,7 @@
 import { getServerCredential, } from './config.js';
 import { randomUUID } from 'node:crypto';
 import { createProtocolEnvelope, decodeAckStatusRequest, decodeAckStatusResult, decodeAppendLogRequest, decodeAppendLogResult, decodeDeleteCubeResponse, decodeDeleteRoleRequest, decodeDeleteRoleResult, decodeDroneRuntimeMetadataState, decodeEntryQueryRequest, decodeEntryQueryResult, decodeEvictDroneResult, decodeProtocolEnvelope, decodeProtocolErrorEnvelope, decodeReassignDroneResult, decodeReadLogResult, decodePutDocumentRequest, decodePutDocumentResult, decodeGetDocumentRequest, decodeGetDocumentResult, decodeListDocumentsRequest, decodeListDocumentsResult, decodeRemoveDocumentRequest, decodeRemoveDocumentResult, decodeRoleRationaleRequest, decodeRoleRationaleResult, decodeUpdateDroneRuntimeMetadataResponse, ErrorCode, ProtocolContractError, } from 'borgmcp-shared/protocol';
+import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, } from './drone-lifecycle.js';
@@ -1012,25 +1013,64 @@ export async function listCubes(connection) {
  * orchestrator pick a default role without a follow-up `getCube` call.
  * Existing callers that read `body.cube` keep working (forward-compat).
  */
+const REPOSITORY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * client#499: normalize the EXPLICIT repository argument into the wire's
+ * `{ repository, working_repo_name }` pair — no cwd inference. A canonical git
+ * remote URL becomes an `origin` identity (reusing the shared canonicalizer,
+ * the same encoding the CLI create path uses); a UUID becomes a `local`
+ * identity (the server requires a UUID for local repositories). The optional
+ * working-repo display name defaults to the origin's repository segment.
+ */
+export function normalizeExplicitRepository(repositoryArg, workingRepoNameArg) {
+    if (typeof repositoryArg !== 'string' || repositoryArg.trim().length === 0) {
+        throw new Error('repository is required: pass a canonical git remote URL (e.g. https://github.com/owner/repo) or a UUID identifying a local repository.');
+    }
+    const repoInput = repositoryArg.trim();
+    const nameArg = typeof workingRepoNameArg === 'string' ? workingRepoNameArg.trim() : '';
+    const canonical = canonicalizeWorkingRepoIdentity(repoInput);
+    if (canonical?.origin && canonical.name) {
+        const derivedName = canonical.name.split('/').pop() || canonical.name;
+        return { repository: { kind: 'origin', value: canonical.origin }, workingRepoName: nameArg || derivedName };
+    }
+    if (REPOSITORY_UUID_RE.test(repoInput)) {
+        if (!nameArg) {
+            throw new Error('working_repo_name is required when repository is a local UUID — there is no origin URL to derive a name from.');
+        }
+        return { repository: { kind: 'local', value: repoInput }, workingRepoName: nameArg };
+    }
+    throw new Error('repository must be a canonical git remote URL (e.g. https://github.com/owner/repo) or a UUID identifying a local repository.');
+}
 export async function createCube(name, cubeDirective, opts, connection) {
     if (!name?.trim())
         throw new Error('Local Borg server cube creation requires a cube name');
     if (opts?.template !== undefined && opts.template !== 'default') {
         throw new Error('Local Borg server supports only the default cube seed');
     }
+    if (!opts?.repository || !opts?.workingRepoName) {
+        throw new Error('Local Borg server cube creation requires an explicit repository identity');
+    }
     const resolved = await localOwnerConnection(connection);
     const created = await localConnectionMutation(resolved, '/api/cubes', 'POST', {
         retry_key: randomUUID(),
         name: name.trim(),
+        working_repo_name: opts.workingRepoName,
+        repository: opts.repository,
         template: 'default',
     });
     if (!created?.cube_id)
         throw new Error('Local Borg server returned an invalid cube creation response');
+    // client#499: the server homes one cube per repository. A 'resolved' result
+    // means this repository already has a cube — report it honestly and DO NOT
+    // PATCH its directive over the existing settings (the round-1 stomp defect).
+    if (created.result === 'resolved') {
+        return { result: 'resolved', cube: await getCube(created.cube_id, resolved) };
+    }
     const patch = { cube_directive: cubeDirective };
     if (opts?.message_taxonomy !== undefined)
         patch.message_taxonomy = opts.message_taxonomy;
     await localConnectionMutation(resolved, `/api/cubes/${created.cube_id}`, 'PATCH', patch);
-    return getCube(created.cube_id, resolved);
+    return { result: 'created', cube: await getCube(created.cube_id, resolved) };
 }
 /**
  * Update a cube's directive and/or message taxonomy. Rename is not supported
