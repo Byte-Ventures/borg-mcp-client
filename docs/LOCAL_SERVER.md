@@ -204,11 +204,20 @@ borg update
 The command performs a zero-mutation registry preflight for the exact proposed
 `borgmcp` and `borgmcp-server` versions, their SHA-512 integrity values, and an
 identical exact `borgmcp-shared` dependency pin. Lookup and installation are
-bound to the canonical `https://registry.npmjs.org/` authority and one proven npm
-executable, global prefix, and global root. An alternate configured registry,
-changed npm context, registry failure, malformed manifest, mismatched or ranged
-shared pin, unsupported package manager, or ambiguous binary fails before
-confirmation and mutation with manual-update guidance.
+bound to one proven npm executable, configured registry, global prefix, and
+global root. The canonical `https://registry.npmjs.org/` needs no extra option.
+To use an alternate HTTPS registry deliberately, name that exact configured URL
+for the current invocation:
+
+```bash
+borg update --registry https://npm.example.com/
+```
+
+The acknowledgement is not persisted or transferable to another URL. A missing
+acknowledgement fails before mutation. A registry change detected after an
+earlier phase refuses before any subsequent package mutation and reports the
+partial state. Registry failure, malformed manifest, mismatched or ranged shared
+pin, unsupported package manager, or ambiguous binary also fails closed.
 
 The client is installed first. Borg then verifies and re-enters through the new
 client binary before any server mutation. If that install, verification, or

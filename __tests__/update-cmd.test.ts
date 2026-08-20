@@ -184,11 +184,15 @@ function targetDeps(overrides: TestUpdateOverrides = {}): UpdateDeps {
 }
 
 describe('parseUpdateArgs', () => {
-  it('accepts only help and explicit confirmation for public invocations', () => {
+  it('accepts help, explicit confirmation, and an exact registry for public invocations', () => {
     expect(parseUpdateArgs([])).toEqual({ ok: true, yes: false });
     expect(parseUpdateArgs(['--yes'])).toEqual({ ok: true, yes: true });
     expect(parseUpdateArgs(['-y'])).toEqual({ ok: true, yes: true });
     expect(parseUpdateArgs(['--help'])).toEqual({ ok: true, help: true, yes: false });
+    expect(parseUpdateArgs(['--registry', 'https://mirror.example.test/npm']))
+      .toEqual({ ok: true, yes: false, registry: 'https://mirror.example.test/npm/' });
+    expect(parseUpdateArgs(['--registry', 'http://mirror.example.test/']))
+      .toEqual({ ok: false, error: 'npm registry URL must be an HTTPS URL without credentials, query, or fragment' });
     expect(parseUpdateArgs(['--target-client', '2.3.0', '--target-server', '0.4.0']))
       .toEqual({ ok: false, error: 'internal update continuation is unavailable' });
     expect(parseUpdateArgs(['--force'])).toEqual({ ok: false, error: 'unknown option: --force' });
@@ -206,6 +210,23 @@ describe('parseUpdateArgs', () => {
     )).toEqual({
       ok: true,
       yes: true,
+      target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
+    });
+  });
+
+  it('preserves an acknowledged registry for a verified re-entry', () => {
+    expect(parseUpdateArgs(
+      [
+        '--registry', 'https://mirror.example.test/npm/',
+        '--target-client', '2.3.0',
+        '--target-server', '0.4.0',
+        '--server-present', 'yes',
+      ],
+      true,
+    )).toEqual({
+      ok: true,
+      yes: false,
+      registry: 'https://mirror.example.test/npm/',
       target: { clientVersion: '2.3.0', serverVersion: '0.4.0', serverPresent: true },
     });
   });
@@ -322,6 +343,25 @@ describe('runUpdate', () => {
     expect(d.serverJson).not.toHaveBeenCalled();
   });
 
+  it('carries the exact acknowledged registry through client re-entry', async () => {
+    const d = deps();
+
+    await expect(runUpdate({ yes: true, registry: 'https://mirror.example.test/npm/' }, d)).resolves.toBe(0);
+    expect(d.reenter).toHaveBeenCalledWith(
+      '/npm/lib/node_modules/borgmcp/dist/claude.js',
+      [
+        'update', '--yes',
+        '--registry', 'https://mirror.example.test/npm/',
+        '--target-client', '2.3.0',
+        '--target-server', '0.4.0',
+        '--server-present', 'yes',
+      ],
+    );
+    expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining(
+      'Published update plan (https://mirror.example.test/npm/)',
+    ));
+  });
+
   it('suppresses every server mutation when the client install fails', async () => {
     const d = deps({ installGlobal: vi.fn(async () => { throw new Error('install failed'); }) });
 
@@ -367,6 +407,16 @@ describe('runUpdate', () => {
       `Server mutation was not attempted.\n` +
       `Retry with: borg update --yes\n`,
     );
+  });
+
+  it('retains the acknowledged registry in recovery after a stable-mirror re-entry failure', async () => {
+    const registry = 'https://mirror.example.test/npm/';
+    const d = deps({ reenter: vi.fn(async () => { throw new Error('spawn failed'); }) });
+
+    await expect(runUpdate({ yes: true, registry }, d)).resolves.toBe(1);
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      `Retry with: borg update --yes --registry '${registry}'`,
+    ));
   });
 
   it('installs the controller before runtime update and verifies the running pair', async () => {

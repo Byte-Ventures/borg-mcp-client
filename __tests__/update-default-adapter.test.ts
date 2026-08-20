@@ -140,6 +140,10 @@ else process.exit(91);
   return {
     log: () => readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]),
     setPrefix: (prefix: string) => writeFileSync(statePath, JSON.stringify({ registry, prefix })),
+    setRegistry: (nextRegistry: string) => {
+      const state = JSON.parse(readFileSync(statePath, 'utf8')) as { prefix: string };
+      writeFileSync(statePath, JSON.stringify({ registry: nextRegistry, prefix: state.prefix }));
+    },
     bin,
     prefixA,
     prefixB,
@@ -342,10 +346,79 @@ process.exit(1);
     const deps = buildDefaultUpdateDeps();
 
     await expect(deps.publishedPackage('borgmcp', 'latest'))
-      .rejects.toThrow(/canonical npm registry/);
+      .rejects.toThrow(/borg update --registry 'https:\/\/mirror\.example\.invalid\/'/);
     expect(npm.log()).toEqual([['config', 'get', 'registry']]);
     expect(npm.log().some(([command]) => command === 'view' || command === 'install')).toBe(false);
     expect(npm.fetch).not.toHaveBeenCalled();
+  });
+
+  it('uses an explicitly acknowledged alternate registry for lookup and install', async () => {
+    const registry = 'https://mirror.example.invalid/npm/';
+    const npm = fakeNpm(registry);
+    const deps = buildDefaultUpdateDeps(registry);
+
+    await expect(deps.publishedPackage('borgmcp', 'latest')).resolves.toMatchObject({
+      name: 'borgmcp',
+      version: '2.3.0',
+    });
+    expect(npm.fetch).toHaveBeenCalledWith(
+      new URL('https://mirror.example.invalid/npm/borgmcp/latest'),
+      { headers: { Accept: 'application/json' }, redirect: 'error' },
+    );
+
+    await expect(deps.installGlobal('borgmcp', '2.3.0', { ignoreScripts: true })).resolves.toBeUndefined();
+    expect(npm.log().find(([command]) => command === 'install')).toEqual([
+      'install',
+      '--global',
+      '--ignore-scripts',
+      expect.stringMatching(/^--prefix=/),
+      `--registry=${registry}`,
+      'borgmcp@2.3.0',
+    ]);
+  });
+
+  it('refuses when the acknowledged registry does not match the configured registry', async () => {
+    const npm = fakeNpm('https://registry.npmjs.org/');
+    const deps = buildDefaultUpdateDeps('https://mirror.example.invalid/npm/');
+
+    await expect(deps.publishedPackage('borgmcp', 'latest'))
+      .rejects.toThrow('does not match the explicitly acknowledged registry');
+    expect(npm.log()).toEqual([['config', 'get', 'registry']]);
+    expect(npm.fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the configured registry changes after acknowledgement', async () => {
+    const registry = 'https://mirror.example.invalid/npm/';
+    const npm = fakeNpm(registry);
+    const deps = buildDefaultUpdateDeps(registry);
+    await expect(deps.publishedPackage('borgmcp', 'latest')).resolves.toMatchObject({ name: 'borgmcp' });
+
+    npm.setRegistry('https://replacement.example.invalid/npm/');
+    await expect(deps.installGlobal('borgmcp', '2.3.0')).rejects.toThrow('npm registry changed during update');
+    expect(npm.log().some(([command]) => command === 'install')).toBe(false);
+  });
+
+  it('distinguishes restoring the acknowledged registry from acknowledging a mid-update replacement', async () => {
+    const registry = 'https://mirror.example.invalid/npm/';
+    const replacement = 'https://replacement.example.invalid/npm/';
+    const npm = fakeNpm(registry);
+    const adapter = buildDefaultUpdateDeps(registry);
+    await expect(adapter.publishedPackage('borgmcp', 'latest')).resolves.toMatchObject({ name: 'borgmcp' });
+    const d = updateDeps(adapter, {
+      currentClient: vi.fn(async () => installed(CLIENT_TARGET, '2.2.0', '0.6.4')),
+      installGlobal: vi.fn(async (name, version, options) => {
+        npm.setRegistry(replacement);
+        await adapter.installGlobal(name, version, options);
+      }),
+    });
+
+    await expect(runUpdate({ yes: true, registry }, d)).resolves.toBe(1);
+    const error = vi.mocked(d.stderr).mock.calls.map(([text]) => text).join('');
+    expect(error).toContain(`Restore ${registry}`);
+    expect(error).toContain(`--registry '${registry}'`);
+    expect(error).toContain('deliberately start a new update');
+    expect(error).toContain(`--registry '${replacement}'`);
+    expect(npm.log().some(([command]) => command === 'install')).toBe(false);
   });
 
   it('reads the nested registry manifest from the exact canonical endpoint without redirects', async () => {
@@ -481,8 +554,9 @@ process.exit(1);
   });
 
   it('rejects a changed npm prefix before install and keeps using the originally proven executable', async () => {
-    const npm = fakeNpm('https://registry.npmjs.org/');
-    const deps = buildDefaultUpdateDeps();
+    const registry = 'https://mirror.example.invalid/npm/';
+    const npm = fakeNpm(registry);
+    const deps = buildDefaultUpdateDeps(registry);
 
     await expect(deps.publishedPackage('borgmcp', 'latest')).resolves.toMatchObject({
       name: 'borgmcp',
@@ -523,13 +597,14 @@ process.exit(1);
   });
 
   it('rejects PATH substitution instead of selecting a different npm for install', async () => {
-    const original = fakeNpm('https://registry.npmjs.org/');
-    const deps = buildDefaultUpdateDeps();
+    const registry = 'https://mirror.example.invalid/npm/';
+    const original = fakeNpm(registry);
+    const deps = buildDefaultUpdateDeps(registry);
     await expect(deps.publishedPackage('borgmcp', 'latest')).resolves.toMatchObject({
       name: 'borgmcp',
       version: '2.3.0',
     });
-    const replacement = fakeNpm('https://registry.npmjs.org/');
+    const replacement = fakeNpm(registry);
 
     await expect(deps.installGlobal('borgmcp', '2.3.0'))
       .rejects.toThrow(/active npm executable changed/);

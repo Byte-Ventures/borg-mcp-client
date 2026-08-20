@@ -238,9 +238,10 @@ describe('borg update help', () => {
     const text = updateHelpText('9.9.9');
     expect(text).toContain('borg update');
     expect(text).toContain('--yes');
+    expect(text).toContain('borg update --registry <url>');
+    expect(text).toContain('exact per-invocation');
     expect(text).toMatch(/published.*borgmcp-shared/is);
-    expect(text).toMatch(/canonical npm/i);
-    expect(text).toMatch(/alternate registries/i);
+    expect(text).toMatch(/alternate configured registry/i);
     expect(text).toMatch(/client.*first/is);
     expect(text).toMatch(/server.*skipped/i);
     expect(text).toMatch(/partial/i);
