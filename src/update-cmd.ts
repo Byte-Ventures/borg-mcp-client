@@ -42,6 +42,7 @@ export interface UpdateTarget {
 export interface UpdateOptions {
   yes: boolean;
   help?: boolean;
+  registry?: string;
   target?: UpdateTarget;
 }
 
@@ -129,6 +130,7 @@ type ServerUpdateFailureStage =
 interface NpmContext {
   commandPath: string;
   commandIdentity: string;
+  registry: string;
   prefix: string;
   root: string;
 }
@@ -185,6 +187,27 @@ export function isExactSemver(value: unknown): value is string {
   return typeof value === 'string' && EXACT_SEMVER.test(value);
 }
 
+function normalizeRegistryUrl(value: string): string {
+  if (value !== value.trim()) throw new Error('npm registry URL must not contain surrounding whitespace');
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('npm registry URL is invalid');
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.search !== '' ||
+    url.hash !== ''
+  ) {
+    throw new Error('npm registry URL must be an HTTPS URL without credentials, query, or fragment');
+  }
+  if (!url.pathname.endsWith('/')) url.pathname += '/';
+  return url.href;
+}
+
 function isCanonicalSha512Integrity(value: unknown): boolean {
   if (typeof value !== 'string' || !value.startsWith('sha512-') || value.includes(' ')) return false;
   const encoded = value.slice('sha512-'.length);
@@ -219,6 +242,7 @@ export function parseUpdateArgs(
 ): ParsedUpdateArgs {
   let yes = false;
   let help = false;
+  let registry: string | undefined;
   let clientVersion: string | undefined;
   let serverVersion: string | undefined;
   let serverPresent: boolean | undefined;
@@ -230,6 +254,16 @@ export function parseUpdateArgs(
       yes = true;
     } else if (arg === '--help' || arg === '-h') {
       help = true;
+    } else if (arg === '--registry') {
+      if (registry !== undefined) return { ok: false, error: '--registry may be specified only once' };
+      const value = args[index + 1];
+      if (!value) return { ok: false, error: '--registry requires a value' };
+      index += 1;
+      try {
+        registry = normalizeRegistryUrl(value);
+      } catch (error) {
+        return { ok: false, error: errorMessage(error, 'npm registry URL is invalid') };
+      }
     } else if (arg === '--target-client' || arg === '--target-server' || arg === '--server-present') {
       hasInternalOption = true;
       const value = args[index + 1];
@@ -262,10 +296,11 @@ export function parseUpdateArgs(
       ok: true,
       yes,
       ...(help ? { help: true } : {}),
+      ...(registry ? { registry } : {}),
       target: { clientVersion, serverVersion, serverPresent },
     };
   }
-  return { ok: true, yes, ...(help ? { help: true } : {}) };
+  return { ok: true, yes, ...(help ? { help: true } : {}), ...(registry ? { registry } : {}) };
 }
 
 function validatePublishedPackage(
@@ -661,7 +696,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
   }
 
   deps.stdout(
-    `Published update plan (${CANONICAL_NPM_REGISTRY}):\n` +
+    `Published update plan (${options.registry ?? CANONICAL_NPM_REGISTRY}):\n` +
     `  client: ${CLIENT_PACKAGE}@${client.version} -> ${CLIENT_PACKAGE}@${pair.client.version}\n` +
     `    target integrity: ${pair.client.integrity}\n` +
     `  server: ${discoveredServer ? `${SERVER_PACKAGE}@${discoveredServer.version}` : 'not installed'} -> ${SERVER_PACKAGE}@${pair.server.version}\n` +
@@ -707,6 +742,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       const args = [
         'update',
         '--yes',
+        ...(options.registry ? ['--registry', options.registry] : []),
         '--target-client', pair.client.version,
         '--target-server', pair.server.version,
         '--server-present', serverWasPresent ? 'yes' : 'no',
@@ -746,7 +782,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       `  prepared runtime: not inspected\n` +
       `  running runtime: not inspected\n` +
       `Server mutation was not attempted.\n` +
-      `Next: reinstall ${CLIENT_PACKAGE}@${pair.client.version} from ${CANONICAL_NPM_REGISTRY}, then rerun borg update --yes.\n`,
+      `Next: reinstall ${CLIENT_PACKAGE}@${pair.client.version} from ${options.registry ?? CANONICAL_NPM_REGISTRY}, then rerun borg update --yes.\n`,
     );
     return interrupted ?? 1;
   }
@@ -998,26 +1034,34 @@ async function npmText(commandPath: string, args: readonly string[], label: stri
   return singleLine(result.stdout, label);
 }
 
-function requireCanonicalRegistry(value: string): void {
-  let normalized: string;
-  try {
-    normalized = new URL(value).href;
-  } catch {
-    throw new Error('npm registry configuration is invalid');
+function requireAcknowledgedRegistry(value: string, acknowledgedRegistry?: string): string {
+  const normalized = normalizeRegistryUrl(value);
+  if (acknowledgedRegistry !== undefined) {
+    const acknowledged = normalizeRegistryUrl(acknowledgedRegistry);
+    if (acknowledged !== normalized) {
+      throw new Error(
+        `the configured npm registry ${normalized} does not match the explicitly acknowledged registry ${acknowledged}`,
+      );
+    }
+    return normalized;
   }
   if (normalized !== CANONICAL_NPM_REGISTRY) {
     throw new Error(
-      `borg update requires the canonical npm registry ${CANONICAL_NPM_REGISTRY}; ` +
-      `the configured registry is unsupported. Use your package manager manually for this installation.`,
+      `borg update uses the canonical npm registry ${CANONICAL_NPM_REGISTRY} by default; ` +
+      `the configured registry ${normalized} has not been explicitly acknowledged. ` +
+      `Rerun with: borg update --registry ${shellEscape(normalized)} to acknowledge this exact registry for one update.`,
     );
   }
+  return normalized;
 }
 
-async function resolveNpmContext(): Promise<NpmContext> {
+async function resolveNpmContext(acknowledgedRegistry?: string): Promise<NpmContext> {
   const commandPath = which.sync('npm');
   const commandIdentity = await realpath(commandPath);
-  const registry = await npmText(commandPath, ['config', 'get', 'registry'], 'registry');
-  requireCanonicalRegistry(registry);
+  const registry = requireAcknowledgedRegistry(
+    await npmText(commandPath, ['config', 'get', 'registry'], 'registry'),
+    acknowledgedRegistry,
+  );
   const prefixText = await npmText(commandPath, ['prefix', '--global'], 'global prefix');
   const rootText = await npmText(commandPath, ['root', '--global'], 'global root');
   if (!isAbsolute(prefixText) || !isAbsolute(rootText)) {
@@ -1029,7 +1073,7 @@ async function resolveNpmContext(): Promise<NpmContext> {
   if (relativeRoot === '' || relativeRoot.startsWith('..') || isAbsolute(relativeRoot)) {
     throw new Error('npm global root is outside its global prefix');
   }
-  return { commandPath, commandIdentity, prefix, root };
+  return { commandPath, commandIdentity, registry, prefix, root };
 }
 
 async function assertNpmContext(context: NpmContext): Promise<NpmContext> {
@@ -1037,8 +1081,8 @@ async function assertNpmContext(context: NpmContext): Promise<NpmContext> {
   if (await realpath(activeCommand) !== context.commandIdentity) {
     throw new Error('active npm executable changed during update');
   }
-  const registry = await npmText(context.commandPath, ['config', 'get', 'registry'], 'registry');
-  requireCanonicalRegistry(registry);
+  const registry = normalizeRegistryUrl(await npmText(context.commandPath, ['config', 'get', 'registry'], 'registry'));
+  if (registry !== context.registry) throw new Error('npm registry changed during update');
   const prefix = await realpath(await npmText(context.commandPath, ['prefix', '--global'], 'global prefix'));
   if (prefix !== context.prefix) throw new Error('npm global prefix changed during update');
   const root = await realpath(await npmText(context.commandPath, ['root', '--global'], 'global root'));
@@ -1146,8 +1190,7 @@ async function defaultPublishedPackage(
   if (version !== 'latest' && !isExactSemver(version)) throw new Error('invalid registry target version');
   // Keep npm context validation above, but read the registry's typed manifest
   // contract directly rather than parsing npm CLI presentation output.
-  void context;
-  const endpoint = new URL(`${encodeURIComponent(name)}/${encodeURIComponent(version)}`, CANONICAL_NPM_REGISTRY);
+  const endpoint = new URL(`${encodeURIComponent(name)}/${encodeURIComponent(version)}`, context.registry);
   let published: PublishedPackage;
   try {
     const response = await fetch(endpoint, {
@@ -1179,8 +1222,7 @@ async function defaultPublishedVersions(
   name: typeof CLIENT_PACKAGE | typeof SERVER_PACKAGE,
   context: NpmContext,
 ): Promise<string[]> {
-  void context;
-  const endpoint = new URL(encodeURIComponent(name), CANONICAL_NPM_REGISTRY);
+  const endpoint = new URL(encodeURIComponent(name), context.registry);
   try {
     const response = await fetch(endpoint, {
       headers: { Accept: 'application/json' },
@@ -1229,10 +1271,10 @@ async function defaultConfirm(message: string, defaultYes = false): Promise<'yes
   }
 }
 
-export function buildDefaultUpdateDeps(): UpdateDeps {
+export function buildDefaultUpdateDeps(acknowledgedRegistry?: string): UpdateDeps {
   let contextPromise: Promise<NpmContext> | undefined;
   const context = async (): Promise<NpmContext> => {
-    contextPromise ??= resolveNpmContext();
+    contextPromise ??= resolveNpmContext(acknowledgedRegistry);
     return assertNpmContext(await contextPromise);
   };
   return {
@@ -1256,7 +1298,7 @@ export function buildDefaultUpdateDeps(): UpdateDeps {
         '--global',
         ...(options?.ignoreScripts ? ['--ignore-scripts'] : []),
         `--prefix=${npm.prefix}`,
-        `--registry=${CANONICAL_NPM_REGISTRY}`,
+        `--registry=${npm.registry}`,
         `${name}@${version}`,
       ], { inherit: true });
       if (result.code !== 0) throw new Error(`${name} installation exited ${result.code}`);
@@ -1292,17 +1334,18 @@ export function buildDefaultUpdateDeps(): UpdateDeps {
 
 export async function runEarlyUpdate(
   argv: readonly string[],
-  deps: UpdateDeps = buildDefaultUpdateDeps(),
+  deps?: UpdateDeps,
 ): Promise<number | null> {
   if (argv[2] !== 'update') return null;
   const parsed = parseUpdateArgs(argv.slice(3), process.env[REENTRY_ENV] === '1');
+  const resolvedDeps = deps ?? buildDefaultUpdateDeps(parsed.ok ? parsed.registry : undefined);
   if (!parsed.ok) {
-    deps.stderr(`${parsed.error}\nRun \`borg update --help\` for usage.\n`);
+    resolvedDeps.stderr(`${parsed.error}\nRun \`borg update --help\` for usage.\n`);
     return 1;
   }
   if (parsed.help) {
-    deps.stdout(updateHelpText(''));
+    resolvedDeps.stdout(updateHelpText(''));
     return 0;
   }
-  return runUpdate(parsed, deps);
+  return runUpdate(parsed, resolvedDeps);
 }

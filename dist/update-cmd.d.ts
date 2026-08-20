@@ -21,6 +21,7 @@ export interface UpdateTarget {
 export interface UpdateOptions {
     yes: boolean;
     help?: boolean;
+    registry?: string;
     target?: UpdateTarget;
 }
 export type ParsedUpdateArgs = ({
@@ -68,7 +69,7 @@ export declare function inspectNpmPackageAt(input: {
     invokedPath?: string;
 }): Promise<InstalledPackage>;
 export declare function parseConfirmationAnswer(answer: string, defaultYes?: boolean): 'yes' | 'no';
-export declare function buildDefaultUpdateDeps(): UpdateDeps;
+export declare function buildDefaultUpdateDeps(acknowledgedRegistry?: string): UpdateDeps;
 export declare function runEarlyUpdate(argv: readonly string[], deps?: UpdateDeps): Promise<number | null>;
 export {};
 //# sourceMappingURL=update-cmd.d.ts.map
