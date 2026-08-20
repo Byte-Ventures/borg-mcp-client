@@ -25,8 +25,22 @@ import { main } from '../src/index.js';
 const CUBE = { id: 'cube-1', name: 'made', cube_directive: 'existing' };
 
 describe('borg_create-cube handler — explicit repository (client#499)', () => {
-  beforeEach(() => { state.handlers.length = 0; state.createCube.mockReset(); vi.spyOn(console, 'error').mockImplementation(() => {}); });
-  afterEach(() => vi.restoreAllMocks());
+  const originalOpenCode = process.env.BORG_OPENCODE;
+  const originalAgentKind = process.env.BORG_AGENT_KIND;
+  beforeEach(() => {
+    delete process.env.BORG_OPENCODE;
+    delete process.env.BORG_AGENT_KIND;
+    state.handlers.length = 0;
+    state.createCube.mockReset();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    if (originalOpenCode === undefined) delete process.env.BORG_OPENCODE;
+    else process.env.BORG_OPENCODE = originalOpenCode;
+    if (originalAgentKind === undefined) delete process.env.BORG_AGENT_KIND;
+    else process.env.BORG_AGENT_KIND = originalAgentKind;
+    vi.restoreAllMocks();
+  });
 
   async function callTool(args: any) {
     await main();
