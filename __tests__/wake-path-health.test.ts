@@ -16,6 +16,10 @@ function openCodeState(
     sessionId: 'session-1',
     totalEntriesInjected: 0,
     totalEntriesRetried: 0,
+    lastInjectionAt: null,
+    lastInjectionResult: null,
+    lastAcceptedEntryId: null,
+    lastFailureCode: null,
     deliveryStates: {
       queued: 0,
       'delivered-unconfirmed': 0,

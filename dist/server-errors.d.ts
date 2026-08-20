@@ -53,6 +53,28 @@ export declare class BorgServerUnreachableError extends Error {
         cause?: unknown;
     });
 }
+export type OpenCodeFailureCode = 'unauthorized' | 'not-found' | 'incompatible-api' | 'timeout' | 'transient';
+export declare class OpenCodeAuthenticationError extends Error {
+    readonly code: "unauthorized";
+    constructor(message?: string);
+}
+export declare class OpenCodeHttpError extends Error {
+    readonly status: number;
+    readonly code: OpenCodeFailureCode;
+    constructor(status: number, code: OpenCodeFailureCode, message: string);
+}
+export declare class OpenCodeResponseError extends Error {
+    readonly code: "incompatible-api";
+    constructor(message?: string, options?: {
+        cause?: unknown;
+    });
+}
+export declare class OpenCodeUnreachableError extends Error {
+    readonly code: 'timeout' | 'transient';
+    constructor(code: 'timeout' | 'transient', message: string, options?: {
+        cause?: unknown;
+    });
+}
 export declare class CubeCreationOutcomeUnknownError extends Error {
     constructor();
 }
