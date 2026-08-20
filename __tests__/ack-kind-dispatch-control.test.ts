@@ -45,13 +45,23 @@ import { main } from '../src/index.js';
 const ENTRY = '33333333-3333-4333-8333-333333333333';
 
 describe('borg_tool → borg_ack invalid kind refuses without mutating', () => {
+  const originalOpenCode = process.env.BORG_OPENCODE;
+  const originalAgentKind = process.env.BORG_AGENT_KIND;
   beforeEach(() => {
+    delete process.env.BORG_OPENCODE;
+    delete process.env.BORG_AGENT_KIND;
     state.handlers.length = 0;
     state.ackLogEntry.mockReset();
     state.ackLogEntry.mockResolvedValue(undefined);
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    if (originalOpenCode === undefined) delete process.env.BORG_OPENCODE;
+    else process.env.BORG_OPENCODE = originalOpenCode;
+    if (originalAgentKind === undefined) delete process.env.BORG_AGENT_KIND;
+    else process.env.BORG_AGENT_KIND = originalAgentKind;
+    vi.restoreAllMocks();
+  });
 
   async function callTool(params: any) {
     await main();
