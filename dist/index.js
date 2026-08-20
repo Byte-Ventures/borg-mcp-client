@@ -14,6 +14,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { assertRoleMatches } from './role-match.js';
 import { CubeDeletionConfirmationError } from './server-errors.js';
+import { rawCubeSettingsResult } from './cube-read-result.js';
 import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, readLogEntry, appendLog, ackLogEntry, getAckStatus, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, normalizeExplicitRepository, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, putDocument, getDocument, listDocuments, removeDocument, } from './remote-client.js';
 import { formatDocument, formatDocumentCitations, formatDocumentMetadata, } from './document-render.js';
 import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
@@ -989,6 +990,19 @@ export async function main() {
                         content: [{ type: 'text', text: `Your cubes (${cubes.length}):\n\n${lines.join('\n\n')}` }],
                         structuredContent: { cubes },
                     };
+                }
+                case 'borg_read-cube': {
+                    const cubeId = args?.cube_id;
+                    if (!cubeId)
+                        throw new Error('cube_id is required');
+                    const active = await requireActiveCube();
+                    const cubeName = cubeId === active.cubeId ? active.name : cubeId;
+                    const cube = await getCubeForManagement(cubeId, {
+                        operation: `read stored settings from cube ${JSON.stringify(cubeName)}`,
+                        cubeName,
+                        noMutation: 'No cube settings were read.',
+                    }, active);
+                    return rawCubeSettingsResult(cube);
                 }
                 case 'borg_create-cube': {
                     const name = args?.name;

@@ -51,6 +51,7 @@ export const MANAGEMENT_TOOLS = [
   'borg_sync-roles',
   'borg_apply-template',
   'borg_list-cubes',
+  'borg_read-cube',
   'borg_list-drones',
   'borg_list-roles',
   'borg_list-templates',

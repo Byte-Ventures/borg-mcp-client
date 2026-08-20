@@ -390,6 +390,17 @@ const BASE_TOOL_MANIFEST = [
         inputSchema: { type: 'object', properties: {} },
     },
     {
+        name: 'borg_read-cube',
+        description: "Read one cube's stored cube_directive and message_taxonomy using the selected local client's cube-management grant. The text block is the cube_directive verbatim, with no rendering, no generated sections, no normalization, and no truncation, so it is safe to use as the base of an authorized read-modify-write.",
+        inputSchema: {
+            type: 'object',
+            properties: {
+                cube_id: { type: 'string', format: 'uuid', description: 'UUID of the cube to read.' },
+            },
+            required: ['cube_id'],
+        },
+    },
+    {
         name: 'borg_create-cube',
         description: 'Create a new cube bound to an explicit repository. The server homes ONE cube per repository: if the given repository already has a cube, this reports that existing cube and leaves its directive unchanged (it never overwrites it). The server seeds a default "Drone" role atomically so a newly-created cube is assimilatable immediately. ' +
             'Pass an optional `template` name to apply a richer role set instead (see borg_list-templates / borg_apply-template).',
@@ -892,6 +903,16 @@ export const TOOL_OUTPUT_SCHEMAS = {
         type: 'object',
         properties: { cubes: { type: 'array', items: CUBE_OUTPUT } },
         required: ['cubes'],
+    },
+    'borg_read-cube': {
+        type: 'object',
+        properties: {
+            cube_id: { type: 'string' },
+            cube_name: { type: 'string' },
+            cube_directive: { type: 'string' },
+            message_taxonomy: { type: ['array', 'null'] },
+        },
+        required: ['cube_id', 'cube_name', 'cube_directive', 'message_taxonomy'],
     },
     'borg_list-drones': {
         type: 'object',

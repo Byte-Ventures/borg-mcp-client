@@ -21,6 +21,7 @@ const TYPED_TOOLS = [
   'borg_get-document',
   'borg_list-documents',
   'borg_list-cubes',
+  'borg_read-cube',
   'borg_list-drones',
   'borg_list-roles',
   'borg_list-templates',

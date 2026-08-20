@@ -109,6 +109,24 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(clientEntrySource).toContain('getAckStatus(');
   });
 
+  it('exposes a verbatim stored cube-settings read', () => {
+    const tool = TOOL_MANIFEST.find((entry) => entry.name === 'borg_read-cube');
+    expect(tool?.inputSchema.required).toEqual(['cube_id']);
+    expect(tool?.inputSchema.properties.cube_id).toMatchObject({ type: 'string', format: 'uuid' });
+    expect(tool?.description).toContain('verbatim');
+    expect(tool?.description).toContain('no rendering');
+    expect(tool?.description).toContain('no truncation');
+    expect(tool?.outputSchema?.required).toEqual([
+      'cube_id',
+      'cube_name',
+      'cube_directive',
+      'message_taxonomy',
+    ]);
+    expect(clientEntrySource).toContain("case 'borg_read-cube':");
+    expect(clientEntrySource).toContain('getCubeForManagement(cubeId');
+    expect(clientEntrySource).toContain('rawCubeSettingsResult(cube)');
+  });
+
   it('exposes exact cursorless entry reads and structured routing guidance', () => {
     const readEntry = TOOL_MANIFEST.find((entry) => entry.name === 'borg_read-entry');
     expect(readEntry?.inputSchema.required).toEqual(['entry_id']);

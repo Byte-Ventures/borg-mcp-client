@@ -21,6 +21,7 @@ import {
 
 import { assertRoleMatches } from './role-match.js';
 import { CubeDeletionConfirmationError } from './server-errors.js';
+import { rawCubeSettingsResult } from './cube-read-result.js';
 
 import {
   getCubeInfo,
@@ -1225,6 +1226,19 @@ export async function main() {
             content: [{ type: 'text', text: `Your cubes (${cubes.length}):\n\n${lines.join('\n\n')}` }],
             structuredContent: { cubes },
           };
+        }
+
+        case 'borg_read-cube': {
+          const cubeId = args?.cube_id as string;
+          if (!cubeId) throw new Error('cube_id is required');
+          const active = await requireActiveCube();
+          const cubeName = cubeId === active.cubeId ? active.name : cubeId;
+          const cube = await getCubeForManagement(cubeId, {
+            operation: `read stored settings from cube ${JSON.stringify(cubeName)}`,
+            cubeName,
+            noMutation: 'No cube settings were read.',
+          }, active);
+          return rawCubeSettingsResult(cube);
         }
 
         case 'borg_create-cube': {
