@@ -1,5 +1,5 @@
 import type { ActiveCube } from './cubes.js';
-export type OpenCodeSeatIdentityErrorCode = 'ROOTS_UNAVAILABLE' | 'ROOTS_INVALID' | 'SEAT_NOT_FOUND' | 'SEAT_WORKTREE_MISMATCH';
+export type OpenCodeSeatIdentityErrorCode = 'IDENTITY_HANDSHAKE_TIMEOUT' | 'ROOTS_UNAVAILABLE' | 'ROOTS_INVALID' | 'SEAT_NOT_FOUND' | 'SEAT_WORKTREE_MISMATCH';
 export declare class OpenCodeSeatIdentityError extends Error {
     readonly code: OpenCodeSeatIdentityErrorCode;
     readonly sessionDirectory?: string | undefined;

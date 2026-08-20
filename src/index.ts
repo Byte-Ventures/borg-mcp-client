@@ -172,6 +172,9 @@ import {
   runEvictDroneTool,
   runReassignDroneTool,
 } from './drone-management.js';
+
+const OPEN_CODE_IDENTITY_HANDSHAKE_TIMEOUT_MS = 5_000;
+
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
@@ -392,8 +395,25 @@ export async function main() {
 
   let openCodeIdentityFailure: OpenCodeSeatIdentityError | null = null;
   let finishOpenCodeIdentity: (() => void) | null = null;
+  let openCodeIdentityTimeout: ReturnType<typeof setTimeout> | null = null;
+  const settleOpenCodeIdentity = () => {
+    if (openCodeIdentityTimeout) clearTimeout(openCodeIdentityTimeout);
+    openCodeIdentityTimeout = null;
+    const finish = finishOpenCodeIdentity;
+    finishOpenCodeIdentity = null;
+    finish?.();
+  };
   const openCodeIdentityReady = openCodeRuntime && !readinessProbe
-    ? new Promise<void>((resolveIdentity) => { finishOpenCodeIdentity = resolveIdentity; })
+    ? new Promise<void>((resolveIdentity) => {
+        finishOpenCodeIdentity = resolveIdentity;
+        openCodeIdentityTimeout = setTimeout(() => {
+          openCodeIdentityFailure = new OpenCodeSeatIdentityError(
+            'IDENTITY_HANDSHAKE_TIMEOUT',
+            'OpenCode identity handshake did not complete within 5 seconds.',
+          );
+          settleOpenCodeIdentity();
+        }, OPEN_CODE_IDENTITY_HANDSHAKE_TIMEOUT_MS);
+      })
     : null;
   const waitForOpenCodeIdentity = async (): Promise<OpenCodeSeatIdentityError | null> => {
     if (openCodeIdentityReady) await openCodeIdentityReady;
@@ -1663,7 +1683,7 @@ export async function main() {
           ? error
           : new OpenCodeSeatIdentityError('ROOTS_UNAVAILABLE', String(error));
       }).finally(() => {
-        finishOpenCodeIdentity?.();
+        settleOpenCodeIdentity();
       });
     };
   }
@@ -1674,7 +1694,7 @@ export async function main() {
   if (openCodeIdentityReady) {
     await openCodeIdentityReady;
     if (openCodeIdentityFailure) {
-      console.error(formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd()));
+      throw new Error(formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd()));
     } else {
       await runMcpStartupServices(false, startupServices, { openCodeFirst: true });
     }
