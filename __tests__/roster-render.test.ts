@@ -218,16 +218,20 @@ describe('renderRoster — liveness mode (since provided)', () => {
     expect(bullets).not.toContain('`awake`');
   });
 
-  it.each(['idle', 'pending', 'awake', 'stale'] as const)('renders additive wake_state=%s when present', (wake_state) => {
+  it.each([
+    { seen_since: false, wake_state: 'awake', marker: 'stale' },
+    { seen_since: true, wake_state: 'stale', marker: 'awake' },
+  ] as const)('uses seen_since instead of wake_state when they disagree', ({ seen_since, wake_state, marker }) => {
     const out = renderRoster({
       cubeName: 'c',
-      drones: [drone({ label: `drone-${wake_state}`, seen_since: wake_state === 'stale', wake_state })],
+      drones: [drone({ label: `drone-${wake_state}`, seen_since, wake_state })],
       roles: roleSet(),
       resolvedSince: SINCE,
       humanAgo: fakeHumanAgo,
     });
     const bullets = droneLines(out).join('\n');
-    expect(bullets).toContain(`\`${wake_state}\``);
+    expect(bullets).toContain(`\`${marker}\``);
+    expect(bullets).not.toContain(`\`${wake_state}\``);
   });
 
   it('keeps the prior seen_since rendering when wake_state is absent', () => {
