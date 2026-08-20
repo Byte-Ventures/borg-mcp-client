@@ -214,9 +214,10 @@ borg update --registry https://npm.example.com/
 ```
 
 The acknowledgement is not persisted or transferable to another URL. A missing
-acknowledgement, registry change during the update, registry failure, malformed
-manifest, mismatched or ranged shared pin, unsupported package manager, or
-ambiguous binary fails before mutation.
+acknowledgement fails before mutation. A registry change detected after an
+earlier phase refuses before any subsequent package mutation and reports the
+partial state. Registry failure, malformed manifest, mismatched or ranged shared
+pin, unsupported package manager, or ambiguous binary also fails closed.
 
 The client is installed first. Borg then verifies and re-enters through the new
 client binary before any server mutation. If that install, verification, or

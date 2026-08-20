@@ -16,16 +16,37 @@ const CANONICAL_NPM_REGISTRY = 'https://registry.npmjs.org/';
 const REENTRY_ENV = 'BORG_UPDATE_REENTRY';
 const MAX_CAPTURE_BYTES = 1024 * 1024;
 const EXACT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+class RegistryChangedDuringUpdateError extends Error {
+    expectedRegistry;
+    observedRegistry;
+    constructor(expectedRegistry, observedRegistry) {
+        super(`npm registry changed during update from ${expectedRegistry} to ${observedRegistry}`);
+        this.expectedRegistry = expectedRegistry;
+        this.observedRegistry = observedRegistry;
+        this.name = 'RegistryChangedDuringUpdateError';
+    }
+}
 function signalExitCode(error) {
     return error instanceof CommandSignalError ? error.exitCode : null;
 }
 function errorMessage(error, fallback) {
     return error instanceof Error ? error.message : fallback;
 }
+function updateRetryCommand(registry) {
+    return `borg update --yes${registry ? ` --registry ${shellEscape(registry)}` : ''}`;
+}
+function renderUpdateRetry(error, registry) {
+    if (error instanceof RegistryChangedDuringUpdateError) {
+        return (`The configured npm registry changed during the update.\n` +
+            `Restore ${error.expectedRegistry} and retry with: ${updateRetryCommand(error.expectedRegistry)}\n` +
+            `Or deliberately start a new update against the current registry with: ${updateRetryCommand(error.observedRegistry)}\n`);
+    }
+    return `Retry with: ${updateRetryCommand(registry)}\n`;
+}
 function hasErrorCode(error, code) {
     return error instanceof Error && error.code === code;
 }
-function renderReentryPreflightFailure(error, target) {
+function renderReentryPreflightFailure(error, target, registry) {
     return (`Update preflight failed: ${errorMessage(error, 'unknown failure')}\n` +
         `Observed update state:\n` +
         `  client: ${CLIENT_PACKAGE}@${target.clientVersion} installed and verified before re-entry\n` +
@@ -33,7 +54,7 @@ function renderReentryPreflightFailure(error, target) {
         `  prepared runtime: not inspected\n` +
         `  running runtime: not inspected\n` +
         `Server mutation was not attempted.\n` +
-        `Retry with: borg update --yes\n`);
+        renderUpdateRetry(error, registry));
 }
 function renderServerState(client, server, status, update) {
     const updateLine = update === null
@@ -431,7 +452,7 @@ function verifyServerStatus(status, target) {
     }
     return 'running';
 }
-function renderServerFailureRecovery(status, updateAttempted, retryCommand) {
+function renderServerFailureRecovery(status, updateAttempted, retryCommand, error, registry) {
     let text = '';
     if (status?.state === 'stopped') {
         text += renderStoppedServiceRecovery(status);
@@ -441,7 +462,10 @@ function renderServerFailureRecovery(status, updateAttempted, retryCommand) {
             `Check it with: borg server status\n` +
             `If it is stopped, run the recovery command reported by borg server status.\n`);
     }
-    if (retryCommand !== 'borg server start') {
+    if (error instanceof RegistryChangedDuringUpdateError) {
+        text += renderUpdateRetry(error, registry);
+    }
+    else if (retryCommand !== 'borg server start') {
         text += status?.state === 'stopped'
             ? `Then retry the failed stage with: ${retryCommand}\n`
             : `Next: ${retryCommand}\n`;
@@ -466,6 +490,7 @@ export async function runUpdate(options, deps) {
     let pair;
     let client;
     let discoveredServer;
+    const updateRetry = updateRetryCommand(options.registry);
     try {
         [pair, client, discoveredServer] = await Promise.all([
             publishedPair(options.target, deps),
@@ -476,7 +501,7 @@ export async function runUpdate(options, deps) {
     catch (error) {
         const interrupted = signalExitCode(error);
         deps.stderr(options.target
-            ? renderReentryPreflightFailure(error, options.target)
+            ? renderReentryPreflightFailure(error, options.target, options.registry)
             : (`Update preflight failed: ${errorMessage(error, 'unknown failure')}\n` +
                 `Observed update state:\n` +
                 `  client: not inspected (registry preflight incomplete)\n` +
@@ -484,7 +509,9 @@ export async function runUpdate(options, deps) {
                 `  prepared runtime: not inspected\n` +
                 `  running runtime: not inspected\n` +
                 `No mutation was attempted.\n` +
-                `Manual fallback: npm install -g ${CLIENT_PACKAGE} && npm install -g ${SERVER_PACKAGE}\n`));
+                (error instanceof RegistryChangedDuringUpdateError
+                    ? renderUpdateRetry(error, options.registry)
+                    : `Manual fallback: npm install -g ${CLIENT_PACKAGE} && npm install -g ${SERVER_PACKAGE}\n`)));
         return interrupted ?? 1;
     }
     const serverWasPresent = options.target?.serverPresent ?? discoveredServer !== null;
@@ -496,7 +523,7 @@ export async function runUpdate(options, deps) {
             `  prepared runtime: not inspected\n` +
             `  running runtime: not inspected\n` +
             `Server mutation was not attempted.\n` +
-            `Retry with: borg update --yes\n`);
+            `Retry with: ${updateRetry}\n`);
         return 1;
     }
     deps.stdout(`Published update plan (${options.registry ?? CANONICAL_NPM_REGISTRY}):\n` +
@@ -556,7 +583,7 @@ export async function runUpdate(options, deps) {
                 `  prepared runtime: not inspected\n` +
                 `  running runtime: not inspected\n` +
                 `Server mutation was not attempted.\n` +
-                `Retry with: borg update --yes\n`);
+                renderUpdateRetry(error, options.registry));
             return interrupted ?? 1;
         }
     }
@@ -574,7 +601,9 @@ export async function runUpdate(options, deps) {
             `  prepared runtime: not inspected\n` +
             `  running runtime: not inspected\n` +
             `Server mutation was not attempted.\n` +
-            `Next: reinstall ${CLIENT_PACKAGE}@${pair.client.version} from ${options.registry ?? CANONICAL_NPM_REGISTRY}, then rerun borg update --yes.\n`);
+            (error instanceof RegistryChangedDuringUpdateError
+                ? renderUpdateRetry(error, options.registry)
+                : `Next: reinstall ${CLIENT_PACKAGE}@${pair.client.version} from ${options.registry ?? CANONICAL_NPM_REGISTRY}, then rerun ${updateRetry}.\n`));
         return interrupted ?? 1;
     }
     if (!serverWasPresent) {
@@ -612,7 +641,7 @@ export async function runUpdate(options, deps) {
             `  prepared runtime: not inspected\n` +
             `  running runtime: not inspected\n` +
             `Server runtime mutation was not attempted.\n` +
-            `Retry with: borg update --yes\n`);
+            renderUpdateRetry(error, options.registry));
         return interrupted ?? 1;
     }
     let observedStatus = null;
@@ -637,7 +666,7 @@ export async function runUpdate(options, deps) {
         initialServerState = status.state;
         if (status.installedController !== exactServerIdentity(pair.server.version)) {
             failureStage = 'server controller identity check';
-            retryCommand = 'borg update --yes';
+            retryCommand = updateRetry;
             throw new Error('server status contradicted the verified controller identity');
         }
         try {
@@ -672,7 +701,7 @@ export async function runUpdate(options, deps) {
         retryCommand = 'borg server update';
         const state = verifyServerStatus(status, pair.server);
         failureStage = 'final package verification';
-        retryCommand = 'borg update --yes';
+        retryCommand = updateRetry;
         const [finalClient, finalServer] = await Promise.all([
             deps.currentClient(),
             deps.currentServer(),
@@ -716,7 +745,7 @@ export async function runUpdate(options, deps) {
         }
         deps.stderr(`Server update failed during ${failureStage}: ${errorMessage(error, 'unknown failure')}.\n` +
             renderServerState(client, server, observedStatus, observedUpdate) +
-            renderServerFailureRecovery(observedStatus, updateAttempted, retryCommand));
+            renderServerFailureRecovery(observedStatus, updateAttempted, retryCommand, error, options.registry));
         return interrupted ?? 1;
     }
 }
@@ -835,7 +864,7 @@ async function assertNpmContext(context) {
     }
     const registry = normalizeRegistryUrl(await npmText(context.commandPath, ['config', 'get', 'registry'], 'registry'));
     if (registry !== context.registry)
-        throw new Error('npm registry changed during update');
+        throw new RegistryChangedDuringUpdateError(context.registry, registry);
     const prefix = await realpath(await npmText(context.commandPath, ['prefix', '--global'], 'global prefix'));
     if (prefix !== context.prefix)
         throw new Error('npm global prefix changed during update');

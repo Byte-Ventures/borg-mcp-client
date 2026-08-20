@@ -398,6 +398,29 @@ process.exit(1);
     expect(npm.log().some(([command]) => command === 'install')).toBe(false);
   });
 
+  it('distinguishes restoring the acknowledged registry from acknowledging a mid-update replacement', async () => {
+    const registry = 'https://mirror.example.invalid/npm/';
+    const replacement = 'https://replacement.example.invalid/npm/';
+    const npm = fakeNpm(registry);
+    const adapter = buildDefaultUpdateDeps(registry);
+    await expect(adapter.publishedPackage('borgmcp', 'latest')).resolves.toMatchObject({ name: 'borgmcp' });
+    const d = updateDeps(adapter, {
+      currentClient: vi.fn(async () => installed(CLIENT_TARGET, '2.2.0', '0.6.4')),
+      installGlobal: vi.fn(async (name, version, options) => {
+        npm.setRegistry(replacement);
+        await adapter.installGlobal(name, version, options);
+      }),
+    });
+
+    await expect(runUpdate({ yes: true, registry }, d)).resolves.toBe(1);
+    const error = vi.mocked(d.stderr).mock.calls.map(([text]) => text).join('');
+    expect(error).toContain(`Restore ${registry}`);
+    expect(error).toContain(`--registry '${registry}'`);
+    expect(error).toContain('deliberately start a new update');
+    expect(error).toContain(`--registry '${replacement}'`);
+    expect(npm.log().some(([command]) => command === 'install')).toBe(false);
+  });
+
   it('reads the nested registry manifest from the exact canonical endpoint without redirects', async () => {
     const npm = fakeNpm('https://registry.npmjs.org/');
     const deps = buildDefaultUpdateDeps();

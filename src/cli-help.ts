@@ -217,8 +217,8 @@ export function updateHelpText(version: string): string {
     `requires matching exact borgmcp-shared pins, and verifies canonical npm ownership. The client is\n` +
     `installed first and the update continues under that new client before the server controller\n` +
     `and runtime are updated. An alternate configured registry requires an exact per-invocation\n` +
-    `--registry acknowledgement; registry changes and unsupported or ambiguous package-manager\n` +
-    `provenance fail closed before mutation.\n\n` +
+    `--registry acknowledgement; registry changes refuse before any subsequent package mutation,\n` +
+    `and unsupported or ambiguous package-manager provenance fails closed.\n\n` +
     `If no local server is installed, the server phase is skipped. A failure after the client\n` +
     `succeeds is reported as partial completion with status-specific recovery. Borg never starts\n` +
     `a stopped server. After package verification, Borg replaces stale borgmcp package launch paths\n` +

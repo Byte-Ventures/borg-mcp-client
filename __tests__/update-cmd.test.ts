@@ -409,6 +409,16 @@ describe('runUpdate', () => {
     );
   });
 
+  it('retains the acknowledged registry in recovery after a stable-mirror re-entry failure', async () => {
+    const registry = 'https://mirror.example.test/npm/';
+    const d = deps({ reenter: vi.fn(async () => { throw new Error('spawn failed'); }) });
+
+    await expect(runUpdate({ yes: true, registry }, d)).resolves.toBe(1);
+    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining(
+      `Retry with: borg update --yes --registry '${registry}'`,
+    ));
+  });
+
   it('installs the controller before runtime update and verifies the running pair', async () => {
     let statusCalls = 0;
     const d = deps({
