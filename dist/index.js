@@ -1457,7 +1457,7 @@ export async function main() {
     if (openCodeIdentityReady) {
         await openCodeIdentityReady;
         if (openCodeIdentityFailure) {
-            console.error(formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd()));
+            throw new Error(formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd()));
         }
         else {
             await runMcpStartupServices(false, startupServices, { openCodeFirst: true });

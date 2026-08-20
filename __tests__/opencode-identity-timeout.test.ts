@@ -29,7 +29,6 @@ describe('OpenCode identity handshake timeout', () => {
     process.env.BORG_AGENT_KIND = 'opencode';
     state.handlers.length = 0;
     state.runMcpStartupServices.mockClear();
-    vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -39,19 +38,22 @@ describe('OpenCode identity handshake timeout', () => {
     vi.restoreAllMocks();
   });
 
-  it('continues with an operator-visible failure when initialize never completes', async () => {
-    let completed = false;
-    const started = main().then(() => { completed = true; });
+  it('fails closed with an operator-visible diagnostic when initialize never completes', async () => {
+    let outcome: unknown;
+    const started = main().then(
+      () => { outcome = 'resolved'; },
+      (error) => { outcome = error; },
+    );
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(completed).toBe(true);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain(
+      'Borg OpenCode identity error [IDENTITY_HANDSHAKE_TIMEOUT]',
+    );
+    expect((outcome as Error).message).toContain(
+      'OpenCode identity handshake did not complete',
+    );
     await expect(started).resolves.toBeUndefined();
 
     expect(state.runMcpStartupServices).not.toHaveBeenCalled();
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('Borg OpenCode identity error [IDENTITY_HANDSHAKE_TIMEOUT]'),
-    );
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('OpenCode identity handshake did not complete'),
-    );
   });
 });
