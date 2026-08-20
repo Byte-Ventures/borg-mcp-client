@@ -50,6 +50,7 @@ import { normalizeLogAudience, } from './direct-log.js';
 import { formatLocalManageToolResult } from './local-manage-tool-result.js';
 import { OpenCodeSeatIdentityError, formatOpenCodeSeatIdentityError, resolveOpenCodeSeatIdentity, } from './opencode-seat-identity.js';
 import { runEvictDroneTool, runReassignDroneTool, } from './drone-management.js';
+const OPEN_CODE_IDENTITY_HANDSHAKE_TIMEOUT_MS = 5_000;
 /**
  * Apply a template's roles + message_taxonomy to a cube.
  *
@@ -228,8 +229,23 @@ export async function main() {
     });
     let openCodeIdentityFailure = null;
     let finishOpenCodeIdentity = null;
+    let openCodeIdentityTimeout = null;
+    const settleOpenCodeIdentity = () => {
+        if (openCodeIdentityTimeout)
+            clearTimeout(openCodeIdentityTimeout);
+        openCodeIdentityTimeout = null;
+        const finish = finishOpenCodeIdentity;
+        finishOpenCodeIdentity = null;
+        finish?.();
+    };
     const openCodeIdentityReady = openCodeRuntime && !readinessProbe
-        ? new Promise((resolveIdentity) => { finishOpenCodeIdentity = resolveIdentity; })
+        ? new Promise((resolveIdentity) => {
+            finishOpenCodeIdentity = resolveIdentity;
+            openCodeIdentityTimeout = setTimeout(() => {
+                openCodeIdentityFailure = new OpenCodeSeatIdentityError('IDENTITY_HANDSHAKE_TIMEOUT', 'OpenCode identity handshake did not complete within 5 seconds.');
+                settleOpenCodeIdentity();
+            }, OPEN_CODE_IDENTITY_HANDSHAKE_TIMEOUT_MS);
+        })
         : null;
     const waitForOpenCodeIdentity = async () => {
         if (openCodeIdentityReady)
@@ -1432,7 +1448,7 @@ export async function main() {
                     ? error
                     : new OpenCodeSeatIdentityError('ROOTS_UNAVAILABLE', String(error));
             }).finally(() => {
-                finishOpenCodeIdentity?.();
+                settleOpenCodeIdentity();
             });
         };
     }

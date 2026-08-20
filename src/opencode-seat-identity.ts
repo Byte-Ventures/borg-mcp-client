@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { ActiveCube } from './cubes.js';
 
 export type OpenCodeSeatIdentityErrorCode =
+  | 'IDENTITY_HANDSHAKE_TIMEOUT'
   | 'ROOTS_UNAVAILABLE'
   | 'ROOTS_INVALID'
   | 'SEAT_NOT_FOUND'
