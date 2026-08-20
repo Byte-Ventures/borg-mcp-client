@@ -86,14 +86,19 @@ interface OpenCodeDroneState {
 }
 
 interface OpenCodeLastObservation {
-  sequence: number;
+  injectionSequence: number;
+  acceptedSequence: number;
+  failureSequence: number;
   lastInjectionAt: number | null;
   lastInjectionResult: OpenCodeInjectionResult | null;
   lastAcceptedEntryId: string | null;
   lastFailureCode: string | null;
 }
 
-type OpenCodeLastFields = Omit<OpenCodeLastObservation, 'sequence'>;
+type OpenCodeLastFields = Pick<
+  OpenCodeLastObservation,
+  'lastInjectionAt' | 'lastInjectionResult' | 'lastAcceptedEntryId' | 'lastFailureCode'
+>;
 
 let state: OpenCodeDroneState | null = null;
 
@@ -247,7 +252,9 @@ export async function connectOpenCodeDrone(deps: ConnectDeps): Promise<void> {
     processingDeliveries: false,
     nextObservationSequence: 0,
     lastObservation: {
-      sequence: 0,
+      injectionSequence: 0,
+      acceptedSequence: 0,
+      failureSequence: 0,
       lastInjectionAt: null,
       lastInjectionResult: null,
       lastAcceptedEntryId: null,
@@ -735,11 +742,34 @@ function openCodeFailureCode(error: unknown): string {
 function updateLastOpenCodeObservation(
   owner: OpenCodeDroneState,
   sequence: number,
-  update: (current: OpenCodeLastFields) => OpenCodeLastFields,
+  update: Partial<OpenCodeLastFields>,
 ): void {
-  if (sequence < owner.lastObservation.sequence) return;
-  const { sequence: _currentSequence, ...current } = owner.lastObservation;
-  owner.lastObservation = { sequence, ...update(current) };
+  // Attempts, acceptances, and failures resolve independently; an observation
+  // may be stale for one field without being stale for the others.
+  const current = owner.lastObservation;
+  const updatesInjection = 'lastInjectionAt' in update || 'lastInjectionResult' in update;
+  const updatesAccepted = 'lastAcceptedEntryId' in update;
+  const updatesFailure = 'lastFailureCode' in update;
+  owner.lastObservation = {
+    ...current,
+    ...(updatesInjection && sequence >= current.injectionSequence
+      ? {
+        injectionSequence: sequence,
+        ...('lastInjectionAt' in update
+          ? { lastInjectionAt: update.lastInjectionAt as number | null }
+          : {}),
+        ...('lastInjectionResult' in update
+          ? { lastInjectionResult: update.lastInjectionResult as OpenCodeInjectionResult | null }
+          : {}),
+      }
+      : {}),
+    ...(updatesAccepted && sequence >= current.acceptedSequence
+      ? { acceptedSequence: sequence, lastAcceptedEntryId: update.lastAcceptedEntryId as string | null }
+      : {}),
+    ...(updatesFailure && sequence >= current.failureSequence
+      ? { failureSequence: sequence, lastFailureCode: update.lastFailureCode as string | null }
+      : {}),
+  };
 }
 
 function recordOpenCodeFailure(
@@ -747,20 +777,18 @@ function recordOpenCodeFailure(
   error: unknown,
   observationSequence: number,
 ): void {
-  updateLastOpenCodeObservation(owner, observationSequence, (current) => ({
-    ...current,
+  updateLastOpenCodeObservation(owner, observationSequence, {
     lastFailureCode: openCodeFailureCode(error),
-  }));
+  });
 }
 
 function recordOpenCodeAcceptance(
   owner: OpenCodeDroneState,
   delivery: Pick<OpenCodeDelivery, 'sequence' | 'entryId'>,
 ): void {
-  updateLastOpenCodeObservation(owner, delivery.sequence, (current) => ({
-    ...current,
+  updateLastOpenCodeObservation(owner, delivery.sequence, {
     lastAcceptedEntryId: delivery.entryId,
-  }));
+  });
 }
 
 function clearPendingSubmission(owner: OpenCodeDroneState, entryId: string): void {
@@ -784,12 +812,11 @@ function confirmOpenCodeDelivery(
     delivery.sourceEntryId,
   );
   owner.totalEntriesInjected++;
-  updateLastOpenCodeObservation(owner, delivery.sequence, (current) => ({
-    ...current,
+  updateLastOpenCodeObservation(owner, delivery.sequence, {
     lastAcceptedEntryId: delivery.entryId,
     lastInjectionResult: 'delivered',
     lastFailureCode: null,
-  }));
+  });
 }
 
 function scheduleOpenCodeReconciliation(
@@ -989,12 +1016,11 @@ async function processOpenCodeDeliveries(owner: OpenCodeDroneState): Promise<voi
   try {
     while (state === owner && owner.deliveryQueue.length > 0) {
       const delivery = owner.deliveryQueue.shift()!;
-      updateLastOpenCodeObservation(owner, delivery.sequence, (current) => ({
-        ...current,
+      updateLastOpenCodeObservation(owner, delivery.sequence, {
         lastInjectionAt: Date.now(),
         lastInjectionResult: null,
         lastFailureCode: null,
-      }));
+      });
       let outcome: OpenCodeDeliveryOutcome = 'failed';
       try {
         outcome = await deliverOpenCodeEntry(owner, delivery);
@@ -1002,15 +1028,14 @@ async function processOpenCodeDeliveries(owner: OpenCodeDroneState): Promise<voi
         recordOpenCodeFailure(owner, err, delivery.sequence);
         log(`entry ${delivery.entryId} delivery error: ${err}`, owner);
       }
-      updateLastOpenCodeObservation(owner, delivery.sequence, (current) => ({
-        ...current,
+      updateLastOpenCodeObservation(owner, delivery.sequence, {
         lastInjectionResult: outcome,
         lastFailureCode: outcome === 'delivered'
           ? null
           : outcome === 'failed'
-            ? (current.lastFailureCode ?? 'unknown')
-            : current.lastFailureCode,
-      }));
+            ? (owner.lastObservation.lastFailureCode ?? 'unknown')
+            : owner.lastObservation.lastFailureCode,
+      });
 
       owner.activeDeliveries.delete(delivery.entryId);
       if (delivery.settled) {

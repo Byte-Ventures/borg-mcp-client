@@ -102,7 +102,9 @@ export async function connectOpenCodeDrone(deps) {
         processingDeliveries: false,
         nextObservationSequence: 0,
         lastObservation: {
-            sequence: 0,
+            injectionSequence: 0,
+            acceptedSequence: 0,
+            failureSequence: 0,
             lastInjectionAt: null,
             lastInjectionResult: null,
             lastAcceptedEntryId: null,
@@ -541,22 +543,42 @@ function openCodeFailureCode(error) {
     return error instanceof Error && error.name ? error.name : 'unknown';
 }
 function updateLastOpenCodeObservation(owner, sequence, update) {
-    if (sequence < owner.lastObservation.sequence)
-        return;
-    const { sequence: _currentSequence, ...current } = owner.lastObservation;
-    owner.lastObservation = { sequence, ...update(current) };
+    // Attempts, acceptances, and failures resolve independently; an observation
+    // may be stale for one field without being stale for the others.
+    const current = owner.lastObservation;
+    const updatesInjection = 'lastInjectionAt' in update || 'lastInjectionResult' in update;
+    const updatesAccepted = 'lastAcceptedEntryId' in update;
+    const updatesFailure = 'lastFailureCode' in update;
+    owner.lastObservation = {
+        ...current,
+        ...(updatesInjection && sequence >= current.injectionSequence
+            ? {
+                injectionSequence: sequence,
+                ...('lastInjectionAt' in update
+                    ? { lastInjectionAt: update.lastInjectionAt }
+                    : {}),
+                ...('lastInjectionResult' in update
+                    ? { lastInjectionResult: update.lastInjectionResult }
+                    : {}),
+            }
+            : {}),
+        ...(updatesAccepted && sequence >= current.acceptedSequence
+            ? { acceptedSequence: sequence, lastAcceptedEntryId: update.lastAcceptedEntryId }
+            : {}),
+        ...(updatesFailure && sequence >= current.failureSequence
+            ? { failureSequence: sequence, lastFailureCode: update.lastFailureCode }
+            : {}),
+    };
 }
 function recordOpenCodeFailure(owner, error, observationSequence) {
-    updateLastOpenCodeObservation(owner, observationSequence, (current) => ({
-        ...current,
+    updateLastOpenCodeObservation(owner, observationSequence, {
         lastFailureCode: openCodeFailureCode(error),
-    }));
+    });
 }
 function recordOpenCodeAcceptance(owner, delivery) {
-    updateLastOpenCodeObservation(owner, delivery.sequence, (current) => ({
-        ...current,
+    updateLastOpenCodeObservation(owner, delivery.sequence, {
         lastAcceptedEntryId: delivery.entryId,
-    }));
+    });
 }
 function clearPendingSubmission(owner, entryId) {
     if (!owner.pendingSubmissions.delete(entryId))
@@ -573,12 +595,11 @@ function confirmOpenCodeDelivery(owner, delivery) {
     clearPendingSubmission(owner, delivery.entryId);
     rememberBounded(owner.deliveredEntries, delivery.entryId, delivery.text, delivery.sourceEntryId);
     owner.totalEntriesInjected++;
-    updateLastOpenCodeObservation(owner, delivery.sequence, (current) => ({
-        ...current,
+    updateLastOpenCodeObservation(owner, delivery.sequence, {
         lastAcceptedEntryId: delivery.entryId,
         lastInjectionResult: 'delivered',
         lastFailureCode: null,
-    }));
+    });
 }
 function scheduleOpenCodeReconciliation(owner, delivery) {
     if (!delivery.sessionId || owner.reconcilingEntryIds.has(delivery.entryId))
@@ -775,12 +796,11 @@ async function processOpenCodeDeliveries(owner) {
     try {
         while (state === owner && owner.deliveryQueue.length > 0) {
             const delivery = owner.deliveryQueue.shift();
-            updateLastOpenCodeObservation(owner, delivery.sequence, (current) => ({
-                ...current,
+            updateLastOpenCodeObservation(owner, delivery.sequence, {
                 lastInjectionAt: Date.now(),
                 lastInjectionResult: null,
                 lastFailureCode: null,
-            }));
+            });
             let outcome = 'failed';
             try {
                 outcome = await deliverOpenCodeEntry(owner, delivery);
@@ -789,15 +809,14 @@ async function processOpenCodeDeliveries(owner) {
                 recordOpenCodeFailure(owner, err, delivery.sequence);
                 log(`entry ${delivery.entryId} delivery error: ${err}`, owner);
             }
-            updateLastOpenCodeObservation(owner, delivery.sequence, (current) => ({
-                ...current,
+            updateLastOpenCodeObservation(owner, delivery.sequence, {
                 lastInjectionResult: outcome,
                 lastFailureCode: outcome === 'delivered'
                     ? null
                     : outcome === 'failed'
-                        ? (current.lastFailureCode ?? 'unknown')
-                        : current.lastFailureCode,
-            }));
+                        ? (owner.lastObservation.lastFailureCode ?? 'unknown')
+                        : owner.lastObservation.lastFailureCode,
+            });
             owner.activeDeliveries.delete(delivery.entryId);
             if (delivery.settled) {
                 delivery.resolve(true);

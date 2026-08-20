@@ -334,9 +334,9 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState().lastFailureCode).toBe('transient');
   });
 
-  it('keeps a newer failure observation atomic when an older no-target delivery finishes late', async () => {
-    const launch = launchKickoff('late-no-target');
-    const root = session('late-no-target-root', 10);
+  it('retains a newer failure while an older delivery reports its terminal result and acceptance', async () => {
+    const launch = launchKickoff('independent-observation-domains');
+    const root = session('independent-observation-root', 10);
     let detailCalls = 0;
     let releaseOlder!: (response: Response) => void;
     const olderResponse = new Promise<Response>((resolve) => {
@@ -352,19 +352,18 @@ describe('OpenCode wake target binding', () => {
 
     await connect();
     await injectInitialKickoff(launch);
-    const olderDelivery = injectOpenCodeEntry('older no-target wake', 'older-no-target');
+    const olderDelivery = injectOpenCodeEntry('older accepted wake', 'older-accepted');
     await vi.waitFor(() => expect(detailCalls).toBe(1));
     await expect(probeOpenCodeDroneArmed()).resolves.toBe(false);
-    const newerObservation = __getOpenCodeLastObservationForTests();
-    expect(newerObservation.lastFailureCode).toBe('unauthorized');
+    releaseOlder(new Response(JSON.stringify(root), { status: 200 }));
+    await expect(olderDelivery).resolves.toBe(true);
 
-    releaseOlder(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }));
-    await expect(olderDelivery).resolves.toBe(false);
-
-    expect(__getOpenCodeLastObservationForTests()).toEqual(newerObservation);
+    const observation = __getOpenCodeLastObservationForTests();
+    expect(observation.failureSequence).toBeGreaterThan(observation.injectionSequence);
+    expect(observation.failureSequence).toBeGreaterThan(observation.acceptedSequence);
     expect(getOpenCodeConnectionState()).toMatchObject({
-      lastInjectionResult: null,
-      lastAcceptedEntryId: null,
+      lastInjectionResult: 'delivered',
+      lastAcceptedEntryId: 'older-accepted',
       lastFailureCode: 'unauthorized',
     });
   });

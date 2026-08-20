@@ -1,6 +1,8 @@
 import { type OpenCodeLaunchTrust } from './opencode-launch-trust.js';
 interface OpenCodeLastObservation {
-    sequence: number;
+    injectionSequence: number;
+    acceptedSequence: number;
+    failureSequence: number;
     lastInjectionAt: number | null;
     lastInjectionResult: OpenCodeInjectionResult | null;
     lastAcceptedEntryId: string | null;
