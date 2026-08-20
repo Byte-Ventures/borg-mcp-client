@@ -1,4 +1,13 @@
 import { type OpenCodeLaunchTrust } from './opencode-launch-trust.js';
+interface OpenCodeLastObservation {
+    injectionSequence: number;
+    acceptedSequence: number;
+    failureSequence: number;
+    lastInjectionAt: number | null;
+    lastInjectionResult: OpenCodeInjectionResult | null;
+    lastAcceptedEntryId: string | null;
+    lastFailureCode: string | null;
+}
 interface ConnectDeps {
     serverUrl: string;
     apiPassword: string;
@@ -7,6 +16,8 @@ interface ConnectDeps {
     cubeName: string;
 }
 export type OpenCodeDeliveryState = 'queued' | 'delivered-unconfirmed' | 'retried' | 'failed';
+type OpenCodeDeliveryOutcome = 'delivered' | 'delivered-unconfirmed' | 'failed';
+type OpenCodeInjectionResult = OpenCodeDeliveryOutcome;
 export interface OpenCodeLaunchKickoff {
     prompt: string;
     apiPassword: string;
@@ -44,9 +55,15 @@ export interface OpenCodeConnectionState {
     sessionId: string | null;
     totalEntriesInjected: number;
     totalEntriesRetried: number;
+    lastInjectionAt: number | null;
+    lastInjectionResult: OpenCodeInjectionResult | null;
+    lastAcceptedEntryId: string | null;
+    lastFailureCode: string | null;
     deliveryStates: Record<OpenCodeDeliveryState, number>;
 }
 export declare function getOpenCodeConnectionState(): OpenCodeConnectionState;
+export declare function __getOpenCodeDiagnosticLogPathForTests(): string;
+export declare function __getOpenCodeLastObservationForTests(): OpenCodeLastObservation;
 export declare function computeOpenCodePort(droneId: string, base?: number): number;
 export declare function configuredOpenCodePort(env?: NodeJS.ProcessEnv): number | null;
 export declare const OPEN_CODE_PORT_MISSING_DIAGNOSTIC = "OpenCode launch port is missing; skipping OpenCode entry injection. Relaunch through borg.";

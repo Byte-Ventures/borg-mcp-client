@@ -361,6 +361,36 @@ describe('renderStreamStatus — body shape (drone-4 diagnostic-completeness con
     expect(out).not.toContain('until the retry-drain lands');
     expect(out).toContain('until the wake is delivered or the unread log is drained');
   });
+
+  it('renders the OpenCode target and last delivery diagnostics', () => {
+    const out = renderStreamStatus({
+      status: freshStatus({ connected: true, lastWireActivityAt: '2026-05-11T12:00:00.000Z' }),
+      inboxMonitorHealthy: true,
+      wakePath: {
+        agentKind: 'opencode',
+        healthy: true,
+        openCode: {
+          connected: true,
+          sessionId: 'session-123',
+          totalEntriesInjected: 1,
+          totalEntriesRetried: 0,
+          lastInjectionAt: 1,
+          lastInjectionResult: 'delivered',
+          lastAcceptedEntryId: 'entry-123',
+          lastFailureCode: null,
+          deliveryStates: { queued: 0, 'delivered-unconfirmed': 0, retried: 0, failed: 0 },
+        },
+      },
+      droneLabel: 'd',
+      cubeName: 'c',
+      humanAgo: fakeHumanAgo,
+    });
+
+    expect(out).toContain('- **OpenCode target session**: session-123');
+    expect(out).toContain('- **OpenCode last injection**: delivered at 1970-01-01T00:00:00.001Z');
+    expect(out).toContain('- **OpenCode last accepted entry**: entry-123');
+    expect(out).toContain('- **OpenCode last failure code**: _(none)_');
+  });
 });
 
 describe('formatWakePathPrefix (gh#43 — regen self-heal)', () => {

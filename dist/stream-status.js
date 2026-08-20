@@ -211,8 +211,13 @@ export function renderStreamStatus(inputs) {
         lines.push('Continue as the owning drone, or close its duplicate agent session before relaunching from the intended worktree. The live owner releases this lock on exit; a stale lock is reclaimed automatically.');
     }
     if (wakePath.agentKind === 'opencode' && wakePath.openCode) {
-        const delivery = wakePath.openCode.deliveryStates;
-        lines.push(`- **OpenCode delivery connected**: ${wakePath.openCode.connected}`);
+        const openCode = wakePath.openCode;
+        const delivery = openCode.deliveryStates;
+        lines.push(`- **OpenCode delivery connected**: ${openCode.connected}`);
+        lines.push(`- **OpenCode target session**: ${openCode.sessionId ?? '_(none resolved yet)_'}`);
+        lines.push(`- **OpenCode last injection**: ${openCode.lastInjectionResult ?? '_(none yet)_'}${typeof openCode.lastInjectionAt === 'number' ? ` at ${new Date(openCode.lastInjectionAt).toISOString()}` : ''}`);
+        lines.push(`- **OpenCode last accepted entry**: ${openCode.lastAcceptedEntryId ?? '_(none)_'}`);
+        lines.push(`- **OpenCode last failure code**: ${openCode.lastFailureCode ?? '_(none)_'}`);
         lines.push(`- **OpenCode queued**: ${delivery.queued}`);
         lines.push(`- **OpenCode delivered-unconfirmed**: ${delivery['delivered-unconfirmed']}`);
         lines.push(`- **OpenCode retried**: ${delivery.retried}`);

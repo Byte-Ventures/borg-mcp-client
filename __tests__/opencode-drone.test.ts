@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
+import { mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
+  __getOpenCodeDiagnosticLogPathForTests,
+  __getOpenCodeLastObservationForTests,
   allocateOpenCodePort,
   configuredOpenCodePort,
   computeOpenCodePort,
@@ -11,10 +14,12 @@ import {
   getOpenCodeConnectionState,
   injectInitialKickoff,
   injectOpenCodeEntry,
+  probeOpenCodeDroneArmed,
   settleOpenCodeEntry,
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 import { streamOnce } from '../src/log-stream';
+import { OpenCodeAuthenticationError } from '../src/server-errors';
 import {
   OPENCODE_INJECTED_ENTRY_METADATA_KEY,
   OPENCODE_WAKE_IDENTITY_METADATA_KEY,
@@ -80,6 +85,8 @@ function installOpenCodeApi(options: {
     promptBodies: Array<Record<string, unknown>>;
     messages: unknown[];
   }) => Response | Promise<Response>;
+  sessionsResponse?: () => Response | Promise<Response>;
+  sessionResponse?: (sessionId: string, session: Session | undefined) => Response | Promise<Response>;
 }) {
   const prompts: string[] = [];
   const promptBodies: Array<Record<string, unknown>> = [];
@@ -91,6 +98,7 @@ function installOpenCodeApi(options: {
     const suffix = path.match(/^\/session\/[^/]+\/(.+)$/)?.[1];
 
     if (path === '/session') {
+      if (options.sessionsResponse) return options.sessionsResponse();
       return new Response(JSON.stringify(options.sessions()), { status: 200 });
     }
     if (id && suffix === 'message') {
@@ -131,6 +139,7 @@ function installOpenCodeApi(options: {
     if (id) {
       if (options.missing?.has(id)) return new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
       const found = options.sessions().find((item) => item.id === id);
+      if (options.sessionResponse) return options.sessionResponse(id, found);
       return found
         ? new Response(JSON.stringify(found), { status: 200 })
         : new Response(JSON.stringify({ error: 'not found' }), { status: 404 });
@@ -218,6 +227,16 @@ describe('OpenCode wake target binding', () => {
     })).toThrow('must be independent');
   });
 
+  it('uses a typed authentication error for an unverifiable API password', async () => {
+    await expect(connectOpenCodeDrone({
+      serverUrl: SERVER_URL,
+      apiPassword: 'short',
+      directory: DIRECTORY,
+      droneLabel: 'drone-7',
+      cubeName: 'borg-mcp',
+    })).rejects.toBeInstanceOf(OpenCodeAuthenticationError);
+  });
+
   it('authenticates every OpenCode API request with the per-launch password', async () => {
     const launch = launchKickoff('authenticated-launch');
     const root = session('authenticated-root', 10);
@@ -241,6 +260,294 @@ describe('OpenCode wake target binding', () => {
     expect(api.fetchMock).toHaveBeenCalled();
     for (const [, init] of api.fetchMock.mock.calls) {
       expect(new Headers(init?.headers).get('Authorization')).toBe(expected);
+    }
+  });
+
+  it.each([
+    [401, 'unauthorized'],
+    [404, 'not-found'],
+    [503, 'transient'],
+  ])('classifies an OpenCode session probe HTTP %i failure as %s', async (status, failureCode) => {
+    const launch = launchKickoff(`probe-${status}`);
+    const root = session(`probe-root-${status}`, 10);
+    let probeStatus = 200;
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      sessionResponse: (_id, found) => new Response(
+        probeStatus === 200 ? JSON.stringify(found) : JSON.stringify({ error: 'failed' }),
+        { status: probeStatus },
+      ),
+    });
+
+    await connect();
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    probeStatus = status;
+
+    await expect(probeOpenCodeDroneArmed()).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().lastFailureCode).toBe(failureCode);
+  });
+
+  it('classifies a timed-out OpenCode session probe separately from transport failures', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('probe-timeout');
+    const root = session('probe-timeout-root', 10);
+    let timeout = false;
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      sessionResponse: (_id, found) => timeout
+        ? new Promise<Response>((_resolve, reject) => {
+          const signal = vi.mocked(fetch).mock.calls.at(-1)?.[1]?.signal;
+          signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        })
+        : new Response(JSON.stringify(found), { status: 200 }),
+    });
+
+    await connect();
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    timeout = true;
+    const probe = probeOpenCodeDroneArmed();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(probe).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().lastFailureCode).toBe('timeout');
+  });
+
+  it('classifies an OpenCode transport failure separately from a timeout', async () => {
+    const launch = launchKickoff('probe-transport');
+    const root = session('probe-transport-root', 10);
+    let unavailable = false;
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      sessionResponse: (_id, found) => unavailable
+        ? Promise.reject(new Error('connection reset'))
+        : new Response(JSON.stringify(found), { status: 200 }),
+    });
+
+    await connect();
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    unavailable = true;
+
+    await expect(probeOpenCodeDroneArmed()).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().lastFailureCode).toBe('transient');
+  });
+
+  it('retains a newer failure while an older delivery reports its terminal result and acceptance', async () => {
+    const launch = launchKickoff('independent-observation-domains');
+    const root = session('independent-observation-root', 10);
+    let detailCalls = 0;
+    let releaseOlder!: (response: Response) => void;
+    const olderResponse = new Promise<Response>((resolve) => {
+      releaseOlder = resolve;
+    });
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      sessionResponse: () => ++detailCalls === 1
+        ? olderResponse
+        : new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 }),
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const olderDelivery = injectOpenCodeEntry('older accepted wake', 'older-accepted');
+    await vi.waitFor(() => expect(detailCalls).toBe(1));
+    await expect(probeOpenCodeDroneArmed()).resolves.toBe(false);
+    releaseOlder(new Response(JSON.stringify(root), { status: 200 }));
+    await expect(olderDelivery).resolves.toBe(true);
+
+    const observation = __getOpenCodeLastObservationForTests();
+    expect(observation.failureSequence).toBeGreaterThan(observation.injectionSequence);
+    expect(observation.failureSequence).toBeGreaterThan(observation.acceptedSequence);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      lastInjectionResult: 'delivered',
+      lastAcceptedEntryId: 'older-accepted',
+      lastFailureCode: 'unauthorized',
+    });
+  });
+
+  it('drops a superseded connection observation without freezing the replacement connection', async () => {
+    const firstLaunch = launchKickoff('superseded-owner-a');
+    const secondLaunch = launchKickoff('replacement-owner-b');
+    const firstRoot = session('superseded-root-a', 10);
+    const secondRoot = session('replacement-root-b', 20);
+    let rejectFirstRequest!: (error: Error) => void;
+    const firstRequest = new Promise<Response>((_resolve, reject) => {
+      rejectFirstRequest = reject;
+    });
+    let holdFirstRequest = false;
+    let firstRequestStarted = false;
+    installOpenCodeApi({
+      sessions: () => [firstRoot, secondRoot],
+      messages: {
+        [firstRoot.id]: kickoffMessages(firstLaunch),
+        [secondRoot.id]: kickoffMessages(secondLaunch),
+      },
+      sessionsResponse: () => {
+        if (holdFirstRequest) {
+          firstRequestStarted = true;
+          return firstRequest;
+        }
+        return new Response(JSON.stringify([firstRoot, secondRoot]), { status: 200 });
+      },
+    });
+
+    await connect('owner-a');
+    await injectInitialKickoff(firstLaunch);
+    holdFirstRequest = true;
+    const supersededDelivery = injectOpenCodeEntry('superseded wake', 'superseded-entry');
+    await vi.waitFor(() => expect(firstRequestStarted).toBe(true));
+
+    await connect('owner-b');
+    holdFirstRequest = false;
+    await injectInitialKickoff(secondLaunch);
+    const replacementBeforeOldFailure = __getOpenCodeLastObservationForTests();
+    rejectFirstRequest(new Error('old connection failed after replacement'));
+    await expect(supersededDelivery).resolves.toBe(false);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(__getOpenCodeLastObservationForTests()).toEqual(replacementBeforeOldFailure);
+    await expect(injectOpenCodeEntry('replacement wake', 'replacement-entry')).resolves.toBe(true);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      lastInjectionResult: 'delivered',
+      lastAcceptedEntryId: 'replacement-entry',
+      lastFailureCode: null,
+    });
+  });
+
+  it('rejects a syntactically valid but incompatible OpenCode session response', async () => {
+    const launch = launchKickoff('incompatible-session');
+    const root = session('incompatible-session-root', 10);
+    let incompatible = false;
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      sessionResponse: (_id, found) => new Response(
+        JSON.stringify(incompatible ? { id: root.id } : found),
+        { status: 200 },
+      ),
+    });
+
+    await connect();
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    incompatible = true;
+
+    await expect(probeOpenCodeDroneArmed()).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().lastFailureCode).toBe('incompatible-api');
+  });
+
+  it('classifies malformed OpenCode JSON as an incompatible API response', async () => {
+    const launch = launchKickoff('malformed-json');
+    const root = session('malformed-json-root', 10);
+    let malformed = false;
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      sessionResponse: (_id, found) => new Response(
+        malformed ? '{' : JSON.stringify(found),
+        { status: 200 },
+      ),
+    });
+
+    await connect();
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    malformed = true;
+
+    await expect(probeOpenCodeDroneArmed()).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().lastFailureCode).toBe('incompatible-api');
+  });
+
+  it.each([
+    ['session collection', { sessionsResponse: () => new Response('{}', { status: 200 }) }],
+    ['message collection', {
+      messageListResponse: () => new Response(JSON.stringify({ messages: [] }), { status: 200 }),
+    }],
+  ])('rejects an incompatible OpenCode %s response', async (_surface, responseOverrides) => {
+    vi.useFakeTimers();
+    const launch = launchKickoff(`incompatible-${_surface}`);
+    const root = session(`incompatible-${_surface}-root`, 10);
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      ...responseOverrides,
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(binding).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().lastFailureCode).toBe('incompatible-api');
+  });
+
+  it.each([
+    ['missing info', { parts: [] }],
+    ['missing parts', { info: { role: 'user' } }],
+  ])('rejects an OpenCode message envelope with %s', async (_case, invalidMessage) => {
+    vi.useFakeTimers();
+    const launch = launchKickoff(`invalid-message-${_case}`);
+    const root = session(`invalid-message-${_case}-root`, 10);
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      messageListResponse: () => new Response(JSON.stringify([invalidMessage]), { status: 200 }),
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(binding).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().lastFailureCode).toBe('incompatible-api');
+  });
+
+  it('reports the target, last attempt, accepted entry, and cleared failure after delivery', async () => {
+    const launch = launchKickoff('delivery-diagnostics');
+    const root = session('delivery-diagnostics-root', 10);
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+    });
+
+    await connect();
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    await expect(injectOpenCodeEntry('diagnostic wake', 'entry-diagnostic')).resolves.toBe(true);
+
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      sessionId: root.id,
+      lastInjectionResult: 'delivered',
+      lastAcceptedEntryId: 'entry-diagnostic',
+      lastFailureCode: null,
+    });
+    expect(getOpenCodeConnectionState().lastInjectionAt).toEqual(expect.any(Number));
+  });
+
+  it('uses separate bounded 0600 diagnostic logs for separate drones', async () => {
+    await connect('diagnostic-drone-a');
+    const firstPath = __getOpenCodeDiagnosticLogPathForTests();
+    expect(statSync(firstPath).mode & 0o777).toBe(0o600);
+    for (let i = 0; i < 1_000; i++) await connect('diagnostic-drone-a');
+    expect(statSync(firstPath).size).toBeLessThanOrEqual(64 * 1024);
+
+    await connect('diagnostic-drone-b');
+    expect(__getOpenCodeDiagnosticLogPathForTests()).not.toBe(firstPath);
+  });
+
+  it('reports diagnostic log write failures instead of swallowing them', async () => {
+    await connect('diagnostic-write-failure');
+    const path = __getOpenCodeDiagnosticLogPathForTests();
+    unlinkSync(path);
+    mkdirSync(path);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      await connect('diagnostic-write-failure');
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('OpenCode diagnostic log write failed'));
+    } finally {
+      stderr.mockRestore();
+      rmSync(path, { recursive: true, force: true });
     }
   });
 
@@ -1006,10 +1313,33 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState()).toMatchObject({
       sessionId: root.id,
       totalEntriesRetried: 0,
+      lastInjectionResult: 'failed',
+      lastAcceptedEntryId: null,
+      lastFailureCode: 'transient',
       deliveryStates: {
         'delivered-unconfirmed': 0,
         failed: 1,
       },
+    });
+  });
+
+  it('reports an unauthorized prompt rejection with no accepted entry', async () => {
+    const launch = launchKickoff('unauthorized-prompt');
+    const root = session('unauthorized-prompt-root', 10);
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      promptStatus: { [root.id]: 401 },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    await expect(injectOpenCodeEntry('unauthorized wake', 'unauthorized-entry')).resolves.toBe(false);
+
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      lastInjectionResult: 'failed',
+      lastAcceptedEntryId: null,
+      lastFailureCode: 'unauthorized',
     });
   });
 
@@ -1070,7 +1400,7 @@ describe('OpenCode wake target binding', () => {
         promptBodies.push(body);
         storedParts.push(...(Array.isArray(body.parts) ? body.parts : []));
         if (!Number.isFinite(visibleAt)) visibleAt = Date.now() + 6_000;
-        return new Response(null, { status: 204 });
+        throw new Error('connection reset after OpenCode accepted the prompt');
       }
       throw new Error(`Unhandled OpenCode API request: ${init?.method ?? 'GET'} ${path}`);
     });
@@ -1090,10 +1420,18 @@ describe('OpenCode wake target binding', () => {
       'delivered-unconfirmed': 1,
       failed: 0,
     });
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      lastInjectionResult: 'delivered-unconfirmed',
+      lastAcceptedEntryId: null,
+      lastFailureCode: 'transient',
+    });
 
     await vi.advanceTimersByTimeAsync(3_000);
     await vi.waitFor(() => expect(getOpenCodeConnectionState()).toMatchObject({
       totalEntriesInjected: 1,
+      lastInjectionResult: 'delivered',
+      lastAcceptedEntryId: 'entry-post-acceptance-loss',
+      lastFailureCode: null,
       deliveryStates: {
         queued: 0,
         'delivered-unconfirmed': 0,
@@ -1112,5 +1450,75 @@ describe('OpenCode wake target binding', () => {
       OPENCODE_WAKE_IDENTITY_METADATA_KEY
     ]).toBe('entry-post-acceptance-loss');
     expect(messageListCount).toBeGreaterThanOrEqual(4);
+  });
+
+  it('keeps every last-delivery field on the newer observation when an older reconciliation finishes late', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('out-of-order-reconciliation');
+    const root = session('out-of-order-root', 10);
+    let olderReconciliationFailed = false;
+    const injectedMessage = (body: Record<string, unknown>, id: string) => ({
+      info: { id: `message-${id}`, role: 'user' },
+      parts: body.parts,
+    });
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+      promptResponse: ({ attempt }) => {
+        if (attempt === 1) return Promise.reject(new Error('connection reset after acceptance'));
+        return new Response(attempt === 3 ? '' : null, { status: attempt === 3 ? 401 : 204 });
+      },
+      messageListResponse: ({ promptBodies, messages }) => {
+        if (promptBodies.length < 2) {
+          return new Response(JSON.stringify(messages), { status: 200 });
+        }
+        const newer = injectedMessage(promptBodies[1], 'newer');
+        if (promptBodies.length === 2) {
+          return new Response(JSON.stringify([...messages, newer]), { status: 200 });
+        }
+        if (!olderReconciliationFailed) {
+          olderReconciliationFailed = true;
+          return new Response('temporarily unavailable', { status: 503 });
+        }
+        return new Response(JSON.stringify([
+          ...messages,
+          newer,
+          injectedMessage(promptBodies[0], 'older'),
+        ]), { status: 200 });
+      },
+    });
+
+    await connect();
+    await injectInitialKickoff(launch);
+    const older = injectOpenCodeEntry('older wake', 'older-entry');
+    await vi.advanceTimersByTimeAsync(4_250);
+    await expect(older).resolves.toBe(true);
+    await expect(injectOpenCodeEntry('newer wake', 'newer-entry')).resolves.toBe(true);
+    await expect(injectOpenCodeEntry('newest rejected wake', 'newest-entry')).resolves.toBe(false);
+
+    const newerState = getOpenCodeConnectionState();
+    expect(newerState).toMatchObject({
+      lastInjectionResult: 'failed',
+      lastAcceptedEntryId: 'newer-entry',
+      lastFailureCode: 'unauthorized',
+    });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      lastInjectionAt: newerState.lastInjectionAt,
+      lastInjectionResult: 'failed',
+      lastAcceptedEntryId: 'newer-entry',
+      lastFailureCode: 'unauthorized',
+    });
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      lastInjectionAt: newerState.lastInjectionAt,
+      lastInjectionResult: 'failed',
+      lastAcceptedEntryId: 'newer-entry',
+      lastFailureCode: 'unauthorized',
+      deliveryStates: { 'delivered-unconfirmed': 0 },
+    });
+    expect(api.promptBodies).toHaveLength(3);
   });
 });

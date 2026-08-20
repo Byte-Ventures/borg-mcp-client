@@ -110,6 +110,56 @@ export class BorgServerUnreachableError extends Error {
   }
 }
 
+export type OpenCodeFailureCode =
+  | 'unauthorized'
+  | 'not-found'
+  | 'incompatible-api'
+  | 'timeout'
+  | 'transient';
+
+export class OpenCodeAuthenticationError extends Error {
+  readonly code = 'unauthorized' as const;
+
+  constructor(message = 'OpenCode API authentication is unavailable') {
+    super(message);
+    this.name = 'OpenCodeAuthenticationError';
+  }
+}
+
+export class OpenCodeHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: OpenCodeFailureCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'OpenCodeHttpError';
+  }
+}
+
+export class OpenCodeResponseError extends Error {
+  readonly code = 'incompatible-api' as const;
+
+  constructor(
+    message = 'OpenCode returned an incompatible API response',
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'OpenCodeResponseError';
+  }
+}
+
+export class OpenCodeUnreachableError extends Error {
+  constructor(
+    public readonly code: 'timeout' | 'transient',
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'OpenCodeUnreachableError';
+  }
+}
+
 export class CubeCreationOutcomeUnknownError extends Error {
   constructor() {
     super('Cube creation outcome is unknown.');
