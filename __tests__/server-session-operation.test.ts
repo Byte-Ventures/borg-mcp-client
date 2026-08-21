@@ -7,7 +7,7 @@
  * (origin, trust, cube, role) via the operation dimension — a distinct seat ref.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -39,12 +39,20 @@ const siblingOperation = { projectRoot: '/work/repo', kind: 'sibling' as const, 
 const digestOf = (s: string) => createHash('sha256').update(s).digest('hex');
 type Seats = typeof import('../src/seats.js');
 
-function activate(seats: Seats, op: typeof seatOperation | typeof siblingOperation, bearer: string, drone: string, worktree: string) {
+function activate(
+  seats: Seats,
+  op: typeof seatOperation | typeof siblingOperation,
+  bearer: string,
+  drone: string,
+  worktree: string,
+  commonDir?: string,
+  targetCubeId = cubeId,
+) {
   return seats.activateAndBindSeat({
-    origin, trustIdentity, cubeId, roleId, operation: op,
+    origin, trustIdentity, cubeId: targetCubeId, roleId, operation: op,
     droneId: drone, sessionId: '44444444-4444-4444-8444-444444444444',
     expiresAt: '2026-07-15T20:30:00.000Z',
-    expectedPendingDigest: digestOf(bearer), worktree, name: 'cube', droneLabel: 'd',
+    expectedPendingDigest: digestOf(bearer), worktree, commonDir, name: 'cube', droneLabel: 'd',
   });
 }
 
@@ -66,6 +74,59 @@ describe('seat operation-dimension namespacing', () => {
     // Each opaque reference resolves ONLY its own bearer.
     await expect(seats.getActiveSeatCredential(seatRefV, binding)).resolves.toBe(seat.credential);
     await expect(seats.getActiveSeatCredential(siblingRefV, binding)).resolves.toBe(sibling.credential);
+  });
+
+  it('detects active seats in one cube from different clone families', async () => {
+    const { seats } = await load();
+    const seat = await seats.mintPendingSeat({ origin, trustIdentity, cubeId, roleId, operation: seatOperation, credential: 'seat-bearer-'.padEnd(43, 'a') });
+    const sibling = await seats.mintPendingSeat({ origin, trustIdentity, cubeId, roleId, operation: siblingOperation, credential: 'sib-bearer-'.padEnd(43, 'b') });
+
+    await activate(seats, seatOperation, seat.credential, '33333333-3333-4333-8333-333333333333', '/clone-a/repo', '/clone-a/repo/.git');
+    await activate(seats, siblingOperation, sibling.credential, '55555555-5555-4555-8555-555555555555', '/clone-b/repo', '/clone-b/repo/.git');
+
+    await expect(seats.hasActiveSeatInDifferentCloneFamily(cubeId, '/clone-b/repo/.git')).resolves.toBe(true);
+  });
+
+  it('does not report active seats in one clone family as different', async () => {
+    const { seats } = await load();
+    const seat = await seats.mintPendingSeat({ origin, trustIdentity, cubeId, roleId, operation: seatOperation, credential: 'seat-bearer-'.padEnd(43, 'a') });
+    const sibling = await seats.mintPendingSeat({ origin, trustIdentity, cubeId, roleId, operation: siblingOperation, credential: 'sib-bearer-'.padEnd(43, 'b') });
+
+    await activate(seats, seatOperation, seat.credential, '33333333-3333-4333-8333-333333333333', '/clone/repo', '/clone/repo/.git');
+    await activate(seats, siblingOperation, sibling.credential, '55555555-5555-4555-8555-555555555555', '/clone/repo-sibling', '/clone/repo/.git');
+
+    await expect(seats.hasActiveSeatInDifferentCloneFamily(cubeId, '/clone/repo/.git')).resolves.toBe(false);
+  });
+
+  it('ignores a different clone family belonging to another cube', async () => {
+    const { seats } = await load();
+    const otherCubeId = '66666666-6666-4666-8666-666666666666';
+    const seat = await seats.mintPendingSeat({ origin, trustIdentity, cubeId, roleId, operation: seatOperation, credential: 'seat-bearer-'.padEnd(43, 'a') });
+    const otherCubeSeat = await seats.mintPendingSeat({ origin, trustIdentity, cubeId: otherCubeId, roleId, operation: seatOperation, credential: 'other-bearer-'.padEnd(43, 'c') });
+
+    await activate(seats, seatOperation, seat.credential, '33333333-3333-4333-8333-333333333333', '/clone/repo', '/clone/repo/.git');
+    await activate(seats, seatOperation, otherCubeSeat.credential, '77777777-7777-4777-8777-777777777777', '/other-clone/repo', '/other-clone/repo/.git', otherCubeId);
+
+    await expect(seats.hasActiveSeatInDifferentCloneFamily(cubeId, '/clone/repo/.git')).resolves.toBe(false);
+  });
+
+  it('ignores a bound pending sibling from a different clone family', async () => {
+    const { dir, seats } = await load();
+    const seat = await seats.mintPendingSeat({ origin, trustIdentity, cubeId, roleId, operation: seatOperation, credential: 'seat-bearer-'.padEnd(43, 'a') });
+    const sibling = await seats.mintPendingSeat({ origin, trustIdentity, cubeId, roleId, operation: siblingOperation, credential: 'sib-bearer-'.padEnd(43, 'b') });
+
+    await activate(seats, seatOperation, seat.credential, '33333333-3333-4333-8333-333333333333', '/clone/repo', '/clone/repo/.git');
+    await seats.bindPendingSeatToWorktree({
+      origin, trustIdentity, cubeId, roleId, operation: siblingOperation,
+      expectedPendingDigest: digestOf(sibling.credential),
+      worktree: '/other-clone/repo', name: 'cube', droneLabel: 'pending',
+    });
+    const storePath = join(dir, '.config', 'borgmcp', 'seats.json');
+    const store = JSON.parse(readFileSync(storePath, 'utf8')) as { seats: Record<string, { commonDir?: string }> };
+    store.seats[seats.seatRef({ origin, trustIdentity, cubeId, roleId, operation: siblingOperation })].commonDir = '/other-clone/repo/.git';
+    writeFileSync(storePath, JSON.stringify(store, null, 2));
+
+    await expect(seats.hasActiveSeatInDifferentCloneFamily(cubeId, '/clone/repo/.git')).resolves.toBe(false);
   });
 
   it('re-returns the exact same pending bearer for the same seat operation (retry-safe)', async () => {

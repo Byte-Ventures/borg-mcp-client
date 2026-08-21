@@ -1341,6 +1341,7 @@ export async function runAssimilate(args, deps, options = {}) {
         try {
             outcome = await deps.finalizeServerSeat({
                 active: activeCube,
+                commonDir: repositoryContext.commonDir,
                 expected: sessionExpected,
                 activate: result.finalize.activate,
                 scrubPending: result.finalize.scrubPending,
@@ -1425,6 +1426,17 @@ export async function runAssimilate(args, deps, options = {}) {
                 `Re-run ${localAssimilateCommand(auth.apiUrl)} to attach against the current state.\n`);
             rollbackWorktree();
             return 1;
+        }
+    }
+    if (repositoryContext.publicRepository && deps.hasActiveSeatInDifferentCloneFamily) {
+        try {
+            if (await deps.hasActiveSeatInDifferentCloneFamily(result.cube_id, repositoryContext.commonDir)) {
+                deps.stderr('warning: this cube already has a seat from a different clone family. ' +
+                    'All seats for a repository use worktrees from the same clone family, sharing its object database and refs.\n');
+            }
+        }
+        catch {
+            // This comparison is advisory and must never block assimilation.
         }
     }
     // gh#793: best-effort GC of orphaned inbox files (evicted/dead drones) in the
