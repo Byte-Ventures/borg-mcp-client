@@ -636,6 +636,24 @@ describe('OpenCode wake target binding', () => {
     }
   });
 
+  it('re-verifies a prepared private root before the next write', () => {
+    writeOpenCodeStartupDiagnostic('prepare private root');
+    chmodSync(borgConfigRoot(), 0o777);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let refusal: unknown;
+
+    try {
+      writeOpenCodeStartupDiagnostic('must refuse changed root');
+    } catch (error) {
+      refusal = error;
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect(refusal).toBeInstanceOf(Error);
+    expect(statSync(borgConfigRoot()).mode & 0o777).toBe(0o777);
+  });
+
   it('binds only one exact hidden correlation match and rejects duplicates', async () => {
     vi.useFakeTimers();
     const launch = launchKickoff('exact-hidden-match');
