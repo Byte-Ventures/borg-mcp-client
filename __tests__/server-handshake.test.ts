@@ -60,6 +60,8 @@ const digestOf = (bearer: string) => createHash('sha256').update(bearer).digest(
 // The worktree binding + display supplied at FINALIZE (activate+bind).
 const BINDING: SeatBinding = {
   worktree: '/work/project-one',
+  commonDir: '/work/project-one/.git',
+  repositoryOrigin: 'https://github.com/Byte-Ventures/borg-mcp-client',
   name: 'local-cube',
   droneLabel: 'builder-1',
   roleName: 'Builder',
@@ -1050,6 +1052,10 @@ describe('self-hosted server handshake', () => {
     });
     // activate(binding) (the FINALIZE merged activate+bind) returns the typed outcome.
     await expect(prepared.activate(BINDING)).resolves.toBe('activated');
+    expect(activateAndBind).toHaveBeenCalledWith(expect.objectContaining({
+      commonDir: BINDING.commonDir,
+      repositoryOrigin: BINDING.repositoryOrigin,
+    }));
 
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://server.example.com/api/client/attach');

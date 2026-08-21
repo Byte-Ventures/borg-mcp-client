@@ -101,22 +101,45 @@ describe('seats store — one atomic unit (ACTIVE-without-binding unreachable)',
     expect(live).toMatchObject({ state: 'active', worktree: '/work/repo', droneId: STAMP.droneId, name: 'local-cube' });
   });
 
-  it('loads a 4.5.0 seat record carrying the retired commonDir field', async () => {
-    const { dir, seats } = await load();
-    const bearer = 'legacy-common-dir-'.padEnd(43, 'z');
+  it('loads a 4.5.1 seat record without clone metadata and never matches it', async () => {
+    const { seats } = await load();
+    const bearer = 'legacy-no-clone-metadata-'.padEnd(43, 'z');
     await seats.mintPendingSeat({ ...SEAT, credential: bearer });
     expect(await activateOk(seats, bearer)).toBe('activated');
-
-    const path = storeJson(dir);
-    const stored = JSON.parse(readOrEmpty(path)) as { seats: Record<string, Record<string, unknown>> };
-    Object.values(stored.seats)[0].commonDir = '/work/repo/.git';
-    writeFileSync(path, `${JSON.stringify(stored, null, 2)}\n`);
 
     await expect(seats.getActiveSeatForWorktree('/work/repo')).resolves.toMatchObject({
       state: 'active',
       worktree: '/work/repo',
       droneId: STAMP.droneId,
     });
+    await expect(seats.hasActiveSeatInDifferentCloneFamily(
+      SEAT.cubeId,
+      'https://github.com/org/repo',
+      '/work/repo/.git',
+    )).resolves.toBe(false);
+  });
+
+  it('C5: ignores a matching repository record whose common directory is absent', async () => {
+    const { seats } = await load();
+    const bearer = 'partial-clone-metadata-'.padEnd(43, 'z');
+    const repositoryOrigin = 'https://github.com/org/repo';
+    await seats.mintPendingSeat({ ...SEAT, credential: bearer });
+    expect(await seats.activateAndBindSeat({
+      ...SEAT,
+      ...STAMP,
+      expectedPendingDigest: digestOf(bearer),
+      worktree: '/work/repo',
+      repositoryOrigin,
+      name: 'local-cube',
+      droneLabel: 'builder-1',
+      roleName: 'Drone',
+    })).toBe('activated');
+
+    await expect(seats.hasActiveSeatInDifferentCloneFamily(
+      SEAT.cubeId,
+      repositoryOrigin,
+      '/work/repo/.git',
+    )).resolves.toBe(false);
   });
 
   it('the store file is 0600', async () => {

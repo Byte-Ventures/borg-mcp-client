@@ -106,6 +106,10 @@ function isValidSeatRecord(ref, value) {
         return false;
     if (r.worktree !== undefined && typeof r.worktree !== 'string')
         return false;
+    if (r.commonDir !== undefined && !isNonEmptyString(r.commonDir))
+        return false;
+    if (r.repositoryOrigin !== undefined && !isNonEmptyString(r.repositoryOrigin))
+        return false;
     if (r.droneId !== undefined && (typeof r.droneId !== 'string' || !UUID_RE.test(r.droneId)))
         return false;
     if (r.sessionId !== undefined && (typeof r.sessionId !== 'string' || !UUID_RE.test(r.sessionId)))
@@ -359,6 +363,8 @@ export async function activateAndBindSeat(input) {
             droneId: input.droneId,
             sessionId: input.sessionId,
             worktree: input.worktree,
+            ...(input.commonDir !== undefined ? { commonDir: input.commonDir } : {}),
+            ...(input.repositoryOrigin !== undefined ? { repositoryOrigin: input.repositoryOrigin } : {}),
             name: input.name,
             droneLabel: input.droneLabel,
             ...(input.roleName !== undefined ? { roleName: input.roleName } : {}),
@@ -506,6 +512,16 @@ export async function readAllActiveSeats() {
         }
     }
     return out;
+}
+/** Whether this cube has an active seat on the SAME repository from a different
+ *  clone family. Repositories without a remote have no identity shared across
+ *  clones, so their separate clones are undetectable here — see client#264. */
+export async function hasActiveSeatInDifferentCloneFamily(cubeId, repositoryOrigin, commonDir) {
+    const seats = await readAllActiveSeats();
+    return seats.some(({ record }) => record.cubeId === cubeId &&
+        record.repositoryOrigin === repositoryOrigin &&
+        record.commonDir !== undefined &&
+        record.commonDir !== commonDir);
 }
 /** All valid worktree-bound registry entries, including a PENDING seat whose
  * interrupted finalize preserved its worktree for a later resume. Read-only:
