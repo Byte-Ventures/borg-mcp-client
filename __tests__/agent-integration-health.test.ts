@@ -287,6 +287,7 @@ describe('agent integration health', () => {
     const stdout: string[] = [];
     expect(runDoctor({
       expectedVersion: '3.3.0', path: f.bin, homeDir: join(f.root, 'home'),
+      openCodeStartupLogPath: join(f.root, 'absent-startup.log'),
       stdout: (text) => stdout.push(text),
     })).toBe(1);
     expect(stdout.join('')).toContain('borg-inbox-monitor: missing');

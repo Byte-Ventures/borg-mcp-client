@@ -3,21 +3,27 @@ import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { borgConfigRoot, ensurePrivateBorgConfigRoot } from './private-root.js';
 import { OPENCODE_INJECTED_ENTRY_METADATA_KEY, OPENCODE_WAKE_IDENTITY_METADATA_KEY, OPENCODE_LAUNCH_CORRELATION_METADATA_KEY, } from './opencode-plugin.js';
 import { createOpenCodeLaunchTrust, isOpenCode256BitIdentity, OPENCODE_SERVER_USERNAME, } from './opencode-launch-trust.js';
 import { OpenCodeAuthenticationError, OpenCodeHttpError, OpenCodeResponseError, OpenCodeUnreachableError, } from './server-errors.js';
 const OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES = 64 * 1024;
 const diagnosticLogPathsForTests = new Set();
+let preparedDiagnosticRoot = null;
 function stateIdentityDigest(current) {
     const key = [current.serverUrl, current.directory, current.cubeName, current.droneLabel].join('\0');
     return createHash('sha256').update(key).digest('hex').slice(0, 24);
 }
 export function openCodeStartupDiagnosticLogPath() {
-    return join(tmpdir(), 'borg-opencode-drone-startup.log');
+    return join(borgConfigRoot(), 'opencode-drone-startup.log');
 }
 function diagnosticLogPath(owner) {
+    const root = borgConfigRoot();
+    if (preparedDiagnosticRoot !== root) {
+        throw Object.assign(new Error('OpenCode diagnostic root is not prepared'), { code: 'EPERM' });
+    }
     const path = owner
-        ? join(tmpdir(), `borg-opencode-drone-${stateIdentityDigest(owner)}.log`)
+        ? join(root, `opencode-drone-${stateIdentityDigest(owner)}.log`)
         : openCodeStartupDiagnosticLogPath();
     diagnosticLogPathsForTests.add(path);
     return path;
@@ -31,9 +37,7 @@ function log(msg, owner = state) {
         const path = diagnosticLogPath(owner);
         descriptor = openSync(path, constants.O_RDWR |
             constants.O_APPEND |
-            constants.O_CREAT |
-            constants.O_NOFOLLOW |
-            constants.O_NONBLOCK, 0o600);
+            constants.O_CREAT, 0o600);
         if (!fstatSync(descriptor).isFile()) {
             throw Object.assign(new Error('OpenCode diagnostic log is not a regular file'), { code: 'EINVAL' });
         }
@@ -54,7 +58,7 @@ function log(msg, owner = state) {
         const firstNewline = completeTail.indexOf(0x0a);
         const bounded = firstNewline >= 0 ? completeTail.subarray(firstNewline + 1) : completeTail;
         temporary = `${path}.${randomUUID()}.tmp`;
-        temporaryDescriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+        temporaryDescriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
         if (!fstatSync(temporaryDescriptor).isFile()) {
             throw Object.assign(new Error('OpenCode diagnostic temporary is not a regular file'), { code: 'EINVAL' });
         }
@@ -100,7 +104,12 @@ function log(msg, owner = state) {
         }
     }
 }
-export function writeOpenCodeStartupDiagnostic(message) {
+export async function writeOpenCodeStartupDiagnostic(message) {
+    const root = borgConfigRoot();
+    if (preparedDiagnosticRoot !== root) {
+        await ensurePrivateBorgConfigRoot(root);
+        preparedDiagnosticRoot = root;
+    }
     log(message, null);
 }
 let state = null;
@@ -137,6 +146,11 @@ function abandonOpenCodeDeliveries(current) {
 export async function connectOpenCodeDrone(deps) {
     if (!isOpenCode256BitIdentity(deps.apiPassword)) {
         throw new OpenCodeAuthenticationError('OpenCode API password is missing or unverifiable');
+    }
+    const root = borgConfigRoot();
+    if (preparedDiagnosticRoot !== root) {
+        await ensurePrivateBorgConfigRoot(root);
+        preparedDiagnosticRoot = root;
     }
     abandonOpenCodeDeliveries(state);
     state = {
@@ -1237,5 +1251,6 @@ export function __resetOpenCodeDroneForTests() {
         }
     }
     diagnosticLogPathsForTests.clear();
+    preparedDiagnosticRoot = null;
 }
 //# sourceMappingURL=opencode-drone.js.map
