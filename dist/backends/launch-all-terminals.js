@@ -73,17 +73,20 @@ async function launchLinux(candidates, opts, deps) {
     }
 }
 /**
- * Control char (incl. newline) in a worktree path. SR f94bb3fe + Coordinator
+ * Control char (incl. newline) in a worktree path. A path cannot be escaped
+ * without changing the launch target, so it remains a fail-loud rejection.
+ * Server-derived title fields are escaped separately by composeTerminalTitle.
+ * SR f94bb3fe + Coordinator
  * c6370c41 fold-in: a newline in the path breaks the macOS osascript AppleScript
  * string literal (parse error). Reject such paths up front (the user's own path;
  * pathological) — fail-loud + skip, never silently mangle. Applies to both
  * platforms defensively (the tmux primary handles control chars fine via
  * shellEscape + array-args, so this guard is terminals-backend-specific).
  */
-const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+const WORKTREE_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
 export async function runTerminalsBackend(candidates, opts, deps) {
     const safe = candidates.filter((c) => {
-        if (CONTROL_CHAR_RE.test(c.worktreeDir)) {
+        if (WORKTREE_CONTROL_CHAR_RE.test(c.worktreeDir)) {
             deps.stderr(`skipping ${c.droneLabel} (${JSON.stringify(c.worktreeDir)}): worktree path contains a control ` +
                 `character — unsafe for --mode terminals; use --mode tmux instead.\n`);
             return false;
