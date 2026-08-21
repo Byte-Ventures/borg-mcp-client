@@ -213,7 +213,6 @@ export async function sendBorgServerAttach(origin, trustIdentity, parentCredenti
                 sessionId: decoded.session.id,
                 expectedPendingDigest: pendingBearerDigest,
                 worktree: binding.worktree,
-                ...(binding.commonDir !== undefined ? { commonDir: binding.commonDir } : {}),
                 name: binding.name,
                 droneLabel: binding.droneLabel,
                 ...(binding.roleName !== undefined ? { roleName: binding.roleName } : {}),

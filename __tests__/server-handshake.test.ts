@@ -60,7 +60,6 @@ const digestOf = (bearer: string) => createHash('sha256').update(bearer).digest(
 // The worktree binding + display supplied at FINALIZE (activate+bind).
 const BINDING: SeatBinding = {
   worktree: '/work/project-one',
-  commonDir: '/work/project-one/.git',
   name: 'local-cube',
   droneLabel: 'builder-1',
   roleName: 'Builder',
@@ -1088,7 +1087,6 @@ describe('self-hosted server handshake', () => {
       expectedPendingDigest: digestOf(bearer),
       // The worktree binding + display land atomically WITH activation.
       worktree: BINDING.worktree,
-      commonDir: BINDING.commonDir,
       name: BINDING.name,
       droneLabel: BINDING.droneLabel,
     }));
