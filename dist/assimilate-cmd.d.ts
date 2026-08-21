@@ -153,10 +153,13 @@ export interface AssimilateDeps {
      *  production; absent from unit stubs that fully mock `assimilate`. */
     finalizeServerSeat?: (input: {
         active: ActiveCube;
+        commonDir: string;
         expected: ExpectedBinding;
         activate: (binding: SeatBinding) => Promise<unknown>;
         scrubPending: () => Promise<unknown>;
     }) => Promise<FinalizeServerSeatOutcome>;
+    /** Advisory clone-family comparison for public repositories. */
+    hasActiveSeatInDifferentCloneFamily?: (cubeId: string, commonDir: string) => Promise<boolean>;
     findProjectRoot: (cwd: string) => string;
     resolveRepositoryContext: (cwd: string) => Promise<GitRepositoryContext | null>;
     getRepositoryIdentity: (context: GitRepositoryContext) => Promise<CreateCubeRepository>;

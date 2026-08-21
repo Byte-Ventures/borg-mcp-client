@@ -299,10 +299,13 @@ export interface AssimilateDeps {
    *  production; absent from unit stubs that fully mock `assimilate`. */
   finalizeServerSeat?: (input: {
     active: ActiveCube;
+    commonDir: string;
     expected: ExpectedBinding;
     activate: (binding: SeatBinding) => Promise<unknown>;
     scrubPending: () => Promise<unknown>;
   }) => Promise<FinalizeServerSeatOutcome>;
+  /** Advisory clone-family comparison for public repositories. */
+  hasActiveSeatInDifferentCloneFamily?: (cubeId: string, commonDir: string) => Promise<boolean>;
   findProjectRoot: (cwd: string) => string;
   resolveRepositoryContext: (cwd: string) => Promise<GitRepositoryContext | null>;
   getRepositoryIdentity: (context: GitRepositoryContext) => Promise<CreateCubeRepository>;
@@ -1938,6 +1941,7 @@ export async function runAssimilate(
     try {
       outcome = await deps.finalizeServerSeat({
         active: activeCube,
+        commonDir: repositoryContext.commonDir,
         expected: sessionExpected,
         activate: result.finalize.activate,
         scrubPending: result.finalize.scrubPending,
@@ -2027,6 +2031,19 @@ export async function runAssimilate(
       );
       rollbackWorktree();
       return 1;
+    }
+  }
+
+  if (repositoryContext.publicRepository && deps.hasActiveSeatInDifferentCloneFamily) {
+    try {
+      if (await deps.hasActiveSeatInDifferentCloneFamily(result.cube_id, repositoryContext.commonDir)) {
+        deps.stderr(
+          'warning: this cube already has a seat from a different clone family. ' +
+          'All seats for a repository use worktrees from the same clone family, sharing its object database and refs.\n',
+        );
+      }
+    } catch {
+      // This comparison is advisory and must never block assimilation.
     }
   }
 

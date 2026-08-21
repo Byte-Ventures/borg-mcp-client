@@ -43,6 +43,7 @@ import {
 import { advanceLocalServerCursor } from './local-server-cursor.js';
 import {
   findIncompleteSiblingAttempt,
+  hasActiveSeatInDifferentCloneFamily,
   observeSeat,
   prepareSeat,
   seatRef,
@@ -214,9 +215,10 @@ export function buildDefaultAssimilateDeps(
     // missing/replaced/throw → the pending record is the rerunnable locator; the
     // caller PRESERVES the worktree). expectation-mismatch is produced upstream at
     // PREPARE (result.prepareAborted), never here.
-    finalizeServerSeat: async ({ active, activate }) => {
+    finalizeServerSeat: async ({ active, commonDir, activate }) => {
       const binding = {
         worktree: cubesFindProjectRoot(process.cwd()),
+        commonDir,
         name: active.name,
         droneLabel: active.droneLabel,
         ...(active.roleName !== undefined ? { roleName: active.roleName } : {}),
@@ -233,6 +235,7 @@ export function buildDefaultAssimilateDeps(
         ? { committed: true }
         : { committed: false, reason: 'activation-failed' };
     },
+    hasActiveSeatInDifferentCloneFamily,
     findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
     resolveRepositoryContext: resolveGitRepositoryContext,
     getRepositoryIdentity: getOrCreateRepositoryIdentity,

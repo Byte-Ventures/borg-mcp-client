@@ -21,7 +21,7 @@ import { buildDefaultFirstRunServerInstallDeps, offerFirstRunServerInstall, } fr
 import { listCubes as remoteListCubes, getCube as remoteGetCube, } from './remote-client.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN, associateLocalBorgServerRepositoryCube, connectLocalBorgServer, createLocalBorgServerCube, enrollLocalBorgServer, enrollLocalBorgServerArtifact, probeLocalBorgServer, resolveLocalBorgServerRepositoryCube, resumeLocalBorgServerEnrollment, sendBorgServerAttach, } from './server-handshake.js';
 import { advanceLocalServerCursor } from './local-server-cursor.js';
-import { findIncompleteSiblingAttempt, observeSeat, prepareSeat, seatRef, } from './seats.js';
+import { findIncompleteSiblingAttempt, hasActiveSeatInDifferentCloneFamily, observeSeat, prepareSeat, seatRef, } from './seats.js';
 import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
@@ -140,9 +140,10 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         // missing/replaced/throw → the pending record is the rerunnable locator; the
         // caller PRESERVES the worktree). expectation-mismatch is produced upstream at
         // PREPARE (result.prepareAborted), never here.
-        finalizeServerSeat: async ({ active, activate }) => {
+        finalizeServerSeat: async ({ active, commonDir, activate }) => {
             const binding = {
                 worktree: cubesFindProjectRoot(process.cwd()),
+                commonDir,
                 name: active.name,
                 droneLabel: active.droneLabel,
                 ...(active.roleName !== undefined ? { roleName: active.roleName } : {}),
@@ -160,6 +161,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
                 ? { committed: true }
                 : { committed: false, reason: 'activation-failed' };
         },
+        hasActiveSeatInDifferentCloneFamily,
         findProjectRoot: (cwd) => cubesFindProjectRoot(cwd),
         resolveRepositoryContext: resolveGitRepositoryContext,
         getRepositoryIdentity: getOrCreateRepositoryIdentity,
