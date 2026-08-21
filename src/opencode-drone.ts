@@ -16,7 +16,11 @@ import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { borgConfigRoot, ensurePrivateBorgConfigRoot } from './private-root.js';
+import {
+  borgConfigRoot,
+  ensurePrivateBorgConfigRoot,
+  ensurePrivateBorgConfigRootSync,
+} from './private-root.js';
 import {
   OPENCODE_INJECTED_ENTRY_METADATA_KEY,
   OPENCODE_WAKE_IDENTITY_METADATA_KEY,
@@ -61,7 +65,7 @@ function diagnosticLogPath(owner: OpenCodeDroneState | null): string {
   return path;
 }
 
-function log(msg: string, owner: OpenCodeDroneState | null = state) {
+function log(msg: string, owner: OpenCodeDroneState | null = state, throwOnFailure = false) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
   let descriptor: number | null = null;
   let temporaryDescriptor: number | null = null;
@@ -130,6 +134,7 @@ function log(msg: string, owner: OpenCodeDroneState | null = state) {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException | null)?.code ?? 'unknown';
     process.stderr.write(`OpenCode diagnostic log write failed (${code})\n`);
+    if (throwOnFailure) throw error;
   } finally {
     if (temporaryDescriptor !== null) {
       try { closeSync(temporaryDescriptor); } catch { /* The primary write error is already reported. */ }
@@ -147,13 +152,13 @@ function log(msg: string, owner: OpenCodeDroneState | null = state) {
   }
 }
 
-export async function writeOpenCodeStartupDiagnostic(message: string): Promise<void> {
+export function writeOpenCodeStartupDiagnostic(message: string): void {
   const root = borgConfigRoot();
   if (preparedDiagnosticRoot !== root) {
-    await ensurePrivateBorgConfigRoot(root);
+    ensurePrivateBorgConfigRootSync(root);
     preparedDiagnosticRoot = root;
   }
-  log(message, null);
+  log(message, null, true);
 }
 
 interface OpenCodeDroneState {

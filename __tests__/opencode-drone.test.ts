@@ -588,7 +588,7 @@ describe('OpenCode wake target binding', () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
     try {
-      await writeOpenCodeStartupDiagnostic('must not enter directory');
+      expect(() => writeOpenCodeStartupDiagnostic('must not enter directory')).toThrow();
       expect(statSync(diagnosticPath).isDirectory()).toBe(true);
       expect(stderr).toHaveBeenCalledWith(expect.stringContaining('OpenCode diagnostic log write failed'));
     } finally {

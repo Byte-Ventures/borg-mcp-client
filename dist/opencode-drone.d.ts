@@ -1,6 +1,6 @@
 import { type OpenCodeLaunchTrust } from './opencode-launch-trust.js';
 export declare function openCodeStartupDiagnosticLogPath(): string;
-export declare function writeOpenCodeStartupDiagnostic(message: string): Promise<void>;
+export declare function writeOpenCodeStartupDiagnostic(message: string): void;
 interface OpenCodeLastObservation {
     injectionSequence: number;
     acceptedSequence: number;

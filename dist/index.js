@@ -1458,7 +1458,12 @@ export async function main() {
         await openCodeIdentityReady;
         if (openCodeIdentityFailure) {
             const diagnostic = formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd());
-            await writeOpenCodeStartupDiagnostic(diagnostic);
+            try {
+                writeOpenCodeStartupDiagnostic(diagnostic);
+            }
+            catch {
+                // Diagnostic persistence is best-effort; the original identity failure must terminate startup.
+            }
             throw new Error(diagnostic);
         }
         else {

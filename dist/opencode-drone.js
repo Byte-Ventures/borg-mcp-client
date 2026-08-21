@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { borgConfigRoot, ensurePrivateBorgConfigRoot } from './private-root.js';
+import { borgConfigRoot, ensurePrivateBorgConfigRoot, ensurePrivateBorgConfigRootSync, } from './private-root.js';
 import { OPENCODE_INJECTED_ENTRY_METADATA_KEY, OPENCODE_WAKE_IDENTITY_METADATA_KEY, OPENCODE_LAUNCH_CORRELATION_METADATA_KEY, } from './opencode-plugin.js';
 import { createOpenCodeLaunchTrust, isOpenCode256BitIdentity, OPENCODE_SERVER_USERNAME, } from './opencode-launch-trust.js';
 import { OpenCodeAuthenticationError, OpenCodeHttpError, OpenCodeResponseError, OpenCodeUnreachableError, } from './server-errors.js';
@@ -28,7 +28,7 @@ function diagnosticLogPath(owner) {
     diagnosticLogPathsForTests.add(path);
     return path;
 }
-function log(msg, owner = state) {
+function log(msg, owner = state, throwOnFailure = false) {
     const line = `[${new Date().toISOString()}] ${msg}\n`;
     let descriptor = null;
     let temporaryDescriptor = null;
@@ -80,6 +80,8 @@ function log(msg, owner = state) {
     catch (error) {
         const code = error?.code ?? 'unknown';
         process.stderr.write(`OpenCode diagnostic log write failed (${code})\n`);
+        if (throwOnFailure)
+            throw error;
     }
     finally {
         if (temporaryDescriptor !== null) {
@@ -104,13 +106,13 @@ function log(msg, owner = state) {
         }
     }
 }
-export async function writeOpenCodeStartupDiagnostic(message) {
+export function writeOpenCodeStartupDiagnostic(message) {
     const root = borgConfigRoot();
     if (preparedDiagnosticRoot !== root) {
-        await ensurePrivateBorgConfigRoot(root);
+        ensurePrivateBorgConfigRootSync(root);
         preparedDiagnosticRoot = root;
     }
-    log(message, null);
+    log(message, null, true);
 }
 let state = null;
 const OPEN_CODE_DELIVERY_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000];
