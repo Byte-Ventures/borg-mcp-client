@@ -50,6 +50,8 @@ export interface SeatRecord {
   sessionId?: string;
   // binding + display (set atomically at FINALIZE; absent while pending)
   worktree?: string;
+  commonDir?: string;
+  repositoryOrigin?: string;
   name?: string;
   droneLabel?: string;
   roleName?: string;
@@ -149,6 +151,8 @@ function isValidSeatRecord(ref: string, value: unknown): value is SeatRecord {
   if (r.roleClass !== undefined && (typeof r.roleClass !== 'string' || !ROLE_CLASSES.has(r.roleClass))) return false;
   if (r.isHumanSeat !== undefined && typeof r.isHumanSeat !== 'boolean') return false;
   if (r.worktree !== undefined && typeof r.worktree !== 'string') return false;
+  if (r.commonDir !== undefined && !isNonEmptyString(r.commonDir)) return false;
+  if (r.repositoryOrigin !== undefined && !isNonEmptyString(r.repositoryOrigin)) return false;
   if (r.droneId !== undefined && (typeof r.droneId !== 'string' || !UUID_RE.test(r.droneId))) return false;
   if (r.sessionId !== undefined && (typeof r.sessionId !== 'string' || !UUID_RE.test(r.sessionId))) return false;
   // State-consistency invariants (no inconsistent active|pending).
@@ -447,6 +451,8 @@ export type ActivateSeatOutcome = 'activated' | 'missing' | 'replaced';
  *  worktree is decided). Merged atomically with activation by activateAndBindSeat. */
 export interface SeatBinding {
   worktree: string;
+  commonDir?: string;
+  repositoryOrigin?: string;
   name: string;
   droneLabel: string;
   roleName?: string;
@@ -475,6 +481,8 @@ export async function activateAndBindSeat(input: {
   sessionId: string;
   expectedPendingDigest: string;
   worktree: string;
+  commonDir?: string;
+  repositoryOrigin?: string;
   name: string;
   droneLabel: string;
   roleName?: string;
@@ -496,6 +504,8 @@ export async function activateAndBindSeat(input: {
       droneId: input.droneId,
       sessionId: input.sessionId,
       worktree: input.worktree,
+      ...(input.commonDir !== undefined ? { commonDir: input.commonDir } : {}),
+      ...(input.repositoryOrigin !== undefined ? { repositoryOrigin: input.repositoryOrigin } : {}),
       name: input.name,
       droneLabel: input.droneLabel,
       ...(input.roleName !== undefined ? { roleName: input.roleName } : {}),
@@ -673,6 +683,23 @@ export async function readAllActiveSeats(): Promise<Array<{ worktree: string; re
     }
   }
   return out;
+}
+
+/** Whether this cube has an active seat on the SAME repository from a different
+ *  clone family. Repositories without a remote have no identity shared across
+ *  clones, so their separate clones are undetectable here — see client#264. */
+export async function hasActiveSeatInDifferentCloneFamily(
+  cubeId: string,
+  repositoryOrigin: string,
+  commonDir: string,
+): Promise<boolean> {
+  const seats = await readAllActiveSeats();
+  return seats.some(({ record }) =>
+    record.cubeId === cubeId &&
+    record.repositoryOrigin === repositoryOrigin &&
+    record.commonDir !== undefined &&
+    record.commonDir !== commonDir
+  );
 }
 
 /** All valid worktree-bound registry entries, including a PENDING seat whose

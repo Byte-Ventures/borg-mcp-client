@@ -410,6 +410,8 @@ export async function sendBorgServerAttach(
           sessionId: decoded.session.id,
           expectedPendingDigest: pendingBearerDigest,
           worktree: binding.worktree,
+          ...(binding.commonDir !== undefined ? { commonDir: binding.commonDir } : {}),
+          ...(binding.repositoryOrigin !== undefined ? { repositoryOrigin: binding.repositoryOrigin } : {}),
           name: binding.name,
           droneLabel: binding.droneLabel,
           ...(binding.roleName !== undefined ? { roleName: binding.roleName } : {}),

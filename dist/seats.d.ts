@@ -34,6 +34,8 @@ export interface SeatRecord {
     droneId?: string;
     sessionId?: string;
     worktree?: string;
+    commonDir?: string;
+    repositoryOrigin?: string;
     name?: string;
     droneLabel?: string;
     roleName?: string;
@@ -147,6 +149,8 @@ export type ActivateSeatOutcome = 'activated' | 'missing' | 'replaced';
  *  worktree is decided). Merged atomically with activation by activateAndBindSeat. */
 export interface SeatBinding {
     worktree: string;
+    commonDir?: string;
+    repositoryOrigin?: string;
     name: string;
     droneLabel: string;
     roleName?: string;
@@ -174,6 +178,8 @@ export declare function activateAndBindSeat(input: {
     sessionId: string;
     expectedPendingDigest: string;
     worktree: string;
+    commonDir?: string;
+    repositoryOrigin?: string;
     name: string;
     droneLabel: string;
     roleName?: string;
@@ -254,6 +260,10 @@ export declare function readAllActiveSeats(): Promise<Array<{
     worktree: string;
     record: SeatRecord;
 }>>;
+/** Whether this cube has an active seat on the SAME repository from a different
+ *  clone family. Repositories without a remote have no identity shared across
+ *  clones, so their separate clones are undetectable here — see client#264. */
+export declare function hasActiveSeatInDifferentCloneFamily(cubeId: string, repositoryOrigin: string, commonDir: string): Promise<boolean>;
 /** All valid worktree-bound registry entries, including a PENDING seat whose
  * interrupted finalize preserved its worktree for a later resume. Read-only:
  * pending records remain non-hydratable and getActiveSeatForWorktree stays
