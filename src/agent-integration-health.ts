@@ -15,6 +15,7 @@ import {
   installBorgPlugin,
   openCodePluginPath,
 } from './opencode-plugin.js';
+import { openCodeStartupDiagnosticLogPath } from './opencode-drone.js';
 
 export const AGENT_HOOK_BINS = [
   'borg-regen',
@@ -292,10 +293,28 @@ export function assertAgentIntegrationHealthy(report: AgentIntegrationHealth): v
 
 export function runDoctor(options: InspectAgentIntegrationHealthOptions & {
   stdout?: (text: string) => void;
+  openCodeStartupLogPath?: string;
 } = {}): number {
   const report = inspectAgentIntegrationHealth(options);
-  (options.stdout ?? ((text) => process.stdout.write(text)))(renderAgentIntegrationHealth(report));
+  const output = renderAgentIntegrationHealth(report) + renderOpenCodeStartupDiagnostics(
+    options.openCodeStartupLogPath ?? openCodeStartupDiagnosticLogPath(),
+  );
+  (options.stdout ?? ((text) => process.stdout.write(text)))(output);
   return report.issues.length === 0 ? 0 : 1;
+}
+
+export function renderOpenCodeStartupDiagnostics(logPath: string): string {
+  try {
+    const metadata = fs.lstatSync(logPath);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) {
+      return `OpenCode startup diagnostics: refused at ${logPath} (path is not a regular file)\n`;
+    }
+    const contents = fs.readFileSync(logPath, 'utf8');
+    return `OpenCode startup diagnostics (${logPath}):\n${contents.trimEnd()}\n`;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return '';
+    return `OpenCode startup diagnostics: unreadable at ${logPath} (${error instanceof Error ? error.message : String(error)})\n`;
+  }
 }
 
 export function warnIfAgentIntegrationUnhealthy(

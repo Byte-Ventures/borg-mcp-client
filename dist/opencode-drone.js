@@ -12,17 +12,18 @@ function stateIdentityDigest(current) {
     const key = [current.serverUrl, current.directory, current.cubeName, current.droneLabel].join('\0');
     return createHash('sha256').update(key).digest('hex').slice(0, 24);
 }
+export function openCodeStartupDiagnosticLogPath() {
+    return join(tmpdir(), 'borg-opencode-drone-startup.log');
+}
 function diagnosticLogPath(owner) {
-    const path = join(tmpdir(), `borg-opencode-drone-${stateIdentityDigest(owner)}.log`);
+    const path = owner
+        ? join(tmpdir(), `borg-opencode-drone-${stateIdentityDigest(owner)}.log`)
+        : openCodeStartupDiagnosticLogPath();
     diagnosticLogPathsForTests.add(path);
     return path;
 }
 function log(msg, owner = state) {
     const line = `[${new Date().toISOString()}] ${msg}\n`;
-    if (!owner) {
-        process.stderr.write(line);
-        return;
-    }
     try {
         const path = diagnosticLogPath(owner);
         if (existsSync(path))
@@ -43,6 +44,9 @@ function log(msg, owner = state) {
         const code = error?.code ?? 'unknown';
         process.stderr.write(`OpenCode diagnostic log write failed (${code})\n`);
     }
+}
+export function writeOpenCodeStartupDiagnostic(message) {
+    log(message, null);
 }
 let state = null;
 const OPEN_CODE_DELIVERY_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000];

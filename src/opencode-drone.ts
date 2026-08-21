@@ -30,18 +30,20 @@ function stateIdentityDigest(current: OpenCodeDroneState): string {
   return createHash('sha256').update(key).digest('hex').slice(0, 24);
 }
 
-function diagnosticLogPath(owner: OpenCodeDroneState): string {
-  const path = join(tmpdir(), `borg-opencode-drone-${stateIdentityDigest(owner)}.log`);
+export function openCodeStartupDiagnosticLogPath(): string {
+  return join(tmpdir(), 'borg-opencode-drone-startup.log');
+}
+
+function diagnosticLogPath(owner: OpenCodeDroneState | null): string {
+  const path = owner
+    ? join(tmpdir(), `borg-opencode-drone-${stateIdentityDigest(owner)}.log`)
+    : openCodeStartupDiagnosticLogPath();
   diagnosticLogPathsForTests.add(path);
   return path;
 }
 
 function log(msg: string, owner: OpenCodeDroneState | null = state) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
-  if (!owner) {
-    process.stderr.write(line);
-    return;
-  }
   try {
     const path = diagnosticLogPath(owner);
     if (existsSync(path)) chmodSync(path, 0o600);
@@ -59,6 +61,10 @@ function log(msg: string, owner: OpenCodeDroneState | null = state) {
     const code = (error as NodeJS.ErrnoException | null)?.code ?? 'unknown';
     process.stderr.write(`OpenCode diagnostic log write failed (${code})\n`);
   }
+}
+
+export function writeOpenCodeStartupDiagnostic(message: string): void {
+  log(message, null);
 }
 
 interface OpenCodeDroneState {

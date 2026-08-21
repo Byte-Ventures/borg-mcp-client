@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
@@ -20,11 +23,16 @@ vi.mock('../src/readiness-probe.js', () => ({ isMcpReadinessProbe: () => false }
 vi.mock('../src/console-prefix.js', () => ({ consolePrefix: () => '', initConsolePrefix: vi.fn(async () => {}) }));
 
 import { main } from '../src/index.js';
+import { openCodeStartupDiagnosticLogPath } from '../src/opencode-drone.js';
 
 describe('OpenCode identity handshake timeout', () => {
   const originalAgentKind = process.env.BORG_AGENT_KIND;
+  const originalTmpDir = process.env.TMPDIR;
+  let testTmpDir: string;
 
   beforeEach(() => {
+    testTmpDir = mkdtempSync(join(tmpdir(), 'borg-opencode-identity-timeout-'));
+    process.env.TMPDIR = testTmpDir;
     vi.useFakeTimers();
     process.env.BORG_AGENT_KIND = 'opencode';
     state.handlers.length = 0;
@@ -34,11 +42,14 @@ describe('OpenCode identity handshake timeout', () => {
   afterEach(() => {
     if (originalAgentKind === undefined) delete process.env.BORG_AGENT_KIND;
     else process.env.BORG_AGENT_KIND = originalAgentKind;
+    if (originalTmpDir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = originalTmpDir;
+    rmSync(testTmpDir, { recursive: true, force: true });
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it('fails closed with an operator-visible diagnostic when initialize never completes', async () => {
+  it('writes a doctor-readable diagnostic when initialize never completes', async () => {
     let outcome: unknown;
     const started = main().then(
       () => { outcome = 'resolved'; },
@@ -52,6 +63,11 @@ describe('OpenCode identity handshake timeout', () => {
     expect((outcome as Error).message).toContain(
       'OpenCode identity handshake did not complete',
     );
+    const diagnosticPath = openCodeStartupDiagnosticLogPath();
+    expect(readFileSync(diagnosticPath, 'utf8')).toContain(
+      'Borg OpenCode identity error [IDENTITY_HANDSHAKE_TIMEOUT]',
+    );
+    expect(statSync(diagnosticPath).mode & 0o777).toBe(0o600);
     await expect(started).resolves.toBeUndefined();
 
     expect(state.runMcpStartupServices).not.toHaveBeenCalled();

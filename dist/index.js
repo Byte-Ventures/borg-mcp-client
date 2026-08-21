@@ -41,7 +41,7 @@ import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { confirmDisplayIdentity, identityFromRegen, markDisplayIdentityReadFailed, renderDisplayIdentity, seedDisplayIdentity, withRenderedRegenIdentity, } from './display-identity.js';
 import { resolveSessionAgentKind, } from './codex-app-wake.js';
 import { resolveReportableSessionAgentKind } from './agent-runtime.js';
-import { connectOpenCodeDrone, injectOpenCodeEntry, settleOpenCodeEntry, configuredOpenCodePort, OPEN_CODE_PORT_MISSING_DIAGNOSTIC, openCodeLaunchBinding, } from './opencode-drone.js';
+import { connectOpenCodeDrone, injectOpenCodeEntry, settleOpenCodeEntry, configuredOpenCodePort, OPEN_CODE_PORT_MISSING_DIAGNOSTIC, openCodeLaunchBinding, writeOpenCodeStartupDiagnostic, } from './opencode-drone.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { openCodeApiPasswordFromEnv } from './opencode-launch-trust.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
@@ -1457,7 +1457,9 @@ export async function main() {
     if (openCodeIdentityReady) {
         await openCodeIdentityReady;
         if (openCodeIdentityFailure) {
-            throw new Error(formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd()));
+            const diagnostic = formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd());
+            writeOpenCodeStartupDiagnostic(diagnostic);
+            throw new Error(diagnostic);
         }
         else {
             await runMcpStartupServices(false, startupServices, { openCodeFirst: true });

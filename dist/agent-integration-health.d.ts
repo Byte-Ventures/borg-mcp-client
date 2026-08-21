@@ -34,7 +34,9 @@ export declare function renderAgentIntegrationHealth(report: AgentIntegrationHea
 export declare function assertAgentIntegrationHealthy(report: AgentIntegrationHealth): void;
 export declare function runDoctor(options?: InspectAgentIntegrationHealthOptions & {
     stdout?: (text: string) => void;
+    openCodeStartupLogPath?: string;
 }): number;
+export declare function renderOpenCodeStartupDiagnostics(logPath: string): string;
 export declare function warnIfAgentIntegrationUnhealthy(options?: InspectAgentIntegrationHealthOptions & {
     stderr?: (text: string) => void;
 }): boolean;
