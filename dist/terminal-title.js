@@ -31,6 +31,7 @@
  *     "drone has been around long enough that cubes.json is already
  *     populated," so the assimilated path is the common case.
  */
+import { escapeSyncDisplay } from './sync-roles-render.js';
 /**
  * Pure: compose the title string for a session. Exported so tests can
  * exercise every branch without TTY / process / fs dependencies.
@@ -42,9 +43,9 @@
  */
 export function composeTerminalTitle(activeDrone, repoBasename) {
     if (activeDrone) {
-        return `borg · ${activeDrone.label} · ${activeDrone.cubeName}`;
+        return `borg · ${escapeSyncDisplay(activeDrone.label)} · ${escapeSyncDisplay(activeDrone.cubeName)}`;
     }
-    return `borg · ${repoBasename}`;
+    return `borg · ${escapeSyncDisplay(repoBasename)}`;
 }
 /**
  * Side-effecting: emit the OSC 0 escape to stdout, but only if stdout

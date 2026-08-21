@@ -32,6 +32,8 @@
  *     populated," so the assimilated path is the common case.
  */
 
+import { escapeSyncDisplay } from './sync-roles-render.js';
+
 /**
  * Pure: compose the title string for a session. Exported so tests can
  * exercise every branch without TTY / process / fs dependencies.
@@ -46,9 +48,9 @@ export function composeTerminalTitle(
   repoBasename: string
 ): string {
   if (activeDrone) {
-    return `borg · ${activeDrone.label} · ${activeDrone.cubeName}`;
+    return `borg · ${escapeSyncDisplay(activeDrone.label)} · ${escapeSyncDisplay(activeDrone.cubeName)}`;
   }
-  return `borg · ${repoBasename}`;
+  return `borg · ${escapeSyncDisplay(repoBasename)}`;
 }
 
 /**

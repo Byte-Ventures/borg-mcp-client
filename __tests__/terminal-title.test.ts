@@ -73,6 +73,21 @@ describe('setTerminalTitle', () => {
     expect(writes[0]).toBe('\x1b]0;borg · drone-7 · borg-mcp\x07');
   });
 
+  it('escapes hostile server labels inside the emitted OSC title', () => {
+    const { stdout, writes } = makeStdout(true);
+    setTerminalTitle(
+      { label: 'drone\x1b\x07\n\rlabel', cubeName: 'cube\x1b\x07\n\rname' },
+      'fallback',
+      stdout,
+    );
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toBe(
+      '\x1b]0;borg · drone\\u{1b}\\u{7}⏎\\u{d}label · cube\\u{1b}\\u{7}⏎\\u{d}name\x07',
+    );
+    expect(writes[0].slice(4, -1)).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+  });
+
   it('no-ops when stdout is NOT a TTY (piped / CI)', () => {
     const { stdout, writes } = makeStdout(false);
     setTerminalTitle(
@@ -106,5 +121,14 @@ describe('setTerminalTitle', () => {
     const { stdout, writes } = makeStdout(true);
     setTerminalTitle(null, 'borg-mcp-builder', stdout);
     expect(writes[0]).toBe('\x1b]0;borg · borg-mcp-builder\x07');
+  });
+
+  it('escapes a hostile unassimilated fallback inside the emitted OSC title', () => {
+    const { stdout, writes } = makeStdout(true);
+    setTerminalTitle(null, 'repo\x1b\x07\n\rname', stdout);
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toBe('\x1b]0;borg · repo\\u{1b}\\u{7}⏎\\u{d}name\x07');
+    expect(writes[0].slice(4, -1)).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
   });
 });

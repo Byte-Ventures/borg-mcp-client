@@ -229,9 +229,23 @@ describe('terminals backend (client#400 + control-char fold-in)', () => {
     );
     const script = (deps.runSync as any).mock.calls.find((c: any[]) => c[0] === 'osascript')?.[1]?.[1] as string;
     expect(script).toContain('/a \\"quote\\" \\\\ path');
-    expect(script).toContain('borg · drone-\\"\\\\ · cube-\\"\\\\');
+    expect(script).toContain('borg · drone-\\"\\\\\\\\ · cube-\\"\\\\\\\\');
     expect(script).not.toContain('/a "quote" \\ path');
     expect(script).not.toContain('borg · drone-"\\ · cube-"\\');
+  });
+
+  it('macOS escapes hostile server labels before building the AppleScript literal', async () => {
+    const deps = makeStubDeps({ pathExists: vi.fn((p: string) => p === '/Applications/iTerm.app') });
+    await runTerminalsBackend(
+      [cand({ droneLabel: 'drone\x1b\x07\n\rlabel' })],
+      { ...wopts('darwin'), cubeName: 'cube\x1b\x07\n\rname' },
+      deps,
+    );
+
+    const script = (deps.runSync as any).mock.calls.find((c: any[]) => c[0] === 'osascript')?.[1]?.[1] as string;
+    expect(script).toContain('set name to "borg · drone\\\\u{1b}\\\\u{7}⏎\\\\u{d}label · cube\\\\u{1b}\\\\u{7}⏎\\\\u{d}name"');
+    expect(script).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+    expect(deps.runSync).toHaveBeenCalledWith('osascript', ['-e', script]);
   });
 
   it('macOS + no terminal app → hard-fails (NoTerminalError)', async () => {
@@ -252,6 +266,21 @@ describe('terminals backend (client#400 + control-char fold-in)', () => {
     const call = (deps.runSync as any).mock.calls.find((c: any[]) => c[0] === 'kitty');
     expect(call).toBeDefined();
     expect(call[1].at(-1)).toContain("borg · drone-1 · myrepo");
+  });
+
+  it('Linux escapes hostile server labels before building the OSC printf command', async () => {
+    const deps = makeStubDeps({ getEnv: vi.fn((n: string) => (n === 'BORG_TERMINAL' ? 'kitty' : undefined)) });
+    await runTerminalsBackend(
+      [cand({ droneLabel: 'drone\x1b\x07\n\rlabel' })],
+      { ...wopts('linux'), cubeName: 'cube\x1b\x07\n\rname' },
+      deps,
+    );
+
+    const call = (deps.runSync as any).mock.calls.find((c: any[]) => c[0] === 'kitty');
+    const command = call[1].at(-1) as string;
+    expect(command).toContain('borg · drone\\u{1b}\\u{7}⏎\\u{d}label · cube\\u{1b}\\u{7}⏎\\u{d}name');
+    expect(command).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+    expect(call).toBeDefined();
   });
 
   it('rate-limit stagger on macOS: sleep(launchDelayMs) fires BETWEEN launches (N-1), not before the first', async () => {
