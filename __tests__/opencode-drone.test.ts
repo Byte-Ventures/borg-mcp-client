@@ -1,5 +1,17 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -594,6 +606,33 @@ describe('OpenCode wake target binding', () => {
     } finally {
       stderr.mockRestore();
       rmSync(diagnosticPath, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a planted alias after the private root is replaced', () => {
+    chmodSync(testStateRoot, 0o777);
+    writeOpenCodeStartupDiagnostic('prepare original private root');
+    const originalConfigParent = join(testStateRoot, '.config-original');
+    renameSync(join(testStateRoot, '.config'), originalConfigParent);
+    mkdirSync(join(testStateRoot, '.config'), { mode: 0o777 });
+    mkdirSync(borgConfigRoot(), { mode: 0o700 });
+    const victimPath = join(testStateRoot, 'victim.txt');
+    writeFileSync(victimPath, 'unchanged\n', { mode: 0o644 });
+    symlinkSync(victimPath, openCodeStartupDiagnosticLogPath());
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      let refusal: unknown;
+      try {
+        writeOpenCodeStartupDiagnostic('must not reach victim');
+      } catch (error) {
+        refusal = error;
+      }
+      expect(readFileSync(victimPath, 'utf8')).toBe('unchanged\n');
+      expect(statSync(victimPath).mode & 0o777).toBe(0o644);
+      expect(refusal).toBeInstanceOf(Error);
+    } finally {
+      stderr.mockRestore();
     }
   });
 

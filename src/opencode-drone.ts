@@ -42,7 +42,6 @@ import {
 
 const OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES = 64 * 1024;
 const diagnosticLogPathsForTests = new Set<string>();
-let preparedDiagnosticRoot: string | null = null;
 
 function stateIdentityDigest(current: OpenCodeDroneState): string {
   const key = [current.serverUrl, current.directory, current.cubeName, current.droneLabel].join('\0');
@@ -55,9 +54,6 @@ export function openCodeStartupDiagnosticLogPath(): string {
 
 function diagnosticLogPath(owner: OpenCodeDroneState | null): string {
   const root = borgConfigRoot();
-  if (preparedDiagnosticRoot !== root) {
-    throw Object.assign(new Error('OpenCode diagnostic root is not prepared'), { code: 'EPERM' });
-  }
   const path = owner
     ? join(root, `opencode-drone-${stateIdentityDigest(owner)}.log`)
     : openCodeStartupDiagnosticLogPath();
@@ -71,12 +67,17 @@ function log(msg: string, owner: OpenCodeDroneState | null = state, throwOnFailu
   let temporaryDescriptor: number | null = null;
   let temporary: string | null = null;
   try {
+    ensurePrivateBorgConfigRootSync(borgConfigRoot());
     const path = diagnosticLogPath(owner);
+    // The private root is the primary boundary. Where available, no-follow also
+    // closes the final replacement gap between root verification and this open.
+    const noFollow = constants.O_NOFOLLOW ?? 0;
     descriptor = openSync(
       path,
       constants.O_RDWR |
         constants.O_APPEND |
-        constants.O_CREAT,
+        constants.O_CREAT |
+        noFollow,
       0o600,
     );
     if (!fstatSync(descriptor).isFile()) {
@@ -107,7 +108,7 @@ function log(msg: string, owner: OpenCodeDroneState | null = state, throwOnFailu
     temporary = `${path}.${randomUUID()}.tmp`;
     temporaryDescriptor = openSync(
       temporary,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow,
       0o600,
     );
     if (!fstatSync(temporaryDescriptor).isFile()) {
@@ -153,11 +154,6 @@ function log(msg: string, owner: OpenCodeDroneState | null = state, throwOnFailu
 }
 
 export function writeOpenCodeStartupDiagnostic(message: string): void {
-  const root = borgConfigRoot();
-  if (preparedDiagnosticRoot !== root) {
-    ensurePrivateBorgConfigRootSync(root);
-    preparedDiagnosticRoot = root;
-  }
   log(message, null, true);
 }
 
@@ -329,11 +325,7 @@ export async function connectOpenCodeDrone(deps: ConnectDeps): Promise<void> {
   if (!isOpenCode256BitIdentity(deps.apiPassword)) {
     throw new OpenCodeAuthenticationError('OpenCode API password is missing or unverifiable');
   }
-  const root = borgConfigRoot();
-  if (preparedDiagnosticRoot !== root) {
-    await ensurePrivateBorgConfigRoot(root);
-    preparedDiagnosticRoot = root;
-  }
+  await ensurePrivateBorgConfigRoot(borgConfigRoot());
   abandonOpenCodeDeliveries(state);
   state = {
     serverUrl: deps.serverUrl,
@@ -1537,5 +1529,4 @@ export function __resetOpenCodeDroneForTests(): void {
     }
   }
   diagnosticLogPathsForTests.clear();
-  preparedDiagnosticRoot = null;
 }
