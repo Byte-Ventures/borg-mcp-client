@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
@@ -14,8 +16,10 @@ import {
   getOpenCodeConnectionState,
   injectInitialKickoff,
   injectOpenCodeEntry,
+  openCodeStartupDiagnosticLogPath,
   probeOpenCodeDroneArmed,
   settleOpenCodeEntry,
+  writeOpenCodeStartupDiagnostic,
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 import { streamOnce } from '../src/log-stream';
@@ -548,6 +552,52 @@ describe('OpenCode wake target binding', () => {
     } finally {
       stderr.mockRestore();
       rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  it('does not follow a substituted startup diagnostic symlink', () => {
+    const root = mkdtempSync(join(tmpdir(), 'borg-opencode-diagnostic-symlink-'));
+    const originalTmpDir = process.env.TMPDIR;
+    process.env.TMPDIR = root;
+    const diagnosticPath = openCodeStartupDiagnosticLogPath();
+    const victimPath = join(root, 'victim.txt');
+    writeFileSync(victimPath, 'unchanged\n', { mode: 0o644 });
+    symlinkSync(victimPath, diagnosticPath);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      writeOpenCodeStartupDiagnostic('must not reach victim');
+      expect(readFileSync(victimPath, 'utf8')).toBe('unchanged\n');
+      expect(statSync(victimPath).mode & 0o777).toBe(0o644);
+    } finally {
+      stderr.mockRestore();
+      if (originalTmpDir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = originalTmpDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not follow the former predictable rotation temporary', () => {
+    const root = mkdtempSync(join(tmpdir(), 'borg-opencode-diagnostic-rotation-'));
+    const originalTmpDir = process.env.TMPDIR;
+    process.env.TMPDIR = root;
+    const diagnosticPath = openCodeStartupDiagnosticLogPath();
+    const victimPath = join(root, 'victim.txt');
+    const predictableTemporary = `${diagnosticPath}.${process.pid}.tmp`;
+    writeFileSync(victimPath, 'unchanged\n', { mode: 0o644 });
+    symlinkSync(victimPath, predictableTemporary);
+
+    try {
+      writeOpenCodeStartupDiagnostic('x'.repeat(70 * 1024));
+      expect(readFileSync(victimPath, 'utf8')).toBe('unchanged\n');
+      expect(statSync(victimPath).mode & 0o777).toBe(0o644);
+      expect(statSync(diagnosticPath).isFile()).toBe(true);
+      expect(statSync(diagnosticPath).mode & 0o777).toBe(0o600);
+      expect(statSync(diagnosticPath).size).toBeLessThanOrEqual(64 * 1024);
+    } finally {
+      if (originalTmpDir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = originalTmpDir;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
