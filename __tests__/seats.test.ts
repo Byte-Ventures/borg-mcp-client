@@ -101,7 +101,7 @@ describe('seats store — one atomic unit (ACTIVE-without-binding unreachable)',
     expect(live).toMatchObject({ state: 'active', worktree: '/work/repo', droneId: STAMP.droneId, name: 'local-cube' });
   });
 
-  it('C5: loads a 4.5.1 seat record without clone metadata and never matches it', async () => {
+  it('loads a 4.5.1 seat record without clone metadata and never matches it', async () => {
     const { seats } = await load();
     const bearer = 'legacy-no-clone-metadata-'.padEnd(43, 'z');
     await seats.mintPendingSeat({ ...SEAT, credential: bearer });
@@ -115,6 +115,29 @@ describe('seats store — one atomic unit (ACTIVE-without-binding unreachable)',
     await expect(seats.hasActiveSeatInDifferentCloneFamily(
       SEAT.cubeId,
       'https://github.com/org/repo',
+      '/work/repo/.git',
+    )).resolves.toBe(false);
+  });
+
+  it('C5: ignores a matching repository record whose common directory is absent', async () => {
+    const { seats } = await load();
+    const bearer = 'partial-clone-metadata-'.padEnd(43, 'z');
+    const repositoryOrigin = 'https://github.com/org/repo';
+    await seats.mintPendingSeat({ ...SEAT, credential: bearer });
+    expect(await seats.activateAndBindSeat({
+      ...SEAT,
+      ...STAMP,
+      expectedPendingDigest: digestOf(bearer),
+      worktree: '/work/repo',
+      repositoryOrigin,
+      name: 'local-cube',
+      droneLabel: 'builder-1',
+      roleName: 'Drone',
+    })).toBe('activated');
+
+    await expect(seats.hasActiveSeatInDifferentCloneFamily(
+      SEAT.cubeId,
+      repositoryOrigin,
       '/work/repo/.git',
     )).resolves.toBe(false);
   });
