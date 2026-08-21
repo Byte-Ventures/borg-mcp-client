@@ -245,11 +245,13 @@ noncanonical worktrees heal when Borg next launches or assimilates them.
 
 `borg doctor` performs the same bin-owner and version checks without changing
 state. It inventories managed hook files and verifies the OpenCode orientation
-plugin against its borgmcp version marker and generated behavior. It reports
-status-specific recovery: reinstall a missing bin, correct PATH for the wrong
-package or version, run `borg update --yes` for stale managed hooks, repair a
-named invalid configuration before rerunning update, or run `borg update --yes`
-to install a missing or outdated OpenCode plugin.
+plugin against its borgmcp version marker and generated behavior. It also prints
+the bounded, identity-free OpenCode startup diagnostic log so failures hidden by
+OpenCode's discarded MCP stderr can be inspected. It reports status-specific
+recovery: reinstall a missing bin, correct PATH for the wrong package or version,
+run `borg update --yes` for stale managed hooks, repair a named invalid
+configuration before rerunning update, or run `borg update --yes` to install a
+missing or outdated OpenCode plugin.
 
 `borg server update` remains the server-runtime-only command. It verifies and
 activates the server artifact but deliberately does not rewrite the global

@@ -1,5 +1,19 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
@@ -14,12 +28,15 @@ import {
   getOpenCodeConnectionState,
   injectInitialKickoff,
   injectOpenCodeEntry,
+  openCodeStartupDiagnosticLogPath,
   probeOpenCodeDroneArmed,
   settleOpenCodeEntry,
+  writeOpenCodeStartupDiagnostic,
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 import { streamOnce } from '../src/log-stream';
 import { OpenCodeAuthenticationError } from '../src/server-errors';
+import { BORG_STATE_ROOT_ENV, borgConfigRoot } from '../src/private-root';
 import {
   OPENCODE_INJECTED_ENTRY_METADATA_KEY,
   OPENCODE_WAKE_IDENTITY_METADATA_KEY,
@@ -161,14 +178,22 @@ async function connect(droneLabel = 'drone-7') {
 }
 
 describe('OpenCode wake target binding', () => {
+  const originalStateRoot = process.env[BORG_STATE_ROOT_ENV];
+  let testStateRoot: string;
+
   beforeEach(() => {
     __resetOpenCodeDroneForTests();
+    testStateRoot = realpathSync(mkdtempSync(join(tmpdir(), 'borg-opencode-drone-state-')));
+    process.env[BORG_STATE_ROOT_ENV] = testStateRoot;
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     __resetOpenCodeDroneForTests();
+    if (originalStateRoot === undefined) delete process.env[BORG_STATE_ROOT_ENV];
+    else process.env[BORG_STATE_ROOT_ENV] = originalStateRoot;
+    rmSync(testStateRoot, { recursive: true, force: true });
   });
 
   it('allocates distinct OS ports for IDs that collide under the old hash', async () => {
@@ -549,6 +574,84 @@ describe('OpenCode wake target binding', () => {
       stderr.mockRestore();
       rmSync(path, { recursive: true, force: true });
     }
+  });
+
+  it('keeps both diagnostic variants under the private Borg config root', async () => {
+    await connect('private-diagnostic-path');
+    expect(dirname(openCodeStartupDiagnosticLogPath())).toBe(borgConfigRoot());
+    expect(dirname(__getOpenCodeDiagnosticLogPathForTests())).toBe(borgConfigRoot());
+    expect(statSync(borgConfigRoot()).mode & 0o777).toBe(0o700);
+  });
+
+  it('corrects an existing non-writable private root mode before logging', async () => {
+    mkdirSync(borgConfigRoot(), { recursive: true, mode: 0o750 });
+    chmodSync(borgConfigRoot(), 0o750);
+    await writeOpenCodeStartupDiagnostic('private root mode corrected');
+
+    expect(statSync(borgConfigRoot()).mode & 0o777).toBe(0o700);
+    expect(statSync(openCodeStartupDiagnosticLogPath()).mode & 0o777).toBe(0o600);
+  });
+
+  it('refuses a non-regular startup diagnostic destination', async () => {
+    await writeOpenCodeStartupDiagnostic('prepare private root');
+    const diagnosticPath = openCodeStartupDiagnosticLogPath();
+    unlinkSync(diagnosticPath);
+    mkdirSync(diagnosticPath);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      expect(() => writeOpenCodeStartupDiagnostic('must not enter directory')).toThrow();
+      expect(statSync(diagnosticPath).isDirectory()).toBe(true);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('OpenCode diagnostic log write failed'));
+    } finally {
+      stderr.mockRestore();
+      rmSync(diagnosticPath, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a planted alias after the private root is replaced', () => {
+    chmodSync(testStateRoot, 0o777);
+    writeOpenCodeStartupDiagnostic('prepare original private root');
+    const originalConfigParent = join(testStateRoot, '.config-original');
+    renameSync(join(testStateRoot, '.config'), originalConfigParent);
+    mkdirSync(join(testStateRoot, '.config'), { mode: 0o777 });
+    mkdirSync(borgConfigRoot(), { mode: 0o700 });
+    const victimPath = join(testStateRoot, 'victim.txt');
+    writeFileSync(victimPath, 'unchanged\n', { mode: 0o644 });
+    symlinkSync(victimPath, openCodeStartupDiagnosticLogPath());
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      let refusal: unknown;
+      try {
+        writeOpenCodeStartupDiagnostic('must not reach victim');
+      } catch (error) {
+        refusal = error;
+      }
+      expect(readFileSync(victimPath, 'utf8')).toBe('unchanged\n');
+      expect(statSync(victimPath).mode & 0o777).toBe(0o644);
+      expect(refusal).toBeInstanceOf(Error);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('re-verifies a prepared private root before the next write', () => {
+    writeOpenCodeStartupDiagnostic('prepare private root');
+    chmodSync(borgConfigRoot(), 0o777);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let refusal: unknown;
+
+    try {
+      writeOpenCodeStartupDiagnostic('must refuse changed root');
+    } catch (error) {
+      refusal = error;
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect(refusal).toBeInstanceOf(Error);
+    expect(statSync(borgConfigRoot()).mode & 0o777).toBe(0o777);
   });
 
   it('binds only one exact hidden correlation match and rejects duplicates', async () => {

@@ -1,8 +1,9 @@
-import { appendFileSync, chmodSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { createHash } from 'crypto';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync, writeSync, } from 'fs';
+import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { borgConfigRoot, ensurePrivateBorgConfigRoot, ensurePrivateBorgConfigRootSync, } from './private-root.js';
 import { OPENCODE_INJECTED_ENTRY_METADATA_KEY, OPENCODE_WAKE_IDENTITY_METADATA_KEY, OPENCODE_LAUNCH_CORRELATION_METADATA_KEY, } from './opencode-plugin.js';
 import { createOpenCodeLaunchTrust, isOpenCode256BitIdentity, OPENCODE_SERVER_USERNAME, } from './opencode-launch-trust.js';
 import { OpenCodeAuthenticationError, OpenCodeHttpError, OpenCodeResponseError, OpenCodeUnreachableError, } from './server-errors.js';
@@ -12,37 +13,102 @@ function stateIdentityDigest(current) {
     const key = [current.serverUrl, current.directory, current.cubeName, current.droneLabel].join('\0');
     return createHash('sha256').update(key).digest('hex').slice(0, 24);
 }
+export function openCodeStartupDiagnosticLogPath() {
+    return join(borgConfigRoot(), 'opencode-drone-startup.log');
+}
 function diagnosticLogPath(owner) {
-    const path = join(tmpdir(), `borg-opencode-drone-${stateIdentityDigest(owner)}.log`);
+    const root = borgConfigRoot();
+    const path = owner
+        ? join(root, `opencode-drone-${stateIdentityDigest(owner)}.log`)
+        : openCodeStartupDiagnosticLogPath();
     diagnosticLogPathsForTests.add(path);
     return path;
 }
-function log(msg, owner = state) {
+function log(msg, owner = state, throwOnFailure = false) {
     const line = `[${new Date().toISOString()}] ${msg}\n`;
-    if (!owner) {
-        process.stderr.write(line);
-        return;
-    }
+    let descriptor = null;
+    let temporaryDescriptor = null;
+    let temporary = null;
     try {
+        ensurePrivateBorgConfigRootSync(borgConfigRoot());
         const path = diagnosticLogPath(owner);
-        if (existsSync(path))
-            chmodSync(path, 0o600);
-        appendFileSync(path, line, { encoding: 'utf8', mode: 0o600 });
-        chmodSync(path, 0o600);
-        if (statSync(path).size <= OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES)
+        // The private root is the primary boundary. Where available, no-follow also
+        // closes the final replacement gap between root verification and this open.
+        const noFollow = constants.O_NOFOLLOW ?? 0;
+        descriptor = openSync(path, constants.O_RDWR |
+            constants.O_APPEND |
+            constants.O_CREAT |
+            noFollow, 0o600);
+        if (!fstatSync(descriptor).isFile()) {
+            throw Object.assign(new Error('OpenCode diagnostic log is not a regular file'), { code: 'EINVAL' });
+        }
+        fchmodSync(descriptor, 0o600);
+        writeSync(descriptor, line, null, 'utf8');
+        const size = fstatSync(descriptor).size;
+        if (size <= OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES)
             return;
-        const contents = readFileSync(path);
-        const tail = contents.subarray(contents.length - OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES);
-        const firstNewline = tail.indexOf(0x0a);
-        const bounded = firstNewline >= 0 ? tail.subarray(firstNewline + 1) : tail;
-        const temporary = `${path}.${process.pid}.tmp`;
-        writeFileSync(temporary, bounded, { mode: 0o600 });
+        const tail = Buffer.allocUnsafe(OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES);
+        let bytesRead = 0;
+        while (bytesRead < tail.length) {
+            const count = readSync(descriptor, tail, bytesRead, tail.length - bytesRead, size - tail.length + bytesRead);
+            if (count === 0)
+                break;
+            bytesRead += count;
+        }
+        const completeTail = tail.subarray(0, bytesRead);
+        const firstNewline = completeTail.indexOf(0x0a);
+        const bounded = firstNewline >= 0 ? completeTail.subarray(firstNewline + 1) : completeTail;
+        temporary = `${path}.${randomUUID()}.tmp`;
+        temporaryDescriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600);
+        if (!fstatSync(temporaryDescriptor).isFile()) {
+            throw Object.assign(new Error('OpenCode diagnostic temporary is not a regular file'), { code: 'EINVAL' });
+        }
+        fchmodSync(temporaryDescriptor, 0o600);
+        let bytesWritten = 0;
+        while (bytesWritten < bounded.length) {
+            const count = writeSync(temporaryDescriptor, bounded, bytesWritten, bounded.length - bytesWritten);
+            if (count === 0)
+                throw Object.assign(new Error('OpenCode diagnostic temporary write stalled'), { code: 'EIO' });
+            bytesWritten += count;
+        }
+        closeSync(temporaryDescriptor);
+        temporaryDescriptor = null;
+        closeSync(descriptor);
+        descriptor = null;
         renameSync(temporary, path);
+        temporary = null;
     }
     catch (error) {
         const code = error?.code ?? 'unknown';
         process.stderr.write(`OpenCode diagnostic log write failed (${code})\n`);
+        if (throwOnFailure)
+            throw error;
     }
+    finally {
+        if (temporaryDescriptor !== null) {
+            try {
+                closeSync(temporaryDescriptor);
+            }
+            catch { /* The primary write error is already reported. */ }
+        }
+        if (descriptor !== null) {
+            try {
+                closeSync(descriptor);
+            }
+            catch { /* The primary write error is already reported. */ }
+        }
+        if (temporary !== null) {
+            try {
+                unlinkSync(temporary);
+            }
+            catch {
+                // Already absent or inaccessible; the randomized name cannot be reused.
+            }
+        }
+    }
+}
+export function writeOpenCodeStartupDiagnostic(message) {
+    log(message, null, true);
 }
 let state = null;
 const OPEN_CODE_DELIVERY_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000];
@@ -79,6 +145,7 @@ export async function connectOpenCodeDrone(deps) {
     if (!isOpenCode256BitIdentity(deps.apiPassword)) {
         throw new OpenCodeAuthenticationError('OpenCode API password is missing or unverifiable');
     }
+    await ensurePrivateBorgConfigRoot(borgConfigRoot());
     abandonOpenCodeDeliveries(state);
     state = {
         serverUrl: deps.serverUrl,

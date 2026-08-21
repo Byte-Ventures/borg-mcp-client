@@ -1,21 +1,86 @@
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   borgConfigRoot,
   borgHomeRoot,
   ensurePrivateBorgConfigRoot,
+  ensurePrivateBorgConfigRootSync,
 } from '../src/private-root.js';
 
 const fixtures: string[] = [];
 const originalStateRoot = process.env.BORG_STATE_ROOT;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (originalStateRoot === undefined) delete process.env.BORG_STATE_ROOT;
   else process.env.BORG_STATE_ROOT = originalStateRoot;
   await Promise.all(fixtures.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+describe('ensurePrivateBorgConfigRootSync', () => {
+  it('rejects a non-canonical path', async () => {
+    const { base } = await fixture();
+    const nonCanonical = `${base}/missing/../root`;
+    expect(() => ensurePrivateBorgConfigRootSync(nonCanonical)).toThrow(/not canonical/);
+  });
+
+  it.each(['symlink', 'file'] as const)('rejects a %s instead of a real directory', async (kind) => {
+    const { base, root } = await fixture();
+    await mkdir(join(base, '.config'), { mode: 0o700 });
+    if (kind === 'symlink') {
+      const target = join(base, 'target');
+      await mkdir(target, { mode: 0o700 });
+      await symlink(target, root);
+    } else {
+      await writeFile(root, 'not a directory');
+    }
+
+    expect(() => ensurePrivateBorgConfigRootSync(root)).toThrow(/real directory/);
+  });
+
+  it('rejects a root not owned by the current uid when uid checks are available', async () => {
+    if (typeof process.getuid !== 'function') return;
+    const { root } = await fixture();
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    vi.spyOn(process, 'getuid').mockReturnValue(process.getuid() + 1);
+
+    expect(() => ensurePrivateBorgConfigRootSync(root)).toThrow(/not owned by the current user/);
+  });
+
+  it('rejects a group or world-writable root', async () => {
+    const { root } = await fixture();
+    await mkdir(root, { recursive: true, mode: 0o777 });
+    await chmod(root, 0o777);
+
+    expect(() => ensurePrivateBorgConfigRootSync(root)).toThrow(/writable by other users/);
+  });
+
+  it('tightens a safe legacy mode to 0700', async () => {
+    const { root } = await fixture();
+    await mkdir(root, { recursive: true, mode: 0o755 });
+    await chmod(root, 0o755);
+
+    ensurePrivateBorgConfigRootSync(root);
+
+    expect((await lstat(root)).mode & 0o777).toBe(0o700);
+  });
+
+  it('re-verifies the final directory mode after chmod', async () => {
+    const { root } = await fixture();
+    await mkdir(root, { recursive: true, mode: 0o755 });
+    await chmod(root, 0o755);
+    const chmodSync = fs.chmodSync;
+    vi.spyOn(fs, 'chmodSync').mockImplementation((path, mode) => {
+      chmodSync(path, mode);
+      chmodSync(path, 0o755);
+    });
+
+    expect(() => ensurePrivateBorgConfigRootSync(root)).toThrow(/not private/);
+  });
 });
 
 async function fixture(): Promise<{ base: string; root: string }> {

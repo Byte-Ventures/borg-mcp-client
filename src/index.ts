@@ -150,6 +150,7 @@ import {
   configuredOpenCodePort,
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
   openCodeLaunchBinding,
+  writeOpenCodeStartupDiagnostic,
 } from './opencode-drone.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { openCodeApiPasswordFromEnv } from './opencode-launch-trust.js';
@@ -1694,7 +1695,13 @@ export async function main() {
   if (openCodeIdentityReady) {
     await openCodeIdentityReady;
     if (openCodeIdentityFailure) {
-      throw new Error(formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd()));
+      const diagnostic = formatOpenCodeSeatIdentityError(openCodeIdentityFailure, process.cwd());
+      try {
+        writeOpenCodeStartupDiagnostic(diagnostic);
+      } catch {
+        // Diagnostic persistence is best-effort; the original identity failure must terminate startup.
+      }
+      throw new Error(diagnostic);
     } else {
       await runMcpStartupServices(false, startupServices, { openCodeFirst: true });
     }

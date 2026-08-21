@@ -117,7 +117,7 @@ export function doctorHelpText(version: string): string {
   return (
     `borg doctor (borgmcp ${version}) — inspect Borg agent integrations without changing them\n\n` +
     `Usage:\n` +
-    `  borg doctor          Run read-only checks for hook commands, hook configuration, and the OpenCode plugin\n` +
+    `  borg doctor          Run read-only checks for hook commands, OpenCode integration, and startup diagnostics\n` +
     `  borg doctor --help   Show this help\n`
   );
 }
@@ -172,7 +172,7 @@ export function topLevelHelpText(version: string): string {
     `  borg                     Show the launch menu in a repository root; resume directly in a linked worktree\n` +
     `  borg setup               Set up borg MCP server + agent CLI integration\n` +
     `  borg update              Update the client and installed local server together\n` +
-    `  borg doctor              Check agent hook commands, versions, configs, and the OpenCode plugin\n` +
+    `  borg doctor              Check agent hook commands, OpenCode integration, and startup diagnostics\n` +
     `  borg clone <url> [dir]   Clone a repository, then create and launch its cube\n` +
     `  borg quickstart          Create a cube and a drone for every role, then launch them\n` +
     `  borg assimilate [role]   Join or create a cube with one drone under one role\n` +

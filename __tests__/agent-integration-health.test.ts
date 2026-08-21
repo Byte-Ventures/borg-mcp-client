@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   inspectAgentIntegrationHealth,
   renderAgentIntegrationHealth,
+  renderOpenCodeStartupDiagnostics,
   runDoctor,
   warnIfAgentIntegrationUnhealthy,
 } from '../src/agent-integration-health';
@@ -286,10 +287,38 @@ describe('agent integration health', () => {
     const stdout: string[] = [];
     expect(runDoctor({
       expectedVersion: '3.3.0', path: f.bin, homeDir: join(f.root, 'home'),
+      openCodeStartupLogPath: join(f.root, 'absent-startup.log'),
       stdout: (text) => stdout.push(text),
     })).toBe(1);
     expect(stdout.join('')).toContain('borg-inbox-monitor: missing');
     expect(readFileSync(join(f.root, 'lib', 'node_modules', 'borgmcp', 'package.json'), 'utf8')).toBe(before);
+  });
+
+  it('surfaces the bounded OpenCode startup diagnostic without changing doctor health', () => {
+    const f = packageFixture();
+    const diagnosticPath = join(f.root, 'borg-opencode-drone-startup.log');
+    writeFileSync(diagnosticPath, '[timestamp] identity handshake failed\n', { mode: 0o600 });
+    const stdout: string[] = [];
+
+    expect(runDoctor({
+      expectedVersion: '3.3.0', path: f.bin, homeDir: join(f.root, 'home'),
+      openCodeStartupLogPath: diagnosticPath,
+      stdout: (text) => stdout.push(text),
+    })).toBe(0);
+    expect(stdout.join('')).toContain(`OpenCode startup diagnostics (${diagnosticPath}):`);
+    expect(stdout.join('')).toContain('identity handshake failed');
+  });
+
+  it('refuses to follow a startup diagnostic symlink', () => {
+    const f = packageFixture();
+    const target = join(f.root, 'target.log');
+    const diagnosticPath = join(f.root, 'borg-opencode-drone-startup.log');
+    writeFileSync(target, 'not a Borg diagnostic');
+    symlinkSync(target, diagnosticPath);
+
+    expect(renderOpenCodeStartupDiagnostics(diagnosticPath)).toBe(
+      `OpenCode startup diagnostics: refused at ${diagnosticPath} (path is not a regular file)\n`,
+    );
   });
 
   it('reports stale managed hook commands without changing the config', () => {

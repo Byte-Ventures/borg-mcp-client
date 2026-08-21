@@ -18,4 +18,6 @@ export declare const borgConfigRoot: () => string;
 export declare function borgAgentConfigEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 /** Ensure Borg's local state root exists with owner-only directory permissions. */
 export declare function ensurePrivateBorgConfigRoot(root?: string): Promise<void>;
+/** Synchronous equivalent for startup-failure paths that must never await. */
+export declare function ensurePrivateBorgConfigRootSync(root?: string): void;
 //# sourceMappingURL=private-root.d.ts.map
