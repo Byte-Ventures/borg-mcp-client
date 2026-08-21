@@ -171,7 +171,6 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
       },
     })),
     finalizeServerSeat: vi.fn(async () => ({ committed: true as const })),
-    hasActiveSeatInDifferentCloneFamily: vi.fn(async () => false),
     getInboxPath: vi.fn((c: string, d: string) => `/tmp/test-inbox/${c}/${d}.log`),
     probeMcpReady: vi.fn(async () => true),
     setCliPreferenceForWorktree: vi.fn(async () => {}),
@@ -1761,62 +1760,45 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     const call = finalizeServerSeat.mock.calls[0][0];
     expect(call.expected).toEqual({ kind: 'absent' });
     expect(call.active).toMatchObject({ cubeId: 'c', droneId: 'd', localSessionCredentialRef: REF });
-    expect(call.commonDir).toBe('/work/myrepo/.git');
     expect(call.activate).toBe(activate);
     expect(call.scrubPending).toBe(scrubPending);
     // The legacy activate-then-bind writer is bypassed on the composite path.
     expect(setActiveCube).not.toHaveBeenCalled();
   });
 
-  it('warns when a public-repository cube has an active seat from a different clone family', async () => {
+  it('does not warn on public assimilation when a persisted clone-family comparison would match', async () => {
     const stderr = vi.fn();
     const hasActiveSeatInDifferentCloneFamily = vi.fn(async () => true);
     const deps = makeStubDeps({
       assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
       getCube: getCube(),
       stderr,
-      hasActiveSeatInDifferentCloneFamily,
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
     });
-
-    expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps, { launch: false })).toBe(0);
-    expect(hasActiveSeatInDifferentCloneFamily).toHaveBeenCalledWith('c', '/work/myrepo/.git');
-    expect(stderr).toHaveBeenCalledWith(
-      'warning: this cube already has a seat from a different clone family. ' +
-      'All seats for a repository use worktrees from the same clone family, sharing its object database and refs.\n',
-    );
-  });
-
-  it('stays silent when public-repository seats use the same clone family', async () => {
-    const stderr = vi.fn();
-    const deps = makeStubDeps({
-      assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
-      getCube: getCube(),
-      stderr,
-      hasActiveSeatInDifferentCloneFamily: vi.fn(async () => false),
-      listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
-    });
+    Object.assign(deps, { hasActiveSeatInDifferentCloneFamily });
 
     expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps, { launch: false })).toBe(0);
     expect(stderr.mock.calls.flat().join('\n')).not.toContain('clone family');
   });
 
-  it('does not duplicate clone-family discrimination for private repositories', async () => {
+  it('does not warn on private assimilation when a persisted clone-family comparison would match', async () => {
+    const stderr = vi.fn();
     const hasActiveSeatInDifferentCloneFamily = vi.fn(async () => true);
     const deps = makeStubDeps({
       assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
       getCube: getCube(),
+      stderr,
       resolveRepositoryContext: vi.fn(async () => ({
         root: '/work/myrepo',
         commonDir: '/work/myrepo/.git',
         derivedName: 'myrepo',
       })),
-      hasActiveSeatInDifferentCloneFamily,
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
     });
+    Object.assign(deps, { hasActiveSeatInDifferentCloneFamily });
 
     expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps, { launch: false })).toBe(0);
-    expect(hasActiveSeatInDifferentCloneFamily).not.toHaveBeenCalled();
+    expect(stderr.mock.calls.flat().join('\n')).not.toContain('clone family');
   });
 
   it('a --here reattach declares EXACT with the prior live-bearer digest', async () => {

@@ -34,7 +34,6 @@ export interface SeatRecord {
     droneId?: string;
     sessionId?: string;
     worktree?: string;
-    commonDir?: string;
     name?: string;
     droneLabel?: string;
     roleName?: string;
@@ -148,7 +147,6 @@ export type ActivateSeatOutcome = 'activated' | 'missing' | 'replaced';
  *  worktree is decided). Merged atomically with activation by activateAndBindSeat. */
 export interface SeatBinding {
     worktree: string;
-    commonDir?: string;
     name: string;
     droneLabel: string;
     roleName?: string;
@@ -176,7 +174,6 @@ export declare function activateAndBindSeat(input: {
     sessionId: string;
     expectedPendingDigest: string;
     worktree: string;
-    commonDir?: string;
     name: string;
     droneLabel: string;
     roleName?: string;
@@ -257,8 +254,6 @@ export declare function readAllActiveSeats(): Promise<Array<{
     worktree: string;
     record: SeatRecord;
 }>>;
-/** Whether this cube has an active seat from another canonical Git clone family. */
-export declare function hasActiveSeatInDifferentCloneFamily(cubeId: string, commonDir: string): Promise<boolean>;
 /** All valid worktree-bound registry entries, including a PENDING seat whose
  * interrupted finalize preserved its worktree for a later resume. Read-only:
  * pending records remain non-hydratable and getActiveSeatForWorktree stays
