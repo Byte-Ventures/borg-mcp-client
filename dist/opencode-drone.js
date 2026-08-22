@@ -1,4 +1,4 @@
-import { closeSync, constants, existsSync, fchmodSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, readSync, renameSync, unlinkSync, writeFileSync, writeSync, } from 'fs';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync, writeSync, } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
 import { join } from 'path';
@@ -8,8 +8,6 @@ import { OPENCODE_INJECTED_ENTRY_METADATA_KEY, OPENCODE_WAKE_IDENTITY_METADATA_K
 import { createOpenCodeLaunchTrust, isOpenCode256BitIdentity, OPENCODE_SERVER_USERNAME, } from './opencode-launch-trust.js';
 import { OpenCodeAuthenticationError, OpenCodeHttpError, OpenCodeResponseError, OpenCodeUnreachableError, } from './server-errors.js';
 const OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES = 64 * 1024;
-const OPEN_CODE_BINDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
-const OPEN_CODE_BINDING_FILE_RE = /^borg-opencode-session-[a-f0-9]{24}\.json$/;
 const diagnosticLogPathsForTests = new Set();
 function stateIdentityDigest(current) {
     const key = [current.directory, current.cubeName, current.droneLabel].join('\0');
@@ -180,7 +178,6 @@ export async function connectOpenCodeDrone(deps) {
             lastFailureCode: null,
         },
     };
-    sweepStaleOpenCodeBindings(tmpdir(), bindingPath(), Date.now());
     log(`connected url=${deps.serverUrl} dir=${deps.directory}`, state);
 }
 // ---------------------------------------------------------------------------
@@ -351,33 +348,6 @@ function bindingPath() {
     const path = join(tmpdir(), `borg-opencode-session-${stateIdentityDigest(current)}.json`);
     bindingPathsForTests.add(path);
     return path;
-}
-function sweepStaleOpenCodeBindings(root, currentPath, now) {
-    let names;
-    try {
-        names = readdirSync(root);
-    }
-    catch {
-        return;
-    }
-    for (const name of names) {
-        if (!OPEN_CODE_BINDING_FILE_RE.test(name))
-            continue;
-        const path = join(root, name);
-        if (path === currentPath)
-            continue;
-        try {
-            const metadata = lstatSync(path);
-            if (!metadata.isFile() || now - metadata.mtimeMs < OPEN_CODE_BINDING_MAX_AGE_MS)
-                continue;
-            // unlink removes the directory entry itself. lstat does not follow
-            // symlinks, and non-regular entries are never unlinked.
-            unlinkSync(path);
-        }
-        catch {
-            // A concurrent replacement/removal or inaccessible entry is left alone.
-        }
-    }
 }
 function bindingMatchesState(binding) {
     const current = state;
@@ -1280,9 +1250,6 @@ export function __decodeOpenCodeSessionForTests(value) {
 }
 export async function __listOpenCodeSessionsForTests() {
     return listSessions();
-}
-export function __sweepStaleOpenCodeBindingsForTests(root, currentPath, now) {
-    sweepStaleOpenCodeBindings(root, currentPath, now);
 }
 export function computeOpenCodePort(droneId, base = 14096) {
     let hash = 0;

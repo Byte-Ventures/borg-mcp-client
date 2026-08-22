@@ -1,8 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -24,7 +23,6 @@ import {
   __getOpenCodeDiagnosticLogPathForTests,
   __getOpenCodeLastObservationForTests,
   __listOpenCodeSessionsForTests,
-  __sweepStaleOpenCodeBindingsForTests,
   allocateOpenCodePort,
   configuredOpenCodePort,
   computeOpenCodePort,
@@ -186,12 +184,14 @@ async function connect(droneLabel = 'drone-7', serverUrl = SERVER_URL) {
 
 describe('OpenCode wake target binding', () => {
   const originalStateRoot = process.env[BORG_STATE_ROOT_ENV];
+  const originalTmpDir = process.env.TMPDIR;
   let testStateRoot: string;
 
   beforeEach(() => {
     __resetOpenCodeDroneForTests();
     testStateRoot = realpathSync(mkdtempSync(join(tmpdir(), 'borg-opencode-drone-state-')));
     process.env[BORG_STATE_ROOT_ENV] = testStateRoot;
+    process.env.TMPDIR = testStateRoot;
   });
 
   afterEach(() => {
@@ -200,6 +200,8 @@ describe('OpenCode wake target binding', () => {
     __resetOpenCodeDroneForTests();
     if (originalStateRoot === undefined) delete process.env[BORG_STATE_ROOT_ENV];
     else process.env[BORG_STATE_ROOT_ENV] = originalStateRoot;
+    if (originalTmpDir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = originalTmpDir;
     rmSync(testStateRoot, { recursive: true, force: true });
   });
 
@@ -556,7 +558,7 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState().lastFailureCode).toBe('incompatible-api');
   });
 
-  it('accepts consumed session fields when upstream model and agent fields have changed', () => {
+  it('accepts the exact OpenCode v2 session shape while ignoring unread fields', () => {
     const upstreamSession = {
       ...session('observed-upstream-shape', 10),
       model: {
@@ -564,13 +566,13 @@ describe('OpenCode wake target binding', () => {
         providerID: 'anthropic',
         variant: 'high',
       },
-      agent: { upstreamShapeIsOpaque: true },
+      agent: 'build',
     };
 
     expect(__decodeOpenCodeSessionForTests(upstreamSession)).toBe(upstreamSession);
   });
 
-  it('lists a populated session collection with opaque upstream model and agent fields', async () => {
+  it('lists a populated collection containing the exact OpenCode v2 session shape', async () => {
     const upstreamSession = {
       ...session('populated-upstream-shape', 10),
       model: {
@@ -578,7 +580,7 @@ describe('OpenCode wake target binding', () => {
         providerID: 'anthropic',
         variant: 'high',
       },
-      agent: ['opaque', { to: 'borg' }],
+      agent: 'build',
     };
     installOpenCodeApi({ sessions: () => [upstreamSession] });
     await connect();
@@ -692,32 +694,29 @@ describe('OpenCode wake target binding', () => {
     expect(__getOpenCodeDiagnosticLogPathForTests()).toBe(firstPath);
   });
 
-  it('sweeps only stale regular binding files without following symlinks', async () => {
-    const identity = createHash('sha256').update(randomUUID()).digest('hex').slice(0, 24);
-    const symlinkIdentity = createHash('sha256').update(randomUUID()).digest('hex').slice(0, 24);
-    const stalePath = join(testStateRoot, `borg-opencode-session-${identity}.json`);
-    const symlinkPath = join(testStateRoot, `borg-opencode-session-${symlinkIdentity}.json`);
-    const currentPath = join(testStateRoot, 'borg-opencode-session-000000000000000000000000.json');
-    const victimPath = join(testStateRoot, 'binding-sweep-victim.json');
-    writeFileSync(stalePath, '{}', { mode: 0o600 });
+  it('preserves an idle active seat binding older than seven days when another seat connects', async () => {
+    const launch = launchKickoff('idle-active-binding');
+    const root = session('idle-active-root', 10);
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+    });
+    const droneLabel = 'idle-active-seat';
+    const identity = createHash('sha256')
+      .update([DIRECTORY, 'borg-mcp', droneLabel].join('\0'))
+      .digest('hex')
+      .slice(0, 24);
+    const idleBindingPath = join(testStateRoot, `borg-opencode-session-${identity}.json`);
+
+    await connect(droneLabel);
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    expect(existsSync(idleBindingPath)).toBe(true);
     const staleTime = new Date(Date.now() - (8 * 24 * 60 * 60 * 1_000));
-    utimesSync(stalePath, staleTime, staleTime);
-    writeFileSync(currentPath, '{}', { mode: 0o600 });
-    utimesSync(currentPath, staleTime, staleTime);
-    writeFileSync(victimPath, 'unchanged\n', { mode: 0o600 });
-    symlinkSync(victimPath, symlinkPath);
+    utimesSync(idleBindingPath, staleTime, staleTime);
 
-    try {
-      __sweepStaleOpenCodeBindingsForTests(testStateRoot, currentPath, Date.now());
+    await connect('another-seat');
 
-      expect(existsSync(stalePath)).toBe(false);
-      expect(existsSync(currentPath)).toBe(true);
-      expect(lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
-      expect(readFileSync(victimPath, 'utf8')).toBe('unchanged\n');
-    } finally {
-      try { unlinkSync(stalePath); } catch { /* Already swept. */ }
-      try { unlinkSync(symlinkPath); } catch { /* Test cleanup only. */ }
-    }
+    expect(existsSync(idleBindingPath)).toBe(true);
   });
 
   it('reports diagnostic log write failures instead of swallowing them', async () => {

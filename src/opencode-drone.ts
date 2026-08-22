@@ -4,10 +4,8 @@ import {
   existsSync,
   fchmodSync,
   fstatSync,
-  lstatSync,
   openSync,
   readFileSync,
-  readdirSync,
   readSync,
   renameSync,
   unlinkSync,
@@ -43,8 +41,6 @@ import {
 } from './server-errors.js';
 
 const OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES = 64 * 1024;
-const OPEN_CODE_BINDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
-const OPEN_CODE_BINDING_FILE_RE = /^borg-opencode-session-[a-f0-9]{24}\.json$/;
 const diagnosticLogPathsForTests = new Set<string>();
 
 function stateIdentityDigest(current: OpenCodeDroneState): string {
@@ -360,7 +356,6 @@ export async function connectOpenCodeDrone(deps: ConnectDeps): Promise<void> {
       lastFailureCode: null,
     },
   };
-  sweepStaleOpenCodeBindings(tmpdir(), bindingPath(), Date.now());
   log(`connected url=${deps.serverUrl} dir=${deps.directory}`, state);
 }
 
@@ -554,33 +549,6 @@ function bindingPath(): string {
   const path = join(tmpdir(), `borg-opencode-session-${stateIdentityDigest(current)}.json`);
   bindingPathsForTests.add(path);
   return path;
-}
-
-function sweepStaleOpenCodeBindings(
-  root: string,
-  currentPath: string,
-  now: number,
-): void {
-  let names: string[];
-  try {
-    names = readdirSync(root);
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    if (!OPEN_CODE_BINDING_FILE_RE.test(name)) continue;
-    const path = join(root, name);
-    if (path === currentPath) continue;
-    try {
-      const metadata = lstatSync(path);
-      if (!metadata.isFile() || now - metadata.mtimeMs < OPEN_CODE_BINDING_MAX_AGE_MS) continue;
-      // unlink removes the directory entry itself. lstat does not follow
-      // symlinks, and non-regular entries are never unlinked.
-      unlinkSync(path);
-    } catch {
-      // A concurrent replacement/removal or inaccessible entry is left alone.
-    }
-  }
 }
 
 function bindingMatchesState(binding: SessionBinding): boolean {
@@ -1603,14 +1571,6 @@ export function __decodeOpenCodeSessionForTests(value: unknown): unknown {
 
 export async function __listOpenCodeSessionsForTests(): Promise<unknown[]> {
   return listSessions();
-}
-
-export function __sweepStaleOpenCodeBindingsForTests(
-  root: string,
-  currentPath: string,
-  now: number,
-): void {
-  sweepStaleOpenCodeBindings(root, currentPath, now);
 }
 
 export function computeOpenCodePort(droneId: string, base: number = 14096): number {
