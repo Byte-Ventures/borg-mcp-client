@@ -271,11 +271,7 @@ function decodeSession(value) {
         || !isRecord(value.time)
         || typeof value.time.created !== 'number'
         || !Number.isFinite(value.time.created)
-        || (value.parentID !== undefined && typeof value.parentID !== 'string')
-        || (value.agent !== undefined && typeof value.agent !== 'string')
-        || (value.model !== undefined && (!isRecord(value.model)
-            || typeof value.model.providerID !== 'string'
-            || typeof value.model.modelID !== 'string'))) {
+        || (value.parentID !== undefined && typeof value.parentID !== 'string')) {
         throw new OpenCodeResponseError();
     }
     return value;
@@ -1278,6 +1274,12 @@ export function __getOpenCodeLastObservationForTests() {
     if (!state)
         throw new Error('OpenCode drone is not connected');
     return { ...state.lastObservation };
+}
+export function __decodeOpenCodeSessionForTests(value) {
+    return decodeSession(value);
+}
+export async function __listOpenCodeSessionsForTests() {
+    return listSessions();
 }
 export function __sweepStaleOpenCodeBindingsForTests(root, currentPath, now) {
     sweepStaleOpenCodeBindings(root, currentPath, now);

@@ -66,6 +66,8 @@ export interface OpenCodeConnectionState {
 export declare function getOpenCodeConnectionState(): OpenCodeConnectionState;
 export declare function __getOpenCodeDiagnosticLogPathForTests(): string;
 export declare function __getOpenCodeLastObservationForTests(): OpenCodeLastObservation;
+export declare function __decodeOpenCodeSessionForTests(value: unknown): unknown;
+export declare function __listOpenCodeSessionsForTests(): Promise<unknown[]>;
 export declare function __sweepStaleOpenCodeBindingsForTests(root: string, currentPath: string, now: number): void;
 export declare function computeOpenCodePort(droneId: string, base?: number): number;
 export declare function configuredOpenCodePort(env?: NodeJS.ProcessEnv): number | null;

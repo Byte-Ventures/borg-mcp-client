@@ -20,8 +20,10 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
+  __decodeOpenCodeSessionForTests,
   __getOpenCodeDiagnosticLogPathForTests,
   __getOpenCodeLastObservationForTests,
+  __listOpenCodeSessionsForTests,
   __sweepStaleOpenCodeBindingsForTests,
   allocateOpenCodePort,
   configuredOpenCodePort,
@@ -552,6 +554,36 @@ describe('OpenCode wake target binding', () => {
 
     await expect(probeOpenCodeDroneArmed()).resolves.toBe(false);
     expect(getOpenCodeConnectionState().lastFailureCode).toBe('incompatible-api');
+  });
+
+  it('accepts consumed session fields when upstream model and agent fields have changed', () => {
+    const upstreamSession = {
+      ...session('observed-upstream-shape', 10),
+      model: {
+        id: 'claude-sonnet-4',
+        providerID: 'anthropic',
+        variant: 'high',
+      },
+      agent: { upstreamShapeIsOpaque: true },
+    };
+
+    expect(__decodeOpenCodeSessionForTests(upstreamSession)).toBe(upstreamSession);
+  });
+
+  it('lists a populated session collection with opaque upstream model and agent fields', async () => {
+    const upstreamSession = {
+      ...session('populated-upstream-shape', 10),
+      model: {
+        id: 'claude-sonnet-4',
+        providerID: 'anthropic',
+        variant: 'high',
+      },
+      agent: ['opaque', { to: 'borg' }],
+    };
+    installOpenCodeApi({ sessions: () => [upstreamSession] });
+    await connect();
+
+    await expect(__listOpenCodeSessionsForTests()).resolves.toEqual([upstreamSession]);
   });
 
   it('classifies malformed OpenCode JSON as an incompatible API response', async () => {
