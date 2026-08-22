@@ -537,7 +537,7 @@ async function findLaunchSession(correlationIdentity) {
     catch (error) {
         if (state === owner)
             recordOpenCodeFailure(owner, error, observationSequence);
-        return { kind: 'list-failed', failureCode: openCodeFailureCode(error) };
+        return { kind: 'list-failed', ...openCodeFailureDiagnostic(error) };
     }
     if (state !== owner)
         return { kind: 'superseded' };
@@ -562,7 +562,7 @@ async function findLaunchSession(correlationIdentity) {
             kind: 'message-list-failed',
             listedCount: listedSessions.length,
             directoryCount: sessions.length,
-            failureCode: openCodeFailureCode(error),
+            ...openCodeFailureDiagnostic(error),
         };
     }
     if (state !== owner)
@@ -583,6 +583,7 @@ function logLaunchSessionSearchFailure(failure, attempts, owner) {
     switch (failure.kind) {
         case 'list-failed':
             log(`kickoff: session search list-failed code=${failure.failureCode} `
+                + `class=${failure.errorClass} status=${failure.httpStatus ?? 'none'} `
                 + `listed=unknown directory=unknown matches=unknown attempts=${attempts}`, owner);
             break;
         case 'directory-miss':
@@ -591,6 +592,7 @@ function logLaunchSessionSearchFailure(failure, attempts, owner) {
             break;
         case 'message-list-failed':
             log(`kickoff: session search messages-failed code=${failure.failureCode} `
+                + `class=${failure.errorClass} status=${failure.httpStatus ?? 'none'} `
                 + `listed=${failure.listedCount} directory=${failure.directoryCount} `
                 + `matches=unknown attempts=${attempts}`, owner);
             break;
@@ -653,6 +655,13 @@ function openCodeFailureCode(error) {
     if (typeof code === 'string' && code.length > 0)
         return code;
     return error instanceof Error && error.name ? error.name : 'unknown';
+}
+function openCodeFailureDiagnostic(error) {
+    return {
+        failureCode: openCodeFailureCode(error),
+        errorClass: error instanceof Error && error.name ? error.name : 'unknown',
+        httpStatus: error instanceof OpenCodeHttpError ? error.status : null,
+    };
 }
 function updateLastOpenCodeObservation(owner, sequence, update) {
     // Attempts, acceptances, and failures resolve independently; an observation
@@ -997,7 +1006,9 @@ export async function injectInitialKickoff(launch) {
         if (!serverReady) {
             const observationSequence = ++owner.nextObservationSequence;
             recordOpenCodeFailure(owner, lastServerError, observationSequence);
-            log(`kickoff: server unavailable code=${openCodeFailureCode(lastServerError)} attempts=30`, owner);
+            const failure = openCodeFailureDiagnostic(lastServerError);
+            log(`kickoff: server unavailable code=${failure.failureCode} `
+                + `class=${failure.errorClass} status=${failure.httpStatus ?? 'none'} attempts=30`, owner);
             return false;
         }
         // Capture the launch-selected session, including explicit resume/fork

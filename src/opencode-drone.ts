@@ -755,6 +755,8 @@ async function findLaunchSession(correlationIdentity: string): Promise<{
 } | {
   kind: 'list-failed';
   failureCode: string;
+  errorClass: string;
+  httpStatus: number | null;
 } | {
   kind: 'directory-miss';
   listedCount: number;
@@ -764,6 +766,8 @@ async function findLaunchSession(correlationIdentity: string): Promise<{
   listedCount: number;
   directoryCount: number;
   failureCode: string;
+  errorClass: string;
+  httpStatus: number | null;
 } | {
   kind: 'correlation-mismatch';
   listedCount: number;
@@ -777,7 +781,7 @@ async function findLaunchSession(correlationIdentity: string): Promise<{
     listedSessions = await listSessions();
   } catch (error) {
     if (state === owner) recordOpenCodeFailure(owner, error, observationSequence);
-    return { kind: 'list-failed', failureCode: openCodeFailureCode(error) };
+    return { kind: 'list-failed', ...openCodeFailureDiagnostic(error) };
   }
   if (state !== owner) return { kind: 'superseded' };
   const sessions = listedSessions.filter(
@@ -804,7 +808,7 @@ async function findLaunchSession(correlationIdentity: string): Promise<{
       kind: 'message-list-failed',
       listedCount: listedSessions.length,
       directoryCount: sessions.length,
-      failureCode: openCodeFailureCode(error),
+      ...openCodeFailureDiagnostic(error),
     };
   }
   if (state !== owner) return { kind: 'superseded' };
@@ -834,6 +838,7 @@ function logLaunchSessionSearchFailure(
     case 'list-failed':
       log(
         `kickoff: session search list-failed code=${failure.failureCode} `
+        + `class=${failure.errorClass} status=${failure.httpStatus ?? 'none'} `
         + `listed=unknown directory=unknown matches=unknown attempts=${attempts}`,
         owner,
       );
@@ -848,6 +853,7 @@ function logLaunchSessionSearchFailure(
     case 'message-list-failed':
       log(
         `kickoff: session search messages-failed code=${failure.failureCode} `
+        + `class=${failure.errorClass} status=${failure.httpStatus ?? 'none'} `
         + `listed=${failure.listedCount} directory=${failure.directoryCount} `
         + `matches=unknown attempts=${attempts}`,
         owner,
@@ -919,6 +925,18 @@ function openCodeFailureCode(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code;
   if (typeof code === 'string' && code.length > 0) return code;
   return error instanceof Error && error.name ? error.name : 'unknown';
+}
+
+function openCodeFailureDiagnostic(error: unknown): {
+  failureCode: string;
+  errorClass: string;
+  httpStatus: number | null;
+} {
+  return {
+    failureCode: openCodeFailureCode(error),
+    errorClass: error instanceof Error && error.name ? error.name : 'unknown',
+    httpStatus: error instanceof OpenCodeHttpError ? error.status : null,
+  };
 }
 
 function updateLastOpenCodeObservation(
@@ -1288,8 +1306,10 @@ export async function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promi
     if (!serverReady) {
       const observationSequence = ++owner.nextObservationSequence;
       recordOpenCodeFailure(owner, lastServerError, observationSequence);
+      const failure = openCodeFailureDiagnostic(lastServerError);
       log(
-        `kickoff: server unavailable code=${openCodeFailureCode(lastServerError)} attempts=30`,
+        `kickoff: server unavailable code=${failure.failureCode} `
+        + `class=${failure.errorClass} status=${failure.httpStatus ?? 'none'} attempts=30`,
         owner,
       );
       return false;

@@ -303,7 +303,7 @@ describe('OpenCode wake target binding', () => {
     await expect(binding).resolves.toBe(false);
     expect(getOpenCodeConnectionState().lastFailureCode).toBe('unauthorized');
     expect(readFileSync(__getOpenCodeDiagnosticLogPathForTests(), 'utf8')).toContain(
-      'kickoff: server unavailable code=unauthorized attempts=30',
+      'kickoff: server unavailable code=unauthorized class=OpenCodeHttpError status=401 attempts=30',
     );
     expect(api.fetchMock).toHaveBeenCalledTimes(30);
   });
@@ -329,12 +329,20 @@ describe('OpenCode wake target binding', () => {
 
   it.each([
     {
-      name: 'session-list failure',
+      name: 'session-list HTTP failure',
       sessions: [session('listed-root', 10)],
       sessionsResponse: (attempt: number) => attempt === 1
         ? new Response(JSON.stringify([session('listed-root', 10)]), { status: 200 })
-        : new Response('unauthorized', { status: 401 }),
-      expected: 'kickoff: session search list-failed code=unauthorized listed=unknown directory=unknown matches=unknown attempts=30',
+        : new Response('forbidden', { status: 403 }),
+      expected: 'kickoff: session search list-failed code=incompatible-api class=OpenCodeHttpError status=403 listed=unknown directory=unknown matches=unknown attempts=30',
+    },
+    {
+      name: 'session-list decode failure',
+      sessions: [session('decode-root', 10)],
+      sessionsResponse: (attempt: number) => attempt === 1
+        ? new Response(JSON.stringify([session('decode-root', 10)]), { status: 200 })
+        : new Response('{}', { status: 200 }),
+      expected: 'kickoff: session search list-failed code=incompatible-api class=OpenCodeResponseError status=none listed=unknown directory=unknown matches=unknown attempts=30',
     },
     {
       name: 'zero directory matches',
