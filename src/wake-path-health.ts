@@ -49,7 +49,9 @@ export function openCodeWakePathHealthy(
   ) {
     return null;
   }
-  if (state.sessionId === null) return null;
+  if (state.sessionId === null) {
+    return state.lastFailureCode === null ? null : false;
+  }
   return true;
 }
 

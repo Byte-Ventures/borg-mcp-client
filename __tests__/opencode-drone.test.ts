@@ -1,6 +1,8 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,6 +12,7 @@ import {
   statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,6 +22,7 @@ import {
   __resetOpenCodeDroneForTests,
   __getOpenCodeDiagnosticLogPathForTests,
   __getOpenCodeLastObservationForTests,
+  __sweepStaleOpenCodeBindingsForTests,
   allocateOpenCodePort,
   configuredOpenCodePort,
   computeOpenCodePort,
@@ -35,6 +39,7 @@ import {
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 import { streamOnce } from '../src/log-stream';
+import { openCodeWakePathHealthy } from '../src/wake-path-health';
 import { OpenCodeAuthenticationError } from '../src/server-errors';
 import { BORG_STATE_ROOT_ENV, borgConfigRoot } from '../src/private-root';
 import {
@@ -167,9 +172,9 @@ function installOpenCodeApi(options: {
   return { prompts, promptBodies, fetchMock };
 }
 
-async function connect(droneLabel = 'drone-7') {
+async function connect(droneLabel = 'drone-7', serverUrl = SERVER_URL) {
   await connectOpenCodeDrone({
-    serverUrl: SERVER_URL,
+    serverUrl,
     apiPassword: API_PASSWORD,
     directory: DIRECTORY,
     droneLabel,
@@ -646,6 +651,43 @@ describe('OpenCode wake target binding', () => {
     expect(__getOpenCodeDiagnosticLogPathForTests()).not.toBe(firstPath);
   });
 
+  it('keeps one seat identity when a relaunch selects a different port', async () => {
+    await connect('stable-seat-identity', 'http://127.0.0.1:15113');
+    const firstPath = __getOpenCodeDiagnosticLogPathForTests();
+
+    await connect('stable-seat-identity', 'http://127.0.0.1:16113');
+
+    expect(__getOpenCodeDiagnosticLogPathForTests()).toBe(firstPath);
+  });
+
+  it('sweeps only stale regular binding files without following symlinks', async () => {
+    const identity = createHash('sha256').update(randomUUID()).digest('hex').slice(0, 24);
+    const symlinkIdentity = createHash('sha256').update(randomUUID()).digest('hex').slice(0, 24);
+    const stalePath = join(testStateRoot, `borg-opencode-session-${identity}.json`);
+    const symlinkPath = join(testStateRoot, `borg-opencode-session-${symlinkIdentity}.json`);
+    const currentPath = join(testStateRoot, 'borg-opencode-session-000000000000000000000000.json');
+    const victimPath = join(testStateRoot, 'binding-sweep-victim.json');
+    writeFileSync(stalePath, '{}', { mode: 0o600 });
+    const staleTime = new Date(Date.now() - (8 * 24 * 60 * 60 * 1_000));
+    utimesSync(stalePath, staleTime, staleTime);
+    writeFileSync(currentPath, '{}', { mode: 0o600 });
+    utimesSync(currentPath, staleTime, staleTime);
+    writeFileSync(victimPath, 'unchanged\n', { mode: 0o600 });
+    symlinkSync(victimPath, symlinkPath);
+
+    try {
+      __sweepStaleOpenCodeBindingsForTests(testStateRoot, currentPath, Date.now());
+
+      expect(existsSync(stalePath)).toBe(false);
+      expect(existsSync(currentPath)).toBe(true);
+      expect(lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
+      expect(readFileSync(victimPath, 'utf8')).toBe('unchanged\n');
+    } finally {
+      try { unlinkSync(stalePath); } catch { /* Already swept. */ }
+      try { unlinkSync(symlinkPath); } catch { /* Test cleanup only. */ }
+    }
+  });
+
   it('reports diagnostic log write failures instead of swallowing them', async () => {
     await connect('diagnostic-write-failure');
     const path = __getOpenCodeDiagnosticLogPathForTests();
@@ -763,6 +805,24 @@ describe('OpenCode wake target binding', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(binding).resolves.toBe(false);
     expect(getOpenCodeConnectionState().sessionId).toBeNull();
+  });
+
+  it('reports a failed kickoff as an unhealthy no-target state instead of idle', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('no-target-health');
+    const root = session('uncorrelated-health-root', 10);
+    installOpenCodeApi({ sessions: () => [root], messages: { [root.id]: [] } });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.runAllTimersAsync();
+
+    await expect(binding).resolves.toBe(false);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      sessionId: null,
+      lastFailureCode: 'no-target',
+    });
+    expect(openCodeWakePathHealthy(getOpenCodeConnectionState())).toBe(false);
   });
 
   it('does not claim an exact match while another candidate is unverifiable', async () => {
@@ -911,6 +971,23 @@ describe('OpenCode wake target binding', () => {
     await connect();
     await injectOpenCodeEntry('wake from MCP child');
 
+    expect(api.prompts).toEqual([root.id]);
+  });
+
+  it('restores a prior-launch binding after the OpenCode port changes', async () => {
+    const launch = launchKickoff('port-independent-binding');
+    const root = session('port-independent-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+    });
+
+    await connect('stable-binding-seat', 'http://127.0.0.1:15113');
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    disconnectOpenCodeDrone();
+    await connect('stable-binding-seat', 'http://127.0.0.1:16113');
+
+    await expect(injectOpenCodeEntry('wake after port change')).resolves.toBe(true);
     expect(api.prompts).toEqual([root.id]);
   });
 
