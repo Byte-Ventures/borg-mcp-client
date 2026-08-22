@@ -530,30 +530,75 @@ function launchCorrelationMatchCount(messages, correlationIdentity) {
 async function findLaunchSession(correlationIdentity) {
     const owner = state;
     const observationSequence = ++owner.nextObservationSequence;
+    let listedSessions;
     try {
-        const listedSessions = await listSessions();
-        if (state !== owner)
-            return null;
-        const sessions = listedSessions.filter((session) => session.directory === owner.directory);
-        const knownRootSessionIds = sessions
-            .filter(isTopLevelSession)
-            .map((session) => session.id);
-        const candidates = await Promise.all(sessions.map(async (session) => ({
-            session,
-            matchCount: launchCorrelationMatchCount(await listSessionMessages(session.id), correlationIdentity),
-        })));
-        if (state !== owner)
-            return null;
-        const totalMatches = candidates.reduce((total, candidate) => total + candidate.matchCount, 0);
-        if (totalMatches !== 1)
-            return null;
-        const matched = candidates.find((candidate) => candidate.matchCount === 1);
-        return matched ? { session: matched.session, knownRootSessionIds } : null;
+        listedSessions = await listSessions();
     }
     catch (error) {
         if (state === owner)
             recordOpenCodeFailure(owner, error, observationSequence);
-        return null;
+        return { kind: 'list-failed', failureCode: openCodeFailureCode(error) };
+    }
+    if (state !== owner)
+        return { kind: 'superseded' };
+    const sessions = listedSessions.filter((session) => session.directory === owner.directory);
+    if (sessions.length === 0) {
+        return { kind: 'directory-miss', listedCount: listedSessions.length, directoryCount: 0 };
+    }
+    const knownRootSessionIds = sessions
+        .filter(isTopLevelSession)
+        .map((session) => session.id);
+    let candidates;
+    try {
+        candidates = await Promise.all(sessions.map(async (session) => ({
+            session,
+            matchCount: launchCorrelationMatchCount(await listSessionMessages(session.id), correlationIdentity),
+        })));
+    }
+    catch (error) {
+        if (state === owner)
+            recordOpenCodeFailure(owner, error, observationSequence);
+        return {
+            kind: 'message-list-failed',
+            listedCount: listedSessions.length,
+            directoryCount: sessions.length,
+            failureCode: openCodeFailureCode(error),
+        };
+    }
+    if (state !== owner)
+        return { kind: 'superseded' };
+    const totalMatches = candidates.reduce((total, candidate) => total + candidate.matchCount, 0);
+    if (totalMatches !== 1) {
+        return {
+            kind: 'correlation-mismatch',
+            listedCount: listedSessions.length,
+            directoryCount: sessions.length,
+            matchCount: totalMatches,
+        };
+    }
+    const matched = candidates.find((candidate) => candidate.matchCount === 1);
+    return { kind: 'found', session: matched.session, knownRootSessionIds };
+}
+function logLaunchSessionSearchFailure(failure, attempts, owner) {
+    switch (failure.kind) {
+        case 'list-failed':
+            log(`kickoff: session search list-failed code=${failure.failureCode} `
+                + `listed=unknown directory=unknown matches=unknown attempts=${attempts}`, owner);
+            break;
+        case 'directory-miss':
+            log(`kickoff: session search directory-miss listed=${failure.listedCount} `
+                + `directory=${failure.directoryCount} matches=0 attempts=${attempts}`, owner);
+            break;
+        case 'message-list-failed':
+            log(`kickoff: session search messages-failed code=${failure.failureCode} `
+                + `listed=${failure.listedCount} directory=${failure.directoryCount} `
+                + `matches=unknown attempts=${attempts}`, owner);
+            break;
+        case 'correlation-mismatch':
+            log(`kickoff: session search correlation-mismatch listed=${failure.listedCount} `
+                + `directory=${failure.directoryCount} `
+                + `matches=${failure.matchCount} attempts=${attempts}`, owner);
+            break;
     }
 }
 async function resolveInjectionSession(owner, observationSequence) {
@@ -930,31 +975,49 @@ export async function injectInitialKickoff(launch) {
     }
     try {
         // Wait for the server.
+        let serverReady = false;
+        let lastServerError;
         for (let i = 0; i < 30; i++) {
             try {
                 await listSessions();
+                if (state !== owner)
+                    return false;
+                serverReady = true;
                 log(`kickoff: server ready (attempt ${i + 1})`, owner);
                 break;
             }
-            catch {
-                // not ready yet
+            catch (error) {
+                if (state !== owner)
+                    return false;
+                lastServerError = error;
             }
-            await new Promise((r) => setTimeout(r, 1000));
+            if (i < 29)
+                await new Promise((r) => setTimeout(r, 1000));
+        }
+        if (!serverReady) {
+            const observationSequence = ++owner.nextObservationSequence;
+            recordOpenCodeFailure(owner, lastServerError, observationSequence);
+            log(`kickoff: server unavailable code=${openCodeFailureCode(lastServerError)} attempts=30`, owner);
+            return false;
         }
         // Capture the launch-selected session, including explicit resume/fork
         // targets. Unrelated sessions do not contain this launch's metadata identity.
+        let lastSearchFailure = null;
         for (let i = 0; i < 30; i++) {
-            const binding = await findLaunchSession(launch.correlationIdentity);
-            if (binding) {
-                if (state !== owner)
-                    return false;
-                saveBinding(binding.session, binding.knownRootSessionIds);
-                log(`kickoff: bound session ${binding.session.id.slice(0, 8)}…`, owner);
+            const result = await findLaunchSession(launch.correlationIdentity);
+            if (result.kind === 'superseded')
+                return false;
+            if (result.kind === 'found') {
+                saveBinding(result.session, result.knownRootSessionIds);
+                log(`kickoff: bound session ${result.session.id.slice(0, 8)}…`, owner);
                 return true;
             }
-            await new Promise((r) => setTimeout(r, 1000));
+            lastSearchFailure = result;
+            if (i < 29)
+                await new Promise((r) => setTimeout(r, 1000));
         }
-        log('kickoff: no session found', owner);
+        if (lastSearchFailure)
+            logLaunchSessionSearchFailure(lastSearchFailure, 30, owner);
         return false;
     }
     catch (err) {

@@ -288,6 +288,84 @@ describe('OpenCode wake target binding', () => {
     }
   });
 
+  it('reports the final server-readiness failure code and attempt count', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('server-readiness-failure');
+    const api = installOpenCodeApi({
+      sessions: () => [],
+      sessionsResponse: () => new Response('unauthorized', { status: 401 }),
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.runAllTimersAsync();
+
+    await expect(binding).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().lastFailureCode).toBe('unauthorized');
+    expect(readFileSync(__getOpenCodeDiagnosticLogPathForTests(), 'utf8')).toContain(
+      'kickoff: server unavailable code=unauthorized attempts=30',
+    );
+    expect(api.fetchMock).toHaveBeenCalledTimes(30);
+  });
+
+  it('does not poll for a launch session after server readiness exhausts', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('no-session-poll-after-readiness-failure');
+    const api = installOpenCodeApi({
+      sessions: () => [],
+      sessionsResponse: () => Promise.reject(new Error('connection refused')),
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.runAllTimersAsync();
+
+    await expect(binding).resolves.toBe(false);
+    expect(api.fetchMock).toHaveBeenCalledTimes(30);
+    expect(readFileSync(__getOpenCodeDiagnosticLogPathForTests(), 'utf8')).not.toContain(
+      'kickoff: no session found',
+    );
+  });
+
+  it.each([
+    {
+      name: 'session-list failure',
+      sessions: [session('listed-root', 10)],
+      sessionsResponse: (attempt: number) => attempt === 1
+        ? new Response(JSON.stringify([session('listed-root', 10)]), { status: 200 })
+        : new Response('unauthorized', { status: 401 }),
+      expected: 'kickoff: session search list-failed code=unauthorized listed=unknown directory=unknown matches=unknown attempts=30',
+    },
+    {
+      name: 'zero directory matches',
+      sessions: [{ ...session('other-directory-root', 10), directory: '/other-repo' }],
+      expected: 'kickoff: session search directory-miss listed=1 directory=0 matches=0 attempts=30',
+    },
+    {
+      name: 'wrong correlation count',
+      sessions: [session('uncorrelated-root', 10)],
+      expected: 'kickoff: session search correlation-mismatch listed=1 directory=1 matches=0 attempts=30',
+    },
+  ])('distinguishes $name while finding the launch session', async ({ sessions, sessionsResponse, expected }) => {
+    vi.useFakeTimers();
+    const launch = launchKickoff(`launch-search-${expected}`);
+    let listAttempts = 0;
+    installOpenCodeApi({
+      sessions: () => sessions,
+      messages: Object.fromEntries(sessions.map((candidate) => [candidate.id, []])),
+      ...(sessionsResponse
+        ? { sessionsResponse: () => sessionsResponse(++listAttempts) }
+        : {}),
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.runAllTimersAsync();
+
+    await expect(binding).resolves.toBe(false);
+    expect(readFileSync(__getOpenCodeDiagnosticLogPathForTests(), 'utf8')).toContain(expected);
+  });
+
   it.each([
     [401, 'unauthorized'],
     [404, 'not-found'],
