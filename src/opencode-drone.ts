@@ -44,7 +44,7 @@ const OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES = 64 * 1024;
 const diagnosticLogPathsForTests = new Set<string>();
 
 function stateIdentityDigest(current: OpenCodeDroneState): string {
-  const key = [current.serverUrl, current.directory, current.cubeName, current.droneLabel].join('\0');
+  const key = [current.directory, current.cubeName, current.droneLabel].join('\0');
   return createHash('sha256').update(key).digest('hex').slice(0, 24);
 }
 
@@ -211,8 +211,6 @@ interface OCSession {
   directory: string;
   time: { created: number };
   parentID?: string;
-  agent?: string;
-  model?: { providerID: string; modelID: string };
 }
 
 interface OCMessage {
@@ -461,12 +459,6 @@ function decodeSession(value: unknown): OCSession {
     || typeof value.time.created !== 'number'
     || !Number.isFinite(value.time.created)
     || (value.parentID !== undefined && typeof value.parentID !== 'string')
-    || (value.agent !== undefined && typeof value.agent !== 'string')
-    || (value.model !== undefined && (
-      !isRecord(value.model)
-      || typeof value.model.providerID !== 'string'
-      || typeof value.model.modelID !== 'string'
-    ))
   ) {
     throw new OpenCodeResponseError();
   }
@@ -562,7 +554,6 @@ function bindingPath(): string {
 function bindingMatchesState(binding: SessionBinding): boolean {
   const current = state!;
   return binding.version === 4
-    && binding.serverUrl === current.serverUrl
     && binding.directory === current.directory
     && binding.droneLabel === current.droneLabel
     && binding.cubeName === current.cubeName
@@ -747,35 +738,126 @@ function launchCorrelationMatchCount(messages: OCMessage[], correlationIdentity:
  * therefore allowed only when it received this launch's correlation metadata.
  */
 async function findLaunchSession(correlationIdentity: string): Promise<{
+  kind: 'found';
   session: OCSession;
   knownRootSessionIds: string[];
-} | null> {
+} | {
+  kind: 'superseded';
+} | {
+  kind: 'list-failed';
+  failureCode: string;
+  errorClass: string;
+  httpStatus: number | null;
+} | {
+  kind: 'directory-miss';
+  listedCount: number;
+  directoryCount: 0;
+} | {
+  kind: 'message-list-failed';
+  listedCount: number;
+  directoryCount: number;
+  failureCode: string;
+  errorClass: string;
+  httpStatus: number | null;
+} | {
+  kind: 'correlation-mismatch';
+  listedCount: number;
+  directoryCount: number;
+  matchCount: number;
+}> {
   const owner = state!;
   const observationSequence = ++owner.nextObservationSequence;
+  let listedSessions: OCSession[];
   try {
-    const listedSessions = await listSessions();
-    if (state !== owner) return null;
-    const sessions = listedSessions.filter(
-      (session) => session.directory === owner.directory,
-    );
-    const knownRootSessionIds = sessions
-      .filter(isTopLevelSession)
-      .map((session) => session.id);
-    const candidates = await Promise.all(sessions.map(async (session) => ({
+    listedSessions = await listSessions();
+  } catch (error) {
+    if (state === owner) recordOpenCodeFailure(owner, error, observationSequence);
+    return { kind: 'list-failed', ...openCodeFailureDiagnostic(error) };
+  }
+  if (state !== owner) return { kind: 'superseded' };
+  const sessions = listedSessions.filter(
+    (session) => session.directory === owner.directory,
+  );
+  if (sessions.length === 0) {
+    return { kind: 'directory-miss', listedCount: listedSessions.length, directoryCount: 0 };
+  }
+  const knownRootSessionIds = sessions
+    .filter(isTopLevelSession)
+    .map((session) => session.id);
+  let candidates: Array<{ session: OCSession; matchCount: number }>;
+  try {
+    candidates = await Promise.all(sessions.map(async (session) => ({
       session,
       matchCount: launchCorrelationMatchCount(
         await listSessionMessages(session.id),
         correlationIdentity,
       ),
     })));
-    if (state !== owner) return null;
-    const totalMatches = candidates.reduce((total, candidate) => total + candidate.matchCount, 0);
-    if (totalMatches !== 1) return null;
-    const matched = candidates.find((candidate) => candidate.matchCount === 1);
-    return matched ? { session: matched.session, knownRootSessionIds } : null;
   } catch (error) {
     if (state === owner) recordOpenCodeFailure(owner, error, observationSequence);
-    return null;
+    return {
+      kind: 'message-list-failed',
+      listedCount: listedSessions.length,
+      directoryCount: sessions.length,
+      ...openCodeFailureDiagnostic(error),
+    };
+  }
+  if (state !== owner) return { kind: 'superseded' };
+  const totalMatches = candidates.reduce((total, candidate) => total + candidate.matchCount, 0);
+  if (totalMatches !== 1) {
+    return {
+      kind: 'correlation-mismatch',
+      listedCount: listedSessions.length,
+      directoryCount: sessions.length,
+      matchCount: totalMatches,
+    };
+  }
+  const matched = candidates.find((candidate) => candidate.matchCount === 1)!;
+  return { kind: 'found', session: matched.session, knownRootSessionIds };
+}
+
+type LaunchSessionSearchFailure = Exclude<Awaited<ReturnType<typeof findLaunchSession>>, {
+  kind: 'found' | 'superseded';
+}>;
+
+function logLaunchSessionSearchFailure(
+  failure: LaunchSessionSearchFailure,
+  attempts: number,
+  owner: OpenCodeDroneState,
+): void {
+  switch (failure.kind) {
+    case 'list-failed':
+      log(
+        `kickoff: session search list-failed code=${failure.failureCode} `
+        + `class=${failure.errorClass} status=${failure.httpStatus ?? 'none'} `
+        + `listed=unknown directory=unknown matches=unknown attempts=${attempts}`,
+        owner,
+      );
+      break;
+    case 'directory-miss':
+      log(
+        `kickoff: session search directory-miss listed=${failure.listedCount} `
+        + `directory=${failure.directoryCount} matches=0 attempts=${attempts}`,
+        owner,
+      );
+      break;
+    case 'message-list-failed':
+      log(
+        `kickoff: session search messages-failed code=${failure.failureCode} `
+        + `class=${failure.errorClass} status=${failure.httpStatus ?? 'none'} `
+        + `listed=${failure.listedCount} directory=${failure.directoryCount} `
+        + `matches=unknown attempts=${attempts}`,
+        owner,
+      );
+      break;
+    case 'correlation-mismatch':
+      log(
+        `kickoff: session search correlation-mismatch listed=${failure.listedCount} `
+        + `directory=${failure.directoryCount} `
+        + `matches=${failure.matchCount} attempts=${attempts}`,
+        owner,
+      );
+      break;
   }
 }
 
@@ -834,6 +916,18 @@ function openCodeFailureCode(error: unknown): string {
   const code = (error as { code?: unknown } | null)?.code;
   if (typeof code === 'string' && code.length > 0) return code;
   return error instanceof Error && error.name ? error.name : 'unknown';
+}
+
+function openCodeFailureDiagnostic(error: unknown): {
+  failureCode: string;
+  errorClass: string;
+  httpStatus: number | null;
+} {
+  return {
+    failureCode: openCodeFailureCode(error),
+    errorClass: error instanceof Error && error.name ? error.name : 'unknown',
+    httpStatus: error instanceof OpenCodeHttpError ? error.status : null,
+  };
 }
 
 function updateLastOpenCodeObservation(
@@ -1185,31 +1279,59 @@ export async function injectInitialKickoff(launch: OpenCodeLaunchKickoff): Promi
 
   try {
     // Wait for the server.
+    let serverReady = false;
+    let lastServerError: unknown;
     for (let i = 0; i < 30; i++) {
       try {
         await listSessions();
+        if (state !== owner) return false;
+        serverReady = true;
         log(`kickoff: server ready (attempt ${i + 1})`, owner);
         break;
-      } catch {
-        // not ready yet
+      } catch (error) {
+        if (state !== owner) return false;
+        lastServerError = error;
       }
-      await new Promise((r) => setTimeout(r, 1000));
+      if (i < 29) await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (!serverReady) {
+      const observationSequence = ++owner.nextObservationSequence;
+      recordOpenCodeFailure(owner, lastServerError, observationSequence);
+      const failure = openCodeFailureDiagnostic(lastServerError);
+      log(
+        `kickoff: server unavailable code=${failure.failureCode} `
+        + `class=${failure.errorClass} status=${failure.httpStatus ?? 'none'} attempts=30`,
+        owner,
+      );
+      return false;
     }
 
     // Capture the launch-selected session, including explicit resume/fork
     // targets. Unrelated sessions do not contain this launch's metadata identity.
+    let lastSearchFailure: LaunchSessionSearchFailure | null = null;
     for (let i = 0; i < 30; i++) {
-      const binding = await findLaunchSession(launch.correlationIdentity);
-      if (binding) {
-        if (state !== owner) return false;
-        saveBinding(binding.session, binding.knownRootSessionIds);
-        log(`kickoff: bound session ${binding.session.id.slice(0, 8)}…`, owner);
+      const result = await findLaunchSession(launch.correlationIdentity);
+      if (result.kind === 'superseded') return false;
+      if (result.kind === 'found') {
+        saveBinding(result.session, result.knownRootSessionIds);
+        log(`kickoff: bound session ${result.session.id.slice(0, 8)}…`, owner);
         return true;
       }
-      await new Promise((r) => setTimeout(r, 1000));
+      lastSearchFailure = result;
+      if (i < 29) await new Promise((r) => setTimeout(r, 1000));
     }
 
-    log('kickoff: no session found', owner);
+    if (lastSearchFailure) {
+      logLaunchSessionSearchFailure(lastSearchFailure, 30, owner);
+      if (
+        lastSearchFailure.kind === 'directory-miss'
+        || lastSearchFailure.kind === 'correlation-mismatch'
+      ) {
+        updateLastOpenCodeObservation(owner, ++owner.nextObservationSequence, {
+          lastFailureCode: 'no-target',
+        });
+      }
+    }
     return false;
   } catch (err) {
     log(`kickoff error: ${err}`, owner);
@@ -1441,6 +1563,14 @@ export function __getOpenCodeDiagnosticLogPathForTests(): string {
 export function __getOpenCodeLastObservationForTests(): OpenCodeLastObservation {
   if (!state) throw new Error('OpenCode drone is not connected');
   return { ...state.lastObservation };
+}
+
+export function __decodeOpenCodeSessionForTests(value: unknown): unknown {
+  return decodeSession(value);
+}
+
+export async function __listOpenCodeSessionsForTests(): Promise<unknown[]> {
+  return listSessions();
 }
 
 export function computeOpenCodePort(droneId: string, base: number = 14096): number {

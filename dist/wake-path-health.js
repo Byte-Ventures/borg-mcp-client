@@ -12,8 +12,9 @@ export function openCodeWakePathHealthy(state) {
         state.deliveryStates.retried > 0) {
         return null;
     }
-    if (state.sessionId === null)
-        return null;
+    if (state.sessionId === null) {
+        return state.lastFailureCode === null ? null : false;
+    }
     return true;
 }
 export async function inspectWakePath(inputs, deps = {}) {

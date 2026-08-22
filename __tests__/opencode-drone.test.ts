@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,6 +11,7 @@ import {
   statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,8 +19,10 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
+  __decodeOpenCodeSessionForTests,
   __getOpenCodeDiagnosticLogPathForTests,
   __getOpenCodeLastObservationForTests,
+  __listOpenCodeSessionsForTests,
   allocateOpenCodePort,
   configuredOpenCodePort,
   computeOpenCodePort,
@@ -35,6 +39,7 @@ import {
   OPEN_CODE_PORT_MISSING_DIAGNOSTIC,
 } from '../src/opencode-drone';
 import { streamOnce } from '../src/log-stream';
+import { openCodeWakePathHealthy } from '../src/wake-path-health';
 import { OpenCodeAuthenticationError } from '../src/server-errors';
 import { BORG_STATE_ROOT_ENV, borgConfigRoot } from '../src/private-root';
 import {
@@ -167,9 +172,9 @@ function installOpenCodeApi(options: {
   return { prompts, promptBodies, fetchMock };
 }
 
-async function connect(droneLabel = 'drone-7') {
+async function connect(droneLabel = 'drone-7', serverUrl = SERVER_URL) {
   await connectOpenCodeDrone({
-    serverUrl: SERVER_URL,
+    serverUrl,
     apiPassword: API_PASSWORD,
     directory: DIRECTORY,
     droneLabel,
@@ -179,12 +184,14 @@ async function connect(droneLabel = 'drone-7') {
 
 describe('OpenCode wake target binding', () => {
   const originalStateRoot = process.env[BORG_STATE_ROOT_ENV];
+  const originalTmpDir = process.env.TMPDIR;
   let testStateRoot: string;
 
   beforeEach(() => {
     __resetOpenCodeDroneForTests();
     testStateRoot = realpathSync(mkdtempSync(join(tmpdir(), 'borg-opencode-drone-state-')));
     process.env[BORG_STATE_ROOT_ENV] = testStateRoot;
+    process.env.TMPDIR = testStateRoot;
   });
 
   afterEach(() => {
@@ -193,6 +200,8 @@ describe('OpenCode wake target binding', () => {
     __resetOpenCodeDroneForTests();
     if (originalStateRoot === undefined) delete process.env[BORG_STATE_ROOT_ENV];
     else process.env[BORG_STATE_ROOT_ENV] = originalStateRoot;
+    if (originalTmpDir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = originalTmpDir;
     rmSync(testStateRoot, { recursive: true, force: true });
   });
 
@@ -286,6 +295,92 @@ describe('OpenCode wake target binding', () => {
     for (const [, init] of api.fetchMock.mock.calls) {
       expect(new Headers(init?.headers).get('Authorization')).toBe(expected);
     }
+  });
+
+  it('reports the final server-readiness failure code and attempt count', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('server-readiness-failure');
+    const api = installOpenCodeApi({
+      sessions: () => [],
+      sessionsResponse: () => new Response('unauthorized', { status: 401 }),
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.runAllTimersAsync();
+
+    await expect(binding).resolves.toBe(false);
+    expect(getOpenCodeConnectionState().lastFailureCode).toBe('unauthorized');
+    expect(readFileSync(__getOpenCodeDiagnosticLogPathForTests(), 'utf8')).toContain(
+      'kickoff: server unavailable code=unauthorized class=OpenCodeHttpError status=401 attempts=30',
+    );
+    expect(api.fetchMock).toHaveBeenCalledTimes(30);
+  });
+
+  it('does not poll for a launch session after server readiness exhausts', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('no-session-poll-after-readiness-failure');
+    const api = installOpenCodeApi({
+      sessions: () => [],
+      sessionsResponse: () => Promise.reject(new Error('connection refused')),
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.runAllTimersAsync();
+
+    await expect(binding).resolves.toBe(false);
+    expect(api.fetchMock).toHaveBeenCalledTimes(30);
+    expect(readFileSync(__getOpenCodeDiagnosticLogPathForTests(), 'utf8')).not.toContain(
+      'kickoff: no session found',
+    );
+  });
+
+  it.each([
+    {
+      name: 'session-list HTTP failure',
+      sessions: [session('listed-root', 10)],
+      sessionsResponse: (attempt: number) => attempt === 1
+        ? new Response(JSON.stringify([session('listed-root', 10)]), { status: 200 })
+        : new Response('forbidden', { status: 403 }),
+      expected: 'kickoff: session search list-failed code=incompatible-api class=OpenCodeHttpError status=403 listed=unknown directory=unknown matches=unknown attempts=30',
+    },
+    {
+      name: 'session-list decode failure',
+      sessions: [session('decode-root', 10)],
+      sessionsResponse: (attempt: number) => attempt === 1
+        ? new Response(JSON.stringify([session('decode-root', 10)]), { status: 200 })
+        : new Response('{}', { status: 200 }),
+      expected: 'kickoff: session search list-failed code=incompatible-api class=OpenCodeResponseError status=none listed=unknown directory=unknown matches=unknown attempts=30',
+    },
+    {
+      name: 'zero directory matches',
+      sessions: [{ ...session('other-directory-root', 10), directory: '/other-repo' }],
+      expected: 'kickoff: session search directory-miss listed=1 directory=0 matches=0 attempts=30',
+    },
+    {
+      name: 'wrong correlation count',
+      sessions: [session('uncorrelated-root', 10)],
+      expected: 'kickoff: session search correlation-mismatch listed=1 directory=1 matches=0 attempts=30',
+    },
+  ])('distinguishes $name while finding the launch session', async ({ sessions, sessionsResponse, expected }) => {
+    vi.useFakeTimers();
+    const launch = launchKickoff(`launch-search-${expected}`);
+    let listAttempts = 0;
+    installOpenCodeApi({
+      sessions: () => sessions,
+      messages: Object.fromEntries(sessions.map((candidate) => [candidate.id, []])),
+      ...(sessionsResponse
+        ? { sessionsResponse: () => sessionsResponse(++listAttempts) }
+        : {}),
+    });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.runAllTimersAsync();
+
+    await expect(binding).resolves.toBe(false);
+    expect(readFileSync(__getOpenCodeDiagnosticLogPathForTests(), 'utf8')).toContain(expected);
   });
 
   it.each([
@@ -463,6 +558,36 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState().lastFailureCode).toBe('incompatible-api');
   });
 
+  it('accepts the exact OpenCode v2 session shape while ignoring unread fields', () => {
+    const upstreamSession = {
+      ...session('observed-upstream-shape', 10),
+      model: {
+        id: 'claude-sonnet-4',
+        providerID: 'anthropic',
+        variant: 'high',
+      },
+      agent: 'build',
+    };
+
+    expect(__decodeOpenCodeSessionForTests(upstreamSession)).toBe(upstreamSession);
+  });
+
+  it('lists a populated collection containing the exact OpenCode v2 session shape', async () => {
+    const upstreamSession = {
+      ...session('populated-upstream-shape', 10),
+      model: {
+        id: 'claude-sonnet-4',
+        providerID: 'anthropic',
+        variant: 'high',
+      },
+      agent: 'build',
+    };
+    installOpenCodeApi({ sessions: () => [upstreamSession] });
+    await connect();
+
+    await expect(__listOpenCodeSessionsForTests()).resolves.toEqual([upstreamSession]);
+  });
+
   it('classifies malformed OpenCode JSON as an incompatible API response', async () => {
     const launch = launchKickoff('malformed-json');
     const root = session('malformed-json-root', 10);
@@ -558,6 +683,40 @@ describe('OpenCode wake target binding', () => {
 
     await connect('diagnostic-drone-b');
     expect(__getOpenCodeDiagnosticLogPathForTests()).not.toBe(firstPath);
+  });
+
+  it('keeps one seat identity when a relaunch selects a different port', async () => {
+    await connect('stable-seat-identity', 'http://127.0.0.1:15113');
+    const firstPath = __getOpenCodeDiagnosticLogPathForTests();
+
+    await connect('stable-seat-identity', 'http://127.0.0.1:16113');
+
+    expect(__getOpenCodeDiagnosticLogPathForTests()).toBe(firstPath);
+  });
+
+  it('preserves an idle active seat binding older than seven days when another seat connects', async () => {
+    const launch = launchKickoff('idle-active-binding');
+    const root = session('idle-active-root', 10);
+    installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+    });
+    const droneLabel = 'idle-active-seat';
+    const identity = createHash('sha256')
+      .update([DIRECTORY, 'borg-mcp', droneLabel].join('\0'))
+      .digest('hex')
+      .slice(0, 24);
+    const idleBindingPath = join(testStateRoot, `borg-opencode-session-${identity}.json`);
+
+    await connect(droneLabel);
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    expect(existsSync(idleBindingPath)).toBe(true);
+    const staleTime = new Date(Date.now() - (8 * 24 * 60 * 60 * 1_000));
+    utimesSync(idleBindingPath, staleTime, staleTime);
+
+    await connect('another-seat');
+
+    expect(existsSync(idleBindingPath)).toBe(true);
   });
 
   it('reports diagnostic log write failures instead of swallowing them', async () => {
@@ -677,6 +836,24 @@ describe('OpenCode wake target binding', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(binding).resolves.toBe(false);
     expect(getOpenCodeConnectionState().sessionId).toBeNull();
+  });
+
+  it('reports a failed kickoff as an unhealthy no-target state instead of idle', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('no-target-health');
+    const root = session('uncorrelated-health-root', 10);
+    installOpenCodeApi({ sessions: () => [root], messages: { [root.id]: [] } });
+
+    await connect();
+    const binding = injectInitialKickoff(launch);
+    await vi.runAllTimersAsync();
+
+    await expect(binding).resolves.toBe(false);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      sessionId: null,
+      lastFailureCode: 'no-target',
+    });
+    expect(openCodeWakePathHealthy(getOpenCodeConnectionState())).toBe(false);
   });
 
   it('does not claim an exact match while another candidate is unverifiable', async () => {
@@ -825,6 +1002,23 @@ describe('OpenCode wake target binding', () => {
     await connect();
     await injectOpenCodeEntry('wake from MCP child');
 
+    expect(api.prompts).toEqual([root.id]);
+  });
+
+  it('restores a prior-launch binding after the OpenCode port changes', async () => {
+    const launch = launchKickoff('port-independent-binding');
+    const root = session('port-independent-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+    });
+
+    await connect('stable-binding-seat', 'http://127.0.0.1:15113');
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    disconnectOpenCodeDrone();
+    await connect('stable-binding-seat', 'http://127.0.0.1:16113');
+
+    await expect(injectOpenCodeEntry('wake after port change')).resolves.toBe(true);
     expect(api.prompts).toEqual([root.id]);
   });
 
