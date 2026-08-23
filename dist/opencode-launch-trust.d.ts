@@ -10,4 +10,5 @@ export interface OpenCodeLaunchTrust {
 export declare function createOpenCodeLaunchTrust(overrides?: Partial<OpenCodeLaunchTrust>): OpenCodeLaunchTrust;
 export declare function isOpenCode256BitIdentity(value: unknown): value is string;
 export declare function openCodeApiPasswordFromEnv(env: NodeJS.ProcessEnv): string | null;
+export declare function openCodeLaunchCorrelationFromEnv(env: NodeJS.ProcessEnv): string | null;
 //# sourceMappingURL=opencode-launch-trust.d.ts.map

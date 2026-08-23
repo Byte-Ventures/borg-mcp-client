@@ -1643,6 +1643,7 @@ export async function runAssimilate(args, deps, options = {}) {
             directory: agentCwd,
             droneLabel: result.drone_label,
             cubeName: cubeDetail.name,
+            launchIdentity: launchKickoff.correlationIdentity,
         })
             .then(() => injectInitialKickoff(launchKickoff))
             .catch(() => { });
