@@ -66,10 +66,8 @@ import {
   setCodexWakeTarget,
 } from './cubes.js';
 import {
-  addClaudeLaunchAccess,
-  addCodexForeignPathReminderHook,
-  addOpenCodeLaunchAccess,
   addProjectSessionStartHook,
+  provisionLaunchAccess,
 } from './config-utils.js';
 import type { LaunchAccessPaths } from './launch-access.js';
 import { findPendingServerEnrollment } from './config.js';
@@ -247,17 +245,7 @@ export function buildDefaultAssimilateDeps(
     installProjectSessionHook: (projectRoot) => {
       addProjectSessionStartHook(projectRoot);
     },
-    provisionLaunchAccess: (cli, projectRoot, paths: LaunchAccessPaths) => {
-      if (cli === 'claude') {
-        addClaudeLaunchAccess(projectRoot, paths);
-      } else if (cli === 'codex') {
-        // Codex receives the path grant on the launch command itself. Its
-        // native PreToolUse hook is global but reads this launch's scoped env.
-        addCodexForeignPathReminderHook();
-      } else {
-        addOpenCodeLaunchAccess(projectRoot, paths);
-      }
-    },
+    provisionLaunchAccess,
 
     // #1015: discovery is advisory but still verifies the server-owned CA.
     detectLocalServer: async () =>

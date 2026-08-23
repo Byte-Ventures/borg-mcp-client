@@ -23,7 +23,7 @@ import {
 import { shellEscape } from './shell-escape.js';
 import { BORG_STATE_ROOT_ENV, borgAgentConfigEnv, borgHomeRoot } from './private-root.js';
 import type { LaunchAccessPaths } from './launch-access.js';
-import { BORG_LAUNCH_EXPECTED_SEAT_ENV } from './cubes.js';
+import { BORG_LAUNCH_EXPECTED_SEAT_ENV, type BorgCli } from './cubes.js';
 import {
   OPENCODE_SERVER_PASSWORD_ENV,
   OPENCODE_SERVER_PASSWORD_REFERENCE,
@@ -1396,6 +1396,23 @@ export function addOpenCodeLaunchAccess(
   const changed = JSON.stringify(config) !== before;
   if (changed) writeJsonFile(configPath, config);
   return changed;
+}
+
+/** Provision the project-local path access required by the selected CLI. */
+export function provisionLaunchAccess(
+  cli: BorgCli,
+  projectRoot: string,
+  paths: LaunchAccessPaths,
+): void {
+  if (cli === 'claude') {
+    addClaudeLaunchAccess(projectRoot, paths);
+  } else if (cli === 'codex') {
+    // Codex receives path grants on its launch command. Its global hook reads
+    // the scoped launch environment and only supplies the reminder.
+    addCodexForeignPathReminderHook();
+  } else {
+    addOpenCodeLaunchAccess(projectRoot, paths);
+  }
 }
 
 /**

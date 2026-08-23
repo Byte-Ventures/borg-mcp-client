@@ -17,6 +17,7 @@
 import { spawn } from 'child_process';
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
@@ -54,7 +55,7 @@ import { BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeCo
 import { findLoadedCodexThread } from './codex-app-server.js';
 import { buildAgentKickoffPrompt, buildKickoffWakePathClause, recordCodexWakeTarget, socketPathFromRemoteArgs, } from './codex-launch.js';
 import { codexBorgSessionConfigArgs } from './launch-gate.js';
-import { addCodexSessionStartHook, addCodexUserPromptSubmitHook, addProjectSessionStartHook, addUserPromptSubmitHook, removeSessionStartHook, } from './config-utils.js';
+import { addCodexSessionStartHook, addCodexUserPromptSubmitHook, addProjectSessionStartHook, addUserPromptSubmitHook, provisionLaunchAccess, removeSessionStartHook, } from './config-utils.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
 import { configureResolvedCli } from './resolved-cli-config.js';
 import { installBorgPlugin } from './opencode-plugin.js';
@@ -64,6 +65,7 @@ import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals 
 import { isClientOwnedCubeInitArgv, runEarlyServerFacade } from './server-facade.js';
 import { runEarlyUpdate } from './update-cmd.js';
 import { runDoctor, warnIfAgentIntegrationUnhealthy } from './agent-integration-health.js';
+import { scratchRootForSeat } from './launch-access.js';
 export class OpenCodeTargetedLaunchConfigError extends Error {
     code = 'OPENCODE_TARGETED_LAUNCH_CONFIG';
     constructor(droneLabel, worktree) {
@@ -405,7 +407,19 @@ async function main() {
     }
     // Configure only the CLI that will actually launch. This must follow the
     // one-shot menu: the resolved default can differ from the menu selection.
-    cli = configureSelectedLaunchCli(cli, launchAction, (selectedCli) => ensureResolvedCliConfigured(selectedCli, active));
+    cli = configureSelectedLaunchCli(cli, launchAction, (selectedCli) => {
+        ensureResolvedCliConfigured(selectedCli, active);
+        if (selectedCli === 'opencode' && active) {
+            const worktree = findProjectRoot(process.cwd());
+            provisionLaunchAccess(selectedCli, worktree, {
+                worktree,
+                scratch: scratchRootForSeat(homedir(), active.droneLabel, active.droneId),
+                // OpenCode does not grant Git internals; this field is used only by
+                // the Codex launch-argument path.
+                commonDir: worktree,
+            });
+        }
+    });
     if (active && !parsedCli.force) {
         const inboxPath = inboxPathForDrone(active.cubeId, active.droneId);
         const stateRoot = monitorStateRootForWorktree(findProjectRoot(process.cwd()));

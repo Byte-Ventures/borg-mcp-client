@@ -27,7 +27,7 @@ import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError, CubeCreationConfirmationError } from './server-errors.js';
 import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setProjectCliPreference, setCodexWakeTarget, } from './cubes.js';
-import { addClaudeLaunchAccess, addCodexForeignPathReminderHook, addOpenCodeLaunchAccess, addProjectSessionStartHook, } from './config-utils.js';
+import { addProjectSessionStartHook, provisionLaunchAccess, } from './config-utils.js';
 import { findPendingServerEnrollment } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
@@ -172,19 +172,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         installProjectSessionHook: (projectRoot) => {
             addProjectSessionStartHook(projectRoot);
         },
-        provisionLaunchAccess: (cli, projectRoot, paths) => {
-            if (cli === 'claude') {
-                addClaudeLaunchAccess(projectRoot, paths);
-            }
-            else if (cli === 'codex') {
-                // Codex receives the path grant on the launch command itself. Its
-                // native PreToolUse hook is global but reads this launch's scoped env.
-                addCodexForeignPathReminderHook();
-            }
-            else {
-                addOpenCodeLaunchAccess(projectRoot, paths);
-            }
-        },
+        provisionLaunchAccess,
         // #1015: discovery is advisory but still verifies the server-owned CA.
         detectLocalServer: async () => (await probeLocalBorgServer(DEFAULT_LOCAL_SERVER_ORIGIN))
             ? DEFAULT_LOCAL_SERVER_ORIGIN

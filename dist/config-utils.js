@@ -1328,6 +1328,20 @@ export function addOpenCodeLaunchAccess(projectRoot, paths) {
         writeJsonFile(configPath, config);
     return changed;
 }
+/** Provision the project-local path access required by the selected CLI. */
+export function provisionLaunchAccess(cli, projectRoot, paths) {
+    if (cli === 'claude') {
+        addClaudeLaunchAccess(projectRoot, paths);
+    }
+    else if (cli === 'codex') {
+        // Codex receives path grants on its launch command. Its global hook reads
+        // the scoped launch environment and only supplies the reminder.
+        addCodexForeignPathReminderHook();
+    }
+    else {
+        addOpenCodeLaunchAccess(projectRoot, paths);
+    }
+}
 /**
  * Add borg MCP server to OpenCode using `opencode mcp add` CLI.
  * Pins activation and agent-kind signals plus OpenCode config substitutions

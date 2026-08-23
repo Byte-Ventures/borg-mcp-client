@@ -40,6 +40,7 @@ import {
 } from '../src/opencode-drone';
 import { streamOnce } from '../src/log-stream';
 import { openCodeWakePathHealthy } from '../src/wake-path-health';
+import { renderStreamStatus } from '../src/stream-status';
 import { OpenCodeAuthenticationError } from '../src/server-errors';
 import { BORG_STATE_ROOT_ENV, borgConfigRoot } from '../src/private-root';
 import {
@@ -1607,7 +1608,8 @@ describe('OpenCode wake target binding', () => {
     ).resolves.toBe(false);
 
     expect(api.prompts).toEqual([root.id]);
-    expect(getOpenCodeConnectionState()).toMatchObject({
+    const failedState = getOpenCodeConnectionState();
+    expect(failedState).toMatchObject({
       sessionId: root.id,
       totalEntriesRetried: 0,
       lastInjectionResult: 'failed',
@@ -1618,6 +1620,31 @@ describe('OpenCode wake target binding', () => {
         failed: 1,
       },
     });
+    const status = renderStreamStatus({
+      status: {
+        connected: true,
+        lastWireActivityAt: '2026-08-23T12:00:00.000Z',
+        lastContentEventAt: '2026-08-23T12:00:00.000Z',
+        lastHeartbeatAt: '2026-08-23T12:00:00.000Z',
+        lastPersistedEventId: 'entry-that-is-rejected',
+        reconnectAttempts: 0,
+        runLoopRestartCount: 0,
+        ownership: { state: 'owner' },
+      },
+      inboxMonitorHealthy: false,
+      wakePath: {
+        agentKind: 'opencode',
+        healthy: openCodeWakePathHealthy(failedState),
+        openCode: failedState,
+      },
+      inboxPath: '/tmp/inbox.log',
+      droneLabel: 'builder-1',
+      cubeName: 'cube-1',
+      humanAgo: () => '1s ago',
+    });
+    expect(status.split('\n')[0]).toBe('**Stream connected (OpenCode delivery degraded).**');
+    expect(status).toContain('- **OpenCode failed**: 1');
+    expect(status).toContain('`borg_read-log unread_only=true`');
   });
 
   it('reports an unauthorized prompt rejection with no accepted entry', async () => {
