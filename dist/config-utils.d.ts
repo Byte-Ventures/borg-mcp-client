@@ -4,6 +4,7 @@
  * Handles adding borg-mcp to Claude Code via the claude CLI
  */
 import type { LaunchAccessPaths } from './launch-access.js';
+import { type BorgCli } from './cubes.js';
 /**
  * Register a Claude Code SessionStart hook that runs `borg-regen` at the
  * start of every session. Idempotent: re-running won't add duplicates.
@@ -174,6 +175,8 @@ export declare function isOpenCodeMcpServerConfiguredForLaunch(configPath?: stri
  * `.opencode/opencode.json`; the user-global config is shared by every seat.
  */
 export declare function addOpenCodeLaunchAccess(projectRoot: string, paths: LaunchAccessPaths): boolean;
+/** Provision the project-local path access required by the selected CLI. */
+export declare function provisionLaunchAccess(cli: BorgCli, projectRoot: string, paths: LaunchAccessPaths): void;
 /**
  * Add borg MCP server to OpenCode using `opencode mcp add` CLI.
  * Pins activation and agent-kind signals plus OpenCode config substitutions

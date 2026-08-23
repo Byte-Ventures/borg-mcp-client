@@ -46,6 +46,7 @@ describe('gh#853 — main-worktree launch-menu gate', () => {
     const menu = source.indexOf('const action = await runBareLaunchMenu', terminalGuard);
     const currentDroneInput = source.indexOf('currentDrone:', gate);
     const configure = source.indexOf('ensureResolvedCliConfigured(selectedCli, active)', menu);
+    const launchAccess = source.indexOf('provisionLaunchAccess(selectedCli', configure);
     const spawn = source.indexOf(': spawn(cli, launchArgs', configure);
 
     expect(probe).toBeGreaterThan(0);
@@ -60,7 +61,8 @@ describe('gh#853 — main-worktree launch-menu gate', () => {
     expect(source.slice(legacyProbe, menu)).not.toContain('process.exit');
     expect(currentDroneInput).toBeGreaterThan(menu);
     expect(configure).toBeGreaterThan(menu);
-    expect(spawn).toBeGreaterThan(configure);
+    expect(launchAccess).toBeGreaterThan(configure);
+    expect(spawn).toBeGreaterThan(launchAccess);
   });
 
   it('bare borg + both streams TTY + main worktree → show', () => {

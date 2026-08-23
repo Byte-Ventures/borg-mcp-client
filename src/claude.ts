@@ -18,6 +18,7 @@
 import { spawn } from 'child_process';
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
@@ -102,6 +103,7 @@ import {
   addCodexUserPromptSubmitHook,
   addProjectSessionStartHook,
   addUserPromptSubmitHook,
+  provisionLaunchAccess,
   removeSessionStartHook,
 } from './config-utils.js';
 import { ensureCliMcpConfigured } from './ensure-mcp-config.js';
@@ -118,6 +120,7 @@ import { buildOpenCodeLaunchArgs, defaultApprovalIo, resolveLaunchBorgApprovals 
 import { isClientOwnedCubeInitArgv, runEarlyServerFacade } from './server-facade.js';
 import { runEarlyUpdate } from './update-cmd.js';
 import { runDoctor, warnIfAgentIntegrationUnhealthy } from './agent-integration-health.js';
+import { scratchRootForSeat } from './launch-access.js';
 
 export type AssimilateDepsBuilder = typeof buildDefaultAssimilateDeps;
 
@@ -550,7 +553,19 @@ async function main() {
   cli = configureSelectedLaunchCli(
     cli,
     launchAction,
-    (selectedCli) => ensureResolvedCliConfigured(selectedCli, active),
+    (selectedCli) => {
+      ensureResolvedCliConfigured(selectedCli, active);
+      if (selectedCli === 'opencode' && active) {
+        const worktree = findProjectRoot(process.cwd());
+        provisionLaunchAccess(selectedCli, worktree, {
+          worktree,
+          scratch: scratchRootForSeat(homedir(), active.droneLabel, active.droneId),
+          // OpenCode does not grant Git internals; this field is used only by
+          // the Codex launch-argument path.
+          commonDir: worktree,
+        });
+      }
+    },
   );
 
   if (active && !parsedCli.force) {
