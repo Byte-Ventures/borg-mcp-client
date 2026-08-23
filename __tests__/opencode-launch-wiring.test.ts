@@ -99,10 +99,14 @@ describe('OpenCode production launch wiring', () => {
       return child as any;
     });
     const connect = vi.fn(async () => {});
-    const injectKickoff = vi.fn(async () => {
+    const observedKickoffs: Array<ReturnType<typeof createOpenCodeLaunchKickoff>> = [];
+    const injectKickoff = vi.fn(async (attemptKickoff: ReturnType<typeof createOpenCodeLaunchKickoff>) => {
+      observedKickoffs.push(attemptKickoff);
       const server = servers[injectKickoff.mock.calls.length - 1];
       if (!server.listening) await once(server, 'listening');
-      return true;
+      return observedKickoffs.filter(
+        ({ correlationIdentity }) => correlationIdentity === attemptKickoff.correlationIdentity,
+      ).length === 1;
     });
     const allocatePort = vi.fn(() => allocateOpenCodePort());
     const kickoff = createOpenCodeLaunchKickoff('kickoff');
@@ -135,6 +139,15 @@ describe('OpenCode production launch wiring', () => {
       expect(connect.mock.calls.map(([input]) => input.serverUrl)).toEqual(
         attemptedPorts.map((port) => `http://127.0.0.1:${port}`),
       );
+      expect(observedKickoffs).toHaveLength(2);
+      expect(observedKickoffs[1].correlationIdentity).not.toBe(observedKickoffs[0].correlationIdentity);
+      expect(observedKickoffs[1].apiPassword).not.toBe(observedKickoffs[0].apiPassword);
+      for (const [index, attemptKickoff] of observedKickoffs.entries()) {
+        const spawnEnv = spawnProcess.mock.calls[index][2].env;
+        expect(spawnEnv.BORG_OPENCODE_LAUNCH_CORRELATION).toBe(attemptKickoff.correlationIdentity);
+        expect(spawnEnv.OPENCODE_SERVER_PASSWORD).toBe(attemptKickoff.apiPassword);
+        expect(connect.mock.calls[index][0].apiPassword).toBe(attemptKickoff.apiPassword);
+      }
       expect(launched.process).toBe(children[1]);
       expect(launched.launchEnv.BORG_OPENCODE_PORT).toBe(attemptedPorts[1]);
     } finally {
@@ -165,10 +178,40 @@ describe('OpenCode production launch wiring', () => {
       connect: async () => {},
       injectKickoff: () => new Promise<boolean>(() => {}),
       allocatePort,
-    })).rejects.toThrow('after 3 attempts');
+    })).rejects.toThrow('after 3 attempts (code=1, signal=none)');
 
     expect(spawnProcess).toHaveBeenCalledTimes(3);
     expect(allocatePort).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves an OpenCode executable-not-found spawn failure', async () => {
+    const spawnError = Object.assign(new Error('spawn opencode ENOENT'), {
+      code: 'ENOENT',
+      path: 'opencode',
+    });
+    const spawnProcess = vi.fn(() => {
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('error', spawnError));
+      return child as any;
+    });
+    const kickoff = createOpenCodeLaunchKickoff('kickoff');
+
+    await expect(launchOpenCodeProcess({
+      cwd: '/repo',
+      port: 15555,
+      prompt: kickoff.prompt,
+      passthroughArgs: [],
+      env: { BORG_SESSION: '1' },
+      droneLabel: 'drone-1',
+      cubeName: 'borg',
+      kickoff,
+      spawnProcess,
+      connect: async () => {},
+      injectKickoff: () => new Promise<boolean>(() => {}),
+      allocatePort: vi.fn(),
+    })).rejects.toBe(spawnError);
+
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
   });
 
   it('index consumer connects to the propagated launch port', async () => {

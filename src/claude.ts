@@ -167,52 +167,67 @@ export async function launchOpenCodeProcess(options: {
   process: ReturnType<typeof spawn>;
 }> {
   let port = options.port;
-  // The kickoff correlation proves readiness belongs to this launch; each
-  // retry rebuilds the child and consumer port identity as one unit.
+  let lastExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  // Each child gets independent trust so a retry cannot bind a session or
+  // durable binding left by an earlier attempt.
   for (let attempt = 0; attempt < 3; attempt++) {
+    const attemptKickoff = attempt === 0
+      ? options.kickoff
+      : createOpenCodeLaunchKickoff(options.prompt);
     const plan = createOpenCodeLaunchPlan(options.cwd, port, options.prompt, options.passthroughArgs);
     const launchEnv = {
       ...options.env,
       BORG_OPENCODE_PORT: plan.envPort,
       [OPENCODE_SERVER_USERNAME_ENV]: OPENCODE_SERVER_USERNAME,
-      [OPENCODE_SERVER_PASSWORD_ENV]: options.kickoff.apiPassword,
-      [BORG_OPENCODE_LAUNCH_CORRELATION_ENV]: options.kickoff.correlationIdentity,
+      [OPENCODE_SERVER_PASSWORD_ENV]: attemptKickoff.apiPassword,
+      [BORG_OPENCODE_LAUNCH_CORRELATION_ENV]: attemptKickoff.correlationIdentity,
     };
     const child = (options.spawnProcess ?? spawn)('opencode', plan.launchArgs, {
       stdio: 'inherit',
       shell: false,
       env: launchEnv,
     });
-    let markStopped: (outcome: 'stopped') => void;
-    const stopped = new Promise<'stopped'>((resolve) => { markStopped = resolve; });
-    const onStopped = () => markStopped('stopped');
-    child.once('error', onStopped);
-    child.once('exit', onStopped);
+    type Stopped =
+      | { kind: 'error'; error: NodeJS.ErrnoException }
+      | { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null };
+    let markStopped: (outcome: Stopped) => void;
+    const stopped = new Promise<Stopped>((resolve) => { markStopped = resolve; });
+    const onError = (error: NodeJS.ErrnoException) => markStopped({ kind: 'error', error });
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      markStopped({ kind: 'exit', code, signal });
+    };
+    child.once('error', onError);
+    child.once('exit', onExit);
     await (options.connect ?? connectOpenCodeDrone)({
       serverUrl: plan.serverUrl,
-      apiPassword: options.kickoff.apiPassword,
+      apiPassword: attemptKickoff.apiPassword,
       directory: options.cwd,
       droneLabel: options.droneLabel,
       cubeName: options.cubeName,
     });
     const outcome = await Promise.race([
-      (options.injectKickoff ?? injectInitialKickoff)(options.kickoff).then(
-        (bound) => bound ? 'ready' as const : 'unbound' as const,
+      (options.injectKickoff ?? injectInitialKickoff)(attemptKickoff).then(
+        (bound) => bound ? { kind: 'ready' as const } : { kind: 'unbound' as const },
       ),
       stopped,
     ]);
-    child.off('error', onStopped);
-    child.off('exit', onStopped);
-    if (outcome === 'ready') {
+    child.off('error', onError);
+    child.off('exit', onExit);
+    if (outcome.kind === 'ready') {
       return { launchArgs: plan.launchArgs, launchEnv, process: child };
     }
-    if (outcome === 'unbound') {
+    if (outcome.kind === 'unbound') {
       child.kill();
       throw new Error('OpenCode started but its launch session could not be identified');
     }
+    if (outcome.kind === 'error') throw outcome.error;
+    lastExit = outcome;
     if (attempt < 2) port = await (options.allocatePort ?? allocateOpenCodePort)();
   }
-  throw new Error('OpenCode exited before its launch session became ready after 3 attempts');
+  throw new Error(
+    `OpenCode exited before launch readiness after 3 attempts `
+    + `(code=${lastExit?.code ?? 'none'}, signal=${lastExit?.signal ?? 'none'})`,
+  );
 }
 
 export async function runAssimilateEntry(
@@ -829,6 +844,11 @@ if (isEntryInvocation()) {
       error instanceof OpenCodeTargetedLaunchConfigError
     ) {
       process.stderr.write(`${error.message}\n`);
+      process.exit(1);
+    }
+    if (error?.code === 'ENOENT' && error?.path === 'opencode') {
+      console.error(`${consolePrefix()}${chalk.red('\n◼ Failed to launch opencode')}`);
+      console.error(`${consolePrefix()}${chalk.gray('Make sure opencode is installed.\n')}`);
       process.exit(1);
     }
     console.error(`${consolePrefix()}${chalk.red(`\n◼ Error: ${error.message}\n`)}`);
