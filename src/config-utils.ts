@@ -5,6 +5,7 @@
  */
 
 import { execSync } from 'child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -207,6 +208,132 @@ function readOpenCodeGlobalConfig(configPath: string): Record<string, unknown> {
 function writeJsonFile(p: string, data: any): void {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+}
+
+interface OpenCodeProjectConfigSnapshot {
+  config: unknown;
+  identity: { dev: number; ino: number } | null;
+  mode: number;
+}
+
+function unsafeOpenCodeConfigPath(configPath: string, detail: string): Error {
+  return new Error(`OpenCode config path ${configPath} is unsafe: ${detail}`);
+}
+
+function assertOpenCodeProjectConfigDirectory(projectRoot: string, configPath: string): string {
+  const root = path.resolve(projectRoot);
+  let rootStat: fs.Stats;
+  try {
+    rootStat = fs.lstatSync(root);
+  } catch {
+    throw unsafeOpenCodeConfigPath(configPath, 'project root is missing or unreadable');
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory() || fs.realpathSync(root) !== root) {
+    throw unsafeOpenCodeConfigPath(configPath, 'project root must be a canonical real directory');
+  }
+
+  const configDir = path.join(root, '.opencode');
+  try {
+    fs.mkdirSync(configDir, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  let directoryStat: fs.Stats;
+  try {
+    directoryStat = fs.lstatSync(configDir);
+  } catch {
+    throw unsafeOpenCodeConfigPath(configPath, '.opencode is missing or unreadable');
+  }
+  if (
+    directoryStat.isSymbolicLink()
+    || !directoryStat.isDirectory()
+    || fs.realpathSync(configDir) !== configDir
+  ) {
+    throw unsafeOpenCodeConfigPath(configPath, '.opencode must be a canonical real directory, not a symlink');
+  }
+  return configDir;
+}
+
+function inspectOpenCodeProjectConfigFile(configPath: string): fs.Stats | null {
+  let metadata: fs.Stats;
+  try {
+    metadata = fs.lstatSync(configPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.nlink !== 1) {
+    throw unsafeOpenCodeConfigPath(configPath, 'final path must be one regular file, not a symlink');
+  }
+  return metadata;
+}
+
+function readOpenCodeProjectConfig(projectRoot: string, configPath: string): OpenCodeProjectConfigSnapshot {
+  assertOpenCodeProjectConfigDirectory(projectRoot, configPath);
+  const metadata = inspectOpenCodeProjectConfigFile(configPath);
+  if (!metadata) return { config: {}, identity: null, mode: 0o600 };
+
+  let descriptor: number | null = null;
+  try {
+    descriptor = fs.openSync(configPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== metadata.dev || opened.ino !== metadata.ino) {
+      throw unsafeOpenCodeConfigPath(configPath, 'final file changed while opening');
+    }
+    const text = fs.readFileSync(descriptor, 'utf8');
+    return {
+      config: text.trim() ? JSON.parse(text) : {},
+      identity: { dev: opened.dev, ino: opened.ino },
+      mode: opened.mode & 0o777,
+    };
+  } finally {
+    if (descriptor !== null) fs.closeSync(descriptor);
+  }
+}
+
+function writeOpenCodeProjectConfig(
+  projectRoot: string,
+  configPath: string,
+  data: unknown,
+  snapshot: OpenCodeProjectConfigSnapshot,
+): void {
+  const configDir = assertOpenCodeProjectConfigDirectory(projectRoot, configPath);
+  const temporary = path.join(
+    configDir,
+    `.opencode.json.${process.pid}.${randomBytes(12).toString('hex')}.tmp`,
+  );
+  let descriptor: number | null = null;
+  try {
+    descriptor = fs.openSync(
+      temporary,
+      fs.constants.O_WRONLY
+        | fs.constants.O_CREAT
+        | fs.constants.O_EXCL
+        | (fs.constants.O_NOFOLLOW ?? 0),
+      snapshot.mode,
+    );
+    fs.writeFileSync(descriptor, JSON.stringify(data, null, 2) + '\n', 'utf8');
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = null;
+
+    assertOpenCodeProjectConfigDirectory(projectRoot, configPath);
+    const current = inspectOpenCodeProjectConfigFile(configPath);
+    const unchanged = snapshot.identity === null
+      ? current === null
+      : current !== null
+        && current.dev === snapshot.identity.dev
+        && current.ino === snapshot.identity.ino;
+    if (!unchanged) {
+      throw unsafeOpenCodeConfigPath(configPath, 'final file changed before replacement');
+    }
+    fs.renameSync(temporary, configPath);
+  } finally {
+    if (descriptor !== null) {
+      try { fs.closeSync(descriptor); } catch { /* Preserve the primary failure. */ }
+    }
+    try { fs.unlinkSync(temporary); } catch { /* Renamed or never created. */ }
+  }
 }
 
 /**
@@ -1339,11 +1466,13 @@ export function addOpenCodeLaunchAccess(
   paths: LaunchAccessPaths,
 ): boolean {
   const configPath = path.join(projectRoot, '.opencode', 'opencode.json');
+  let snapshot: OpenCodeProjectConfigSnapshot;
   let config: any;
   try {
-    config = readJsonFile(configPath);
+    snapshot = readOpenCodeProjectConfig(projectRoot, configPath);
+    config = snapshot.config;
   } catch (err: any) {
-    throw new Error(`Could not parse ${configPath}: ${err.message}`);
+    throw new Error(`Could not safely read OpenCode config ${configPath}: ${err.message}`);
   }
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error(`OpenCode config ${configPath} is not an object`);
@@ -1394,7 +1523,13 @@ export function addOpenCodeLaunchAccess(
   config.permission = permissionObject;
 
   const changed = JSON.stringify(config) !== before;
-  if (changed) writeJsonFile(configPath, config);
+  if (changed) {
+    try {
+      writeOpenCodeProjectConfig(projectRoot, configPath, config, snapshot);
+    } catch (err: any) {
+      throw new Error(`Could not safely update OpenCode config ${configPath}: ${err.message}`);
+    }
+  }
   return changed;
 }
 

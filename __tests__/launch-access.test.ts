@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +8,7 @@ import {
   addCodexForeignPathReminderHook,
   addOpenCodeLaunchAccess,
   isCodexHookRegistered,
+  provisionLaunchAccess,
 } from '../src/config-utils';
 import { codexLaunchDirectoryArgs, scratchRootForSeat } from '../src/launch-access';
 import { codexLaunchDirectoryArgs as builtCodexLaunchDirectoryArgs } from '../dist/launch-access.js';
@@ -119,6 +120,39 @@ describe('Claude launch access', () => {
 });
 
 describe('OpenCode launch access', () => {
+  it.each(['directory', 'file'] as const)(
+    'refuses a symlinked OpenCode config %s before launch and leaves the outside target untouched',
+    (kind) => {
+      const projectRoot = path.join(root, 'project');
+      const configDir = path.join(projectRoot, '.opencode');
+      const outsideDir = path.join(root, 'outside');
+      const outsideConfig = path.join(outsideDir, 'opencode.json');
+      fs.mkdirSync(projectRoot);
+      fs.mkdirSync(outsideDir);
+      fs.writeFileSync(outsideConfig, JSON.stringify({ theme: 'outside' }));
+      if (kind === 'directory') {
+        fs.symlinkSync(outsideDir, configDir);
+      } else {
+        fs.mkdirSync(configDir);
+        fs.symlinkSync(outsideConfig, path.join(configDir, 'opencode.json'));
+      }
+      const before = fs.readFileSync(outsideConfig, 'utf8');
+      const spawn = vi.fn();
+
+      expect(() => {
+        provisionLaunchAccess('opencode', projectRoot, {
+          worktree: projectRoot,
+          scratch: paths.scratch,
+          commonDir: path.join(projectRoot, '.git'),
+        });
+        spawn();
+      }).toThrow(/OpenCode config.*(?:unsafe|symlink|real directory|regular file)/i);
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(fs.readFileSync(outsideConfig, 'utf8')).toBe(before);
+    },
+  );
+
   it('writes subtree rules to the seat-local config and preserves global-style settings', () => {
     const configPath = path.join(root, '.opencode', 'opencode.json');
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
