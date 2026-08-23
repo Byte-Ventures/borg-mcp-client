@@ -148,7 +148,7 @@ export function createOpenCodeLaunchPlan(
   };
 }
 
-export function launchOpenCodeProcess(options: {
+export async function launchOpenCodeProcess(options: {
   cwd: string;
   port: number;
   prompt: string;
@@ -159,37 +159,76 @@ export function launchOpenCodeProcess(options: {
   kickoff: ReturnType<typeof createOpenCodeLaunchKickoff>;
   spawnProcess?: typeof spawn;
   connect?: typeof connectOpenCodeDrone;
-}): {
+  injectKickoff?: typeof injectInitialKickoff;
+  allocatePort?: typeof allocateOpenCodePort;
+}): Promise<{
   launchArgs: string[];
   launchEnv: NodeJS.ProcessEnv;
   process: ReturnType<typeof spawn>;
-} {
-  const plan = createOpenCodeLaunchPlan(options.cwd, options.port, options.prompt, options.passthroughArgs);
-  const launchEnv = {
-    ...options.env,
-    BORG_OPENCODE_PORT: plan.envPort,
-    [OPENCODE_SERVER_USERNAME_ENV]: OPENCODE_SERVER_USERNAME,
-    [OPENCODE_SERVER_PASSWORD_ENV]: options.kickoff.apiPassword,
-    [BORG_OPENCODE_LAUNCH_CORRELATION_ENV]: options.kickoff.correlationIdentity,
-  };
-  // OpenCode's bind can still race this allocation; client#298 tracks the
-  // residual pre-bind window outside this slice.
-  const child = (options.spawnProcess ?? spawn)('opencode', plan.launchArgs, {
-    stdio: 'inherit',
-    shell: false,
-    env: launchEnv,
-  });
-  (options.connect ?? connectOpenCodeDrone)({
-    serverUrl: plan.serverUrl,
-    apiPassword: options.kickoff.apiPassword,
-    directory: options.cwd,
-    droneLabel: options.droneLabel,
-    cubeName: options.cubeName,
-    launchIdentity: options.kickoff.correlationIdentity,
-  })
-    .then(() => injectInitialKickoff(options.kickoff))
-    .catch(() => {});
-  return { launchArgs: plan.launchArgs, launchEnv, process: child };
+}> {
+  let port = options.port;
+  let lastExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  // Each child gets independent trust so a retry cannot bind a session or
+  // durable binding left by an earlier attempt.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const attemptKickoff = attempt === 0
+      ? options.kickoff
+      : createOpenCodeLaunchKickoff(options.prompt);
+    const plan = createOpenCodeLaunchPlan(options.cwd, port, options.prompt, options.passthroughArgs);
+    const launchEnv = {
+      ...options.env,
+      BORG_OPENCODE_PORT: plan.envPort,
+      [OPENCODE_SERVER_USERNAME_ENV]: OPENCODE_SERVER_USERNAME,
+      [OPENCODE_SERVER_PASSWORD_ENV]: attemptKickoff.apiPassword,
+      [BORG_OPENCODE_LAUNCH_CORRELATION_ENV]: attemptKickoff.correlationIdentity,
+    };
+    const child = (options.spawnProcess ?? spawn)('opencode', plan.launchArgs, {
+      stdio: 'inherit',
+      shell: false,
+      env: launchEnv,
+    });
+    type Stopped =
+      | { kind: 'error'; error: NodeJS.ErrnoException }
+      | { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null };
+    let markStopped: (outcome: Stopped) => void;
+    const stopped = new Promise<Stopped>((resolve) => { markStopped = resolve; });
+    const onError = (error: NodeJS.ErrnoException) => markStopped({ kind: 'error', error });
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      markStopped({ kind: 'exit', code, signal });
+    };
+    child.once('error', onError);
+    child.once('exit', onExit);
+    await (options.connect ?? connectOpenCodeDrone)({
+      serverUrl: plan.serverUrl,
+      apiPassword: attemptKickoff.apiPassword,
+      directory: options.cwd,
+      droneLabel: options.droneLabel,
+      cubeName: options.cubeName,
+      launchIdentity: attemptKickoff.correlationIdentity,
+    });
+    const outcome = await Promise.race([
+      (options.injectKickoff ?? injectInitialKickoff)(attemptKickoff).then(
+        (bound) => bound ? { kind: 'ready' as const } : { kind: 'unbound' as const },
+      ),
+      stopped,
+    ]);
+    child.off('error', onError);
+    child.off('exit', onExit);
+    if (outcome.kind === 'ready') {
+      return { launchArgs: plan.launchArgs, launchEnv, process: child };
+    }
+    if (outcome.kind === 'unbound') {
+      child.kill();
+      throw new Error('OpenCode started but its launch session could not be identified');
+    }
+    if (outcome.kind === 'error') throw outcome.error;
+    lastExit = outcome;
+    if (attempt < 2) port = await (options.allocatePort ?? allocateOpenCodePort)();
+  }
+  throw new Error(
+    `OpenCode exited before launch readiness after 3 attempts `
+    + `(code=${lastExit?.code ?? 'none'}, signal=${lastExit?.signal ?? 'none'})`,
+  );
 }
 
 export async function runAssimilateEntry(
@@ -683,7 +722,7 @@ async function main() {
   console.error(`${consolePrefix()}${chalk.blue(`◼ Launching ${cliDisplayName}…`)}`);
 
   const agentProcess = cli === 'opencode' && openCodeKickoff && openCodePort !== undefined
-    ? launchOpenCodeProcess({
+    ? (await launchOpenCodeProcess({
         cwd: process.cwd(),
         port: openCodePort,
         prompt: openCodeKickoff.prompt,
@@ -692,7 +731,7 @@ async function main() {
         droneLabel: active?.droneLabel ?? 'opencode',
         cubeName: active?.name ?? 'borg',
         kickoff: openCodeKickoff,
-      }).process
+      })).process
     : spawn(cli, launchArgs, { stdio: 'inherit', shell: false, env: launchEnv });
 
   // gh#857 WI-2: wake-target recording is codex-only (app-server bridge).
@@ -806,6 +845,11 @@ if (isEntryInvocation()) {
       error instanceof OpenCodeTargetedLaunchConfigError
     ) {
       process.stderr.write(`${error.message}\n`);
+      process.exit(1);
+    }
+    if (error?.code === 'ENOENT' && error?.path === 'opencode') {
+      console.error(`${consolePrefix()}${chalk.red('\n◼ Failed to launch opencode')}`);
+      console.error(`${consolePrefix()}${chalk.gray('Make sure opencode is installed.\n')}`);
       process.exit(1);
     }
     console.error(`${consolePrefix()}${chalk.red(`\n◼ Error: ${error.message}\n`)}`);

@@ -117,7 +117,7 @@ fs.writeFileSync(process.env.BORG_TEST_CAPTURE, JSON.stringify({
     expect(ensureCliMcpConfigured('opencode')).toBe(true);
 
     const kickoff = createOpenCodeLaunchKickoff('kickoff');
-    const launched = launchOpenCodeProcess({
+    const launched = await launchOpenCodeProcess({
       cwd: root,
       port: 15555,
       prompt: kickoff.prompt,
@@ -131,6 +131,7 @@ fs.writeFileSync(process.env.BORG_TEST_CAPTURE, JSON.stringify({
       cubeName: 'alpha',
       kickoff,
       connect: async () => {},
+      injectKickoff: async () => true,
     });
     const [exitCode] = await once(launched.process, 'exit');
 
