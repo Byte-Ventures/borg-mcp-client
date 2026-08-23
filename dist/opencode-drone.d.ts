@@ -65,6 +65,7 @@ export interface OpenCodeConnectionState {
 }
 export declare function getOpenCodeConnectionState(): OpenCodeConnectionState;
 export declare function __getOpenCodeDiagnosticLogPathForTests(): string;
+export declare function __getOpenCodeBindingPathForTests(): string;
 export declare function __getOpenCodeLastObservationForTests(): OpenCodeLastObservation;
 export declare function __decodeOpenCodeSessionForTests(value: unknown): unknown;
 export declare function __listOpenCodeSessionsForTests(): Promise<unknown[]>;

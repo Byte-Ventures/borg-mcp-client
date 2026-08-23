@@ -14,7 +14,7 @@ import {
 } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import {
   borgConfigRoot,
@@ -44,8 +44,9 @@ const OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES = 64 * 1024;
 const diagnosticLogPathsForTests = new Set<string>();
 
 function stateIdentityDigest(current: OpenCodeDroneState): string {
-  const key = [current.directory, current.cubeName, current.droneLabel].join('\0');
-  return createHash('sha256').update(key).digest('hex').slice(0, 24);
+  // The worktree is the stable seat boundary; launch placeholders for cube and
+  // drone names must not select different files before session identity resolves.
+  return createHash('sha256').update(resolve(current.directory)).digest('hex').slice(0, 24);
 }
 
 export function openCodeStartupDiagnosticLogPath(): string {
@@ -1558,6 +1559,11 @@ export function getOpenCodeConnectionState(): OpenCodeConnectionState {
 export function __getOpenCodeDiagnosticLogPathForTests(): string {
   if (!state) throw new Error('OpenCode drone is not connected');
   return diagnosticLogPath(state);
+}
+
+export function __getOpenCodeBindingPathForTests(): string {
+  if (!state) throw new Error('OpenCode drone is not connected');
+  return bindingPath();
 }
 
 export function __getOpenCodeLastObservationForTests(): OpenCodeLastObservation {

@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetOpenCodeDroneForTests,
   __decodeOpenCodeSessionForTests,
+  __getOpenCodeBindingPathForTests,
   __getOpenCodeDiagnosticLogPathForTests,
   __getOpenCodeLastObservationForTests,
   __listOpenCodeSessionsForTests,
@@ -172,11 +173,11 @@ function installOpenCodeApi(options: {
   return { prompts, promptBodies, fetchMock };
 }
 
-async function connect(droneLabel = 'drone-7', serverUrl = SERVER_URL) {
+async function connect(droneLabel = 'drone-7', serverUrl = SERVER_URL, directory = DIRECTORY) {
   await connectOpenCodeDrone({
     serverUrl,
     apiPassword: API_PASSWORD,
-    directory: DIRECTORY,
+    directory,
     droneLabel,
     cubeName: 'borg-mcp',
   });
@@ -674,14 +675,14 @@ describe('OpenCode wake target binding', () => {
     expect(getOpenCodeConnectionState().lastInjectionAt).toEqual(expect.any(Number));
   });
 
-  it('uses separate bounded 0600 diagnostic logs for separate drones', async () => {
+  it('uses separate bounded 0600 diagnostic logs for separate worktree seats', async () => {
     await connect('diagnostic-drone-a');
     const firstPath = __getOpenCodeDiagnosticLogPathForTests();
     expect(statSync(firstPath).mode & 0o777).toBe(0o600);
     for (let i = 0; i < 1_000; i++) await connect('diagnostic-drone-a');
     expect(statSync(firstPath).size).toBeLessThanOrEqual(64 * 1024);
 
-    await connect('diagnostic-drone-b');
+    await connect('diagnostic-drone-b', SERVER_URL, '/repo-b');
     expect(__getOpenCodeDiagnosticLogPathForTests()).not.toBe(firstPath);
   });
 
@@ -694,6 +695,27 @@ describe('OpenCode wake target binding', () => {
     expect(__getOpenCodeDiagnosticLogPathForTests()).toBe(firstPath);
   });
 
+  it('keeps identity-keyed paths when launch placeholders resolve to the worktree seat', async () => {
+    await connectOpenCodeDrone({
+      serverUrl: SERVER_URL,
+      apiPassword: API_PASSWORD,
+      directory: DIRECTORY,
+      droneLabel: 'opencode',
+      cubeName: 'borg',
+    });
+    const launchPaths = {
+      binding: __getOpenCodeBindingPathForTests(),
+      diagnostic: __getOpenCodeDiagnosticLogPathForTests(),
+    };
+
+    await connect('builder-4cf3a767');
+
+    expect({
+      binding: __getOpenCodeBindingPathForTests(),
+      diagnostic: __getOpenCodeDiagnosticLogPathForTests(),
+    }).toEqual(launchPaths);
+  });
+
   it('preserves an idle active seat binding older than seven days when another seat connects', async () => {
     const launch = launchKickoff('idle-active-binding');
     const root = session('idle-active-root', 10);
@@ -703,7 +725,7 @@ describe('OpenCode wake target binding', () => {
     });
     const droneLabel = 'idle-active-seat';
     const identity = createHash('sha256')
-      .update([DIRECTORY, 'borg-mcp', droneLabel].join('\0'))
+      .update(DIRECTORY)
       .digest('hex')
       .slice(0, 24);
     const idleBindingPath = join(testStateRoot, `borg-opencode-session-${identity}.json`);

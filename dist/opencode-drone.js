@@ -1,7 +1,7 @@
 import { closeSync, constants, existsSync, fchmodSync, fstatSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync, writeSync, } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { borgConfigRoot, ensurePrivateBorgConfigRoot, ensurePrivateBorgConfigRootSync, } from './private-root.js';
 import { OPENCODE_INJECTED_ENTRY_METADATA_KEY, OPENCODE_WAKE_IDENTITY_METADATA_KEY, OPENCODE_LAUNCH_CORRELATION_METADATA_KEY, } from './opencode-plugin.js';
@@ -10,8 +10,9 @@ import { OpenCodeAuthenticationError, OpenCodeHttpError, OpenCodeResponseError, 
 const OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES = 64 * 1024;
 const diagnosticLogPathsForTests = new Set();
 function stateIdentityDigest(current) {
-    const key = [current.directory, current.cubeName, current.droneLabel].join('\0');
-    return createHash('sha256').update(key).digest('hex').slice(0, 24);
+    // The worktree is the stable seat boundary; launch placeholders for cube and
+    // drone names must not select different files before session identity resolves.
+    return createHash('sha256').update(resolve(current.directory)).digest('hex').slice(0, 24);
 }
 export function openCodeStartupDiagnosticLogPath() {
     return join(borgConfigRoot(), 'opencode-drone-startup.log');
@@ -1239,6 +1240,11 @@ export function __getOpenCodeDiagnosticLogPathForTests() {
     if (!state)
         throw new Error('OpenCode drone is not connected');
     return diagnosticLogPath(state);
+}
+export function __getOpenCodeBindingPathForTests() {
+    if (!state)
+        throw new Error('OpenCode drone is not connected');
+    return bindingPath();
 }
 export function __getOpenCodeLastObservationForTests() {
     if (!state)
