@@ -289,6 +289,13 @@ interface SessionBinding {
   }>;
 }
 
+interface SessionBindingClaim {
+  version: 1;
+  directory: string;
+  droneLabel: string;
+  cubeName: string;
+}
+
 export interface OpenCodeLaunchKickoff {
   prompt: string;
   apiPassword: string;
@@ -560,6 +567,10 @@ function bindingPath(): string {
   return path;
 }
 
+function bindingClaimPath(): string {
+  return `${bindingPath()}.claim`;
+}
+
 function bindingMatchesState(binding: SessionBinding): boolean {
   const current = state!;
   const sameResolvedSeat = binding.droneLabel === current.droneLabel
@@ -614,20 +625,55 @@ function clearBinding(): void {
 
 function writeBinding(binding: SessionBinding): boolean {
   const current = state!;
-  current.sessionId = binding.sessionId;
-  current.sessionCreatedAt = binding.sessionCreatedAt;
-  current.knownRootSessionIds = binding.knownRootSessionIds;
-
   try {
     const path = bindingPath();
     const temporary = `${path}.${process.pid}.tmp`;
     writeFileSync(temporary, JSON.stringify(binding), { mode: 0o600 });
     renameSync(temporary, path);
+    current.sessionId = binding.sessionId;
+    current.sessionCreatedAt = binding.sessionCreatedAt;
+    current.knownRootSessionIds = binding.knownRootSessionIds;
     return true;
   } catch (err) {
     log(`session binding write failed: ${err}`);
     return false;
   }
+}
+
+function claimPlaceholderBinding(): boolean {
+  const current = state!;
+  const claim: SessionBindingClaim = {
+    version: 1,
+    directory: current.directory,
+    droneLabel: current.droneLabel,
+    cubeName: current.cubeName,
+  };
+  const path = bindingClaimPath();
+  try {
+    writeFileSync(path, JSON.stringify(claim), { mode: 0o600, flag: 'wx' });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      log(`session binding claim failed: ${error}`);
+      return false;
+    }
+  }
+  try {
+    const existing = JSON.parse(readFileSync(path, 'utf8')) as SessionBindingClaim;
+    return existing.version === 1
+      && existing.directory === claim.directory
+      && existing.droneLabel === claim.droneLabel
+      && existing.cubeName === claim.cubeName;
+  } catch {
+    return false;
+  }
+}
+
+function dropCachedBinding(): void {
+  if (!state) return;
+  state.sessionId = null;
+  state.sessionCreatedAt = null;
+  state.knownRootSessionIds = [];
 }
 
 function saveBinding(session: OCSession, knownRootSessionIds: string[]): void {
@@ -675,30 +721,33 @@ function persistCurrentBinding(): boolean {
 function restoreBinding(): SessionBinding | null {
   if (!state) return null;
   if (state.sessionId && state.sessionCreatedAt !== null) {
-    return {
-      version: 5,
-      sessionId: state.sessionId,
-      sessionCreatedAt: state.sessionCreatedAt,
-      knownRootSessionIds: state.knownRootSessionIds,
-      serverUrl: state.serverUrl,
-      directory: state.directory,
-      droneLabel: state.droneLabel,
-      cubeName: state.cubeName,
-      launchIdentity: state.launchIdentity,
-      pendingSubmissions: [...state.pendingSubmissions].map(([entryId, pending]) => ({
-        entryId,
-        sourceEntryId: pending.sourceEntryId,
-        sessionId: pending.sessionId,
-      })),
-    };
+    const persisted = readBinding();
+    if (
+      persisted?.droneLabel === state.droneLabel
+      && persisted.cubeName === state.cubeName
+    ) return persisted;
+    dropCachedBinding();
+    return null;
   }
 
-  const binding = readBinding();
+  let binding = readBinding();
   if (!binding) return null;
   if (binding.droneLabel === 'opencode' && binding.cubeName === 'borg') {
-    binding.droneLabel = state.droneLabel;
-    binding.cubeName = state.cubeName;
-    if (!writeBinding(binding)) return null;
+    if (!claimPlaceholderBinding()) return null;
+    if (!writeBinding({
+      ...binding,
+      droneLabel: state.droneLabel,
+      cubeName: state.cubeName,
+    })) return null;
+    binding = readBinding();
+    if (
+      !binding
+      || binding.droneLabel !== state.droneLabel
+      || binding.cubeName !== state.cubeName
+    ) {
+      dropCachedBinding();
+      return null;
+    }
   }
   state.sessionId = binding.sessionId;
   state.sessionCreatedAt = binding.sessionCreatedAt;
@@ -1674,6 +1723,11 @@ export function __resetOpenCodeDroneForTests(): void {
   for (const path of bindingPathsForTests) {
     try {
       unlinkSync(path);
+    } catch {
+      // Already removed.
+    }
+    try {
+      unlinkSync(`${path}.claim`);
     } catch {
       // Already removed.
     }

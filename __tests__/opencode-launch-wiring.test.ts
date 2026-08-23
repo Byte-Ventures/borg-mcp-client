@@ -1,13 +1,27 @@
 import { EventEmitter, once } from 'node:events';
+import { existsSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createOpenCodeLaunchPlan, launchOpenCodeProcess } from '../src/claude';
-import { allocateOpenCodePort, createOpenCodeLaunchKickoff } from '../src/opencode-drone';
+import {
+  __getOpenCodeBindingPathForTests,
+  __resetOpenCodeDroneForTests,
+  allocateOpenCodePort,
+  connectOpenCodeDrone,
+  createOpenCodeLaunchKickoff,
+  disconnectOpenCodeDrone,
+  injectInitialKickoff,
+  injectOpenCodeEntry,
+  probeOpenCodeDroneArmed,
+} from '../src/opencode-drone';
 import { connectOpenCodeRuntime } from '../src/index';
+import { OPENCODE_LAUNCH_CORRELATION_METADATA_KEY } from '../src/opencode-plugin';
 
 describe('OpenCode production launch wiring', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    __resetOpenCodeDroneForTests();
   });
 
   it('normal claude launch uses one port for CLI args, child env, and consumer URL', () => {
@@ -147,12 +161,146 @@ describe('OpenCode production launch wiring', () => {
         expect(spawnEnv.BORG_OPENCODE_LAUNCH_CORRELATION).toBe(attemptKickoff.correlationIdentity);
         expect(spawnEnv.OPENCODE_SERVER_PASSWORD).toBe(attemptKickoff.apiPassword);
         expect(connect.mock.calls[index][0].apiPassword).toBe(attemptKickoff.apiPassword);
+        expect(connect.mock.calls[index][0].launchIdentity).toBe(attemptKickoff.correlationIdentity);
       }
       expect(launched.process).toBe(children[1]);
       expect(launched.launchEnv.BORG_OPENCODE_PORT).toBe(attemptedPorts[1]);
     } finally {
       blocker.close();
       for (const server of servers) if (server.listening) server.close();
+    }
+  });
+
+  it('restores and delivers only through the surviving retry binding', async () => {
+    const directory = '/repo/retry-binding';
+    const sessions: Array<{ id: string; directory: string; time: { created: number } }> = [];
+    const messages = new Map<string, unknown[]>();
+    let promptCount = 0;
+    const handler = (request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse) => {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      response.setHeader('content-type', 'application/json');
+      if (request.method === 'GET' && url.pathname === '/session') {
+        response.end(JSON.stringify(sessions));
+        return;
+      }
+      const detail = sessions.find((session) => url.pathname === `/session/${session.id}`);
+      if (request.method === 'GET' && detail) {
+        response.end(JSON.stringify(detail));
+        return;
+      }
+      const messageSession = sessions.find(
+        (session) => url.pathname === `/session/${session.id}/message`,
+      );
+      if (request.method === 'GET' && messageSession) {
+        response.end(JSON.stringify(messages.get(messageSession.id) ?? []));
+        return;
+      }
+      const promptSession = sessions.find(
+        (session) => url.pathname === `/session/${session.id}/prompt_async`,
+      );
+      if (request.method === 'POST' && promptSession) {
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        request.on('end', () => {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { parts: unknown[] };
+          promptCount++;
+          messages.get(promptSession.id)!.push({
+            info: { id: `msg_000000000000retry${promptCount}`, role: 'user' },
+            parts: body.parts,
+          });
+          response.statusCode = 204;
+          response.end();
+        });
+        return;
+      }
+      response.statusCode = 404;
+      response.end('{}');
+    };
+    const firstServer = createHttpServer(handler);
+    const secondServer = createHttpServer(handler);
+    firstServer.listen(0, '127.0.0.1');
+    secondServer.listen(0, '127.0.0.1');
+    await Promise.all([once(firstServer, 'listening'), once(secondServer, 'listening')]);
+    const firstAddress = firstServer.address();
+    const secondAddress = secondServer.address();
+    if (!firstAddress || typeof firstAddress === 'string' || !secondAddress || typeof secondAddress === 'string') {
+      throw new Error('test servers did not bind TCP');
+    }
+    const children: EventEmitter[] = [];
+    const spawnProcess = vi.fn(() => {
+      const child = new EventEmitter();
+      children.push(child);
+      return child as any;
+    });
+    const attempts: Array<ReturnType<typeof createOpenCodeLaunchKickoff>> = [];
+    const bindingPaths: string[] = [];
+    const kickoff = createOpenCodeLaunchKickoff('retry binding kickoff');
+
+    try {
+      const launched = await launchOpenCodeProcess({
+        cwd: directory,
+        port: firstAddress.port,
+        prompt: kickoff.prompt,
+        passthroughArgs: [],
+        env: { BORG_SESSION: '1' },
+        droneLabel: 'opencode',
+        cubeName: 'borg',
+        kickoff,
+        spawnProcess,
+        allocatePort: async () => secondAddress.port,
+        injectKickoff: async (attemptKickoff) => {
+          attempts.push(attemptKickoff);
+          const index = attempts.length;
+          const session = {
+            id: `ses_000000000000attempt${index}`,
+            directory,
+            time: { created: index },
+          };
+          sessions.push(session);
+          messages.set(session.id, [{
+            info: { id: `msg_000000000000attempt${index}`, role: 'user' },
+            parts: [{
+              type: 'text',
+              text: attemptKickoff.prompt,
+              metadata: {
+                [OPENCODE_LAUNCH_CORRELATION_METADATA_KEY]: attemptKickoff.correlationIdentity,
+              },
+            }],
+          }]);
+          await expect(injectInitialKickoff(attemptKickoff)).resolves.toBe(true);
+          bindingPaths.push(__getOpenCodeBindingPathForTests());
+          if (index === 1) {
+            children[0].emit('exit', 1, null);
+            return new Promise<boolean>(() => {});
+          }
+          return true;
+        },
+      });
+
+      expect(launched.process).toBe(children[1]);
+      expect(attempts).toHaveLength(2);
+      expect(bindingPaths[1]).not.toBe(bindingPaths[0]);
+      expect(bindingPaths.every((path) => existsSync(path))).toBe(true);
+      expect(launched.launchEnv.BORG_OPENCODE_LAUNCH_CORRELATION).toBe(
+        attempts[1].correlationIdentity,
+      );
+
+      disconnectOpenCodeDrone();
+      await connectOpenCodeDrone({
+        serverUrl: `http://127.0.0.1:${secondAddress.port}`,
+        apiPassword: attempts[1].apiPassword,
+        directory,
+        droneLabel: 'builder-survivor',
+        cubeName: 'cube-one',
+        launchIdentity: attempts[1].correlationIdentity,
+      });
+      await expect(probeOpenCodeDroneArmed()).resolves.toBe(true);
+      await expect(injectOpenCodeEntry('surviving retry wake', 'surviving-retry-entry')).resolves.toBe(true);
+      expect(promptCount).toBe(1);
+    } finally {
+      firstServer.close();
+      secondServer.close();
+      await Promise.all([once(firstServer, 'close'), once(secondServer, 'close')]);
     }
   });
 
