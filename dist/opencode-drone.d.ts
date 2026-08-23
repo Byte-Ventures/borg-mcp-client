@@ -16,6 +16,7 @@ interface ConnectDeps {
     directory: string;
     droneLabel: string;
     cubeName: string;
+    launchIdentity: string;
 }
 export type OpenCodeDeliveryState = 'queued' | 'delivered-unconfirmed' | 'retried' | 'failed';
 type OpenCodeDeliveryOutcome = 'delivered' | 'delivered-unconfirmed' | 'failed';

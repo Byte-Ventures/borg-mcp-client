@@ -94,6 +94,7 @@ fs.writeFileSync(process.env.BORG_TEST_CAPTURE, JSON.stringify({
   expectedSeat: process.env.BORG_LAUNCH_EXPECTED_SEAT ?? '<missing>',
   apiUsername: process.env.OPENCODE_SERVER_USERNAME ?? '<missing>',
   apiPassword: process.env.OPENCODE_SERVER_PASSWORD ?? '<missing>',
+  launchCorrelation: process.env.BORG_OPENCODE_LAUNCH_CORRELATION ?? '<missing>',
 }));
 `);
 
@@ -138,6 +139,7 @@ fs.writeFileSync(process.env.BORG_TEST_CAPTURE, JSON.stringify({
       expectedSeat: Buffer.from(JSON.stringify(expectation), 'utf8').toString('base64url'),
       apiUsername: 'opencode',
       apiPassword: launched.launchEnv.OPENCODE_SERVER_PASSWORD,
+      launchCorrelation: launched.launchEnv.BORG_OPENCODE_LAUNCH_CORRELATION,
     });
     expect(Buffer.from(String(launched.launchEnv.OPENCODE_SERVER_PASSWORD), 'base64url')).toHaveLength(32);
   });

@@ -10,8 +10,8 @@ import { OpenCodeAuthenticationError, OpenCodeHttpError, OpenCodeResponseError, 
 const OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES = 64 * 1024;
 const diagnosticLogPathsForTests = new Set();
 function stateIdentityDigest(current) {
-    // The worktree is the stable seat boundary; launch placeholders for cube and
-    // drone names must not select different files before session identity resolves.
+    // Diagnostic files follow the stable worktree location; launch placeholders
+    // must not select a second log before session identity resolves.
     return createHash('sha256').update(resolve(current.directory)).digest('hex').slice(0, 24);
 }
 export function openCodeStartupDiagnosticLogPath() {
@@ -146,6 +146,9 @@ export async function connectOpenCodeDrone(deps) {
     if (!isOpenCode256BitIdentity(deps.apiPassword)) {
         throw new OpenCodeAuthenticationError('OpenCode API password is missing or unverifiable');
     }
+    if (!isOpenCode256BitIdentity(deps.launchIdentity)) {
+        throw new OpenCodeAuthenticationError('OpenCode launch identity is missing or unverifiable');
+    }
     await ensurePrivateBorgConfigRoot(borgConfigRoot());
     abandonOpenCodeDeliveries(state);
     state = {
@@ -157,6 +160,7 @@ export async function connectOpenCodeDrone(deps) {
         directory: deps.directory,
         droneLabel: deps.droneLabel,
         cubeName: deps.cubeName,
+        launchIdentity: deps.launchIdentity,
         connected: true,
         totalEntriesInjected: 0,
         totalEntriesRetried: 0,
@@ -346,16 +350,23 @@ async function promptSession(id, bodyObj) {
 // ---------------------------------------------------------------------------
 function bindingPath() {
     const current = state;
-    const path = join(tmpdir(), `borg-opencode-session-${stateIdentityDigest(current)}.json`);
+    const identity = createHash('sha256').update(current.launchIdentity).digest('hex').slice(0, 24);
+    const path = join(tmpdir(), `borg-opencode-session-${identity}.json`);
     bindingPathsForTests.add(path);
     return path;
 }
 function bindingMatchesState(binding) {
     const current = state;
-    return binding.version === 4
+    const sameResolvedSeat = binding.droneLabel === current.droneLabel
+        && binding.cubeName === current.cubeName;
+    // The 256-bit launch identity lets the resolved MCP child claim only its
+    // launcher's placeholder binding; resolved ownership still requires labels.
+    const unclaimedLaunch = binding.droneLabel === 'opencode'
+        && binding.cubeName === 'borg';
+    return binding.version === 5
         && binding.directory === current.directory
-        && binding.droneLabel === current.droneLabel
-        && binding.cubeName === current.cubeName
+        && binding.launchIdentity === current.launchIdentity
+        && (sameResolvedSeat || unclaimedLaunch)
         && typeof binding.sessionId === 'string'
         && typeof binding.sessionCreatedAt === 'number'
         && Array.isArray(binding.knownRootSessionIds)
@@ -416,7 +427,7 @@ function writeBinding(binding) {
 function saveBinding(session, knownRootSessionIds) {
     const current = state;
     const binding = {
-        version: 4,
+        version: 5,
         sessionId: session.id,
         sessionCreatedAt: session.time.created,
         knownRootSessionIds,
@@ -424,6 +435,7 @@ function saveBinding(session, knownRootSessionIds) {
         directory: current.directory,
         droneLabel: current.droneLabel,
         cubeName: current.cubeName,
+        launchIdentity: current.launchIdentity,
         pendingSubmissions: [...current.pendingSubmissions].map(([entryId, pending]) => ({
             entryId,
             sourceEntryId: pending.sourceEntryId,
@@ -437,7 +449,7 @@ function persistCurrentBinding() {
     if (!current?.sessionId || current.sessionCreatedAt === null)
         return false;
     return writeBinding({
-        version: 4,
+        version: 5,
         sessionId: current.sessionId,
         sessionCreatedAt: current.sessionCreatedAt,
         knownRootSessionIds: current.knownRootSessionIds,
@@ -445,6 +457,7 @@ function persistCurrentBinding() {
         directory: current.directory,
         droneLabel: current.droneLabel,
         cubeName: current.cubeName,
+        launchIdentity: current.launchIdentity,
         pendingSubmissions: [...current.pendingSubmissions].map(([entryId, pending]) => ({
             entryId,
             sourceEntryId: pending.sourceEntryId,
@@ -457,7 +470,7 @@ function restoreBinding() {
         return null;
     if (state.sessionId && state.sessionCreatedAt !== null) {
         return {
-            version: 4,
+            version: 5,
             sessionId: state.sessionId,
             sessionCreatedAt: state.sessionCreatedAt,
             knownRootSessionIds: state.knownRootSessionIds,
@@ -465,6 +478,7 @@ function restoreBinding() {
             directory: state.directory,
             droneLabel: state.droneLabel,
             cubeName: state.cubeName,
+            launchIdentity: state.launchIdentity,
             pendingSubmissions: [...state.pendingSubmissions].map(([entryId, pending]) => ({
                 entryId,
                 sourceEntryId: pending.sourceEntryId,
@@ -475,6 +489,12 @@ function restoreBinding() {
     const binding = readBinding();
     if (!binding)
         return null;
+    if (binding.droneLabel === 'opencode' && binding.cubeName === 'borg') {
+        binding.droneLabel = state.droneLabel;
+        binding.cubeName = state.cubeName;
+        if (!writeBinding(binding))
+            return null;
+    }
     state.sessionId = binding.sessionId;
     state.sessionCreatedAt = binding.sessionCreatedAt;
     state.knownRootSessionIds = binding.knownRootSessionIds;

@@ -52,6 +52,7 @@ const DIRECTORY = '/repo';
 const SERVER_URL = 'http://127.0.0.1:15113';
 const KICKOFF = 'Call borg_regen and follow the playbook.';
 const API_PASSWORD = Buffer.alloc(32, 0x41).toString('base64url');
+const LAUNCH_IDENTITY = Buffer.alloc(32, 0x42).toString('base64url');
 const CORRELATION_METADATA_KEY = 'borgOpenCodeLaunchCorrelation';
 
 interface Session {
@@ -173,13 +174,19 @@ function installOpenCodeApi(options: {
   return { prompts, promptBodies, fetchMock };
 }
 
-async function connect(droneLabel = 'drone-7', serverUrl = SERVER_URL, directory = DIRECTORY) {
+async function connect(
+  droneLabel = 'drone-7',
+  serverUrl = SERVER_URL,
+  directory = DIRECTORY,
+  launchIdentity = LAUNCH_IDENTITY,
+) {
   await connectOpenCodeDrone({
     serverUrl,
     apiPassword: API_PASSWORD,
     directory,
     droneLabel,
     cubeName: 'borg-mcp',
+    launchIdentity,
   });
 }
 
@@ -269,6 +276,15 @@ describe('OpenCode wake target binding', () => {
       directory: DIRECTORY,
       droneLabel: 'drone-7',
       cubeName: 'borg-mcp',
+      launchIdentity: LAUNCH_IDENTITY,
+    })).rejects.toBeInstanceOf(OpenCodeAuthenticationError);
+    await expect(connectOpenCodeDrone({
+      serverUrl: SERVER_URL,
+      apiPassword: API_PASSWORD,
+      directory: DIRECTORY,
+      droneLabel: 'drone-7',
+      cubeName: 'borg-mcp',
+      launchIdentity: 'short',
     })).rejects.toBeInstanceOf(OpenCodeAuthenticationError);
   });
 
@@ -695,25 +711,42 @@ describe('OpenCode wake target binding', () => {
     expect(__getOpenCodeDiagnosticLogPathForTests()).toBe(firstPath);
   });
 
-  it('keeps identity-keyed paths when launch placeholders resolve to the worktree seat', async () => {
+  it('hands the placeholder launch binding to its resolved seat and rejects another seat', async () => {
+    const launch = launchKickoff('placeholder-handoff');
+    const root = session('placeholder-root', 10);
+    const api = installOpenCodeApi({
+      sessions: () => [root],
+      messages: { [root.id]: kickoffMessages(launch) },
+    });
     await connectOpenCodeDrone({
       serverUrl: SERVER_URL,
       apiPassword: API_PASSWORD,
       directory: DIRECTORY,
       droneLabel: 'opencode',
       cubeName: 'borg',
+      launchIdentity: launch.correlationIdentity,
     });
     const launchPaths = {
       binding: __getOpenCodeBindingPathForTests(),
       diagnostic: __getOpenCodeDiagnosticLogPathForTests(),
     };
+    await expect(injectInitialKickoff(launch)).resolves.toBe(true);
+    disconnectOpenCodeDrone();
 
-    await connect('builder-4cf3a767');
+    await connect('builder-4cf3a767', SERVER_URL, DIRECTORY, launch.correlationIdentity);
 
     expect({
       binding: __getOpenCodeBindingPathForTests(),
       diagnostic: __getOpenCodeDiagnosticLogPathForTests(),
     }).toEqual(launchPaths);
+    await expect(probeOpenCodeDroneArmed()).resolves.toBe(true);
+    await expect(injectOpenCodeEntry('resolved wake')).resolves.toBe(true);
+
+    disconnectOpenCodeDrone();
+    await connect('reviewer-other', SERVER_URL, DIRECTORY, launch.correlationIdentity);
+    await expect(probeOpenCodeDroneArmed()).resolves.toBe(false);
+    await expect(injectOpenCodeEntry('wrong seat wake')).resolves.toBe(false);
+    expect(api.prompts).toEqual([root.id]);
   });
 
   it('preserves an idle active seat binding older than seven days when another seat connects', async () => {
@@ -725,7 +758,7 @@ describe('OpenCode wake target binding', () => {
     });
     const droneLabel = 'idle-active-seat';
     const identity = createHash('sha256')
-      .update(DIRECTORY)
+      .update(LAUNCH_IDENTITY)
       .digest('hex')
       .slice(0, 24);
     const idleBindingPath = join(testStateRoot, `borg-opencode-session-${identity}.json`);

@@ -37,4 +37,8 @@ export function openCodeApiPasswordFromEnv(env) {
     const password = env[OPENCODE_SERVER_PASSWORD_ENV];
     return isOpenCode256BitIdentity(password) ? password : null;
 }
+export function openCodeLaunchCorrelationFromEnv(env) {
+    const identity = env[BORG_OPENCODE_LAUNCH_CORRELATION_ENV];
+    return isOpenCode256BitIdentity(identity) ? identity : null;
+}
 //# sourceMappingURL=opencode-launch-trust.js.map

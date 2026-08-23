@@ -185,6 +185,7 @@ export function launchOpenCodeProcess(options: {
     directory: options.cwd,
     droneLabel: options.droneLabel,
     cubeName: options.cubeName,
+    launchIdentity: options.kickoff.correlationIdentity,
   })
     .then(() => injectInitialKickoff(options.kickoff))
     .catch(() => {});

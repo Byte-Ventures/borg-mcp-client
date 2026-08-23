@@ -86,12 +86,14 @@ describe('OpenCode production launch wiring', () => {
         BORG_OPENCODE_PORT: '15555',
         OPENCODE_SERVER_USERNAME: 'opencode',
         OPENCODE_SERVER_PASSWORD: Buffer.alloc(32, 0x41).toString('base64url'),
+        BORG_OPENCODE_LAUNCH_CORRELATION: Buffer.alloc(32, 0x42).toString('base64url'),
       },
       { connect },
     )).resolves.toBe(true);
 
     expect(connect).toHaveBeenCalledWith(expect.objectContaining({
       serverUrl: 'http://127.0.0.1:15555',
+      launchIdentity: Buffer.alloc(32, 0x42).toString('base64url'),
     }));
   });
 
@@ -115,13 +117,23 @@ describe('OpenCode production launch wiring', () => {
     expect(error.mock.calls[0][0]).toContain('Relaunch through borg');
   });
 
-  it('index consumer fails closed before connect when API authentication is absent or unverifiable', async () => {
+  it('index consumer fails closed before connect when launch authentication is absent or unverifiable', async () => {
     const connect = vi.fn(async () => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await expect(connectOpenCodeRuntime(
       { name: 'borg', droneLabel: 'drone-1' },
       { BORG_OPENCODE_PORT: '15555' },
+      { connect },
+    )).resolves.toBe(false);
+    await expect(connectOpenCodeRuntime(
+      { name: 'borg', droneLabel: 'drone-1' },
+      {
+        BORG_OPENCODE_PORT: '15555',
+        OPENCODE_SERVER_USERNAME: 'opencode',
+        OPENCODE_SERVER_PASSWORD: Buffer.alloc(32, 0x41).toString('base64url'),
+        BORG_OPENCODE_LAUNCH_CORRELATION: 'not-256-bit',
+      },
       { connect },
     )).resolves.toBe(false);
     await expect(connectOpenCodeRuntime(
