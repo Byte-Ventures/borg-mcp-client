@@ -14,7 +14,7 @@ import {
 } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import {
   borgConfigRoot,
@@ -44,8 +44,9 @@ const OPEN_CODE_DIAGNOSTIC_LOG_MAX_BYTES = 64 * 1024;
 const diagnosticLogPathsForTests = new Set<string>();
 
 function stateIdentityDigest(current: OpenCodeDroneState): string {
-  const key = [current.directory, current.cubeName, current.droneLabel].join('\0');
-  return createHash('sha256').update(key).digest('hex').slice(0, 24);
+  // Diagnostic files follow the stable worktree location; launch placeholders
+  // must not select a second log before session identity resolves.
+  return createHash('sha256').update(resolve(current.directory)).digest('hex').slice(0, 24);
 }
 
 export function openCodeStartupDiagnosticLogPath(): string {
@@ -166,6 +167,7 @@ interface OpenCodeDroneState {
   directory: string;
   droneLabel: string;
   cubeName: string;
+  launchIdentity: string;
   connected: boolean;
   totalEntriesInjected: number;
   totalEntriesRetried: number;
@@ -204,6 +206,7 @@ interface ConnectDeps {
   directory: string;
   droneLabel: string;
   cubeName: string;
+  launchIdentity: string;
 }
 
 interface OCSession {
@@ -270,7 +273,7 @@ const OPEN_CODE_RECONCILIATION_ATTEMPTS = 20;
 const OPEN_CODE_DELIVERY_HISTORY_LIMIT = 256;
 
 interface SessionBinding {
-  version: 4;
+  version: 5;
   sessionId: string;
   sessionCreatedAt: number;
   knownRootSessionIds: string[];
@@ -278,11 +281,19 @@ interface SessionBinding {
   directory: string;
   droneLabel: string;
   cubeName: string;
+  launchIdentity: string;
   pendingSubmissions: Array<{
     entryId: string;
     sourceEntryId: string;
     sessionId: string;
   }>;
+}
+
+interface SessionBindingClaim {
+  version: 1;
+  directory: string;
+  droneLabel: string;
+  cubeName: string;
 }
 
 export interface OpenCodeLaunchKickoff {
@@ -323,6 +334,9 @@ export async function connectOpenCodeDrone(deps: ConnectDeps): Promise<void> {
   if (!isOpenCode256BitIdentity(deps.apiPassword)) {
     throw new OpenCodeAuthenticationError('OpenCode API password is missing or unverifiable');
   }
+  if (!isOpenCode256BitIdentity(deps.launchIdentity)) {
+    throw new OpenCodeAuthenticationError('OpenCode launch identity is missing or unverifiable');
+  }
   await ensurePrivateBorgConfigRoot(borgConfigRoot());
   abandonOpenCodeDeliveries(state);
   state = {
@@ -334,6 +348,7 @@ export async function connectOpenCodeDrone(deps: ConnectDeps): Promise<void> {
     directory: deps.directory,
     droneLabel: deps.droneLabel,
     cubeName: deps.cubeName,
+    launchIdentity: deps.launchIdentity,
     connected: true,
     totalEntriesInjected: 0,
     totalEntriesRetried: 0,
@@ -546,17 +561,28 @@ async function promptSession(id: string, bodyObj: Record<string, unknown>): Prom
 
 function bindingPath(): string {
   const current = state!;
-  const path = join(tmpdir(), `borg-opencode-session-${stateIdentityDigest(current)}.json`);
+  const identity = createHash('sha256').update(current.launchIdentity).digest('hex').slice(0, 24);
+  const path = join(tmpdir(), `borg-opencode-session-${identity}.json`);
   bindingPathsForTests.add(path);
   return path;
 }
 
+function bindingClaimPath(): string {
+  return `${bindingPath()}.claim`;
+}
+
 function bindingMatchesState(binding: SessionBinding): boolean {
   const current = state!;
-  return binding.version === 4
+  const sameResolvedSeat = binding.droneLabel === current.droneLabel
+    && binding.cubeName === current.cubeName;
+  // The 256-bit launch identity lets the resolved MCP child claim only its
+  // launcher's placeholder binding; resolved ownership still requires labels.
+  const unclaimedLaunch = binding.droneLabel === 'opencode'
+    && binding.cubeName === 'borg';
+  return binding.version === 5
     && binding.directory === current.directory
-    && binding.droneLabel === current.droneLabel
-    && binding.cubeName === current.cubeName
+    && binding.launchIdentity === current.launchIdentity
+    && (sameResolvedSeat || unclaimedLaunch)
     && typeof binding.sessionId === 'string'
     && typeof binding.sessionCreatedAt === 'number'
     && Array.isArray(binding.knownRootSessionIds)
@@ -599,15 +625,14 @@ function clearBinding(): void {
 
 function writeBinding(binding: SessionBinding): boolean {
   const current = state!;
-  current.sessionId = binding.sessionId;
-  current.sessionCreatedAt = binding.sessionCreatedAt;
-  current.knownRootSessionIds = binding.knownRootSessionIds;
-
   try {
     const path = bindingPath();
     const temporary = `${path}.${process.pid}.tmp`;
     writeFileSync(temporary, JSON.stringify(binding), { mode: 0o600 });
     renameSync(temporary, path);
+    current.sessionId = binding.sessionId;
+    current.sessionCreatedAt = binding.sessionCreatedAt;
+    current.knownRootSessionIds = binding.knownRootSessionIds;
     return true;
   } catch (err) {
     log(`session binding write failed: ${err}`);
@@ -615,10 +640,46 @@ function writeBinding(binding: SessionBinding): boolean {
   }
 }
 
+function claimPlaceholderBinding(): boolean {
+  const current = state!;
+  const claim: SessionBindingClaim = {
+    version: 1,
+    directory: current.directory,
+    droneLabel: current.droneLabel,
+    cubeName: current.cubeName,
+  };
+  const path = bindingClaimPath();
+  try {
+    writeFileSync(path, JSON.stringify(claim), { mode: 0o600, flag: 'wx' });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      log(`session binding claim failed: ${error}`);
+      return false;
+    }
+  }
+  try {
+    const existing = JSON.parse(readFileSync(path, 'utf8')) as SessionBindingClaim;
+    return existing.version === 1
+      && existing.directory === claim.directory
+      && existing.droneLabel === claim.droneLabel
+      && existing.cubeName === claim.cubeName;
+  } catch {
+    return false;
+  }
+}
+
+function dropCachedBinding(): void {
+  if (!state) return;
+  state.sessionId = null;
+  state.sessionCreatedAt = null;
+  state.knownRootSessionIds = [];
+}
+
 function saveBinding(session: OCSession, knownRootSessionIds: string[]): void {
   const current = state!;
   const binding: SessionBinding = {
-    version: 4,
+    version: 5,
     sessionId: session.id,
     sessionCreatedAt: session.time.created,
     knownRootSessionIds,
@@ -626,6 +687,7 @@ function saveBinding(session: OCSession, knownRootSessionIds: string[]): void {
     directory: current.directory,
     droneLabel: current.droneLabel,
     cubeName: current.cubeName,
+    launchIdentity: current.launchIdentity,
     pendingSubmissions: [...current.pendingSubmissions].map(([entryId, pending]) => ({
       entryId,
       sourceEntryId: pending.sourceEntryId,
@@ -639,7 +701,7 @@ function persistCurrentBinding(): boolean {
   const current = state;
   if (!current?.sessionId || current.sessionCreatedAt === null) return false;
   return writeBinding({
-    version: 4,
+    version: 5,
     sessionId: current.sessionId,
     sessionCreatedAt: current.sessionCreatedAt,
     knownRootSessionIds: current.knownRootSessionIds,
@@ -647,6 +709,7 @@ function persistCurrentBinding(): boolean {
     directory: current.directory,
     droneLabel: current.droneLabel,
     cubeName: current.cubeName,
+    launchIdentity: current.launchIdentity,
     pendingSubmissions: [...current.pendingSubmissions].map(([entryId, pending]) => ({
       entryId,
       sourceEntryId: pending.sourceEntryId,
@@ -658,25 +721,34 @@ function persistCurrentBinding(): boolean {
 function restoreBinding(): SessionBinding | null {
   if (!state) return null;
   if (state.sessionId && state.sessionCreatedAt !== null) {
-    return {
-      version: 4,
-      sessionId: state.sessionId,
-      sessionCreatedAt: state.sessionCreatedAt,
-      knownRootSessionIds: state.knownRootSessionIds,
-      serverUrl: state.serverUrl,
-      directory: state.directory,
-      droneLabel: state.droneLabel,
-      cubeName: state.cubeName,
-      pendingSubmissions: [...state.pendingSubmissions].map(([entryId, pending]) => ({
-        entryId,
-        sourceEntryId: pending.sourceEntryId,
-        sessionId: pending.sessionId,
-      })),
-    };
+    const persisted = readBinding();
+    if (
+      persisted?.droneLabel === state.droneLabel
+      && persisted.cubeName === state.cubeName
+    ) return persisted;
+    dropCachedBinding();
+    return null;
   }
 
-  const binding = readBinding();
+  let binding = readBinding();
   if (!binding) return null;
+  if (binding.droneLabel === 'opencode' && binding.cubeName === 'borg') {
+    if (!claimPlaceholderBinding()) return null;
+    if (!writeBinding({
+      ...binding,
+      droneLabel: state.droneLabel,
+      cubeName: state.cubeName,
+    })) return null;
+    binding = readBinding();
+    if (
+      !binding
+      || binding.droneLabel !== state.droneLabel
+      || binding.cubeName !== state.cubeName
+    ) {
+      dropCachedBinding();
+      return null;
+    }
+  }
   state.sessionId = binding.sessionId;
   state.sessionCreatedAt = binding.sessionCreatedAt;
   state.knownRootSessionIds = binding.knownRootSessionIds;
@@ -1560,6 +1632,11 @@ export function __getOpenCodeDiagnosticLogPathForTests(): string {
   return diagnosticLogPath(state);
 }
 
+export function __getOpenCodeBindingPathForTests(): string {
+  if (!state) throw new Error('OpenCode drone is not connected');
+  return bindingPath();
+}
+
 export function __getOpenCodeLastObservationForTests(): OpenCodeLastObservation {
   if (!state) throw new Error('OpenCode drone is not connected');
   return { ...state.lastObservation };
@@ -1646,6 +1723,11 @@ export function __resetOpenCodeDroneForTests(): void {
   for (const path of bindingPathsForTests) {
     try {
       unlinkSync(path);
+    } catch {
+      // Already removed.
+    }
+    try {
+      unlinkSync(`${path}.claim`);
     } catch {
       // Already removed.
     }

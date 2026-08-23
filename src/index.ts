@@ -153,7 +153,7 @@ import {
   writeOpenCodeStartupDiagnostic,
 } from './opencode-drone.js';
 import { installBorgPlugin } from './opencode-plugin.js';
-import { openCodeApiPasswordFromEnv } from './opencode-launch-trust.js';
+import { openCodeApiPasswordFromEnv, openCodeLaunchCorrelationFromEnv } from './opencode-launch-trust.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
 import {
   lifecycleSignalForMessage,
@@ -312,6 +312,11 @@ export async function connectOpenCodeRuntime(
     console.error('OpenCode API credential is missing or unverifiable; skipping OpenCode entry injection. Relaunch through borg.');
     return false;
   }
+  const launchIdentity = openCodeLaunchCorrelationFromEnv(env);
+  if (launchIdentity === null) {
+    console.error('OpenCode launch identity is missing or unverifiable; skipping OpenCode entry injection. Relaunch through borg.');
+    return false;
+  }
   const binding = openCodeLaunchBinding(configuredPort);
   await (deps.connect ?? connectOpenCodeDrone)({
     serverUrl: binding.serverUrl,
@@ -319,6 +324,7 @@ export async function connectOpenCodeRuntime(
     directory: active.worktree ?? findProjectRoot(),
     droneLabel: active.droneLabel,
     cubeName: active.name,
+    launchIdentity,
   });
   return true;
 }

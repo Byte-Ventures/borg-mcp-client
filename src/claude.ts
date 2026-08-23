@@ -207,6 +207,7 @@ export async function launchOpenCodeProcess(options: {
       directory: options.cwd,
       droneLabel: options.droneLabel,
       cubeName: options.cubeName,
+      launchIdentity: attemptKickoff.correlationIdentity,
     });
     const outcome = await Promise.race([
       (options.injectKickoff ?? injectInitialKickoff)(attemptKickoff).then(

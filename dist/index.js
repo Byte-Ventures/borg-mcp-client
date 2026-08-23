@@ -43,7 +43,7 @@ import { resolveSessionAgentKind, } from './codex-app-wake.js';
 import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { connectOpenCodeDrone, injectOpenCodeEntry, settleOpenCodeEntry, configuredOpenCodePort, OPEN_CODE_PORT_MISSING_DIAGNOSTIC, openCodeLaunchBinding, writeOpenCodeStartupDiagnostic, } from './opencode-drone.js';
 import { installBorgPlugin } from './opencode-plugin.js';
-import { openCodeApiPasswordFromEnv } from './opencode-launch-trust.js';
+import { openCodeApiPasswordFromEnv, openCodeLaunchCorrelationFromEnv } from './opencode-launch-trust.js';
 import { setModuleInjectOpenCode } from './log-stream.js';
 import { lifecycleSignalForMessage, recordLifecycleLog, shouldSuppressLifecycleLog, } from './lifecycle-log-guard.js';
 import { normalizeLogAudience, } from './direct-log.js';
@@ -152,6 +152,11 @@ export async function connectOpenCodeRuntime(active, env = process.env, deps = {
         console.error('OpenCode API credential is missing or unverifiable; skipping OpenCode entry injection. Relaunch through borg.');
         return false;
     }
+    const launchIdentity = openCodeLaunchCorrelationFromEnv(env);
+    if (launchIdentity === null) {
+        console.error('OpenCode launch identity is missing or unverifiable; skipping OpenCode entry injection. Relaunch through borg.');
+        return false;
+    }
     const binding = openCodeLaunchBinding(configuredPort);
     await (deps.connect ?? connectOpenCodeDrone)({
         serverUrl: binding.serverUrl,
@@ -159,6 +164,7 @@ export async function connectOpenCodeRuntime(active, env = process.env, deps = {
         directory: active.worktree ?? findProjectRoot(),
         droneLabel: active.droneLabel,
         cubeName: active.name,
+        launchIdentity,
     });
     return true;
 }
