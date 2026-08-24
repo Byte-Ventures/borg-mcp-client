@@ -13,32 +13,88 @@ const STATE_FILE = 'repository-identities.json';
 const LOCK_FILE = 'repository-identities.lock';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DISPLAY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/;
+export class RepositoryDiscoveryError extends Error {
+    kind;
+    name = 'RepositoryDiscoveryError';
+    constructor(kind, message, options) {
+        super(message, options);
+        this.kind = kind;
+    }
+}
+export function repositoryDiscoveryFailureMessage(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.replace(/[\x00-\x1F\x7F]/g, '').trim() || 'Unknown repository discovery failure';
+}
 function defaultRunGit(cwd, args) {
-    const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
-    return { status: result.status, stdout: result.stdout };
+    const result = spawnSync('git', args, {
+        cwd,
+        encoding: 'utf8',
+        env: { ...process.env, LC_ALL: 'C' },
+    });
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr, error: result.error };
 }
 function output(result) {
     const value = result.status === 0 ? result.stdout?.trim() : null;
     return value || null;
 }
+function runGitForDiscovery(runGit, cwd, args) {
+    let result;
+    try {
+        result = runGit(cwd, args);
+    }
+    catch (cause) {
+        throw new RepositoryDiscoveryError('git-execution', `Git repository discovery could not run: ${repositoryDiscoveryFailureMessage(cause)}`, { cause });
+    }
+    if (result.error) {
+        throw new RepositoryDiscoveryError('git-execution', `Git repository discovery could not run: ${repositoryDiscoveryFailureMessage(result.error)}`, { cause: result.error });
+    }
+    return result;
+}
+function gitQueryFailure(label, result) {
+    const detail = (result.stderr ?? '').replace(/[\x00-\x1F\x7F]/g, '').trim();
+    const suffix = detail ? `: ${detail}` : ` (Git exited with status ${result.status ?? 'unknown'})`;
+    return new RepositoryDiscoveryError('git-query', `Git repository discovery failed while querying ${label}${suffix}`);
+}
+async function canonicalizeRepositoryPath(canonicalPath, path, label) {
+    try {
+        return await canonicalPath(path);
+    }
+    catch (cause) {
+        throw new RepositoryDiscoveryError('canonical-path', `Could not resolve the ${label}: ${repositoryDiscoveryFailureMessage(cause)}`, { cause });
+    }
+}
 export async function resolveGitRepositoryContext(cwd, deps = {}) {
     const runGit = deps.runGit ?? defaultRunGit;
     const canonicalPath = deps.canonicalPath ?? realpath;
-    const rootRaw = output(runGit(cwd, ['rev-parse', '--show-toplevel']));
-    if (!rootRaw || !isAbsolute(rootRaw))
-        return null;
-    const bare = output(runGit(cwd, ['rev-parse', '--is-bare-repository']));
+    const bareResult = runGitForDiscovery(runGit, cwd, ['rev-parse', '--is-bare-repository']);
+    if (bareResult.status !== 0) {
+        if (/not a git repository/i.test(bareResult.stderr ?? ''))
+            return null;
+        throw gitQueryFailure('whether the repository is bare', bareResult);
+    }
+    const bare = output(bareResult);
     if (bare === 'true')
         throw new Error('BARE_REPOSITORY');
-    const commonRaw = output(runGit(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+    if (bare !== 'false')
+        throw gitQueryFailure('whether the repository is bare', bareResult);
+    const rootResult = runGitForDiscovery(runGit, cwd, ['rev-parse', '--show-toplevel']);
+    const rootRaw = output(rootResult);
+    if (!rootRaw || !isAbsolute(rootRaw))
+        throw gitQueryFailure('the repository root', rootResult);
+    const commonResult = runGitForDiscovery(runGit, cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const commonRaw = output(commonResult);
     if (!commonRaw || !isAbsolute(commonRaw))
-        return null;
-    const root = await canonicalPath(rootRaw);
-    const commonDir = await canonicalPath(commonRaw);
+        throw gitQueryFailure('the Git common directory', commonResult);
+    const root = await canonicalizeRepositoryPath(canonicalPath, rootRaw, 'repository root path');
+    const commonDir = await canonicalizeRepositoryPath(canonicalPath, commonRaw, 'Git common directory path');
     const derivedName = normalizeCubeName(basename(root));
     if (!derivedName)
         return null;
-    const originRaw = output(runGit(root, ['config', '--get', 'remote.origin.url']));
+    const originResult = runGitForDiscovery(runGit, root, ['config', '--get', 'remote.origin.url']);
+    if (originResult.status !== 0 && (originResult.status !== 1 || originResult.stderr?.trim())) {
+        throw gitQueryFailure('the origin remote', originResult);
+    }
+    const originRaw = output(originResult);
     const canonical = originRaw ? canonicalizeWorkingRepoIdentity(originRaw) : null;
     return {
         root,

@@ -475,6 +475,27 @@ describe('runAssimilate: progress output (gh#653 B4)', () => {
 });
 
 describe('runAssimilate: cube-init surrounding surface', () => {
+  it('keeps the existing copy for a genuine non-repository outcome', async () => {
+    const deps = makeStubDeps({ resolveRepositoryContext: vi.fn(async () => null) });
+    await expect(runAssimilate({ role: undefined, flags: {} }, deps)).resolves.toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(
+      'No Git repository was found for this directory.\n' +
+      'Nothing was changed.\n' +
+      'Run this command inside a Git repository.\n',
+    );
+  });
+
+  it('reports an operational repository-discovery failure with its cause', async () => {
+    const deps = makeStubDeps({
+      resolveRepositoryContext: vi.fn(async () => { throw new Error('git failed: dubious ownership\u001b[2J'); }),
+    });
+    await expect(runAssimilate({ role: undefined, flags: {} }, deps)).resolves.toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(
+      'Could not inspect this Git repository: git failed: dubious ownership[2J\n' +
+      'Nothing was changed.\n',
+    );
+  });
+
   it('writes the affirmative final frame to stdout while progress stays on stderr', async () => {
     const stdout = vi.fn();
     const stderr = vi.fn();

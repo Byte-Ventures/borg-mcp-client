@@ -11,7 +11,7 @@ import { type WorkingRepo } from './working-repo.js';
 import { type LaunchAccessPaths } from './launch-access.js';
 import type { AssociateRepositoryCubeResponse, CreateCubeRepository, CubeTemplate } from 'borgmcp-shared/protocol';
 import { type RepositoryCubeCreation, type RepositoryCubeResolution } from './repository-cube-init.js';
-import type { GitRepositoryContext, RepositoryAssociation } from './repository-identity.js';
+import { type GitRepositoryContext, type RepositoryAssociation } from './repository-identity.js';
 export interface AssimilateFlags {
     worktree?: string;
     template?: string;

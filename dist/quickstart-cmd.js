@@ -6,6 +6,7 @@ import { buildDefaultLaunchAllDeps } from './launch-all-deps.js';
 import { LAUNCH_ALL_NO_DISPATCH_EXIT_CODE, runLaunchAll } from './launch-all-cmd.js';
 import { roleSlug } from './role-resolver.js';
 import { DEFAULT_LOCAL_SERVER_ORIGIN } from './server-handshake.js';
+import { repositoryDiscoveryFailureMessage } from './repository-identity.js';
 export function buildDefaultQuickstartDeps() {
     const io = buildDefaultAssimilateDeps();
     return {
@@ -133,8 +134,14 @@ export async function runQuickstart(args, deps, options = {}) {
     try {
         context = await assimilate.resolveRepositoryContext(assimilate.cwd());
     }
-    catch {
-        context = null;
+    catch (error) {
+        if (error instanceof Error && error.message === 'BARE_REPOSITORY') {
+            context = null;
+        }
+        else {
+            deps.stderr(`borg quickstart: could not inspect this Git repository: ${repositoryDiscoveryFailureMessage(error)}\n`);
+            return 1;
+        }
     }
     if (!context) {
         deps.stderr('borg quickstart: run this command inside a non-bare Git repository.\n');
