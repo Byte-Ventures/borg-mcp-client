@@ -16,7 +16,8 @@ const SERVER_CREDENTIAL_RECORD_VERSION = 2;
 const SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 3;
 const LEGACY_SERVER_PENDING_ENROLLMENT_RECORD_VERSION = 1;
 const SERVER_ACCEPTED_ENROLLMENT_MARKER_VERSION = 1;
-const SERVER_CUBE_RETRY_RECORD_VERSION = 2;
+const SERVER_CUBE_RETRY_RECORD_VERSION = 3;
+const LEGACY_SERVER_CUBE_RETRY_RECORD_VERSION = 2;
 // The 0600 credential store (Queen rescope: replaces the OS keychain). A single
 // file holds every parent credential/enrollment record; a single flock
 // serializes every mutator + observer that must (SR-seven #4).
@@ -878,35 +879,69 @@ export async function getOrCreatePendingServerCubeCreation(input) {
     return withCredentialStoreLock(async () => {
         const stored = await backend.get(account);
         if (stored) {
+            let record;
             try {
-                const record = JSON.parse(stored);
-                if (record.version !== SERVER_CUBE_RETRY_RECORD_VERSION ||
-                    record.state !== 'pending' ||
-                    record.origin !== input.origin ||
-                    record.trustIdentity !== input.trustIdentity ||
-                    record.clientId !== input.clientId ||
-                    record.repositoryBinding !== repositoryBinding ||
-                    record.name !== input.name ||
-                    record.workingRepoName !== input.workingRepoName ||
-                    record.template !== input.template ||
-                    typeof record.retryKey !== 'string' || !UUID_RE.test(record.retryKey)) {
-                    throw new Error('mismatch');
-                }
+                const parsed = JSON.parse(stored);
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+                    throw new Error('invalid record');
+                record = parsed;
+            }
+            catch {
+                throw new Error('pending Borg server cube creation does not match this repository');
+            }
+            const retryKey = typeof record.retryKey === 'string' && UUID_RE.test(record.retryKey)
+                ? record.retryKey
+                : null;
+            const sameOperation = record.state === 'pending' &&
+                record.origin === input.origin &&
+                record.trustIdentity === input.trustIdentity &&
+                record.clientId === input.clientId &&
+                record.repositoryBinding === repositoryBinding &&
+                record.name === input.name &&
+                record.workingRepoName === input.workingRepoName &&
+                retryKey !== null;
+            if (sameOperation && record.version === SERVER_CUBE_RETRY_RECORD_VERSION && record.template === input.template) {
                 return {
                     origin: input.origin,
                     trustIdentity: input.trustIdentity,
                     clientId: input.clientId,
                     repositoryBinding,
-                    retryKey: record.retryKey,
+                    retryKey,
                     name: input.name,
                     workingRepoName: input.workingRepoName,
                     repository: input.repository,
                     template: input.template,
                 };
             }
-            catch {
-                throw new Error('pending Borg server cube creation does not match this repository');
+            if (sameOperation &&
+                record.version === LEGACY_SERVER_CUBE_RETRY_RECORD_VERSION &&
+                record.template === 'default') {
+                const replacement = {
+                    origin: input.origin,
+                    trustIdentity: input.trustIdentity,
+                    clientId: input.clientId,
+                    repositoryBinding,
+                    retryKey: randomUUID(),
+                    name: input.name,
+                    workingRepoName: input.workingRepoName,
+                    repository: input.repository,
+                    template: input.template,
+                };
+                await backend.set(account, JSON.stringify({
+                    version: SERVER_CUBE_RETRY_RECORD_VERSION,
+                    state: 'pending',
+                    origin: replacement.origin,
+                    trustIdentity: replacement.trustIdentity,
+                    clientId: replacement.clientId,
+                    repositoryBinding: replacement.repositoryBinding,
+                    retryKey: replacement.retryKey,
+                    name: replacement.name,
+                    workingRepoName: replacement.workingRepoName,
+                    template: replacement.template,
+                }));
+                return replacement;
             }
+            throw new Error('pending Borg server cube creation does not match this repository');
         }
         const record = {
             origin: input.origin,

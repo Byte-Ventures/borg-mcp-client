@@ -199,7 +199,7 @@ export interface AssimilateDeps {
         name: string;
         workingRepoName: string;
         repository: CreateCubeRepository;
-        template: Exclude<CubeTemplate, 'default'>;
+        template: CubeTemplate;
     }, serverTrustIdentity?: string) => Promise<RepositoryCubeCreation>;
     assimilate: (apiUrl: string, token: string, params: {
         cube_id: string;
