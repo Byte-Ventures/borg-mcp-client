@@ -2,10 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   runAssimilate,
   safeStderr,
-  type ActiveCube,
+  type AssimilationActiveCube,
   type AssimilateDeps,
   type AssimilateResult,
 } from '../src/assimilate-cmd';
+import type { ActiveCube } from '../src/cubes';
 import { BorgServerError, LegacySessionCredentialCollisionError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
 import { createHash } from 'node:crypto';
@@ -4327,7 +4328,7 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     let active: ActiveCube | null = null;
     let droneCount = 0;
     const getActiveCube = vi.fn(async () => active);
-    const finalizeServerSeat = vi.fn(async ({ active: next }: { active: ActiveCube }) => {
+    const finalizeServerSeat = vi.fn(async ({ active: next }: { active: AssimilationActiveCube }) => {
       active = { ...next, sessionToken: 'saved-local-session' };
       return { committed: true as const };
     });

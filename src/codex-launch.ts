@@ -1,5 +1,6 @@
 import type { BorgCli } from './cubes.js';
-import { wakePathArming, type AgentKind } from './regen-format.js';
+import type { AgentKind } from './agent-runtime.js';
+import { wakePathArming } from './regen-format.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
 
 /**

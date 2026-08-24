@@ -26,8 +26,11 @@ import {
   codexStateRootConfigArgs,
   withAgentRuntimeEnv,
 } from './agent-runtime.js';
-import type { BorgCli } from './cubes.js';
-import { inboxPathForDrone } from './cubes.js';
+import {
+  inboxPathForDrone,
+  type ActiveCube as CanonicalActiveCube,
+  type BorgCli,
+} from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import {
   formatSeatReattachRefusal,
@@ -194,24 +197,8 @@ export interface AssimilateResult {
   prepareAborted?: boolean;
 }
 
-export interface ActiveCube {
-  cubeId: string;
-  droneId: string;
-  name: string;
-  sessionToken?: string;
-  droneLabel: string;
-  apiUrl: string;
-  /** Verified local-server CA identity; absent until a local server is selected. */
-  serverTrustIdentity?: string;
-  localSessionCredentialRef?: string;
-  /** Durable operation that produced this exact seat binding. */
-  operation?: ServerSessionOperation;
-  // gh#899: assimilated role, persisted for connect-time tool-surface scoping
-  // (mirrors cubes.ts ActiveCube; optional → backward-compatible).
-  roleName?: string;
-  roleClass?: 'queen' | 'worker';
-  isHumanSeat?: boolean;
-}
+/** Pre-finalization seat metadata has no hydrated bearer or bound worktree yet. */
+export type AssimilationActiveCube = Omit<CanonicalActiveCube, 'sessionToken' | 'worktree'>;
 
 export interface AssimilateDeps {
   runSync: (cmd: string, args: string[], cwd?: string) => { status: number | null; stdout: string; stderr: string };
@@ -257,7 +244,7 @@ export interface AssimilateDeps {
   setTerminalTitle: (label: string, cubeName: string) => void;
 
   // CR-PD-F3 — getActiveCube is fs/promises-backed in src/cubes.ts.
-  getActiveCube: () => Promise<ActiveCube | null>;
+  getActiveCube: () => Promise<CanonicalActiveCube | null>;
   /** Read-only relaunch guard for the saved seat's inbox monitor. */
   inspectLiveInboxMonitor?: (
     inboxPath: string,
@@ -287,14 +274,14 @@ export interface AssimilateDeps {
     cubeId: string;
     projectRoot: string;
   }) => Promise<{ operation: ServerSessionOperation; roleId: string; credentialRef: string } | null>;
-  probeSeat: (seat: ActiveCube) => Promise<SeatStatus>;
+  probeSeat: (seat: CanonicalActiveCube) => Promise<SeatStatus>;
   /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
    *  typed expectation, persist the binding FIRST, then run `activate` (keychain
    *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and
    *  report an honest abort. Wired to the merged activate+bind FINALIZE in
    *  production; absent from unit stubs that fully mock `assimilate`. */
   finalizeServerSeat?: (input: {
-    active: ActiveCube;
+    active: AssimilationActiveCube;
     commonDir: string;
     repositoryOrigin?: string;
     expected: ExpectedBinding;
@@ -910,7 +897,7 @@ export async function runAssimilate(
   // Read local seat state before authority discovery, which may probe the local
   // server. A retired replacement collision must not send either saved bearer or
   // perform any other network request.
-  let existing: ActiveCube | null = null;
+  let existing: CanonicalActiveCube | null = null;
   let hasPersistedIdentity = false;
   let localSeatReadError: unknown;
   try {
@@ -1866,7 +1853,7 @@ export async function runAssimilate(
   };
 
   // ----- Step 8: persist the binding (narrow rollback — worktree exists if spawned) -----
-  const activeCube: ActiveCube = {
+  const activeCube: AssimilationActiveCube = {
     cubeId: result.cube_id,
     droneId: result.drone_id,
     name: cubeDetail.name,

@@ -34,7 +34,7 @@ import {
   ErrorCode,
   type DocumentCitation,
 } from 'borgmcp-shared/protocol';
-import { getActiveCube, inboxPathForDrone } from './cubes.js';
+import { getActiveCube, inboxPathForDrone, type ActiveCube } from './cubes.js';
 import { assertUuidShape } from './evict-drone.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import {
@@ -419,7 +419,7 @@ export interface StreamDeps {
     isSourcePending?: () => Promise<boolean>,
   ) => Promise<boolean>;
   /** Inspect whether one retry source remains beyond the durable unread cursor. */
-  hasPendingWakeEntry?: (active: ActiveCube, entryId: string) => Promise<boolean>;
+  hasPendingWakeEntry?: (active: StreamActiveCube, entryId: string) => Promise<boolean>;
   /** Clear in-process retry diagnostics after the durable entry is consumed. */
   settleOpenCodeEntry?: (sourceEntryId: string) => void;
 }
@@ -670,21 +670,17 @@ export function __runLoopForTest(testDeps: RunLoopTestDeps): Promise<void> {
 // Single SSE session (exported for tests)
 // ------------------------------------------------------------------
 
-export interface ActiveCube {
-  cubeId: string;
-  droneId: string;
-  sessionToken: string;
-  apiUrl: string;
-  serverTrustIdentity?: string;
-  localSessionCredentialRef?: string;
-  localSessionExpiresAt?: string | null;
-  worktree?: string;
-  droneLabel?: string;
-  name?: string;
-}
+/** Direct stream controls may omit metadata or omit trust to exercise fail-closed validation. */
+export type StreamActiveCube = Pick<
+  ActiveCube,
+  'cubeId' | 'droneId' | 'sessionToken' | 'apiUrl'
+> & Partial<Pick<
+  ActiveCube,
+  'serverTrustIdentity' | 'localSessionCredentialRef' | 'worktree' | 'droneLabel' | 'name'
+>>;
 
 export async function streamOnce(
-  active: ActiveCube,
+  active: StreamActiveCube,
   lastEventId: string | null,
   onEventId: (id: string) => void,
   deps: StreamDeps = {}
@@ -1270,7 +1266,7 @@ export async function streamOnce(
 }
 
 export async function streamOnceIfOwner(
-  active: ActiveCube,
+  active: StreamActiveCube,
   lastEventId: string | null,
   onEventId: (id: string) => void,
   deps: StreamDeps = {}

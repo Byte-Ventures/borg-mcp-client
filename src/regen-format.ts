@@ -21,6 +21,7 @@ import { formatDocumentCitations } from './document-render.js';
 import { shellEscape } from './shell-escape.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
 import { isBorgSession } from './launch-gate.js';
+import type { AgentKind } from './agent-runtime.js';
 
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
@@ -71,9 +72,6 @@ export function shouldRelayPlainSessionReminder(args: {
     args.disabled === undefined
   );
 }
-
-/** The agent runtime a session runs under — drives the wake-path branch. */
-export type AgentKind = 'claude' | 'codex' | 'opencode';
 
 /**
  * The agent-branched WAKE-PATH ARMING sub-block (gh#929/gh#927) — the single

@@ -10,7 +10,7 @@ import { perWorktreeBranchName, computeWorktreePath, localBranchExists, isMerged
 import { DroneEvictedError } from './drone-lifecycle.js';
 import { codexBorgSessionConfigArgs } from './launch-gate.js';
 import { codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, codexStateRootConfigArgs, withAgentRuntimeEnv, } from './agent-runtime.js';
-import { inboxPathForDrone } from './cubes.js';
+import { inboxPathForDrone, } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import { formatSeatReattachRefusal, inspectLiveInboxMonitor, } from './seat-reattach-guard.js';
 import { resolveLaunchEnv } from './model-presets.js';
