@@ -214,7 +214,7 @@ async function writeServerCredentialRecord(backend, record, allowReplacement = f
     }
     if (backend.entries) {
         const accounts = await backend.entries();
-        const conflicts = Object.entries(accounts).filter(([account, value]) => {
+        const conflicts = Object.entries(accounts).filter(([, value]) => {
             try {
                 const parsed = JSON.parse(value);
                 return parsed.version === SERVER_CREDENTIAL_RECORD_VERSION && parsed.origin === record.origin;
