@@ -1144,17 +1144,17 @@ export async function getOrCreatePendingServerCubeCreation(
           template: input.template,
         };
       }
-      if (
-        sameOperation &&
-        record.version === LEGACY_SERVER_CUBE_RETRY_RECORD_VERSION &&
-        record.template === 'default'
-      ) {
+      if (sameOperation && record.version === LEGACY_SERVER_CUBE_RETRY_RECORD_VERSION) {
+        const preserveRetryKey = record.template === input.template;
+        if (!preserveRetryKey && record.template !== 'default') {
+          throw new Error('pending Borg server cube creation does not match this repository');
+        }
         const replacement: PendingServerCubeCreationRecord = {
           origin: input.origin,
           trustIdentity: input.trustIdentity,
           clientId: input.clientId,
           repositoryBinding,
-          retryKey: randomUUID(),
+          retryKey: preserveRetryKey ? retryKey : randomUUID(),
           name: input.name,
           workingRepoName: input.workingRepoName,
           repository: input.repository,
