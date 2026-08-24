@@ -139,6 +139,7 @@ export function topLevelHelpText(version) {
         `  borg                     Show the launch menu in a repository root; resume directly in a linked worktree\n` +
         `  borg setup               Set up borg MCP server + agent CLI integration\n` +
         `  borg update              Update the client and installed local server together\n` +
+        `  borg upgrade             Alias for borg update\n` +
         `  borg doctor              Check agent hook commands, OpenCode integration, and startup diagnostics\n` +
         `  borg clone <url> [dir]   Clone a repository, then create and launch its cube\n` +
         `  borg quickstart          Create a cube and a drone for every role, then launch them\n` +

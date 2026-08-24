@@ -444,9 +444,14 @@ lines.on('line', (line) => {
 `
       : `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
-if (process.argv.slice(2).join('\\0') === 'update\\0--help') {
+const topLevelArgs = process.argv.slice(2).join('\\0');
+if (topLevelArgs === 'update\\0--help' || topLevelArgs === 'upgrade\\0--help') {
   process.stdout.write('borg update\\nmatching exact borgmcp-shared pins\\n');
   process.exit(0);
+}
+if (topLevelArgs === 'update\\0--force' || topLevelArgs === 'upgrade\\0--force') {
+  process.stderr.write('unknown option: --force\\nRun \`borg update --help\` for usage.\\n');
+  process.exit(1);
 }
 const [command, ...args] = process.argv.slice(3);
 const child = spawn('borg-mcp-server', [command, ...args], { shell: false, stdio: 'inherit' });
