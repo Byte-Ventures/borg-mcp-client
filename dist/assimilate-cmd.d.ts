@@ -145,7 +145,6 @@ export interface AssimilateDeps {
         credentialRef: string;
     } | null>;
     probeSeat: (seat: ActiveCube) => Promise<SeatStatus>;
-    setActiveCube: (a: ActiveCube) => Promise<void>;
     /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
      *  typed expectation, persist the binding FIRST, then run `activate` (keychain
      *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and

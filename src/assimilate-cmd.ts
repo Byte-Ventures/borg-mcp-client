@@ -256,10 +256,7 @@ export interface AssimilateDeps {
   // process.stdout.
   setTerminalTitle: (label: string, cubeName: string) => void;
 
-  // CR-PD-F3 — getActiveCube/setActiveCube are fs/promises-backed in
-  // src/cubes.ts (Promise<ActiveCube|null> / Promise<void>).
-  // The scaffold previously declared them sync; that would silently
-  // mis-await in Phase F wiring. Promise<...> matches the real shape.
+  // CR-PD-F3 — getActiveCube is fs/promises-backed in src/cubes.ts.
   getActiveCube: () => Promise<ActiveCube | null>;
   /** Read-only relaunch guard for the saved seat's inbox monitor. */
   inspectLiveInboxMonitor?: (
@@ -291,7 +288,6 @@ export interface AssimilateDeps {
     projectRoot: string;
   }) => Promise<{ operation: ServerSessionOperation; roleId: string; credentialRef: string } | null>;
   probeSeat: (seat: ActiveCube) => Promise<SeatStatus>;
-  setActiveCube: (a: ActiveCube) => Promise<void>;
   /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
    *  typed expectation, persist the binding FIRST, then run `activate` (keychain
    *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and
@@ -1064,8 +1060,8 @@ export async function runAssimilate(
   // state until AFTER the API assimilate succeeds — early-return at
   // role resolution / listCubes / createCube / template-prompt /
   // template-invalid-choice is now structurally clean (no orphan
-  // class possible). Worktree rollback narrows to the single
-  // setActiveCube failure path post-worktree-creation.
+  // class possible). Worktree rollback narrows to local finalization failures
+  // after worktree creation.
 
   // Sprint 18: capture pre-chdir cwd for the post-exit shell-cd hint
   // (no chdir has happened yet; this is a stable starting point).
@@ -1958,7 +1954,7 @@ export async function runAssimilate(
       // A BINDING-WRITE (or revalidate) failure BEFORE the binding landed. Nothing
       // owns the spawned worktree yet, so rolling it back is safe.
       const message = err instanceof Error ? err.message : String(err);
-      deps.stderr(`setActiveCube failed: ${message}\n`);
+      deps.stderr(`finalizeServerSeat failed: ${message}\n`);
       rollbackWorktree();
       return 1;
     }

@@ -94,7 +94,7 @@ describe('inboxPathForDrone canonical pattern', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Seam 4: setActiveCube + getActiveCube real fs round-trip
+// Active cube reads from real filesystem state
 // ---------------------------------------------------------------------------
 
 describe('cubes.json fs persistence round-trip', () => {

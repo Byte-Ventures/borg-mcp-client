@@ -97,7 +97,6 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     readPersistedLocalSeat: vi.fn(async () => null),
     peekServerSessionRecord: vi.fn(async () => false),
     probeSeat: vi.fn(async () => 'live'),
-    setActiveCube: vi.fn(async () => {}),
     findProjectRoot: vi.fn(() => '/work/myrepo'),
     resolveRepositoryContext: vi.fn(async () => ({
       root: '/work/myrepo',
@@ -1125,8 +1124,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
 // Sprint 19 (gh#184): assimilate flow reorder + strict rollback.
 // Worktree spawn now happens AFTER API success. Assimilate API failure
 // no longer creates a worktree (no rollback needed; clean early-exit).
-// Worktree rollback narrows to the single setActiveCube failure path
-// post-worktree-creation.
+// Worktree rollback narrows to local finalization failures after creation.
 describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-up)', () => {
   const sameCubeSeat = vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone' }));
   const cubeResolves = {
@@ -1178,8 +1176,8 @@ describe('runAssimilate: reattach to an EVICTED seat is refused (gh#877 follow-u
 describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)', () => {
   // Ratified client-seat-reset-state-model clause 1: attach mutates NOTHING on a
   // rejection — it diagnoses and points at the dedicated OFFLINE
-  // `borg reset-local-connection` command. No setActiveCube / any local write happens
-  // on the rejected path (clearActiveCube was DELETED — SR-seven (c)).
+  // `borg reset-local-connection` command. No local write happens on the rejected
+  // path (clearActiveCube was DELETED — SR-seven (c)).
   const sameCubeSeat = () => vi.fn(async () => ({ cubeId: 'c', droneId: 'd-prior', name: 'myrepo', droneLabel: 'l', apiUrl: 'https://server.test', serverTrustIdentity: SERVER_TRUST_IDENTITY, localSessionCredentialRef: 'borg-server-session:' + 'a'.repeat(64), roleName: 'Drone' }));
   const cubeResolves = {
     cwd: () => '/work/myrepo',
@@ -1191,15 +1189,10 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
   // THIS worktree's saved session bearer — a pin-matched SESSION_REJECTED.
   const rejectAttach = () => vi.fn(async () => { throw new BorgServerError('SESSION_REJECTED', 'session bearer no longer accepted'); });
 
-  function assertNoMutation(deps: AssimilateDeps): void {
-    expect(deps.setActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
-  }
-
   it('the attach-catch rejection reports the exact superseded diagnosis and mutates nothing', async () => {
     const stderr = vi.fn();
-    const setActiveCube = vi.fn(async () => {});
     const deps = makeStubDeps({
-      ...cubeResolves, stderr, setActiveCube,
+      ...cubeResolves, stderr,
       isTTY: () => true,
       probeSeat: vi.fn(async () => 'live'),
       getActiveCube: sameCubeSeat(),
@@ -1211,15 +1204,13 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
       'Local session was superseded by a newer enrollment.\n' +
         'Next: run borg reset-local-connection, then borg assimilate --host https://server.test --enroll.\n',
     );
-    assertNoMutation(deps);
   });
 
   it('CANONICAL PATH: a pin-matched superseded probe diagnoses before attach with exact copy', async () => {
     const stderr = vi.fn();
-    const setActiveCube = vi.fn(async () => {});
     const assimilate = vi.fn(async () => { throw new Error('attach must not run after a rejected probe'); });
     const deps = makeStubDeps({
-      ...cubeResolves, stderr, setActiveCube, assimilate,
+      ...cubeResolves, stderr, assimilate,
       isTTY: () => false,
       probeSeat: vi.fn(async () => 'rejected'),
       getActiveCube: sameCubeSeat(),
@@ -1231,7 +1222,6 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
       'Local session was superseded by a newer enrollment.\n' +
         'Next: run borg reset-local-connection, then borg assimilate --host https://server.test --enroll.\n',
     );
-    assertNoMutation(deps);
   });
 
   it('the superseded diagnosis is identical whether or not stdin is a TTY', async () => {
@@ -1249,7 +1239,6 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
       'Local session was superseded by a newer enrollment.\n' +
         'Next: run borg reset-local-connection, then borg assimilate --host https://server.test --enroll.\n',
     );
-    assertNoMutation(deps);
   });
 
   it('a revoked probe reports the distinct exact diagnosis and does not attach', async () => {
@@ -1266,7 +1255,6 @@ describe('runAssimilate: pin-matched SESSION_REJECTED is PURE DIAGNOSIS (#1082)'
       'Local session was revoked.\n' +
         'Next: run borg reset-local-connection, then borg assimilate --host https://server.test --enroll.\n',
     );
-    assertNoMutation(deps);
   });
 });
 
@@ -1295,7 +1283,6 @@ describe('runAssimilate: probe cause is preserved to cause-accurate recovery (CR
     // Distinct from the takeover path AND the transient path.
     expect(out).not.toContain('borg reset-local-connection');
     expect(out).not.toMatch(/borg-mcp-server start|Start or restart the server/i);
-    expect(deps.setActiveCube as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 
   it('trust-mismatch: TERMINAL trust copy, exit 1, never restart-the-server advice, never a reset', async () => {
@@ -1424,7 +1411,7 @@ describe('runAssimilate: Sprint 19 (gh#184) strict-rollback semantics', () => {
     });
     const exit = await runAssimilate({ role: undefined, flags: { yes: true } }, deps);
     expect(exit).toBe(1);
-    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('setActiveCube failed: seat store write failed'));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('finalizeServerSeat failed: seat store write failed'));
     // Rollback called: worktree-remove on the spawned worktree path.
     const rollbackCall = runSyncSpy.mock.calls.find(
       (call) => call[1][0] === 'worktree' && call[1][1] === 'remove'
@@ -1746,14 +1733,13 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }],
   }));
 
-  it('a fresh attach drives finalizeServerSeat with an ABSENT expectation + the deferred thunks; setActiveCube is NOT used', async () => {
+  it('a fresh attach drives finalizeServerSeat with an ABSENT expectation + the deferred thunks', async () => {
     const activate = vi.fn(async () => {});
     const scrubPending = vi.fn(async () => {});
     const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
-    const setActiveCube = vi.fn(async () => {});
     const deps = makeStubDeps({
       assimilate: localResultWithFinalize(activate, scrubPending),
-      getCube: getCube(), setActiveCube, finalizeServerSeat,
+      getCube: getCube(), finalizeServerSeat,
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
     });
     expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(0);
@@ -1765,8 +1751,6 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
     expect(call.repositoryOrigin).toBe('https://github.com/org/myrepo');
     expect(call.activate).toBe(activate);
     expect(call.scrubPending).toBe(scrubPending);
-    // The legacy activate-then-bind writer is bypassed on the composite path.
-    expect(setActiveCube).not.toHaveBeenCalled();
   });
 
   it('C2: warns when the same public repository has an active seat from a different clone family', async () => {
@@ -1913,17 +1897,15 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
   it('an expectation-mismatch abort fails closed (exit 1), rolls back nothing to overwrite, and never audits success', async () => {
     const finalizeServerSeat = vi.fn(async () => ({ committed: false as const, reason: 'expectation-mismatch' as const }));
     const stderr = vi.fn();
-    const setActiveCube = vi.fn(async () => {});
     const deps = makeStubDeps({
       assimilate: localResultWithFinalize(vi.fn(async () => {}), vi.fn(async () => {})),
-      getCube: getCube(), finalizeServerSeat, setActiveCube, stderr,
+      getCube: getCube(), finalizeServerSeat, stderr,
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
     });
     expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
     const out = stderr.mock.calls.map((c) => String(c[0])).join('');
     expect(out).toMatch(/changed during attach/);
     expect(out).not.toMatch(/re-attached|no new drone minted/);
-    expect(setActiveCube).not.toHaveBeenCalled();
   });
 
   it('a finalize throw fails closed (exit 1)', async () => {
@@ -1935,7 +1917,7 @@ describe('runAssimilate: Step 8 COMPOSITE FINALIZE (Race 2, part C)', () => {
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
     });
     expect(await runAssimilate({ role: undefined, flags: { yes: true } }, deps)).toBe(1);
-    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toMatch(/setActiveCube failed: keychain locked/);
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toMatch(/finalizeServerSeat failed: keychain locked/);
   });
 
   // CR #5: a spawned-sibling worktree OWNS the persisted binding once FINALIZE
@@ -2896,7 +2878,6 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       return { status: 0, stdout: '', stderr: '' };
     });
     const stderr = vi.fn();
-    const setActiveCube = vi.fn(async () => {});
     const assimilateSpy = vi.fn(async () => ({
       cube_id: 'cube-1',
       drone_id: 'drone-prior',
