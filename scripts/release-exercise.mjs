@@ -428,13 +428,16 @@ async function runDocumentJourney(installed, temporary, isolatedHome) {
   const digester = new credentials.CredentialDigester(await loadDigestKey(bootstrap.paths.digestKey));
   const authority = new credentials.CredentialAuthority(runtime.credentials, digester);
   const api = new CoordinationApi(runtime, authority);
-  const operator = principal.operatorPrincipal('00000000-0000-4000-8000-000000000002');
+  const clientId = '00000000-0000-4000-8000-000000000002';
+  const operator = principal.clientPrincipal(clientId);
   const cubeId = '00000000-0000-4000-8000-000000000003';
   const roleId = '00000000-0000-4000-8000-000000000004';
   const droneId = '00000000-0000-4000-8000-000000000005';
   const sessionId = '00000000-0000-4000-8000-000000000006';
   const sessionToken = 's'.repeat(43);
+  runtime.maintenance.createClient({ id: clientId, name: 'Installed document journey' });
   runtime.maintenance.createCube({ id: cubeId, name: 'Installed document journey', directive: '' });
+  runtime.maintenance.grantClientCube({ clientId, cubeId, access: 'manage' });
   const port = await freePort();
   const server = await httpsServer.startHttpsServer({
     bind: { host: '127.0.0.1', port },
