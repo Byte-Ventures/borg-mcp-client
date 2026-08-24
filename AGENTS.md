@@ -34,7 +34,6 @@
 - `npm run release:check` runs the full release lane: public-source scan, release readiness, lock-registry check, typecheck, tests, build, onboarding smoke, and package verification.
 - Releases are tag-triggered and immutable. Never move or reuse a tag. A pre-stage workflow failure may be rerun; npm stage acceptance consumes the version. Check the registry before naming a version.
 - Follow `docs/RELEASING.md`. A merged release-prep PR does not authorize tagging or publication.
-- `docs/EXTRACTION_PROVENANCE.md` ships to npm and records spent versions. Its current-release-identity statements move with a bump. Record a spent version in its table; never append a clause to the entry.
 
 ## Documentation Surfaces
 
