@@ -22,7 +22,7 @@ vi.mock('../src/remote-client.js', async (o) => ({ ...(await o<typeof import('..
 
 import { main } from '../src/index.js';
 
-const CUBE = { id: 'cube-1', name: 'made', cube_directive: 'existing' };
+const CUBE = { id: 'cube-1', name: 'made', cube_directive: 'existing', roles: [{ id: 'role-1', name: 'Coordinator' }] };
 
 describe('borg_create-cube handler — explicit repository (client#499)', () => {
   const originalOpenCode = process.env.BORG_OPENCODE;
@@ -63,7 +63,9 @@ describe('borg_create-cube handler — explicit repository (client#499)', () => 
     expect(state.createCube).toHaveBeenCalledWith('made', 'hello', expect.objectContaining({
       repository: { kind: 'origin', value: 'https://github.com/owner/made' },
       workingRepoName: 'made',
+      template: 'software-dev',
     }));
+    expect(result.structuredContent).toMatchObject({ template: 'software-dev' });
   });
 
   it('reports an existing repository cube honestly on resolved (directive unchanged, no create claim)', async () => {

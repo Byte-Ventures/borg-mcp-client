@@ -54,7 +54,7 @@ function makeEntryDeps(question: PromptQuestion) {
     name: 'repo',
     working_repo_name: input.workingRepoName,
     repository: input.repository,
-    template: 'default' as const,
+    template: 'software-dev' as const,
     human_seat_role_id: 'role-human',
     default_worker_role_id: 'role-default',
     access: 'manage' as const,
@@ -581,7 +581,7 @@ describe.each(entrypoints)('legacy repository cube adoption through $entry', ({ 
       name: 'repo',
       working_repo_name: 'repo',
       repository: { kind: 'origin', value: 'https://github.com/org/repo' },
-      template: 'default',
+      template: 'software-dev',
       human_seat_role_id: 'role-human',
       default_worker_role_id: 'role-default',
       access: 'manage',
@@ -594,7 +594,7 @@ describe.each(entrypoints)('legacy repository cube adoption through $entry', ({ 
     expect(state.saveRepositoryAssociation).toHaveBeenCalledWith(
       SERVER_TRUST_IDENTITY,
       { kind: 'origin', value: 'https://github.com/org/repo' },
-      { cubeId: 'cube-existing', name: 'repo', workingRepoName: 'repo', template: 'default' },
+      { cubeId: 'cube-existing', name: 'repo', workingRepoName: 'repo', template: 'software-dev' },
     );
     expect(state.createCube).not.toHaveBeenCalled();
     if (entry === 'borg assimilate') expect(state.assimilate).toHaveBeenCalledOnce();
@@ -615,7 +615,7 @@ describe.each(entrypoints)('legacy repository cube adoption through $entry', ({ 
         name: 'repo',
         working_repo_name: 'repo',
         repository: { kind: 'origin', value: 'https://github.com/org/repo' },
-        template: 'default',
+        template: 'software-dev',
         human_seat_role_id: 'role-human',
         default_worker_role_id: 'role-default',
         access: 'manage',

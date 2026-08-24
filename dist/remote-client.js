@@ -17,7 +17,7 @@ import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_CODE, } from './drone-lifecycle.js';
-import { getTemplate } from 'borgmcp-shared/templates';
+import { NEW_CUBE_TEMPLATE_PRESENTATIONS, getTemplate, } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { buildRuntimeMetadataPatch } from './runtime-metadata.js';
 import { loadBorgServerTrust } from './server-trust.js';
@@ -1005,10 +1005,8 @@ export async function listCubes(connection) {
  * to surface the interactive template prompt on first-drone bootstrap.
  */
 /**
- * Create a new cube. Server-side seeds a default "Drone" role atomically
- * so the cube is assimilatable immediately, OR applies the named template
- * atomically when `opts.template` is set (single-withUserId transaction —
- * skips the auto-Drone insert to avoid is_default partial-index conflict).
+ * Create a new cube. Server-side seeds the selected named template atomically
+ * so the cube is assimilatable immediately.
  *
  * Returns `{ cube, roles }` — the roles array lets the assimilate
  * orchestrator pick a default role without a follow-up `getCube` call.
@@ -1066,8 +1064,10 @@ export function normalizeExplicitRepository(repositoryArg, workingRepoNameArg) {
 export async function createCube(name, cubeDirective, opts, connection) {
     if (!name?.trim())
         throw new Error('Local Borg server cube creation requires a cube name');
-    if (opts?.template !== undefined && opts.template !== 'default') {
-        throw new Error('Local Borg server supports only the default cube seed');
+    const templateName = opts?.template ?? NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
+    const template = getTemplate(templateName);
+    if (!template) {
+        throw new Error(`Unknown template "${templateName}". Available: ${NEW_CUBE_TEMPLATE_PRESENTATIONS.map(({ name }) => name).join(', ')}`);
     }
     if (!opts?.repository || !opts?.workingRepoName) {
         throw new Error('Local Borg server cube creation requires an explicit repository identity');
@@ -1082,7 +1082,7 @@ export async function createCube(name, cubeDirective, opts, connection) {
         name: name.trim(),
         working_repo_name: opts.workingRepoName,
         repository: opts.repository,
-        template: 'default',
+        template: template.name,
     }));
     // client#499: the server homes one cube per repository. A 'resolved' result
     // means this repository already has a cube — report it honestly and DO NOT

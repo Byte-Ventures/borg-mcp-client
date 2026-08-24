@@ -12,7 +12,7 @@ export interface RepositoryCubeCreation {
     response: CreateCubeResponse;
     cube: RepositoryCubeDetail;
 }
-type NewCubeTemplate = Exclude<CubeTemplate, 'default'>;
+type NewCubeTemplate = CubeTemplate;
 export type RepositoryCubeResolution = ResolveRepositoryCubeResponse;
 export interface RepositoryCubeInitFlags {
     cubeName?: string;

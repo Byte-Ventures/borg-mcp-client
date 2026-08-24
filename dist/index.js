@@ -16,7 +16,7 @@ import { assertRoleMatches } from './role-match.js';
 import { CubeDeletionConfirmationError } from './server-errors.js';
 import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, readLogEntry, appendLog, ackLogEntry, getAckStatus, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, normalizeExplicitRepository, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, putDocument, getDocument, listDocuments, removeDocument, } from './remote-client.js';
 import { formatDocument, formatDocumentCitations, formatDocumentMetadata, } from './document-render.js';
-import { getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
+import { NEW_CUBE_TEMPLATE_PRESENTATIONS, getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, getActiveCubeForWorktree, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, pinMcpSeatIdentity, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
 import { addUserPromptSubmitHook } from './config-utils.js';
@@ -51,22 +51,6 @@ import { formatLocalManageToolResult } from './local-manage-tool-result.js';
 import { OpenCodeSeatIdentityError, formatOpenCodeSeatIdentityError, resolveOpenCodeSeatIdentity, } from './opencode-seat-identity.js';
 import { runEvictDroneTool, runReassignDroneTool, } from './drone-management.js';
 const OPEN_CODE_IDENTITY_HANDSHAKE_TIMEOUT_MS = 5_000;
-/**
- * Apply a template's roles + message_taxonomy to a cube.
- *
- * Client-orchestrated through the server's non-clobbering role and taxonomy
- * primitives. New roles are inserted; existing template-named roles get ADD
- * fragments (template sections/classes the cube lacks) auto-applied, but
- * EVOLVED (conflicting) fragments are kept — never silently overwritten. The
- * old per-role blanket `updateRole`/whole-taxonomy `updateCube` overwrite path
- * is removed. Operators who want to take the template version of a conflicting
- * fragment use `borg_sync-roles` with a `decisions` map. Primitive operations
- * are sequential, so a later failure can leave earlier changes committed.
- * Returns `{ created, updated }` for the caller's toast.
- */
-async function applyTemplateToCube(cubeId, template, authority) {
-    return await applyTemplate(cubeId, template.name, authority);
-}
 export async function runApplyTemplateTool(cubeId, template, authority, deps = {}) {
     const apply = deps.applyTemplate ?? applyTemplate;
     const read = deps.getCubeForManagement ?? getCubeForManagement;
@@ -1015,19 +999,16 @@ export async function main() {
                 case 'borg_create-cube': {
                     const name = args?.name;
                     const cubeDirective = args?.cube_directive;
-                    const templateName = args?.template;
+                    const templateName = args?.template ?? NEW_CUBE_TEMPLATE_PRESENTATIONS[0].name;
                     if (!name)
                         throw new Error('name is required');
                     if (cubeDirective === undefined)
                         throw new Error('cube_directive is required (pass empty string if none)');
                     // Resolve template (validates name early so the cube isn't
                     // created in a partial state if the template name is wrong).
-                    let template = null;
-                    if (templateName) {
-                        template = getTemplate(templateName);
-                        if (!template) {
-                            throw new Error(`Unknown template "${templateName}". Available: ${listTemplateNames().join(', ')}`);
-                        }
+                    const template = getTemplate(templateName);
+                    if (!template) {
+                        throw new Error(`Unknown template "${templateName}". Available: ${listTemplateNames().join(', ')}`);
                     }
                     // client#499: the cube binds to an EXPLICIT repository (no cwd
                     // inference). Normalize the argument client-side and fail with a
@@ -1040,6 +1021,7 @@ export async function main() {
                     const resolvedCubeDirective = resolveCubeDirectiveForCreate(cubeDirective, template);
                     const resolvedMessageTaxonomy = resolveMessageTaxonomyForCreate(undefined, template);
                     const { result, cube } = await createCube(name, resolvedCubeDirective, {
+                        template: template.name,
                         message_taxonomy: resolvedMessageTaxonomy,
                         repository,
                         workingRepoName,
@@ -1054,30 +1036,19 @@ export async function main() {
                             structuredContent: { cube, result: 'resolved', template: null, roles_created: null, roles_updated: null },
                         };
                     }
-                    // Apply template roles if requested. Merges by name: any role the
-                    // server auto-seeded (e.g. "Drone") that the template doesn't
-                    // also include stays put; templated roles upsert.
-                    if (template) {
-                        const summary = await applyTemplateToCube(cube.id, template);
-                        const cubeDirectiveNote = resolvedCubeDirective !== cubeDirective
-                            ? ' Template cube directive applied (operator passed empty).'
-                            : '';
-                        const text = `Created cube **${cube.name}** (id: ${cube.id}) with template **${templateName}** applied — ${summary.created} role(s) created, ${summary.updated} updated.${cubeDirectiveNote} Use borg_assimilate ${cube.name} to join as a drone.`;
-                        return {
-                            content: [{ type: 'text', text }],
-                            structuredContent: {
-                                cube,
-                                result: 'created',
-                                template: templateName,
-                                roles_created: summary.created,
-                                roles_updated: summary.updated,
-                            },
-                        };
-                    }
-                    const text = `Created cube **${cube.name}** (id: ${cube.id}). A default "Drone" role was seeded — rename or replace it via borg_update-role / borg_create-role / borg_delete-role. Use borg_assimilate ${cube.name} to join as a drone.`;
+                    const cubeDirectiveNote = resolvedCubeDirective !== cubeDirective
+                        ? ' Template cube directive applied (operator passed empty).'
+                        : '';
+                    const text = `Created cube **${cube.name}** (id: ${cube.id}) with template **${templateName}** applied atomically — ${cube.roles.length} role(s) created.${cubeDirectiveNote} Use borg_assimilate ${cube.name} to join as a drone.`;
                     return {
                         content: [{ type: 'text', text }],
-                        structuredContent: { cube, result: 'created', template: null, roles_created: null, roles_updated: null },
+                        structuredContent: {
+                            cube,
+                            result: 'created',
+                            template: templateName,
+                            roles_created: cube.roles.length,
+                            roles_updated: 0,
+                        },
                     };
                 }
                 case 'borg_update-cube': {

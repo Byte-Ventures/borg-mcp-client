@@ -15,7 +15,7 @@ const emptyMetadata = {
 };
 
 function localEnvelope(payload: unknown) {
-  return { protocol_version: '12', request_id: 'local-response-1', payload };
+  return { protocol_version: '13', request_id: 'local-response-1', payload };
 }
 
 describe('regen() runtime metadata self-heal', () => {

@@ -543,4 +543,70 @@ describe('self-hosted server credential storage', () => {
     });
     expect(replacement.retryKey).not.toBe(first.retryKey);
   });
+
+  it('migrates a shipped version-2 named cube retry without changing its retry key', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const input = {
+      origin,
+      trustIdentity,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      name: 'named-project',
+      workingRepoName: 'named-project',
+      repository: { kind: 'local' as const, value: '22222222-2222-4222-8222-222222222222' },
+      template: 'software-dev' as const,
+    };
+    const original = await getOrCreatePendingServerCubeCreation(input);
+    const [account] = [...values.keys()];
+    const tag12Record = { ...JSON.parse(values.get(account)!), version: 2 };
+    values.set(account, JSON.stringify(tag12Record));
+
+    const migrated = await getOrCreatePendingServerCubeCreation(input);
+
+    expect(migrated).toEqual(original);
+    expect(JSON.parse(values.get(account)!)).toMatchObject({
+      version: 3,
+      state: 'pending',
+      retryKey: original.retryKey,
+      template: 'software-dev',
+    });
+  });
+
+  it('retires an exact tag-12 default cube retry without changing unrelated credentials', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const input = {
+      origin,
+      trustIdentity,
+      clientId: '11111111-1111-4111-8111-111111111111',
+      name: 'legacy-project',
+      workingRepoName: 'legacy-project',
+      repository: { kind: 'local' as const, value: '22222222-2222-4222-8222-222222222222' },
+      template: 'software-dev' as const,
+    };
+    await getOrCreatePendingServerCubeCreation(input);
+    const [account] = [...values.keys()];
+    const legacyRetryKey = '33333333-3333-4333-8333-333333333333';
+    const tag12Record = {
+      ...JSON.parse(values.get(account)!),
+      version: 2,
+      retryKey: legacyRetryKey,
+      template: 'default',
+    };
+    values.set(account, JSON.stringify(tag12Record));
+    values.set('unrelated-account', 'opaque-unrelated-value');
+
+    const migrated = await getOrCreatePendingServerCubeCreation(input);
+
+    expect(migrated).toMatchObject({ template: 'software-dev' });
+    expect(migrated.retryKey).not.toBe(legacyRetryKey);
+    expect(JSON.parse(values.get(account)!)).toMatchObject({
+      version: 3,
+      state: 'pending',
+      retryKey: migrated.retryKey,
+      template: 'software-dev',
+    });
+    expect(values.get(account)).not.toContain('"default"');
+    expect(values.get('unrelated-account')).toBe('opaque-unrelated-value');
+  });
 });

@@ -372,7 +372,7 @@ export interface AssimilateDeps {
       name: string;
       workingRepoName: string;
       repository: CreateCubeRepository;
-      template: Exclude<CubeTemplate, 'default'>;
+      template: CubeTemplate;
     },
     serverTrustIdentity?: string,
   ) => Promise<RepositoryCubeCreation>;

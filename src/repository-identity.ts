@@ -187,8 +187,8 @@ function emptyState(): RepositoryIdentityState {
   return { version: STORE_VERSION, localIdentities: {}, associations: {} };
 }
 
-function parseState(raw: string | null): RepositoryIdentityState {
-  if (raw === null) return emptyState();
+function parseState(raw: string | null): { state: RepositoryIdentityState; migrated: boolean } {
+  if (raw === null) return { state: emptyState(), migrated: false };
   const parsed = JSON.parse(raw) as Partial<RepositoryIdentityState>;
   if (
     parsed.version !== STORE_VERSION ||
@@ -202,7 +202,9 @@ function parseState(raw: string | null): RepositoryIdentityState {
       throw new Error('Borg repository identity store is malformed or unsupported');
     }
   }
-  for (const [key, value] of Object.entries(parsed.associations)) {
+  let migrated = false;
+  for (const [key, rawAssociation] of Object.entries(parsed.associations)) {
+    const value = rawAssociation as Omit<Partial<RepositoryAssociation>, 'template'> & { template?: unknown };
     if (
       !/^[a-f0-9]{64}$/.test(key) ||
       !value || typeof value !== 'object' || Array.isArray(value) ||
@@ -210,13 +212,22 @@ function parseState(raw: string | null): RepositoryIdentityState {
       typeof value.name !== 'string' || Buffer.byteLength(value.name, 'utf8') > 120 ||
       !DISPLAY_NAME_RE.test(value.name) ||
       typeof value.workingRepoName !== 'string' || Buffer.byteLength(value.workingRepoName, 'utf8') > 120 ||
-      !DISPLAY_NAME_RE.test(value.workingRepoName) ||
-      !CUBE_TEMPLATES.some((template) => template === value.template)
+      !DISPLAY_NAME_RE.test(value.workingRepoName)
     ) {
       throw new Error('Borg repository identity store is malformed or unsupported');
     }
+    // Tag 12 persisted the removed legacy seed. Dropping only this valid
+    // association makes the caller re-resolve authoritative state from tag 13.
+    if (value.template === 'default') {
+      delete parsed.associations[key];
+      migrated = true;
+      continue;
+    }
+    if (!CUBE_TEMPLATES.some((template) => template === value.template)) {
+      throw new Error('Borg repository identity store is malformed or unsupported');
+    }
   }
-  return parsed as RepositoryIdentityState;
+  return { state: parsed as RepositoryIdentityState, migrated };
 }
 
 function digest(secret: Buffer, purpose: string, value: string): string {
@@ -238,9 +249,10 @@ async function withIdentityState<T>(
       await atomicWrite0600(secretPath, `${secret.toString('hex')}\n`, options);
     }
     const statePath = join(root, STATE_FILE);
-    const state = parseState(await readStoreFile(statePath, options));
+    const parsed = parseState(await readStoreFile(statePath, options));
+    const state = parsed.state;
     const outcome = await operation(secret, state);
-    if (outcome.changed) {
+    if (parsed.migrated || outcome.changed) {
       await atomicWrite0600(statePath, `${JSON.stringify(state, null, 2)}\n`, options);
     }
     return outcome.result;

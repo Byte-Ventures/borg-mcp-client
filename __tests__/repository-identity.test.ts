@@ -205,6 +205,42 @@ describe('repository identity', () => {
     await expect(getRepositoryAssociation('trust-a', repository, { root })).resolves.toEqual(association);
   });
 
+  it('discards a tag-12 default association without corrupting unrelated identity state', async () => {
+    const root = temporaryRoot();
+    const legacyRepository = { kind: 'local' as const, value: 'ad1b74bd-1262-45dd-b015-298e7395c550' };
+    const otherRepository = { kind: 'local' as const, value: 'bd2c85ce-2373-46ee-9026-309f8406d661' };
+    const otherAssociation = {
+      cubeId: '8da6e20c-6b18-44aa-a3ea-a9d839cdf57a',
+      name: 'other-repo',
+      workingRepoName: 'other-repo',
+      template: 'starter' as const,
+    };
+    const localContext: GitRepositoryContext = {
+      root: '/private/repo', commonDir: '/private/repo/.git', derivedName: 'repo',
+      publicRepository: null, publicRepositoryName: null,
+    };
+    const localIdentity = await getOrCreateRepositoryIdentity(localContext, { root });
+    await saveRepositoryAssociation('trust-a', legacyRepository, {
+      cubeId: '9eb7f31d-7c29-43e6-9361-d80cbbf8e826',
+      name: 'legacy-repo', workingRepoName: 'legacy-repo', template: 'starter',
+    }, { root });
+    await saveRepositoryAssociation('trust-a', otherRepository, otherAssociation, { root });
+
+    const statePath = join(root, 'repository-identities.json');
+    const tag12State = JSON.parse(readFileSync(statePath, 'utf8'));
+    const legacy = Object.values(tag12State.associations)
+      .find((association: any) => association.name === 'legacy-repo') as any;
+    legacy.template = 'default';
+    writeFileSync(statePath, `${JSON.stringify(tag12State, null, 2)}\n`, { mode: 0o600 });
+
+    await expect(getRepositoryAssociation('trust-a', legacyRepository, { root })).resolves.toBeNull();
+    await expect(getRepositoryAssociation('trust-a', otherRepository, { root })).resolves.toEqual(otherAssociation);
+    await expect(getOrCreateRepositoryIdentity(localContext, { root })).resolves.toEqual(localIdentity);
+    const migrated = JSON.parse(readFileSync(statePath, 'utf8'));
+    expect(Object.values(migrated.associations)).toEqual([otherAssociation]);
+    expect(JSON.stringify(migrated)).not.toContain('"default"');
+  });
+
   it('fails closed on control-bearing association display state', async () => {
     const root = temporaryRoot();
     const repository = { kind: 'local' as const, value: 'ad1b74bd-1262-45dd-b015-298e7395c550' };

@@ -12,7 +12,7 @@ const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function envelope(payload: unknown) {
-  return JSON.stringify({ protocol_version: '12', request_id: 'wu2-test', payload });
+  return JSON.stringify({ protocol_version: '13', request_id: 'wu2-test', payload });
 }
 
 describe('Sprint 10 WU2 local adapter', () => {
@@ -46,7 +46,7 @@ describe('Sprint 10 WU2 local adapter', () => {
           name: 'adopted',
           working_repo_name: 'adopted',
           repository: { kind: 'origin', value: 'https://github.com/owner/adopted' },
-          template: 'default',
+          template: 'software-dev',
           human_seat_role_id: ROLE_ID,
           default_worker_role_id: ROLE_ID,
           access: 'manage',
@@ -90,7 +90,7 @@ describe('Sprint 10 WU2 local adapter', () => {
     }));
   });
 
-  it('creates a default-seed cube through the retry-safe local route and reads it back', async () => {
+  it('creates a cube with the canonical named template through the retry-safe local route and reads it back', async () => {
     const { createCube } = await import('../src/remote-client.js');
 
     await expect(createCube('adopted', 'directive', {
@@ -107,7 +107,7 @@ describe('Sprint 10 WU2 local adapter', () => {
     expect(new URL(String(input)).pathname).toBe('/api/cubes');
     expect(JSON.parse(String(init.body)).payload).toMatchObject({
       name: 'adopted',
-      template: 'default',
+      template: 'software-dev',
       working_repo_name: 'adopted',
       repository: { kind: 'origin', value: 'https://github.com/owner/adopted' },
     });

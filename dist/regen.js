@@ -160,7 +160,7 @@ async function emitUnassimilatedNotice() {
     lines.push('');
     lines.push('## Tools you can call once the user has chosen');
     lines.push('- Join an existing cube: `borg_assimilate cube_name="<their choice>"`');
-    lines.push('- Create a new cube: `borg_create-cube name="<name>" cube_directive="<markdown>"` (optionally `template="software-dev"`)');
+    lines.push('- Create a new cube: `borg_create-cube name="<name>" cube_directive="<markdown>"` (defaults to `template="software-dev"`)');
     lines.push('- See available templates: `borg_list-templates`');
     process.stdout.write(lines.join('\n') + '\n');
 }

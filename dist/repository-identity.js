@@ -119,7 +119,7 @@ function emptyState() {
 }
 function parseState(raw) {
     if (raw === null)
-        return emptyState();
+        return { state: emptyState(), migrated: false };
     const parsed = JSON.parse(raw);
     if (parsed.version !== STORE_VERSION ||
         !parsed.localIdentities || typeof parsed.localIdentities !== 'object' || Array.isArray(parsed.localIdentities) ||
@@ -131,19 +131,30 @@ function parseState(raw) {
             throw new Error('Borg repository identity store is malformed or unsupported');
         }
     }
-    for (const [key, value] of Object.entries(parsed.associations)) {
+    let migrated = false;
+    for (const [key, rawAssociation] of Object.entries(parsed.associations)) {
+        const value = rawAssociation;
         if (!/^[a-f0-9]{64}$/.test(key) ||
             !value || typeof value !== 'object' || Array.isArray(value) ||
             typeof value.cubeId !== 'string' || !UUID_RE.test(value.cubeId) ||
             typeof value.name !== 'string' || Buffer.byteLength(value.name, 'utf8') > 120 ||
             !DISPLAY_NAME_RE.test(value.name) ||
             typeof value.workingRepoName !== 'string' || Buffer.byteLength(value.workingRepoName, 'utf8') > 120 ||
-            !DISPLAY_NAME_RE.test(value.workingRepoName) ||
-            !CUBE_TEMPLATES.some((template) => template === value.template)) {
+            !DISPLAY_NAME_RE.test(value.workingRepoName)) {
+            throw new Error('Borg repository identity store is malformed or unsupported');
+        }
+        // Tag 12 persisted the removed legacy seed. Dropping only this valid
+        // association makes the caller re-resolve authoritative state from tag 13.
+        if (value.template === 'default') {
+            delete parsed.associations[key];
+            migrated = true;
+            continue;
+        }
+        if (!CUBE_TEMPLATES.some((template) => template === value.template)) {
             throw new Error('Borg repository identity store is malformed or unsupported');
         }
     }
-    return parsed;
+    return { state: parsed, migrated };
 }
 function digest(secret, purpose, value) {
     return createHmac('sha256', secret).update(purpose).update('\0').update(value).digest('hex');
@@ -160,9 +171,10 @@ async function withIdentityState(operation, deps = {}) {
             await atomicWrite0600(secretPath, `${secret.toString('hex')}\n`, options);
         }
         const statePath = join(root, STATE_FILE);
-        const state = parseState(await readStoreFile(statePath, options));
+        const parsed = parseState(await readStoreFile(statePath, options));
+        const state = parsed.state;
         const outcome = await operation(secret, state);
-        if (outcome.changed) {
+        if (parsed.migrated || outcome.changed) {
             await atomicWrite0600(statePath, `${JSON.stringify(state, null, 2)}\n`, options);
         }
         return outcome.result;
