@@ -620,7 +620,7 @@ test('release preflight refuses a client before publication when the current ser
         }),
       }),
     }),
-    /borgmcp@4\.7\.0 pins borgmcp-shared@1\.1\.0.*borgmcp-server@1\.0\.0 pins borgmcp-shared@0\.14\.0.*Publish the compatible server before tagging this client/s,
+    /borgmcp@4\.8\.0 pins borgmcp-shared@1\.1\.0.*borgmcp-server@1\.0\.0 pins borgmcp-shared@0\.14\.0.*Publish the compatible server before tagging this client/s,
   );
 });
 
