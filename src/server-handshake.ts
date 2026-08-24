@@ -89,7 +89,6 @@ import type { EnrollmentArtifactBinding } from './enrollment-types.js';
 const HANDSHAKE_BODY_LIMIT = 64 * 1024;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CLIENT_ATTACH_PATH = '/api/client/attach';
 export const DEFAULT_LOCAL_SERVER_ORIGIN = 'https://127.0.0.1:7091' as const;
 
 type FetchLike = typeof fetch;

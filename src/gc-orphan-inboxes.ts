@@ -14,7 +14,7 @@
  * always err toward KEEPING.
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   pidfilePathFor,

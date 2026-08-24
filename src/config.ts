@@ -326,7 +326,7 @@ async function writeServerCredentialRecord(
   }
   if (backend.entries) {
     const accounts = await backend.entries();
-    const conflicts = Object.entries(accounts).filter(([account, value]) => {
+    const conflicts = Object.entries(accounts).filter(([, value]) => {
       try {
         const parsed = JSON.parse(value) as { version?: unknown; origin?: unknown };
         return parsed.version === SERVER_CREDENTIAL_RECORD_VERSION && parsed.origin === record.origin;

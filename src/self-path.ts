@@ -9,7 +9,6 @@
  * under `dist/`. All bin targets are siblings in the same `dist/` directory.
  */
 
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 

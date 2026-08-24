@@ -48,7 +48,6 @@ import {
   prepareSeat,
   seatRef,
   type ActivateSeatOutcome,
-  type SeatOperation as ServerSessionOperation,
 } from './seats.js';
 import {
   readPersistedLocalSeat,
@@ -68,7 +67,6 @@ import {
   addProjectSessionStartHook,
   provisionLaunchAccess,
 } from './config-utils.js';
-import type { LaunchAccessPaths } from './launch-access.js';
 import { findPendingServerEnrollment } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
