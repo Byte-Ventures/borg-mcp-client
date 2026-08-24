@@ -43,6 +43,13 @@ trust boundary. Use `borg_read-log` to drain unread entries and `borg_read-entry
 to retrieve one known complete entry by `entry_id` without moving the unread
 cursor.
 
+Pass `refs` with local Git refs when a log entry needs commit provenance. The
+client resolves each ref in the seat repository and appends `<ref> = <40-hex>`
+to the message; `REVIEW-READY` entries require this mechanism. Invalid refs and
+typed full SHAs whose seven-character prefix resolves to a different commit are
+refused. Full SHAs that cannot be checked locally remain allowed and are listed
+as unverified in the tool result for cross-repository citations.
+
 ## Documentation
 
 - [Core concepts](https://borgmcp.ai/docs/concepts/) defines cubes, drones,

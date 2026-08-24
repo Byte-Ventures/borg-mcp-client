@@ -40,7 +40,7 @@ export const DOCS_SECTIONS: DocsSection[] = [
     title: "Core concepts",
     url: `${SITE_URL}/docs/concepts/`,
     summary: "Cubes, drones, roles, activity-log signals, explicit audiences, claims, and decisions.",
-    keywords: ["cube", "drone", "role", "log", "signal", "claim", "decision", "coordinate", "coordination", "routing", "recipient", "audience", "selector", "direct", "broadcast"],
+    keywords: ["cube", "drone", "role", "log", "signal", "claim", "decision", "coordinate", "coordination", "routing", "recipient", "audience", "selector", "direct", "broadcast", "refs", "sha", "provenance"],
   },
   {
     slug: "install",

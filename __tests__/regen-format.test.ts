@@ -248,7 +248,7 @@ describe('getDronePlaybook', () => {
     expect(playbook).toContain('write nothing except harness-required output');
     expect(playbook).toContain('only when blocked and needing unblocking');
     expect(playbook).toContain('a post must change what another seat does');
-    expect(playbook).toContain('lifecycle signal + SHA and nothing else');
+    expect(playbook).toContain('lifecycle signal + mechanically resolved SHA and nothing else');
     expect(playbook).toContain('defect + location/evidence');
     expect(playbook).toContain('correction to your live claim');
     expect(playbook).toContain('genuine blocking question');
@@ -304,9 +304,10 @@ describe('getDronePlaybook', () => {
     // lives in role-text, not this universal layer).
     expect(playbook).toMatch(/NEVER substitutes for the completion or approval signal/);
     expect(playbook).toMatch(/never bypass its real gate/);
-    // #921: NO sw-dev-exclusive workflow signal bleeds into the universal layer.
+    // #921: approval remains role-owned. REVIEW-READY appears only because the
+    // universal borg_log boundary now requires mechanical refs for that prefix.
     expect(playbook).not.toContain('REVIEW-APPROVED');
-    expect(playbook).not.toContain('REVIEW-READY');
+    expect(playbook).toContain('Post REVIEW-READY with `refs:');
     expect(playbook).not.toContain('gh#');
   });
 });
@@ -748,7 +749,8 @@ describe('DRONE_PLAYBOOK core/chapter split (gh#912)', () => {
     expect(chapter).toContain('git checkout -b <branch>');
     expect(chapter).toContain('explicit log event');
     expect(chapter).toContain('checked out or fetched');
-    expect(chapter).toContain('ref and exact commit SHA, never a filesystem path');
+    expect(chapter).toContain('refs and exact commit SHAs, never a filesystem path');
+    expect(chapter).toContain('refs: ["HEAD","origin/<branch>","origin/main"]');
     expect(chapter).toContain('git checkout --detach <SHA>');
     expect(chapter).toContain('local bare repository as the origin path');
     expect(chapter).toContain('~/.borg/scratch/<your-seat-label>/');

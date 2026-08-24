@@ -192,7 +192,7 @@ describe('borg_log ARRIVAL instruction ordering', () => {
 
     await main();
     const result = await state.handlers[1]({
-      params: { name: 'borg_log', arguments: { message: 'REVIEW-READY', to: [known, removed] } },
+      params: { name: 'borg_log', arguments: { message: 'RESULT', to: [known, removed] } },
     });
 
     expect(result.content[0].text).toContain('Recipients: reviewer-1, `id:22222222`');
