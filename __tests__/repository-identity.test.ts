@@ -24,13 +24,111 @@ afterEach(() => {
 });
 
 describe('repository identity', () => {
+  it('returns no context only when Git reports that the directory is not a repository', async () => {
+    await expect(resolveGitRepositoryContext('/not-a-repo', {
+      runGit: () => ({
+        status: 128,
+        stderr: 'fatal: not a git repository (or any of the parent directories): .git\n',
+      }),
+    })).resolves.toBeNull();
+  });
+
+  it('preserves the designed bare-repository sentinel', async () => {
+    await expect(resolveGitRepositoryContext('/repo.git', {
+      runGit: () => ({ status: 0, stdout: 'true\n' }),
+    })).rejects.toThrow('BARE_REPOSITORY');
+  });
+
+  it.each(['ENOENT', 'EACCES', 'EPERM'])('reports Git execution failure %s with its cause', async (code) => {
+    const cause = Object.assign(new Error(`spawn git ${code}`), { code });
+    await expect(resolveGitRepositoryContext('/repo', {
+      runGit: () => ({ status: null, error: cause }),
+    })).rejects.toMatchObject({
+      name: 'RepositoryDiscoveryError',
+      kind: 'git-execution',
+      cause,
+    });
+  });
+
+  it('reports an invalid working directory spawn failure with its cause', async () => {
+    const cause = Object.assign(new Error('spawnSync git ENOENT'), { code: 'ENOENT', path: '/missing/repo' });
+    await expect(resolveGitRepositoryContext('/missing/repo', {
+      runGit: () => ({ status: null, error: cause }),
+    })).rejects.toMatchObject({
+      message: expect.stringContaining('spawnSync git ENOENT'),
+      cause,
+    });
+  });
+
+  it('reports Git safety and configuration failures instead of claiming there is no repository', async () => {
+    await expect(resolveGitRepositoryContext('/repo', {
+      runGit: () => ({ status: 128, stderr: 'fatal: detected dubious ownership in repository at /repo\n' }),
+    })).rejects.toMatchObject({
+      name: 'RepositoryDiscoveryError',
+      kind: 'git-query',
+      message: expect.stringContaining('detected dubious ownership'),
+    });
+  });
+
+  it('reports a failed common-directory query with its Git diagnostic', async () => {
+    await expect(resolveGitRepositoryContext('/repo', {
+      runGit: (_cwd, args) => {
+        const command = args.join(' ');
+        if (command === 'rev-parse --is-bare-repository') return { status: 0, stdout: 'false\n' };
+        if (command === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo\n' };
+        return { status: 128, stderr: 'fatal: could not resolve git common directory\n' };
+      },
+    })).rejects.toMatchObject({
+      kind: 'git-query',
+      message: expect.stringContaining('could not resolve git common directory'),
+    });
+  });
+
+  it('reports an origin configuration failure instead of treating it as no origin', async () => {
+    await expect(resolveGitRepositoryContext('/repo', {
+      canonicalPath: async (value) => value,
+      runGit: (_cwd, args) => {
+        const command = args.join(' ');
+        if (command === 'rev-parse --is-bare-repository') return { status: 0, stdout: 'false\n' };
+        if (command === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo\n' };
+        if (command === 'rev-parse --path-format=absolute --git-common-dir') {
+          return { status: 0, stdout: '/repo/.git\n' };
+        }
+        return { status: 128, stderr: 'fatal: bad config line 1 in file .git/config\n' };
+      },
+    })).rejects.toMatchObject({
+      kind: 'git-query',
+      message: expect.stringContaining('bad config line 1'),
+    });
+  });
+
+  it.each(['ENOENT', 'EACCES', 'EPERM', 'ENOTDIR', 'ELOOP'])(
+    'reports canonical repository path failure %s with its cause',
+    async (code) => {
+      const cause = Object.assign(new Error(`realpath ${code}`), { code });
+      await expect(resolveGitRepositoryContext('/repo', {
+        runGit: (_cwd, args) => {
+          const command = args.join(' ');
+          if (command === 'rev-parse --is-bare-repository') return { status: 0, stdout: 'false\n' };
+          if (command === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo\n' };
+          return { status: 0, stdout: '/repo/.git\n' };
+        },
+        canonicalPath: async () => { throw cause; },
+      })).rejects.toMatchObject({
+        name: 'RepositoryDiscoveryError',
+        kind: 'canonical-path',
+        cause,
+      });
+    },
+  );
+
   it('prefers a canonical public origin and uses the shared Git common directory', async () => {
     const context = await resolveGitRepositoryContext('/repo/worktree', {
       canonicalPath: async (value) => value,
       runGit: (_cwd, args) => {
         const command = args.join(' ');
-        if (command === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo/worktree\n' };
         if (command === 'rev-parse --is-bare-repository') return { status: 0, stdout: 'false\n' };
+        if (command === 'rev-parse --show-toplevel') return { status: 0, stdout: '/repo/worktree\n' };
         if (command === 'rev-parse --path-format=absolute --git-common-dir') return { status: 0, stdout: '/repo/.git\n' };
         return { status: 0, stdout: 'git@github.com:Org/Repo.git\n' };
       },
