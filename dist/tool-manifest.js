@@ -391,8 +391,8 @@ const BASE_TOOL_MANIFEST = [
     },
     {
         name: 'borg_create-cube',
-        description: 'Create a new cube bound to an explicit repository. The server homes ONE cube per repository: if the given repository already has a cube, this reports that existing cube and leaves its directive unchanged (it never overwrites it). The server seeds a default "Drone" role atomically so a newly-created cube is assimilatable immediately. ' +
-            'Pass an optional `template` name to apply a richer role set instead (see borg_list-templates / borg_apply-template).',
+        description: 'Create a new cube bound to an explicit repository. The server homes ONE cube per repository: if the given repository already has a cube, this reports that existing cube and leaves its directive unchanged (it never overwrites it). The server seeds the selected named template atomically; `software-dev` is selected by default. ' +
+            'Pass an optional `template` name to select another role set (see borg_list-templates / borg_apply-template).',
         inputSchema: {
             type: 'object',
             properties: {
@@ -415,7 +415,7 @@ const BASE_TOOL_MANIFEST = [
                 },
                 template: {
                     type: 'string',
-                    description: 'Optional template name to apply after cube creation (e.g. "software-dev"). Roles are merged by name; the default Drone role gets overwritten by the template if a same-named role is in the template. Only applied when a cube is newly created — never to an already-existing repository cube.',
+                    description: 'Optional named template (default: "software-dev"). The server seeds its roles atomically when a cube is newly created; it is never applied to an already-existing repository cube.',
                 },
             },
             required: ['name', 'cube_directive', 'repository'],

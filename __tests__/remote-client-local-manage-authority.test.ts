@@ -12,12 +12,12 @@ const SESSION = 's'.repeat(43);
 const PARENT = 'p'.repeat(43);
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '12', request_id: requestId, payload };
+  return { protocol_version: '13', request_id: requestId, payload };
 }
 
 function errorEnvelope(code: string, message = 'server detail must not be surfaced') {
   return {
-    protocol_version: '12',
+    protocol_version: '13',
     request_id: 'local-error-1',
     error: { code, ...(message === undefined ? {} : { message }) },
   };
@@ -301,7 +301,7 @@ describe('local manage-request authority', () => {
 
   it.each([
     ['message-less envelope', JSON.stringify({
-      protocol_version: '12',
+      protocol_version: '13',
       request_id: 'local-error-1',
       error: { code: 'INVALID_INPUT' },
     })],
@@ -413,7 +413,7 @@ describe('local manage-request authority', () => {
     expect(init?.method).toBe('DELETE');
     expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${PARENT}`);
     expect(JSON.parse(String(init?.body))).toMatchObject({
-      protocol_version: '12',
+      protocol_version: '13',
       payload: {},
     });
   });

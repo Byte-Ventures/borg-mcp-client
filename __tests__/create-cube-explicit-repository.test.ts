@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { decodeCreateCubeRequest } from 'borgmcp-shared/protocol';
 import { normalizeExplicitRepository } from '../src/remote-client';
 
 // client#499: the borg_create-cube tool binds a cube to an EXPLICIT repository
@@ -63,7 +64,7 @@ const ORIGIN = 'https://localhost:8787';
 const TRUST = 'spki-sha256:test';
 const CONN = { apiUrl: ORIGIN, authToken: 's'.repeat(43), serverTrustIdentity: TRUST };
 const REPO = { repository: { kind: 'origin' as const, value: 'https://github.com/owner/repo' }, workingRepoName: 'repo' };
-const env = (payload: unknown) => ({ protocol_version: '12', request_id: 'local-response-1', payload });
+const env = (payload: unknown) => ({ protocol_version: '13', request_id: 'local-response-1', payload });
 // The full CreateCubeResponse the shared contract requires (client strictly decodes it).
 const CREATE_RESPONSE = (result: 'created' | 'resolved') => ({
   result,
@@ -71,7 +72,7 @@ const CREATE_RESPONSE = (result: 'created' | 'resolved') => ({
   name: 'c',
   working_repo_name: 'repo',
   repository: { kind: 'origin', value: 'https://github.com/owner/repo' },
-  template: 'default',
+  template: 'software-dev',
   human_seat_role_id: '22222222-2222-4222-8222-222222222222',
   default_worker_role_id: '33333333-3333-4333-8333-333333333333',
   access: 'manage',
@@ -109,13 +110,23 @@ describe('createCube created-vs-resolved boundary', () => {
   beforeEach(() => vi.resetModules());
   afterEach(() => { vi.restoreAllMocks(); vi.resetModules(); });
 
+  it('rejects the removed legacy default template at the tag-13 request boundary', () => {
+    expect(() => decodeCreateCubeRequest({
+      retry_key: 'legacy-default-template',
+      name: 'c',
+      working_repo_name: 'repo',
+      repository: REPO.repository,
+      template: 'default',
+    })).toThrow(/template/);
+  });
+
   it('created: sends the repository fields, PATCHes the directive, returns result=created', async () => {
     stub('created');
     const { createCube } = await import('../src/remote-client.js');
     const r = await createCube('c', 'new directive', REPO, CONN);
     expect(r.result).toBe('created');
     const body = JSON.parse(String(fetchSpy.mock.calls.find(([, i]) => i?.method === 'POST')![1].body)).payload;
-    expect(body).toMatchObject({ working_repo_name: 'repo', repository: REPO.repository, template: 'default' });
+    expect(body).toMatchObject({ working_repo_name: 'repo', repository: REPO.repository, template: 'software-dev' });
     expect(patched).toBe(true);
   });
 
@@ -126,6 +137,14 @@ describe('createCube created-vs-resolved boundary', () => {
     expect(r.result).toBe('resolved');
     expect(r.cube).toMatchObject({ id: CUBE_ID, cube_directive: 'existing' });
     expect(patched).toBe(false); // the round-1 stomp defect must not recur
+  });
+
+  it('threads an explicitly selected named template', async () => {
+    stub('created');
+    const { createCube } = await import('../src/remote-client.js');
+    await createCube('c', 'directive', { ...REPO, template: 'starter' }, CONN);
+    const body = JSON.parse(String(fetchSpy.mock.calls.find(([, i]) => i?.method === 'POST')![1].body)).payload;
+    expect(body.template).toBe('starter');
   });
 
   it('refuses when no explicit repository is provided', async () => {

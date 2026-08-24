@@ -1,6 +1,6 @@
 import {
   NEW_CUBE_TEMPLATE_PRESENTATIONS,
-  LEGACY_DEFAULT_TEMPLATE_LABEL,
+  getTemplate,
 } from 'borgmcp-shared/templates';
 import type {
   AssociateRepositoryCubeResponse,
@@ -33,7 +33,7 @@ export interface RepositoryCubeCreation {
   cube: RepositoryCubeDetail;
 }
 
-type NewCubeTemplate = Exclude<CubeTemplate, 'default'>;
+type NewCubeTemplate = CubeTemplate;
 
 const NEW_CUBE_TEMPLATE_NAMES: readonly NewCubeTemplate[] =
   NEW_CUBE_TEMPLATE_PRESENTATIONS.map(({ name }) => name);
@@ -110,10 +110,7 @@ export function validRepositoryCubeName(value: string): boolean {
 }
 
 function presentation(template: CubeTemplate) {
-  if (template === 'default') {
-    return { name: template, label: LEGACY_DEFAULT_TEMPLATE_LABEL };
-  }
-  return NEW_CUBE_TEMPLATE_PRESENTATIONS.find((candidate) => candidate.name === template)!;
+  return getTemplate(template)!;
 }
 
 async function ask(

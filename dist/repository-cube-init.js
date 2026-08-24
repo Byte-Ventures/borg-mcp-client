@@ -1,4 +1,4 @@
-import { NEW_CUBE_TEMPLATE_PRESENTATIONS, LEGACY_DEFAULT_TEMPLATE_LABEL, } from 'borgmcp-shared/templates';
+import { NEW_CUBE_TEMPLATE_PRESENTATIONS, getTemplate, } from 'borgmcp-shared/templates';
 import { shellEscape } from './shell-escape.js';
 import { BorgServerError, CubeCreationConfirmationError, CubeCreationOutcomeUnknownError, } from './server-errors.js';
 const NEW_CUBE_TEMPLATE_NAMES = NEW_CUBE_TEMPLATE_PRESENTATIONS.map(({ name }) => name);
@@ -30,10 +30,7 @@ export function validRepositoryCubeName(value) {
     return Buffer.byteLength(value, 'utf8') <= 120 && /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(value);
 }
 function presentation(template) {
-    if (template === 'default') {
-        return { name: template, label: LEGACY_DEFAULT_TEMPLATE_LABEL };
-    }
-    return NEW_CUBE_TEMPLATE_PRESENTATIONS.find((candidate) => candidate.name === template);
+    return getTemplate(template);
 }
 async function ask(deps, message, operation = 'creation') {
     try {
