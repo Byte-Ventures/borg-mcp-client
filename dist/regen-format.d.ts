@@ -5,6 +5,7 @@
  * Lives in its own module so regen.ts can import these without pulling in
  * index.ts's stdio MCP server bootstrap.
  */
+import type { AgentKind } from './agent-runtime.js';
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
  *
@@ -30,8 +31,6 @@ export declare function shouldRelayPlainSessionReminder(args: {
     borgSession: string | undefined;
     disabled: string | undefined;
 }): boolean;
-/** The agent runtime a session runs under — drives the wake-path branch. */
-export type AgentKind = 'claude' | 'codex' | 'opencode';
 /**
  * The agent-branched WAKE-PATH ARMING sub-block (gh#929/gh#927) — the single
  * shared "re-establish your wake path" instruction reused by the launch

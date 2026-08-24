@@ -1,6 +1,6 @@
 import type { Role, RoleOccupant } from './role-resolver.js';
 import { type CodexRemoteLaunch } from './codex-remote.js';
-import type { BorgCli } from './cubes.js';
+import { type ActiveCube as CanonicalActiveCube, type BorgCli } from './cubes.js';
 import { type LiveInboxMonitor } from './seat-reattach-guard.js';
 import type { SeatStatus } from './seat-probe.js';
 import type { ServerSessionOperation } from './config.js';
@@ -71,22 +71,8 @@ export interface AssimilateResult {
     };
     prepareAborted?: boolean;
 }
-export interface ActiveCube {
-    cubeId: string;
-    droneId: string;
-    name: string;
-    sessionToken?: string;
-    droneLabel: string;
-    apiUrl: string;
-    /** Verified local-server CA identity; absent until a local server is selected. */
-    serverTrustIdentity?: string;
-    localSessionCredentialRef?: string;
-    /** Durable operation that produced this exact seat binding. */
-    operation?: ServerSessionOperation;
-    roleName?: string;
-    roleClass?: 'queen' | 'worker';
-    isHumanSeat?: boolean;
-}
+/** Pre-finalization seat metadata has no hydrated bearer or bound worktree yet. */
+export type AssimilationActiveCube = Omit<CanonicalActiveCube, 'sessionToken' | 'worktree'>;
 export interface AssimilateDeps {
     runSync: (cmd: string, args: string[], cwd?: string) => {
         status: number | null;
@@ -112,7 +98,7 @@ export interface AssimilateDeps {
     }) => Promise<LaunchApprovalDecision>;
     getHostname: () => string;
     setTerminalTitle: (label: string, cubeName: string) => void;
-    getActiveCube: () => Promise<ActiveCube | null>;
+    getActiveCube: () => Promise<CanonicalActiveCube | null>;
     /** Read-only relaunch guard for the saved seat's inbox monitor. */
     inspectLiveInboxMonitor?: (inboxPath: string, monitorStateRoot: string) => LiveInboxMonitor | null;
     hasPersistedActiveCube: () => Promise<boolean>;
@@ -144,14 +130,14 @@ export interface AssimilateDeps {
         roleId: string;
         credentialRef: string;
     } | null>;
-    probeSeat: (seat: ActiveCube) => Promise<SeatStatus>;
+    probeSeat: (seat: CanonicalActiveCube) => Promise<SeatStatus>;
     /** COMPOSITE cube-owned FINALIZE (Race 2): under the cube lock, revalidate the
      *  typed expectation, persist the binding FIRST, then run `activate` (keychain
      *  pending→ACTIVE) LAST; on mismatch, `scrubPending` the own pending record and
      *  report an honest abort. Wired to the merged activate+bind FINALIZE in
      *  production; absent from unit stubs that fully mock `assimilate`. */
     finalizeServerSeat?: (input: {
-        active: ActiveCube;
+        active: AssimilationActiveCube;
         commonDir: string;
         repositoryOrigin?: string;
         expected: ExpectedBinding;
