@@ -33,6 +33,7 @@ import { renderStreamStatus, formatWakePathPrefix, shouldShowWakePathWarning, } 
 import { inspectWakePath } from './wake-path-health.js';
 import { RUNTIME_METADATA_ADVISORY, renderRoster, renderRuntimeMetadataLines, } from './roster-render.js';
 import { resolveWorkingRepo } from './working-repo.js';
+import { auditMessageShas, renderProvenance, requiresRefs, resolveRefs, validateRefs, } from './log-provenance.js';
 import { CubeDeletedError, DroneEvictedError, formatCubeDeletedErrorToolResult, formatEvictedToolResult, } from './drone-lifecycle.js';
 import { classifyInSessionAssimilate, reattachOnlyRefusal, reattachFailureMessage, } from './assimilate-guard.js';
 import { gateAllowsActivation, borgSessionToolNotice } from './launch-gate.js';
@@ -813,13 +814,22 @@ export async function main() {
                     const active = await getActiveCube();
                     if (!active)
                         throw new Error('Not assimilated to a cube. Use borg_assimilate <cube-name> first.');
+                    const refs = validateRefs(args?.refs);
+                    if (requiresRefs(message) && refs.length === 0) {
+                        throw new Error('REVIEW-READY messages require refs. Pass refs: ["HEAD", "origin/<branch>", "origin/main"].');
+                    }
+                    const repository = active.worktree ?? findProjectRoot();
+                    const shaAudit = auditMessageShas(message, repository);
+                    if (shaAudit.refusal)
+                        throw new Error(shaAudit.refusal);
+                    const finalMessage = `${message}${renderProvenance(resolveRefs(refs, repository))}`;
                     seedDisplayIdentity(active);
                     const displayIdentity = renderDisplayIdentity(active);
-                    const lifecycleSignal = lifecycleSignalForMessage(message);
+                    const lifecycleSignal = lifecycleSignalForMessage(finalMessage);
                     if (lifecycleSignal) {
-                        const decision = await shouldSuppressLifecycleLog(active, message);
+                        const decision = await shouldSuppressLifecycleLog(active, finalMessage);
                         if (decision.suppress) {
-                            await recordLifecycleLog(active, message);
+                            await recordLifecycleLog(active, finalMessage);
                             if (lifecycleSignal === 'arrival')
                                 markArrivalAnnouncedThisProcess();
                             return {
@@ -850,8 +860,8 @@ export async function main() {
                         ...(documents ? { documents } : {}),
                         serverTrustIdentity: active.serverTrustIdentity,
                     };
-                    const result = await appendLog(active.sessionToken, active.apiUrl, message, appendOpts);
-                    await recordLifecycleLog(active, message);
+                    const result = await appendLog(active.sessionToken, active.apiUrl, finalMessage, appendOpts);
+                    await recordLifecycleLog(active, finalMessage);
                     if (lifecycleSignal === 'arrival')
                         markArrivalAnnouncedThisProcess();
                     let recipientDrones = [];
@@ -881,7 +891,10 @@ export async function main() {
                     const advisory = result.advisory?.code === 'STORE_AS_DOCUMENT'
                         ? `\nAdvisory: this message exceeded ${result.advisory.threshold_bytes} UTF-8 bytes. Store durable detail with borg_put-document, then cite its full id in borg_log.documents with an explicit borg_log.to audience.`
                         : '';
-                    const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${routed}${unreachable}${citations}${advisory}`;
+                    const shaAdvisory = shaAudit.unverified.length > 0
+                        ? `\nAdvisory: unverified Git SHA(s): ${shaAudit.unverified.join(', ')}`
+                        : '';
+                    const text = `Logged to cube "${displayIdentity.cubeName}" as ${displayIdentity.droneLabel}. (entry id: ${result.entry.id})${routed}${unreachable}${citations}${advisory}${shaAdvisory}`;
                     return {
                         content: [{ type: 'text', text }],
                         structuredContent: {

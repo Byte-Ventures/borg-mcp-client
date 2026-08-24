@@ -139,6 +139,15 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(log?.inputSchema.properties.message.description).toContain('4096');
     expect(log?.inputSchema.properties.message.description).not.toContain('10KB');
     expect(log?.inputSchema.properties.message.description).not.toContain('10 KB');
+    expect(log?.inputSchema.properties.refs).toEqual({
+      type: 'array',
+      items: { type: 'string' },
+      minItems: 1,
+      maxItems: 8,
+      uniqueItems: true,
+      description: expect.stringContaining('mechanically'),
+    });
+    expect(JSON.stringify(log?.inputSchema.properties.refs)).not.toMatch(/oneOf|anyOf|allOf/);
 
     for (const name of ['borg_update-cube', 'borg_patch-taxonomy-class']) {
       const schema = TOOL_MANIFEST.find((entry) => entry.name === name)?.inputSchema;
@@ -156,7 +165,8 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     expect(serializeWithFlatPropertyAdapter(log.inputSchema, {
       message: 'STATUS: ready',
       to: 'broadcast',
-    })).toEqual({ message: 'STATUS: ready', to: 'broadcast' });
+      refs: ['HEAD', 'origin/main'],
+    })).toEqual({ message: 'STATUS: ready', to: 'broadcast', refs: ['HEAD', 'origin/main'] });
     expect(serializeWithFlatPropertyAdapter(dispatcher.inputSchema, {
       name: 'borg_log',
       arguments: directed,

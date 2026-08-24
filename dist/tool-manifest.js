@@ -358,7 +358,7 @@ const BASE_TOOL_MANIFEST = [
     },
     {
         name: 'borg_log',
-        description: 'Append a message to the cube\'s activity log with an explicit audience. Every call must pass `to: "broadcast"` for all drones or a non-empty selector array for direct delivery. Selectors accept an exact drone label, drone id, the stable 8-hex `id:` token shown in roster/read-log, role name, or role slug. Message text and taxonomy classes never choose the audience; optional `class` records classification/lifecycle metadata only. Cite durable cube documents through `documents`; citations carry current metadata but do not inline document content. Direct routing controls delivery and wakes, not read confidentiality inside the cube.',
+        description: 'Append a message to the cube\'s activity log with an explicit audience. Every call must pass `to: "broadcast"` for all drones or a non-empty selector array for direct delivery. Selectors accept an exact drone label, drone id, the stable 8-hex `id:` token shown in roster/read-log, role name, or role slug. Pass local Git refs through `refs` to append their mechanically resolved commit SHAs; REVIEW-READY messages require refs. Message text and taxonomy classes never choose the audience; optional `class` records classification/lifecycle metadata only. Cite durable cube documents through `documents`; citations carry current metadata but do not inline document content. Direct routing controls delivery and wakes, not read confidentiality inside the cube.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -379,6 +379,14 @@ const BASE_TOOL_MANIFEST = [
                     maxItems: 100,
                     uniqueItems: true,
                     description: 'Optional full opaque ids of 1-100 same-cube documents to cite atomically. Unknown, duplicate, or foreign ids are refused.',
+                },
+                refs: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    minItems: 1,
+                    maxItems: 8,
+                    uniqueItems: true,
+                    description: 'Optional local Git refs to resolve mechanically and append as `<ref> = <40-hex>` provenance. Required for REVIEW-READY messages.',
                 },
             },
             required: ['message', 'to'],
