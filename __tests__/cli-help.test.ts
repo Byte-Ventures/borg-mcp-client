@@ -230,8 +230,11 @@ describe('borg server help', () => {
 });
 
 describe('borg update help', () => {
-  it('advertises the whole-product journey at top level', () => {
-    expect(topLevelHelpText('9.9.9')).toContain('borg update');
+  it('advertises update as canonical and upgrade as its alias at top level', () => {
+    const text = topLevelHelpText('9.9.9');
+    expect(text).toContain('borg update              Update the client and installed local server together');
+    expect(text).toContain('borg upgrade             Alias for borg update');
+    expect(clientSubcommandHelpText('upgrade', ['--help'], '9.9.9')).toBeNull();
   });
 
   it('documents preflight, ordering, config refresh, skip, partial completion, and restart semantics', () => {

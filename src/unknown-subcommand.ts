@@ -15,6 +15,7 @@
 export const KNOWN_SUBCOMMANDS = [
   'setup',
   'update',
+  'upgrade',
   'doctor',
   'clone',
   'quickstart',

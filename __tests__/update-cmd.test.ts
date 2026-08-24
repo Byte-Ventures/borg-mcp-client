@@ -1103,9 +1103,9 @@ describe('runEarlyUpdate', () => {
     expect(d.publishedPackage).not.toHaveBeenCalled();
   });
 
-  it('renders focused help without registry, provenance, prompt, or mutation work', async () => {
+  it.each(['update', 'upgrade'])('renders focused help for %s without registry, provenance, prompt, or mutation work', async (command) => {
     const d = deps();
-    await expect(runEarlyUpdate(['node', 'borg', 'update', '--help'], d)).resolves.toBe(0);
+    await expect(runEarlyUpdate(['node', 'borg', command, '--help'], d)).resolves.toBe(0);
     expect(d.stdout).toHaveBeenCalledWith(expect.stringContaining('borg update'));
     expect(d.publishedPackage).not.toHaveBeenCalled();
     expect(d.currentClient).not.toHaveBeenCalled();
@@ -1113,11 +1113,54 @@ describe('runEarlyUpdate', () => {
     expect(d.installGlobal).not.toHaveBeenCalled();
   });
 
-  it('rejects unknown options without any update work', async () => {
+  it.each(['update', 'upgrade'])('rejects unknown %s options without any update work', async (command) => {
     const d = deps();
-    await expect(runEarlyUpdate(['node', 'borg', 'update', '--force'], d)).resolves.toBe(1);
-    expect(d.stderr).toHaveBeenCalledWith(expect.stringContaining('unknown option: --force'));
+    await expect(runEarlyUpdate(['node', 'borg', command, '--force'], d)).resolves.toBe(1);
+    expect(d.stderr).toHaveBeenCalledWith(
+      'unknown option: --force\nRun `borg update --help` for usage.\n',
+    );
     expect(d.publishedPackage).not.toHaveBeenCalled();
     expect(d.installGlobal).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['non-interactive refusal', false, 'yes', 1],
+    ['declined confirmation', true, 'no', 0],
+    ['confirmation EOF', true, 'eof', 1],
+    ['confirmation interruption', true, 'interrupted', 130],
+  ] as const)('keeps update and upgrade %s behavior byte-identical', async (_label, tty, decision, expected) => {
+    const updateConfirm = vi.fn(async () => decision);
+    const upgradeConfirm = vi.fn(async () => decision);
+    const updateDeps = deps({ isTTY: () => tty, confirm: updateConfirm });
+    const upgradeDeps = deps({ isTTY: () => tty, confirm: upgradeConfirm });
+
+    const updateCode = await runEarlyUpdate(['node', 'borg', 'update'], updateDeps);
+    const upgradeCode = await runEarlyUpdate(['node', 'borg', 'upgrade'], upgradeDeps);
+
+    expect(updateCode).toBe(expected);
+    expect(upgradeCode).toBe(updateCode);
+    expect(upgradeConfirm.mock.calls).toEqual(updateConfirm.mock.calls);
+    expect(vi.mocked(upgradeDeps.stdout).mock.calls).toEqual(vi.mocked(updateDeps.stdout).mock.calls);
+    expect(vi.mocked(upgradeDeps.stderr).mock.calls).toEqual(vi.mocked(updateDeps.stderr).mock.calls);
+    expect(upgradeDeps.calls).toEqual(updateDeps.calls);
+  });
+
+  it('routes upgrade arguments and exit status through the canonical update continuation', async () => {
+    const updateDeps = deps({ reenter: vi.fn(async () => 37) });
+    const upgradeDeps = deps({ reenter: vi.fn(async () => 37) });
+    const args = ['--yes', '--registry', 'https://mirror.example.test/npm'];
+
+    await expect(runEarlyUpdate(['node', 'borg', 'update', ...args], updateDeps)).resolves.toBe(37);
+    await expect(runEarlyUpdate(['node', 'borg', 'upgrade', ...args], upgradeDeps)).resolves.toBe(37);
+    expect(vi.mocked(upgradeDeps.reenter).mock.calls).toEqual(vi.mocked(updateDeps.reenter).mock.calls);
+    expect(vi.mocked(upgradeDeps.reenter).mock.calls[0]?.[1]).toEqual([
+      'update', '--yes',
+      '--registry', 'https://mirror.example.test/npm/',
+      '--target-client', '2.3.0',
+      '--target-server', '0.4.0',
+      '--server-present', 'yes',
+    ]);
+    expect(vi.mocked(upgradeDeps.stderr).mock.calls).toEqual(vi.mocked(updateDeps.stderr).mock.calls);
+    expect(upgradeDeps.calls).toEqual(updateDeps.calls);
   });
 });

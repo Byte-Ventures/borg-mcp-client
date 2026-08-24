@@ -8,6 +8,7 @@ describe('unknownSubcommand (gh#911)', () => {
 
   it('returns null for every known subcommand (falls through to its handler)', () => {
     expect(KNOWN_SUBCOMMANDS).toContain('update');
+    expect(KNOWN_SUBCOMMANDS).toContain('upgrade');
     expect(KNOWN_SUBCOMMANDS).toContain('doctor');
     expect(KNOWN_SUBCOMMANDS).toContain('drones');
     expect(KNOWN_SUBCOMMANDS).toContain('launch');
@@ -28,6 +29,7 @@ describe('unknownSubcommand (gh#911)', () => {
     expect(unknownSubcommand('evict-drone')).toBe('evict-drone');
     // a typo of a real subcommand
     expect(unknownSubcommand('asimilate')).toBe('asimilate');
+    expect(unknownSubcommand('upgarde')).toBe('upgarde');
     expect(unknownSubcommand('bogus')).toBe('bogus');
     expect(unknownSubcommand('seats')).toBe('seats');
   });

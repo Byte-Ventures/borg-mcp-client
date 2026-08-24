@@ -81,6 +81,46 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
         `Packed update help failed: status=${updateHelp.status}, stdout=${JSON.stringify(updateHelp.stdout)}, stderr=${JSON.stringify(updateHelp.stderr)}, error=${updateHelp.error?.message ?? ''}`,
       );
     }
+    const upgradeHelp = spawnSync(generatedBin, ['upgrade', '--help'], {
+      env: { ...env, CI: '1', NO_COLOR: '1' },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    if (
+      upgradeHelp.error ||
+      upgradeHelp.status !== updateHelp.status ||
+      upgradeHelp.stdout !== updateHelp.stdout ||
+      upgradeHelp.stderr !== updateHelp.stderr
+    ) {
+      throw new Error(
+        `Packed upgrade help differs from update: status=${upgradeHelp.status}, stdout=${JSON.stringify(upgradeHelp.stdout)}, stderr=${JSON.stringify(upgradeHelp.stderr)}, error=${upgradeHelp.error?.message ?? ''}`,
+      );
+    }
+
+    const updateInvalid = spawnSync(generatedBin, ['update', '--force'], {
+      env: { ...env, CI: '1', NO_COLOR: '1' },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    const upgradeInvalid = spawnSync(generatedBin, ['upgrade', '--force'], {
+      env: { ...env, CI: '1', NO_COLOR: '1' },
+      encoding: 'utf8',
+      timeout: timeoutMs,
+    });
+    if (
+      updateInvalid.error ||
+      upgradeInvalid.error ||
+      updateInvalid.status !== 1 ||
+      upgradeInvalid.status !== updateInvalid.status ||
+      updateInvalid.stdout !== '' ||
+      upgradeInvalid.stdout !== updateInvalid.stdout ||
+      !updateInvalid.stderr.includes('Run `borg update --help` for usage.') ||
+      upgradeInvalid.stderr !== updateInvalid.stderr
+    ) {
+      throw new Error(
+        `Packed upgrade rejection differs from update: updateStatus=${updateInvalid.status}, upgradeStatus=${upgradeInvalid.status}, updateStderr=${JSON.stringify(updateInvalid.stderr)}, upgradeStderr=${JSON.stringify(upgradeInvalid.stderr)}`,
+      );
+    }
 
     const child = spawn(generatedBin, ['server', 'status', '--json'], {
       env: {
@@ -249,6 +289,7 @@ process.exit(args === ${JSON.stringify(expected)} ? 37 : args === ${JSON.stringi
       serverFacadeStartupFailureExitCode: unavailable.status,
       serverFacadeMissingExitCode: missing.status,
       updateHelpExitCode: updateHelp.status,
+      upgradeHelpExitCode: upgradeHelp.status,
     };
   } finally {
     await rm(directory, { recursive: true, force: true });
