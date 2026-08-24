@@ -1,5 +1,5 @@
 import type { BorgCli } from './cubes.js';
-import { type AgentKind } from './regen-format.js';
+import type { AgentKind } from './agent-runtime.js';
 /**
  * The claude kickoff prompt's wake-path section (gh#929) — the SAME shared
  * `wakePathArming` the SessionStart hook + /clear orientation use (one place,

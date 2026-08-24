@@ -24,10 +24,9 @@ import {
   formatLeanOrientation,
   formatPlainSessionReminder,
   shouldRelayPlainSessionReminder,
-  type AgentKind,
 } from './regen-format.js';
 import { resolveSessionAgentKind } from './codex-app-wake.js';
-import { resolveReportableSessionAgentKind } from './agent-runtime.js';
+import { resolveReportableSessionAgentKind, type AgentKind } from './agent-runtime.js';
 import { handleVersionFlag } from './version.js';
 import {
   BORG_LAUNCH_REMINDER_DISABLED_ENV,

@@ -25,7 +25,7 @@
  */
 import { type BroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import { ErrorCode, type DocumentCitation } from 'borgmcp-shared/protocol';
-import { getActiveCube } from './cubes.js';
+import { getActiveCube, type ActiveCube } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
 import { acquireStreamLease, type StreamOwnershipSnapshot } from './stream-owner.js';
@@ -135,7 +135,7 @@ export interface StreamDeps {
     /** Optional OpenCode wake delivery after the durable inbox append. */
     injectOpenCode?: (text: string, entryId: string, allowSubmit: boolean, sourceEntryId?: string, isSourcePending?: () => Promise<boolean>) => Promise<boolean>;
     /** Inspect whether one retry source remains beyond the durable unread cursor. */
-    hasPendingWakeEntry?: (active: ActiveCube, entryId: string) => Promise<boolean>;
+    hasPendingWakeEntry?: (active: StreamActiveCube, entryId: string) => Promise<boolean>;
     /** Clear in-process retry diagnostics after the durable entry is consumed. */
     settleOpenCodeEntry?: (sourceEntryId: string) => void;
 }
@@ -166,20 +166,10 @@ export interface RunLoopTestDeps {
  * `__resetStreamStateForTest` / `__resetCodexHeartbeatForTest`.
  */
 export declare function __runLoopForTest(testDeps: RunLoopTestDeps): Promise<void>;
-export interface ActiveCube {
-    cubeId: string;
-    droneId: string;
-    sessionToken: string;
-    apiUrl: string;
-    serverTrustIdentity?: string;
-    localSessionCredentialRef?: string;
-    localSessionExpiresAt?: string | null;
-    worktree?: string;
-    droneLabel?: string;
-    name?: string;
-}
-export declare function streamOnce(active: ActiveCube, lastEventId: string | null, onEventId: (id: string) => void, deps?: StreamDeps): Promise<void>;
-export declare function streamOnceIfOwner(active: ActiveCube, lastEventId: string | null, onEventId: (id: string) => void, deps?: StreamDeps): Promise<'streamed' | 'skipped'>;
+/** Direct stream controls may omit metadata or omit trust to exercise fail-closed validation. */
+export type StreamActiveCube = Pick<ActiveCube, 'cubeId' | 'droneId' | 'sessionToken' | 'apiUrl'> & Partial<Pick<ActiveCube, 'serverTrustIdentity' | 'localSessionCredentialRef' | 'worktree' | 'droneLabel' | 'name'>>;
+export declare function streamOnce(active: StreamActiveCube, lastEventId: string | null, onEventId: (id: string) => void, deps?: StreamDeps): Promise<void>;
+export declare function streamOnceIfOwner(active: StreamActiveCube, lastEventId: string | null, onEventId: (id: string) => void, deps?: StreamDeps): Promise<'streamed' | 'skipped'>;
 export type ParsedEvent = {
     type: 'log';
     id: string;
