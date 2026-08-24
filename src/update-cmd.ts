@@ -1370,7 +1370,7 @@ export async function runEarlyUpdate(
   argv: readonly string[],
   deps?: UpdateDeps,
 ): Promise<number | null> {
-  if (argv[2] !== 'update') return null;
+  if (argv[2] !== 'update' && argv[2] !== 'upgrade') return null;
   const parsed = parseUpdateArgs(argv.slice(3), process.env[REENTRY_ENV] === '1');
   const resolvedDeps = deps ?? buildDefaultUpdateDeps(parsed.ok ? parsed.registry : undefined);
   if (!parsed.ok) {
