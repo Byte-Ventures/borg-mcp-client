@@ -1,4 +1,4 @@
-import { dirname, basename, join } from 'node:path';
+import { dirname, basename } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Role, RoleOccupant } from './role-resolver.js';
 import {

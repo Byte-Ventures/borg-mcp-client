@@ -60,7 +60,6 @@ import {
 } from 'borgmcp-shared/protocol';
 import { Buffer } from 'node:buffer';
 import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
-import { consolePrefix } from './console-prefix.js';
 import { debugLog } from './debug.js';
 import { assertUuidShape } from './evict-drone.js';
 import {
@@ -70,7 +69,7 @@ import {
   DRONE_EVICTED_CODE,
 } from './drone-lifecycle.js';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
-import { getTemplate, type Template, type TemplateRole } from 'borgmcp-shared/templates';
+import { getTemplate, type TemplateRole } from 'borgmcp-shared/templates';
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import type { FragmentView, NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';

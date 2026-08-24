@@ -56,7 +56,6 @@ import {
   CODEX_HEARTBEAT_CADENCE_MS,
   fireCodexHeartbeatTick,
   formatCodexWakePrompt,
-  resolveSessionAgentKind,
   startCodexHeartbeat,
   wakeCodexViaAppServer,
 } from './codex-app-wake.js';
