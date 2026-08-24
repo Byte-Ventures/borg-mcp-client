@@ -498,16 +498,6 @@ export async function findRemainingActiveSeatForWorktree(worktree: string): Prom
   return record ? { apiUrl: record.origin, operation: record.operation } : null;
 }
 
-/**
- * Legacy binding-only writer. In the collapsed single-store model an ACTIVE seat is
- * created ONLY by the atomic mint→activate+bind path in seats.ts (driven by the
- * attach FINALIZE); there is no standalone binding write. Retained solely as a
- * fail-closed guard for incomplete session metadata.
- */
-export async function setActiveCube(_active: ActiveCubeInput): Promise<void> {
-  throw new Error('local Borg server session metadata is incomplete');
-}
-
 export function activeCubeWithFreshRegenIdentity(
   active: ActiveCube,
   result: {

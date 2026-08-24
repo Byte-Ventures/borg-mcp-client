@@ -640,7 +640,6 @@ describe('real-adapter SIGINT integration for borg server cube init', () => {
           peekServerSessionRecord: vi.fn(async () => false),
           findIncompleteSiblingAttempt: vi.fn(async () => null),
           probeSeat: vi.fn(async () => 'live' as any),
-          setActiveCube: vi.fn(),
           resolveCliApprovals: vi.fn(async () => ({ codexArgs: [] })),
         };
 

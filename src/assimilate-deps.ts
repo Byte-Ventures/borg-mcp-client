@@ -60,7 +60,6 @@ import {
   findProjectRoot as cubesFindProjectRoot,
   getActiveCube as cubesGetActive,
   hasPersistedActiveCube as cubesHasPersistedActive,
-  setActiveCube as cubesSetActive,
   inboxPathForDrone,
   setProjectCliPreference,
   setCodexWakeTarget,
@@ -204,7 +203,6 @@ export function buildDefaultAssimilateDeps(
       return { operation: record.operation, roleId: record.roleId, credentialRef: seatRef(record) };
     },
     probeSeat: (seat) => defaultProbeSeat(seat as import('./cubes.js').ActiveCube),
-    setActiveCube: (a) => cubesSetActive(a),
     // Single-store FINALIZE: the merged activate+bind (reached via the injected
     // `activate` thunk from sendBorgServerAttach) stamps the exact
     // digest-matched PENDING record ACTIVE and binds the decided worktree in ONE

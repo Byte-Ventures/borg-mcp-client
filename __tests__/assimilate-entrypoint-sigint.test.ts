@@ -73,7 +73,6 @@ function makeEntryDeps(question: PromptQuestion) {
     },
   }));
   const finalizeServerSeat = vi.fn(async () => ({ committed: true as const }));
-  const setActiveCube = vi.fn();
   const getRepositoryIdentity = vi.fn(async () => ({
     kind: 'origin' as const,
     value: 'https://github.com/org/repo',
@@ -144,7 +143,6 @@ function makeEntryDeps(question: PromptQuestion) {
     peekServerSessionRecord: vi.fn(async () => false),
     findIncompleteSiblingAttempt: vi.fn(async () => null),
     probeSeat: vi.fn(async () => 'live' as const),
-    setActiveCube,
     resolveCliApprovals: vi.fn(async () => ({ codexArgs: [] })),
   } as unknown as AssimilateDeps;
 
@@ -157,7 +155,6 @@ function makeEntryDeps(question: PromptQuestion) {
     saveRepositoryAssociation,
     assimilate,
     finalizeServerSeat,
-    setActiveCube,
     getRepositoryIdentity,
     getRepositoryAssociation,
   };
@@ -305,7 +302,6 @@ describe.each(entrypoints)('production prompt interruption through $entry', ({ r
     expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
     expect(state.assimilate).not.toHaveBeenCalled();
     expect(state.finalizeServerSeat).not.toHaveBeenCalled();
-    expect(state.setActiveCube).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -338,7 +334,6 @@ describe.each(entrypoints)('production prompt interruption through $entry', ({ r
     expect(state.createCube).not.toHaveBeenCalled();
     expect(state.assimilate).not.toHaveBeenCalled();
     expect(state.finalizeServerSeat).not.toHaveBeenCalled();
-    expect(state.setActiveCube).not.toHaveBeenCalled();
   });
 
   it('reports an initial resolve failure with truthful pre-mutation recovery', async () => {
@@ -465,7 +460,6 @@ describe.each(entrypoints)('post-dispatch cube creation recovery through $entry'
     expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
     expect(state.assimilate).not.toHaveBeenCalled();
     expect(state.finalizeServerSeat).not.toHaveBeenCalled();
-    expect(state.setActiveCube).not.toHaveBeenCalled();
   });
 
   it('post-create cube readback failure is unconfirmed and never persists local state', async () => {
@@ -487,7 +481,6 @@ describe.each(entrypoints)('post-dispatch cube creation recovery through $entry'
     expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
     expect(state.assimilate).not.toHaveBeenCalled();
     expect(state.finalizeServerSeat).not.toHaveBeenCalled();
-    expect(state.setActiveCube).not.toHaveBeenCalled();
   });
 
   it('post-create authoritative repository readback failure is unconfirmed and never persists local state', async () => {
@@ -529,7 +522,6 @@ describe.each(entrypoints)('post-dispatch cube creation recovery through $entry'
     expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
     expect(state.assimilate).not.toHaveBeenCalled();
     expect(state.finalizeServerSeat).not.toHaveBeenCalled();
-    expect(state.setActiveCube).not.toHaveBeenCalled();
   });
 
   it('rejects authoritative role IDs absent from cube readback before local persistence', async () => {
@@ -577,7 +569,6 @@ describe.each(entrypoints)('post-dispatch cube creation recovery through $entry'
     expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
     expect(state.assimilate).not.toHaveBeenCalled();
     expect(state.finalizeServerSeat).not.toHaveBeenCalled();
-    expect(state.setActiveCube).not.toHaveBeenCalled();
   });
 });
 
@@ -729,6 +720,5 @@ describe.each(entrypoints)('legacy repository cube adoption through $entry', ({ 
     expect(state.saveRepositoryAssociation).not.toHaveBeenCalled();
     expect(state.assimilate).not.toHaveBeenCalled();
     expect(state.finalizeServerSeat).not.toHaveBeenCalled();
-    expect(state.setActiveCube).not.toHaveBeenCalled();
   });
 });

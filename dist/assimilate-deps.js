@@ -26,7 +26,7 @@ import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError, CubeCreationConfirmationError } from './server-errors.js';
-import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, setActiveCube as cubesSetActive, inboxPathForDrone, setProjectCliPreference, setCodexWakeTarget, } from './cubes.js';
+import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, inboxPathForDrone, setProjectCliPreference, setCodexWakeTarget, } from './cubes.js';
 import { addProjectSessionStartHook, provisionLaunchAccess, } from './config-utils.js';
 import { findPendingServerEnrollment } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
@@ -131,7 +131,6 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
             return { operation: record.operation, roleId: record.roleId, credentialRef: seatRef(record) };
         },
         probeSeat: (seat) => defaultProbeSeat(seat),
-        setActiveCube: (a) => cubesSetActive(a),
         // Single-store FINALIZE: the merged activate+bind (reached via the injected
         // `activate` thunk from sendBorgServerAttach) stamps the exact
         // digest-matched PENDING record ACTIVE and binds the decided worktree in ONE

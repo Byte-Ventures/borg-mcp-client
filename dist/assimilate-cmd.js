@@ -567,8 +567,8 @@ export async function runAssimilate(args, deps, options = {}) {
     // state until AFTER the API assimilate succeeds — early-return at
     // role resolution / listCubes / createCube / template-prompt /
     // template-invalid-choice is now structurally clean (no orphan
-    // class possible). Worktree rollback narrows to the single
-    // setActiveCube failure path post-worktree-creation.
+    // class possible). Worktree rollback narrows to local finalization failures
+    // after worktree creation.
     // Sprint 18: capture pre-chdir cwd for the post-exit shell-cd hint
     // (no chdir has happened yet; this is a stable starting point).
     const originalCwd = deps.cwd();
@@ -1354,7 +1354,7 @@ export async function runAssimilate(args, deps, options = {}) {
             // A BINDING-WRITE (or revalidate) failure BEFORE the binding landed. Nothing
             // owns the spawned worktree yet, so rolling it back is safe.
             const message = err instanceof Error ? err.message : String(err);
-            deps.stderr(`setActiveCube failed: ${message}\n`);
+            deps.stderr(`finalizeServerSeat failed: ${message}\n`);
             rollbackWorktree();
             return 1;
         }
