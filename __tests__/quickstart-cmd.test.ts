@@ -82,6 +82,44 @@ function makeDeps(options: {
 }
 
 describe('runQuickstart', () => {
+  it('keeps the existing copy for a genuine non-repository outcome', async () => {
+    const rig = makeDeps();
+    vi.mocked(rig.assimilateDeps.resolveRepositoryContext).mockResolvedValueOnce(null);
+    expect(await runQuickstart({ roles: [], yes: true }, rig.deps)).toBe(1);
+    expect(rig.errors.join('')).toBe(
+      'borg quickstart: run this command inside a non-bare Git repository.\n',
+    );
+  });
+
+  it('keeps the existing copy for the designed bare-repository sentinel', async () => {
+    const rig = makeDeps();
+    vi.mocked(rig.assimilateDeps.resolveRepositoryContext).mockRejectedValueOnce(new Error('BARE_REPOSITORY'));
+    expect(await runQuickstart({ roles: [], yes: true }, rig.deps)).toBe(1);
+    expect(rig.errors.join('')).toBe(
+      'borg quickstart: run this command inside a non-bare Git repository.\n',
+    );
+  });
+
+  it('reports an operational repository-discovery failure with its cause', async () => {
+    const rig = makeDeps();
+    vi.mocked(rig.assimilateDeps.resolveRepositoryContext).mockRejectedValueOnce(
+      new Error('realpath failed: EACCES\u001b[2J'),
+    );
+    expect(await runQuickstart({ roles: [], yes: true }, rig.deps)).toBe(1);
+    expect(rig.errors.join('')).toBe(
+      'borg quickstart: could not inspect this Git repository: realpath failed: EACCES[2J\n',
+    );
+  });
+
+  it('reports an unreadable working directory instead of calling it a non-repository', async () => {
+    const rig = makeDeps();
+    rig.assimilateDeps.cwd = () => { throw new Error('cwd failed: EACCES'); };
+    expect(await runQuickstart({ roles: [], yes: true }, rig.deps)).toBe(1);
+    expect(rig.errors.join('')).toBe(
+      'borg quickstart: could not inspect this Git repository: cwd failed: EACCES\n',
+    );
+  });
+
   it('fails closed with the ratified two-terminal copy before repository identity or creation', async () => {
     const rig = makeDeps({ server: null });
     expect(await runQuickstart({ roles: [], yes: true }, rig.deps)).toBe(1);

@@ -106,7 +106,11 @@ import {
   type RepositoryCubeCreation,
   type RepositoryCubeResolution,
 } from './repository-cube-init.js';
-import type { GitRepositoryContext, RepositoryAssociation } from './repository-identity.js';
+import {
+  repositoryDiscoveryFailureMessage,
+  type GitRepositoryContext,
+  type RepositoryAssociation,
+} from './repository-identity.js';
 
 const PRIVATE_STATE_UNAVAILABLE_COPY = [
   'Borg could not safely prepare its private local state.',
@@ -744,7 +748,11 @@ export async function runAssimilate(
       deps.stderr(`${command} requires a non-bare repository worktree. Clone or check out the repository, then retry.\n`);
       return 1;
     }
-    repositoryContext = null;
+    deps.stderr(
+      `Could not inspect this Git repository: ${repositoryDiscoveryFailureMessage(error)}\n` +
+      'Nothing was changed.\n',
+    );
+    return 1;
   }
   if (!repositoryContext) {
     deps.stderr(
