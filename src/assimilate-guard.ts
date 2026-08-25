@@ -18,7 +18,7 @@ export type AssimilateDecision =
   | { kind: 'no-identity' }
   | { kind: 'different-cube'; activeCubeName: string };
 
-/** Cube names are lowercase server-side; tolerate caller case/whitespace. */
+/** Cube names compare case-insensitively; tolerate caller whitespace. */
 function normalizeCubeName(name: string): string {
   return name.trim().toLowerCase();
 }

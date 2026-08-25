@@ -220,13 +220,13 @@ describe('guided repository cube initialization', () => {
     expect(saveAssociation).not.toHaveBeenCalled();
   });
 
-  it('fails closed when more than one accessible cube has the proposed name', async () => {
+  it('fails closed when more than one accessible cube has the proposed name case-insensitively', async () => {
     const associateCube = vi.fn();
     const createCube = vi.fn();
     const inputDeps = deps({
       listCubes: vi.fn(async () => [
         { id: 'cube-a', name: 'repo' },
-        { id: 'cube-b', name: 'repo' },
+        { id: 'cube-b', name: 'REPO' },
       ]),
       associateCube,
       createCube,
@@ -260,7 +260,7 @@ describe('guided repository cube initialization', () => {
     expect(inputDeps.saveAssociation).not.toHaveBeenCalled();
   });
 
-  it('adopts an exact legacy match when the operator accepts the default', async () => {
+  it('adopts a case-insensitive name match when the operator accepts the default', async () => {
     const prompt = vi.fn(async () => '');
     const write = vi.fn();
     const associateCube = vi.fn(deps().associateCube);
@@ -272,7 +272,7 @@ describe('guided repository cube initialization', () => {
     });
 
     await expect(initializeRepositoryCube({
-      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: { cubeName: 'REPO' }, canCreate: true,
     }, inputDeps)).resolves.toMatchObject({ kind: 'success', existing: true });
 
     expect(prompt).toHaveBeenCalledWith('Link this repository to that cube? [Y/n]: ');
@@ -288,7 +288,7 @@ describe('guided repository cube initialization', () => {
     ]);
   });
 
-  it('declines an exact legacy match only on an explicit negative answer', async () => {
+  it('declines a case-insensitive name match only on an explicit negative answer', async () => {
     const associateCube = vi.fn();
     const prompt = vi.fn(async () => 'no');
     const write = vi.fn();
@@ -300,7 +300,7 @@ describe('guided repository cube initialization', () => {
     });
 
     await expect(initializeRepositoryCube({
-      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: {}, canCreate: true,
+      mode: 'assimilate', context, serverOrigin: 'https://borg.test', flags: { cubeName: 'REPO' }, canCreate: true,
     }, inputDeps)).resolves.toEqual({ kind: 'stop', code: 0 });
 
     expect(associateCube).not.toHaveBeenCalled();

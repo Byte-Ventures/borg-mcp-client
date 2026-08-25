@@ -10,7 +10,7 @@
  * Seat CREATION stays in the CLI (`borg assimilate` in a terminal), where
  * worktree spawn + identity persistence are handled coherently.
  */
-/** Cube names are lowercase server-side; tolerate caller case/whitespace. */
+/** Cube names compare case-insensitively; tolerate caller whitespace. */
 function normalizeCubeName(name) {
     return name.trim().toLowerCase();
 }

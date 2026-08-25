@@ -212,8 +212,8 @@ describe('borg server help', () => {
       `  --template ${templateOptions}  New-cube template (default: ${defaultTemplate})\n` +
       `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
       `  --help, -h                       Show this help\n\n` +
-      `An existing repository association skips all prompts. One accessible exact-name legacy\n` +
-      `cube requires explicit interactive adoption; ambiguous matches fail closed. An enrolled\n` +
+      `An existing repository association skips all prompts. One accessible cube with a case-insensitive\n` +
+      `name match requires explicit interactive adoption; ambiguous matches fail closed. An enrolled\n` +
       `owner client may create a repository cube; ordinary clients require an explicit cube grant.\n`,
     );
     expect(cubeInitHelpText('9.9.9')).not.toMatch(/--worktree|--here|--cli|--model/);

@@ -329,6 +329,19 @@ describe('TOOL_MANIFEST — source-of-truth tool reference', () => {
     }
   });
 
+  it('publishes the flat role-name contract for create and update', () => {
+    for (const toolName of ['borg_create-role', 'borg_update-role']) {
+      const name = TOOL_MANIFEST.find((entry) => entry.name === toolName)?.inputSchema.properties.name;
+      expect(name).toMatchObject({
+        type: 'string',
+        description: expect.stringMatching(/1-64 bytes.*ASCII letter or digit.*spaces.*periods.*underscores.*hyphens/i),
+      });
+      expect(name).not.toHaveProperty('anyOf');
+      expect(name).not.toHaveProperty('oneOf');
+      expect(name).not.toHaveProperty('allOf');
+    }
+  });
+
   it('empty role updates do not recommend retired model selection (gh#1019)', () => {
     const errorCopy = [...clientEntrySource.matchAll(/Pass at least one of:[^']+/g)]
       .map((match) => match[0])

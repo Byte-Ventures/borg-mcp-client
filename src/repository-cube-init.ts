@@ -266,7 +266,8 @@ export async function initializeRepositoryCube(input: {
   }
   const accessibleCubes = await deps.listCubes();
   const adoptExactMatch = async (name: string): Promise<RepositoryCubeInitResult | null> => {
-    const matches = accessibleCubes.filter((cube) => cube.name === name);
+    const normalizedName = name.trim().toLowerCase();
+    const matches = accessibleCubes.filter((cube) => cube.name.trim().toLowerCase() === normalizedName);
     if (matches.length === 0) return null;
     if (matches.length > 1) {
       deps.write(`More than one accessible cube is named '${name}'. No cube, repository binding, or drone was created. Ask the server operator for an unambiguous repository cube grant.\n`);

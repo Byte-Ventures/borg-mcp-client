@@ -227,8 +227,8 @@ export function cubeInitHelpText(version) {
         `  --template ${NEW_CUBE_TEMPLATE_OPTIONS}  New-cube template (default: ${DEFAULT_NEW_CUBE_TEMPLATE})\n` +
         `  --yes, -y                        Accept new-cube defaults; never adopt by name\n` +
         `  --help, -h                       Show this help\n\n` +
-        `An existing repository association skips all prompts. One accessible exact-name legacy\n` +
-        `cube requires explicit interactive adoption; ambiguous matches fail closed. An enrolled\n` +
+        `An existing repository association skips all prompts. One accessible cube with a case-insensitive\n` +
+        `name match requires explicit interactive adoption; ambiguous matches fail closed. An enrolled\n` +
         `owner client may create a repository cube; ordinary clients require an explicit cube grant.\n`);
 }
 /**
@@ -261,8 +261,8 @@ export function assimilateHelpText(version) {
         `Assimilate adds or resumes one drone under one role; use quickstart when you want\n` +
         `the repository's full roster.\n` +
         `Creation shows repository context, name, template, and one confirmation. An existing\n` +
-        `repository association skips all prompts. One accessible exact-name legacy cube requires\n` +
-        `explicit interactive adoption; ambiguous matches fail closed. An enrolled owner client may\n` +
+        `repository association skips all prompts. One accessible cube with a case-insensitive name\n` +
+        `match requires explicit interactive adoption; ambiguous matches fail closed. An enrolled owner client may\n` +
         `create an idempotent repository cube; ordinary clients require an explicit cube grant.\n` +
         `A drone is created only after enrollment. Preview only.\n` +
         `See docs/LOCAL_SERVER.md for self-hosted setup and current status.\n\n` +

@@ -2084,7 +2084,7 @@ export async function applyTemplate(
   let created = 0;
   let updated = 0;
   for (const role of template.roles) {
-    const existing = current.roles.find((candidate) => candidate.name === role.name);
+    const existing = current.roles.find((candidate) => candidate.name.toLowerCase() === role.name.toLowerCase());
     if (!existing) {
       await createRole(cubeId, role, active, authority.connection);
       created++;
@@ -2143,7 +2143,7 @@ export async function syncRoles(
   const additions: Array<{ key: string; run: () => Promise<void> }> = [];
   const conflictKeys = new Set<string>();
   for (const role of template.roles) {
-    const existing = current.roles.find((candidate) => candidate.name === role.name);
+    const existing = current.roles.find((candidate) => candidate.name.toLowerCase() === role.name.toLowerCase());
     if (!existing) {
       const key = `role:${role.name}`;
       const fragments: FragmentView[] = [{
@@ -2176,7 +2176,7 @@ export async function syncRoles(
     roles.push({ name: role.name, status: 'existing', fragments });
   }
   for (const existing of current.roles) {
-    if (!template.roles.some((role) => role.name === existing.name)) {
+    if (!template.roles.some((role) => role.name.toLowerCase() === existing.name.toLowerCase())) {
       roles.push({ name: existing.name, status: 'custom-skipped', fragments: [] });
     }
   }

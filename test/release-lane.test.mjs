@@ -39,7 +39,7 @@ const root = resolve(import.meta.dirname, '..');
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const sharedVersion = packageManifest.dependencies['borgmcp-shared'];
 const SHARED_TARBALL = `https://registry.npmjs.org/borgmcp-shared/-/borgmcp-shared-${sharedVersion}.tgz`;
-const SHARED_INTEGRITY = 'sha512-wadK82ok1D3PTE1eWqLEng585qFjfkQ3GqqwZvEnMfoiztwM2L2T9h6jR9UHi2G6ePvI6RdMGu36hlJsdd6L3w==';
+const SHARED_INTEGRITY = 'sha512-w6qcOXDngxuj/EN1UMTy5FFX2gPsJxGPnClAzngWTD6dh9lNcQKq71Vx4rD+Et8Xv+CMJZVAC8+/04OyhKX1XA==';
 
 const RELEASE_NOTES = 'Curated tagged release notes.\n\n- Exact shipped work.';
 const RELEASE_INTEGRITY = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;
@@ -585,8 +585,8 @@ test('release preflight accepts the published server when exact shared pins matc
         ok: true,
         json: async () => ({
           name: 'borgmcp-server',
-          version: '3.3.0',
-          dependencies: { 'borgmcp-shared': '1.1.0' },
+          version: '3.4.0',
+          dependencies: { 'borgmcp-shared': '1.2.0' },
         }),
       };
     },
@@ -595,8 +595,8 @@ test('release preflight accepts the published server when exact shared pins matc
   assert.deepEqual(report, {
     name: 'borgmcp',
     version: packageManifest.version,
-    shared: '1.1.0',
-    server: '3.3.0',
+    shared: '1.2.0',
+    server: '3.4.0',
   });
   assert.deepEqual(requests, [{
     url: 'https://registry.npmjs.org/borgmcp-server/latest',
@@ -620,7 +620,7 @@ test('release preflight refuses a client before publication when the current ser
         }),
       }),
     }),
-    /borgmcp@4\.8\.0 pins borgmcp-shared@1\.1\.0.*borgmcp-server@1\.0\.0 pins borgmcp-shared@0\.14\.0.*Publish the compatible server before tagging this client/s,
+    /borgmcp@4\.9\.0 pins borgmcp-shared@1\.2\.0.*borgmcp-server@1\.0\.0 pins borgmcp-shared@0\.14\.0.*Publish the compatible server before tagging this client/s,
   );
 });
 
