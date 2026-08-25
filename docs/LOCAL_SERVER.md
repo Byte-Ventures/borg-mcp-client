@@ -72,8 +72,8 @@ Options:
   --yes, -y                        Accept new-cube defaults; never adopt by name
   --help, -h                       Show this help
 
-An existing repository association skips all prompts. One accessible exact-name legacy
-cube requires explicit interactive adoption; ambiguous matches fail closed. An enrolled
+An existing repository association skips all prompts. One accessible cube with a case-insensitive
+name match requires explicit interactive adoption; ambiguous matches fail closed. An enrolled
 owner client may create a repository cube; ordinary clients require an explicit cube grant.
 ```
 
@@ -126,10 +126,11 @@ resumes that pending enrollment before displaying another invitation prompt.
 
 `borg assimilate` and `borg server cube init` share one repository-cube flow.
 An existing local or server repository association is resolved without prompts.
-Otherwise Borg checks accessible cubes against the exact proposed name. One
-match displays the cube, repository, and server and requires explicit interactive
-confirmation before the server atomically associates it; multiple matches fail
-closed. `--yes` never adopts a cube by name. With no match, an authorized owner
+Otherwise Borg compares accessible cube names with the proposed name
+case-insensitively. One match displays the cube, repository, and server and
+requires explicit interactive confirmation before the server atomically
+associates it; multiple matches fail closed. `--yes` never adopts a cube by
+name. With no match, an authorized owner
 continues to the creation guide, which shows the repository and server, proposes
 an editable name, offers every new-cube template shipped by the pinned shared
 release with the recommended template first, and asks for one confirmation.

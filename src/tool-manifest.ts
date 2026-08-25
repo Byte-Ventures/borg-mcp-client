@@ -557,7 +557,7 @@ const BASE_TOOL_MANIFEST: ToolManifestEntry[] = [
             type: 'object',
             properties: {
               cube_id: { type: 'string', description: 'UUID of the cube this role belongs to.' },
-              name: { type: 'string', description: 'Role name (e.g. "Builder", "Reviewer").' },
+              name: { type: 'string', description: 'Role name: 1-64 bytes, starting with an ASCII letter or digit, then using only ASCII letters, digits, spaces, periods, underscores, or hyphens.' },
               short_description: { type: 'string', description: 'One-line summary, shown to every drone in the cube.' },
               detailed_description: { type: 'string', description: 'Full playbook for drones in this role — workflow, conventions, log signals to post.' },
               is_default: { type: 'boolean', description: 'If true, new drones assimilating into this cube are assigned this role. Demotes the previous default.' },
@@ -576,7 +576,7 @@ const BASE_TOOL_MANIFEST: ToolManifestEntry[] = [
             type: 'object',
             properties: {
               role_id: { type: 'string', description: 'UUID of the role to update.' },
-              name: { type: 'string', description: 'New role name (optional).' },
+              name: { type: 'string', description: 'New role name (optional): 1-64 bytes, starting with an ASCII letter or digit, then using only ASCII letters, digits, spaces, periods, underscores, or hyphens.' },
               short_description: { type: 'string', description: 'New short description (optional).' },
               detailed_description: { type: 'string', description: 'New detailed playbook (optional).' },
               is_default: { type: 'boolean', description: 'Set true to make this the cube\'s default role (optional).' },

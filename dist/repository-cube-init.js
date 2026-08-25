@@ -152,7 +152,8 @@ export async function initializeRepositoryCube(input, deps) {
     }
     const accessibleCubes = await deps.listCubes();
     const adoptExactMatch = async (name) => {
-        const matches = accessibleCubes.filter((cube) => cube.name === name);
+        const normalizedName = name.trim().toLowerCase();
+        const matches = accessibleCubes.filter((cube) => cube.name.trim().toLowerCase() === normalizedName);
         if (matches.length === 0)
             return null;
         if (matches.length > 1) {

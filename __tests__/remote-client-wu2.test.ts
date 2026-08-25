@@ -141,6 +141,24 @@ describe('Sprint 10 WU2 local adapter', () => {
     });
   });
 
+  it('reconciles template roles with existing case-variant role names', async () => {
+    const template = getTemplate('software-dev')!;
+    const builder = template.roles.find((role) => role.name === 'Builder')!;
+    roleFixtures = [{ ...builder, id: ROLE_ID, name: 'builder' }];
+    const { applyTemplate, syncRoles } = await import('../src/remote-client.js');
+
+    await expect(applyTemplate(CUBE_ID, 'software-dev')).resolves.toMatchObject({
+      created: template.roles.length - 1,
+    });
+    const result = await syncRoles(CUBE_ID, 'software-dev', false);
+
+    expect(result.roles.find((role) => role.name === 'Builder')?.status).toBe('existing');
+    expect(result.roles).not.toContainEqual({ name: 'builder', status: 'custom-skipped', fragments: [] });
+    expect(fetchSpy.mock.calls.filter(([input, request]) =>
+      new URL(String(input)).pathname.endsWith('/roles') && request?.method === 'POST'
+    )).toHaveLength(template.roles.length - 1);
+  });
+
   it('classifies evolved fragments as conflicts and leaves custom roles untouched', async () => {
     const builder = getTemplate('software-dev')!.roles.find((role) => role.name === 'Builder')!;
     roleFixtures = [

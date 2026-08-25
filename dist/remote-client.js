@@ -1409,7 +1409,7 @@ export async function applyTemplate(cubeId, templateName, authorityOverride) {
     let created = 0;
     let updated = 0;
     for (const role of template.roles) {
-        const existing = current.roles.find((candidate) => candidate.name === role.name);
+        const existing = current.roles.find((candidate) => candidate.name.toLowerCase() === role.name.toLowerCase());
         if (!existing) {
             await createRole(cubeId, role, active, authority.connection);
             created++;
@@ -1464,7 +1464,7 @@ export async function syncRoles(cubeId, templateName = 'software-dev', apply = f
     const additions = [];
     const conflictKeys = new Set();
     for (const role of template.roles) {
-        const existing = current.roles.find((candidate) => candidate.name === role.name);
+        const existing = current.roles.find((candidate) => candidate.name.toLowerCase() === role.name.toLowerCase());
         if (!existing) {
             const key = `role:${role.name}`;
             const fragments = [{
@@ -1502,7 +1502,7 @@ export async function syncRoles(cubeId, templateName = 'software-dev', apply = f
         roles.push({ name: role.name, status: 'existing', fragments });
     }
     for (const existing of current.roles) {
-        if (!template.roles.some((role) => role.name === existing.name)) {
+        if (!template.roles.some((role) => role.name.toLowerCase() === existing.name.toLowerCase())) {
             roles.push({ name: existing.name, status: 'custom-skipped', fragments: [] });
         }
     }
