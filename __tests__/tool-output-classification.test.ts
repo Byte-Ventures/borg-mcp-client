@@ -184,6 +184,8 @@ describe('tool output classification — complete registry', () => {
     expect(byName.get('borg_read-log')?.outputSchema?.required).toEqual(
       expect.arrayContaining(['entries', 'behind_by', 'has_more']),
     );
+    expect(byName.get('borg_read-log')?.outputSchema?.properties).toHaveProperty('omitted');
+    expect(byName.get('borg_read-log')?.outputSchema?.required).not.toContain('omitted');
     expect(byName.get('borg_log')?.outputSchema?.required).toEqual(
       expect.arrayContaining(['suppressed', 'entry', 'recipients', 'unreachable_recipients', 'advisory']),
     );

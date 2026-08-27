@@ -41,10 +41,12 @@ export declare function buildReadLogStructuredContent(input: {
     entries: unknown[];
     behind_by: unknown;
     has_more: unknown;
+    omitted?: unknown;
 }): {
     entries: unknown[];
     behind_by: number | null;
     has_more: boolean;
+    omitted?: number;
 };
 export declare function formatPatchedRoleSectionResult(action: 'replace' | 'insert' | 'delete', heading: string, role: {
     name: string;

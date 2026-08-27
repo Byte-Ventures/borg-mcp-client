@@ -16,6 +16,7 @@ import { assertRoleMatches } from './role-match.js';
 import { CubeDeletionConfirmationError } from './server-errors.js';
 import { getCubeInfo, getRoleInfo, getRoleInfoByName, getRoster, readLog, readLogEntry, appendLog, ackLogEntry, getAckStatus, recordDecision, removeDecision, listDecisions, regen, listCubes, createCube, normalizeExplicitRepository, updateCube, deleteCube, createRole, updateRole, patchRoleSection, sanitizeServerAdvisory, patchTaxonomyClass, deleteRole, getCube, getCubeForManagement, resolveLocalManageAuthority, listRoles, syncRoles, applyTemplate, whoami, roleRationale, putDocument, getDocument, listDocuments, removeDocument, } from './remote-client.js';
 import { formatDocument, formatDocumentCitations, formatDocumentMetadata, } from './document-render.js';
+import { buildReadLogDigest, DIGEST_TAIL } from './read-log-digest.js';
 import { NEW_CUBE_TEMPLATE_PRESENTATIONS, getTemplate, listTemplateNames, resolveCubeDirectiveForCreate, resolveCubeDirectiveForApply, resolveMessageTaxonomyForCreate, } from 'borgmcp-shared/templates';
 import { activeCubeWithFreshRegenIdentity, getActiveCube, getActiveCubeForWorktree, refreshActiveCubeMetadata, findProjectRoot, inboxPathForDrone, pinMcpSeatIdentity, } from './cubes.js';
 import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.js';
@@ -116,11 +117,14 @@ export function resolveAckKind(raw) {
 // included — entries already carry drone_label/role_name, and borg_roster
 // serves identity mapping when a consumer needs it.
 export function buildReadLogStructuredContent(input) {
-    return {
+    const result = {
         entries: input.entries,
         behind_by: typeof input.behind_by === 'number' ? input.behind_by : null,
         has_more: input.has_more === true,
     };
+    if (typeof input.omitted === 'number')
+        result.omitted = input.omitted;
+    return result;
 }
 export function formatPatchedRoleSectionResult(action, heading, role, advisory) {
     const verb = action === 'replace' ? 'Replaced' : action === 'insert' ? 'Inserted' : 'Deleted';
@@ -716,7 +720,7 @@ export async function main() {
                     const since = typeof args?.since === 'string' ? args.since : undefined;
                     const limit = typeof args?.limit === 'number' ? args.limit : undefined;
                     const unreadOnly = args?.unread_only === true || args?.unread_only === 'true';
-                    const { entries, drones, roles, behind_by, has_more } = await readLog(active.sessionToken, active.apiUrl, {
+                    const { entries, drones, roles, message_taxonomy, behind_by, has_more, digest, capped } = await readLog(active.sessionToken, active.apiUrl, {
                         since,
                         limit,
                         unreadOnly,
@@ -728,10 +732,26 @@ export async function main() {
                     const roleById = new Map();
                     for (const r of roles)
                         roleById.set(r.id, r);
+                    let structuredEntries = entries;
+                    let omitted;
                     const lines = [];
                     lines.push(`# Activity log: ${active.name}`);
                     lines.push('');
-                    if (!entries.length) {
+                    if (digest) {
+                        const result = buildReadLogDigest({
+                            entries,
+                            selfDroneId: active.droneId,
+                            taxonomy: message_taxonomy,
+                            droneById,
+                            roleById,
+                            tail: DIGEST_TAIL,
+                            capped,
+                        });
+                        lines.push(result.text);
+                        structuredEntries = result.tailEntries;
+                        omitted = result.omitted;
+                    }
+                    else if (!entries.length) {
                         lines.push('_(no entries)_');
                     }
                     else {
@@ -753,7 +773,12 @@ export async function main() {
                     }
                     return {
                         content: [{ type: 'text', text: lines.join('\n') }],
-                        structuredContent: buildReadLogStructuredContent({ entries, behind_by, has_more }),
+                        structuredContent: buildReadLogStructuredContent({
+                            entries: structuredEntries,
+                            behind_by,
+                            has_more,
+                            omitted,
+                        }),
                     };
                 }
                 case 'borg_read-entry': {
