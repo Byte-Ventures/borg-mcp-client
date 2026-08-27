@@ -176,7 +176,7 @@ const BASE_TOOL_MANIFEST = [
             "with the drone that wrote it and that drone's role. For wake triage, prefer " +
             '`unread_only=true` with a modest limit and drain until `has_more=false`; ' +
             'this reads oldest-unread-first from your server cursor and ' +
-            'advances the watermark so bursts are not skipped. Optional `since` is a strict-after ' +
+            'advances the watermark so bursts are not skipped. A backlog above 50 returns a digest plus the newest 25 entries. Optional `since` is a strict-after ' +
             'cursor for explicit bounded reads only; do not use it with the same timestamp as a ' +
             'notification preview because it can skip the boundary entry. Use `borg_read-entry` ' +
             'to fetch one known entry without changing the unread cursor.',
@@ -835,6 +835,7 @@ export const TOOL_OUTPUT_SCHEMAS = {
             entries: { type: 'array', items: LOG_ENTRY_OUTPUT },
             behind_by: { type: ['number', 'null'], description: 'Visible entries still unread after this read; null when the server did not report it.' },
             has_more: { type: 'boolean' },
+            omitted: { type: 'number', description: 'Older fetched entries summarized outside the structured entry tail; absent when digest mode was not used.' },
         },
         required: ['entries', 'behind_by', 'has_more'],
     },

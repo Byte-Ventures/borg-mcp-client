@@ -26,6 +26,7 @@ import { BorgServerError, BorgServerHttpError, BorgProtocolMismatchError, BorgSe
 import { getActiveCube } from './cubes.js';
 import { markSeatRejected } from './seats.js';
 import { advanceLocalServerCursor, getLocalServerCursor, } from './local-server-cursor.js';
+import { DIGEST_FETCH_CAP, DIGEST_THRESHOLD } from './read-log-digest.js';
 import { readBoundedResponseBody } from './server-response.js';
 import { normalizeLogAudience } from './direct-log.js';
 import { RoleSectionConflictError } from './local-manage-tool-result.js';
@@ -767,7 +768,7 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
         cursor = await getLocalServerCursor(localCursorBinding(local));
     if (opts.since !== undefined)
         cursor = await resolveLocalLogCursor(local, opts.since);
-    const page = await localReadLogPage(local, {
+    let page = await localReadLogPage(local, {
         cursor,
         limit: opts.limit,
         // Keep the cursor payload stable across a lost response; do not re-read or
@@ -777,13 +778,37 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
     if (opts.unreadOnly && page.cursor) {
         await advanceLocalServerCursor(localCursorBinding(local), page.cursor);
     }
+    const entries = [...page.entries];
+    const backlog = entries.length + (typeof page.behind_by === 'number' ? page.behind_by : 0);
+    const digest = opts.unreadOnly === true && opts.since === undefined && backlog > DIGEST_THRESHOLD;
+    if (digest) {
+        while (page.has_more === true && entries.length < DIGEST_FETCH_CAP) {
+            if (!page.cursor || page.entries.length === 0) {
+                throw new ProtocolContractError('Unread log page reported more entries without advancing its cursor.');
+            }
+            page = await localReadLogPage(local, {
+                cursor: page.cursor,
+                limit: Math.min(500, DIGEST_FETCH_CAP - entries.length),
+                retryMode: 'unread-cursor',
+            });
+            if (page.cursor) {
+                await advanceLocalServerCursor(localCursorBinding(local), page.cursor);
+            }
+            entries.push(...page.entries);
+        }
+    }
     const composed = await localCubeComposition(local);
     return {
-        entries: page.entries,
+        entries,
         drones: composed.drones,
         roles: composed.roles,
+        message_taxonomy: composed.cube.message_taxonomy ?? null,
         behind_by: page.behind_by,
         has_more: page.has_more,
+        digest,
+        capped: digest && page.has_more === true && typeof page.behind_by === 'number'
+            ? page.behind_by
+            : 0,
     };
 }
 /** Read one complete log entry without consulting or advancing the unread cursor. */

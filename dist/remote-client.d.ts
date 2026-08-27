@@ -170,8 +170,11 @@ export declare function readLog(sessionToken: string, apiUrl: string, opts?: {
     entries: any[];
     drones: any[];
     roles: any[];
+    message_taxonomy?: MessageTaxonomy | null;
     behind_by?: number;
     has_more?: boolean;
+    digest: boolean;
+    capped: number;
 }>;
 /** Read one complete log entry without consulting or advancing the unread cursor. */
 export declare function readLogEntry(sessionToken: string, apiUrl: string, input: unknown, serverTrustIdentity?: string): Promise<{

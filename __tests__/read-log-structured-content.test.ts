@@ -52,6 +52,22 @@ describe('borg_read-log structured payload proportionality', () => {
     });
   });
 
+  it('includes omitted only for digest output', () => {
+    expect(buildReadLogStructuredContent({
+      entries: [sampleEntry],
+      behind_by: 0,
+      has_more: false,
+      omitted: 26,
+    })).toMatchObject({ omitted: 26 });
+    expect(buildReadLogStructuredContent({
+      entries: [],
+      behind_by: 0,
+      has_more: false,
+    })).not.toHaveProperty('omitted');
+    expect(readLogSchema.properties).toHaveProperty('omitted');
+    expect(readLogSchema.required).not.toContain('omitted');
+  });
+
   it('declares no roster block in the borg_read-log outputSchema', () => {
     expect(readLogSchema.properties).not.toHaveProperty('drones');
     expect(readLogSchema.properties).not.toHaveProperty('roles');

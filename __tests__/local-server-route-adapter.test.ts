@@ -35,6 +35,31 @@ function connectionReset(): Error & { code: string } {
   return Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
 }
 
+function logEntry(index: number) {
+  return {
+    id: `88888888-8888-4888-8888-${String(index).padStart(12, '0')}`,
+    cube_id: CUBE_ID,
+    drone_id: COORDINATOR_DRONE_ID,
+    drone_label: 'coordinator-1',
+    role_name: 'Release Coordinator',
+    message: `DISPATCH item ${index}`,
+    visibility: 'direct',
+    recipient_drone_ids: [DRONE_ID],
+    created_at: new Date(Date.UTC(2026, 7, 27, 0, 0, index)).toISOString(),
+  };
+}
+
+function logPage(entries: ReturnType<typeof logEntry>[], behindBy: number) {
+  const last = entries.at(-1)!;
+  return {
+    entries,
+    cursor: { id: last.id, created_at: last.created_at },
+    behind_by: behindBy,
+    has_more: behindBy > 0,
+    claims: [],
+  };
+}
+
 describe('local server route adapter', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
   const getServerCredential = vi.fn(async () => 'parent-enrollment-token');
@@ -277,6 +302,102 @@ describe('local server route adapter', () => {
     expect(firstPayload.cursor).toEqual(INITIAL_CURSOR);
     expect(retryPayload.cursor).toEqual(INITIAL_CURSOR);
     expect(advanceCursor).toHaveBeenCalledOnce();
+  });
+
+  it('drains every page when the initial unread backlog exceeds the digest threshold', async () => {
+    const remote = await import('../src/remote-client.js');
+    const fallbackFetch = fetchSpy.getMockImplementation()!;
+    let offset = 0;
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname !== `/api/cubes/${CUBE_ID}/logs` || init?.method !== 'PUT') {
+        return fallbackFetch(input, init);
+      }
+      const limit = JSON.parse(String(init.body)).payload.limit as number;
+      const count = Math.min(limit, 51 - offset);
+      const entries = Array.from({ length: count }, (_, index) => logEntry(offset + index));
+      offset += count;
+      return new Response(JSON.stringify(envelope(logPage(entries, 51 - offset))), { status: 200 });
+    });
+
+    const result = await remote.readLog(SESSION, ORIGIN, { unreadOnly: true, limit: 20 });
+
+    expect(result).toMatchObject({ digest: true, capped: 0, behind_by: 0, has_more: false });
+    expect(result.entries).toHaveLength(51);
+    const logCalls = fetchSpy.mock.calls.filter(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` && init?.method === 'PUT'
+    );
+    expect(logCalls).toHaveLength(2);
+    expect(JSON.parse(String(logCalls[1][1]?.body)).payload).toEqual({
+      cursor: { id: logEntry(19).id, created_at: logEntry(19).created_at },
+      limit: 500,
+    });
+    expect(advanceCursor).toHaveBeenCalledTimes(2);
+    expect(advanceCursor).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      { id: logEntry(50).id, created_at: logEntry(50).created_at },
+    );
+  });
+
+  it('stops at the digest fetch cap and reports the unread count not covered', async () => {
+    const remote = await import('../src/remote-client.js');
+    const fallbackFetch = fetchSpy.getMockImplementation()!;
+    let offset = 0;
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname !== `/api/cubes/${CUBE_ID}/logs` || init?.method !== 'PUT') {
+        return fallbackFetch(input, init);
+      }
+      const limit = JSON.parse(String(init.body)).payload.limit as number;
+      const count = Math.min(limit, 2010 - offset);
+      const entries = Array.from({ length: count }, (_, index) => logEntry(offset + index));
+      offset += count;
+      return new Response(JSON.stringify(envelope(logPage(entries, 2010 - offset))), { status: 200 });
+    });
+
+    const result = await remote.readLog(SESSION, ORIGIN, { unreadOnly: true, limit: 500 });
+
+    expect(result).toMatchObject({ digest: true, capped: 10, behind_by: 10, has_more: true });
+    expect(result.entries).toHaveLength(2000);
+    const logCalls = fetchSpy.mock.calls.filter(([input, init]) =>
+      new URL(String(input)).pathname === `/api/cubes/${CUBE_ID}/logs` && init?.method === 'PUT'
+    );
+    expect(logCalls).toHaveLength(4);
+    expect(advanceCursor).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not advance the unread watermark past a page that fails decoding', async () => {
+    const remote = await import('../src/remote-client.js');
+    const fallbackFetch = fetchSpy.getMockImplementation()!;
+    let pageNumber = 0;
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname !== `/api/cubes/${CUBE_ID}/logs` || init?.method !== 'PUT') {
+        return fallbackFetch(input, init);
+      }
+      pageNumber += 1;
+      if (pageNumber === 1) {
+        return new Response(JSON.stringify(envelope(logPage(
+          Array.from({ length: 20 }, (_, index) => logEntry(index)),
+          31,
+        ))), { status: 200 });
+      }
+      return new Response(JSON.stringify(envelope({
+        entries: 'not-an-array',
+        cursor: { id: logEntry(50).id, created_at: logEntry(50).created_at },
+        behind_by: 0,
+        has_more: false,
+        claims: [],
+      })), { status: 200 });
+    });
+
+    await expect(remote.readLog(SESSION, ORIGIN, { unreadOnly: true, limit: 20 }))
+      .rejects.toThrow();
+    expect(advanceCursor).toHaveBeenCalledOnce();
+    expect(advanceCursor).toHaveBeenCalledWith(
+      expect.any(Object),
+      { id: logEntry(19).id, created_at: logEntry(19).created_at },
+    );
   });
 
   it('surfaces unread-log recovery guidance after the bounded reset retry is exhausted', async () => {

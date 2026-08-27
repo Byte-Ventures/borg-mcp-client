@@ -66,6 +66,7 @@ import {
   formatDocumentCitations,
   formatDocumentMetadata,
 } from './document-render.js';
+import { buildReadLogDigest, DIGEST_TAIL } from './read-log-digest.js';
 import {
   NEW_CUBE_TEMPLATE_PRESENTATIONS,
   getTemplate,
@@ -265,12 +266,15 @@ export function buildReadLogStructuredContent(input: {
   entries: unknown[];
   behind_by: unknown;
   has_more: unknown;
-}): { entries: unknown[]; behind_by: number | null; has_more: boolean } {
-  return {
+  omitted?: unknown;
+}): { entries: unknown[]; behind_by: number | null; has_more: boolean; omitted?: number } {
+  const result: { entries: unknown[]; behind_by: number | null; has_more: boolean; omitted?: number } = {
     entries: input.entries,
     behind_by: typeof input.behind_by === 'number' ? input.behind_by : null,
     has_more: input.has_more === true,
   };
+  if (typeof input.omitted === 'number') result.omitted = input.omitted;
+  return result;
 }
 
 export function formatPatchedRoleSectionResult(action: 'replace' | 'insert' | 'delete', heading: string, role: { name: string; id: string }, advisory?: unknown): string {
@@ -917,7 +921,7 @@ export async function main() {
           const limit = typeof args?.limit === 'number' ? args.limit : undefined;
           const unreadOnly =
             args?.unread_only === true || args?.unread_only === 'true';
-          const { entries, drones, roles, behind_by, has_more } = await readLog(active.sessionToken, active.apiUrl, {
+          const { entries, drones, roles, message_taxonomy, behind_by, has_more, digest, capped } = await readLog(active.sessionToken, active.apiUrl, {
             since,
             limit,
             unreadOnly,
@@ -929,10 +933,25 @@ export async function main() {
           const roleById = new Map<string, any>();
           for (const r of roles) roleById.set(r.id, r);
 
+          let structuredEntries = entries;
+          let omitted: number | undefined;
           const lines: string[] = [];
           lines.push(`# Activity log: ${active.name}`);
           lines.push('');
-          if (!entries.length) {
+          if (digest) {
+            const result = buildReadLogDigest({
+              entries,
+              selfDroneId: active.droneId,
+              taxonomy: message_taxonomy,
+              droneById,
+              roleById,
+              tail: DIGEST_TAIL,
+              capped,
+            });
+            lines.push(result.text);
+            structuredEntries = result.tailEntries;
+            omitted = result.omitted;
+          } else if (!entries.length) {
             lines.push('_(no entries)_');
           } else {
             for (const e of entries) {
@@ -956,7 +975,12 @@ export async function main() {
           }
           return {
             content: [{ type: 'text', text: lines.join('\n') }],
-            structuredContent: buildReadLogStructuredContent({ entries, behind_by, has_more }),
+            structuredContent: buildReadLogStructuredContent({
+              entries: structuredEntries,
+              behind_by,
+              has_more,
+              omitted,
+            }),
           };
         }
 
