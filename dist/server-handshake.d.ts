@@ -56,7 +56,7 @@ export interface ServerAttachResult {
     } | null;
 }
 /**
- * Attach an enrolled client principal to one granted cube/role over protocol v13.
+ * Attach an enrolled client principal to one granted cube/role over protocol v14.
  * The client CSPRNG-generates the session bearer and persists it PENDING in the
  * local 0600 credential store (keyed by the stable per-seat identity) BEFORE
  * this request, so an interrupted/lost response is recovered by re-sending the

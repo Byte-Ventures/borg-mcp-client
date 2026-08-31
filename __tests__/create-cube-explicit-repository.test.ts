@@ -64,7 +64,7 @@ const ORIGIN = 'https://localhost:8787';
 const TRUST = 'spki-sha256:test';
 const CONN = { apiUrl: ORIGIN, authToken: 's'.repeat(43), serverTrustIdentity: TRUST };
 const REPO = { repository: { kind: 'origin' as const, value: 'https://github.com/owner/repo' }, workingRepoName: 'repo' };
-const env = (payload: unknown) => ({ protocol_version: '13', request_id: 'local-response-1', payload });
+const env = (payload: unknown) => ({ protocol_version: '14', request_id: 'local-response-1', payload });
 // The full CreateCubeResponse the shared contract requires (client strictly decodes it).
 const CREATE_RESPONSE = (result: 'created' | 'resolved') => ({
   result,
@@ -110,7 +110,7 @@ describe('createCube created-vs-resolved boundary', () => {
   beforeEach(() => vi.resetModules());
   afterEach(() => { vi.restoreAllMocks(); vi.resetModules(); });
 
-  it('rejects the removed legacy default template at the tag-13 request boundary', () => {
+  it('rejects the removed legacy default template at the tag-14 request boundary', () => {
     expect(() => decodeCreateCubeRequest({
       retry_key: 'legacy-default-template',
       name: 'c',

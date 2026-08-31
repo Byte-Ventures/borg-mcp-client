@@ -2,4 +2,4 @@
 
 | Package | Version | License |
 | --- | --- | --- |
-| borgmcp-shared | 1.0.1 | Apache-2.0 |
+| borgmcp-shared | 2.0.0 | Apache-2.0 |

@@ -28,7 +28,7 @@ const INITIAL_CURSOR = {
 };
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '13', request_id: requestId, payload };
+  return { protocol_version: '14', request_id: requestId, payload };
 }
 
 function connectionReset(): Error & { code: string } {
@@ -56,7 +56,6 @@ function logPage(entries: ReturnType<typeof logEntry>[], behindBy: number) {
     cursor: { id: last.id, created_at: last.created_at },
     behind_by: behindBy,
     has_more: behindBy > 0,
-    claims: [],
   };
 }
 
@@ -139,7 +138,6 @@ describe('local server route adapter', () => {
           cursor: { id: LOG_ID, created_at: '2026-07-14T14:00:00.000Z' },
           behind_by: 0,
           has_more: false,
-          claims: [],
         })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/logs` && method === 'POST') {
@@ -387,7 +385,6 @@ describe('local server route adapter', () => {
         cursor: { id: logEntry(50).id, created_at: logEntry(50).created_at },
         behind_by: 0,
         has_more: false,
-        claims: [],
       })), { status: 200 });
     });
 

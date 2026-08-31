@@ -15,7 +15,7 @@ const emptyMetadata = {
 };
 
 function localEnvelope(payload: unknown) {
-  return { protocol_version: '13', request_id: 'local-response-1', payload };
+  return { protocol_version: '14', request_id: 'local-response-1', payload };
 }
 
 describe('regen() runtime metadata self-heal', () => {
@@ -57,7 +57,7 @@ describe('regen() runtime metadata self-heal', () => {
         })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/logs` && method === 'PUT') {
-        return new Response(JSON.stringify(localEnvelope({ entries: [], cursor: null, behind_by: 0, has_more: false, claims: [] })), { status: 200 });
+        return new Response(JSON.stringify(localEnvelope({ entries: [], cursor: null, behind_by: 0, has_more: false })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/decisions` && method === 'PUT') {
         return new Response(JSON.stringify(localEnvelope({ decisions: [] })), { status: 200 });

@@ -7,7 +7,7 @@ const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
-  return { protocol_version: '13', request_id: requestId, payload };
+  return { protocol_version: '14', request_id: requestId, payload };
 }
 
 describe('appendLog mandatory explicit audience', () => {
@@ -134,7 +134,7 @@ describe('appendLog mandatory explicit audience', () => {
 
   it('preserves a typed server selector refusal', async () => {
     fetchSpy.mockImplementationOnce(async () => new Response(JSON.stringify({
-      protocol_version: '13',
+      protocol_version: '14',
       request_id: 'routing-refusal-1',
       error: { code: 'INVALID_INPUT', message: 'Unknown recipient.' },
     }), { status: 400 }));
