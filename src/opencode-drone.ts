@@ -272,6 +272,7 @@ const OPEN_CODE_RECONCILIATION_DELAY_MS = 3_000;
 const OPEN_CODE_RECONCILIATION_ATTEMPTS = 20;
 const OPEN_CODE_DELIVERY_HISTORY_LIMIT = 256;
 
+/** Session identity is the exact id + directory pair, never OpenCode project scope. */
 interface SessionBinding {
   version: 5;
   sessionId: string;

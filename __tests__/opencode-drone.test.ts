@@ -61,6 +61,7 @@ interface Session {
   directory: string;
   time: { created: number };
   parentID?: string;
+  projectID?: string;
 }
 
 function session(id: string, created: number, parentID?: string): Session {
@@ -974,6 +975,71 @@ describe('OpenCode wake target binding', () => {
 
     expect(api.prompts).toEqual([root.id]);
     expect(getOpenCodeConnectionState().sessionId).toBe(root.id);
+  });
+
+  it('isolates sibling-worktree sessions that share one OpenCode project bucket', async () => {
+    vi.useFakeTimers();
+    const launch = launchKickoff('shared-project-sibling-worktrees');
+    const projectID = 'shared-project';
+    const first = {
+      ...session('sibling-first-root', 10),
+      directory: '/repo/worktrees/drone-a',
+      projectID,
+    };
+    const second = {
+      ...session('sibling-second-root', 20),
+      directory: '/repo/worktrees/drone-b',
+      projectID,
+    };
+    const entryId = 'entry-sibling-isolation';
+    const api = installOpenCodeApi({
+      sessions: () => [first, second],
+      messages: {
+        [first.id]: kickoffMessages(launch),
+        [second.id]: [
+          ...kickoffMessages(launch),
+          {
+            info: { id: 'msg_sibling_wrong_session', role: 'user' },
+            parts: [{
+              type: 'text',
+              text: 'wake already present in sibling',
+              metadata: {
+                [OPENCODE_INJECTED_ENTRY_METADATA_KEY]: true,
+                [OPENCODE_WAKE_IDENTITY_METADATA_KEY]: entryId,
+              },
+            }],
+          },
+        ],
+      },
+      // Keep session A unconfirmed so session B's matching wake identity would
+      // be observable if confirmation ever widened beyond the exact binding.
+      promptResponse: () => new Response(null, { status: 204 }),
+    });
+
+    await connect('drone-a', SERVER_URL, first.directory);
+    const binding = injectInitialKickoff(launch);
+    await vi.runAllTimersAsync();
+    await expect(binding).resolves.toBe(true);
+    expect(JSON.parse(readFileSync(__getOpenCodeBindingPathForTests(), 'utf8'))).toMatchObject({
+      sessionId: first.id,
+      directory: first.directory,
+    });
+
+    const delivery = injectOpenCodeEntry('wake for drone A', entryId);
+    await vi.advanceTimersByTimeAsync(4_250);
+    await expect(delivery).resolves.toBe(true);
+
+    expect(api.prompts).toEqual([first.id]);
+    expect(getOpenCodeConnectionState()).toMatchObject({
+      sessionId: first.id,
+      totalEntriesInjected: 0,
+      deliveryStates: { 'delivered-unconfirmed': 1 },
+    });
+    const requestPaths = api.fetchMock.mock.calls.map(([input]) => new URL(String(input)).pathname);
+    expect(requestPaths).toContain(`/session/${first.id}/prompt_async`);
+    expect(requestPaths).not.toContain(`/session/${second.id}`);
+    expect(requestPaths).not.toContain(`/session/${second.id}/message`);
+    expect(requestPaths).not.toContain(`/session/${second.id}/prompt_async`);
   });
 
   it('waits for this launch identity instead of binding a prior identical kickoff', async () => {
