@@ -276,23 +276,22 @@ function diagnoseSessionTermination(deps, apiUrl, outcome, mode = 'assimilate') 
         `Next: run borg reset-local-connection, then ${recovery}.\n`);
     return 1;
 }
-export async function runAssimilate(args, deps, options = {}) {
+const continueAssimilation = (value) => ({
+    kind: 'continue',
+    value,
+});
+export async function resolveAssimilationRepository(args, deps) {
     const mode = args.mode ?? 'assimilate';
-    // ----- Input validation (before any subprocess work) -----
-    // A role is a lookup key, not a path component. matchRoleByName() below
-    // applies the shared roleSlug() normalization, so displayed names such as
-    // "Builder" and "Code Reviewer" must reach that resolver. Keep the strict
-    // identifier validator for worktree names, which do become path components.
     if (args.flags.worktree !== undefined) {
-        const v = validateName(args.flags.worktree);
-        if (!v.ok) {
-            deps.stderr(v.error + '\n');
-            return 1;
+        const validation = validateName(args.flags.worktree);
+        if (!validation.ok) {
+            deps.stderr(validation.error + '\n');
+            return { kind: 'stop', code: 1 };
         }
     }
     if (args.flags.cubeName !== undefined && !validRepositoryCubeName(args.flags.cubeName.trim())) {
         deps.stderr('Invalid cube name. Use 1-120 letters, digits, spaces, dots, underscores, or hyphens, starting with a letter or digit.\n');
-        return 1;
+        return { kind: 'stop', code: 1 };
     }
     let repositoryContext;
     try {
@@ -302,18 +301,449 @@ export async function runAssimilate(args, deps, options = {}) {
         if (error instanceof Error && error.message === 'BARE_REPOSITORY') {
             const command = mode === 'cube-init' ? 'borg server cube init' : 'borg assimilate';
             deps.stderr(`${command} requires a non-bare repository worktree. Clone or check out the repository, then retry.\n`);
-            return 1;
+            return { kind: 'stop', code: 1 };
         }
         deps.stderr(`Could not inspect this Git repository: ${repositoryDiscoveryFailureMessage(error)}\n` +
             'Nothing was changed.\n');
-        return 1;
+        return { kind: 'stop', code: 1 };
     }
     if (!repositoryContext) {
         deps.stderr('No Git repository was found for this directory.\n' +
             'Nothing was changed.\n' +
             'Run this command inside a Git repository.\n');
-        return 1;
+        return { kind: 'stop', code: 1 };
     }
+    return continueAssimilation({ mode, repositoryContext });
+}
+export async function finalizeAssimilationSeat(input, deps) {
+    const { activeCube, apiUrl, repositoryContext, result, sessionExpected, rollbackWorktree } = input;
+    if (result.finalize === undefined || deps.finalizeServerSeat === undefined) {
+        deps.stderr('Local Borg server session metadata is incomplete; no connection was saved.\n');
+        rollbackWorktree();
+        return { kind: 'stop', code: 1 };
+    }
+    let outcome;
+    try {
+        outcome = await deps.finalizeServerSeat({
+            active: activeCube,
+            commonDir: repositoryContext.commonDir,
+            ...(repositoryContext.publicRepository
+                ? { repositoryOrigin: repositoryContext.publicRepository.value }
+                : {}),
+            expected: sessionExpected,
+            activate: result.finalize.activate,
+            scrubPending: result.finalize.scrubPending,
+        });
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        deps.stderr(`finalizeServerSeat failed: ${message}\n`);
+        rollbackWorktree();
+        return { kind: 'stop', code: 1 };
+    }
+    if (outcome.committed)
+        return continueAssimilation(undefined);
+    if (outcome.reason === 'activation-failed') {
+        let bindOutcome = 'unavailable';
+        if (result.finalize.bindPending) {
+            try {
+                bindOutcome = (await result.finalize.bindPending({
+                    worktree: deps.findProjectRoot(deps.cwd()),
+                    name: activeCube.name,
+                    droneLabel: activeCube.droneLabel,
+                    ...(activeCube.roleName !== undefined ? { roleName: activeCube.roleName } : {}),
+                    ...(activeCube.roleClass !== undefined ? { roleClass: activeCube.roleClass } : {}),
+                    ...(activeCube.isHumanSeat !== undefined ? { isHumanSeat: activeCube.isHumanSeat } : {}),
+                }));
+            }
+            catch {
+                bindOutcome = 'threw';
+            }
+        }
+        if (bindOutcome === 'bound') {
+            deps.stderr(`This worktree's secure session on ${apiUrl} did not finish activating, but ` +
+                'its resumable connection state was PRESERVED here. This worktree was NOT removed. From ' +
+                `here, re-run ${localAssimilateCommand(apiUrl)} to converge (the identical connection ` +
+                `is reused — no duplicate is minted), or run ${resetLocalSeatCommand(apiUrl)} to ` +
+                'clear it.\n');
+            return { kind: 'stop', code: 1 };
+        }
+        const bindFailure = bindOutcome === 'missing'
+            ? 'the exact pending connection record went missing locally before it could be bound'
+            : bindOutcome === 'replaced'
+                ? 'the exact pending connection record was replaced locally before it could be bound; the replacement was left untouched'
+                : bindOutcome === 'threw'
+                    ? 'the private store could not be read or written while preserving the pending connection'
+                    : 'this client did not receive a pending-connection preservation handle';
+        deps.stderr(`This worktree's secure session on ${apiUrl} did not finish activating: ` +
+            `${bindFailure}. The spawned worktree will be removed. No client-only command can ` +
+            'prove reuse or safely clear the possibly accepted server-side drone; ask the server ' +
+            'operator to inspect that drone before retrying.\n');
+        rollbackWorktree();
+        return { kind: 'stop', code: 1 };
+    }
+    deps.stderr(`This worktree's saved connection to ${apiUrl} changed during attach ` +
+        '(a concurrent reset or enroll); no drone was created and nothing was overwritten. ' +
+        `Re-run ${localAssimilateCommand(apiUrl)} to attach against the current state.\n`);
+    rollbackWorktree();
+    return { kind: 'stop', code: 1 };
+}
+export async function launchAssimilatedAgent(input, deps) {
+    const { flags, result, cubeDetail, assignedRole, apiUrl, cli, effectiveModel, agentCwd, seatWorktree, scratchRoot, launchAccessPaths, monitorStateRoot, spawnedWorktreePath, originalCwd, } = input;
+    deps.setTerminalTitle(result.drone_label, cubeDetail.name);
+    const useColor = deps.isTTY() && !process.env.NO_COLOR && !process.env.CI;
+    deps.stdout(renderAssimilationWelcome(result.drone_label, assignedRole.name, cubeDetail.name, useColor, apiUrl));
+    if (!await deps.probeMcpReady()) {
+        deps.stderr(`warning: borg-mcp readiness probe did not complete within the timeout; ` +
+            `launching ${cli} anyway — the kickoff prompt's ToolSearch fallback ` +
+            `will recover if the MCP server takes longer to start.\n`);
+    }
+    const inboxPath = deps.getInboxPath(result.cube_id, result.drone_id);
+    const codexWakeNonce = cli === 'codex' ? `borg-wake-${randomUUID()}` : null;
+    const monitorClause = buildKickoffWakePathClause(cli, cli === 'claude' ? inboxPath : null, cli === 'claude' ? monitorStateRoot : null);
+    let codexWakePathClause;
+    let remoteArgs = [];
+    let launchArgs;
+    let codexSocketPath = null;
+    let codexServerCleanup = null;
+    const launchApproval = deps.resolveCliApprovals
+        ? await deps.resolveCliApprovals(cli, agentCwd, { skipOverride: flags.noBorgApprovalOverride })
+        : { codexArgs: [] };
+    if (launchApproval.warning)
+        deps.stderr(`warning: ${launchApproval.warning}\n`);
+    const modelEnv = resolveLaunchEnv(effectiveModel);
+    const childEnv = {
+        ...withAgentRuntimeEnv(process.env, cli),
+        ...modelEnv.set,
+        BORG_SESSION: '1',
+        [BORG_LAUNCH_CLI_ENV]: cli,
+        [BORG_LAUNCH_WORKTREE_ENV]: seatWorktree,
+        [BORG_LAUNCH_SCRATCH_ENV]: scratchRoot,
+    };
+    if (cli === 'opencode' && launchApproval.openCodePermission) {
+        childEnv.OPENCODE_PERMISSION = launchApproval.openCodePermission;
+    }
+    for (const key of modelEnv.unset)
+        delete childEnv[key];
+    if (cli === 'codex') {
+        const remote = await deps.prepareCodexRemoteLaunch();
+        if (remote.warning) {
+            deps.stderr(`warning: ${remote.warning}\n`);
+            codexWakePathClause =
+                '⚠ Codex wake-path capability check failed: remote-control is unavailable for this session. Run borg_regen manually whenever you return, and expect only fallback wakeups until relaunch.';
+        }
+        else {
+            codexWakePathClause = 'Codex wake-path capability check passed: remote-control socket established for this session.';
+        }
+        remoteArgs = remote.args;
+        if (Object.keys(remote.env).length > 0)
+            Object.assign(childEnv, remote.env);
+        codexSocketPath = socketPathFromRemoteArgs(remote.args);
+        codexServerCleanup = remote.server?.cleanup ?? null;
+    }
+    const kickoff = buildAgentKickoffPrompt({
+        cli,
+        codexWakeNonce,
+        monitorClause,
+        codexWakePathClause,
+    });
+    let openCodeKickoff = null;
+    let dronePort;
+    launchArgs = [kickoff];
+    if (cli === 'codex') {
+        launchArgs = [
+            ...codexLaunchDirectoryArgs(launchAccessPaths),
+            ...launchApproval.codexArgs,
+            ...codexBorgSessionConfigArgs(),
+            ...codexAgentKindConfigArgs(),
+            ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
+            ...codexStateRootConfigArgs(),
+            ...remoteArgs,
+            ...withCodexCwdArg(launchArgs, agentCwd),
+        ];
+    }
+    else if (cli === 'opencode') {
+        dronePort = await allocateOpenCodePort();
+        childEnv.BORG_OPENCODE_PORT = String(dronePort);
+        installBorgPlugin();
+        openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
+        childEnv[OPENCODE_SERVER_USERNAME_ENV] = OPENCODE_SERVER_USERNAME;
+        childEnv[OPENCODE_SERVER_PASSWORD_ENV] = openCodeKickoff.apiPassword;
+        childEnv[BORG_OPENCODE_LAUNCH_CORRELATION_ENV] = openCodeKickoff.correlationIdentity;
+        launchArgs = buildOpenCodeLaunchArgs(agentCwd, dronePort, openCodeKickoff.prompt);
+    }
+    const exitPromise = deps.exec(cli, launchArgs, agentCwd, childEnv);
+    if (cli === 'codex' && codexSocketPath && codexWakeNonce) {
+        void recordCodexWakeTarget({
+            deps,
+            cubeId: result.cube_id,
+            droneId: result.drone_id,
+            socketPath: codexSocketPath,
+            cwd: agentCwd,
+            previewNeedle: codexWakeNonce,
+            launchedAtSeconds: Math.floor(Date.now() / 1000),
+        });
+    }
+    if (cli === 'opencode' && openCodeKickoff) {
+        const launchKickoff = openCodeKickoff;
+        connectOpenCodeDrone({
+            serverUrl: `http://127.0.0.1:${dronePort}`,
+            apiPassword: launchKickoff.apiPassword,
+            directory: agentCwd,
+            droneLabel: result.drone_label,
+            cubeName: cubeDetail.name,
+            launchIdentity: launchKickoff.correlationIdentity,
+        }).then(() => injectInitialKickoff(launchKickoff)).catch(() => { });
+    }
+    const exitCode = await exitPromise;
+    if (codexServerCleanup) {
+        try {
+            codexServerCleanup();
+        }
+        catch {
+            // Best-effort cleanup after a normal Codex exit.
+        }
+    }
+    if (spawnedWorktreePath && originalCwd !== spawnedWorktreePath) {
+        deps.stderr(`\nAgent exited. You were working in ${spawnedWorktreePath}; your shell is back in ${originalCwd}.\n` +
+            'To return:\n' +
+            `  cd ${shellEscape(spawnedWorktreePath)}\n`);
+    }
+    return exitCode;
+}
+export async function resolveAssimilationCubeRole(input, deps) {
+    const { requestedRole, flags, cubeDetail, isFirstDrone, savedLocalRole, apiUrl } = input;
+    let resolvedRole;
+    if (savedLocalRole) {
+        resolvedRole = savedLocalRole;
+    }
+    else if (requestedRole !== undefined) {
+        resolvedRole = matchRoleByName(cubeDetail.roles, requestedRole);
+        if (!resolvedRole) {
+            const available = cubeDetail.roles.map((role) => role.name).join(', ');
+            const suggestion = suggestRoleName(requestedRole, cubeDetail.roles.map((role) => role.name));
+            const suggestionLine = suggestion ? ` Did you mean "${suggestion}"?` : '';
+            deps.stderr(`No role matching "${requestedRole}" in cube "${cubeDetail.name}" on ${apiUrl}. ` +
+                `Available: ${available}.${suggestionLine}\n` +
+                `Rerun ${localAssimilateRoleCommand(apiUrl)} with one of the available roles.\n`);
+            return { kind: 'stop', code: 1 };
+        }
+    }
+    else {
+        const occupiedRoleIds = occupiedRoleIdsForAutoRole(cubeDetail.drones ?? []);
+        resolvedRole = pickDefaultRole(cubeDetail.roles, { isFirstDrone, occupiedRoleIds });
+        if (!resolvedRole) {
+            deps.stderr(`Cube "${cubeDetail.name}" on ${apiUrl} has no default or human-seat role. ` +
+                `Ask the server operator to configure a role, then rerun ` +
+                `${localAssimilateRoleCommand(apiUrl)}.\n`);
+            return { kind: 'stop', code: 1 };
+        }
+    }
+    const effectiveModel = flags.model ?? null;
+    const cli = await deps.resolveCli(flags.cli);
+    try {
+        ensureCliMcpConfigured(cli);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        deps.stderr(`${cli} MCP configuration failed for ${apiUrl}: ${safeStderr(message)}. ` +
+            `Fix the ${cli} MCP configuration, then rerun ${localAssimilateCliCommand(apiUrl, cli)}.\n`);
+        return { kind: 'stop', code: 1 };
+    }
+    return continueAssimilation({ resolvedRole, effectiveModel, cli });
+}
+export async function prepareAssimilationSeat(input, deps) {
+    const { apiUrl, token, serverTrustIdentity, cubeDetail, resolvedRole, cli, effectiveModel, projectRoot, existing, reattachPriorId, remintInvalidPrior, resumeCredentialRef, resumeDroneId, resumeState, sessionOperation, } = input;
+    let sessionExpected;
+    if (resumeCredentialRef && resumeState === 'pending') {
+        sessionExpected = { kind: 'absent' };
+    }
+    else if (resumeCredentialRef) {
+        sessionExpected = {
+            kind: 'exact',
+            credentialRef: resumeCredentialRef,
+            ...(resumeDroneId ? { droneId: resumeDroneId } : {}),
+        };
+    }
+    else if (remintInvalidPrior && existing?.localSessionCredentialRef) {
+        sessionExpected = {
+            kind: 'exact',
+            credentialRef: existing.localSessionCredentialRef,
+            ...(existing.droneId ? { droneId: existing.droneId } : {}),
+        };
+    }
+    else if (reattachPriorId != null && existing?.localSessionCredentialRef && existing.sessionToken) {
+        sessionExpected = {
+            kind: 'exact',
+            credentialRef: existing.localSessionCredentialRef,
+            ...(existing.droneId ? { droneId: existing.droneId } : {}),
+            sessionDigest: createHash('sha256').update(existing.sessionToken).digest('hex'),
+        };
+    }
+    else {
+        sessionExpected = { kind: 'absent' };
+    }
+    deps.stderr(`Joining cube '${cubeDetail.name}' as ${resolvedRole.name}…\n`);
+    let result;
+    try {
+        result = await deps.assimilate(apiUrl, token, {
+            cube_id: cubeDetail.id,
+            role_id: resolvedRole.id,
+            hostname: deps.getHostname(),
+            agent_kind: cli,
+            model: effectiveModel,
+            working_repo: resolveWorkingRepo(projectRoot),
+            ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
+            ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
+            session_operation: sessionOperation,
+            session_expected: sessionExpected,
+            revalidate_at_prepare: true,
+        }, serverTrustIdentity);
+    }
+    catch (error) {
+        if (error instanceof DroneEvictedError && reattachPriorId != null) {
+            deps.stderr(`This worktree's drone on ${apiUrl} was evicted. ` +
+                `Remove this worktree, or from a fresh worktree run ${localAssimilateCommand(apiUrl)}.\n`);
+            return { kind: 'stop', code: 1 };
+        }
+        if (error instanceof BorgServerError && reattachPriorId != null) {
+            if (error.code === 'SESSION_REVOKED') {
+                return { kind: 'stop', code: diagnoseSessionTermination(deps, apiUrl, 'revoked') };
+            }
+            if (error.code === 'SESSION_REJECTED') {
+                return { kind: 'stop', code: diagnoseSessionTermination(deps, apiUrl, 'superseded') };
+            }
+        }
+        return { kind: 'stop', code: reportServerFailure(deps, apiUrl, error) };
+    }
+    if (result.prepareAborted) {
+        deps.stderr(`This worktree's saved connection to ${apiUrl} changed before the attach ` +
+            '(a concurrent reset or enroll); no credential was created or sent and nothing was ' +
+            `changed. Re-run ${localAssimilateCommand(apiUrl)} to attach against the current state.\n`);
+        return { kind: 'stop', code: 1 };
+    }
+    if (result.local_session === undefined) {
+        return {
+            kind: 'stop',
+            code: reportServerFailure(deps, apiUrl, new Error('Borg server did not return compatible secure session metadata')),
+        };
+    }
+    const assignedRole = cubeDetail.roles.find((role) => role.id === result.role_id) ?? resolvedRole;
+    if (result.result === 'reused') {
+        deps.stderr(`re-attached as ${result.drone_label} (same session, no new drone minted)\n`);
+    }
+    else if (assignedRole.id !== resolvedRole.id) {
+        deps.stderr(`The requested role "${resolvedRole.name}" was unavailable; ` +
+            `attached under the "${assignedRole.name}" role instead.\n`);
+    }
+    return continueAssimilation({ result, assignedRole, sessionExpected });
+}
+export async function prepareAssimilationWorktree(input, deps) {
+    const { flags, repositoryContext, projectRoot, wantSibling, verifiedHead, assignedRole, existing } = input;
+    let spawnedWorktreePath = null;
+    if (!wantSibling)
+        return continueAssimilation({ spawnedWorktreePath });
+    const originProbe = deps.runSync('git', ['remote', 'get-url', 'origin'], projectRoot);
+    let startRef = 'HEAD';
+    if (originProbe.status === 0 && originProbe.stdout.trim().length > 0) {
+        deps.runSync('git', ['fetch', 'origin'], projectRoot);
+        const mainProbe = deps.runSync('git', ['rev-parse', '--verify', 'origin/main'], projectRoot);
+        if (mainProbe.status === 0) {
+            startRef = 'origin/main';
+        }
+        else if (deps.runSync('git', ['rev-parse', '--verify', 'origin/master'], projectRoot).status === 0) {
+            startRef = 'origin/master';
+        }
+    }
+    if (startRef === 'HEAD') {
+        deps.stderr(`note: no usable origin; new worktree will start on local HEAD (${verifiedHead.slice(0, 7)})\n`);
+    }
+    else {
+        const remoteHead = deps.runSync('git', ['rev-parse', startRef], projectRoot).stdout.trim();
+        if (verifiedHead !== remoteHead) {
+            deps.stderr(`note: local HEAD (${verifiedHead.slice(0, 7)}) differs from ${startRef} (${remoteHead.slice(0, 7)}); ` +
+                `new worktree will start on ${startRef}\n`);
+        }
+    }
+    const repoBase = basename(dirname(repositoryContext.commonDir));
+    const suffix = flags.worktree ?? roleSlug(assignedRole.name);
+    if (suffix.length === 0) {
+        deps.stderr(`cannot derive a worktree name from role "${assignedRole.name}"; ` +
+            'pass an explicit --worktree <name>\n');
+        return { kind: 'stop', code: 1 };
+    }
+    const homeDir = deps.homedir();
+    let registeredWorktrees = listRegisteredWorktrees(deps, projectRoot);
+    if (registeredWorktrees === null) {
+        deps.stderr('Borg could not enumerate this repository’s existing worktrees, so it did not risk creating a colliding sibling.\n' +
+            'Run `git worktree list` from this repository and resolve the reported Git error, then rerun `borg assimilate`.\n' +
+            'A local drone reservation was created and remains pending; rerunning after fixing the worktree issue resumes that reservation.\n');
+        return { kind: 'stop', code: 1 };
+    }
+    let candidate = computeWorktreePath(homeDir, repoBase, suffix);
+    let worktreeBranch = perWorktreeBranchName(basename(candidate), repoBase);
+    let suffixNumber = 2;
+    while (deps.pathExists(candidate) ||
+        registeredWorktrees.names.has(basename(candidate)) ||
+        registeredWorktrees.branches.has(worktreeBranch) ||
+        (localBranchExists(deps.runSync, projectRoot, worktreeBranch) &&
+            !isMerged(deps.runSync, projectRoot, worktreeBranch, startRef))) {
+        candidate = computeWorktreePath(homeDir, repoBase, suffix, suffixNumber);
+        worktreeBranch = perWorktreeBranchName(basename(candidate), repoBase);
+        suffixNumber++;
+    }
+    let worktreeResult;
+    let residualBranch = null;
+    while (true) {
+        deps.mkdirp(dirname(candidate));
+        const branchExisted = localBranchExists(deps.runSync, projectRoot, worktreeBranch);
+        worktreeResult = branchExisted
+            ? deps.runSync('git', ['worktree', 'add', candidate, worktreeBranch], projectRoot)
+            : deps.runSync('git', ['worktree', 'add', '-b', worktreeBranch, candidate, startRef], projectRoot);
+        if (worktreeResult.status === 0)
+            break;
+        const refreshed = listRegisteredWorktrees(deps, projectRoot);
+        const branchAppeared = !branchExisted && localBranchExists(deps.runSync, projectRoot, worktreeBranch);
+        const collision = deps.pathExists(candidate) ||
+            refreshed?.names.has(basename(candidate)) === true ||
+            refreshed?.branches.has(worktreeBranch) === true ||
+            (!branchExisted && worktreeAddReportedCollision(worktreeResult.stderr));
+        if (!collision || refreshed === null) {
+            if (branchAppeared && refreshed?.branches.has(worktreeBranch) !== true)
+                residualBranch = worktreeBranch;
+            break;
+        }
+        registeredWorktrees = refreshed;
+        do {
+            candidate = computeWorktreePath(homeDir, repoBase, suffix, suffixNumber);
+            worktreeBranch = perWorktreeBranchName(basename(candidate), repoBase);
+            suffixNumber++;
+        } while (deps.pathExists(candidate) ||
+            registeredWorktrees.names.has(basename(candidate)) ||
+            registeredWorktrees.branches.has(worktreeBranch) ||
+            localBranchExists(deps.runSync, projectRoot, worktreeBranch));
+    }
+    if (worktreeResult.status !== 0) {
+        deps.stderr(`Borg could not create sibling worktree ${candidate} on branch ${worktreeBranch}. ` +
+            `Git reported: ${safeStderr(worktreeResult.stderr)}\n` +
+            (residualBranch
+                ? `Git left branch ${residualBranch} without a registered worktree; Borg preserved it.\n`
+                : '') +
+            'Run `git worktree list` and `git status` to inspect repository state, resolve the reported Git error, then rerun `borg assimilate`.\n' +
+            'A local drone reservation was created and remains pending; rerunning after fixing the worktree issue resumes that reservation.\n');
+        return { kind: 'stop', code: 1 };
+    }
+    deps.stderr(`spawned sibling worktree at ${candidate} on branch ${worktreeBranch} (${startRef})` +
+        (existing !== null
+            ? '; the original dir keeps its active drone binding — run `borg reset-local-connection` there if that binding is stale.\n'
+            : '.\n'));
+    deps.chdir(candidate);
+    deps.stderr(renderWorktreeSteeringNote(candidate, worktreeBranch, projectRoot));
+    spawnedWorktreePath = deps.cwd();
+    return continueAssimilation({ spawnedWorktreePath });
+}
+export async function resolveAssimilationAuthority(input, deps) {
+    const { args, mode, repositoryContext } = input;
     const hostlessEnrollment = args.flags.enroll === true &&
         args.flags.server === undefined && deps.defaultAuthority === undefined;
     const artifactOnlyEnrollment = hostlessEnrollment && deps.isTTY();
@@ -324,13 +754,8 @@ export async function runAssimilate(args, deps, options = {}) {
     if (hostlessEnrollment && !deps.isTTY()) {
         deps.stderr('Local enrollment requires an interactive operator terminal. ' +
             `Re-run ${localAssimilateCommand(undefined, true, mode)} from the operator’s terminal.\n`);
-        return 1;
+        return { kind: 'stop', code: 1 };
     }
-    // An explicit --host plus a new invitation must be rejected on the pure
-    // input path. Decode and compare the operator-presented artifact before any
-    // pending-enrollment lookup: the lookup enumerates the credential backend,
-    // so it must not precede this contradiction check. A matching artifact may
-    // then take the published pending-resume path until client#267 lands.
     if (args.flags.enroll && args.flags.server !== undefined && deps.isTTY()) {
         let preResumeOrigin;
         try {
@@ -338,12 +763,12 @@ export async function runAssimilate(args, deps, options = {}) {
         }
         catch (error) {
             deps.stderr(`${error instanceof Error ? error.message : String(error)}\n`);
-            return 1;
+            return { kind: 'stop', code: 1 };
         }
         prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
         if (!prefetchedInvitation) {
             deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
-            return 1;
+            return { kind: 'stop', code: 1 };
         }
         try {
             prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
@@ -353,12 +778,10 @@ export async function runAssimilate(args, deps, options = {}) {
         }
         catch (error) {
             deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
-            prefetchedInvitation = undefined;
-            prefetchedArtifact = undefined;
-            return 1;
+            return { kind: 'stop', code: 1 };
         }
         let pendingForHost = false;
-        if (deps.peekPendingServerEnrollment !== undefined) {
+        if (deps.peekPendingServerEnrollment) {
             let pending = null;
             try {
                 pending = await deps.peekPendingServerEnrollment();
@@ -376,7 +799,7 @@ export async function runAssimilate(args, deps, options = {}) {
                 }
                 catch (error) {
                     deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
-                    return 1;
+                    return { kind: 'stop', code: 1 };
                 }
             }
         }
@@ -394,29 +817,24 @@ export async function runAssimilate(args, deps, options = {}) {
             }
         }
     }
-    if (artifactOnlyEnrollment ||
-        preResumeAttempted && preResumedEnrollment === null) {
+    if (artifactOnlyEnrollment || preResumeAttempted && preResumedEnrollment === null) {
         if (artifactOnlyEnrollment && deps.resumePendingServerEnrollment) {
             preResumedEnrollment = await deps.resumePendingServerEnrollment(() => {
                 deps.stderr('Resuming the pending enrollment; no new invitation is required.\n');
             });
         }
-        if (artifactOnlyEnrollment && preResumedEnrollment) {
-            // The exact pending tuple was already redeemed or is being resumed.
-        }
-        else {
+        if (!(artifactOnlyEnrollment && preResumedEnrollment)) {
             prefetchedInvitation = await deps.promptSecret('Enrollment invitation (single-use; hidden input):');
             if (!prefetchedInvitation) {
                 deps.stderr('No enrollment invitation was entered. Ask the server operator for one, then retry.\n');
-                return 1;
+                return { kind: 'stop', code: 1 };
             }
             try {
                 prefetchedArtifact = decodeAndVerifyInvitationArtifact(prefetchedInvitation);
             }
             catch (error) {
                 deps.stderr(`${error instanceof Error ? error.message : 'The enrollment invitation is invalid.'}\n`);
-                prefetchedInvitation = undefined;
-                return 1;
+                return { kind: 'stop', code: 1 };
             }
         }
     }
@@ -426,10 +844,7 @@ export async function runAssimilate(args, deps, options = {}) {
             : 'borg assimilate --host <host>';
         const serverInstall = await deps.ensureLocalServerInstalled(connectCommand);
         if (serverInstall !== 'present') {
-            // A newly installed server still needs its explicit setup/start journey.
-            // Decline, non-interactive, and failure paths have already printed exact
-            // recovery commands. None may continue into private-state mutation.
-            return serverInstall === 'installed' ? 0 : 1;
+            return { kind: 'stop', code: serverInstall === 'installed' ? 0 : 1 };
         }
     }
     try {
@@ -437,11 +852,8 @@ export async function runAssimilate(args, deps, options = {}) {
     }
     catch {
         deps.stderr(`${PRIVATE_STATE_UNAVAILABLE_COPY}\n`);
-        return 1;
+        return { kind: 'stop', code: 1 };
     }
-    // Read local seat state before authority discovery, which may probe the local
-    // server. A retired replacement collision must not send either saved bearer or
-    // perform any other network request.
     let existing = null;
     let hasPersistedIdentity = false;
     let localSeatReadError;
@@ -451,17 +863,16 @@ export async function runAssimilate(args, deps, options = {}) {
     }
     catch (error) {
         if (error instanceof LegacySessionCredentialCollisionError) {
-            return reportServerFailure(deps, error.origin, error, false, mode);
+            return { kind: 'stop', code: reportServerFailure(deps, error.origin, error, false, mode) };
         }
         localSeatReadError = error;
     }
-    // ----- Step 1: Select and authenticate the local server -----
     const selectedAuthority = await selectAssimilationAuthority(args.flags, deps, mode);
     if (!selectedAuthority)
-        return 1;
+        return { kind: 'stop', code: 1 };
     let authority = selectedAuthority;
     if (localSeatReadError !== undefined) {
-        return reportServerFailure(deps, authority.apiUrl, localSeatReadError, false, mode);
+        return { kind: 'stop', code: reportServerFailure(deps, authority.apiUrl, localSeatReadError, false, mode) };
     }
     const projectRoot = repositoryContext.root;
     const wantSibling = args.flags.worktree !== undefined ||
@@ -470,98 +881,108 @@ export async function runAssimilate(args, deps, options = {}) {
     if (mode !== 'cube-init' && args.flags.here && existing === null && !hasPersistedIdentity) {
         deps.stderr('`borg assimilate --here` resumes this worktree\'s saved drone, but no saved drone was found.\n' +
             'Run `borg assimilate` to create a new drone in a managed worktree.\n');
-        return 1;
+        return { kind: 'stop', code: 1 };
     }
     if (mode !== 'cube-init' && wantSibling) {
         const headProbe = deps.runSync('git', ['rev-parse', '--verify', 'HEAD'], projectRoot);
         if (headProbe.status !== 0) {
             deps.stderr('sibling worktree spawn requires HEAD pointing at a commit.\n' +
                 'Create an initial commit (for example: `git commit --allow-empty -m "Initial commit"`), then rerun `borg assimilate`.\n');
-            return 1;
+            return { kind: 'stop', code: 1 };
         }
         verifiedHead = headProbe.stdout.trim();
     }
     let auth;
-    {
-        try {
-            let serverAuth;
-            if (args.flags.enroll) {
-                if (!deps.isTTY()) {
-                    deps.stderr('Local enrollment requires an interactive operator terminal. ' +
-                        `Re-run ${localAssimilateCommand(authority.apiUrl, true, mode)} from the operator’s terminal.\n`);
-                    return 1;
-                }
-                let resumed = preResumedEnrollment;
-                if (!resumed && prefetchedArtifact === undefined && !preResumeAttempted && !artifactOnlyEnrollment) {
-                    resumed = await deps.resumeServerEnrollment(authority.apiUrl, () => {
-                        deps.stderr(`Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
-                            'do not enter another invitation unless the server certificate was reissued; ' +
-                            'if it was, request a current invitation and rerun this command.\n');
-                    });
-                }
-                if (resumed) {
-                    if ('apiUrl' in resumed && typeof resumed.apiUrl === 'string') {
-                        authority = { kind: 'server', apiUrl: resumed.apiUrl };
-                    }
-                    serverAuth = resumed;
-                }
-                else {
-                    let invitation = prefetchedInvitation ?? await deps.promptSecret(artifactOnlyEnrollment
-                        ? 'Enrollment invitation (single-use; hidden input):'
-                        : `Enrollment invitation for \`${authority.apiUrl}\` (single-use; hidden input):`);
-                    if (!invitation) {
-                        deps.stderr(artifactOnlyEnrollment
-                            ? 'No enrollment invitation was entered. Ask the server operator for one, then rerun `borg assimilate --enroll`.\n'
-                            : `No enrollment invitation was entered for ${authority.apiUrl}. ` +
-                                `Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true, mode)}.\n`);
-                        return 1;
-                    }
-                    try {
-                        const artifact = prefetchedArtifact ?? decodeAndVerifyInvitationArtifact(invitation);
-                        if (args.flags.server !== undefined && authority.apiUrl !== artifact.endpoint) {
-                            throw new InvitationArtifactEndpointMismatchError(authority.apiUrl, artifact.endpoint);
-                        }
-                        authority = { kind: 'server', apiUrl: artifact.endpoint };
-                        serverAuth = await deps.connectServer(authority.apiUrl, {
-                            invitation,
-                            artifact,
-                            confirmReplacement: async () => strictAffirmative(await deps.prompt(`A local enrollment for ${authority.apiUrl} already exists. Replacing it will orphan ` +
-                                'the first enrolled client. Replace it? [y/N]: ')),
-                        });
-                    }
-                    finally {
-                        // Strings cannot be zeroized in JavaScript, but drop this command's
-                        // reference immediately after the exchange instead of retaining the
-                        // invitation through the rest of assimilation/agent launch.
-                        invitation = '';
-                    }
-                }
-                if (serverAuth.serverCapabilities?.includes('create_cube')) {
-                    deps.stderr(`Owner client enrolled with \`${authority.apiUrl}\`. ` +
-                        'Creating or joining this repository’s cube next.\n');
-                }
-                else {
-                    deps.stderr(`Ordinary client enrolled with \`${authority.apiUrl}\`. ` +
-                        'Checking for an accessible repository cube next.\n');
-                }
+    try {
+        let serverAuth;
+        if (args.flags.enroll) {
+            if (!deps.isTTY()) {
+                deps.stderr('Local enrollment requires an interactive operator terminal. ' +
+                    `Re-run ${localAssimilateCommand(authority.apiUrl, true, mode)} from the operator’s terminal.\n`);
+                return { kind: 'stop', code: 1 };
+            }
+            let resumed = preResumedEnrollment;
+            if (!resumed && prefetchedArtifact === undefined && !preResumeAttempted && !artifactOnlyEnrollment) {
+                resumed = await deps.resumeServerEnrollment(authority.apiUrl, () => {
+                    deps.stderr(`Resuming the pending enrollment for \`${authority.apiUrl}\`; ` +
+                        'do not enter another invitation unless the server certificate was reissued; ' +
+                        'if it was, request a current invitation and rerun this command.\n');
+                });
+            }
+            if (resumed) {
+                if (resumed.apiUrl)
+                    authority = { kind: 'server', apiUrl: resumed.apiUrl };
+                serverAuth = resumed;
             }
             else {
-                serverAuth = await deps.connectServer(authority.apiUrl);
+                let invitation = prefetchedInvitation ?? await deps.promptSecret(artifactOnlyEnrollment
+                    ? 'Enrollment invitation (single-use; hidden input):'
+                    : `Enrollment invitation for \`${authority.apiUrl}\` (single-use; hidden input):`);
+                if (!invitation) {
+                    deps.stderr(artifactOnlyEnrollment
+                        ? 'No enrollment invitation was entered. Ask the server operator for one, then rerun `borg assimilate --enroll`.\n'
+                        : `No enrollment invitation was entered for ${authority.apiUrl}. Ask the server operator for one, then rerun ${localAssimilateCommand(authority.apiUrl, true, mode)}.\n`);
+                    return { kind: 'stop', code: 1 };
+                }
+                try {
+                    const artifact = prefetchedArtifact ?? decodeAndVerifyInvitationArtifact(invitation);
+                    if (args.flags.server !== undefined && authority.apiUrl !== artifact.endpoint) {
+                        throw new InvitationArtifactEndpointMismatchError(authority.apiUrl, artifact.endpoint);
+                    }
+                    authority = { kind: 'server', apiUrl: artifact.endpoint };
+                    serverAuth = await deps.connectServer(authority.apiUrl, {
+                        invitation,
+                        artifact,
+                        confirmReplacement: async () => strictAffirmative(await deps.prompt(`A local enrollment for ${authority.apiUrl} already exists. Replacing it will orphan ` +
+                            'the first enrolled client. Replace it? [y/N]: ')),
+                    });
+                }
+                finally {
+                    invitation = '';
+                }
             }
-            auth = {
-                token: serverAuth.token,
-                apiUrl: authority.apiUrl,
-                serverTrustIdentity: serverAuth.trustIdentity,
-                serverCapabilities: serverAuth.serverCapabilities ?? [],
-            };
-            if (args.flags.enroll) {
-                deps.stderr(`This machine (${deps.getHostname()}) is enrolled with Borg server \`${authority.apiUrl}\`.\n`);
-            }
+            deps.stderr(serverAuth.serverCapabilities?.includes('create_cube')
+                ? `Owner client enrolled with \`${authority.apiUrl}\`. Creating or joining this repository’s cube next.\n`
+                : `Ordinary client enrolled with \`${authority.apiUrl}\`. Checking for an accessible repository cube next.\n`);
         }
-        catch (error) {
-            return reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true, mode);
+        else {
+            serverAuth = await deps.connectServer(authority.apiUrl);
+        }
+        auth = {
+            token: serverAuth.token,
+            apiUrl: authority.apiUrl,
+            serverTrustIdentity: serverAuth.trustIdentity,
+            serverCapabilities: serverAuth.serverCapabilities ?? [],
+        };
+        if (args.flags.enroll) {
+            deps.stderr(`This machine (${deps.getHostname()}) is enrolled with Borg server \`${authority.apiUrl}\`.\n`);
         }
     }
+    catch (error) {
+        return {
+            kind: 'stop',
+            code: reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true, mode),
+        };
+    }
+    return continueAssimilation({
+        authority,
+        auth,
+        existing,
+        hasPersistedIdentity,
+        projectRoot,
+        wantSibling,
+        verifiedHead,
+    });
+}
+export async function runAssimilate(args, deps, options = {}) {
+    const repository = await resolveAssimilationRepository(args, deps);
+    if (repository.kind === 'stop')
+        return repository.code;
+    const { mode, repositoryContext } = repository.value;
+    const authorityResolution = await resolveAssimilationAuthority({ args, mode, repositoryContext }, deps);
+    if (authorityResolution.kind === 'stop')
+        return authorityResolution.code;
+    const { authority, auth, existing, hasPersistedIdentity, projectRoot, wantSibling, verifiedHead, } = authorityResolution.value;
     // ----- Sprint 19 (gh#184): Reorder for strict-rollback semantics. -----
     // The previous flow created a sibling worktree (FS state) BEFORE
     // role resolution + API assimilate. Any early-return between
@@ -910,352 +1331,49 @@ export async function runAssimilate(args, deps, options = {}) {
             return 1;
         }
     }
-    // ----- Step 5: Role resolution -----
-    let resolvedRole;
-    if (savedLocalRole) {
-        resolvedRole = savedLocalRole;
-    }
-    else if (args.role !== undefined) {
-        resolvedRole = matchRoleByName(cubeDetail.roles, args.role);
-        if (!resolvedRole) {
-            // Sprint 19 (gh#184) + drone-7 metaphor argument: include a
-            // fuzzy-match "did you mean ...?" suggestion to serve Queen's
-            // "more user-friendly" intent without violating the
-            // Borg-collective metaphor (collective defines roles; drones
-            // slot in). Levenshtein distance ≤2 on the cube's role names.
-            const available = cubeDetail.roles.map((r) => r.name).join(', ');
-            const suggestion = suggestRoleName(args.role, cubeDetail.roles.map((r) => r.name));
-            const suggestionLine = suggestion ? ` Did you mean "${suggestion}"?` : '';
-            if (authority.kind === 'server') {
-                deps.stderr(`No role matching "${args.role}" in cube "${cubeDetail.name}" on ${authority.apiUrl}. ` +
-                    `Available: ${available}.${suggestionLine}\n` +
-                    `Rerun ${localAssimilateRoleCommand(authority.apiUrl)} with one of the available roles.\n`);
-            }
-            else {
-                deps.stderr(`no role matching "${args.role}" in cube "${cubeDetail.name}". Available: ${available}.${suggestionLine}\n` +
-                    `(Use --template <name> on first-drone setup or run \`borg_create-role\` from inside Claude.)\n`);
-            }
-            return 1;
-        }
-    }
-    else {
-        const occupiedRoleIds = occupiedRoleIdsForAutoRole(cubeDetail.drones ?? []);
-        resolvedRole = pickDefaultRole(cubeDetail.roles, { isFirstDrone, occupiedRoleIds });
-        if (!resolvedRole) {
-            if (authority.kind === 'server') {
-                deps.stderr(`Cube "${cubeDetail.name}" on ${authority.apiUrl} has no default or human-seat role. ` +
-                    `Ask the server operator to configure a role, then rerun ` +
-                    `${localAssimilateRoleCommand(authority.apiUrl)}.\n`);
-            }
-            else {
-                deps.stderr(`cube "${cubeDetail.name}" has no default or human-seat role; cannot infer a role. ` +
-                    `Either pass a role argument explicitly (e.g. \`borg assimilate builder\`) or ` +
-                    `run \`borg_create-role\` from inside Claude to set up roles.\n`);
-            }
-            return 1;
-        }
-    }
-    // ----- Step 5b: --here collision check BEFORE the API mint (gh#780) -----
-    // Pre-gh#780 this check lived in Step 7 — AFTER the API assimilate — so a
-    // `--here` run in a directory that already hosts a drone minted a fresh
-    // drones row server-side, then aborted before Step 8 ever persisted the
-    // mapping: an orphan seat with no local identity. The check must precede
-    // the mint. (The full worktree DECISION stays in Step 7 by design — FS
-    // state only after API success; this hoists only the abort case.)
-    //
-    // PR-D refinement: --here + existing + SAME authority/cube is the
-    // saved-seat recovery flow. The local
-    // seats first prove liveness with their keychained session, then reuse the
-    // saved role/retry binding; only authoritative eviction rotates that retry.
-    // Role defaults and local launch state do not select the model. The explicit
-    // Claude-only flag remains temporarily for compatibility with existing
-    // invocations.
-    const effectiveModel = args.flags.model ?? null;
-    // Resolve the agent CLI now so the worker learns agent_kind AT assimilate
-    // time.
-    const cli = await deps.resolveCli(args.flags.cli);
-    try {
-        ensureCliMcpConfigured(cli);
-    }
-    catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (authority.kind === 'server') {
-            deps.stderr(`${cli} MCP configuration failed for ${authority.apiUrl}: ${safeStderr(message)}. ` +
-                `Fix the ${cli} MCP configuration, then rerun ` +
-                `${localAssimilateCliCommand(authority.apiUrl, cli)}.\n`);
-        }
-        else {
-            deps.stderr(`${cli} MCP configuration failed: ${message}\n`);
-        }
-        return 1;
-    }
-    // The TYPED prepare-time expectation (ratified clause 3 / CR #1). Declared HERE,
-    // BEFORE the mint+send, and revalidated at BOTH the cube-lock-held PREPARE (so a
-    // reset that wins before PREPARE aborts before any credential is created/sent)
-    // and FINALIZE. resume/reattach/remint pin the FULL prior binding (ref + drone
-    // id [+ live digest]); fresh/sibling declare ABSENT.
-    let sessionExpected;
-    if (resumeCredentialRef && resumeState === 'pending') {
-        // CR#2: a bound-PENDING resume (a sibling whose activation failed) re-sends the
-        // identical pending bearer the server already digest-bound. A PENDING record is
-        // NOT a live binding, so it declares ABSENT (pending-reuse): prepareSeat REUSES
-        // the existing pending record (identical bearer). An EXACT expectation would be
-        // rejected by prepareSeat's `prior.state==='active'` guard and abort the only
-        // ghost-free recovery.
-        sessionExpected = { kind: 'absent' };
-    }
-    else if (resumeCredentialRef) {
-        sessionExpected = {
-            kind: 'exact',
-            credentialRef: resumeCredentialRef,
-            ...(resumeDroneId ? { droneId: resumeDroneId } : {}),
-        };
-    }
-    else if (remintInvalidPrior && existing?.localSessionCredentialRef) {
-        sessionExpected = {
-            kind: 'exact',
-            credentialRef: existing.localSessionCredentialRef,
-            ...(existing.droneId ? { droneId: existing.droneId } : {}),
-        };
-    }
-    else if (reattachPriorId != null && existing?.localSessionCredentialRef && existing.sessionToken) {
-        sessionExpected = {
-            kind: 'exact',
-            credentialRef: existing.localSessionCredentialRef,
-            ...(existing.droneId ? { droneId: existing.droneId } : {}),
-            sessionDigest: createHash('sha256').update(existing.sessionToken).digest('hex'),
-        };
-    }
-    else {
-        sessionExpected = { kind: 'absent' };
-    }
-    // CR1(b): PREPARE-time revalidation is preserved for siblings too. A sibling
-    // declares an ABSENT expectation: a PENDING record at the ref (a lost-response
-    // retry / crash-in-gap) stays reusable so the identical bearer is re-sent, but an
-    // ACTIVE record holding the ref is a mismatch → abort (never silently reuse/move
-    // a live binding). With the collision-safe sibling key above the fresh ref is
-    // normally empty, so ABSENT passes and the mint proceeds; the check is the
-    // defense that stops an active seat from being unseated.
-    const revalidateAtPrepare = true;
-    // ----- Step 6: API assimilate (no FS state yet — clean exit on failure) -----
-    // gh#653 B4: progress for the seat-mint round-trip (silent-window stall).
-    deps.stderr(`Joining cube '${cubeDetail.name}' as ${resolvedRole.name}…\n`);
-    let result;
-    try {
-        const assimilateParams = {
-            cube_id: cubeDetail.id,
-            role_id: resolvedRole.id,
-            hostname: deps.getHostname(),
-            agent_kind: cli,
-            model: effectiveModel,
-            working_repo: resolveWorkingRepo(projectRoot),
-            ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
-            ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
-            session_operation: sessionOperation,
-            session_expected: sessionExpected,
-            revalidate_at_prepare: revalidateAtPrepare,
-        };
-        result = await deps.assimilate(auth.apiUrl, auth.token, assimilateParams, auth.serverTrustIdentity);
-    }
-    catch (err) {
-        // gh#877 follow-up: a re-attach (`--here`) whose saved seat was evicted is
-        // REFUSED server-side (410 DRONE_EVICTED) rather than silently re-minting a
-        // fresh drone. Surface the terminal recovery path instead of the generic
-        // "assimilate failed". Only on a reattach attempt (reattachPriorId set);
-        // a non-reattach DroneEvictedError falls through to the generic message.
-        if (err instanceof DroneEvictedError && reattachPriorId != null) {
-            deps.stderr(`This worktree's drone on ${authority.apiUrl} was evicted. ` +
-                `Remove this worktree, or from a fresh worktree run ` +
-                `${localAssimilateCommand(authority.apiUrl)}.\n`);
-            return 1;
-        }
-        // Pin-matched terminal session outcomes are pure diagnosis.
-        // Reached only after a successful pinned-TLS attach, so it is pin-matched by
-        // construction — a pin mismatch throws a distinct trust error and never
-        // enters this branch. Attach mutates NOTHING; it recommends the offline
-        // `borg reset-local-connection` command.
-        if (err instanceof BorgServerError && reattachPriorId != null) {
-            if (err.code === 'SESSION_REVOKED') {
-                return diagnoseSessionTermination(deps, authority.apiUrl, 'revoked');
-            }
-            if (err.code === 'SESSION_REJECTED') {
-                return diagnoseSessionTermination(deps, authority.apiUrl, 'superseded');
-            }
-        }
-        if (authority.kind === 'server') {
-            return reportServerFailure(deps, authority.apiUrl, err);
-        }
-        const message = err instanceof Error ? err.message : String(err);
-        deps.stderr(`assimilate failed: ${message}\n`);
-        return 1;
-    }
-    if (authority.kind === 'server' && result.prepareAborted) {
-        // CR #1: the cube-lock-held PREPARE revalidation aborted BEFORE any credential
-        // was minted or sent — this worktree's saved seat changed under us (a
-        // concurrent offline reset, or a competing enroll). No FS/network mutation
-        // happened; never silently recreate.
-        deps.stderr(`This worktree's saved connection to ${authority.apiUrl} changed before the attach ` +
-            '(a concurrent reset or enroll); no credential was created or sent and nothing was ' +
-            `changed. Re-run ${localAssimilateCommand(authority.apiUrl)} to attach against the ` +
-            'current state.\n');
-        return 1;
-    }
-    if (authority.kind === 'server' && result.local_session === undefined) {
-        return reportServerFailure(deps, authority.apiUrl, new Error('Borg server did not return compatible secure session metadata'));
-    }
-    // The server may assimilate a member into a DIFFERENT role than the client's
-    // auto-picked default (gh#700 fallback: when the member's invite doesn't
-    // grant the default role, the server picks one of their GRANTED roles).
-    // Resolve the role the SERVER ACTUALLY assigned (result.role_id) and use it
-    // for all human-facing display + naming below — not the client's pre-pick.
-    // The drone label / session token are already server-truth; this aligns the
-    // displayed role name + worktree slug with what was actually assigned.
-    const assignedRole = cubeDetail.roles.find((r) => r.id === result.role_id) ?? resolvedRole;
-    if (result.result === 'reused') {
-        // The drone's existing role is authoritative on an idempotent reattach —
-        // a role difference is expected, not a grant fallback. The bearer is
-        // reused, not rotated: no new drone minted.
-        deps.stderr(`re-attached as ${result.drone_label} (same session, no new drone minted)\n`);
-    }
-    else if (assignedRole.id !== resolvedRole.id) {
-        deps.stderr(`The requested role "${resolvedRole.name}" was unavailable; ` +
-            `attached under the "${assignedRole.name}" role instead.\n`);
-    }
-    // ----- Step 7: Worktree decision (FS state ONLY after API success) -----
-    // (`existing` was read at Step 5b; a different-cube --here collision
-    // already aborted there, pre-mint. The surviving --here + existing case
-    // is the SAME-cube reattach — an in-place recovery, never a sibling
-    // spawn.)
-    let spawnedWorktreePath = null;
-    if (wantSibling) {
-        const localHead = verifiedHead;
-        const originProbe = deps.runSync('git', ['remote', 'get-url', 'origin'], projectRoot);
-        let startRef = 'HEAD';
-        if (originProbe.status === 0 && originProbe.stdout.trim().length > 0) {
-            // gh#238: when origin exists, fetch it so the new worktree starts on the
-            // latest remote default branch rather than a possibly stale local HEAD.
-            deps.runSync('git', ['fetch', 'origin'], projectRoot);
-            const mainProbe = deps.runSync('git', ['rev-parse', '--verify', 'origin/main'], projectRoot);
-            if (mainProbe.status === 0) {
-                startRef = 'origin/main';
-            }
-            else {
-                const masterProbe = deps.runSync('git', ['rev-parse', '--verify', 'origin/master'], projectRoot);
-                if (masterProbe.status === 0) {
-                    startRef = 'origin/master';
-                }
-            }
-        }
-        if (startRef === 'HEAD') {
-            deps.stderr(`note: no usable origin; new worktree will start on local HEAD (${localHead.slice(0, 7)})\n`);
-        }
-        else {
-            // Warn if local HEAD diverges from the remote default branch.
-            const remoteHead = deps.runSync('git', ['rev-parse', startRef], projectRoot).stdout.trim();
-            if (localHead !== remoteHead) {
-                deps.stderr(`note: local HEAD (${localHead.slice(0, 7)}) differs from ${startRef} (${remoteHead.slice(0, 7)}); ` +
-                    `new worktree will start on ${startRef}\n`);
-            }
-        }
-        // The common Git directory identifies the repository across every linked
-        // worktree. Using projectRoot here fragments one repository's siblings when
-        // assimilation starts inside an existing sibling worktree.
-        const repoBase = basename(dirname(repositoryContext.commonDir));
-        const suffix = args.flags.worktree ?? roleSlug(assignedRole.name);
-        // gh#556 Part 1: empty-suffix guard (CR-binding). roleSlug can yield '' for a
-        // pathological all-special-char role name; an empty leaf would let join() collapse
-        // the worktree path up to the repo-level dir (~/.borg/worktrees/<repo>) and spawn a
-        // worktree at the parent-of-all-this-repo's-worktrees. Fail loud BEFORE the path calc.
-        if (suffix.length === 0) {
-            deps.stderr(`cannot derive a worktree name from role "${assignedRole.name}"; ` +
-                `pass an explicit --worktree <name>\n`);
-            return 1;
-        }
-        // gh#556 Part 1: NEW worktrees live under ~/.borg/worktrees/<repo>/<name>
-        // (was a sibling <parent>/<repo>-<name>). Existing siblings are untouched
-        // (absolute git-registered paths). Collision dedup KEPT (<name>-<n>).
-        const homeDir = deps.homedir();
-        let registeredWorktrees = listRegisteredWorktrees(deps, projectRoot);
-        if (registeredWorktrees === null) {
-            deps.stderr('Borg could not enumerate this repository’s existing worktrees, so it did not risk creating a colliding sibling.\n' +
-                'Run `git worktree list` from this repository and resolve the reported Git error, then rerun `borg assimilate`.\n' +
-                'A local drone reservation was created and remains pending; rerunning after fixing the worktree issue resumes that reservation.\n');
-            return 1;
-        }
-        let candidate = computeWorktreePath(homeDir, repoBase, suffix);
-        let wtBranch = perWorktreeBranchName(basename(candidate), repoBase);
-        let n = 2;
-        // gh#864: dedup against an existing worktree PATH/registration AND against a
-        // lingering UNMERGED per-worktree branch. `git worktree add -b <wtBranch>`
-        // (below) hard-fails when <wtBranch> already exists even if its old worktree
-        // was pruned — so a stale ref would block the spawn. A MERGED lingering
-        // branch is safely adoptable (handled at the add), so it does NOT force a
-        // suffix bump; only an UNMERGED ref (carrying un-merged commits) bumps to a
-        // fresh suffix so we never reuse/clobber its work.
-        while (deps.pathExists(candidate) ||
-            registeredWorktrees.names.has(basename(candidate)) ||
-            registeredWorktrees.branches.has(wtBranch) ||
-            (localBranchExists(deps.runSync, projectRoot, wtBranch) &&
-                !isMerged(deps.runSync, projectRoot, wtBranch, startRef))) {
-            candidate = computeWorktreePath(homeDir, repoBase, suffix, n);
-            wtBranch = perWorktreeBranchName(basename(candidate), repoBase);
-            n++;
-        }
-        let wt;
-        let residualBranch = null;
-        while (true) {
-            // gh#556 Part 1: create the intermediate ~/.borg/worktrees/<repo>/ before
-            // `git worktree add` (git creates the leaf, not the parent chain). Plain
-            // recursive mkdir — NO chmod of the existing ~/.borg (credentials file).
-            deps.mkdirp(dirname(candidate));
-            const branchExisted = localBranchExists(deps.runSync, projectRoot, wtBranch);
-            wt = branchExisted
-                ? deps.runSync('git', ['worktree', 'add', candidate, wtBranch], projectRoot)
-                : deps.runSync('git', ['worktree', 'add', '-b', wtBranch, candidate, startRef], projectRoot);
-            if (wt.status === 0)
-                break;
-            // Another assimilate may claim the name or branch after our first list.
-            // Refresh and suffix-bump instead of surfacing a collision to the operator.
-            const refreshed = listRegisteredWorktrees(deps, projectRoot);
-            const branchAppeared = !branchExisted && localBranchExists(deps.runSync, projectRoot, wtBranch);
-            const collision = deps.pathExists(candidate) ||
-                refreshed?.names.has(basename(candidate)) === true ||
-                refreshed?.branches.has(wtBranch) === true ||
-                (!branchExisted && worktreeAddReportedCollision(wt.stderr));
-            if (!collision || refreshed === null) {
-                if (branchAppeared && refreshed?.branches.has(wtBranch) !== true) {
-                    residualBranch = wtBranch;
-                }
-                break;
-            }
-            registeredWorktrees = refreshed;
-            do {
-                candidate = computeWorktreePath(homeDir, repoBase, suffix, n);
-                wtBranch = perWorktreeBranchName(basename(candidate), repoBase);
-                n++;
-            } while (deps.pathExists(candidate) ||
-                registeredWorktrees.names.has(basename(candidate)) ||
-                registeredWorktrees.branches.has(wtBranch) ||
-                localBranchExists(deps.runSync, projectRoot, wtBranch));
-        }
-        if (wt.status !== 0) {
-            deps.stderr(`Borg could not create sibling worktree ${candidate} on branch ${wtBranch}. ` +
-                `Git reported: ${safeStderr(wt.stderr)}\n` +
-                (residualBranch
-                    ? `Git left branch ${residualBranch} without a registered worktree; Borg preserved it.\n`
-                    : '') +
-                'Run `git worktree list` and `git status` to inspect repository state, resolve the reported Git error, then rerun `borg assimilate`.\n' +
-                'A local drone reservation was created and remains pending; rerunning after fixing the worktree issue resumes that reservation.\n');
-            return 1;
-        }
-        deps.stderr(`spawned sibling worktree at ${candidate} on branch ${wtBranch} (${startRef})` +
-            (existing !== null
-                ? `; the original dir keeps its active drone binding — run \`borg reset-local-connection\` there if that binding is stale.\n`
-                : '.\n'));
-        deps.chdir(candidate);
-        deps.stderr(renderWorktreeSteeringNote(candidate, wtBranch, projectRoot));
-        spawnedWorktreePath = deps.cwd();
-    }
+    const cubeRole = await resolveAssimilationCubeRole({
+        requestedRole: args.role,
+        flags: args.flags,
+        cubeDetail,
+        isFirstDrone,
+        savedLocalRole,
+        apiUrl: authority.apiUrl,
+    }, deps);
+    if (cubeRole.kind === 'stop')
+        return cubeRole.code;
+    const { resolvedRole, effectiveModel, cli } = cubeRole.value;
+    const seat = await prepareAssimilationSeat({
+        apiUrl: auth.apiUrl,
+        token: auth.token,
+        serverTrustIdentity: auth.serverTrustIdentity,
+        cubeDetail,
+        resolvedRole,
+        cli,
+        effectiveModel,
+        projectRoot,
+        existing,
+        reattachPriorId,
+        remintInvalidPrior,
+        resumeCredentialRef,
+        resumeDroneId,
+        resumeState,
+        sessionOperation,
+    }, deps);
+    if (seat.kind === 'stop')
+        return seat.code;
+    const { result, assignedRole, sessionExpected } = seat.value;
+    const worktree = await prepareAssimilationWorktree({
+        flags: args.flags,
+        repositoryContext,
+        projectRoot,
+        wantSibling,
+        verifiedHead,
+        assignedRole,
+        existing,
+    }, deps);
+    if (worktree.kind === 'stop')
+        return worktree.code;
+    const { spawnedWorktreePath } = worktree.value;
     // ----- Step 7b: provision launch access before persisting/launching -----
     // The launched process gets its current worktree plus a stable, disposable
     // per-seat scratch root. Codex also receives an external Git common directory
@@ -1327,113 +1445,16 @@ export async function runAssimilate(args, deps, options = {}) {
         rollbackWorktree();
         return 1;
     }
-    // Local-server authority: drive the COMPOSITE cube-owned FINALIZE (Race 2).
-    // The cube lock is held OUTER across revalidate → binding-write → activate; the
-    // typed expectation is declared HERE at the orchestration layer (reattach =
-    // EXACT prior binding with its live-bearer digest; eviction remint = EXACT ref
-    // only, bearer intentionally replaced; fresh/sibling = ABSENT).
-    if (result.finalize === undefined || deps.finalizeServerSeat === undefined) {
-        deps.stderr('Local Borg server session metadata is incomplete; no connection was saved.\n');
-        rollbackWorktree();
-        return 1;
-    }
-    {
-        // The SAME typed expectation declared before PREPARE is revalidated again at
-        // FINALIZE (commit-time revalidation, ratified clause 3).
-        let outcome;
-        try {
-            outcome = await deps.finalizeServerSeat({
-                active: activeCube,
-                commonDir: repositoryContext.commonDir,
-                ...(repositoryContext.publicRepository
-                    ? { repositoryOrigin: repositoryContext.publicRepository.value }
-                    : {}),
-                expected: sessionExpected,
-                activate: result.finalize.activate,
-                scrubPending: result.finalize.scrubPending,
-            });
-        }
-        catch (err) {
-            // A BINDING-WRITE (or revalidate) failure BEFORE the binding landed. Nothing
-            // owns the spawned worktree yet, so rolling it back is safe.
-            const message = err instanceof Error ? err.message : String(err);
-            deps.stderr(`finalizeServerSeat failed: ${message}\n`);
-            rollbackWorktree();
-            return 1;
-        }
-        if (!outcome.committed) {
-            if (outcome.reason === 'activation-failed') {
-                // CR #5: the atomic activate+bind did NOT commit (missing/replaced/threw), so
-                // the record stays PENDING with no worktree of its own. CR#2/CR#4: bind that
-                // exact pending record to THIS preserved worktree WITHOUT activating it — the
-                // record stays pending (non-hydratable) but becomes DISCOVERABLE from here, so
-                // a rerun FROM this worktree re-derives the exact original operation and
-                // re-sends the identical bearer, converging on the SAME seat (no ghost).
-                //
-                // CR#4 (SR-seven false-success revocation): the bindPending OUTCOME is
-                // load-bearing and must be BRANCHED. A blanket "safe to re-run / identical
-                // seat reused" claim on a missing/replaced/thrown bind is a FALSE-SUCCESS
-                // revocation failure — the worktree would NOT own a durable locator, yet the
-                // operator would be told convergence is guaranteed. Preserve the spawned
-                // worktree ONLY when it owns a durable locator (a `bound` outcome).
-                let bindOutcome = 'unavailable';
-                if (result.finalize?.bindPending) {
-                    try {
-                        bindOutcome = (await result.finalize.bindPending({
-                            worktree: deps.findProjectRoot(deps.cwd()),
-                            name: activeCube.name,
-                            droneLabel: activeCube.droneLabel,
-                            ...(activeCube.roleName !== undefined ? { roleName: activeCube.roleName } : {}),
-                            ...(activeCube.roleClass !== undefined ? { roleClass: activeCube.roleClass } : {}),
-                            ...(activeCube.isHumanSeat !== undefined ? { isHumanSeat: activeCube.isHumanSeat } : {}),
-                        }));
-                    }
-                    catch {
-                        bindOutcome = 'threw';
-                    }
-                }
-                if (bindOutcome === 'bound') {
-                    // The worktree now owns a durable locator (the bound-pending record points
-                    // here). PRESERVE it. Truthful convergence copy: a rerun FROM here re-sends
-                    // the identical bearer (no duplicate), and `reset-local-connection` from here now
-                    // discovers + clears the bound-pending record.
-                    deps.stderr(`This worktree's secure session on ${auth.apiUrl} did not finish activating, but ` +
-                        'its resumable connection state was PRESERVED here. This worktree was NOT removed. From ' +
-                        `here, re-run ${localAssimilateCommand(auth.apiUrl)} to converge (the identical connection ` +
-                        `is reused — no duplicate is minted), or run ${resetLocalSeatCommand(auth.apiUrl)} to ` +
-                        'clear it.\n');
-                    return 1;
-                }
-                // missing / replaced / threw / unavailable: the worktree owns NO durable
-                // locator. The server may already have accepted the seat, while the client
-                // has no protocol operation id or cleanup endpoint with which to prove reuse
-                // or remove it. State the exact local outcome and do not prescribe a retry
-                // that can silently create a duplicate server seat (#35).
-                const bindFailure = bindOutcome === 'missing'
-                    ? 'the exact pending connection record went missing locally before it could be bound'
-                    : bindOutcome === 'replaced'
-                        ? 'the exact pending connection record was replaced locally before it could be bound; the replacement was left untouched'
-                        : bindOutcome === 'threw'
-                            ? 'the private store could not be read or written while preserving the pending connection'
-                            : 'this client did not receive a pending-connection preservation handle';
-                deps.stderr(`This worktree's secure session on ${auth.apiUrl} did not finish activating: ` +
-                    `${bindFailure}. The spawned worktree will be removed. No client-only command can ` +
-                    'prove reuse or safely clear the possibly accepted server-side drone; ask the server ' +
-                    'operator to inspect that drone before retrying.\n');
-                rollbackWorktree();
-                return 1;
-            }
-            // 'expectation-mismatch': the binding was NEVER written (this worktree's
-            // saved seat changed under us between PREPARE and FINALIZE — a concurrent
-            // reset or enroll). The composite scrubbed only our own pending record — no
-            // orphan ACTIVE credential — so a just-spawned worktree is safe to remove.
-            deps.stderr(`This worktree's saved connection to ${auth.apiUrl} changed during attach ` +
-                '(a concurrent reset or enroll); no drone was created and nothing was overwritten. ' +
-                `Re-run ${localAssimilateCommand(auth.apiUrl)} to attach against the current state.\n`);
-            rollbackWorktree();
-            return 1;
-        }
-    }
+    const finalization = await finalizeAssimilationSeat({
+        activeCube,
+        apiUrl: auth.apiUrl,
+        repositoryContext,
+        result,
+        sessionExpected,
+        rollbackWorktree,
+    }, deps);
+    if (finalization.kind === 'stop')
+        return finalization.code;
     if (repositoryContext.publicRepository && deps.hasActiveSeatInDifferentCloneFamily) {
         try {
             if (await deps.hasActiveSeatInDifferentCloneFamily(result.cube_id, repositoryContext.publicRepository.value, repositoryContext.commonDir)) {
@@ -1490,193 +1511,22 @@ export async function runAssimilate(args, deps, options = {}) {
     });
     if (options.launch === false)
         return 0;
-    // ----- Step 8: Launch selected agent CLI -----
-    // Mirrors the kickoff invocation from claude.ts (no-args path): the agent
-    // picks up the newly-persisted ActiveCube via the MCP stdio server on
-    // startup. The kickoff prompt re-enters /loop borg_regen so the new
-    // drone bootstraps into the cube cleanly. The monitor clause (CR-PE-F1)
-    // arms the inbox tail so the new drone wakes on peer log entries in
-    // real time — without this, drones miss real-time wake events during
-    // the bootstrap window and only self-heal at the /loop heartbeat.
-    deps.setTerminalTitle(result.drone_label, cubeDetail.name);
-    // Pedagogical hint to stdout before Claude takes over the terminal.
-    // Ink does not enter alt-screen-buffer (verified empirically via PTY
-    // probe 2026-05-19), so lines printed here remain visible in the
-    // user's terminal scrollback above Claude's interactive UI. Color is
-    // gated on TTY + NO_COLOR/CI env-var conventions; the welcome shape
-    // itself is cube-agnostic so non-default templates render identically.
-    const useColor = deps.isTTY() && !process.env.NO_COLOR && !process.env.CI;
-    deps.stdout(renderAssimilationWelcome(result.drone_label, assignedRole.name, cubeDetail.name, useColor, authority.kind === 'server' ? authority.apiUrl : undefined));
-    // BUG-5 / v0.9.3: probe MCP readiness before launching claude so
-    // the launched session sees tools at startup. Non-blocking: probe
-    // failure surfaces a stderr warning but the launch proceeds (the
-    // kickoff text's ToolSearch recovery clause is the second line of
-    // defense).
-    const mcpReady = await deps.probeMcpReady();
-    if (!mcpReady) {
-        deps.stderr(`warning: borg-mcp readiness probe did not complete within the timeout; ` +
-            `launching ${cli} anyway — the kickoff prompt's ToolSearch fallback ` +
-            `will recover if the MCP server takes longer to start.\n`);
-    }
-    const inboxPath = deps.getInboxPath(result.cube_id, result.drone_id);
-    const codexWakeNonce = cli === 'codex' ? `borg-wake-${randomUUID()}` : null;
-    // gh#929: shared wakePathArming + NEVER-TaskStop (unified with claude.ts —
-    // the two call sites previously carried divergent monitorClause strings).
-    const monitorClause = buildKickoffWakePathClause(cli, cli === 'claude' ? inboxPath : null, cli === 'claude' ? monitorStateRoot : null);
-    let codexWakePathClause;
-    let remoteArgs = [];
-    let launchArgs;
-    let codexSocketPath = null;
-    let codexServerCleanup = null;
-    const launchApproval = deps.resolveCliApprovals
-        ? await deps.resolveCliApprovals(cli, agentCwd, {
-            skipOverride: args.flags.noBorgApprovalOverride,
-        })
-        : { codexArgs: [] };
-    if (launchApproval.warning)
-        deps.stderr(`warning: ${launchApproval.warning}\n`);
-    // Temporary Claude-only model compatibility. Local/provider models are
-    // configured by the selected agent CLI and are never rewritten by Borg.
-    const modelEnv = resolveLaunchEnv(effectiveModel);
-    const childEnv = {
-        ...withAgentRuntimeEnv(process.env, cli),
-        ...modelEnv.set,
-        BORG_SESSION: '1',
-        [BORG_LAUNCH_CLI_ENV]: cli,
-        [BORG_LAUNCH_WORKTREE_ENV]: seatWorktree,
-        [BORG_LAUNCH_SCRATCH_ENV]: scratchRoot,
-    };
-    if (cli === 'opencode' && launchApproval.openCodePermission) {
-        childEnv.OPENCODE_PERMISSION = launchApproval.openCodePermission;
-    }
-    for (const key of modelEnv.unset) {
-        delete childEnv[key];
-    }
-    if (cli === 'codex') {
-        const remote = await deps.prepareCodexRemoteLaunch();
-        if (remote.warning) {
-            deps.stderr(`warning: ${remote.warning}\n`);
-            codexWakePathClause =
-                `⚠ Codex wake-path capability check failed: remote-control is unavailable for this session. Run borg_regen manually whenever you return, and expect only fallback wakeups until relaunch.`;
-        }
-        else {
-            codexWakePathClause =
-                `Codex wake-path capability check passed: remote-control socket established for this session.`;
-        }
-        remoteArgs = remote.args;
-        // Codex env takes precedence over model env when there is overlap.
-        if (Object.keys(remote.env).length > 0) {
-            Object.assign(childEnv, remote.env);
-        }
-        codexSocketPath = socketPathFromRemoteArgs(remote.args);
-        codexServerCleanup = remote.server?.cleanup ?? null;
-    }
-    const kickoff = buildAgentKickoffPrompt({
+    return launchAssimilatedAgent({
+        flags: args.flags,
+        result,
+        cubeDetail,
+        assignedRole,
+        apiUrl: auth.apiUrl,
         cli,
-        codexWakeNonce,
-        monitorClause,
-        codexWakePathClause,
-    });
-    // Keep launch trust separate from the shared kickoff. OpenCode receives the
-    // same prompt text; its plugin adds the correlation identity to hidden
-    // TextPart metadata instead of argv or prompt content.
-    let openCodeKickoff = null;
-    let dronePort;
-    launchArgs = [kickoff];
-    if (cli === 'codex') {
-        // gh#673 P1-codex: -c overrides deliver BORG_SESSION and the selected
-        // CLI identity to the codex-spawned borg-mcp child (inherited env never
-        // reaches Codex MCP children — V2/V2b probes). Explicitly pin remote wake
-        // off when no socket is available, overriding legacy static configs that
-        // formerly used this transport marker as Codex identity.
-        launchArgs = [
-            ...codexLaunchDirectoryArgs(launchAccessPaths),
-            ...launchApproval.codexArgs,
-            ...codexBorgSessionConfigArgs(),
-            ...codexAgentKindConfigArgs(),
-            ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
-            ...codexStateRootConfigArgs(),
-            ...remoteArgs,
-            ...withCodexCwdArg(launchArgs, agentCwd),
-        ];
-    }
-    else if (cli === 'opencode') {
-        // OpenCode assimilate launch: start TUI with the kickoff passed via
-        // --prompt (auto-submits it as the first message). BORG_SESSION is
-        // pinned in opencode.json. An OS-selected launch-scoped port is shared
-        // with the MCP child for local HTTP entry injection.
-        dronePort = await allocateOpenCodePort();
-        childEnv.BORG_OPENCODE_PORT = String(dronePort);
-        installBorgPlugin();
-        const cwd = agentCwd;
-        openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
-        childEnv[OPENCODE_SERVER_USERNAME_ENV] = OPENCODE_SERVER_USERNAME;
-        childEnv[OPENCODE_SERVER_PASSWORD_ENV] = openCodeKickoff.apiPassword;
-        childEnv[BORG_OPENCODE_LAUNCH_CORRELATION_ENV] = openCodeKickoff.correlationIdentity;
-        launchArgs = buildOpenCodeLaunchArgs(cwd, dronePort, openCodeKickoff.prompt);
-    }
-    // gh#673 P1: mark the launched agent session as borg-launched so the
-    // MCP child + hook bins activate (launch-gate.ts). childEnv is the
-    // complete child environment (process.env + model.set, minus unset
-    // keys, plus BORG_SESSION + codex env). The exec seam must use it
-    // directly without re-merging process.env (assimilate-deps.ts).
-    const exitPromise = deps.exec(cli, launchArgs, agentCwd, childEnv);
-    if (cli === 'codex' && codexSocketPath && codexWakeNonce) {
-        void recordCodexWakeTarget({
-            deps,
-            cubeId: result.cube_id,
-            droneId: result.drone_id,
-            socketPath: codexSocketPath,
-            cwd: agentCwd,
-            previewNeedle: codexWakeNonce,
-            launchedAtSeconds: Math.floor(Date.now() / 1000),
-        });
-    }
-    // gh#opencode: bind to the kickoff-bearing session through OpenCode's local
-    // HTTP API after the TUI auto-submits --prompt. Best-effort.
-    if (cli === 'opencode' && openCodeKickoff) {
-        const launchKickoff = openCodeKickoff;
-        // The port is checked before spawn but cannot be reserved through
-        // OpenCode's own bind. The residual allocation-to-spawn race is tracked
-        // in client#298; this slice only establishes deterministic rendezvous.
-        const serverUrl = `http://127.0.0.1:${dronePort}`;
-        connectOpenCodeDrone({
-            serverUrl,
-            apiPassword: launchKickoff.apiPassword,
-            directory: agentCwd,
-            droneLabel: result.drone_label,
-            cubeName: cubeDetail.name,
-            launchIdentity: launchKickoff.correlationIdentity,
-        })
-            .then(() => injectInitialKickoff(launchKickoff))
-            .catch(() => { });
-    }
-    const exitCode = await exitPromise;
-    // gh#528: kill the borg-owned Codex app-server when the assimilate-launched
-    // session exits, so it isn't left orphaned (live → not pruned by pid liveness).
-    // OpenCode has no app-server to clean up.
-    if (codexServerCleanup) {
-        try {
-            codexServerCleanup();
-        }
-        catch {
-            // best-effort
-        }
-    }
-    // Sprint 18: when a sibling worktree was spawned, the user's shell
-    // returns to their original cwd after Claude exits (process.chdir
-    // doesn't propagate to the parent). Emit a stderr hint so they know
-    // how to get back into the worktree. shellEscape defangs any shell
-    // metachars in the path against paste-injection (drone-11 SR-LANE).
-    // Skip the hint when no worktree was spawned (--here / no-worktree
-    // flow) or when originalCwd already matches the worktree path
-    // (defensive against the no-op edge case drone-9 UX-LANE flagged).
-    if (spawnedWorktreePath && originalCwd !== spawnedWorktreePath) {
-        deps.stderr(`\nAgent exited. You were working in ${spawnedWorktreePath}; your shell is back in ${originalCwd}.\n` +
-            `To return:\n` +
-            `  cd ${shellEscape(spawnedWorktreePath)}\n`);
-    }
-    return exitCode;
+        effectiveModel,
+        agentCwd,
+        seatWorktree,
+        scratchRoot,
+        launchAccessPaths,
+        monitorStateRoot,
+        spawnedWorktreePath,
+        originalCwd,
+    }, deps);
 }
 function renderWorktreeSteeringNote(worktreePath, wtBranch, primaryPath) {
     return (`\nWORKTREE STEERING: You are in worktree ${worktreePath} on branch ${wtBranch}. ` +
