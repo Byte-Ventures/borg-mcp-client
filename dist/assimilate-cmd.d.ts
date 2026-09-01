@@ -231,10 +231,125 @@ export interface AssimilateDeps {
         updatedAfter: number;
     }) => Promise<string | null>;
 }
+export type AuthorityResolutionDeps = Pick<AssimilateDeps, 'connectServer' | 'cwd' | 'defaultAuthority' | 'detectLocalServer' | 'ensureLocalServerInstalled' | 'getActiveCube' | 'getHostname' | 'hasPersistedActiveCube' | 'isTTY' | 'peekPendingServerEnrollment' | 'preparePrivateRoot' | 'prompt' | 'promptSecret' | 'resumePendingServerEnrollment' | 'resumeServerEnrollment' | 'runSync' | 'stderr'>;
 type AssimilationAuthority = {
     kind: 'server';
     apiUrl: string;
 };
+export type AssimilationPhaseOutcome<T> = {
+    kind: 'continue';
+    value: T;
+} | {
+    kind: 'stop';
+    code: number;
+};
+export interface RepositoryResolutionOutcome {
+    mode: 'assimilate' | 'cube-init';
+    repositoryContext: GitRepositoryContext;
+}
+export type RepositoryResolutionDeps = Pick<AssimilateDeps, 'cwd' | 'resolveRepositoryContext' | 'stderr'>;
+export declare function resolveAssimilationRepository(args: AssimilateArgs, deps: RepositoryResolutionDeps): Promise<AssimilationPhaseOutcome<RepositoryResolutionOutcome>>;
+export type FinalizationDeps = Pick<AssimilateDeps, 'cwd' | 'finalizeServerSeat' | 'findProjectRoot' | 'stderr'>;
+export interface FinalizationInput {
+    activeCube: AssimilationActiveCube;
+    apiUrl: string;
+    repositoryContext: GitRepositoryContext;
+    result: AssimilateResult;
+    sessionExpected: ExpectedBinding;
+    rollbackWorktree: () => void;
+}
+export declare function finalizeAssimilationSeat(input: FinalizationInput, deps: FinalizationDeps): Promise<AssimilationPhaseOutcome<void>>;
+export type LaunchDeps = Pick<AssimilateDeps, 'exec' | 'findLoadedCodexThread' | 'getInboxPath' | 'isTTY' | 'prepareCodexRemoteLaunch' | 'probeMcpReady' | 'resolveCliApprovals' | 'setCodexWakeTarget' | 'setTerminalTitle' | 'stderr' | 'stdout'>;
+export interface LaunchInput {
+    flags: AssimilateFlags;
+    result: AssimilateResult;
+    cubeDetail: CubeDetail;
+    assignedRole: Role;
+    apiUrl: string;
+    cli: BorgCli;
+    effectiveModel: string | null;
+    agentCwd: string;
+    seatWorktree: string;
+    scratchRoot: string;
+    launchAccessPaths: LaunchAccessPaths;
+    monitorStateRoot: string;
+    spawnedWorktreePath: string | null;
+    originalCwd: string;
+}
+export declare function launchAssimilatedAgent(input: LaunchInput, deps: LaunchDeps): Promise<number>;
+export type CubeRoleResolutionDeps = Pick<AssimilateDeps, 'resolveCli' | 'stderr'>;
+export interface CubeRoleResolutionInput {
+    requestedRole: string | undefined;
+    flags: AssimilateFlags;
+    cubeDetail: CubeDetail;
+    isFirstDrone: boolean;
+    savedLocalRole: Role | undefined;
+    apiUrl: string;
+}
+export interface CubeRoleResolutionOutcome {
+    resolvedRole: Role;
+    effectiveModel: string | null;
+    cli: BorgCli;
+}
+export declare function resolveAssimilationCubeRole(input: CubeRoleResolutionInput, deps: CubeRoleResolutionDeps): Promise<AssimilationPhaseOutcome<CubeRoleResolutionOutcome>>;
+export type SeatPreparationDeps = Pick<AssimilateDeps, 'assimilate' | 'getHostname' | 'stderr'>;
+export interface SeatPreparationInput {
+    apiUrl: string;
+    token: string;
+    serverTrustIdentity: string;
+    cubeDetail: CubeDetail;
+    resolvedRole: Role;
+    cli: BorgCli;
+    effectiveModel: string | null;
+    projectRoot: string;
+    existing: CanonicalActiveCube | null;
+    reattachPriorId: string | undefined;
+    remintInvalidPrior: boolean;
+    resumeCredentialRef: string | undefined;
+    resumeDroneId: string | undefined;
+    resumeState: 'pending' | 'active' | undefined;
+    sessionOperation: ServerSessionOperation;
+}
+export interface SeatPreparationOutcome {
+    result: AssimilateResult;
+    assignedRole: Role;
+    sessionExpected: ExpectedBinding;
+}
+export declare function prepareAssimilationSeat(input: SeatPreparationInput, deps: SeatPreparationDeps): Promise<AssimilationPhaseOutcome<SeatPreparationOutcome>>;
+export type WorktreePreparationDeps = Pick<AssimilateDeps, 'chdir' | 'cwd' | 'homedir' | 'mkdirp' | 'pathExists' | 'runSync' | 'stderr'>;
+export interface WorktreePreparationInput {
+    flags: AssimilateFlags;
+    repositoryContext: GitRepositoryContext;
+    projectRoot: string;
+    wantSibling: boolean;
+    verifiedHead: string;
+    assignedRole: Role;
+    existing: CanonicalActiveCube | null;
+}
+export interface WorktreePreparationOutcome {
+    spawnedWorktreePath: string | null;
+}
+export declare function prepareAssimilationWorktree(input: WorktreePreparationInput, deps: WorktreePreparationDeps): Promise<AssimilationPhaseOutcome<WorktreePreparationOutcome>>;
+export interface AuthorityResolutionInput {
+    args: AssimilateArgs;
+    mode: 'assimilate' | 'cube-init';
+    repositoryContext: GitRepositoryContext;
+}
+export interface AuthorityResolutionOutcome {
+    authority: AssimilationAuthority;
+    auth: {
+        token: string;
+        apiUrl: string;
+        serverTrustIdentity: string;
+        serverCapabilities: readonly string[];
+    };
+    existing: CanonicalActiveCube | null;
+    hasPersistedIdentity: boolean;
+    projectRoot: string;
+    wantSibling: boolean;
+    verifiedHead: string;
+}
+export declare function resolveAssimilationAuthority(input: AuthorityResolutionInput, deps: AuthorityResolutionDeps): Promise<AssimilationPhaseOutcome<AuthorityResolutionOutcome>>;
 export declare function runAssimilate(args: AssimilateArgs, deps: AssimilateDeps, options?: RunAssimilateOptions): Promise<number>;
 /**
  * Sprint 4 / gh#147 (drone-8 SR-PE-FINDING-1): strip ASCII control

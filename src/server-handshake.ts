@@ -144,7 +144,7 @@ async function readHandshakeBodyWithTimeout(response: Response): Promise<string>
  * TLS, confirm the server speaks the exact protocol tag BEFORE any bearer is
  * created, sent, or a seat attached. Sends NO Authorization header, cookie,
  * query, or body; rejects redirects; and bounds the response. A tag mismatch,
- * an extra field, or any transport anomaly fails closed here — no keychain
+ * an extra field, or any transport anomaly fails closed here — no credential-store
  * write and no attach. The bearer is proven only at attach.
  */
 export async function preflightBorgServerTag(
@@ -223,7 +223,7 @@ export interface ServerAttachResult {
  * activates that pending record in place; the server never returns a bearer.
  */
 /**
- * The PREPARE + network half of an attach, WITHOUT the keychain pending→ACTIVE
+ * The PREPARE + network half of an attach, WITHOUT the file-store pending→ACTIVE
  * transition. The deferred `activate` / `scrubPending` thunks let the cube-lock-
  * owning orchestration (assimilate) FINALIZE binding-FIRST: write the cubes
  * binding referencing this exact pending record under the cube lock, THEN call
@@ -897,7 +897,7 @@ export async function associateLocalBorgServerRepositoryCube(
 
 /**
  * Create one repository cube through the narrow owner capability. The retry
- * key is persisted in the OS keychain before network I/O and reused exactly
+ * key is persisted in the private file store before network I/O and reused exactly
  * after an ambiguous transport result. Ordinary clients are denied locally
  * before any create request is sent.
  */
@@ -1077,7 +1077,7 @@ export async function connectEnrolledBorgServer(
   };
 }
 
-/** Resolve the same-user server CA and its authority-bound keychain credential. */
+/** Resolve the same-user server CA and its authority-bound file-store credential. */
 export async function resolveBorgServerAuthority(
   origin: string,
   deps: {

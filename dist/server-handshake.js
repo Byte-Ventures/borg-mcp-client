@@ -52,7 +52,7 @@ async function readHandshakeBodyWithTimeout(response) {
  * TLS, confirm the server speaks the exact protocol tag BEFORE any bearer is
  * created, sent, or a seat attached. Sends NO Authorization header, cookie,
  * query, or body; rejects redirects; and bounds the response. A tag mismatch,
- * an extra field, or any transport anomaly fails closed here — no keychain
+ * an extra field, or any transport anomaly fails closed here — no credential-store
  * write and no attach. The bearer is proven only at attach.
  */
 export async function preflightBorgServerTag(origin, fetchImpl = fetch) {
@@ -583,7 +583,7 @@ export async function associateLocalBorgServerRepositoryCube(origin, trustIdenti
 }
 /**
  * Create one repository cube through the narrow owner capability. The retry
- * key is persisted in the OS keychain before network I/O and reused exactly
+ * key is persisted in the private file store before network I/O and reused exactly
  * after an ambiguous transport result. Ordinary clients are denied locally
  * before any create request is sent.
  */
@@ -707,7 +707,7 @@ export async function connectEnrolledBorgServer(origin, trustIdentity, deps = {}
         }),
     };
 }
-/** Resolve the same-user server CA and its authority-bound keychain credential. */
+/** Resolve the same-user server CA and its authority-bound file-store credential. */
 export async function resolveBorgServerAuthority(origin, deps = {}) {
     return withEnrollmentOriginLock(origin, async () => {
         const trust = await (deps.loadTrust ?? loadBorgServerTrust)(origin);
