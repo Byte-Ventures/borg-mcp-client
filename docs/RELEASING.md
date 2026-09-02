@@ -21,9 +21,9 @@ Before creating the release tag, independently verify all of these conditions:
 - the extraction review confirms no private backend secrets, deployment
   configuration, customer data, local state, or duplicated shared contracts
   entered the public package;
-- the exact audited registry dependency `borgmcp-shared@2.0.0` remains locked to
+- the exact audited registry dependency `borgmcp-shared@2.0.1` remains locked to
   its canonical tarball and integrity
-  `sha512-GRRpWnWlBI/y8ldut2YCdc8Sb+IdtxgrJaVRAAhPJgeQ5dRNFBXg0BGh+SKKpiHKIkfGuraYhz1hhxzG7wXO9A==`;
+  `sha512-S8ynExOPIosDEeFl8TbeMNAaf+v+1RW2vk5IVlbP6M7rg1EKwWh4g17WVeozPmfF/n2qiyetCU5kPWz38cJ84w==`;
 - the current published server and the client candidate use the same exact
   `borgmcp-shared` version; publish a compatible server before tagging the
   client when that pin changes;
