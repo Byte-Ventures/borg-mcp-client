@@ -1,9 +1,9 @@
-import { access, mkdir, mkdtemp, readFile, rename as fsRename, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rename as fsRename, rm, utimes, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   acquireStreamLease,
   readOwnershipSnapshot,
@@ -12,9 +12,18 @@ import {
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const DRONE_ID = '22222222-2222-4222-8222-222222222222';
+const tempDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirectories.splice(0).map((directory) =>
+    rm(directory, { recursive: true, force: true })
+  ));
+});
 
 async function tempLocksDir(): Promise<string> {
-  return mkdtemp(path.join(tmpdir(), 'borg-stream-owner-'));
+  const directory = await mkdtemp(path.join(tmpdir(), 'borg-stream-owner-'));
+  tempDirectories.push(directory);
+  return directory;
 }
 
 describe('stream-owner lease', () => {

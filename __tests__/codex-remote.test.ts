@@ -7,7 +7,7 @@
  * handle (cleanup on TUI exit), or a fail-loud warning. Tests use injected fakes
  * for spawn/probe/sleep + a real temp runtime dir.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,8 +18,18 @@ import {
   checkCodexBridgeHealthy,
 } from '../src/codex-remote';
 
+const tempDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of tempDirectories.splice(0)) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'borg-codex-remote-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'borg-codex-remote-'));
+  tempDirectories.push(directory);
+  return directory;
 }
 
 /** Minimal deps with a fast (no real wait) clock and a deterministic socket id. */
