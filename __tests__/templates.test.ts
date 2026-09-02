@@ -174,7 +174,7 @@ describe('Template.cube_directive field', () => {
     const coord = t!.roles.find((role) => role.name === 'Coordinator');
     expect(coord?.detailed_description).toContain('Order named drones');
     expect(coord?.detailed_description).toContain('START NOW');
-    expect(coord?.detailed_description).toContain('ACK and claim are receipt only');
+    expect(coord?.detailed_description).toContain('ACK and CLAIM are receipt only');
     expect(coord?.detailed_description).toContain('Verify activation and progress against the concrete milestones');
     expect(coord?.detailed_description).toContain('borg_ack-status');
     expect(coord?.detailed_description).toContain('without advancing unread cursors');
@@ -208,7 +208,7 @@ describe('Template.cube_directive field', () => {
     );
     const text = coordinator?.detailed_description ?? '';
 
-    expect(text).toContain('not a fixed elapsed-time cadence');
+    expect(text).toContain('bounded activation or supervision deadline');
     expect(text).toContain('send one direct status request');
     expect(text).toContain('missed milestones never authorize rerouting or reassignment');
     expect(text).toContain('requires explicit human operator approval');
