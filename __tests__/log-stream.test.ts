@@ -405,44 +405,57 @@ describe('streamOnce', () => {
     const ownerFetch = vi.fn().mockResolvedValue(response);
     const skippedFetch = vi.fn().mockResolvedValue(makeSSEResponse([]));
 
-    const first = streamOnceIfOwner(
-      UUID_ACTIVE_CUBE,
-      null,
-      vi.fn(),
-      {
-        ...makeDeps(ownerFetch, appendLine),
-        ownerDeps: {
-          locksDir,
-          pid: 1001,
-          processNonce: 'owner',
-          cwd: '/work/owner',
-        },
-      }
-    );
-    await vi.waitFor(() => expect(appendLine).toHaveBeenCalledTimes(1));
+    let first: ReturnType<typeof streamOnceIfOwner> | undefined;
+    let responseClosed = false;
+    const closeResponse = () => {
+      if (responseClosed) return;
+      responseClosed = true;
+      close();
+    };
+    try {
+      first = streamOnceIfOwner(
+        UUID_ACTIVE_CUBE,
+        null,
+        vi.fn(),
+        {
+          ...makeDeps(ownerFetch, appendLine),
+          ownerDeps: {
+            locksDir,
+            pid: 1001,
+            processNonce: 'owner',
+            cwd: '/work/owner',
+          },
+        }
+      );
+      await vi.waitFor(() => expect(appendLine).toHaveBeenCalledTimes(1));
 
-    const second = await streamOnceIfOwner(
-      UUID_ACTIVE_CUBE,
-      null,
-      vi.fn(),
-      {
-        ...makeDeps(skippedFetch, appendLine),
-        ownerDeps: {
-          locksDir,
-          pid: 1002,
-          processNonce: 'non-owner',
-          cwd: '/work/non-owner',
-        },
-      }
-    );
+      const second = await streamOnceIfOwner(
+        UUID_ACTIVE_CUBE,
+        null,
+        vi.fn(),
+        {
+          ...makeDeps(skippedFetch, appendLine),
+          ownerDeps: {
+            locksDir,
+            pid: 1002,
+            processNonce: 'non-owner',
+            cwd: '/work/non-owner',
+          },
+        }
+      );
 
-    expect(second).toBe('skipped');
-    expect(ownerFetch).toHaveBeenCalledTimes(1);
-    expect(skippedFetch).not.toHaveBeenCalled();
-    expect(appendLine).toHaveBeenCalledTimes(1);
+      expect(second).toBe('skipped');
+      expect(ownerFetch).toHaveBeenCalledTimes(1);
+      expect(skippedFetch).not.toHaveBeenCalled();
+      expect(appendLine).toHaveBeenCalledTimes(1);
 
-    close();
-    await expect(first).resolves.toBe('streamed');
+      closeResponse();
+      await expect(first).resolves.toBe('streamed');
+    } finally {
+      closeResponse();
+      await first?.catch(() => {});
+      await rm(locksDir, { recursive: true, force: true });
+    }
   });
 
   it('persists an OpenCode entry before submitting its stable SSE entry ID', async () => {
