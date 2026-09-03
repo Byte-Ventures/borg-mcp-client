@@ -585,7 +585,7 @@ test('release preflight accepts the published server when exact shared pins matc
         ok: true,
         json: async () => ({
           name: 'borgmcp-server',
-          version: '3.4.0',
+          version: '4.0.2',
           dependencies: { 'borgmcp-shared': '2.0.1' },
         }),
       };
@@ -596,7 +596,7 @@ test('release preflight accepts the published server when exact shared pins matc
     name: 'borgmcp',
     version: packageManifest.version,
     shared: '2.0.1',
-    server: '3.4.0',
+    server: '4.0.2',
   });
   assert.deepEqual(requests, [{
     url: 'https://registry.npmjs.org/borgmcp-server/latest',
@@ -620,7 +620,7 @@ test('release preflight refuses a client before publication when the current ser
         }),
       }),
     }),
-    /borgmcp@5\.0\.3 pins borgmcp-shared@2\.0\.1.*borgmcp-server@1\.0\.0 pins borgmcp-shared@0\.14\.0.*Publish the compatible server before tagging this client/s,
+    /borgmcp@5\.1\.0 pins borgmcp-shared@2\.0\.1.*borgmcp-server@1\.0\.0 pins borgmcp-shared@0\.14\.0.*Publish the compatible server before tagging this client/s,
   );
 });
 
