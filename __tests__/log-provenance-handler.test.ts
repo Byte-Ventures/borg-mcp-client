@@ -102,6 +102,7 @@ describe('borg_log provenance handler', () => {
       arguments: { message: 'REVIEW-READY branch', to: 'broadcast' },
     });
     expect(refused).toMatchObject({ isError: true });
+    expect(refused.content[0].text).toContain('Pass refs: ["HEAD"]');
     expect(state.appendLog).not.toHaveBeenCalled();
 
     state.handlers.length = 0;
@@ -111,6 +112,19 @@ describe('borg_log provenance handler', () => {
     });
     expect(posted.isError).toBeFalsy();
     expect(state.appendLog.mock.calls[0][2]).toBe(`REVIEW-READY branch\n\nHEAD = ${SHA}`);
+  });
+
+  it('C6 names origin refs in the refusal for a repository with an origin', async () => {
+    state.active.repositoryOrigin = 'https://github.com/org/repo';
+    const refused = await call({
+      name: 'borg_log',
+      arguments: { message: 'REVIEW-READY branch', to: 'broadcast' },
+    });
+    expect(refused).toMatchObject({ isError: true });
+    expect(refused.content[0].text).toContain(
+      'Pass refs: ["HEAD", "origin/<branch>", "origin/main"]'
+    );
+    expect(state.appendLog).not.toHaveBeenCalled();
   });
 
   it('C7 applies leading-dash refusal through borg_tool before Git or append', async () => {

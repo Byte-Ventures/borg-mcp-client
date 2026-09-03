@@ -74,6 +74,8 @@ export interface ActiveCube {
   isHumanSeat?: boolean;
   /** Canonical worktree bound to this exact durable seat. */
   worktree?: string;
+  /** Canonical public origin when the assimilated repository has one. */
+  repositoryOrigin?: string;
 }
 
 export const BORG_LAUNCH_EXPECTED_SEAT_ENV = 'BORG_LAUNCH_EXPECTED_SEAT';
@@ -474,6 +476,7 @@ async function hydrateActiveCube(record: SeatRecord): Promise<ActiveCube | null>
     localSessionCredentialRef: ref,
     operation: record.operation,
     worktree: record.worktree,
+    ...(record.repositoryOrigin !== undefined ? { repositoryOrigin: record.repositoryOrigin } : {}),
     ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
     ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),
     ...(record.isHumanSeat !== undefined ? { isHumanSeat: record.isHumanSeat } : {}),

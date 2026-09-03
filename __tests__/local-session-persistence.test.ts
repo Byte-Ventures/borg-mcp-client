@@ -44,7 +44,11 @@ async function setup() {
 }
 
 describe('local ActiveCube session persistence (single store)', () => {
-  async function seedActiveSeat(seats: typeof import('../src/seats.js'), worktree: string) {
+  async function seedActiveSeat(
+    seats: typeof import('../src/seats.js'),
+    worktree: string,
+    repositoryOrigin?: string,
+  ) {
     const seat = { origin: ORIGIN, trustIdentity: TRUST, cubeId: CUBE_ID, roleId: ROLE_ID,
       operation: { projectRoot: worktree, kind: 'seat' as const, operationKey: 'current-worktree' } };
     await seats.mintPendingSeat({ ...seat, credential: BEARER });
@@ -52,6 +56,7 @@ describe('local ActiveCube session persistence (single store)', () => {
       ...seat, droneId: DRONE_ID, sessionId: '33333333-3333-4333-8333-333333333333',
       expiresAt: '2026-07-20T00:00:00.000Z', expectedPendingDigest: digestOf(BEARER),
       worktree, name: 'local-cube', droneLabel: 'builder-1', roleName: 'Drone',
+      ...(repositoryOrigin === undefined ? {} : { repositoryOrigin }),
     })).toBe('activated');
     return seats.seatRef(seat);
   }
@@ -70,6 +75,18 @@ describe('local ActiveCube session persistence (single store)', () => {
       localSessionCredentialRef: ref,
       sessionToken: BEARER,
     });
+  });
+
+  it('carries repositoryOrigin into ActiveCube only when the seat has one', async () => {
+    const { project, seats, cubes } = await setup();
+    await seedActiveSeat(seats, project, 'https://github.com/org/repo');
+    await expect(cubes.getActiveCube()).resolves.toMatchObject({
+      repositoryOrigin: 'https://github.com/org/repo',
+    });
+
+    const local = await setup();
+    await seedActiveSeat(local.seats, local.project);
+    expect(await local.cubes.getActiveCube()).not.toHaveProperty('repositoryOrigin');
   });
 
   it('resolves hook, kickoff, MCP, and stream ownership to the same live duplicate-worktree seat', async () => {

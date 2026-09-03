@@ -208,6 +208,43 @@ describe('#921 de-template — universal layer is template-agnostic (STARTER con
 });
 
 describe('getDronePlaybook', () => {
+  it('selects repository-mode handover guidance without changing the origin mode', () => {
+    const origin = getDronePlaybook('origin');
+    expect(origin).toBe(getDronePlaybook());
+    expect(origin).toContain(
+      '`borg_log message="<message>" to="broadcast"|["<selector>"] refs=["HEAD","origin/<branch>","origin/main"]`'
+    );
+    expect(origin).toContain(
+      'Post REVIEW-READY with `refs: ["HEAD","origin/<branch>","origin/main"]`.'
+    );
+
+    const local = getDronePlaybook('local');
+    expect(local).toContain('refs=["HEAD"]');
+    expect(local).toContain('Post REVIEW-READY with `refs: ["HEAD"]`');
+    expect(local).not.toContain('origin/');
+    expect(local).not.toContain('push');
+  });
+
+  it('threads the handover mode through full regen rendering', () => {
+    const result = {
+      cube: { name: 'cube', message_taxonomy: [] },
+      role: { name: 'Worker', detailed_description: 'Do work.' },
+      drone: { label: 'worker-1' },
+      roles: [{ id: 'role-1', name: 'Worker', short_description: 'works' }],
+      drones: [{ id: 'drone-1', role_id: 'role-1', label: 'worker-1', last_seen: '2026-09-03T00:00:00.000Z' }],
+      behind_by: 0,
+    };
+    __resetRegenSessionState();
+    const local = formatRegenMarkdown(result, { mode: 'full', handoverMode: 'local' });
+    expect(local).toContain('refs=["HEAD"]');
+    expect(local).not.toContain('origin/');
+    expect(local).not.toContain('push');
+
+    __resetRegenSessionState();
+    const origin = formatRegenMarkdown(result, { mode: 'full', handoverMode: 'origin' });
+    expect(origin).toContain('refs=["HEAD","origin/<branch>","origin/main"]');
+  });
+
   it('keeps unfinished assigned work active after handling the current wake (gh#174)', () => {
     const playbook = getDronePlaybook();
 
@@ -292,6 +329,25 @@ describe('getDronePlaybook', () => {
     expect(playbook).toContain('git checkout -b <branch>');
     expect(playbook).toContain('git checkout --detach <SHA>');
     expect(playbook).toContain('~/.borg/scratch/<seat>/');
+  });
+
+  it('renders a local-only worktree handover chapter without remote steps', () => {
+    const origin = getDronePlaybookChapter('origin');
+    expect(origin).toBe(getDronePlaybookChapter());
+    expect(origin).toContain(
+      'Post REVIEW-READY through `borg_log` with `refs: ["HEAD","origin/<branch>","origin/main"]`'
+    );
+    expect(origin).toContain('`git fetch origin && git merge origin/main`');
+
+    const local = getDronePlaybookChapter('local');
+    const worktree = local.slice(local.indexOf('**Worktree and git mechanism:**'));
+    expect(worktree).toContain('A commit on a named branch is the handover artifact');
+    expect(worktree).toContain('`refs: ["HEAD"]`');
+    expect(worktree).toContain('a local branch ref is optional');
+    expect(worktree).toContain('`git checkout --detach <SHA>`');
+    expect(worktree).toContain('A commit is the only checkpoint; repository backup is the operator\'s concern.');
+    expect(worktree).not.toMatch(/origin\/|push|fetch/);
+    expect(local).not.toContain('origin/');
   });
 
   it('introduces the claim kind as advisory ownership + the keyed-on-real-gate invariant, TEMPLATE-AGNOSTICALLY (gh#418 / #921)', () => {

@@ -343,6 +343,7 @@ async function hydrateActiveCube(record) {
         localSessionCredentialRef: ref,
         operation: record.operation,
         worktree: record.worktree,
+        ...(record.repositoryOrigin !== undefined ? { repositoryOrigin: record.repositoryOrigin } : {}),
         ...(record.roleName !== undefined ? { roleName: record.roleName } : {}),
         ...(record.roleClass !== undefined ? { roleClass: record.roleClass } : {}),
         ...(record.isHumanSeat !== undefined ? { isHumanSeat: record.isHumanSeat } : {}),

@@ -2731,7 +2731,7 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       '/work/myrepo',
     );
     expect(stderr).toHaveBeenCalledWith(
-      'note: no usable origin; new worktree will start on local HEAD (16c1405)\n',
+      'note: local handover mode; new worktree will start on local HEAD (16c1405)\n',
     );
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain(
       'the original dir keeps its active drone binding',

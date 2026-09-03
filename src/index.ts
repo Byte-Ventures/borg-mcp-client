@@ -595,7 +595,10 @@ export async function main() {
           } catch { /* never break regen */ }
 
           return {
-            content: [{ type: 'text', text: versionHeader + prefix + formatRegenMarkdown(displayedResult, { mode }) }],
+            content: [{ type: 'text', text: versionHeader + prefix + formatRegenMarkdown(displayedResult, {
+              mode,
+              handoverMode: active.repositoryOrigin === undefined ? 'local' : 'origin',
+            }) }],
             structuredContent: {
               connected: true,
               mode,
@@ -653,7 +656,10 @@ export async function main() {
               ``,
             ].join('\n');
             return {
-              content: [{ type: 'text', text: header + formatRegenMarkdown(displayedResult, { mode: 'full' }) }],
+              content: [{ type: 'text', text: header + formatRegenMarkdown(displayedResult, {
+                mode: 'full',
+                handoverMode: active!.repositoryOrigin === undefined ? 'local' : 'origin',
+              }) }],
               structuredContent: {
                 reattached: true,
                 cube_name: displayIdentity.cubeName,
@@ -675,10 +681,14 @@ export async function main() {
         }
 
         case 'borg_playbook': {
-          // gh#912: serve the on-demand operating-playbook chapter (static
-          // client-side text — no cube/auth needed; the rule-spine is already
-          // inline in regen). Lets the bootstrap regen stay light.
-          return { content: [{ type: 'text', text: getDronePlaybookChapter() }] };
+          // gh#912: serve the on-demand operating-playbook chapter. Its text is
+          // client-side, selected for the active repository handover mode; the
+          // rule-spine is already inline in regen.
+          const active = await requireActiveCube();
+          return { content: [{
+            type: 'text',
+            text: getDronePlaybookChapter(active.repositoryOrigin === undefined ? 'local' : 'origin'),
+          }] };
         }
 
         case 'borg_docs': {
@@ -785,7 +795,7 @@ export async function main() {
             lines.push('_(Coordinator-class drones can fetch role IDs via `borg_list-roles` for use with `borg_reassign-drone`.)_');
           }
           lines.push('');
-          lines.push(getDronePlaybook());
+          lines.push(getDronePlaybook(active.repositoryOrigin === undefined ? 'local' : 'origin'));
           return {
             content: [{ type: 'text', text: lines.join('\n') }],
             structuredContent: { cube, roles },
@@ -1052,7 +1062,10 @@ export async function main() {
           if (!active) throw new Error('Not assimilated to a cube. Use borg_assimilate <cube-name> first.');
           const refs = validateRefs(args?.refs);
           if (requiresRefs(message) && refs.length === 0) {
-            throw new Error('REVIEW-READY messages require refs. Pass refs: ["HEAD", "origin/<branch>", "origin/main"].');
+            const requiredRefs = active.repositoryOrigin === undefined
+              ? '["HEAD"]'
+              : '["HEAD", "origin/<branch>", "origin/main"]';
+            throw new Error(`REVIEW-READY messages require refs. Pass refs: ${requiredRefs}.`);
           }
           const repository = active.worktree ?? findProjectRoot();
           const shaAudit = auditMessageShas(message, repository);

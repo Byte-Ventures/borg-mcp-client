@@ -6,6 +6,7 @@
  * index.ts's stdio MCP server bootstrap.
  */
 import type { AgentKind } from './agent-runtime.js';
+export type HandoverMode = 'origin' | 'local';
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
  *
@@ -123,7 +124,7 @@ export declare function markArrivalAnnouncedThisProcess(): void;
  * is delegated to a drone) live in each role's detailed_description, not
  * here.
  */
-export declare function getDronePlaybook(): string;
+export declare function getDronePlaybook(handoverMode?: HandoverMode): string;
 /**
  * gh#912: the verbose operating-discipline DETAIL externalized out of the
  * bootstrap regen into an on-demand chapter (fetched via the borg_playbook
@@ -132,7 +133,7 @@ export declare function getDronePlaybook(): string;
  * sharpening, the concrete surfaces, and the four-surface propagation that a
  * drone only needs when doing review/verify-class work. Static text.
  */
-export declare function getDronePlaybookChapter(): string;
+export declare function getDronePlaybookChapter(handoverMode?: HandoverMode): string;
 /**
  * Format an absolute timestamp as a coarse "Xs/Xm/Xh ago" string.
  */
@@ -199,6 +200,7 @@ export declare function formatRegenMarkdown(result: {
     decisions?: any[];
 }, opts?: {
     mode?: RegenMode;
+    handoverMode?: HandoverMode;
 }): string;
 export declare function formatLogEntryMarkdown(entry: any, droneById: Map<string, any>, roleById: Map<string, any>): string;
 export declare function formatLogRecipients(entry: {
