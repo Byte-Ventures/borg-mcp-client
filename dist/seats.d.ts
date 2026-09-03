@@ -31,6 +31,8 @@ export interface SeatRecord {
     operation: SeatOperation;
     credential: string;
     state: 'pending' | 'active';
+    /** Monotonic store-local order assigned when this record is bound active. */
+    bindingOrder?: number;
     droneId?: string;
     sessionId?: string;
     worktree?: string;
@@ -50,6 +52,9 @@ export declare function seatRef(input: {
     roleId: string;
     operation: SeatOperation;
 }): string;
+export declare class AmbiguousSeatBindingError extends Error {
+    constructor(worktree: string);
+}
 export type SeatObservation = {
     state: 'active';
     digest: string;
@@ -216,11 +221,11 @@ export declare function bindPendingSeatToWorktree(input: {
     isHumanSeat?: boolean;
 }): Promise<BindPendingSeatOutcome>;
 /** The preferred ACTIVE seat bound to `worktree`, or null. A pending record (no
- *  worktree, or non-active) is NEVER surfaced as a live binding. Candidates use
- *  one total order across every process: unrejected before rejected, a sibling
- *  finalized into this worktree before an older in-place binding, then seat ref. */
+ *  worktree, or non-active) is NEVER surfaced as a live binding. Persisted bind
+ *  order is authoritative across processes; an unorderable legacy duplicate
+ *  fails closed rather than selecting an identity or inbox path. */
 export declare function getActiveSeatForWorktree(worktree: string): Promise<SeatRecord | null>;
-/** Deprioritize an exact seat after a definitive server auth or eviction verdict. */
+/** Remember a definitive server auth or eviction verdict in this process only. */
 export declare function markSeatRejected(ref: string): void;
 /**
  * CR#2: the seat bound to `worktree` regardless of state — an ACTIVE seat OR a

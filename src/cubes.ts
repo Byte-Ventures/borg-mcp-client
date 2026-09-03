@@ -524,10 +524,11 @@ export function activeCubeWithFreshRegenIdentity(
   return { ...active, name, droneLabel, roleName, roleClass, isHumanSeat };
 }
 
-// The ONLY sanctioned seat-clear is resetLocalSeatBinding → seats.ts
+// The explicit offline seat-clear is resetLocalSeatBinding → seats.ts
 // resetSeatForWorktree, which under the single store flock re-checks the FULL
 // binding (ref + drone id) + the token-safe observation and DELETES the whole
-// record (credential AND binding together — no cross-store 'partial').
+// record (credential AND binding together — no cross-store 'partial'). A
+// successful consented bind can separately retire its worktree predecessor.
 
 export interface LocalSeatSnapshot {
   apiUrl: string;

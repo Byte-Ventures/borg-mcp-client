@@ -47,7 +47,9 @@ For a seat attach, the client:
    before sending it.
 2. Sends that bearer to the server. The server stores only its digest.
 3. On success, atomically changes the same record to `active` and adds the
-   server metadata and worktree binding.
+   server metadata, worktree binding, and a monotonic local bind order. Any
+   predecessor still marked `active` for that worktree is retired in the same
+   store write.
 
 An ambiguous retry reuses the same persisted bearer, so the server resolves the
 same seat instead of minting a duplicate. A crash after server acceptance but
@@ -224,20 +226,25 @@ siblings key on their worktree name, while implicit siblings receive a unique
 operation key. The older `seat` kind with operation key `current-worktree`
 remains supported only for reading and resuming legacy in-place seats with
 `--here`; Borg does not migrate or re-key them. These operations derive distinct
-credential references and distinct bearers, so creating a sibling never moves
-or overwrites a legacy worktree's active seat.
+credential references and distinct bearers, so creating a sibling for a
+different worktree never moves or overwrites a legacy worktree's active seat.
 
-Historical recovery or interrupted operations can leave more than one active
-record bound to one worktree. Every process uses the same total order:
+Each successful bind records a monotonic store-local order and atomically
+retires every older active record for the same worktree. This applies equally
+to implicit siblings, named siblings, and legacy in-place `seat` records; it
+does not migrate or re-key their operations.
 
-1. A candidate not definitively rejected in this process comes before a
-   rejected, revoked, or evicted candidate.
-2. A `sibling` candidate finalized into this worktree comes before an older
-   legacy in-place `seat` candidate.
-3. Remaining ties use the credential reference's lexical order.
+Historical or manually restored stores can still contain duplicate active
+bindings. When every candidate has a distinct persisted bind order, every
+process selects the newest and the older records are retired by the next store
+write. Legacy duplicates without enough ordering information fail closed:
+launcher and SessionStart output does not claim an identity or inbox path and
+names `borg reset-local-connection` as the local recovery command. Borg never
+guesses from credential-reference lexical order.
 
 Only `active` records participate in normal selection. A bound `pending` record
 is discoverable only by the convergence path that resends its exact bearer.
-This ordering is shared by SessionStart, kickoff construction, MCP children,
-stream ownership, and normal active-cube hydration, so one process does not
-select different seats for different surfaces.
+The persisted resolution is shared by SessionStart, kickoff construction, MCP
+children, stream ownership, and normal active-cube hydration, so independent
+processes do not select different seats for those surfaces. Definitive server
+rejections remain process-local verdicts and are not persisted as seat state.
