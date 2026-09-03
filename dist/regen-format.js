@@ -204,10 +204,16 @@ export function markArrivalAnnouncedThisProcess() {
 //   The playbook below points drones to `borg_docs {topic}` for user questions
 //   about how Borg MCP works; this marker pins the param so the #490/#529 guard
 //   verifies borg_docs exposes `topic`.
-export function getDronePlaybook() {
+export function getDronePlaybook(handoverMode = 'origin') {
     const arrivalInstruction = arrivalAnnouncedThisProcess
         ? ''
         : `\n**Required one-time startup setup:** If this instruction is visible, immediately call \`borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"\` before unread-log triage. This is the sole exception to no-work log silence. Do not infer your startup state from peers' \`ARRIVAL:\` entries. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again.\n`;
+    const reviewReadyRefs = handoverMode === 'local'
+        ? '["HEAD"]'
+        : '["HEAD","origin/<branch>","origin/main"]';
+    const stagedDiffPurpose = handoverMode === 'local'
+        ? 'Catches deleted files / anomalous -LOC / wrong paths before handover.'
+        : 'Catches deleted files / anomalous -LOC / wrong paths pre-push.';
     return `## How to operate as a Drone
 
 You're a Drone in a Cube. Coordinate with other drones through the activity log.
@@ -221,14 +227,14 @@ You're a Drone in a Cube. Coordinate with other drones through the activity log.
 - \`borg_roster\` — see who else is connected
 - \`borg_read-log unread_only=true [limit]\` — drain unread log entries from your server-side cursor
 - \`borg_read-entry entry_id=<id>\` — read one known complete entry without moving the unread cursor
-- \`borg_log message="<message>" to="broadcast"|["<selector>"] refs=["HEAD","origin/<branch>","origin/main"]\` — append with an explicit audience and optional mechanically resolved Git provenance; REVIEW-READY requires \`refs\`
+- \`borg_log message="<message>" to="broadcast"|["<selector>"] refs=${reviewReadyRefs}\` — append with an explicit audience and optional mechanically resolved Git provenance; REVIEW-READY requires \`refs\`
 - \`borg_assimilate <cube>\` — switch to a different cube
 
 **How coordination works:** the Cube gives primitives, not workflows. Your role's \`detailed_description\` (above) is your playbook — its conventions + signals come from there, not the system. The log is the coordination channel. Different cubes, different conventions. Every \`borg_log\` call must choose its audience with \`to: "broadcast"\` or a non-empty selector array; omission, message text, prefixes, and classes never choose recipients.
 
 **Communication discipline for non-human seats:**
 - **Console:** write nothing except harness-required output. Surface something to the operator only when blocked and needing unblocking; do not narrate plans, progress, method, or results.
-- **Log:** a post must change what another seat does. Otherwise, do not write it. Keep posts short: lifecycle signal + mechanically resolved SHA and nothing else; defect + location/evidence; correction to your live claim; or a genuine blocking question. Post REVIEW-READY with \`refs: ["HEAD","origin/<branch>","origin/main"]\`.
+- **Log:** a post must change what another seat does. Otherwise, do not write it. Keep posts short: lifecycle signal + mechanically resolved SHA and nothing else; defect + location/evidence; correction to your live claim; or a genuine blocking question. Post REVIEW-READY with \`refs: ${reviewReadyRefs}\`.
 - **Do not post:** plans, work-in-progress/progress narration, method or reasoning, restatements/agreement/credit, self-examination, framing phrases, or coordination commentary.
 - **Evidence boundary:** state what a verdict did not exercise and any unavailable control in the same short clause. The human seat is excluded so its dispatches can explain constraints without being misapplied.
 
@@ -272,7 +278,7 @@ ${arrivalInstruction}
 One seat uses one stable worktree. Start each new item there with \`git checkout -b <branch>\`; do not create another worktree for the item.
 A reviewing seat uses \`git checkout --detach <SHA>\` in its own worktree. Keep scratch work under \`~/.borg/scratch/<seat>/\`; load \`borg_playbook\` for the full mechanism.
 
-Any drone that commits code: run \`git diff --staged --stat\` before \`git commit\` to verify file count + LOC direction + paths match your intent. Catches deleted files / anomalous -LOC / wrong paths pre-push. Your role may layer more git rules (code-implementing + coordinating roles typically carry the full set).`;
+Any drone that commits code: run \`git diff --staged --stat\` before \`git commit\` to verify file count + LOC direction + paths match your intent. ${stagedDiffPurpose} Your role may layer more git rules (code-implementing + coordinating roles typically carry the full set).`;
 }
 /**
  * gh#912: the verbose operating-discipline DETAIL externalized out of the
@@ -287,7 +293,31 @@ Any drone that commits code: run \`git diff --staged --stat\` before \`git commi
 //   `borg_decisions {topic}`; this marker pins the param so the #490/#529
 //   copy-guard verifies borg_decisions exposes `topic`
 //   (client/__tests__/copy-mechanism-guard.test.ts).
-export function getDronePlaybookChapter() {
+export function getDronePlaybookChapter(handoverMode = 'origin') {
+    const codeStateRef = handoverMode === 'local'
+        ? 'a named local branch or commit'
+        : '`origin/main`, PR head, branch, merge-SHA, or tag';
+    const proposalRef = handoverMode === 'local'
+        ? 'If the proposal cites a named local branch or commit, grep that ref via `git show <ref>:<path> | grep`'
+        : 'If the proposal cites current `origin/main` or a branch/SHA, grep that ref via `git show <ref>:<path> | grep`';
+    const commentRef = handoverMode === 'local'
+        ? 'If the comment describes a named local branch or commit, grep that ref via `git show <ref>:<path> | grep`'
+        : 'If the comment describes a merged/base/PR-head state, grep the named ref via `git show <ref>:<path> | grep`';
+    const worktreeMechanism = handoverMode === 'local'
+        ? `- One seat uses one stable worktree, created once at assimilation under the standard worktree root and approved once by the operator. All seats for a repository use worktrees from the same clone family, sharing its object database and refs.
+- Start each new work item in that stable worktree with \`git checkout -b <branch>\`. Do not create a new worktree or folder for each item.
+- A commit on a named branch is the handover artifact. Post REVIEW-READY through \`borg_log\` with \`refs: ["HEAD"]\`; a local branch ref is optional. The reviewing seat runs \`git checkout --detach <SHA>\` in its own worktree and never reads another seat's folder.
+- Treat branch history as shared: another seat may have the branch checked out, so never rewrite it.
+- A commit is the only checkpoint; repository backup is the operator's concern.
+- Put detached review checkouts, clean-environment rigs, fake HOMEs, unpacked artifacts, and throwaway worktrees under \`~/.borg/scratch/<your-seat-label>/\`. Never use \`/tmp\` or an ad-hoc path. Scratch contents are disposable and must be cleaned up with the work.`
+        : `- One seat uses one stable worktree, created once at assimilation under the standard worktree root and approved once by the operator. All seats for a repository use worktrees from the same clone family, sharing its object database and refs.
+- Start each new work item in that stable worktree with \`git checkout -b <branch>\`. Do not create a new worktree or folder for each item.
+- Hand a branch to another seat only through an explicit log event.
+- Treat branch history as shared: another seat may have the branch checked out or fetched, so never rebase or force-push it.
+- Hand over refs and exact commit SHAs, never a filesystem path. Post REVIEW-READY through \`borg_log\` with \`refs: ["HEAD","origin/<branch>","origin/main"]\`; a reviewing seat checks out the resolved SHA in its own worktree with \`git checkout --detach <SHA>\` and never reads another seat's folder.
+- With no hosted remote, the commit is the durable handover artifact because clone-family worktrees share refs; omit the push step. If local push/fetch semantics are required, use a local bare repository as the origin path.
+- Put detached review checkouts, clean-environment rigs, fake HOMEs, unpacked artifacts, and throwaway worktrees under \`~/.borg/scratch/<your-seat-label>/\`. Never use \`/tmp\` or an ad-hoc path. Scratch contents are disposable and must be cleaned up with the work.
+- When an origin exists, synchronize with merge-only history using \`git fetch origin && git merge origin/main\`.`;
     return `## Operating playbook — full disciplines (borg_playbook chapter)
 
 This is the on-demand detail behind the rule-spine in your regen. Load it ONCE per session; it is static — do not re-fetch on every wake.
@@ -304,7 +334,7 @@ Any time you make a factual claim that could be verified — "this shipped as ve
 - Version attribution → \`git tag --contains <sha>\` or \`git log --oneline <tag>\`
 - Code state → match the grep surface to the claim surface:
   - Local uncommitted claim → \`grep -n "<symbol>" <file>\` or direct file read in the working tree
-  - \`origin/main\`, PR head, branch, merge-SHA, or tag claim → \`git show <ref>:<path>\` followed by a symbol search in the returned source
+  - ${codeStateRef} claim → \`git show <ref>:<path>\` followed by a symbol search in the returned source
 - Prod state → \`curl https://<endpoint>\` or \`wrangler tail --env production\`
 - npm registry state → \`npm view <package>@<version>\` or \`npm view <package>@latest\`
 - DB state → query through the existing \`db\` interface; never trust a doc claim about row counts / column values
@@ -317,8 +347,8 @@ Any time you make a factual claim that could be verified — "this shipped as ve
 
 The discipline applies at FOUR surfaces. Catches at the surface closest to origin are cheapest; catches at later surfaces have already propagated through earlier consumers:
 
-- **Surface 1 (brainstorm-proposal time)**: when a brainstorm contribution names specific code identifiers / API field names / enum values / column names / function signatures, the PROPOSING drone source-grep's the referenced file BEFORE composing the proposal. If the proposal cites current \`origin/main\` or a branch/SHA, grep that ref via \`git show <ref>:<path> | grep\`; working-tree grep is only for explicitly local/uncommitted claims. Cheapest catch surface; one drone catches one error.
-- **Surface 2 (comment/JSDoc/docstring writing time)**: when an implementation comment cites cross-file invariants (other modules' thresholds, schema columns, enum values, semantic contracts), the WRITING drone source-grep's the referenced file BEFORE writing the comment. If the comment describes a merged/base/PR-head state, grep the named ref via \`git show <ref>:<path> | grep\`; don't let a stale local checkout stand in for the ref being described. Mid-cost catch; one drone catches one error but downstream reviewers may inherit the wrong mental model from the comment.
+- **Surface 1 (brainstorm-proposal time)**: when a brainstorm contribution names specific code identifiers / API field names / enum values / column names / function signatures, the PROPOSING drone source-grep's the referenced file BEFORE composing the proposal. ${proposalRef}; working-tree grep is only for explicitly local/uncommitted claims. Cheapest catch surface; one drone catches one error.
+- **Surface 2 (comment/JSDoc/docstring writing time)**: when an implementation comment cites cross-file invariants (other modules' thresholds, schema columns, enum values, semantic contracts), the WRITING drone source-grep's the referenced file BEFORE writing the comment. ${commentRef}; don't let a stale local checkout stand in for the ref being described. Mid-cost catch; one drone catches one error but downstream reviewers may inherit the wrong mental model from the comment.
 - **Surface 3 (review-time verification)**: the existing review-class discipline (Code Reviewer formal gates + Security Auditor SR gates + PM/UX/QA courtesy reviews). Late catch opportunity; if the error propagated through Surfaces 1 + 2, multiple reviewers may have already trusted the framing instead of source-grepping themselves.
 - **Surface 4 (durable-tracking-artifact-writing time)**: when filing a deferred-tracking issue from a cube event payload, the FILING drone fetches the originating entry's full body with \`borg_read-entry entry_id=<id>\` BEFORE composing the issue body. For routine wake triage, use \`borg_read-log unread_only=true\` and drain until caught up; do not rely on a truncated event preview or a \`since=<same timestamp>\` read, which can skip the boundary entry. Cube event previews can truncate substantive content (mid-paragraph cuts on long entries); filing from the truncated preview trusts a derivative artifact instead of the source-of-truth full entry. Most expensive surface — the filed issue becomes the cube's durable cross-cycle memory; correcting it requires a follow-up correction post, and later pickup drones inherit the incomplete framing if the correction is missed.
 
@@ -326,14 +356,7 @@ The discipline applies at FOUR surfaces. Catches at the surface closest to origi
 
 **Worktree and git mechanism:**
 
-- One seat uses one stable worktree, created once at assimilation under the standard worktree root and approved once by the operator. All seats for a repository use worktrees from the same clone family, sharing its object database and refs.
-- Start each new work item in that stable worktree with \`git checkout -b <branch>\`. Do not create a new worktree or folder for each item.
-- Hand a branch to another seat only through an explicit log event.
-- Treat branch history as shared: another seat may have the branch checked out or fetched, so never rebase or force-push it.
-- Hand over refs and exact commit SHAs, never a filesystem path. Post REVIEW-READY through \`borg_log\` with \`refs: ["HEAD","origin/<branch>","origin/main"]\`; a reviewing seat checks out the resolved SHA in its own worktree with \`git checkout --detach <SHA>\` and never reads another seat's folder.
-- With no hosted remote, the commit is the durable handover artifact because clone-family worktrees share refs; omit the push step. If local push/fetch semantics are required, use a local bare repository as the origin path.
-- Put detached review checkouts, clean-environment rigs, fake HOMEs, unpacked artifacts, and throwaway worktrees under \`~/.borg/scratch/<your-seat-label>/\`. Never use \`/tmp\` or an ad-hoc path. Scratch contents are disposable and must be cleaned up with the work.
-- When an origin exists, synchronize with merge-only history using \`git fetch origin && git merge origin/main\`.`;
+${worktreeMechanism}`;
 }
 /**
  * Format an absolute timestamp as a coarse "Xs/Xm/Xh ago" string.
@@ -565,7 +588,7 @@ export function formatRegenMarkdown(result, opts = {}) {
             ...safetyDisciplinesForRole(result.role.detailed_description),
         ].join('\n'), '', `## Roles in this cube`, roleOverview, '', `## Connected drones`, `_${RUNTIME_METADATA_ADVISORY}_`, '', droneOverview, '', `## Cube log`, cubeLogSection, ...(decisionsSection ? ['', decisionsSection] : []));
     if (shouldEmitPlaybook) {
-        lines.push('', getDronePlaybook());
+        lines.push('', getDronePlaybook(opts.handoverMode));
         boilerplateEmittedThisSession = true;
     }
     if (shouldEmitRoleText && roleTextHash != null) {
