@@ -45,6 +45,8 @@ export interface SeatRecord {
   // credential
   credential: string;
   state: 'pending' | 'active';
+  /** Monotonic store-local order assigned when this record is bound active. */
+  bindingOrder?: number;
   // server metadata (active only)
   droneId?: string;
   sessionId?: string;
@@ -144,6 +146,8 @@ function isValidSeatRecord(ref: string, value: unknown): value is SeatRecord {
     return false;
   }
   if (r.state !== 'pending' && r.state !== 'active') return false;
+  if (r.bindingOrder !== undefined &&
+      (typeof r.bindingOrder !== 'number' || !Number.isSafeInteger(r.bindingOrder) || r.bindingOrder < 1)) return false;
   // Optional display/typed fields, validated when present.
   if (r.name !== undefined && typeof r.name !== 'string') return false;
   if (r.droneLabel !== undefined && typeof r.droneLabel !== 'string') return false;
@@ -169,7 +173,7 @@ function isValidSeatRecord(ref: string, value: unknown): value is SeatRecord {
     }
   } else {
     // A PENDING record must NOT carry active-only server session fields.
-    if (r.sessionId !== undefined) return false;
+    if (r.sessionId !== undefined || r.bindingOrder !== undefined) return false;
   }
   // The map key must equal the record's derived ref (no cross-key aliasing).
   return seatRef(value as SeatRecord) === ref;
@@ -231,10 +235,54 @@ function parseStore(raw: string): SeatsFile | null {
         }
         if (!isValidSeatRecord(ref, record)) return null;
       }
-      return { version: SEATS_VERSION, seats: seats as Record<string, SeatRecord> };
+      const store = { version: SEATS_VERSION, seats: seats as Record<string, SeatRecord> };
+      repairOrderedDuplicateBindings(store);
+      return store;
     }
   }
   return null;
+}
+
+/**
+ * Remove superseded worktree bindings when persisted ordering proves which bind
+ * is newest. The mutation is persisted by the next transaction that commits.
+ * Legacy duplicates without a complete, unique order stay intact and fail
+ * closed when that worktree is resolved.
+ */
+function repairOrderedDuplicateBindings(store: SeatsFile): void {
+  const byWorktree = new Map<string, Array<[string, SeatRecord]>>();
+  for (const entry of Object.entries(store.seats)) {
+    const [, record] = entry;
+    if (record.state !== 'active' || record.worktree === undefined) continue;
+    const candidates = byWorktree.get(record.worktree) ?? [];
+    candidates.push(entry);
+    byWorktree.set(record.worktree, candidates);
+  }
+  for (const candidates of byWorktree.values()) {
+    if (candidates.length < 2) continue;
+    const ordered = candidates.filter(
+      (entry): entry is [string, SeatRecord & { bindingOrder: number }] =>
+        entry[1].bindingOrder !== undefined,
+    );
+    if (ordered.length === 0) continue;
+    const orders = ordered.map(([, record]) => record.bindingOrder);
+    if (new Set(orders).size !== orders.length) continue;
+    const newest = ordered.reduce((left, right) =>
+      left[1].bindingOrder > right[1].bindingOrder ? left : right);
+    for (const [ref] of candidates) {
+      if (ref !== newest[0]) delete store.seats[ref];
+    }
+  }
+}
+
+export class AmbiguousSeatBindingError extends Error {
+  constructor(worktree: string) {
+    super(
+      `Borg found multiple active seats for worktree ${worktree}, but their bind order is unavailable. ` +
+      'No identity or inbox path was selected. Run `borg reset-local-connection` to clear the ambiguous local connection.',
+    );
+    this.name = 'AmbiguousSeatBindingError';
+  }
 }
 
 async function readStore(): Promise<SeatsFile> {
@@ -498,9 +546,28 @@ export async function activateAndBindSeat(input: {
     const record = txn.data.seats[ref];
     if (!recordMatches(record, ref, binding)) return 'missing';
     if (digestOf(record.credential) !== input.expectedPendingDigest) return 'replaced';
+    const highestOrder = Object.values(txn.data.seats).reduce(
+      (highest, candidate) => Math.max(highest, candidate.bindingOrder ?? 0),
+      0,
+    );
+    const bindingOrder = record.state === 'active' && record.worktree === input.worktree &&
+      record.bindingOrder !== undefined
+      ? record.bindingOrder
+      : highestOrder + 1;
+    if (!Number.isSafeInteger(bindingOrder)) {
+      throw new Error('Borg private seat store bind order is exhausted; refusing to activate a seat');
+    }
+    const retiredRefs: string[] = [];
+    for (const [candidateRef, candidate] of Object.entries(txn.data.seats)) {
+      if (candidateRef !== ref && candidate.state === 'active' && candidate.worktree === input.worktree) {
+        delete txn.data.seats[candidateRef];
+        retiredRefs.push(candidateRef);
+      }
+    }
     txn.data.seats[ref] = {
       ...record,
       state: 'active',
+      bindingOrder,
       droneId: input.droneId,
       sessionId: input.sessionId,
       worktree: input.worktree,
@@ -513,6 +580,7 @@ export async function activateAndBindSeat(input: {
       ...(input.isHumanSeat !== undefined ? { isHumanSeat: input.isHumanSeat } : {}),
     };
     await txn.commit();
+    for (const retiredRef of retiredRefs) rejectedSeatRefs.delete(retiredRef);
     rejectedSeatRefs.delete(ref);
     return 'activated';
   });
@@ -584,25 +652,19 @@ export async function bindPendingSeatToWorktree(input: {
 // ─── Hydration / enumeration (scan by worktree) ──────────────────────────────
 
 /** The preferred ACTIVE seat bound to `worktree`, or null. A pending record (no
- *  worktree, or non-active) is NEVER surfaced as a live binding. Candidates use
- *  one total order across every process: unrejected before rejected, a sibling
- *  finalized into this worktree before an older in-place binding, then seat ref. */
+ *  worktree, or non-active) is NEVER surfaced as a live binding. Persisted bind
+ *  order is authoritative across processes; an unorderable legacy duplicate
+ *  fails closed rather than selecting an identity or inbox path. */
 export async function getActiveSeatForWorktree(worktree: string): Promise<SeatRecord | null> {
   const store = await readStore();
   const candidates = Object.entries(store.seats)
     .filter(([ref, record]) =>
-      record.state === 'active' && record.worktree === worktree && seatRef(record) === ref)
-    .sort(([leftRef, left], [rightRef, right]) => {
-      const rejectionOrder = Number(rejectedSeatRefs.has(leftRef)) - Number(rejectedSeatRefs.has(rightRef));
-      if (rejectionOrder !== 0) return rejectionOrder;
-      const operationOrder = Number(left.operation.kind === 'seat') - Number(right.operation.kind === 'seat');
-      if (operationOrder !== 0) return operationOrder;
-      return leftRef < rightRef ? -1 : leftRef > rightRef ? 1 : 0;
-    });
+      record.state === 'active' && record.worktree === worktree && seatRef(record) === ref);
+  if (candidates.length > 1) throw new AmbiguousSeatBindingError(worktree);
   return candidates[0]?.[1] ?? null;
 }
 
-/** Deprioritize an exact seat after a definitive server auth or eviction verdict. */
+/** Remember a definitive server auth or eviction verdict in this process only. */
 export function markSeatRejected(ref: string): void {
   if (REF_RE.test(ref)) rejectedSeatRefs.add(ref);
 }

@@ -3,8 +3,9 @@
  * seat reset from the ratified client-seat-reset-state-model (Option W).
  *
  * Attach is PURE DIAGNOSIS on a pin-matched SESSION_REJECTED (it mutates
- * nothing and points here). This command is the ONLY writer that intentionally
- * clears a worktree's saved local seat. It performs ZERO network I/O: it never
+ * nothing and points here). This is the ONLY command that explicitly clears a
+ * worktree's saved local seat; a successful consented bind can also retire its
+ * predecessor atomically. The command performs ZERO network I/O: it never
  * contacts the server, so it makes NO server-revocation claim. It clears ONLY
  * this worktree's saved local seat — its credential and cube binding together —
  * from the local seat store (keyed on findProjectRoot()); server, trust anchor,

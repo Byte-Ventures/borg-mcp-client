@@ -5,7 +5,7 @@
  * the SOLE raw-bearer reader (getActiveSeatCredential).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -134,6 +134,45 @@ describe('local ActiveCube session persistence (single store)', () => {
     expect(mcp?.sessionToken).toBe(liveBearer);
     expect(streamLockPath(stream!.cubeId, stream!.droneId, join(fixture, 'locks')))
       .toContain(liveDroneId);
+  });
+
+  it('refuses shared active-cube hydration when legacy duplicate bindings cannot be ordered', async () => {
+    const { fixture, project, seats, cubes } = await setup();
+    const staleRef = await seedActiveSeat(seats, project);
+    const storePath = join(fixture, '.config', 'borgmcp', 'seats.json');
+    const staleRecord = (JSON.parse(readFileSync(storePath, 'utf8')) as { seats: Record<string, any> }).seats[staleRef];
+    const liveBearer = 'unordered-live-'.padEnd(43, 'r');
+    const live = {
+      origin: ORIGIN,
+      trustIdentity: TRUST,
+      cubeId: CUBE_ID,
+      roleId: ROLE_ID,
+      operation: {
+        projectRoot: project,
+        kind: 'sibling' as const,
+        operationKey: 'implicit-sibling:unordered-live',
+      },
+    };
+    await seats.mintPendingSeat({ ...live, credential: liveBearer });
+    await seats.activateAndBindSeat({
+      ...live,
+      droneId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      expectedPendingDigest: digestOf(liveBearer),
+      worktree: project,
+      name: 'local-cube',
+      droneLabel: 'builder-live',
+      roleName: 'Builder',
+    });
+    const liveRef = seats.seatRef(live);
+    const liveRecord = (JSON.parse(readFileSync(storePath, 'utf8')) as { seats: Record<string, any> }).seats[liveRef];
+    delete staleRecord.bindingOrder;
+    delete liveRecord.bindingOrder;
+    writeFileSync(storePath, JSON.stringify({ version: 1, seats: { [staleRef]: staleRecord, [liveRef]: liveRecord } }, null, 2) + '\n');
+
+    await expect(cubes.getActiveCube()).rejects.toThrow(
+      /No identity or inbox path was selected.*borg reset-local-connection/,
+    );
   });
 
   it('a pending (non-activated) seat is never surfaced as a live ActiveCube', async () => {

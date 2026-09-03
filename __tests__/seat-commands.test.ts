@@ -208,8 +208,10 @@ describe('production local-registry wiring', () => {
     fixtures.push(stateRoot);
     process.env.BORG_STATE_ROOT = stateRoot;
     const activeWorktree = join(stateRoot, 'active-worktree');
+    const siblingWorktree = join(stateRoot, 'sibling-worktree');
     const pendingWorktree = join(stateRoot, 'pending-worktree');
     mkdirSync(activeWorktree);
+    mkdirSync(siblingWorktree);
     mkdirSync(pendingWorktree);
     vi.resetModules();
 
@@ -250,7 +252,7 @@ describe('production local-registry wiring', () => {
       expectedPendingDigest: createHash('sha256').update(siblingBearer).digest('hex'),
       droneId: DRONE_B,
       sessionId: '66666666-6666-6666-6666-666666666666',
-      worktree: activeWorktree,
+      worktree: siblingWorktree,
       name: 'beta',
       droneLabel: 'builder-sibling',
     });
@@ -259,9 +261,9 @@ describe('production local-registry wiring', () => {
     process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV] = '';
     try {
       await expect(cubes.getActiveCubeForWorktree(activeWorktree)).resolves.toMatchObject({
-        cubeId: CUBE_B,
-        droneId: DRONE_B,
-        droneLabel: 'builder-sibling',
+        cubeId: CUBE_A,
+        droneId: DRONE_A,
+        droneLabel: 'builder-active',
       });
     } finally {
       if (priorEmptyExpectation === undefined) delete process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV];
@@ -290,7 +292,7 @@ describe('production local-registry wiring', () => {
     })).toBe(0);
     expect(stderr).toEqual([]);
     expect(stdout.join('')).toMatch(/builder-active\s+alpha\s+active\s+-\s+.*active-worktree/);
-    expect(stdout.join('')).toMatch(/builder-sibling\s+beta\s+active\s+-\s+.*active-worktree/);
+    expect(stdout.join('')).toMatch(/builder-sibling\s+beta\s+active\s+-\s+.*sibling-worktree/);
     expect(stdout.join('')).toMatch(/builder-pending\s+alpha\s+pending\s+-\s+.*pending-worktree/);
     expect(await cubes.getActiveCubeForWorktree(pendingWorktree)).toBeNull();
 
@@ -325,20 +327,16 @@ describe('production local-registry wiring', () => {
     );
     expect(missingLaunchBareBorg).not.toHaveBeenCalled();
 
-    const conflictingLaunchBareBorg = vi.fn(async () => 0);
+    const activeLaunchBareBorg = vi.fn(async () => 0);
     stderr.length = 0;
     expect(await commands.runLaunchSeat({ target: 'builder-active' }, {
       ...commands.buildDefaultSeatCommandDeps(),
-      launchBareBorg: conflictingLaunchBareBorg,
+      launchBareBorg: activeLaunchBareBorg,
       stdout: (line) => stdout.push(line),
       stderr: (line) => stderr.push(line),
-    })).toBe(1);
-    expect(stderr.join('')).toBe(
-      `borg launch: did not launch 'builder-active' — the worktree at ${activeWorktree} would resume ` +
-      "'builder-sibling' (cube 'beta') instead. To resume 'builder-sibling', run `borg` in that worktree. " +
-      "To review this machine's drones, run `borg drones`.\n",
-    );
-    expect(conflictingLaunchBareBorg).not.toHaveBeenCalled();
+    })).toBe(0);
+    expect(stderr).toEqual([]);
+    expect(activeLaunchBareBorg).toHaveBeenCalledOnce();
 
     const racedLaunchBareBorg = vi.fn(async (worktree, expectation) => {
       const priorExpectation = process.env[cubes.BORG_LAUNCH_EXPECTED_SEAT_ENV];

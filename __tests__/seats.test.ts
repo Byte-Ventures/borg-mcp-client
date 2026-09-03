@@ -150,32 +150,32 @@ describe('seats store — one atomic unit (ACTIVE-without-binding unreachable)',
 });
 
 describe('seats store — deterministic duplicate-worktree resolution', () => {
-  it('prefers a live sibling seat and falls back after its exact ref is rejected', async () => {
+  it('prefers the most recently bound implicit sibling when the stale ref sorts first', async () => {
     const { dir, seats } = await load();
     const worktree = '/work/repo';
-    const staleBearer = 'stale-seat-'.padEnd(43, 's');
-    const liveBearer = 'live-sibling-'.padEnd(43, 'l');
-    const sibling = {
+    const sibling = (operationKey: string) => ({
       ...SEAT,
-      operation: {
-        projectRoot: '/work/source',
-        kind: 'sibling' as const,
-        operationKey: 'implicit-sibling:replacement',
-      },
-    };
+      operation: { projectRoot: '/work/source', kind: 'sibling' as const, operationKey },
+    });
+    const stale = sibling('implicit-sibling:0');
+    const live = sibling('implicit-sibling:1');
+    expect(seats.seatRef(stale) < seats.seatRef(live)).toBe(true);
 
-    await seats.mintPendingSeat({ ...SEAT, credential: staleBearer });
+    const staleBearer = 'stale-implicit-'.padEnd(43, 's');
+    await seats.mintPendingSeat({ ...stale, credential: staleBearer });
     await seats.activateAndBindSeat({
-      ...SEAT,
+      ...stale,
       ...STAMP,
       expectedPendingDigest: digestOf(staleBearer),
       worktree,
       name: 'stale-cube',
       droneLabel: 'builder-stale',
     });
-    await seats.mintPendingSeat({ ...sibling, credential: liveBearer });
+
+    const liveBearer = 'live-implicit-'.padEnd(43, 'l');
+    await seats.mintPendingSeat({ ...live, credential: liveBearer });
     await seats.activateAndBindSeat({
-      ...sibling,
+      ...live,
       droneId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       expectedPendingDigest: digestOf(liveBearer),
@@ -184,42 +184,97 @@ describe('seats store — deterministic duplicate-worktree resolution', () => {
       droneLabel: 'builder-live',
     });
 
-    expect(await seats.getActiveSeatForWorktree(worktree)).toMatchObject({
+    await expect(seats.getActiveSeatForWorktree(worktree)).resolves.toMatchObject({
       droneLabel: 'builder-live',
-      operation: { kind: 'sibling' },
     });
+    const stored = JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, { state: string }> };
+    expect(Object.values(stored.seats).filter((record) => record.state === 'active')).toHaveLength(1);
+    expect(stored.seats[seats.seatRef(stale)]).toBeUndefined();
+  });
 
-    const stored = JSON.parse(readOrEmpty(storeJson(dir))) as { version: number; seats: Record<string, unknown> };
-    stored.seats = Object.fromEntries(Object.entries(stored.seats).reverse());
-    writeFileSync(storeJson(dir), JSON.stringify(stored, null, 2) + '\n', { mode: 0o600 });
-    expect(await seats.getActiveSeatForWorktree(worktree)).toMatchObject({
-      droneLabel: 'builder-live',
-      operation: { kind: 'sibling' },
-    });
+  it('repairs ordered and mixed-format duplicate bindings, then retires the predecessor on the next write', async () => {
+    const { dir, seats } = await load();
+    const worktree = '/work/repo';
+    const staleBearer = 'stale-seat-'.padEnd(43, 's');
+    await seats.mintPendingSeat({ ...SEAT, credential: staleBearer });
+    await activateOk(seats, staleBearer);
+    const staleRef = seats.seatRef(SEAT);
+    const staleRecord = (JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, any> }).seats[staleRef];
 
-    const siblingRef = seats.seatRef(sibling);
-    seats.markSeatRejected(siblingRef);
-    expect(await seats.getActiveSeatForWorktree(worktree)).toMatchObject({
-      droneLabel: 'builder-stale',
-      operation: { kind: 'seat' },
-    });
-
-    await seats.clearSeat(siblingRef);
-    const replacementBearer = 'reminted-live-'.padEnd(43, 'r');
-    await seats.mintPendingSeat({ ...sibling, credential: replacementBearer });
+    const live = {
+      ...SEAT,
+      operation: { projectRoot: '/work/source', kind: 'sibling' as const, operationKey: 'implicit-sibling:replacement' },
+    };
+    const liveBearer = 'live-sibling-'.padEnd(43, 'l');
+    await seats.mintPendingSeat({ ...live, credential: liveBearer });
     await seats.activateAndBindSeat({
-      ...sibling,
+      ...live,
       droneId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      sessionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-      expectedPendingDigest: digestOf(replacementBearer),
+      sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      expectedPendingDigest: digestOf(liveBearer),
       worktree,
       name: 'live-cube',
-      droneLabel: 'builder-reminted',
+      droneLabel: 'builder-live',
     });
-    expect(await seats.getActiveSeatForWorktree(worktree)).toMatchObject({
-      droneLabel: 'builder-reminted',
-      operation: { kind: 'sibling' },
+    const liveRef = seats.seatRef(live);
+    const liveRecord = (JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, any> }).seats[liveRef];
+    const fixture = { version: 1, seats: { [liveRef]: liveRecord, [staleRef]: staleRecord } };
+    writeFileSync(storeJson(dir), JSON.stringify(fixture, null, 2) + '\n', { mode: 0o600 });
+
+    await expect(seats.getActiveSeatForWorktree(worktree)).resolves.toMatchObject({ droneLabel: 'builder-live' });
+    expect(Object.keys((JSON.parse(readOrEmpty(storeJson(dir))) as { seats: object }).seats)).toHaveLength(2);
+
+    delete staleRecord.bindingOrder;
+    staleRecord.expiresAt = '2026-07-20T00:00:00.000Z';
+    writeFileSync(storeJson(dir), JSON.stringify(fixture, null, 2) + '\n', { mode: 0o600 });
+    await expect(seats.getActiveSeatForWorktree(worktree)).resolves.toMatchObject({ droneLabel: 'builder-live' });
+
+    const repairWrite = {
+      ...SEAT,
+      operation: { projectRoot: '/work/other', kind: 'sibling' as const, operationKey: 'implicit-sibling:repair-write' },
+    };
+    await seats.mintPendingSeat({ ...repairWrite, credential: 'repair-write-'.padEnd(43, 'w') });
+    const repaired = JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, { state: string }> };
+    expect(repaired.seats[staleRef]).toBeUndefined();
+    expect(repaired.seats[liveRef]).toBeDefined();
+    expect(Object.values(repaired.seats).filter((record) => record.state === 'active')).toHaveLength(1);
+  });
+
+  it('refuses an unorderable legacy duplicate without rewriting the store', async () => {
+    const { dir, seats } = await load();
+    const worktree = '/work/repo';
+    const staleBearer = 'legacy-stale-'.padEnd(43, 's');
+    await seats.mintPendingSeat({ ...SEAT, credential: staleBearer });
+    await activateOk(seats, staleBearer);
+    const staleRef = seats.seatRef(SEAT);
+    const staleRecord = (JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, any> }).seats[staleRef];
+
+    const live = {
+      ...SEAT,
+      operation: { projectRoot: '/work/source', kind: 'sibling' as const, operationKey: 'implicit-sibling:legacy-live' },
+    };
+    const liveBearer = 'legacy-live-'.padEnd(43, 'l');
+    await seats.mintPendingSeat({ ...live, credential: liveBearer });
+    await seats.activateAndBindSeat({
+      ...live,
+      droneId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      expectedPendingDigest: digestOf(liveBearer),
+      worktree,
+      name: 'live-cube',
+      droneLabel: 'builder-live',
     });
+    const liveRef = seats.seatRef(live);
+    const liveRecord = (JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, any> }).seats[liveRef];
+    delete staleRecord.bindingOrder;
+    delete liveRecord.bindingOrder;
+    const fixture = JSON.stringify({ version: 1, seats: { [staleRef]: staleRecord, [liveRef]: liveRecord } }, null, 2) + '\n';
+    writeFileSync(storeJson(dir), fixture, { mode: 0o600 });
+
+    await expect(seats.getActiveSeatForWorktree(worktree)).rejects.toThrow(
+      /No identity or inbox path was selected.*borg reset-local-connection/,
+    );
+    expect(readOrEmpty(storeJson(dir))).toBe(fixture);
   });
 });
 
