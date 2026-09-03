@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  prepareAssimilationWorktree,
   runAssimilate,
   safeStderr,
   type AssimilationActiveCube,
@@ -2716,6 +2717,13 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
       stderr,
       cwd: () => '/work/myrepo',
       findProjectRoot: () => '/work/myrepo',
+      resolveRepositoryContext: vi.fn(async () => ({
+        root: '/work/myrepo',
+        commonDir: '/work/myrepo/.git',
+        derivedName: 'myrepo',
+        publicRepository: null,
+        publicRepositoryName: null,
+      })),
     });
 
     await expect(runAssimilate({
@@ -2738,6 +2746,57 @@ describe('runAssimilate: step 3 (worktree decision)', () => {
     );
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('active seat');
     expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('that seat binding');
+  });
+
+  it('does not label an origin repository local when its remote branches are unavailable', async () => {
+    const runSync = vi.fn((_cmd: string, args: string[]) => {
+      if (args.join(' ') === 'remote get-url origin') {
+        return { status: 0, stdout: 'https://github.com/org/repo\n', stderr: '' };
+      }
+      if (args.join(' ') === 'rev-parse --verify origin/main' ||
+          args.join(' ') === 'rev-parse --verify origin/master') {
+        return { status: 1, stdout: '', stderr: 'unknown revision' };
+      }
+      if (args.join(' ') === 'worktree list --porcelain') {
+        return { status: 0, stdout: 'worktree /work/repo\n', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        return { status: 1, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const stderr = vi.fn();
+    const deps = makeStubDeps({ runSync, stderr });
+
+    await expect(prepareAssimilationWorktree({
+      flags: { worktree: 'builder' },
+      repositoryContext: {
+        root: '/work/repo',
+        commonDir: '/work/repo/.git',
+        derivedName: 'repo',
+        publicRepository: { kind: 'origin', value: 'https://github.com/org/repo' },
+        publicRepositoryName: 'org/repo',
+      },
+      projectRoot: '/work/repo',
+      wantSibling: true,
+      verifiedHead: '16c1405abcdef0123456789',
+      assignedRole: {
+        id: 'role-builder',
+        cube_id: 'cube-1',
+        name: 'Builder',
+        short_description: 'Builds',
+        detailed_description: 'Build.',
+        is_default: true,
+        is_human_seat: false,
+        created_at: '2026-09-03T00:00:00.000Z',
+      },
+      existing: null,
+    }, deps)).resolves.toMatchObject({ kind: 'continue' });
+
+    expect(stderr).toHaveBeenCalledWith(
+      'note: no usable origin; new worktree will start on local HEAD (16c1405)\n',
+    );
+    expect(stderr.mock.calls.map(([line]) => String(line)).join('')).not.toContain('local handover mode');
   });
 
   // BUG-4 / gh#150 regression (Sprint 3): step 3 must detect unborn-HEAD

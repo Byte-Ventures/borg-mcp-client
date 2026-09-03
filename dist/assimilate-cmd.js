@@ -656,7 +656,10 @@ export async function prepareAssimilationWorktree(input, deps) {
         }
     }
     if (startRef === 'HEAD') {
-        deps.stderr(`note: local handover mode; new worktree will start on local HEAD (${verifiedHead.slice(0, 7)})\n`);
+        const handoverMode = repositoryContext.publicRepository === null
+            ? 'local handover mode'
+            : 'no usable origin';
+        deps.stderr(`note: ${handoverMode}; new worktree will start on local HEAD (${verifiedHead.slice(0, 7)})\n`);
     }
     else {
         const remoteHead = deps.runSync('git', ['rev-parse', startRef], projectRoot).stdout.trim();
