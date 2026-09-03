@@ -192,14 +192,14 @@ describe('seats store — deterministic duplicate-worktree resolution', () => {
     expect(stored.seats[seats.seatRef(stale)]).toBeUndefined();
   });
 
-  it('repairs ordered duplicate bindings in memory and retires the predecessor on the next write', async () => {
+  it('repairs ordered and mixed-format duplicate bindings, then retires the predecessor on the next write', async () => {
     const { dir, seats } = await load();
     const worktree = '/work/repo';
     const staleBearer = 'stale-seat-'.padEnd(43, 's');
     await seats.mintPendingSeat({ ...SEAT, credential: staleBearer });
     await activateOk(seats, staleBearer);
     const staleRef = seats.seatRef(SEAT);
-    const staleRecord = (JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, unknown> }).seats[staleRef];
+    const staleRecord = (JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, any> }).seats[staleRef];
 
     const live = {
       ...SEAT,
@@ -217,12 +217,17 @@ describe('seats store — deterministic duplicate-worktree resolution', () => {
       droneLabel: 'builder-live',
     });
     const liveRef = seats.seatRef(live);
-    const liveRecord = (JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, unknown> }).seats[liveRef];
+    const liveRecord = (JSON.parse(readOrEmpty(storeJson(dir))) as { seats: Record<string, any> }).seats[liveRef];
     const fixture = { version: 1, seats: { [liveRef]: liveRecord, [staleRef]: staleRecord } };
     writeFileSync(storeJson(dir), JSON.stringify(fixture, null, 2) + '\n', { mode: 0o600 });
 
     await expect(seats.getActiveSeatForWorktree(worktree)).resolves.toMatchObject({ droneLabel: 'builder-live' });
     expect(Object.keys((JSON.parse(readOrEmpty(storeJson(dir))) as { seats: object }).seats)).toHaveLength(2);
+
+    delete staleRecord.bindingOrder;
+    staleRecord.expiresAt = '2026-07-20T00:00:00.000Z';
+    writeFileSync(storeJson(dir), JSON.stringify(fixture, null, 2) + '\n', { mode: 0o600 });
+    await expect(seats.getActiveSeatForWorktree(worktree)).resolves.toMatchObject({ droneLabel: 'builder-live' });
 
     const repairWrite = {
       ...SEAT,

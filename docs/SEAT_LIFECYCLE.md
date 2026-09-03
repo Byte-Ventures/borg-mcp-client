@@ -235,9 +235,11 @@ to implicit siblings, named siblings, and legacy in-place `seat` records; it
 does not migrate or re-key their operations.
 
 Historical or manually restored stores can still contain duplicate active
-bindings. When every candidate has a distinct persisted bind order, every
-process selects the newest and the older records are retired by the next store
-write. Legacy duplicates without enough ordering information fail closed:
+bindings. A candidate with a persisted bind order is newer than legacy
+candidates without one; when multiple candidates have distinct persisted bind
+orders, the greatest order is newest. Every process selects that record and the
+older records are retired by the next store write. Legacy duplicates with no
+persisted bind order fail closed:
 launcher and SessionStart output does not claim an identity or inbox path and
 names `borg reset-local-connection` as the local recovery command. Borg never
 guesses from credential-reference lexical order.

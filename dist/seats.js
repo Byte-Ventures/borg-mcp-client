@@ -214,10 +214,13 @@ function repairOrderedDuplicateBindings(store) {
     for (const candidates of byWorktree.values()) {
         if (candidates.length < 2)
             continue;
-        const orders = candidates.map(([, record]) => record.bindingOrder);
-        if (orders.some((order) => order === undefined) || new Set(orders).size !== orders.length)
+        const ordered = candidates.filter((entry) => entry[1].bindingOrder !== undefined);
+        if (ordered.length === 0)
             continue;
-        const newest = candidates.reduce((left, right) => left[1].bindingOrder > right[1].bindingOrder ? left : right);
+        const orders = ordered.map(([, record]) => record.bindingOrder);
+        if (new Set(orders).size !== orders.length)
+            continue;
+        const newest = ordered.reduce((left, right) => left[1].bindingOrder > right[1].bindingOrder ? left : right);
         for (const [ref] of candidates) {
             if (ref !== newest[0])
                 delete store.seats[ref];
