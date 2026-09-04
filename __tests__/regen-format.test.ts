@@ -23,6 +23,7 @@ import { formatWakePathPrefix } from '../src/stream-status';
 import { shellEscape } from '../src/shell-escape';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from '../src/opencode-wake-copy';
 import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
+import type { Decision } from 'borgmcp-shared/protocol';
 import {
   GIT_OPERATIONAL_DISCIPLINE_BUILDER,
   GIT_OPERATIONAL_DISCIPLINE_COORDINATOR,
@@ -1253,7 +1254,18 @@ describe('resolveLeanIdentity', () => {
 });
 
 describe('formatRegenMarkdown — Ratified decisions section (gh#740)', () => {
-  const baseResult = (decisions?: any[]) => ({
+  const decisionFixture = (topic: string, decision: string, index: number): Decision => ({
+    id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    cube_id: '11111111-1111-4111-8111-111111111111',
+    topic,
+    decision,
+    rationale: null,
+    ratified_by: null,
+    status: 'active',
+    supersedes: null,
+    created_at: '2026-09-04T00:00:00.000Z',
+  });
+  const baseResult = (decisions?: Decision[]) => ({
     cube: { name: 'borg-mcp', message_taxonomy: [] },
     role: { name: 'Builder', detailed_description: 'Workflow:\nBuild.', detailed_description_hash: 'h1' },
     drone: { label: 'd-1' },
@@ -1267,8 +1279,8 @@ describe('formatRegenMarkdown — Ratified decisions section (gh#740)', () => {
     __resetRegenSessionState();
     const out = formatRegenMarkdown(
       baseResult([
-        { topic: 'pricing-model', decision: 'pooled, not per-cube' },
-        { topic: 'release-cadence', decision: 'ship-on-consensus' },
+        decisionFixture('pricing-model', 'pooled, not per-cube', 1),
+        decisionFixture('release-cadence', 'ship-on-consensus', 2),
       ]),
       { mode: 'lite' },
     );
@@ -1300,7 +1312,10 @@ describe('formatRegenMarkdown — Ratified decisions section (gh#740)', () => {
 
   it('past the cap (12), renders the first 12 + a "+N more — borg_decisions" elision footer', () => {
     __resetRegenSessionState();
-    const many = Array.from({ length: 15 }, (_, i) => ({ topic: `t-${i}`, decision: `d-${i}` }));
+    const many = Array.from(
+      { length: 15 },
+      (_, i) => decisionFixture(`t-${i}`, `d-${i}`, i + 1),
+    );
     const out = formatRegenMarkdown(baseResult(many), { mode: 'lite' });
     expect(out).toContain('**t-0:** d-0');
     expect(out).toContain('**t-11:** d-11');

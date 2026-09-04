@@ -57,6 +57,7 @@ import {
   type ListDocumentsResult,
   type RemoveDocumentResult,
   type CreateCubeRepository,
+  type Decision,
 } from 'borgmcp-shared/protocol';
 import { Buffer } from 'node:buffer';
 import { canonicalizeWorkingRepoIdentity } from './working-repo.js';
@@ -1261,9 +1262,9 @@ export async function listDecisions(
   apiUrl: string,
   topic?: string,
   serverTrustIdentity?: string,
-): Promise<{ decisions: any[] }> {
+): Promise<{ decisions: Decision[] }> {
   const local = await localAuthorityContext(sessionToken, apiUrl, serverTrustIdentity);
-  const payload = await localServerRequest<{ decisions: any[] }>(
+  const payload = await localServerRequest<{ decisions: Decision[] }>(
     local,
     `/api/cubes/${local.cubeId}/decisions`,
     'PUT',
@@ -1352,7 +1353,7 @@ export async function regen(
   behind_by?: number;
   // gh#740: active ratified decisions for the cube, rendered by regen-format.
   // Local regen composes these via listDecisions.
-  decisions?: any[];
+  decisions?: Decision[];
   decisions_error?: string;
 }> {
   const local = await localAuthorityContext(
@@ -1383,7 +1384,7 @@ export async function regen(
     ? await getLocalServerCursor(localCursorBinding(local))
     : await resolveLocalLogCursor(local, opts.since);
   const page = await localReadLogPage(local, { cursor, limit: 1 });
-  let decisions: any[] | undefined;
+  let decisions: Decision[] | undefined;
   let decisionsError: string | undefined;
   try {
     decisions = (await listDecisions(

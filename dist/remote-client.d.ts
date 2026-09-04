@@ -9,7 +9,7 @@
  * There is no hosted-authority path: every request must carry verified local
  * server trust or it fails closed before any network or credential use.
  */
-import { decodeAppendLogResult, type AckStatusResult, type AgentKind, type EntryQueryResult, type EvictDroneResult, type ReassignDroneResult, type PutDocumentResult, type GetDocumentResult, type ListDocumentsResult, type RemoveDocumentResult, type CreateCubeRepository } from 'borgmcp-shared/protocol';
+import { decodeAppendLogResult, type AckStatusResult, type AgentKind, type EntryQueryResult, type EvictDroneResult, type ReassignDroneResult, type PutDocumentResult, type GetDocumentResult, type ListDocumentsResult, type RemoveDocumentResult, type CreateCubeRepository, type Decision } from 'borgmcp-shared/protocol';
 import type { MessageTaxonomy, MessageTaxonomyClass } from 'borgmcp-shared/templates';
 import type { NonClobberSyncResult } from './sync-roles-render.js';
 import type { WorkingRepo } from './working-repo.js';
@@ -205,7 +205,7 @@ export declare function recordDecision(sessionToken: string, apiUrl: string, inp
  * `topic`, returns that topic's active decision.
  */
 export declare function listDecisions(sessionToken: string, apiUrl: string, topic?: string, serverTrustIdentity?: string): Promise<{
-    decisions: any[];
+    decisions: Decision[];
 }>;
 /** Remove one active ratified decision. The worker enforces the seat gate. */
 export declare function removeDecision(sessionToken: string, apiUrl: string, selector: {
@@ -249,7 +249,7 @@ export declare function regen(sessionToken: string, apiUrl: string, opts?: {
     drones: any[];
     recentLog?: any[];
     behind_by?: number;
-    decisions?: any[];
+    decisions?: Decision[];
     decisions_error?: string;
 }>;
 export declare function roleRationale(sessionToken: string, apiUrl: string, role: string, section: string, serverTrustIdentity?: string): Promise<{

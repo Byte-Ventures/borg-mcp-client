@@ -22,6 +22,7 @@ import { shellEscape } from './shell-escape.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
 import { isBorgSession } from './launch-gate.js';
 import type { AgentKind } from './agent-runtime.js';
+import type { Decision } from 'borgmcp-shared/protocol';
 
 export type HandoverMode = 'origin' | 'local';
 
@@ -562,7 +563,7 @@ export function formatRegenMarkdown(
     // gh#740: active ratified decisions for the cube. Rendered in the
     // always-shown band (lite + full) so the source of truth is in context at
     // mid-session restatement moments. Absent on a pre-gh#740 worker → omitted.
-    decisions?: any[];
+    decisions?: Decision[];
     decisions_error?: string;
   },
   opts: { mode?: RegenMode; handoverMode?: HandoverMode } = {}
@@ -642,7 +643,7 @@ export function formatRegenMarkdown(
       return ['## Ratified decisions', 'No active decisions are recorded.'].join('\n');
     }
     const shown = activeDecisions.slice(0, RATIFIED_DECISIONS_CAP);
-    const lines = shown.map((d: any) => `- **${d.topic}:** ${d.decision}`);
+    const lines = shown.map((d) => `- **${d.topic}:** ${d.decision}`);
     const remaining = activeDecisions.length - shown.length;
     if (remaining > 0) lines.push(`- _+${remaining} more — \`borg_decisions\`_`);
     return ['## Ratified decisions', 'Cite these by topic — do NOT restate a ratified decision from memory.', ...lines].join('\n');
