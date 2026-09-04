@@ -331,6 +331,7 @@ export interface AssimilateDeps {
     trustIdentity: string;
     serverCapabilities?: readonly string[];
   }>;
+  listServerCredentialOrigins?: (origin: string) => Promise<string[]>;
   resumeServerEnrollment: (
     apiUrl: string,
     onPending?: () => void,
@@ -533,13 +534,26 @@ function localAssimilateCliCommand(apiUrl: string, cli: BorgCli): string {
   return `\`borg assimilate --host ${apiUrl} --cli ${cli}\``;
 }
 
-function reportServerFailure(
-  deps: Pick<AssimilateDeps, 'stderr'>,
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+}
+
+function isSiblingEndpoint(reachedOrigin: string, enrolledOrigin: string): boolean {
+  const reached = new URL(reachedOrigin);
+  const enrolled = new URL(enrolledOrigin);
+  return reached.hostname === enrolled.hostname
+    || (reached.port === enrolled.port
+      && isLoopbackHostname(reached.hostname)
+      && isLoopbackHostname(enrolled.hostname));
+}
+
+async function reportServerFailure(
+  deps: Pick<AssimilateDeps, 'stderr' | 'listServerCredentialOrigins'>,
   apiUrl: string,
   error: unknown,
   enroll = false,
   mode: 'assimilate' | 'cube-init' = 'assimilate',
-): number {
+): Promise<number> {
   const message = error instanceof Error ? error.message : String(error);
   const retryCommand = localAssimilateCommand(apiUrl, enroll, mode);
   if (error instanceof BorgServerError && error.code === 'CREATE_CUBE_DENIED') {
@@ -551,6 +565,42 @@ function reportServerFailure(
     return 1;
   }
   if (error instanceof BorgServerError && error.code === 'NOT_ENROLLED') {
+    let enrolledOrigins: string[] = [];
+    try {
+      enrolledOrigins = (await deps.listServerCredentialOrigins?.(apiUrl) ?? []).filter((origin) => {
+        try {
+          const parsed = new URL(origin);
+          return parsed.protocol === 'https:' && parsed.origin === origin && origin !== apiUrl;
+        } catch {
+          return false;
+        }
+      });
+    } catch {
+      // Preserve the existing recovery when the optional diagnostic lookup is unavailable.
+    }
+    const siblingOrigins = enrolledOrigins.filter((origin) => isSiblingEndpoint(apiUrl, origin));
+    if (siblingOrigins.length > 0) {
+      const enrollmentLabel = siblingOrigins.length === 1 ? 'a saved enrollment' : 'saved enrollments';
+      const commandLabel = siblingOrigins.length === 1 ? 'the enrolled endpoint' : 'one of the enrolled endpoints';
+      const commands = siblingOrigins
+        .map((origin) => localAssimilateCommand(origin, false, mode))
+        .join(' or ');
+      deps.stderr(
+        `Borg found ${enrollmentLabel} for ${siblingOrigins.join(', ')}, but this command is reaching ${apiUrl}. ` +
+          `Use ${commandLabel} instead: ${commands}.\n`,
+      );
+      return 1;
+    }
+    if (enrolledOrigins.length > 0) {
+      deps.stderr(
+        `This client is enrolled against ${enrolledOrigins.join(', ')}, not ${apiUrl}. ` +
+          `Confirm that the host, port, and IPv4 or IPv6 loopback ` +
+          `form in ${apiUrl} match the endpoint used during enrollment. If this client has never ` +
+          `enrolled with that server, run ${localAssimilateCommand(apiUrl, true, mode)} from the ` +
+          `operator’s terminal.\n`,
+      );
+      return 1;
+    }
     deps.stderr(
       `Borg could not find a saved enrollment for ${apiUrl}. ` +
         `This can mean that this client has not enrolled with the server, or that its enrollment ` +
@@ -1267,7 +1317,7 @@ export async function prepareAssimilationSeat(
         return { kind: 'stop', code: diagnoseSessionTermination(deps, apiUrl, 'superseded') };
       }
     }
-    return { kind: 'stop', code: reportServerFailure(deps, apiUrl, error) };
+    return { kind: 'stop', code: await reportServerFailure(deps, apiUrl, error) };
   }
 
   if (result.prepareAborted) {
@@ -1281,7 +1331,7 @@ export async function prepareAssimilationSeat(
   if (result.local_session === undefined) {
     return {
       kind: 'stop',
-      code: reportServerFailure(deps, apiUrl, new Error('Borg server did not return compatible secure session metadata')),
+      code: await reportServerFailure(deps, apiUrl, new Error('Borg server did not return compatible secure session metadata')),
     };
   }
   const assignedRole = cubeDetail.roles.find((role) => role.id === result.role_id) ?? resolvedRole;
@@ -1592,7 +1642,7 @@ export async function resolveAssimilationAuthority(
     hasPersistedIdentity = existing !== null || await deps.hasPersistedActiveCube();
   } catch (error) {
     if (error instanceof LegacySessionCredentialCollisionError) {
-      return { kind: 'stop', code: reportServerFailure(deps, error.origin, error, false, mode) };
+      return { kind: 'stop', code: await reportServerFailure(deps, error.origin, error, false, mode) };
     }
     localSeatReadError = error;
   }
@@ -1601,7 +1651,7 @@ export async function resolveAssimilationAuthority(
   if (!selectedAuthority) return { kind: 'stop', code: 1 };
   let authority = selectedAuthority;
   if (localSeatReadError !== undefined) {
-    return { kind: 'stop', code: reportServerFailure(deps, authority.apiUrl, localSeatReadError, false, mode) };
+    return { kind: 'stop', code: await reportServerFailure(deps, authority.apiUrl, localSeatReadError, false, mode) };
   }
 
   const projectRoot = repositoryContext.root;
@@ -1704,7 +1754,7 @@ export async function resolveAssimilationAuthority(
   } catch (error) {
     return {
       kind: 'stop',
-      code: reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true, mode),
+      code: await reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true, mode),
     };
   }
 
@@ -1861,7 +1911,7 @@ export async function runAssimilate(
       return 1;
     }
     if (error instanceof BorgServerError) {
-      return reportServerFailure(deps, auth.apiUrl, error, false, mode);
+      return await reportServerFailure(deps, auth.apiUrl, error, false, mode);
     }
     deps.stderr(
       'Repository cube initialization failed.\n' +

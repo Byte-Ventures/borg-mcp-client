@@ -67,7 +67,7 @@ import {
   addProjectSessionStartHook,
   provisionLaunchAccess,
 } from './config-utils.js';
-import { findPendingServerEnrollment } from './config.js';
+import { findPendingServerEnrollment, listServerCredentialOrigins } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
@@ -268,6 +268,7 @@ export function buildDefaultAssimilateDeps(
       }
       return connectLocalBorgServer(apiUrl);
     },
+    listServerCredentialOrigins,
     resumeServerEnrollment: async (apiUrl, onPending) =>
       resumeLocalBorgServerEnrollment(apiUrl, {
         ...(onPending === undefined ? {} : { onPending }),

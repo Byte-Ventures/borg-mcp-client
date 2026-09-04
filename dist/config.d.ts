@@ -77,6 +77,7 @@ export declare function getServerCredentialRecord(origin: string, trustIdentity:
 /** Read only the bearer for existing call sites that do not need capability metadata. */
 export declare function getServerCredential(origin: string, trustIdentity: string): Promise<string | null>;
 export declare function hasServerCredentialForOrigin(origin: string): Promise<boolean>;
+export declare function listServerCredentialOrigins(origin: string): Promise<string[]>;
 /** Load an exact durable PENDING tuple so a new process can resume it. */
 export declare function getPendingServerEnrollment(origin: string, trustIdentity: string): Promise<PendingServerEnrollmentRecord | null>;
 /** Find the sole pending enrollment so artifact-only retries need no invitation. */

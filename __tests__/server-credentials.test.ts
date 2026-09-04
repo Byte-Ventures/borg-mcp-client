@@ -18,6 +18,7 @@ import {
   getPendingServerEnrollment,
   getServerCredential,
   getServerCredentialRecord,
+  listServerCredentialOrigins,
   storeServerCredential,
   restoreAcceptedEnrollmentAccounts,
 } from '../src/config.js';
@@ -66,6 +67,46 @@ describe('self-hosted server credential storage', () => {
     await expect(getServerCredential(origin, trustIdentity)).resolves.toBe(credential);
     await expect(getServerCredential(origin, 'sha256:server-b')).resolves.toBeNull();
     await expect(getServerCredential('https://localhost:8788', trustIdentity)).resolves.toBeNull();
+  });
+
+  it('enumerates only active enrollment origins without returning credential metadata', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const otherOrigin = 'https://localhost:7091';
+    const otherTrustIdentity = 'sha256:server-b';
+    const otherCredential = 'd'.repeat(43);
+    await storeServerCredential({ origin, trustIdentity, credential });
+    await storeServerCredential({
+      origin: otherOrigin,
+      trustIdentity: otherTrustIdentity,
+      credential: otherCredential,
+    });
+    values.set('unrelated-account-key', JSON.stringify({
+      version: 2,
+      origin: 'https://invalid.example.com',
+    }));
+
+    const origins = await listServerCredentialOrigins('https://localhost:9999');
+    const output = JSON.stringify(origins);
+    expect(origins).toEqual([otherOrigin, origin]);
+    expect(output).not.toContain(credential);
+    expect(output).not.toContain(otherCredential);
+    expect(output).not.toContain(trustIdentity);
+    expect(output).not.toContain(otherTrustIdentity);
+    expect(output).not.toContain('unrelated-account-key');
+    expect(output).not.toContain('invalid.example.com');
+  });
+
+  it('returns no enrollment origins when the credential backend cannot enumerate entries', async () => {
+    const { values } = memoryBackend();
+    __setServerCredentialBackendForTest({
+      name: 'file',
+      get: async (account) => values.get(account) ?? null,
+      set: async (account, value) => { values.set(account, value); },
+      delete: async (account) => { values.delete(account); },
+    });
+
+    await expect(listServerCredentialOrigins(origin)).resolves.toEqual([]);
   });
 
   it('does not expose the authority or trust identity in keychain account metadata', async () => {

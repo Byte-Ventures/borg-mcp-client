@@ -116,7 +116,18 @@ function localAssimilateRoleCommand(apiUrl) {
 function localAssimilateCliCommand(apiUrl, cli) {
     return `\`borg assimilate --host ${apiUrl} --cli ${cli}\``;
 }
-function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimilate') {
+function isLoopbackHostname(hostname) {
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+}
+function isSiblingEndpoint(reachedOrigin, enrolledOrigin) {
+    const reached = new URL(reachedOrigin);
+    const enrolled = new URL(enrolledOrigin);
+    return reached.hostname === enrolled.hostname
+        || (reached.port === enrolled.port
+            && isLoopbackHostname(reached.hostname)
+            && isLoopbackHostname(enrolled.hostname));
+}
+async function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimilate') {
     const message = error instanceof Error ? error.message : String(error);
     const retryCommand = localAssimilateCommand(apiUrl, enroll, mode);
     if (error instanceof BorgServerError && error.code === 'CREATE_CUBE_DENIED') {
@@ -126,6 +137,40 @@ function reportServerFailure(deps, apiUrl, error, enroll = false, mode = 'assimi
         return 1;
     }
     if (error instanceof BorgServerError && error.code === 'NOT_ENROLLED') {
+        let enrolledOrigins = [];
+        try {
+            enrolledOrigins = (await deps.listServerCredentialOrigins?.(apiUrl) ?? []).filter((origin) => {
+                try {
+                    const parsed = new URL(origin);
+                    return parsed.protocol === 'https:' && parsed.origin === origin && origin !== apiUrl;
+                }
+                catch {
+                    return false;
+                }
+            });
+        }
+        catch {
+            // Preserve the existing recovery when the optional diagnostic lookup is unavailable.
+        }
+        const siblingOrigins = enrolledOrigins.filter((origin) => isSiblingEndpoint(apiUrl, origin));
+        if (siblingOrigins.length > 0) {
+            const enrollmentLabel = siblingOrigins.length === 1 ? 'a saved enrollment' : 'saved enrollments';
+            const commandLabel = siblingOrigins.length === 1 ? 'the enrolled endpoint' : 'one of the enrolled endpoints';
+            const commands = siblingOrigins
+                .map((origin) => localAssimilateCommand(origin, false, mode))
+                .join(' or ');
+            deps.stderr(`Borg found ${enrollmentLabel} for ${siblingOrigins.join(', ')}, but this command is reaching ${apiUrl}. ` +
+                `Use ${commandLabel} instead: ${commands}.\n`);
+            return 1;
+        }
+        if (enrolledOrigins.length > 0) {
+            deps.stderr(`This client is enrolled against ${enrolledOrigins.join(', ')}, not ${apiUrl}. ` +
+                `Confirm that the host, port, and IPv4 or IPv6 loopback ` +
+                `form in ${apiUrl} match the endpoint used during enrollment. If this client has never ` +
+                `enrolled with that server, run ${localAssimilateCommand(apiUrl, true, mode)} from the ` +
+                `operator’s terminal.\n`);
+            return 1;
+        }
         deps.stderr(`Borg could not find a saved enrollment for ${apiUrl}. ` +
             `This can mean that this client has not enrolled with the server, or that its enrollment ` +
             `is saved for a different endpoint. Confirm that the host, port, and IPv4 or IPv6 ` +
@@ -614,7 +659,7 @@ export async function prepareAssimilationSeat(input, deps) {
                 return { kind: 'stop', code: diagnoseSessionTermination(deps, apiUrl, 'superseded') };
             }
         }
-        return { kind: 'stop', code: reportServerFailure(deps, apiUrl, error) };
+        return { kind: 'stop', code: await reportServerFailure(deps, apiUrl, error) };
     }
     if (result.prepareAborted) {
         deps.stderr(`This worktree's saved connection to ${apiUrl} changed before the attach ` +
@@ -625,7 +670,7 @@ export async function prepareAssimilationSeat(input, deps) {
     if (result.local_session === undefined) {
         return {
             kind: 'stop',
-            code: reportServerFailure(deps, apiUrl, new Error('Borg server did not return compatible secure session metadata')),
+            code: await reportServerFailure(deps, apiUrl, new Error('Borg server did not return compatible secure session metadata')),
         };
     }
     const assignedRole = cubeDetail.roles.find((role) => role.id === result.role_id) ?? resolvedRole;
@@ -866,7 +911,7 @@ export async function resolveAssimilationAuthority(input, deps) {
     }
     catch (error) {
         if (error instanceof LegacySessionCredentialCollisionError) {
-            return { kind: 'stop', code: reportServerFailure(deps, error.origin, error, false, mode) };
+            return { kind: 'stop', code: await reportServerFailure(deps, error.origin, error, false, mode) };
         }
         localSeatReadError = error;
     }
@@ -875,7 +920,7 @@ export async function resolveAssimilationAuthority(input, deps) {
         return { kind: 'stop', code: 1 };
     let authority = selectedAuthority;
     if (localSeatReadError !== undefined) {
-        return { kind: 'stop', code: reportServerFailure(deps, authority.apiUrl, localSeatReadError, false, mode) };
+        return { kind: 'stop', code: await reportServerFailure(deps, authority.apiUrl, localSeatReadError, false, mode) };
     }
     const projectRoot = repositoryContext.root;
     const wantSibling = args.flags.worktree !== undefined ||
@@ -964,7 +1009,7 @@ export async function resolveAssimilationAuthority(input, deps) {
     catch (error) {
         return {
             kind: 'stop',
-            code: reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true, mode),
+            code: await reportServerFailure(deps, authority.apiUrl, error, args.flags.enroll === true, mode),
         };
     }
     return continueAssimilation({
@@ -1079,7 +1124,7 @@ export async function runAssimilate(args, deps, options = {}) {
             return 1;
         }
         if (error instanceof BorgServerError) {
-            return reportServerFailure(deps, auth.apiUrl, error, false, mode);
+            return await reportServerFailure(deps, auth.apiUrl, error, false, mode);
         }
         deps.stderr('Repository cube initialization failed.\n' +
             'The server may have created or associated a cube; local repository state may be incomplete and no drone was created.\n' +

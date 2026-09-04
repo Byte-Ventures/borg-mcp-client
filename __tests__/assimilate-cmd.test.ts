@@ -4071,10 +4071,94 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(output).not.toContain('\u001b');
   });
 
-  it('does not mistake an endpoint mismatch for a missing enrollment', async () => {
+  it('names a saved sibling-port enrollment and gives the corrected command', async () => {
+    const stderr = vi.fn();
+    const fixture = {
+      origin: 'https://localhost:7091',
+      credential: 'c'.repeat(43),
+      credentialRef: 'borg-server-session:fixture-ref',
+      accountKey: 'borg-server-credential:fixture-account',
+      trustIdentity: 'sha256:fixture-trust-identity',
+    };
+    const deps = makeStubDeps({
+      stderr,
+      listServerCredentialOrigins: vi.fn(async () => [fixture.origin]),
+      connectServer: vi.fn(async () => {
+        throw new BorgServerError('NOT_ENROLLED', 'not enrolled');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    expect(stderr).toHaveBeenCalledWith(
+      'Borg found a saved enrollment for https://localhost:7091, but this command is reaching ' +
+        'https://localhost:8787. Use the enrolled endpoint instead: ' +
+        '`borg assimilate --host https://localhost:7091`.\n',
+    );
+    const output = stderr.mock.calls.map(([text]) => String(text)).join('');
+    expect(output).not.toContain(fixture.credential);
+    expect(output).not.toContain(fixture.credentialRef);
+    expect(output).not.toContain(fixture.accountKey);
+    expect(output).not.toContain(fixture.trustIdentity);
+  });
+
+  it('names a saved enrollment using another loopback form on the reached port', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
+      listServerCredentialOrigins: vi.fn(async () => ['https://127.0.0.1:8787']),
+      connectServer: vi.fn(async () => {
+        throw new BorgServerError('NOT_ENROLLED', 'not enrolled');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    expect(stderr).toHaveBeenCalledWith(
+      'Borg found a saved enrollment for https://127.0.0.1:8787, but this command is reaching ' +
+        'https://localhost:8787. Use the enrolled endpoint instead: ' +
+        '`borg assimilate --host https://127.0.0.1:8787`.\n',
+    );
+  });
+
+  it('names unrelated saved enrollment origins without suggesting them as corrected endpoints', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      listServerCredentialOrigins: vi.fn(async () => ['https://server.example.com']),
+      connectServer: vi.fn(async () => {
+        throw new BorgServerError('NOT_ENROLLED', 'not enrolled');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    expect(stderr).toHaveBeenCalledWith(
+      'This client is enrolled against https://server.example.com, not https://localhost:8787. ' +
+        'Confirm that the host, port, and IPv4 or IPv6 loopback form in ' +
+        'https://localhost:8787 match the endpoint used during enrollment. If this client has never ' +
+        'enrolled with that server, run `borg assimilate --host https://localhost:8787 --enroll` from the ' +
+        'operator’s terminal.\n',
+    );
+  });
+
+  it.each([
+    ['an empty credential store', vi.fn(async () => [])],
+    ['a backend without entries()', undefined],
+  ])('preserves the NOT_ENROLLED copy byte-for-byte with %s', async (_label, listOrigins) => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      ...(listOrigins ? { listServerCredentialOrigins: listOrigins } : {}),
       connectServer: vi.fn(async () => {
         throw new BorgServerError('NOT_ENROLLED', 'not enrolled');
       }),
