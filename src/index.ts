@@ -606,7 +606,9 @@ export async function main() {
               drone: displayedResult.drone,
               role: displayedResult.role,
               behind_by: typeof displayedResult.behind_by === 'number' ? displayedResult.behind_by : null,
-              decision_topics: (displayedResult.decisions ?? []).map((d: any) => d.topic),
+              ...(Array.isArray(displayedResult.decisions)
+                ? { decision_topics: displayedResult.decisions.map((d: any) => d.topic) }
+                : {}),
               running_version: getPackageVersion(),
               on_disk_version: onDiskVersion,
               wake_path_healthy: inboxMonitorHealthy,

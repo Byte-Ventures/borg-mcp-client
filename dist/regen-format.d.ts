@@ -198,6 +198,7 @@ export declare function formatRegenMarkdown(result: {
     recentLog?: any[];
     behind_by?: number;
     decisions?: any[];
+    decisions_error?: string;
 }, opts?: {
     mode?: RegenMode;
     handoverMode?: HandoverMode;

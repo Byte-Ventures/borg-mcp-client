@@ -1353,6 +1353,7 @@ export async function regen(
   // gh#740: active ratified decisions for the cube, rendered by regen-format.
   // Local regen composes these via listDecisions.
   decisions?: any[];
+  decisions_error?: string;
 }> {
   const local = await localAuthorityContext(
     sessionToken,
@@ -1382,7 +1383,8 @@ export async function regen(
     ? await getLocalServerCursor(localCursorBinding(local))
     : await resolveLocalLogCursor(local, opts.since);
   const page = await localReadLogPage(local, { cursor, limit: 1 });
-  let decisions: any[] = [];
+  let decisions: any[] | undefined;
+  let decisionsError: string | undefined;
   try {
     decisions = (await listDecisions(
       sessionToken,
@@ -1391,8 +1393,12 @@ export async function regen(
       opts.serverTrustIdentity,
     )).decisions;
   } catch (error) {
+    const constructorName = error instanceof Error ? error.constructor.name : '';
+    decisionsError = /^[A-Za-z][A-Za-z0-9]*Error$/.test(constructorName)
+      ? constructorName
+      : 'UnknownError';
     console.warn(
-      `Local regen: failed to fetch ratified decisions (${error instanceof Error ? error.message : String(error)}); continuing without them.`,
+      `Local regen: failed to fetch ratified decisions (${decisionsError}); continuing without them.`,
     );
   }
   return {
@@ -1403,7 +1409,8 @@ export async function regen(
     drones: composed.drones,
     recentLog: [],
     behind_by: page.entries.length + page.behind_by,
-    decisions,
+    ...(decisions === undefined ? {} : { decisions }),
+    ...(decisionsError === undefined ? {} : { decisions_error: decisionsError }),
   };
 }
 

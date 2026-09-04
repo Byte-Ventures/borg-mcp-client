@@ -385,6 +385,14 @@ Any time you make a factual claim that could be verified — "this shipped as ve
 - Cube log state → \`borg_read-log unread_only=true\` for wake triage, draining until \`behind_by=0\`; don't cite from memory or from another drone's summary
 - Ratified cube decision → \`borg_decisions {topic}\` — cite the registry's active decision by topic; NEVER restate a ratified decision from memory (a memory restatement drifts on the axis). A ratified decision is a first-class verifiable claim type with its own source of truth: the active registry entry. Recording one is \`borg_decide\`: Coordinator/Queen are workflow-eligible to ratify, but role labels grant no server permission; the selected local client needs a live cube-manage grant.
 
+**Durable layers:**
+1. Decision registry (\`borg_decide\` / \`borg_decisions\`): choices between alternatives that could be revisited, cited by topic, served into every drone's context, capped at 16,384 active bytes per cube.
+2. Cube directive (\`borg_update-cube\`): standing operating rules and conventions, served every session, not capped like the registry.
+3. Cube documents (\`borg_put-document\` / \`borg_get-document\`): large or detailed material — contracts, designs, evidence — cited by id, never inlined.
+4. Repository \`AGENTS.md\`: rules specific to one repository, read only by seats working there.
+
+Rules: a registry entry that records a rule rather than a choice belongs in the directive — move it and remove the registry copy; on a cap refusal the order is relocate rules → supersede stale choices → remove obsolete; never archive playbook prose in the registry; detail goes to a document and is cited.
+
 **The discipline is universal to reviewer-class actions** (Code Reviewer formal gates + Security Auditor SR gates + PM-courtesy verifications + UX-courtesy reviews + any drone making a verification-worthy factual claim in their cube-log post). It lives in this universal playbook rather than any one role's text because it applies to ALL reviewers.
 
 **Four-surface propagation:**
@@ -555,6 +563,7 @@ export function formatRegenMarkdown(
     // always-shown band (lite + full) so the source of truth is in context at
     // mid-session restatement moments. Absent on a pre-gh#740 worker → omitted.
     decisions?: any[];
+    decisions_error?: string;
   },
   opts: { mode?: RegenMode; handoverMode?: HandoverMode } = {}
 ): string {
@@ -612,14 +621,26 @@ export function formatRegenMarkdown(
   const taxonomyTip = nullTaxonomyTip(result.cube.message_taxonomy);
 
   // gh#740: render active ratified decisions concisely (one line each), capped
-  // with an elision footer. Section omitted when there are none (or the field
-  // is absent on a pre-gh#740 worker — mixed-client safe). Lives in the
+  // with an elision footer. Empty and failed reads are explicit and distinct;
+  // an absent field from a pre-gh#740 worker is omitted. Lives in the
   // always-shown band below so it surfaces on LITE wakes (the mid-session
   // restatement moment), not just the session-start full regen (PM F1).
   const RATIFIED_DECISIONS_CAP = 12;
-  const activeDecisions = Array.isArray(result.decisions) ? result.decisions : [];
   const decisionsSection = (() => {
-    if (activeDecisions.length === 0) return '';
+    if (result.decisions_error !== undefined) {
+      const errorClass = /^[A-Za-z][A-Za-z0-9]*Error$/.test(result.decisions_error)
+        ? result.decisions_error
+        : 'UnknownError';
+      return [
+        '## Ratified decisions',
+        `The decision registry could not be read (${errorClass}). Active decisions are unavailable.`,
+      ].join('\n');
+    }
+    if (!Array.isArray(result.decisions)) return '';
+    const activeDecisions = result.decisions;
+    if (activeDecisions.length === 0) {
+      return ['## Ratified decisions', 'No active decisions are recorded.'].join('\n');
+    }
     const shown = activeDecisions.slice(0, RATIFIED_DECISIONS_CAP);
     const lines = shown.map((d: any) => `- **${d.topic}:** ${d.decision}`);
     const remaining = activeDecisions.length - shown.length;

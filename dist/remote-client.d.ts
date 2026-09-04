@@ -250,6 +250,7 @@ export declare function regen(sessionToken: string, apiUrl: string, opts?: {
     recentLog?: any[];
     behind_by?: number;
     decisions?: any[];
+    decisions_error?: string;
 }>;
 export declare function roleRationale(sessionToken: string, apiUrl: string, role: string, section: string, serverTrustIdentity?: string): Promise<{
     role: string;
