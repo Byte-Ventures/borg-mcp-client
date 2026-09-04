@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UNREPORTED_DRONE_RUNTIME_METADATA } from './fixtures/runtime-metadata.js';
 import { TOOL_MANIFEST } from '../src/tool-manifest.js';
+import type { Decision } from 'borgmcp-shared/protocol';
 
 const CUBE_ID = '11111111-1111-4111-8111-111111111111';
 const ROLE_ID = '22222222-2222-4222-8222-222222222222';
@@ -25,6 +26,17 @@ const ACTIVE_CUBE = {
 const INITIAL_CURSOR = {
   id: '77777777-7777-4777-8777-777777777777',
   created_at: '2026-07-14T13:00:00.000Z',
+};
+const ACTIVE_DECISION: Decision = {
+  id: '99999999-9999-4999-8999-999999999999',
+  cube_id: CUBE_ID,
+  topic: 'local',
+  decision: 'stay local',
+  rationale: null,
+  ratified_by: null,
+  status: 'active',
+  supersedes: null,
+  created_at: '2026-09-04T00:00:00.000Z',
 };
 
 function envelope(payload: unknown, requestId = 'local-response-1') {
@@ -177,7 +189,7 @@ describe('local server route adapter', () => {
         return new Response(JSON.stringify(envelope({ drone_id: DRONE_ID, evicted: true })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/decisions` && method === 'PUT') {
-        return new Response(JSON.stringify(envelope({ decisions: [{ topic: 'local', decision: 'stay local' }] })), { status: 200 });
+        return new Response(JSON.stringify(envelope({ decisions: [ACTIVE_DECISION] })), { status: 200 });
       }
       throw new Error(`unexpected local request ${method} ${url.pathname}`);
     });
@@ -253,7 +265,7 @@ describe('local server route adapter', () => {
       .resolves.toMatchObject({ entry: { id: LOG_ID } });
     await remote.ackLogEntry(SESSION, ORIGIN, LOG_ID);
     await expect(remote.listDecisions(SESSION, ORIGIN, 'local'))
-      .resolves.toEqual({ decisions: [{ topic: 'local', decision: 'stay local' }] });
+      .resolves.toEqual({ decisions: [ACTIVE_DECISION] });
 
     const calls = fetchSpy.mock.calls.map(([input, init]) => ({
       url: String(input),

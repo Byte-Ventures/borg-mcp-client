@@ -22,11 +22,13 @@ describe('regen() runtime metadata self-heal', () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
   let metadata: Record<string, string | null> = { ...emptyMetadata };
   let reported = false;
+  let decisionsFailure: Error | null = null;
 
   beforeEach(() => {
     vi.resetModules();
     metadata = { ...emptyMetadata };
     reported = false;
+    decisionsFailure = null;
     fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(input.toString());
       const method = init?.method ?? 'GET';
@@ -60,6 +62,7 @@ describe('regen() runtime metadata self-heal', () => {
         return new Response(JSON.stringify(localEnvelope({ entries: [], cursor: null, behind_by: 0, has_more: false })), { status: 200 });
       }
       if (url.pathname === `/api/cubes/${CUBE_ID}/decisions` && method === 'PUT') {
+        if (decisionsFailure) throw decisionsFailure;
         return new Response(JSON.stringify(localEnvelope({ decisions: [] })), { status: 200 });
       }
       throw new Error(`unexpected local request ${method} ${url.pathname}`);
@@ -84,6 +87,21 @@ describe('regen() runtime metadata self-heal', () => {
   });
 
   afterEach(() => vi.resetModules());
+
+  it('preserves a decision-registry fetch failure as distinct from an empty registry', async () => {
+    decisionsFailure = new TypeError('fixture secret must not render');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { regen } = await import('../src/remote-client.js');
+
+    const result = await regen(SESSION, ORIGIN, { serverTrustIdentity: TRUST_IDENTITY });
+
+    expect(result.decisions).toBeUndefined();
+    expect(result.decisions_error).toBe('TypeError');
+    expect(JSON.stringify(result)).not.toContain('fixture secret');
+    expect(warn).toHaveBeenCalledWith(
+      'Local regen: failed to fetch ratified decisions (TypeError); continuing without them.',
+    );
+  });
 
   it('patches known metadata through the own-session route before composing identity', async () => {
     const { regen } = await import('../src/remote-client.js');

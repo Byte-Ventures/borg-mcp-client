@@ -938,12 +938,17 @@ export async function regen(sessionToken, apiUrl, opts = {}) {
         ? await getLocalServerCursor(localCursorBinding(local))
         : await resolveLocalLogCursor(local, opts.since);
     const page = await localReadLogPage(local, { cursor, limit: 1 });
-    let decisions = [];
+    let decisions;
+    let decisionsError;
     try {
         decisions = (await listDecisions(sessionToken, apiUrl, undefined, opts.serverTrustIdentity)).decisions;
     }
     catch (error) {
-        console.warn(`Local regen: failed to fetch ratified decisions (${error instanceof Error ? error.message : String(error)}); continuing without them.`);
+        const constructorName = error instanceof Error ? error.constructor.name : '';
+        decisionsError = /^[A-Za-z][A-Za-z0-9]*Error$/.test(constructorName)
+            ? constructorName
+            : 'UnknownError';
+        console.warn(`Local regen: failed to fetch ratified decisions (${decisionsError}); continuing without them.`);
     }
     return {
         cube: composed.cube,
@@ -953,7 +958,8 @@ export async function regen(sessionToken, apiUrl, opts = {}) {
         drones: composed.drones,
         recentLog: [],
         behind_by: page.entries.length + page.behind_by,
-        decisions,
+        ...(decisions === undefined ? {} : { decisions }),
+        ...(decisionsError === undefined ? {} : { decisions_error: decisionsError }),
     };
 }
 export async function roleRationale(sessionToken, apiUrl, role, section, serverTrustIdentity) {

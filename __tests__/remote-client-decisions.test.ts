@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Decision } from 'borgmcp-shared/protocol';
 
 /**
  * gh#740: recordDecision / listDecisions / removeDecision wire shape.
@@ -18,6 +19,23 @@ const DRONE_ID = '33333333-3333-4333-8333-333333333333';
 const ORIGIN = 'https://localhost:8787';
 const TRUST_IDENTITY = 'spki-sha256:test-server';
 const SESSION = 's'.repeat(43);
+const DECISION_ONE_ID = '44444444-4444-4444-8444-444444444444';
+const DECISION_TWO_ID = '55555555-5555-4555-8555-555555555555';
+
+function decisionFixture(overrides: Partial<Decision> = {}): Decision {
+  return {
+    id: DECISION_ONE_ID,
+    cube_id: CUBE_ID,
+    topic: 'release-cadence',
+    decision: 'ship on consensus',
+    rationale: null,
+    ratified_by: null,
+    status: 'active',
+    supersedes: null,
+    created_at: '2026-09-04T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 function localEnvelope(payload: unknown, requestId = 'local-response-1') {
   return { protocol_version: '14', request_id: requestId, payload };
@@ -55,7 +73,7 @@ describe('decision registry request shapes (local path)', () => {
 
   it('recordDecision POSTs {topic, decision, rationale?} to the local decisions route', async () => {
     fetchSpy = vi.fn(async () => new Response(
-      JSON.stringify(localEnvelope({ decision: { id: 'd1', topic: 't', status: 'active' } })),
+      JSON.stringify(localEnvelope({ decision: decisionFixture({ topic: 't' }) })),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     ));
     const { recordDecision } = await import('../src/remote-client.js');
@@ -72,7 +90,7 @@ describe('decision registry request shapes (local path)', () => {
       decision: 'pooled',
       rationale: 'gh#738',
     });
-    expect(out.decision.id).toBe('d1');
+    expect(out.decision.id).toBe(DECISION_ONE_ID);
   });
 
   it('listDecisions reads the local registry with PUT (no ?topic= query param)', async () => {
@@ -92,8 +110,8 @@ describe('decision registry request shapes (local path)', () => {
     fetchSpy = vi.fn(async () => new Response(
       JSON.stringify(localEnvelope({
         decisions: [
-          { id: 'd1', topic: 'release cadence', status: 'active' },
-          { id: 'd2', topic: 'pricing-model', status: 'active' },
+          decisionFixture({ topic: 'release cadence' }),
+          decisionFixture({ id: DECISION_TWO_ID, topic: 'pricing-model' }),
         ],
       })),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -102,12 +120,14 @@ describe('decision registry request shapes (local path)', () => {
     const out = await listDecisions(SESSION, ORIGIN, 'release cadence');
     const [url] = fetchSpy.mock.calls[0];
     expect(String(url)).not.toContain('?topic=');
-    expect(out.decisions).toEqual([{ id: 'd1', topic: 'release cadence', status: 'active' }]);
+    expect(out.decisions).toEqual([decisionFixture({ topic: 'release cadence' })]);
   });
 
   it('removeDecision DELETEs a topic selector to the local decisions route', async () => {
     fetchSpy = vi.fn(async () => new Response(
-      JSON.stringify(localEnvelope({ decision: { id: 'd1', topic: 'release-cadence', status: 'removed' } })),
+      JSON.stringify(localEnvelope({
+        decision: decisionFixture({ topic: 'release-cadence', status: 'removed' }),
+      })),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     ));
     const { removeDecision } = await import('../src/remote-client.js');
@@ -116,12 +136,18 @@ describe('decision registry request shapes (local path)', () => {
     expect(new URL(String(url)).pathname).toBe(`/api/cubes/${CUBE_ID}/decisions`);
     expect(init!.method).toBe('DELETE');
     expect(JSON.parse(String(init!.body)).payload).toEqual({ topic: 'release-cadence' });
-    expect(out.decision).toMatchObject({ id: 'd1', status: 'removed' });
+    expect(out.decision).toMatchObject({ id: DECISION_ONE_ID, status: 'removed' });
   });
 
   it('removeDecision DELETEs a decision_id selector to the local decisions route', async () => {
     fetchSpy = vi.fn(async () => new Response(
-      JSON.stringify(localEnvelope({ decision: { id: 'd2', topic: 'release-cadence', status: 'removed' } })),
+      JSON.stringify(localEnvelope({
+        decision: decisionFixture({
+          id: DECISION_TWO_ID,
+          topic: 'release-cadence',
+          status: 'removed',
+        }),
+      })),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     ));
     const { removeDecision } = await import('../src/remote-client.js');

@@ -23,6 +23,7 @@ import { formatWakePathPrefix } from '../src/stream-status';
 import { shellEscape } from '../src/shell-escape';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from '../src/opencode-wake-copy';
 import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
+import type { Decision } from 'borgmcp-shared/protocol';
 import {
   GIT_OPERATIONAL_DISCIPLINE_BUILDER,
   GIT_OPERATIONAL_DISCIPLINE_COORDINATOR,
@@ -1253,7 +1254,18 @@ describe('resolveLeanIdentity', () => {
 });
 
 describe('formatRegenMarkdown — Ratified decisions section (gh#740)', () => {
-  const baseResult = (decisions?: any[]) => ({
+  const decisionFixture = (topic: string, decision: string, index: number): Decision => ({
+    id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    cube_id: '11111111-1111-4111-8111-111111111111',
+    topic,
+    decision,
+    rationale: null,
+    ratified_by: null,
+    status: 'active',
+    supersedes: null,
+    created_at: '2026-09-04T00:00:00.000Z',
+  });
+  const baseResult = (decisions?: Decision[]) => ({
     cube: { name: 'borg-mcp', message_taxonomy: [] },
     role: { name: 'Builder', detailed_description: 'Workflow:\nBuild.', detailed_description_hash: 'h1' },
     drone: { label: 'd-1' },
@@ -1267,8 +1279,8 @@ describe('formatRegenMarkdown — Ratified decisions section (gh#740)', () => {
     __resetRegenSessionState();
     const out = formatRegenMarkdown(
       baseResult([
-        { topic: 'pricing-model', decision: 'pooled, not per-cube' },
-        { topic: 'release-cadence', decision: 'ship-on-consensus' },
+        decisionFixture('pricing-model', 'pooled, not per-cube', 1),
+        decisionFixture('release-cadence', 'ship-on-consensus', 2),
       ]),
       { mode: 'lite' },
     );
@@ -1279,9 +1291,18 @@ describe('formatRegenMarkdown — Ratified decisions section (gh#740)', () => {
     expect(out).toContain('do NOT restate a ratified decision from memory');
   });
 
-  it('omits the section entirely when there are no active decisions (no empty header)', () => {
+  it('renders an empty registry distinctly from an unavailable registry', () => {
     __resetRegenSessionState();
-    expect(formatRegenMarkdown(baseResult([]), { mode: 'lite' })).not.toContain('## Ratified decisions');
+    const empty = formatRegenMarkdown(baseResult([]), { mode: 'lite' });
+    const failed = formatRegenMarkdown({
+      ...baseResult(undefined),
+      decisions_error: 'TypeError',
+    }, { mode: 'lite' });
+    expect(empty).toContain('## Ratified decisions\nNo active decisions are recorded.');
+    expect(failed).toContain(
+      '## Ratified decisions\nThe decision registry could not be read (TypeError). Active decisions are unavailable.',
+    );
+    expect(failed).not.toContain('No active decisions are recorded.');
   });
 
   it('mixed-client: a pre-gh#740 worker (no decisions field) → section omitted, no crash', () => {
@@ -1291,7 +1312,10 @@ describe('formatRegenMarkdown — Ratified decisions section (gh#740)', () => {
 
   it('past the cap (12), renders the first 12 + a "+N more — borg_decisions" elision footer', () => {
     __resetRegenSessionState();
-    const many = Array.from({ length: 15 }, (_, i) => ({ topic: `t-${i}`, decision: `d-${i}` }));
+    const many = Array.from(
+      { length: 15 },
+      (_, i) => decisionFixture(`t-${i}`, `d-${i}`, i + 1),
+    );
     const out = formatRegenMarkdown(baseResult(many), { mode: 'lite' });
     expect(out).toContain('**t-0:** d-0');
     expect(out).toContain('**t-11:** d-11');
@@ -1313,5 +1337,19 @@ describe('getDronePlaybookChapter — ratified-decision discipline (gh#740)', ()
     // names the brainstorm / comment / review surfaces (the gh#738 path)
     expect(ch).toContain('Surface 1, brainstorm');
     expect(ch).toContain('Surface 3, review');
+  });
+
+  it('distinguishes the four durable layers and gives the registry-cap cleanup order', () => {
+    const chapter = getDronePlaybookChapter();
+    const durableLayers = chapter.slice(
+      chapter.indexOf('**Durable layers:**'),
+      chapter.indexOf('**The discipline is universal'),
+    );
+    expect(durableLayers).toMatch(/Decision registry.*choices between alternatives.*16,384 active bytes/s);
+    expect(durableLayers).toMatch(/Cube directive.*standing operating rules.*served every session/s);
+    expect(durableLayers).toMatch(/Cube documents.*large or detailed material.*cited by id/s);
+    expect(durableLayers).toMatch(/Repository `AGENTS\.md`.*rules specific to one repository/s);
+    expect(durableLayers).toMatch(/rule rather than a choice belongs in the directive — move it and remove the registry copy/);
+    expect(durableLayers).toMatch(/relocate rules → supersede stale choices → remove obsolete/);
   });
 });

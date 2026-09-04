@@ -6,6 +6,7 @@
  * index.ts's stdio MCP server bootstrap.
  */
 import type { AgentKind } from './agent-runtime.js';
+import type { Decision } from 'borgmcp-shared/protocol';
 export type HandoverMode = 'origin' | 'local';
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
@@ -197,7 +198,8 @@ export declare function formatRegenMarkdown(result: {
     drones: any[];
     recentLog?: any[];
     behind_by?: number;
-    decisions?: any[];
+    decisions?: Decision[];
+    decisions_error?: string;
 }, opts?: {
     mode?: RegenMode;
     handoverMode?: HandoverMode;
