@@ -572,15 +572,17 @@ export async function listServerCredentialOrigins(origin: string): Promise<strin
   return withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
     const accounts = await backend.entries!();
     const origins = new Set<string>();
-    for (const value of Object.values(accounts)) {
+    for (const [account, value] of Object.entries(accounts)) {
       try {
         const candidate = JSON.parse(value) as { origin?: unknown; trustIdentity?: unknown };
         if (typeof candidate.origin !== 'string' || typeof candidate.trustIdentity !== 'string') continue;
-        origins.add(decodeActiveServerCredentialRecord(
+        const record = decodeActiveServerCredentialRecord(
           value,
           candidate.origin,
           candidate.trustIdentity,
-        ).origin);
+        );
+        if (account !== serverCredentialAccount(record.origin, record.trustIdentity)) continue;
+        origins.add(record.origin);
       } catch {
         // Ignore unrelated or malformed backend entries.
       }

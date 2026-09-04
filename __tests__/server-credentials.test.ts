@@ -81,9 +81,38 @@ describe('self-hosted server credential storage', () => {
       trustIdentity: otherTrustIdentity,
       credential: otherCredential,
     });
+    const pendingOrigin = 'https://localhost:7092';
+    const pendingCredential = 'p'.repeat(43);
+    const pendingTrustIdentity = 'sha256:pending-server';
+    values.set('borg-server-pending:fixture-credential-ref', JSON.stringify({
+      version: 3,
+      state: 'pending',
+      origin: pendingOrigin,
+      trustIdentity: pendingTrustIdentity,
+      invitation: 'i'.repeat(43),
+      retryKey: '11111111-1111-4111-8111-111111111111',
+      credential: pendingCredential,
+      credentialRef: 'fixture-credential-ref',
+      artifactBinding: {
+        artifactFormatVersion: 2,
+        artifactDigest: 'a'.repeat(64),
+        endpoint: pendingOrigin,
+        caSpkiSha256: 'b'.repeat(64),
+        trustIdentity: pendingTrustIdentity,
+        expectedAuthority: 'client',
+        stagedGenerationId: 'd'.repeat(64),
+      },
+    }));
+    const misKeyedOrigin = 'https://localhost:7093';
+    const misKeyedCredential = 'm'.repeat(43);
+    const misKeyedTrustIdentity = 'sha256:mis-keyed-server';
     values.set('unrelated-account-key', JSON.stringify({
       version: 2,
-      origin: 'https://invalid.example.com',
+      origin: misKeyedOrigin,
+      trustIdentity: misKeyedTrustIdentity,
+      credential: misKeyedCredential,
+      clientId: null,
+      serverCapabilities: [],
     }));
 
     const origins = await listServerCredentialOrigins('https://localhost:9999');
@@ -93,8 +122,13 @@ describe('self-hosted server credential storage', () => {
     expect(output).not.toContain(otherCredential);
     expect(output).not.toContain(trustIdentity);
     expect(output).not.toContain(otherTrustIdentity);
+    expect(output).not.toContain(pendingOrigin);
+    expect(output).not.toContain(pendingCredential);
+    expect(output).not.toContain(pendingTrustIdentity);
+    expect(output).not.toContain(misKeyedOrigin);
+    expect(output).not.toContain(misKeyedCredential);
+    expect(output).not.toContain(misKeyedTrustIdentity);
     expect(output).not.toContain('unrelated-account-key');
-    expect(output).not.toContain('invalid.example.com');
   });
 
   it('returns no enrollment origins when the credential backend cannot enumerate entries', async () => {
