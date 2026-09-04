@@ -18,6 +18,7 @@ import {
   getPendingServerEnrollment,
   getServerCredential,
   getServerCredentialRecord,
+  listServerCredentialOrigins,
   storeServerCredential,
   restoreAcceptedEnrollmentAccounts,
 } from '../src/config.js';
@@ -66,6 +67,80 @@ describe('self-hosted server credential storage', () => {
     await expect(getServerCredential(origin, trustIdentity)).resolves.toBe(credential);
     await expect(getServerCredential(origin, 'sha256:server-b')).resolves.toBeNull();
     await expect(getServerCredential('https://localhost:8788', trustIdentity)).resolves.toBeNull();
+  });
+
+  it('enumerates only active enrollment origins without returning credential metadata', async () => {
+    const { backend, values } = memoryBackend();
+    __setServerCredentialBackendForTest(backend);
+    const otherOrigin = 'https://localhost:7091';
+    const otherTrustIdentity = 'sha256:server-b';
+    const otherCredential = 'd'.repeat(43);
+    await storeServerCredential({ origin, trustIdentity, credential });
+    await storeServerCredential({
+      origin: otherOrigin,
+      trustIdentity: otherTrustIdentity,
+      credential: otherCredential,
+    });
+    const pendingOrigin = 'https://localhost:7092';
+    const pendingCredential = 'p'.repeat(43);
+    const pendingTrustIdentity = 'sha256:pending-server';
+    values.set('borg-server-pending:fixture-credential-ref', JSON.stringify({
+      version: 3,
+      state: 'pending',
+      origin: pendingOrigin,
+      trustIdentity: pendingTrustIdentity,
+      invitation: 'i'.repeat(43),
+      retryKey: '11111111-1111-4111-8111-111111111111',
+      credential: pendingCredential,
+      credentialRef: 'fixture-credential-ref',
+      artifactBinding: {
+        artifactFormatVersion: 2,
+        artifactDigest: 'a'.repeat(64),
+        endpoint: pendingOrigin,
+        caSpkiSha256: 'b'.repeat(64),
+        trustIdentity: pendingTrustIdentity,
+        expectedAuthority: 'client',
+        stagedGenerationId: 'd'.repeat(64),
+      },
+    }));
+    const misKeyedOrigin = 'https://localhost:7093';
+    const misKeyedCredential = 'm'.repeat(43);
+    const misKeyedTrustIdentity = 'sha256:mis-keyed-server';
+    values.set('unrelated-account-key', JSON.stringify({
+      version: 2,
+      origin: misKeyedOrigin,
+      trustIdentity: misKeyedTrustIdentity,
+      credential: misKeyedCredential,
+      clientId: null,
+      serverCapabilities: [],
+    }));
+
+    const origins = await listServerCredentialOrigins('https://localhost:9999');
+    const output = JSON.stringify(origins);
+    expect(origins).toEqual([otherOrigin, origin]);
+    expect(output).not.toContain(credential);
+    expect(output).not.toContain(otherCredential);
+    expect(output).not.toContain(trustIdentity);
+    expect(output).not.toContain(otherTrustIdentity);
+    expect(output).not.toContain(pendingOrigin);
+    expect(output).not.toContain(pendingCredential);
+    expect(output).not.toContain(pendingTrustIdentity);
+    expect(output).not.toContain(misKeyedOrigin);
+    expect(output).not.toContain(misKeyedCredential);
+    expect(output).not.toContain(misKeyedTrustIdentity);
+    expect(output).not.toContain('unrelated-account-key');
+  });
+
+  it('returns no enrollment origins when the credential backend cannot enumerate entries', async () => {
+    const { values } = memoryBackend();
+    __setServerCredentialBackendForTest({
+      name: 'file',
+      get: async (account) => values.get(account) ?? null,
+      set: async (account, value) => { values.set(account, value); },
+      delete: async (account) => { values.delete(account); },
+    });
+
+    await expect(listServerCredentialOrigins(origin)).resolves.toEqual([]);
   });
 
   it('does not expose the authority or trust identity in keychain account metadata', async () => {

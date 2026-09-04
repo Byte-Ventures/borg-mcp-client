@@ -167,6 +167,7 @@ export interface AssimilateDeps {
         trustIdentity: string;
         serverCapabilities?: readonly string[];
     }>;
+    listServerCredentialOrigins?: (origin: string) => Promise<string[]>;
     resumeServerEnrollment: (apiUrl: string, onPending?: () => void) => Promise<{
         token: string;
         trustIdentity: string;

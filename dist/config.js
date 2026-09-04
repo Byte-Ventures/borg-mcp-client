@@ -425,6 +425,30 @@ export async function hasServerCredentialForOrigin(origin) {
         });
     }), { processShared: processSharedEnrollmentLock() });
 }
+export async function listServerCredentialOrigins(origin) {
+    const backend = await getServerCredentialBackend();
+    if (!backend.entries)
+        return [];
+    return withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
+        const accounts = await backend.entries();
+        const origins = new Set();
+        for (const [account, value] of Object.entries(accounts)) {
+            try {
+                const candidate = JSON.parse(value);
+                if (typeof candidate.origin !== 'string' || typeof candidate.trustIdentity !== 'string')
+                    continue;
+                const record = decodeActiveServerCredentialRecord(value, candidate.origin, candidate.trustIdentity);
+                if (account !== serverCredentialAccount(record.origin, record.trustIdentity))
+                    continue;
+                origins.add(record.origin);
+            }
+            catch {
+                // Ignore unrelated or malformed backend entries.
+            }
+        }
+        return [...origins].sort();
+    }), { processShared: processSharedEnrollmentLock() });
+}
 function decodePendingServerEnrollment(stored, origin, trustIdentity) {
     const record = JSON.parse(stored);
     if (record.version !== SERVER_PENDING_ENROLLMENT_RECORD_VERSION &&

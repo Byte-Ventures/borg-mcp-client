@@ -28,7 +28,7 @@ import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError, CubeCreationConfirmationError } from './server-errors.js';
 import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, inboxPathForDrone, setProjectCliPreference, setCodexWakeTarget, } from './cubes.js';
 import { addProjectSessionStartHook, provisionLaunchAccess, } from './config-utils.js';
-import { findPendingServerEnrollment } from './config.js';
+import { findPendingServerEnrollment, listServerCredentialOrigins } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
@@ -196,6 +196,7 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
             }
             return connectLocalBorgServer(apiUrl);
         },
+        listServerCredentialOrigins,
         resumeServerEnrollment: async (apiUrl, onPending) => resumeLocalBorgServerEnrollment(apiUrl, {
             ...(onPending === undefined ? {} : { onPending }),
         }),

@@ -566,6 +566,31 @@ export async function hasServerCredentialForOrigin(origin: string): Promise<bool
   }), { processShared: processSharedEnrollmentLock() });
 }
 
+export async function listServerCredentialOrigins(origin: string): Promise<string[]> {
+  const backend = await getServerCredentialBackend();
+  if (!backend.entries) return [];
+  return withEnrollmentOriginLock(origin, () => withCredentialStoreLock(async () => {
+    const accounts = await backend.entries!();
+    const origins = new Set<string>();
+    for (const [account, value] of Object.entries(accounts)) {
+      try {
+        const candidate = JSON.parse(value) as { origin?: unknown; trustIdentity?: unknown };
+        if (typeof candidate.origin !== 'string' || typeof candidate.trustIdentity !== 'string') continue;
+        const record = decodeActiveServerCredentialRecord(
+          value,
+          candidate.origin,
+          candidate.trustIdentity,
+        );
+        if (account !== serverCredentialAccount(record.origin, record.trustIdentity)) continue;
+        origins.add(record.origin);
+      } catch {
+        // Ignore unrelated or malformed backend entries.
+      }
+    }
+    return [...origins].sort();
+  }), { processShared: processSharedEnrollmentLock() });
+}
+
 function decodePendingServerEnrollment(
   stored: string,
   origin: string,

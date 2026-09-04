@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   prepareAssimilationWorktree,
   runAssimilate,
@@ -14,6 +14,12 @@ import { createHash } from 'node:crypto';
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { encodeInvitationArtifact, getInvitationArtifactIntegrityInput } from 'borgmcp-shared/protocol';
+import {
+  __setServerCredentialBackendForTest,
+  listServerCredentialOrigins,
+  storeServerCredential,
+} from '../src/config';
+import type { TokenBackend } from '../src/token-store';
 
 const createHashDigest = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -67,6 +73,8 @@ vi.mock('../src/ensure-mcp-config.js', () => mcpConfigMocks);
 beforeEach(() => {
   mcpConfigMocks.ensureCliMcpConfigured.mockReset();
 });
+
+afterEach(() => __setServerCredentialBackendForTest(null));
 
 function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
   let repositoryAssociation: any = null;
@@ -4071,10 +4079,158 @@ describe('runAssimilate: #1015 authority selection', () => {
     expect(output).not.toContain('\u001b');
   });
 
-  it('does not mistake an endpoint mismatch for a missing enrollment', async () => {
+  it('names a saved sibling-port enrollment and gives the corrected command', async () => {
+    const stderr = vi.fn();
+    const values = new Map<string, string>();
+    const backend: TokenBackend = {
+      name: 'file',
+      entries: async () => Object.fromEntries(values),
+      get: async (account) => values.get(account) ?? null,
+      set: async (account, value) => { values.set(account, value); },
+      delete: async (account) => { values.delete(account); },
+    };
+    __setServerCredentialBackendForTest(backend);
+
+    const enrolledOrigin = 'https://localhost:7091';
+    const activeCredential = 'c'.repeat(43);
+    const activeTrustIdentity = 'sha256:fixture-active-trust';
+    await storeServerCredential({
+      origin: enrolledOrigin,
+      trustIdentity: activeTrustIdentity,
+      credential: activeCredential,
+    });
+    const activeAccountKey = [...values.keys()][0]!;
+
+    const pendingCredential = 'p'.repeat(43);
+    const pendingCredentialRef = 'borg-server-pending:fixture-credential-ref';
+    const pendingTrustIdentity = 'sha256:fixture-pending-trust';
+    const artifactDigest = 'a'.repeat(64);
+    const artifactCaSpki = 'b'.repeat(64);
+    const stagedGenerationId = 'd'.repeat(64);
+    const pendingOrigin = 'https://localhost:7092';
+    values.set(pendingCredentialRef, JSON.stringify({
+      version: 3,
+      state: 'pending',
+      origin: pendingOrigin,
+      trustIdentity: pendingTrustIdentity,
+      invitation: 'i'.repeat(43),
+      retryKey: '11111111-1111-4111-8111-111111111111',
+      credential: pendingCredential,
+      credentialRef: pendingCredentialRef,
+      artifactBinding: {
+        artifactFormatVersion: 2,
+        artifactDigest,
+        endpoint: pendingOrigin,
+        caSpkiSha256: artifactCaSpki,
+        trustIdentity: pendingTrustIdentity,
+        expectedAuthority: 'client',
+        stagedGenerationId,
+      },
+    }));
+
+    const wrongAccountKey = 'borg-server-credential:wrong-account-fixture';
+    const misKeyedCredential = 'm'.repeat(43);
+    const misKeyedTrustIdentity = 'sha256:fixture-mis-keyed-trust';
+    values.set(wrongAccountKey, JSON.stringify({
+      version: 2,
+      origin: 'https://localhost:7093',
+      trustIdentity: misKeyedTrustIdentity,
+      credential: misKeyedCredential,
+      clientId: null,
+      serverCapabilities: [],
+    }));
+
+    await expect(listServerCredentialOrigins('https://localhost:8787'))
+      .resolves.toEqual([enrolledOrigin]);
+    const deps = makeStubDeps({
+      stderr,
+      listServerCredentialOrigins,
+      connectServer: vi.fn(async () => {
+        throw new BorgServerError('NOT_ENROLLED', 'not enrolled');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    expect(stderr).toHaveBeenCalledWith(
+      'Borg found a saved enrollment for https://localhost:7091, but this command is reaching ' +
+        'https://localhost:8787. Use the enrolled endpoint instead: ' +
+        '`borg assimilate --host https://localhost:7091`.\n',
+    );
+    const output = stderr.mock.calls.map(([text]) => String(text)).join('');
+    for (const privateValue of [
+      activeCredential,
+      activeAccountKey,
+      activeTrustIdentity,
+      pendingCredential,
+      pendingCredentialRef,
+      pendingTrustIdentity,
+      artifactDigest,
+      artifactCaSpki,
+      stagedGenerationId,
+      wrongAccountKey,
+      misKeyedCredential,
+      misKeyedTrustIdentity,
+    ]) expect(output).not.toContain(privateValue);
+  });
+
+  it('names a saved enrollment using another loopback form on the reached port', async () => {
     const stderr = vi.fn();
     const deps = makeStubDeps({
       stderr,
+      listServerCredentialOrigins: vi.fn(async () => ['https://127.0.0.1:8787']),
+      connectServer: vi.fn(async () => {
+        throw new BorgServerError('NOT_ENROLLED', 'not enrolled');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    expect(stderr).toHaveBeenCalledWith(
+      'Borg found a saved enrollment for https://127.0.0.1:8787, but this command is reaching ' +
+        'https://localhost:8787. Use the enrolled endpoint instead: ' +
+        '`borg assimilate --host https://127.0.0.1:8787`.\n',
+    );
+  });
+
+  it('names unrelated saved enrollment origins without suggesting them as corrected endpoints', async () => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      listServerCredentialOrigins: vi.fn(async () => ['https://server.example.com']),
+      connectServer: vi.fn(async () => {
+        throw new BorgServerError('NOT_ENROLLED', 'not enrolled');
+      }),
+    });
+
+    expect(await runAssimilate({
+      role: undefined,
+      flags: { server: 'localhost:8787' },
+    }, deps)).toBe(1);
+
+    expect(stderr).toHaveBeenCalledWith(
+      'This client is enrolled against https://server.example.com, not https://localhost:8787. ' +
+        'Confirm that the host, port, and IPv4 or IPv6 loopback form in ' +
+        'https://localhost:8787 match the endpoint used during enrollment. If this client has never ' +
+        'enrolled with that server, run `borg assimilate --host https://localhost:8787 --enroll` from the ' +
+        'operator’s terminal.\n',
+    );
+  });
+
+  it.each([
+    ['an empty credential store', vi.fn(async () => [])],
+    ['a backend without entries()', undefined],
+  ])('preserves the NOT_ENROLLED copy byte-for-byte with %s', async (_label, listOrigins) => {
+    const stderr = vi.fn();
+    const deps = makeStubDeps({
+      stderr,
+      ...(listOrigins ? { listServerCredentialOrigins: listOrigins } : {}),
       connectServer: vi.fn(async () => {
         throw new BorgServerError('NOT_ENROLLED', 'not enrolled');
       }),
