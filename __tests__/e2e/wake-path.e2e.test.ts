@@ -68,8 +68,12 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       expect(pages).toBeLessThan(100);
     }
   };
-  const wakeCount = (seat: any) => seat.kind === 'claude' ? seat.monitorOutput.split('\n').filter((line: string) => line.includes('E2E-')).length
-    : seat.kind === 'codex' ? seat.agent.turns.length : seat.agent.injections.length;
+  const wakeCount = (seat: any, marker: string) => {
+    const prompts = seat.kind === 'claude' ? seat.monitorOutput.split('\n')
+      : seat.kind === 'codex' ? seat.agent.turns.map((turn: any) => turn.input.map((part: any) => part.text).join(''))
+      : seat.agent.injections.map((input: any) => input.parts.map((part: any) => part.text).join(''));
+    return prompts.filter((text: string) => text.includes(marker)).length;
+  };
   try {
     const serverRoot = await installTestServer(join(temporary, 'consumer'));
     const data = join(temporary, 'server');
@@ -178,29 +182,29 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     }
     expect(new Set(fleet.map((seat) => seat.clientId)).size).toBe(10);
     expect(new Set(fleet.map((seat) => seat.credentialHash)).size).toBe(10);
+    for (const seat of fleet) await drain(seat);
     await pause(1000); // tail -F must be armed before the first test entry.
     const author = fleet[0];
     const broadcast = await tool(author, 'borg_log', { message: 'E2E-broadcast', to: 'broadcast' });
-    await until(() => fleet.slice(1).every((seat) => wakeCount(seat) > 0), 'broadcast on nine agent endpoints');
-    expect(wakeCount(author)).toBe(0);
+    await until(() => fleet.slice(1).every((seat) => wakeCount(seat, 'E2E-broadcast') === 1), 'broadcast on nine agent endpoints');
+    expect(wakeCount(author, 'E2E-broadcast')).toBe(0);
     for (const seat of fleet) {
       expect((await drain(seat)).ids.filter((id) => id === broadcast.entry.id)).toHaveLength(1);
       expect((await drain(seat)).ids).toEqual([]);
     }
-    const before = fleet.map(wakeCount);
     const recipients = [fleet[1], fleet[4], fleet[8]];
     const direct = await tool(author, 'borg_log', { message: 'E2E-direct', to: recipients.map((seat) => seat.droneId) });
-    await until(() => recipients.every((seat) => wakeCount(seat) > before[fleet.indexOf(seat)]), 'direct recipients');
+    await until(() => recipients.every((seat) => wakeCount(seat, 'E2E-direct') === 1), 'direct recipients');
     await pause(500);
     for (const seat of fleet) {
-      if (!recipients.includes(seat)) expect(wakeCount(seat)).toBe(before[fleet.indexOf(seat)]);
+      if (!recipients.includes(seat)) expect(wakeCount(seat, 'E2E-direct')).toBe(0);
       expect((await drain(seat)).ids.filter((id) => id === direct.entry.id)).toHaveLength(1);
       expect((await drain(seat)).ids).toEqual([]);
     }
     const ackBefore = await Promise.all(fleet.map(async (seat) => (await readFile(seat.inboxPath, 'utf8').catch(() => '')).length));
     const authorMonitorBefore = author.monitorOutput.length;
     await tool(fleet[1], 'borg_ack', { entry_id: direct.entry.id });
-    await until(async () => (await readFile(author.inboxPath, 'utf8')).length > ackBefore[0], 'ack at author');
+    await until(async () => (await readFile(author.inboxPath, 'utf8').catch(() => '')).length > ackBefore[0], 'ack at author');
     await until(() => author.monitorOutput.length > authorMonitorBefore, 'ack wakes author monitor');
     await pause(500);
     for (let index = 1; index < fleet.length; index++) {
