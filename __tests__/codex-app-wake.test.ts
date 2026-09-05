@@ -1,5 +1,19 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it, vi, beforeEach, afterAll } from 'vitest';
+import { CodexAppServerClient } from '../src/codex-app-server';
+
+const configRoot = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return mkdtempSync(join(tmpdir(), 'borg-codex-wake-'));
+});
+vi.mock('../src/private-root.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/private-root.js')>(),
+  borgConfigRoot: () => configRoot,
+}));
+afterAll(() => rmSync(configRoot, { recursive: true, force: true }));
 import {
   CODEX_CATCHUP_PROMPT,
   CODEX_HEARTBEAT_CADENCE_MS,
@@ -596,8 +610,8 @@ describe('gh#855/client#89 — env-socket wake-target resolution', () => {
   });
 
   const ACTIVE = {
-    cubeId: 'cube',
-    droneId: 'drone',
+    cubeId: '11111111-1111-4111-8111-111111111111',
+    droneId: '22222222-2222-4222-8222-222222222222',
     name: 'cube',
     sessionToken: 'tok',
     droneLabel: 'drone',
@@ -625,7 +639,13 @@ describe('gh#855/client#89 — env-socket wake-target resolution', () => {
     expect(live.startTurn).toHaveBeenCalledWith('live-thread', 'hello');
   });
 
-  it('env socket absent → returns without file access or app-server calls', async () => {
+  it('env socket absent ignores a persisted stale target without app-server calls', async () => {
+    const targetFile = join(configRoot, 'codex-wake-targets.json');
+    writeFileSync(targetFile, JSON.stringify({ targets: {
+      [`${ACTIVE.cubeId}:${ACTIVE.droneId}`]: {
+        socketPath: '/stale.sock', threadId: 'stale-thread', updatedAt: 'stale',
+      },
+    } }));
     const client = {
       connect: vi.fn(),
       loadedThreadIds: vi.fn(),
@@ -644,6 +664,20 @@ describe('gh#855/client#89 — env-socket wake-target resolution', () => {
     expect(client.connect).not.toHaveBeenCalled();
     expect(client.loadedThreadIds).not.toHaveBeenCalled();
     expect(client.startTurn).not.toHaveBeenCalled();
+  });
+
+  it.each(['cli', { subagent: { other: 'guardian' } }])('readThread preserves source %j from the RPC response', async (source) => {
+    const client = new CodexAppServerClient('/unused.sock');
+    const request = vi.spyOn(client as any, 'request').mockResolvedValue({
+      thread: { id: 'thread-1', cwd: '/repo', preview: 'p', status: { type: 'idle' }, updatedAt: 1, source },
+    });
+    try {
+      const thread = await client.readThread('thread-1');
+      expect(request).toHaveBeenCalledWith('thread/read', { threadId: 'thread-1', includeTurns: false });
+      expect(thread?.source).toEqual(source);
+    } finally {
+      request.mockRestore();
+    }
   });
 
   it('no loaded thread schedules retry-drain and delivers one catch-up after the thread loads', async () => {
