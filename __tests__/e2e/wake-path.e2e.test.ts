@@ -19,13 +19,13 @@ const enabled = process.env.BORG_E2E === '1';
 const root = resolve(import.meta.dirname, '../..');
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function until(check: () => Promise<unknown> | unknown, label: string) {
+async function until(check: () => Promise<unknown> | unknown, label: string | (() => string)) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     if (await check()) return;
     await pause(50);
   }
-  throw new Error(`Timed out waiting for ${label}`);
+  throw new Error(`Timed out waiting for ${typeof label === 'function' ? label() : label}`);
 }
 
 it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE and agent wake endpoints', async () => {
@@ -56,7 +56,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
   };
   const tool = async (seat: any, name: string, args = {}) => {
     const result = await seat.mcp.callTool({ name, arguments: args });
-    if (result.isError) throw new Error(`${name}: ${JSON.stringify(result.content)}`);
+    if (result.isError) throw new Error(`${seat.kind} seat ${seat.label}, ${name}: ${JSON.stringify(result.content)}`);
     return result.structuredContent as any;
   };
   const drain = async (seat: any, limit = 5) => {
@@ -65,7 +65,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       const page = await tool(seat, 'borg_read-log', { unread_only: true, limit });
       ids.push(...page.entries.map((entry: any) => entry.id)); pages++;
       if (!page.has_more) return { ids, pages };
-      expect(pages).toBeLessThan(100);
+      expect(pages, `assertion 4: ${seat.kind} seat ${seat.label} unread paging must terminate before 100 pages`).toBeLessThan(100);
     }
   };
   const wakeCount = (seat: any, marker: string) => {
@@ -171,39 +171,43 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       seat.mcp.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: [{ uri: pathToFileURL(worktree).href }] }));
       cleanups.push(() => seat.mcp.close());
       await seat.mcp.connect(transport);
-      await until(async () => (await tool(seat, 'borg_stream-status')).status.connected, `${kind} SSE connection`);
+      await until(async () => (await tool(seat, 'borg_stream-status')).status.connected, `setup: ${kind} seat ${seat.label} SSE connection`);
       if (kind === 'claude') {
         const status = await tool(seat, 'borg_stream-status');
         seat.monitor = spawn(process.execPath, [join(root, 'dist/inbox-monitor.js'), '--state-root', status.monitor_state_root, seat.inboxPath], { env, stdio: ['ignore', 'pipe', 'pipe'] });
         children.push(seat.monitor);
         seat.monitor.stdout.on('data', (chunk: Buffer) => { seat.monitorOutput += chunk; });
-        await until(async () => (await tool(seat, 'borg_stream-status')).inbox_monitor_healthy === true, 'Claude monitor');
+        await until(async () => (await tool(seat, 'borg_stream-status')).inbox_monitor_healthy === true, `setup: Claude seat ${seat.label} healthy monitor`);
       }
       await drain(seat);
     }
-    expect(new Set(fleet.map((seat) => seat.clientId)).size).toBe(10);
-    expect(new Set(fleet.map((seat) => seat.credentialHash)).size).toBe(10);
+    expect(new Set(fleet.map((seat) => seat.clientId)).size, 'setup: all ten fleet seats must have distinct client identities').toBe(10);
+    expect(new Set(fleet.map((seat) => seat.credentialHash)).size, 'setup: all ten fleet seats must have distinct credentials').toBe(10);
     for (const seat of fleet) await drain(seat);
     await pause(1000); // tail -F must be armed before the first test entry.
     const author = fleet[0];
     const broadcast = await tool(author, 'borg_log', { message: 'E2E-broadcast', to: 'broadcast' });
-    await until(() => fleet.slice(1).every((seat) => wakeCount(seat, 'E2E-broadcast') === 1), 'broadcast on nine agent endpoints');
-    await until(async () => (await tool(author, 'borg_stream-status')).status.lastPersistedEventId === broadcast.entry.id, 'author observes its silent broadcast');
-    expect(wakeCount(author, 'E2E-broadcast')).toBe(0);
+    await until(() => fleet.slice(1).every((seat) => wakeCount(seat, 'E2E-broadcast') === 1),
+      () => `assertion 1: exactly one broadcast wake per recipient; observed ${fleet.slice(1).map((seat) => `${seat.kind} seat ${seat.label}=${wakeCount(seat, 'E2E-broadcast')}`).join(', ')}`);
+    await until(async () => (await tool(author, 'borg_stream-status')).status.lastPersistedEventId === broadcast.entry.id,
+      `assertion 1: author ${author.label} observes its broadcast without waking`);
+    expect(wakeCount(author, 'E2E-broadcast'), `assertion 1: author seat ${author.label} must not wake for its own broadcast`).toBe(0);
     for (const seat of fleet) {
-      expect((await drain(seat)).ids.filter((id) => id === broadcast.entry.id)).toHaveLength(1);
-      expect((await drain(seat)).ids).toEqual([]);
+      expect((await drain(seat)).ids.filter((id) => id === broadcast.entry.id), `assertion 7: ${seat.kind} seat ${seat.label} drains broadcast ${broadcast.entry.id} exactly once`).toHaveLength(1);
+      expect((await drain(seat)).ids, `assertion 7: ${seat.kind} seat ${seat.label} second broadcast drain is empty`).toEqual([]);
     }
     const recipients = [fleet[1], fleet[4], fleet[8]];
     const direct = await tool(author, 'borg_log', { message: 'E2E-direct', to: recipients.map((seat) => seat.droneId) });
-    await until(() => recipients.every((seat) => wakeCount(seat, 'E2E-direct') === 1), 'direct recipients');
+    await until(() => recipients.every((seat) => wakeCount(seat, 'E2E-direct') === 1),
+      () => `assertion 2: exactly one direct wake per named recipient; observed ${recipients.map((seat) => `${seat.kind} seat ${seat.label}=${wakeCount(seat, 'E2E-direct')}`).join(', ')}`);
     await until(async () => (await Promise.all(fleet.map((seat) => tool(seat, 'borg_stream-status'))))
-      .every((status) => status.status.lastPersistedEventId === direct.entry.id), 'all seats observe the direct frame');
+      .every((status) => status.status.lastPersistedEventId === direct.entry.id),
+      `assertion 2: every seat (${fleet.map((seat) => seat.label).join(', ')}) observes direct frame ${direct.entry.id} before silence checks`);
     await pause(1000);
     for (const seat of fleet) {
-      if (!recipients.includes(seat)) expect(wakeCount(seat, 'E2E-direct')).toBe(0);
-      expect((await drain(seat)).ids.filter((id) => id === direct.entry.id)).toHaveLength(1);
-      expect((await drain(seat)).ids).toEqual([]);
+      if (!recipients.includes(seat)) expect(wakeCount(seat, 'E2E-direct'), `assertion 2: nonrecipient ${seat.kind} seat ${seat.label} must not wake for direct entry ${direct.entry.id}`).toBe(0);
+      expect((await drain(seat)).ids.filter((id) => id === direct.entry.id), `assertions 2 and 7: ${seat.kind} seat ${seat.label} reads direct entry ${direct.entry.id} exactly once regardless of routing`).toHaveLength(1);
+      expect((await drain(seat)).ids, `assertion 7: ${seat.kind} seat ${seat.label} second direct-entry drain is empty`).toEqual([]);
     }
     const ackBefore = await Promise.all(fleet.map(async (seat) => (await readFile(seat.inboxPath, 'utf8').catch(() => '')).length));
     const observed = (seat: any) => seat.kind === 'claude' ? seat.monitorOutput.length
@@ -211,12 +215,12 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     const ackWakeBefore = fleet.map(observed);
     const authorMonitorBefore = author.monitorOutput.length;
     await tool(fleet[1], 'borg_ack', { entry_id: direct.entry.id });
-    await until(async () => (await readFile(author.inboxPath, 'utf8').catch(() => '')).length > ackBefore[0], 'ack at author');
-    await until(() => author.monitorOutput.length > authorMonitorBefore, 'ack wakes author monitor');
+    await until(async () => (await readFile(author.inboxPath, 'utf8').catch(() => '')).length > ackBefore[0], `assertion 3: ack reaches author seat ${author.label} inbox`);
+    await until(() => author.monitorOutput.length > authorMonitorBefore, `assertion 3: ack wakes author seat ${author.label} monitor`);
     await pause(1000);
     for (let index = 1; index < fleet.length; index++) {
-      expect((await readFile(fleet[index].inboxPath, 'utf8')).length).toBe(ackBefore[index]);
-      expect(observed(fleet[index])).toBe(ackWakeBefore[index]);
+      expect((await readFile(fleet[index].inboxPath, 'utf8')).length, `assertion 3: nonauthor seat ${fleet[index].label} inbox must not receive the ack`).toBe(ackBefore[index]);
+      expect(observed(fleet[index]), `assertion 3: nonauthor ${fleet[index].kind} seat ${fleet[index].label} must not wake for the ack`).toBe(ackWakeBefore[index]);
     }
     const backlog: string[] = [];
     for (let index = 0; index < 12; index++) {
@@ -224,16 +228,16 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       backlog.push(entry.entry.id);
     }
     const paged = await drain(fleet[2], 3);
-    expect(paged.pages).toBeGreaterThan(1);
-    expect(paged.ids).toEqual(backlog);
-    expect((await drain(fleet[2])).ids).toEqual([]);
+    expect(paged.pages, `assertion 4: seat ${fleet[2].label} backlog must span multiple read pages`).toBeGreaterThan(1);
+    expect(paged.ids, `assertion 4: seat ${fleet[2].label} must drain the complete ordered backlog`).toEqual(backlog);
+    expect((await drain(fleet[2])).ids, `assertion 7: seat ${fleet[2].label} second backlog drain must be empty`).toEqual([]);
 
     // Drop the seat's real TLS/SSE connection mid-burst without restarting MCP.
     const replaySeat = fleet[3];
     const replayIds: string[] = [];
     for (let index = 0; index < 8; index++) {
       if (index === 3) {
-        expect(replayConnections.size).toBeGreaterThan(0);
+        expect(replayConnections.size, `assertion 5: seat ${replaySeat.label} must have a live connection to interrupt`).toBeGreaterThan(0);
         for (const socket of replayConnections) socket.destroy();
       }
       const entry = await tool(author, 'borg_log', { message: `E2E-replay-${index}`, to: [replaySeat.droneId] });
@@ -242,21 +246,21 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     await until(async () => {
       const inbox = await readFile(replaySeat.inboxPath, 'utf8');
       return replayIds.every((id) => inbox.includes(id));
-    }, 'replayed inbox');
+    }, `assertion 5: seat ${replaySeat.label} inbox receives all entries after SSE interruption`);
     const replayInbox = await readFile(replaySeat.inboxPath, 'utf8');
-    for (const id of replayIds) expect(replayInbox.split(id).length - 1).toBe(1);
+    for (const id of replayIds) expect(replayInbox.split(id).length - 1, `assertion 5: seat ${replaySeat.label} inbox must contain replay entry ${id} exactly once`).toBe(1);
     const replayDrain = await drain(replaySeat);
-    for (const id of replayIds) expect(replayDrain.ids.filter((value) => value === id)).toHaveLength(1);
-    expect((await drain(replaySeat)).ids).toEqual([]);
-    expect((await tool(fleet[1], 'borg_stream-status')).wake_path.healthy).toBe(true);
+    for (const id of replayIds) expect(replayDrain.ids.filter((value) => value === id), `assertion 7: seat ${replaySeat.label} drains replay entry ${id} exactly once`).toHaveLength(1);
+    expect((await drain(replaySeat)).ids, `assertion 7: seat ${replaySeat.label} second replay drain must be empty`).toEqual([]);
+    expect((await tool(fleet[1], 'borg_stream-status')).wake_path.healthy, `assertion 6: Claude seat ${fleet[1].label} monitor must be healthy before stopping`).toBe(true);
     await stop(fleet[1].monitor);
-    await until(async () => (await tool(fleet[1], 'borg_stream-status')).wake_path.healthy === false, 'stopped monitor degradation');
-    expect((await tool(fleet[4], 'borg_stream-status')).wake_path.healthy).toBe(true);
+    await until(async () => (await tool(fleet[1], 'borg_stream-status')).wake_path.healthy === false, `assertion 6: Claude seat ${fleet[1].label} stopped monitor must report degraded`);
+    expect((await tool(fleet[4], 'borg_stream-status')).wake_path.healthy, `assertion 6: Codex seat ${fleet[4].label} bridge must be healthy before stopping`).toBe(true);
     await fleet[4].agent.close();
-    await until(async () => (await tool(fleet[4], 'borg_stream-status')).wake_path.healthy === false, 'missing Codex bridge');
+    await until(async () => (await tool(fleet[4], 'borg_stream-status')).wake_path.healthy === false, `assertion 6: Codex seat ${fleet[4].label} missing bridge must report degraded`);
     for (const seat of fleet.filter((seat) => seat.kind === 'codex')) {
-      expect(seat.agent.turns.length).toBeGreaterThan(0);
-      expect(seat.agent.turns.every((turn: any) => turn.threadId === 'user')).toBe(true);
+      expect(seat.agent.turns.length, `assertion 8: Codex seat ${seat.label} must receive at least one turn`).toBeGreaterThan(0);
+      expect(seat.agent.turns.every((turn: any) => turn.threadId === 'user'), `assertion 8: Codex seat ${seat.label} targeted threads ${seat.agent.turns.map((turn: any) => turn.threadId).join(', ')}, expected only the user thread`).toBe(true);
     }
   } finally {
     for (const cleanup of cleanups.reverse()) await cleanup();
