@@ -6,11 +6,13 @@
  */
 
 import { BORG_STATE_ROOT_ENV } from './private-root.js';
+import { randomBytes } from 'node:crypto';
 
 export type AgentKind = 'claude' | 'codex' | 'opencode';
 
 /** Pinned into MCP-child environments by Borg launch paths. */
 export const BORG_AGENT_KIND_ENV = 'BORG_AGENT_KIND';
+export const BORG_CLAUDE_LAUNCH_CORRELATION_ENV = 'BORG_CLAUDE_LAUNCH_CORRELATION';
 /** Transport capability only — never use it as the primary CLI identity. */
 export const BORG_CODEX_REMOTE_WAKE_ENV = 'BORG_CODEX_REMOTE_WAKE';
 /** Legacy OpenCode runtime marker, retained for installed-config compatibility. */
@@ -52,7 +54,11 @@ export function withAgentRuntimeEnv(
   delete next[BORG_AGENT_KIND_ENV];
   delete next[BORG_CODEX_REMOTE_WAKE_ENV];
   delete next[BORG_OPENCODE_ENV];
+  delete next[BORG_CLAUDE_LAUNCH_CORRELATION_ENV];
   next[BORG_AGENT_KIND_ENV] = agentKind;
+  if (agentKind === 'claude') {
+    next[BORG_CLAUDE_LAUNCH_CORRELATION_ENV] = randomBytes(32).toString('base64url');
+  }
   if (agentKind === 'opencode') next[BORG_OPENCODE_ENV] = '1';
   return next;
 }

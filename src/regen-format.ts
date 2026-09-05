@@ -251,7 +251,7 @@ export function markArrivalAnnouncedThisProcess(): void {
 export function getDronePlaybook(handoverMode: HandoverMode = 'origin'): string {
   const arrivalInstruction = arrivalAnnouncedThisProcess
     ? ''
-    : `\n**Required one-time startup setup:** If this instruction is visible, immediately call \`borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"\` before unread-log triage. This is the sole exception to no-work log silence. Do not infer your startup state from peers' \`ARRIVAL:\` entries. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again.\n`;
+    : `\n**Required one-time startup setup:** If this instruction is visible, immediately call \`borg_log message="ARRIVAL: <your-label> (<your-role>) online on ${osHostname()}" to="broadcast"\` before unread-log triage. This is the sole exception to no-work log silence. Do not infer your startup state from peers' \`ARRIVAL:\` entries. After the post succeeds, the client suppresses this instruction until the MCP process restarts; an explicit \`/mcp\` reconnect may show it again. The log call suppresses repeat ARRIVAL for a known agent session across reconnects; unknown identity announces. Claude identity can be stale after a resume whose SessionStart hook failed. Inspect \`borg_stream-status\` for the identity source and observation age.\n`;
   const reviewReadyRefs = handoverMode === 'local'
     ? '["HEAD"]'
     : '["HEAD","origin/<branch>","origin/main"]';

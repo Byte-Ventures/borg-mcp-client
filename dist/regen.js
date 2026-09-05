@@ -22,6 +22,7 @@ import { parseHookSource, formatLeanOrientation, formatPlainSessionReminder, sho
 import { resolveSessionAgentKind } from './codex-app-wake.js';
 import { resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { handleVersionFlag } from './version.js';
+import { recordClaudeSessionStart } from './agent-session-identity.js';
 import { BORG_LAUNCH_REMINDER_DISABLED_ENV, BORG_SESSION_ENV, gateAllowsActivation, } from './launch-gate.js';
 import { resolveWorkingRepo } from './working-repo.js';
 import { confirmDisplayIdentity, identityFromRegen, markDisplayIdentityReadFailed, renderDisplayIdentity, seedDisplayIdentity, } from './display-identity.js';
@@ -46,7 +47,8 @@ async function readStdin() {
 }
 async function main() {
     handleVersionFlag();
-    const hookSource = parseHookSource(await readStdin());
+    const hookPayload = await readStdin();
+    const hookSource = parseHookSource(hookPayload);
     // gh#673 P1 (WI-4): the SessionStart orientation only activates in
     // borg-launched sessions — a vanilla `claude` anywhere (including an
     // assimilated repo) stays vanilla. Exit-0 no-op: a hook must never
@@ -82,6 +84,14 @@ async function main() {
     // session-scoped `/loop` + `ScheduleWakeup`, and the kickoff prompt is
     // gone, so the lean orientation adds a "re-establish your wake path" note.
     const source = hookSource;
+    if (resolveSessionAgentKind() === 'claude') {
+        try {
+            await recordClaudeSessionStart(hookPayload);
+        }
+        catch {
+            process.stderr.write('Borg could not record the Claude SessionStart identity.\n');
+        }
+    }
     const active = await getActiveCube();
     if (!active) {
         await emitUnassimilatedNotice();

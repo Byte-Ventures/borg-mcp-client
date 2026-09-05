@@ -23,6 +23,7 @@ import { isEntryInvocation, monitorStateRootForWorktree } from './inbox-monitor.
 import { addUserPromptSubmitHook } from './config-utils.js';
 import { humanAgo, formatLogEntryMarkdown, formatLogRecipients, formatRegenMarkdown, getDronePlaybook, getDronePlaybookChapter, markArrivalAnnouncedThisProcess, nullTaxonomyTip, regenWakePathDroneLabel, } from './regen-format.js';
 import { startLogStream, getStreamStatus } from './log-stream.js';
+import { resolveAgentSessionIdentity } from './agent-session-identity.js';
 import { isMcpReadinessProbe } from './readiness-probe.js';
 import { runMcpStartupServices } from './startup-services.js';
 import { TOOL_MANIFEST } from './tool-manifest.js';
@@ -714,8 +715,12 @@ export async function main() {
                         cubeName: active?.name ?? null,
                         humanAgo,
                     });
+                    const agentSession = await resolveAgentSessionIdentity();
+                    const identityText = agentSession.kind === 'known'
+                        ? `\n\nAgent session source: ${agentSession.source}\nSession id: ${JSON.stringify(agentSession.id)}\nIdentity age: ${Math.max(0, Date.now() - Date.parse(agentSession.observedAt))} ms (observed ${agentSession.observedAt})`
+                        : `\n\nAgent session: unknown (${agentSession.reason}); ARRIVAL is not suppressed across reconnects.`;
                     return {
-                        content: [{ type: 'text', text: silentInertWarning + text }],
+                        content: [{ type: 'text', text: silentInertWarning + text + identityText }],
                         structuredContent: {
                             status,
                             wake_path: wakePath,
@@ -866,17 +871,17 @@ export async function main() {
                     seedDisplayIdentity(active);
                     const displayIdentity = renderDisplayIdentity(active);
                     const lifecycleSignal = lifecycleSignalForMessage(finalMessage);
+                    const agentSession = lifecycleSignal === 'arrival' ? await resolveAgentSessionIdentity() : undefined;
                     if (lifecycleSignal) {
-                        const decision = await shouldSuppressLifecycleLog(active, finalMessage);
+                        const decision = await shouldSuppressLifecycleLog(active, finalMessage, agentSession);
                         if (decision.suppress) {
-                            await recordLifecycleLog(active, finalMessage);
                             if (lifecycleSignal === 'arrival')
                                 markArrivalAnnouncedThisProcess();
                             return {
                                 content: [
                                     {
                                         type: 'text',
-                                        text: `Suppressed duplicate ${decision.signal?.toUpperCase()} lifecycle log for ${displayIdentity.droneLabel}; recent cube log already contains this signal.`,
+                                        text: `Suppressed duplicate ${decision.signal?.toUpperCase()} lifecycle log for ${displayIdentity.droneLabel}; this signal is already recorded locally for the current ${decision.signal === 'arrival' ? 'agent session' : 'idle period'}.`,
                                     },
                                 ],
                                 structuredContent: {
@@ -901,7 +906,7 @@ export async function main() {
                         serverTrustIdentity: active.serverTrustIdentity,
                     };
                     const result = await appendLog(active.sessionToken, active.apiUrl, finalMessage, appendOpts);
-                    await recordLifecycleLog(active, finalMessage);
+                    await recordLifecycleLog(active, finalMessage, agentSession);
                     if (lifecycleSignal === 'arrival')
                         markArrivalAnnouncedThisProcess();
                     let recipientDrones = [];

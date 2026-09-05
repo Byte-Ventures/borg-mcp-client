@@ -51,6 +51,8 @@ export declare function injectOpenCodeEntry(text: string, entryId?: string, allo
 /** Stop retrying every delivery identity derived from a durable entry that the
  * agent has already consumed. Confirmed history stays available for dedup. */
 export declare function settleOpenCodeEntry(sourceEntryId: string): void;
+/** Read the launch-selected identity without changing the injection binding. */
+export declare function resolveOpenCodeAgentSessionId(): Promise<string | null>;
 export declare function probeOpenCodeDroneArmed(): Promise<boolean | null>;
 export declare function disconnectOpenCodeDrone(): void;
 export interface OpenCodeConnectionState {

@@ -5,6 +5,8 @@ const state = vi.hoisted(() => ({
   appendLog: vi.fn(),
   getRoster: vi.fn(),
   shouldSuppressLifecycleLog: vi.fn(),
+  resolveAgentSessionIdentity: vi.fn(),
+  recordLifecycleLog: vi.fn(),
   whoami: vi.fn(),
 }));
 
@@ -55,8 +57,9 @@ vi.mock('../src/remote-client.js', async (importOriginal) => ({
 vi.mock('../src/lifecycle-log-guard.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/lifecycle-log-guard.js')>()),
   shouldSuppressLifecycleLog: state.shouldSuppressLifecycleLog,
-  recordLifecycleLog: vi.fn(async () => {}),
+  recordLifecycleLog: state.recordLifecycleLog,
 }));
+vi.mock('../src/agent-session-identity.js', () => ({ resolveAgentSessionIdentity: state.resolveAgentSessionIdentity }));
 
 import { main } from '../src/index.js';
 import { __resetRegenSessionState, getDronePlaybook } from '../src/regen-format.js';
@@ -72,6 +75,10 @@ describe('borg_log ARRIVAL instruction ordering', () => {
     state.getRoster.mockReset();
     state.shouldSuppressLifecycleLog.mockReset();
     state.shouldSuppressLifecycleLog.mockResolvedValue({ suppress: false, signal: 'arrival' });
+    state.resolveAgentSessionIdentity.mockReset();
+    state.resolveAgentSessionIdentity.mockResolvedValue({ kind: 'unknown', reason: 'test-harness' });
+    state.recordLifecycleLog.mockReset();
+    state.recordLifecycleLog.mockResolvedValue(undefined);
     state.whoami.mockReset();
   });
 
@@ -110,6 +117,34 @@ describe('borg_log ARRIVAL instruction ordering', () => {
     expect(result).toMatchObject({ isError: true });
     expect(result.content[0].text).toContain('injected append failure');
     expect(getDronePlaybook()).toContain('ARRIVAL:');
+  });
+
+  it('resolves identity once and uses the same observation for suppression and successful recording', async () => {
+    state.handlers.length = 0;
+    const identity = { kind: 'known', id: 'claude:session-a', source: 'claude-session-start', observedAt: new Date(0).toISOString() };
+    state.resolveAgentSessionIdentity.mockResolvedValue(identity);
+    state.appendLog.mockResolvedValue({ entry: { id: 'entry', visibility: 'broadcast', recipient_drone_ids: [] } });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await main();
+    await state.handlers[1]({ params: { name: 'borg_log', arguments: { message: 'ARRIVAL: online', to: 'broadcast' } } });
+    expect(state.resolveAgentSessionIdentity).toHaveBeenCalledOnce();
+    expect(state.shouldSuppressLifecycleLog).toHaveBeenCalledWith(expect.anything(), 'ARRIVAL: online', identity);
+    expect(state.recordLifecycleLog).toHaveBeenCalledWith(expect.anything(), 'ARRIVAL: online', identity);
+  });
+
+  it('stream-status exposes the observed identity source, session id, and age', async () => {
+    state.handlers.length = 0;
+    state.resolveAgentSessionIdentity.mockResolvedValue({ kind: 'known', id: 'claude:session-a', source: 'claude-session-start', observedAt: new Date(0).toISOString() });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await main();
+    const { getActiveCube } = await import('../src/cubes.js');
+    vi.mocked(getActiveCube).mockResolvedValueOnce(null);
+    const result = await state.handlers[1]({ params: { name: 'borg_stream-status', arguments: {} } });
+    expect(result.isError, JSON.stringify(result)).not.toBe(true);
+    expect(result.content[0].text).toContain('Agent session source: claude-session-start');
+    expect(result.content[0].text).toContain('Session id: "claude:session-a"');
+    expect(result.content[0].text).toMatch(/Identity age: \d+ ms/);
+    expect(result.content[0].text).toContain(new Date(0).toISOString());
   });
 
   it('echoes the server-confirmed identity after whoami instead of persisted display fields', async () => {

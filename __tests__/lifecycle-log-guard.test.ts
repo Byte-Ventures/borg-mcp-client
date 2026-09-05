@@ -17,66 +17,28 @@ describe('lifecycle-log-guard', () => {
     expect(lifecycleSignalForMessage('DONE: shipped')).toBeNull();
   });
 
-  it('suppresses repeated identical ARRIVAL inside the duplicate window', () => {
-    const state = nextLifecycleStateAfterLog(
-      arrival,
-      undefined,
-      '2026-05-29T16:00:00.000Z'
-    );
+  const identity = { kind: 'known' as const, id: 'claude:session-a', source: 'claude-session-start', observedAt: new Date(0).toISOString() };
 
-    expect(
-      shouldSuppressLifecycleLogFromState(
-        arrival,
-        state,
-        new Date('2026-05-29T16:05:00.000Z').getTime()
-      )
-    ).toEqual({ suppress: true, signal: 'arrival' });
+  it('suppresses an announced session regardless of message wording or elapsed time', () => {
+    const state = nextLifecycleStateAfterLog(arrival, undefined, new Date(0).toISOString(), identity);
+    expect(shouldSuppressLifecycleLogFromState('ARRIVAL: changed wording', state, identity))
+      .toEqual({ suppress: true, signal: 'arrival' });
+    expect(shouldSuppressLifecycleLogFromState(arrival, state, { ...identity, id: 'claude:session-b' }))
+      .toEqual({ suppress: false, signal: 'arrival' });
   });
 
-  it('allows identical ARRIVAL after the duplicate window', () => {
-    const state = nextLifecycleStateAfterLog(
-      arrival,
-      undefined,
-      '2026-05-29T16:00:00.000Z'
-    );
-
-    expect(
-      shouldSuppressLifecycleLogFromState(
-        arrival,
-        state,
-        new Date('2026-05-29T16:11:00.000Z').getTime()
-      )
-    ).toEqual({ suppress: false, signal: 'arrival' });
+  it('announces unknown without forgetting previously announced sessions', () => {
+    const state = nextLifecycleStateAfterLog(arrival, undefined, undefined, identity);
+    const unknown = { kind: 'unknown' as const, reason: 'missing-hook' };
+    expect(shouldSuppressLifecycleLogFromState(arrival, state, unknown).suppress).toBe(false);
+    const next = nextLifecycleStateAfterLog(arrival, state, undefined, unknown);
+    expect(shouldSuppressLifecycleLogFromState(arrival, next, identity).suppress).toBe(true);
   });
 
-  it('keeps suppressing ARRIVAL when suppressed duplicates refresh the window', () => {
-    const initialState = nextLifecycleStateAfterLog(
-      arrival,
-      undefined,
-      '2026-05-29T16:00:00.000Z'
-    );
-
-    expect(
-      shouldSuppressLifecycleLogFromState(
-        arrival,
-        initialState,
-        new Date('2026-05-29T16:05:00.000Z').getTime()
-      )
-    ).toEqual({ suppress: true, signal: 'arrival' });
-
-    const refreshedState = nextLifecycleStateAfterLog(
-      arrival,
-      initialState,
-      '2026-05-29T16:05:00.000Z'
-    );
-
-    expect(
-      shouldSuppressLifecycleLogFromState(
-        arrival,
-        refreshedState,
-        new Date('2026-05-29T16:11:00.000Z').getTime()
-      )
-    ).toEqual({ suppress: true, signal: 'arrival' });
+  it('remembers an earlier session after another session has announced', () => {
+    const first = nextLifecycleStateAfterLog(arrival, undefined, undefined, identity);
+    const second = nextLifecycleStateAfterLog(arrival, first, undefined, { ...identity, id: 'claude:session-b' });
+    expect(shouldSuppressLifecycleLogFromState(arrival, second, identity).suppress).toBe(true);
   });
 
   it('suppresses repeated READY while the idle period is still open', () => {
