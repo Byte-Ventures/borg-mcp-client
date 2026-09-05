@@ -1,5 +1,6 @@
 import type { BorgCli } from './cubes.js';
 import type { AgentKind } from './agent-runtime.js';
+import { type CodexRemoteReadyLaunch } from './codex-remote.js';
 /**
  * The claude kickoff prompt's wake-path section (gh#929) — the SAME shared
  * `wakePathArming` the SessionStart hook + /clear orientation use (one place,
@@ -10,34 +11,24 @@ import type { AgentKind } from './agent-runtime.js';
  * empty; no active cube (no inboxPath) → empty.
  */
 export declare function buildKickoffWakePathClause(agentKind: AgentKind, inboxPath: string | null, monitorStateRoot?: string | null): string;
-export interface CodexWakeTargetDeps {
-    setCodexWakeTarget: (cubeId: string, droneId: string, target: {
-        threadId: string;
-        socketPath: string;
-    }) => Promise<void>;
-    findLoadedCodexThread: (options: {
-        socketPath: string;
-        cwd: string;
-        previewIncludes: string;
-        updatedAfter: number;
-    }) => Promise<string | null>;
-}
 export declare function buildAgentKickoffPrompt(options: {
     cli: BorgCli;
-    codexWakeNonce: string | null;
     monitorClause: string;
-    codexWakePathClause?: string;
 }): string;
-export declare function socketPathFromRemoteArgs(args: string[]): string | null;
-export declare function threadIdFromPassthroughArgs(args: string[]): string | null;
-export declare function recordCodexWakeTarget(options: {
-    deps: CodexWakeTargetDeps;
-    cubeId: string;
-    droneId: string;
-    socketPath: string;
+export type CodexLaunchArgsResult = {
+    ready: true;
+    args: string[];
+} | {
+    ready: false;
+    reason: string;
+};
+export declare function buildCodexLaunchArgs(options: {
+    remote: CodexRemoteReadyLaunch;
     cwd: string;
-    previewNeedle: string;
-    launchedAtSeconds: number;
+    kickoff: string;
+    approvalArgs?: string[];
+    accessArgs?: string[];
+    seatExpectationArgs?: string[];
     passthroughArgs?: string[];
-}): Promise<void>;
+}): CodexLaunchArgsResult;
 //# sourceMappingURL=codex-launch.d.ts.map

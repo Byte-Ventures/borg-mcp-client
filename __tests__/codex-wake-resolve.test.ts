@@ -5,8 +5,7 @@
  * so a missed/stale launch probe → permanent deafness. Phase 1 makes the waking
  * borg-mcp child authoritative about its OWN live app-server socket (injected
  * into its pinned env at spawn) and re-resolves the loaded thread FRESH on every
- * wake. These pin the pure pieces: socket-from-env, the thread picker, and the
- * write-only-on-change guard for the self-healing file cache.
+ * wake. These pin the pure pieces: socket-from-env and the thread picker.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -14,8 +13,6 @@ import {
   codexAppServerSocketConfigArgs,
   codexAppServerSocketFromEnv,
   pickFreshThread,
-  pruneDeadWakeTargets,
-  wakeTargetChanged,
 } from '../src/codex-wake-resolve';
 
 describe('gh#855 — codexAppServerSocketFromEnv', () => {
@@ -24,7 +21,7 @@ describe('gh#855 — codexAppServerSocketFromEnv', () => {
     expect(codexAppServerSocketFromEnv(env)).toBe('/run/borgmcp/codex-remote/abc.sock');
   });
 
-  it('returns null when absent or empty (un-upgraded launch → file fallback)', () => {
+  it('returns null when absent or empty', () => {
     expect(codexAppServerSocketFromEnv({})).toBeNull();
     expect(codexAppServerSocketFromEnv({ [BORG_CODEX_APP_SERVER_SOCKET_ENV]: '' })).toBeNull();
   });
@@ -72,45 +69,31 @@ describe('gh#855 — pickFreshThread (deterministic thread resolution on the liv
     ];
     expect(pickFreshThread(threads, { cwd: '/w/a' })).toBe('b');
   });
-});
-
-describe('gh#855 — pruneDeadWakeTargets (file self-heal; false-deaf-avoidance)', () => {
-  const targets = {
-    'c1:d1': { socketPath: '/s/dead.sock', threadId: 't1' },
-    'c1:d2': { socketPath: '/s/alive.sock', threadId: 't2' },
-    'c1:d3': { socketPath: '/s/unknown.sock', threadId: 't3' },
-  };
-  // dead → false (drop); alive → true (keep); unknown → null (keep — don't false-flag).
-  const liveness = (s: string) => (s.includes('dead') ? false : s.includes('alive') ? true : null);
-
-  it('drops only positively-dead sockets; keeps alive + indeterminate', () => {
-    const { targets: kept, changed } = pruneDeadWakeTargets(targets, liveness);
-    expect(changed).toBe(true);
-    expect(Object.keys(kept).sort()).toEqual(['c1:d2', 'c1:d3']);
+  it('skips subagent threads even when they are newer and share the cwd', () => {
+    const threads = [
+      { id: 'root', cwd: '/w/a', updatedAt: 10, source: 'cli' },
+      { id: 'guardian', cwd: '/w/a', updatedAt: 999, source: { subagent: { other: 'guardian' } } },
+    ];
+    expect(pickFreshThread(threads, { cwd: '/w/a' })).toBe('root');
+    expect(pickFreshThread([threads[1]], { cwd: '/w/a' })).toBeNull();
   });
 
-  it('no dead entries → changed=false (caller skips the write)', () => {
-    const { changed } = pruneDeadWakeTargets(
-      { 'c1:d2': { socketPath: '/s/alive.sock', threadId: 't2' } },
-      liveness
-    );
-    expect(changed).toBe(false);
-  });
-});
-
-describe('gh#855 — wakeTargetChanged (write-only-on-change; no file thrash)', () => {
-  const fresh = { socketPath: '/s/new.sock', threadId: 't1' };
-
-  it('no existing entry → changed (write)', () => {
-    expect(wakeTargetChanged(null, fresh)).toBe(true);
+  it.each([
+    { ephemeral: true, threadSource: 'user' },
+    { ephemeral: false, threadSource: 'system' },
+  ])('rejects ineligible threads independently: %j', (fields) => {
+    const excluded = { id: 'excluded', cwd: '/w/a', updatedAt: 999, source: 'vscode', ...fields };
+    expect(pickFreshThread([excluded], { cwd: '/w/a' })).toBeNull();
+    expect(pickFreshThread([
+      { id: 'user', cwd: '/w/a', updatedAt: 1, ephemeral: false, threadSource: 'user' },
+      excluded,
+    ], { cwd: '/w/a' })).toBe('user');
   });
 
-  it('same socket + thread → unchanged (skip write)', () => {
-    expect(wakeTargetChanged({ socketPath: '/s/new.sock', threadId: 't1' }, fresh)).toBe(false);
-  });
-
-  it('different socket OR thread → changed (write)', () => {
-    expect(wakeTargetChanged({ socketPath: '/s/old.sock', threadId: 't1' }, fresh)).toBe(true);
-    expect(wakeTargetChanged({ socketPath: '/s/new.sock', threadId: 't0' }, fresh)).toBe(true);
+  it('prefers a thread with turns over a newer empty thread in the same cwd', () => {
+    expect(pickFreshThread([
+      { id: 'conversation', cwd: '/w/a', updatedAt: 1, preview: '', turns: [{ id: 'turn-1' }] },
+      { id: 'empty', cwd: '/w/a', updatedAt: 999, preview: '', turns: [] },
+    ], { cwd: '/w/a' })).toBe('conversation');
   });
 });

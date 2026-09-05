@@ -906,10 +906,13 @@ export async function streamOnce(
       // OpenCode queue. A still-unread re-ping may reconcile the prior attempt;
       // its source entry ID prevents a new nonce from resubmitting that prompt.
       if (isReping) {
-        await injectOpenCode(
+        const openCodeDelivered = await injectOpenCode(
           formatOpenCodeWakePrompt(line), deliveryId, true, ev.id,
           () => hasPendingWakeEntry(active, ev.id),
         );
+        if (!openCodeDelivered) {
+          wakeCodex(formatCodexWakePrompt(line), ev.wake_nonce, ev.id);
+        }
       }
       markEventPersisted(ev.id, ev.data?.created_at ?? '');
       return 'persisted-skip';

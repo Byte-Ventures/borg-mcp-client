@@ -7,6 +7,10 @@ export interface CodexThreadSummary {
   preview: string;
   status: { type: string };
   updatedAt: number;
+  source?: unknown;
+  ephemeral?: boolean;
+  threadSource?: string;
+  turns?: unknown[];
 }
 
 interface PendingRequest {
@@ -85,6 +89,10 @@ export class CodexAppServerClient {
       preview: thread.preview,
       status: thread.status,
       updatedAt: thread.updatedAt,
+      source: thread.source,
+      ephemeral: thread.ephemeral,
+      threadSource: thread.threadSource,
+      turns: thread.turns,
     };
   }
 
@@ -156,31 +164,6 @@ export class CodexAppServerClient {
         }
       }
     }
-  }
-}
-
-export async function findLoadedCodexThread(options: {
-  socketPath: string;
-  cwd: string;
-  previewIncludes: string;
-  updatedAfter: number;
-}): Promise<string | null> {
-  const client = new CodexAppServerClient(options.socketPath);
-  await client.connect();
-  try {
-    const ids = await client.loadedThreadIds();
-    let best: CodexThreadSummary | null = null;
-    for (const id of ids) {
-      const thread = await client.readThread(id);
-      if (!thread) continue;
-      if (thread.cwd !== options.cwd) continue;
-      if (!thread.preview.includes(options.previewIncludes)) continue;
-      if (thread.updatedAt < options.updatedAfter) continue;
-      if (!best || thread.updatedAt > best.updatedAt) best = thread;
-    }
-    return best?.id ?? null;
-  } finally {
-    client.close();
   }
 }
 

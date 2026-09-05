@@ -538,6 +538,29 @@ describe('streamOnce', () => {
     );
   });
 
+  it('re-pings Codex when the entry is already on disk and OpenCode does not deliver', async () => {
+    const appendLine = vi.fn().mockResolvedValue(undefined);
+    const injectOpenCode = vi.fn().mockResolvedValue(false);
+    const wakeCodex = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValue(makeSSEResponse([
+      'event: log\nid: e-codex-durable\ndata: {"entry":{"id":"e-codex-durable","message":"retry me","wake_nonce":"wake-codex-durable"}}\n\n',
+    ]));
+
+    await streamOnce(ACTIVE_CUBE, 'older-entry', vi.fn(), {
+      ...makeDeps(fetchImpl, appendLine),
+      hasInboxEntryId: vi.fn().mockResolvedValue(true),
+      injectOpenCode,
+      wakeCodex,
+    });
+
+    expect(appendLine).not.toHaveBeenCalled();
+    expect(wakeCodex).toHaveBeenCalledWith(
+      expect.stringContaining('[entry_id: e-codex-durable]'),
+      'wake-codex-durable',
+      'e-codex-durable',
+    );
+  });
+
   it('settles a consumed entry without emitting another wake retry', async () => {
     const appendLine = vi.fn().mockResolvedValue(undefined);
     const injectOpenCode = vi.fn().mockResolvedValue(true);

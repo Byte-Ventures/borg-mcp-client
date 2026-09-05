@@ -221,16 +221,6 @@ export interface AssimilateDeps {
     setCliPreferenceForWorktree: (cli: BorgCli, worktree: string) => Promise<void>;
     resolveCli: (explicit?: BorgCli) => Promise<BorgCli>;
     prepareCodexRemoteLaunch: () => Promise<CodexRemoteLaunch>;
-    setCodexWakeTarget: (cubeId: string, droneId: string, target: {
-        threadId: string;
-        socketPath: string;
-    }) => Promise<void>;
-    findLoadedCodexThread: (options: {
-        socketPath: string;
-        cwd: string;
-        previewIncludes: string;
-        updatedAfter: number;
-    }) => Promise<string | null>;
 }
 export type AuthorityResolutionDeps = Pick<AssimilateDeps, 'connectServer' | 'cwd' | 'defaultAuthority' | 'detectLocalServer' | 'ensureLocalServerInstalled' | 'getActiveCube' | 'getHostname' | 'hasPersistedActiveCube' | 'isTTY' | 'peekPendingServerEnrollment' | 'preparePrivateRoot' | 'prompt' | 'promptSecret' | 'resumePendingServerEnrollment' | 'resumeServerEnrollment' | 'runSync' | 'stderr'>;
 type AssimilationAuthority = {
@@ -260,7 +250,7 @@ export interface FinalizationInput {
     rollbackWorktree: () => void;
 }
 export declare function finalizeAssimilationSeat(input: FinalizationInput, deps: FinalizationDeps): Promise<AssimilationPhaseOutcome<void>>;
-export type LaunchDeps = Pick<AssimilateDeps, 'exec' | 'findLoadedCodexThread' | 'getInboxPath' | 'isTTY' | 'prepareCodexRemoteLaunch' | 'probeMcpReady' | 'resolveCliApprovals' | 'setCodexWakeTarget' | 'setTerminalTitle' | 'stderr' | 'stdout'>;
+export type LaunchDeps = Pick<AssimilateDeps, 'exec' | 'getInboxPath' | 'isTTY' | 'prepareCodexRemoteLaunch' | 'probeMcpReady' | 'resolveCliApprovals' | 'setTerminalTitle' | 'stderr' | 'stdout'>;
 export interface LaunchInput {
     flags: AssimilateFlags;
     result: AssimilateResult;

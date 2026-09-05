@@ -4,7 +4,7 @@
  * prepareCodexRemoteLaunch is async + lifecycle-owning: it spawns
  * `codex app-server --listen unix://<0700-socket>`, probes readiness via a real
  * protocol round-trip (injected here), and returns `--remote` args + an owned
- * handle (cleanup on TUI exit), or a fail-loud warning. Tests use injected fakes
+ * handle (cleanup on TUI exit), or a typed refusal. Tests use injected fakes
  * for spawn/probe/sleep + a real temp runtime dir.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -36,13 +36,16 @@ function tmpDir(): string {
 function baseDeps(over: Partial<Parameters<typeof prepareCodexRemoteLaunch>[0]> = {}) {
   const kill = vi.fn();
   const spawnAppServer = vi.fn((_socketPath: string) => ({ pid: 4242, kill }));
+  let now = 0;
+  let socketNumber = 0;
   return {
     deps: {
       spawnAppServer,
       probeReady: vi.fn(async () => true),
-      sleep: () => Promise.resolve(),
+      sleep: (ms: number) => { now += ms; return Promise.resolve(); },
+      now: () => now,
       runtimeDir: tmpDir(),
-      socketId: () => 'sockA',
+      socketId: () => `sock${String.fromCharCode(65 + socketNumber++)}`,
       readyTimeoutMs: 100,
       pollIntervalMs: 10, // ⇒ 10 attempts
       isAlive: () => true,
@@ -59,6 +62,8 @@ describe('gh#528 — prepareCodexRemoteLaunch (direct app-server)', () => {
     const out = await prepareCodexRemoteLaunch(deps);
     const sock = path.join(deps.runtimeDir!, 'sockA.sock');
 
+    expect(out.ready).toBe(true);
+    if (!out.ready) throw new Error(out.reason);
     expect(out.args).toEqual(['--remote', `unix://${sock}`]);
     expect(out.env).toEqual({ BORG_CODEX_REMOTE_WAKE: '1' });
     expect(out.server).toMatchObject({ pid: 4242, socketPath: sock });
@@ -72,28 +77,51 @@ describe('gh#528 — prepareCodexRemoteLaunch (direct app-server)', () => {
     const probeReady = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true);
     const { deps, kill } = baseDeps({ probeReady });
     const out = await prepareCodexRemoteLaunch(deps);
-    expect(out.server).toBeDefined();
+    expect(out.ready).toBe(true);
     expect(probeReady).toHaveBeenCalledTimes(3);
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it('default cold-start budget keeps probing beyond the former 8000ms cutoff', async () => {
+  it('default cold-start budget keeps probing beyond the former 30000ms cutoff', async () => {
     let attempts = 0;
-    const probeReady = vi.fn(async () => ++attempts === 34);
-    const sleep = vi.fn(async () => {});
+    const probeReady = vi.fn(async () => ++attempts === 130);
     const { deps, kill } = baseDeps({
       probeReady,
-      sleep,
       readyTimeoutMs: undefined,
       pollIntervalMs: 250,
     });
 
     const out = await prepareCodexRemoteLaunch(deps);
 
-    expect(out.server).toBeDefined();
-    expect(probeReady).toHaveBeenCalledTimes(34);
-    expect(sleep).toHaveBeenCalledTimes(33);
+    expect(out.ready).toBe(true);
+    expect(probeReady).toHaveBeenCalledTimes(130);
     expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('retries once on a fresh socket and returns only the ready second app-server', async () => {
+    const firstKill = vi.fn();
+    const secondKill = vi.fn();
+    const spawnAppServer = vi.fn()
+      .mockImplementationOnce((socketPath: string) => {
+        fs.writeFileSync(socketPath, 'bound');
+        return { pid: 1001, kill: firstKill };
+      })
+      .mockReturnValueOnce({ pid: 1002, kill: secondKill });
+    const probeReady = vi.fn(async (socketPath: string) => socketPath.endsWith('sockB.sock'));
+    const { deps } = baseDeps({ spawnAppServer, probeReady, readyTimeoutMs: 20 });
+
+    const out = await prepareCodexRemoteLaunch(deps);
+
+    expect(out.ready).toBe(true);
+    if (!out.ready) throw new Error(out.reason);
+    const firstSocket = path.join(deps.runtimeDir!, 'sockA.sock');
+    const secondSocket = path.join(deps.runtimeDir!, 'sockB.sock');
+    expect(out.args).toEqual(['--remote', `unix://${secondSocket}`]);
+    expect(out.server).toMatchObject({ pid: 1002, socketPath: secondSocket });
+    expect(firstKill).toHaveBeenCalledTimes(1);
+    expect(secondKill).not.toHaveBeenCalled();
+    expect(fs.existsSync(firstSocket)).toBe(false);
+    expect(fs.existsSync(path.join(deps.runtimeDir!, 'sockA.pid'))).toBe(false);
   });
 
   it('alive but never ready → reports a readiness timeout, kills the child, and cleans up', async () => {
@@ -108,20 +136,16 @@ describe('gh#528 — prepareCodexRemoteLaunch (direct app-server)', () => {
       probeReady: vi.fn(async () => false),
     });
     const out = await prepareCodexRemoteLaunch(deps);
-    expect(out.args).toEqual([]);
-    expect(out.env).toEqual({});
-    expect(out.server).toBeUndefined();
-    expect(out.warning).toMatch(/remained running but did not become ready/i);
-    expect(out.warning).toContain('within 100ms');
-    expect(out.warning).toContain('at <REDACTED_PATH>');
-    expect(out.warning).not.toContain(deps.runtimeDir!);
-    expect(out.warning).toContain('Stderr: warning: initialization still pending');
-    expect(out.warning).not.toMatch(/up to date/i);
-    expect(out.warning).not.toContain('/loop');
-    expect(out.warning).toMatch(/borg_regen/);
-    expect(kill).toHaveBeenCalledTimes(1);
+    expect(out.ready).toBe(false);
+    if (out.ready) throw new Error('expected refusal');
+    expect(out.reason).toMatch(/remained running but did not become ready/i);
+    expect(out.reason).toContain('within 100ms');
+    expect(out.reason).not.toContain(deps.runtimeDir!);
+    expect(out.stderr).toBe('warning: initialization still pending');
+    expect(kill).toHaveBeenCalledTimes(2);
     expect(fs.existsSync(path.join(deps.runtimeDir!, 'sockA.sock'))).toBe(false);
     expect(fs.existsSync(path.join(deps.runtimeDir!, 'sockA.pid'))).toBe(false);
+    expect(fs.existsSync(path.join(deps.runtimeDir!, 'sockB.pid'))).toBe(false);
   });
 
   it('child exit before readiness → stops polling and reports exit code + buffered stderr', async () => {
@@ -141,15 +165,14 @@ describe('gh#528 — prepareCodexRemoteLaunch (direct app-server)', () => {
 
     const out = await prepareCodexRemoteLaunch(deps);
 
-    expect(out.server).toBeUndefined();
-    expect(out.warning).toMatch(/exited before becoming ready/i);
-    expect(out.warning).toContain('exit code 78');
-    expect(out.warning).toContain('Stderr: fatal: invalid app-server configuration');
-    expect(out.warning).not.toMatch(/up to date/i);
-    expect(out.warning).not.toContain('/loop');
-    expect(probeReady).toHaveBeenCalledTimes(1);
+    expect(out.ready).toBe(false);
+    if (out.ready) throw new Error('expected refusal');
+    expect(out.reason).toMatch(/exited before becoming ready/i);
+    expect(out.reason).toContain('exit code 78');
+    expect(out.stderr).toBe('fatal: invalid app-server configuration');
+    expect(probeReady).toHaveBeenCalledTimes(2);
     expect(sleep).not.toHaveBeenCalled();
-    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledTimes(2);
   });
 
   it('sanitizes child diagnostics before rendering them in a warning', async () => {
@@ -170,9 +193,12 @@ describe('gh#528 — prepareCodexRemoteLaunch (direct app-server)', () => {
 
     const out = await prepareCodexRemoteLaunch(deps);
 
-    expect(out.warning).toContain('harmless diagnostic remains');
-    expect(out.warning).toContain('<REDACTED>');
-    expect(out.warning).toContain('<REDACTED_PATH>');
+    expect(out.ready).toBe(false);
+    if (out.ready) throw new Error('expected refusal');
+    const rendered = `${out.reason}\n${out.stderr}`;
+    expect(rendered).toContain('harmless diagnostic remains');
+    expect(rendered).toContain('<REDACTED>');
+    expect(rendered).toContain('<REDACTED_PATH>');
     for (const secret of [
       'child-error-secret',
       'alice:url-secret',
@@ -182,7 +208,7 @@ describe('gh#528 — prepareCodexRemoteLaunch (direct app-server)', () => {
       'pass-secret',
       '/Users/alice',
     ]) {
-      expect(out.warning).not.toContain(secret);
+      expect(rendered).not.toContain(secret);
     }
   });
 
@@ -193,19 +219,18 @@ describe('gh#528 — prepareCodexRemoteLaunch (direct app-server)', () => {
       }),
     });
     const out = await prepareCodexRemoteLaunch(deps);
-    expect(out.args).toEqual([]);
-    expect(out.server).toBeUndefined();
-    expect(out.warning).toMatch(/codex app-server/);
-    expect(out.warning).toMatch(/available on PATH/);
-    expect(out.warning).not.toMatch(/up to date/i);
-    expect(out.warning).not.toContain('/loop');
+    expect(out.ready).toBe(false);
+    if (out.ready) throw new Error('expected refusal');
+    expect(out.reason).toMatch(/codex app-server/);
+    expect(out.reason).toMatch(/available on PATH/);
   });
 
   it('the returned handle.cleanup() kills the child + removes socket and pidfile', async () => {
     const { deps, kill } = baseDeps();
     const out = await prepareCodexRemoteLaunch(deps);
+    if (!out.ready) throw new Error(out.reason);
     expect(fs.existsSync(path.join(deps.runtimeDir!, 'sockA.sock'))).toBe(false); // socket only bound by the (fake) server
-    out.server!.cleanup();
+    out.server.cleanup();
     expect(kill).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(path.join(deps.runtimeDir!, 'sockA.pid'))).toBe(false);
   });

@@ -8,7 +8,7 @@ import { codexAppServerSocketConfigArgs } from './codex-wake-resolve.js';
 import { BORG_AGENT_KIND_ENV, BORG_CODEX_REMOTE_WAKE_ENV, codexAgentKindConfigArgs, codexRemoteWakeConfigArgs, codexStateRootConfigArgs, } from './agent-runtime.js';
 import { borgConfigRoot } from './private-root.js';
 export const DEFAULT_CODEX_REMOTE_DIR = join(borgConfigRoot(), 'codex-remote');
-const DEFAULT_CODEX_REMOTE_READY_TIMEOUT_MS = 30_000;
+const DEFAULT_CODEX_REMOTE_READY_TIMEOUT_MS = 60_000;
 const MAX_CODEX_APP_SERVER_STDERR_CHARS = 16_384;
 /**
  * Keep app-server failure details useful without copying credentials or local
@@ -173,8 +173,8 @@ function pruneStaleSockets(runtimeDir, isAlive) {
         }
     }
 }
-function failLoud(reason) {
-    return { args: [], env: {}, warning: reason };
+function refuse(reason, stderr = '') {
+    return { ready: false, reason, stderr: sanitizeCodexDiagnostic(stderr).trim() };
 }
 function formatExitReason(diagnostics) {
     if (diagnostics.error)
@@ -185,21 +185,17 @@ function formatExitReason(diagnostics) {
         return `signal ${diagnostics.signal}`;
     return 'unknown exit status';
 }
-function formatStderr(stderr) {
-    const trimmed = sanitizeCodexDiagnostic(stderr).trim();
-    return trimmed ? ` Stderr: ${trimmed}` : '';
-}
 /**
  * Start a borg-owned per-launch Codex app-server, probe it for readiness, and
- * return the `--remote` launch args + an owned handle (or a fail-loud warning).
- * Async + lifecycle-owning: the caller MUST call `result.server?.cleanup()` on
- * TUI exit.
+ * return the `--remote` launch args + an owned handle, or a typed refusal after
+ * one retry. The caller MUST call `result.server.cleanup()` on TUI exit.
  */
 export async function prepareCodexRemoteLaunch(deps) {
     const runtimeDir = deps.runtimeDir ?? DEFAULT_CODEX_REMOTE_DIR;
     const isAlive = deps.isAlive ?? defaultIsAlive;
     const readyTimeoutMs = deps.readyTimeoutMs ?? DEFAULT_CODEX_REMOTE_READY_TIMEOUT_MS;
     const pollIntervalMs = deps.pollIntervalMs ?? 250;
+    const now = deps.now ?? Date.now;
     // 1. 0700 owned dir + prune crashed prior sockets (concurrent-safe via pid liveness).
     try {
         mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
@@ -207,80 +203,85 @@ export async function prepareCodexRemoteLaunch(deps) {
         pruneStaleSockets(runtimeDir, isAlive);
     }
     catch (err) {
-        return failLoud(`Codex remote-wake disabled: could not prepare ${runtimeDir} (${err?.message ?? err}); run borg_regen manually.`);
+        return refuse(`could not prepare the Codex app-server runtime directory (${sanitizeCodexDiagnostic(String(err?.message ?? err))})`);
     }
-    // 2. unique, non-predictable socket path inside the owned dir.
-    const id = (deps.socketId ?? (() => randomBytes(16).toString('hex')))();
-    const socketPath = join(runtimeDir, `${id}.sock`);
-    const pidPath = join(runtimeDir, `${id}.pid`);
-    // 3. spawn the long-lived app-server.
-    let child;
-    try {
-        child = deps.spawnAppServer(socketPath);
-    }
-    catch (err) {
-        safeRm(socketPath);
-        return failLoud(`Codex remote-wake disabled: could not start \`codex app-server\` (${sanitizeCodexDiagnostic(String(err?.message ?? err))}) — ` +
-            `confirm the Codex executable is installed and available on PATH. ` +
-            `Remote wake is unavailable for this session; run borg_regen manually to catch up.`);
-    }
-    if (child.pid != null) {
+    let lastRefusal = refuse('the Codex app-server did not become ready');
+    for (let launchAttempt = 0; launchAttempt < 2; launchAttempt += 1) {
+        // Each retry owns a fresh, non-predictable socket and pidfile.
+        const id = (deps.socketId ?? (() => randomBytes(16).toString('hex')))();
+        const socketPath = join(runtimeDir, `${id}.sock`);
+        const pidPath = join(runtimeDir, `${id}.pid`);
+        let child;
         try {
-            writeFileSync(pidPath, String(child.pid));
+            child = deps.spawnAppServer(socketPath);
         }
-        catch {
-            // pidfile is only for stale-prune; launch still proceeds.
+        catch (err) {
+            safeRm(socketPath);
+            safeRm(pidPath);
+            lastRefusal = refuse(`could not start \`codex app-server\` (${sanitizeCodexDiagnostic(String(err?.message ?? err))}); confirm the Codex executable is installed and available on PATH`);
+            continue;
         }
-    }
-    const cleanup = () => {
-        try {
-            child.kill();
+        if (child.pid != null) {
+            try {
+                writeFileSync(pidPath, String(child.pid));
+            }
+            catch {
+                // pidfile is only for stale-prune; launch still proceeds.
+            }
         }
-        catch {
-            // best-effort
-        }
-        safeRm(socketPath);
-        safeRm(pidPath);
-    };
-    // 4. readiness via a real protocol round-trip — bounded attempts (no clock dep).
-    const attempts = Math.max(1, Math.ceil(readyTimeoutMs / pollIntervalMs));
-    let ready = false;
-    let exitDiagnostics;
-    for (let i = 0; i < attempts && !ready; i++) {
-        try {
-            ready = await deps.probeReady(socketPath);
-        }
-        catch {
-            ready = false;
-        }
-        if (!ready) {
+        const cleanup = () => {
+            try {
+                child.kill();
+            }
+            catch {
+                // best-effort
+            }
+            safeRm(socketPath);
+            safeRm(pidPath);
+        };
+        // Readiness is bounded by elapsed wall time, so slow protocol probes count
+        // against the same cold-start budget as the poll sleeps.
+        const startedAt = now();
+        let ready = false;
+        let exitDiagnostics;
+        for (;;) {
+            try {
+                ready = await deps.probeReady(socketPath);
+            }
+            catch {
+                ready = false;
+            }
+            if (ready)
+                break;
             const diagnostics = child.diagnostics?.();
             if (diagnostics?.exited) {
                 exitDiagnostics = diagnostics;
                 break;
             }
+            const remainingMs = readyTimeoutMs - (now() - startedAt);
+            if (remainingMs <= 0)
+                break;
+            await deps.sleep(Math.min(pollIntervalMs, remainingMs));
         }
-        if (!ready && i < attempts - 1)
-            await deps.sleep(pollIntervalMs);
-    }
-    if (!ready) {
         const diagnostics = exitDiagnostics ?? child.diagnostics?.();
-        cleanup();
-        if (diagnostics?.exited) {
-            return failLoud(`Codex remote-wake disabled: \`codex app-server\` exited before becoming ready ` +
-                `(${formatExitReason(diagnostics)}).${formatStderr(diagnostics.stderr)} ` +
-                `Run borg_regen manually to catch up.`);
+        if (!ready) {
+            cleanup();
+            if (diagnostics?.exited) {
+                lastRefusal = refuse(`\`codex app-server\` exited before becoming ready (${formatExitReason(diagnostics)})`, diagnostics.stderr);
+            }
+            else {
+                lastRefusal = refuse(`\`codex app-server\` remained running but did not become ready within ${readyTimeoutMs}ms`, diagnostics?.stderr ?? '');
+            }
+            continue;
         }
-        return failLoud(`Codex remote-wake disabled: \`codex app-server\` remained running but did not become ready ` +
-            `at ${sanitizeCodexDiagnostic(socketPath)} within ${readyTimeoutMs}ms.${formatStderr(diagnostics?.stderr ?? '')} ` +
-            `Run borg_regen manually to catch up.`);
+        return {
+            ready: true,
+            args: ['--remote', `unix://${socketPath}`],
+            env: { [BORG_CODEX_REMOTE_WAKE_ENV]: '1' },
+            server: { pid: child.pid, socketPath, cleanup },
+        };
     }
-    // 5. ready → owned remote launch.
-    return {
-        args: ['--remote', `unix://${socketPath}`],
-        env: { [BORG_CODEX_REMOTE_WAKE_ENV]: '1' },
-        server: { pid: child.pid, socketPath, cleanup },
-    };
+    return lastRefusal;
 }
 /**
  * Production deps for prepareCodexRemoteLaunch — spawn the real `codex

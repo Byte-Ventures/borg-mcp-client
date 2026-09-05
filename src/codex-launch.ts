@@ -2,6 +2,13 @@ import type { BorgCli } from './cubes.js';
 import type { AgentKind } from './agent-runtime.js';
 import { wakePathArming } from './regen-format.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
+import { withCodexCwdArg, type CodexRemoteReadyLaunch } from './codex-remote.js';
+import { codexBorgSessionConfigArgs } from './launch-gate.js';
+import {
+  codexAgentKindConfigArgs,
+  codexRemoteWakeConfigArgs,
+  codexStateRootConfigArgs,
+} from './agent-runtime.js';
 
 /**
  * The claude kickoff prompt's wake-path section (gh#929) — the SAME shared
@@ -29,25 +36,9 @@ export function buildKickoffWakePathClause(
   return '';
 }
 
-export interface CodexWakeTargetDeps {
-  setCodexWakeTarget: (
-    cubeId: string,
-    droneId: string,
-    target: { threadId: string; socketPath: string }
-  ) => Promise<void>;
-  findLoadedCodexThread: (options: {
-    socketPath: string;
-    cwd: string;
-    previewIncludes: string;
-    updatedAfter: number;
-  }) => Promise<string | null>;
-}
-
 export function buildAgentKickoffPrompt(options: {
   cli: BorgCli;
-  codexWakeNonce: string | null;
   monitorClause: string;
-  codexWakePathClause?: string;
 }): string {
   // gh#929: compacted to the load-bearing launch essentials (lean/explicit/
   // imperative, #914 treatment). STRIPPED: the read-log-triage paragraph (the
@@ -55,13 +46,9 @@ export function buildAgentKickoffPrompt(options: {
   // clause (Coordinator/Queen-only; belongs in role-text, not injected for
   // ALL). KEPT: core call + MCP-disconnect recovery + the wake-path arming
   // (claude via the shared monitorClause = buildKickoffWakePathClause; codex
-  // via codexWakePathClause) + the claude/codex/opencode cli-branching.
-  const codexNonceClause = options.codexWakeNonce
-    ? `Wake target nonce: ${options.codexWakeNonce}. `
-    : '';
+  // via the Borg-owned remote socket clause) + the cli-specific branching.
   const codexWakePathClause =
-    options.codexWakePathClause ??
-    `Codex Borg wakeups use remote-control when available; if no wake arrives, run borg_regen manually when returning to the session.`;
+    'Codex Borg wakeups use the Borg-owned remote-control socket for this session.';
   const opencodeWakePathClause = OPENCODE_WAKE_PATH_GUIDANCE;
   const wakeClause = options.cli === 'claude'
     ? options.monitorClause
@@ -70,7 +57,6 @@ export function buildAgentKickoffPrompt(options: {
       : opencodeWakePathClause;
   return (
     `Call borg_regen and follow the playbook in its response. ` +
-    codexNonceClause +
     `Note: at session start the borg MCP server is still spinning up in ` +
     `parallel — if a system reminder claims "MCP server disconnected" or ` +
     `the borg tools are not yet registered, do NOT bail. Make one recovery attempt via ` +
@@ -82,61 +68,42 @@ export function buildAgentKickoffPrompt(options: {
   );
 }
 
-export function socketPathFromRemoteArgs(args: string[]): string | null {
-  const index = args.indexOf('--remote');
-  if (index < 0) return null;
-  const value = args[index + 1];
-  if (!value?.startsWith('unix://')) return null;
-  return value.slice('unix://'.length);
-}
+export type CodexLaunchArgsResult =
+  | { ready: true; args: string[] }
+  | { ready: false; reason: string };
 
-export function threadIdFromPassthroughArgs(args: string[]): string | null {
-  if (args[0] === 'resume' && args[1] && !args[1].startsWith('-')) return args[1];
-  const resumeIndex = args.indexOf('--resume');
-  if (resumeIndex >= 0 && args[resumeIndex + 1]) return args[resumeIndex + 1];
-  return null;
-}
-
-export async function recordCodexWakeTarget(options: {
-  deps: CodexWakeTargetDeps;
-  cubeId: string;
-  droneId: string;
-  socketPath: string;
+export function buildCodexLaunchArgs(options: {
+  remote: CodexRemoteReadyLaunch;
   cwd: string;
-  previewNeedle: string;
-  launchedAtSeconds: number;
+  kickoff: string;
+  approvalArgs?: string[];
+  accessArgs?: string[];
+  seatExpectationArgs?: string[];
   passthroughArgs?: string[];
-}): Promise<void> {
-  try {
-    const explicitThreadId = options.passthroughArgs
-      ? threadIdFromPassthroughArgs(options.passthroughArgs)
-      : null;
-    if (explicitThreadId) {
-      await options.deps.setCodexWakeTarget(options.cubeId, options.droneId, {
-        threadId: explicitThreadId,
-        socketPath: options.socketPath,
-      });
-      return;
-    }
-
-    const deadline = Date.now() + 15_000;
-    while (Date.now() < deadline) {
-      const threadId = await options.deps.findLoadedCodexThread({
-        socketPath: options.socketPath,
-        cwd: options.cwd,
-        previewIncludes: options.previewNeedle,
-        updatedAfter: options.launchedAtSeconds - 5,
-      });
-      if (threadId) {
-        await options.deps.setCodexWakeTarget(options.cubeId, options.droneId, {
-          threadId,
-          socketPath: options.socketPath,
-        });
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  } catch {
-    // Best-effort mapping: launch still succeeds and manual regen remains available.
+}): CodexLaunchArgsResult {
+  const passthroughArgs = options.passthroughArgs ?? [];
+  if (passthroughArgs.some((arg) => arg === '--remote' || arg.startsWith('--remote='))) {
+    return {
+      ready: false,
+      reason: 'Borg owns Codex remote control; remove the passthrough --remote option and retry.',
+    };
   }
+  const remoteValue = `unix://${options.remote.server.socketPath}`;
+  if (options.remote.args.length !== 2 || options.remote.args[0] !== '--remote' || options.remote.args[1] !== remoteValue) {
+    return { ready: false, reason: 'The Borg-owned Codex remote socket is unavailable.' };
+  }
+  return {
+    ready: true,
+    args: [
+      ...(options.accessArgs ?? []),
+      ...(options.approvalArgs ?? []),
+      ...codexBorgSessionConfigArgs(),
+      ...codexAgentKindConfigArgs(),
+      ...codexRemoteWakeConfigArgs(),
+      ...codexStateRootConfigArgs(),
+      ...(options.seatExpectationArgs ?? []),
+      ...options.remote.args,
+      ...withCodexCwdArg([...passthroughArgs, options.kickoff], options.cwd),
+    ],
+  };
 }

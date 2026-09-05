@@ -34,8 +34,10 @@ const ACTIVE = {
   cubeId: 'cube', droneId: 'drone', name: 'cube',
   sessionToken: 'token', droneLabel: 'drone', apiUrl: 'https://api.example.test',
 };
-const TARGET = { threadId: 'thread-123', socketPath: '/tmp/codex.sock', updatedAt: '2026-05-28T10:00:00.000Z' };
-const WAKE_ENV = { BORG_CODEX_REMOTE_WAKE: '1' } as any;
+const WAKE_ENV = {
+  BORG_CODEX_REMOTE_WAKE: '1',
+  BORG_CODEX_APP_SERVER_SOCKET: '/tmp/codex.sock',
+} as any;
 
 function midTurnClient() {
   return {
@@ -54,7 +56,7 @@ function deferDeps(client: ReturnType<typeof midTurnClient>) {
   let clock = 0;
   return {
     getActiveCube: vi.fn(async () => ACTIVE),
-    getCodexWakeTarget: vi.fn(async () => TARGET),
+    env: WAKE_ENV,
     createClient: vi.fn(() => client),
     hasPendingEntry: vi.fn(async () => true), // the entry stays unread → the stall
     sleep: vi.fn(async () => {}),
@@ -91,7 +93,7 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
     // this is what the pre-fix health surface returned verbatim.
     const armed = await probeCodexBridgeArmed(
       { cubeId: ACTIVE.cubeId, droneId: ACTIVE.droneId },
-      { getCodexWakeTarget: vi.fn(async () => TARGET), checkBridge: () => true },
+      { env: WAKE_ENV, socketExists: () => true, checkBridge: () => true },
     );
     expect(armed).toBe(true);
 
@@ -138,7 +140,7 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
     };
     const deps = {
       getActiveCube: vi.fn(async () => ACTIVE),
-      getCodexWakeTarget: vi.fn(async () => TARGET),
+      env: WAKE_ENV,
       createClient: vi.fn(() => client),
       hasPendingEntry: vi.fn(async () => true),
       sleep: vi.fn(async () => { status = { type: 'idle' }; }), // thread frees between polls
@@ -168,7 +170,7 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
     const client = midTurnClient();
     await fireCodexHeartbeatTick({
       getActiveCube: vi.fn(async () => ACTIVE),
-      getCodexWakeTarget: vi.fn(async () => TARGET),
+      env: WAKE_ENV,
       createClient: vi.fn(() => client),
       hasPendingWork: vi.fn(async () => true), // authoritative unread work exists
       now: vi.fn(() => 1000),
@@ -187,7 +189,7 @@ describe('client#89 Codex wake-injection stall diagnostics', () => {
     const busy = midTurnClient();
     await fireCodexHeartbeatTick({
       getActiveCube: vi.fn(async () => ACTIVE),
-      getCodexWakeTarget: vi.fn(async () => TARGET),
+      env: WAKE_ENV,
       createClient: vi.fn(() => busy),
       hasPendingWork: vi.fn(async () => true),
       now: vi.fn(() => 1000),

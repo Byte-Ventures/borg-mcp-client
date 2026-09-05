@@ -55,14 +55,12 @@ export function codexAgentKindConfigArgs() {
  * Pin the remote-wake transport capability separately from the CLI identity.
  *
  * Codex MCP children read their configured env rather than the wrapper's
- * inherited process env. Explicitly pinning "0" on a no-socket launch is
- * therefore necessary to override legacy static configs that used to persist
- * BORG_CODEX_REMOTE_WAKE="1" as an identity marker.
+ * inherited process env. Every Borg Codex launch owns a remote socket.
  */
-export function codexRemoteWakeConfigArgs(enabled = true) {
+export function codexRemoteWakeConfigArgs() {
     return [
         '-c',
-        `mcp_servers.borg.env.${BORG_CODEX_REMOTE_WAKE_ENV}="${enabled ? '1' : '0'}"`,
+        `mcp_servers.borg.env.${BORG_CODEX_REMOTE_WAKE_ENV}="1"`,
     ];
 }
 /**

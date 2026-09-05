@@ -65,10 +65,6 @@ describe('agent runtime identity', () => {
       '-c',
       'mcp_servers.borg.env.BORG_CODEX_REMOTE_WAKE="1"',
     ]);
-    expect(codexRemoteWakeConfigArgs(false)).toEqual([
-      '-c',
-      'mcp_servers.borg.env.BORG_CODEX_REMOTE_WAKE="0"',
-    ]);
     expect(codexStateRootConfigArgs({ BORG_STATE_ROOT: '/tmp/borg state' })).toEqual([
       '-c',
       'mcp_servers.borg.env.BORG_STATE_ROOT="/tmp/borg state"',
