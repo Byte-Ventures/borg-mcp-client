@@ -38,18 +38,23 @@ export function isCodexSubagentSource(source) {
  * is fresh-per-launch / single-session, so the common case is exactly one loaded
  * thread. When more than one is loaded, prefer the thread whose cwd matches this
  * drone's working directory (sibling worktrees have distinct cwds), then the
- * newest by updatedAt — always deterministic. No loaded thread → null (no wake
+ * newest by updatedAt, without preferring an empty thread over one with turns.
+ * System, ephemeral and subagent threads are never candidates. No loaded thread → null (no wake
  * this cycle; the next wake retries, so a transient empty list never causes
  * permanent deafness).
  */
 export function pickFreshThread(threads, opts) {
-    const rootThreads = threads.filter((thread) => !isCodexSubagentSource(thread.source));
+    const rootThreads = threads.filter((thread) => !isCodexSubagentSource(thread.source) && thread.ephemeral !== true &&
+        (thread.threadSource === undefined || thread.threadSource === 'user'));
     if (rootThreads.length === 0)
         return null;
     if (rootThreads.length === 1)
         return rootThreads[0].id;
     const cwdMatches = rootThreads.filter((t) => t.cwd === opts.cwd);
-    const pool = cwdMatches.length > 0 ? cwdMatches : rootThreads;
+    let pool = cwdMatches.length > 0 ? cwdMatches : rootThreads;
+    if (pool.some((thread) => (thread.turns?.length ?? 0) > 0)) {
+        pool = pool.filter((thread) => (thread.turns?.length ?? 0) > 0 || !!thread.preview);
+    }
     let best = pool[0];
     for (const t of pool) {
         if ((t.updatedAt ?? 0) > (best.updatedAt ?? 0))

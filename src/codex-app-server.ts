@@ -8,6 +8,9 @@ export interface CodexThreadSummary {
   status: { type: string };
   updatedAt: number;
   source?: unknown;
+  ephemeral?: boolean;
+  threadSource?: string;
+  turns?: unknown[];
 }
 
 interface PendingRequest {
@@ -87,6 +90,9 @@ export class CodexAppServerClient {
       status: thread.status,
       updatedAt: thread.updatedAt,
       source: thread.source,
+      ephemeral: thread.ephemeral,
+      threadSource: thread.threadSource,
+      turns: thread.turns,
     };
   }
 

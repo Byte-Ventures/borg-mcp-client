@@ -28,6 +28,10 @@ export interface CodexThreadInfo {
     cwd?: string;
     updatedAt?: number;
     source?: unknown;
+    ephemeral?: boolean;
+    threadSource?: string;
+    preview?: string;
+    turns?: unknown[];
 }
 export declare function isCodexSubagentSource(source: unknown): boolean;
 /**
@@ -35,7 +39,8 @@ export declare function isCodexSubagentSource(source: unknown): boolean;
  * is fresh-per-launch / single-session, so the common case is exactly one loaded
  * thread. When more than one is loaded, prefer the thread whose cwd matches this
  * drone's working directory (sibling worktrees have distinct cwds), then the
- * newest by updatedAt — always deterministic. No loaded thread → null (no wake
+ * newest by updatedAt, without preferring an empty thread over one with turns.
+ * System, ephemeral and subagent threads are never candidates. No loaded thread → null (no wake
  * this cycle; the next wake retries, so a transient empty list never causes
  * permanent deafness).
  */

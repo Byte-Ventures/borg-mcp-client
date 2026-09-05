@@ -77,4 +77,23 @@ describe('gh#855 — pickFreshThread (deterministic thread resolution on the liv
     expect(pickFreshThread(threads, { cwd: '/w/a' })).toBe('root');
     expect(pickFreshThread([threads[1]], { cwd: '/w/a' })).toBeNull();
   });
+
+  it.each([
+    { ephemeral: true, threadSource: 'user' },
+    { ephemeral: false, threadSource: 'system' },
+  ])('rejects ineligible threads independently: %j', (fields) => {
+    const excluded = { id: 'excluded', cwd: '/w/a', updatedAt: 999, source: 'vscode', ...fields };
+    expect(pickFreshThread([excluded], { cwd: '/w/a' })).toBeNull();
+    expect(pickFreshThread([
+      { id: 'user', cwd: '/w/a', updatedAt: 1, ephemeral: false, threadSource: 'user' },
+      excluded,
+    ], { cwd: '/w/a' })).toBe('user');
+  });
+
+  it('prefers a thread with turns over a newer empty thread in the same cwd', () => {
+    expect(pickFreshThread([
+      { id: 'conversation', cwd: '/w/a', updatedAt: 1, preview: '', turns: [{ id: 'turn-1' }] },
+      { id: 'empty', cwd: '/w/a', updatedAt: 999, preview: '', turns: [] },
+    ], { cwd: '/w/a' })).toBe('conversation');
+  });
 });

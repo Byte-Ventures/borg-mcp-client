@@ -344,8 +344,12 @@ async function resolveFreshCodexWakeTarget(
     const ids = await probe.loadedThreadIds();
     const summaries: CodexThreadInfo[] = [];
     for (const id of ids) {
-      const t = await probe.readThread(id);
-      if (t) summaries.push({ id: t.id, cwd: t.cwd, updatedAt: t.updatedAt, source: t.source });
+      try {
+        const thread = await probe.readThread(id);
+        if (thread) summaries.push(thread);
+      } catch {
+        // A loaded thread may disappear before its read; keep other candidates.
+      }
     }
     const threadId = pickFreshThread(summaries, { cwd: (deps.cwd ?? (() => process.cwd()))() });
     return threadId ? { socketPath: envSocket, threadId } : null;

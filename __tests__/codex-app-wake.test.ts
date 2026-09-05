@@ -733,6 +733,39 @@ describe('gh#855/client#89 — env-socket wake-target resolution', () => {
     expect(client.startTurn).toHaveBeenCalledWith('root', 'wake root');
     expect(client.startTurn).not.toHaveBeenCalledWith('guardian', expect.any(String));
   });
+
+  it.each([false, true])('resolves the Codex 0.153.4 user thread with unreadable id=%s', async (unreadable) => {
+    const threads = [
+      { id: 'user', cwd: '/repo', source: 'cli', ephemeral: false, threadSource: 'user', preview: 'Borg task', turns: [], createdAt: 100, updatedAt: 101, status: { type: 'idle' } },
+      { id: 'system', cwd: '/repo', source: 'vscode', ephemeral: true, threadSource: 'system', preview: '', turns: [], createdAt: 999, updatedAt: 999, status: { type: 'idle' } },
+    ];
+    const adapter = new CodexAppServerClient('/unused.sock');
+    const request = vi.spyOn(adapter as any, 'request').mockImplementation(async (_method, params: any) => {
+      if (params.threadId === 'unreadable') throw new Error('thread unavailable');
+      return { thread: threads.find((thread) => thread.id === params.threadId) };
+    });
+    const client = {
+      connect: vi.fn(async () => {}),
+      loadedThreadIds: vi.fn(async () => [...(unreadable ? ['unreadable'] : []), 'user', 'system']),
+      readThread: adapter.readThread.bind(adapter),
+      startTurn: vi.fn(async () => {}),
+      close: vi.fn(),
+    };
+    try {
+      expect(await adapter.readThread('system')).toMatchObject({ ephemeral: true, threadSource: 'system', turns: [] });
+      wakeCodexViaAppServer('wake user', { BORG_CODEX_REMOTE_WAKE: '1' }, {
+        getActiveCube: vi.fn(async () => ACTIVE),
+        createClient: () => client,
+        env: { BORG_CODEX_APP_SERVER_SOCKET: '/run/live.sock' },
+        cwd: () => '/repo',
+      });
+      await flush();
+      expect(client.startTurn).toHaveBeenCalledExactlyOnceWith('user', 'wake user');
+    } finally {
+      resetCodexWakeForTests();
+      request.mockRestore();
+    }
+  });
 });
 
 describe('gh#857 WI-1 — durable per-entry retry (no more silent drop)', () => {

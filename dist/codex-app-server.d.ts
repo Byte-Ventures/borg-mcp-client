@@ -7,6 +7,9 @@ export interface CodexThreadSummary {
     };
     updatedAt: number;
     source?: unknown;
+    ephemeral?: boolean;
+    threadSource?: string;
+    turns?: unknown[];
 }
 export declare class CodexAppServerClient {
     private readonly socketPath;

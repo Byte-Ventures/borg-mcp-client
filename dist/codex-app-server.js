@@ -69,6 +69,9 @@ export class CodexAppServerClient {
             status: thread.status,
             updatedAt: thread.updatedAt,
             source: thread.source,
+            ephemeral: thread.ephemeral,
+            threadSource: thread.threadSource,
+            turns: thread.turns,
         };
     }
     async startTurn(threadId, text) {
