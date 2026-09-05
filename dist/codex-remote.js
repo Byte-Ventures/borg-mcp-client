@@ -244,7 +244,7 @@ export async function prepareCodexRemoteLaunch(deps) {
         const startedAt = now();
         let ready = false;
         let exitDiagnostics;
-        while (!ready) {
+        for (;;) {
             try {
                 ready = await deps.probeReady(socketPath);
             }

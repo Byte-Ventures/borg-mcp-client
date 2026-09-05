@@ -350,7 +350,7 @@ export async function prepareCodexRemoteLaunch(
     const startedAt = now();
     let ready = false;
     let exitDiagnostics: CodexChildDiagnostics | undefined;
-    while (!ready) {
+    for (;;) {
       try {
         ready = await deps.probeReady(socketPath);
       } catch {
