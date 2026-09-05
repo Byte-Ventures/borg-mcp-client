@@ -32,6 +32,8 @@ jobs:
   client:
     name: client source (${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    env:
+      BORG_E2E: ${{ matrix.node-version == '24.19.0' && '1' || '0' }}
     strategy:
       matrix:
         node-version: ['22.12.0', '24.19.0']

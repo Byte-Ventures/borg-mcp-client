@@ -18,6 +18,7 @@ import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { installConsumerPackages, openRealServer } from '../test/support/real-server.mjs';
 
 const root = resolve(fileURLToPath(new URL('../', import.meta.url)));
 const ALT_SCREEN_ENTER = '\u001b[?1049h';
@@ -328,10 +329,7 @@ async function installCandidates(temporary, clientTarball, serverSpec, expectedS
   const consumer = join(temporary, 'consumer');
   await mkdir(consumer);
   await writeFile(join(consumer, 'package.json'), '{"name":"borg-release-exercise","private":true}\n');
-  runNpm([
-    'install', '--ignore-scripts', '--package-lock=true', '--save-exact',
-    clientTarball, serverSpec,
-  ], { cwd: consumer, stdio: 'pipe' });
+  installConsumerPackages(consumer, [clientTarball, serverSpec]);
 
   const clientRoot = await realpath(join(consumer, 'node_modules', 'borgmcp'));
   const serverRoot = await realpath(join(consumer, 'node_modules', 'borgmcp-server'));
@@ -410,23 +408,9 @@ async function verifyInstalledCoordinationTemplates(consumer) {
 
 async function runDocumentJourney(installed, temporary, isolatedHome) {
   const dataDirectory = join(temporary, 'document-data');
-  await mkdir(dataDirectory, { mode: 0o700 });
-  const serverModule = (name) => pathToFileURL(join(installed.serverRoot, 'dist', name)).href;
   const clientModule = (name) => pathToFileURL(join(installed.clientRoot, 'dist', name)).href;
-  const [{ bootstrapServer, loadDigestKey }, { CoordinationApi }, credentials, httpsServer, principal, store] =
-    await Promise.all([
-      import(serverModule('bootstrap.js')),
-      import(serverModule('coordination-api.js')),
-      import(serverModule('credentials.js')),
-      import(serverModule('https-server.js')),
-      import(serverModule('principal.js')),
-      import(serverModule('store.js')),
-    ]);
-  const bootstrap = await bootstrapServer(dataDirectory);
-  const runtime = await store.openStore({ path: bootstrap.paths.database });
-  const digester = new credentials.CredentialDigester(await loadDigestKey(bootstrap.paths.digestKey));
-  const authority = new credentials.CredentialAuthority(runtime.credentials, digester);
-  const api = new CoordinationApi(runtime, authority);
+  const realServer = await openRealServer(installed.serverRoot, dataDirectory);
+  const { runtime, principal } = realServer;
   const clientId = '00000000-0000-4000-8000-000000000002';
   const operator = principal.clientPrincipal(clientId);
   const cubeId = '00000000-0000-4000-8000-000000000003';
@@ -438,16 +422,7 @@ async function runDocumentJourney(installed, temporary, isolatedHome) {
   runtime.maintenance.createCube({ id: cubeId, name: 'Installed document journey', directive: '' });
   runtime.maintenance.grantClientCube({ clientId, cubeId, access: 'manage' });
   const port = await freePort();
-  const server = await httpsServer.startHttpsServer({
-    bind: { host: '127.0.0.1', port },
-    tls: {
-      key: await readFile(bootstrap.paths.serverKey),
-      cert: await readFile(bootstrap.paths.serverCertificate),
-      ca: await readFile(bootstrap.paths.caCertificate),
-    },
-    authorizeCoordination: async () => operator,
-    handleCoordination: (request) => api.handle(request),
-  });
+  const server = await realServer.listen(port, async () => operator);
   const origin = server.origin;
   const previousStateRoot = process.env.BORG_STATE_ROOT;
   const previousDataDirectory = process.env.BORG_SERVER_DATA_DIR;
@@ -510,8 +485,7 @@ async function runDocumentJourney(installed, temporary, isolatedHome) {
     if (previousDataDirectory === undefined) delete process.env.BORG_SERVER_DATA_DIR;
     else process.env.BORG_SERVER_DATA_DIR = previousDataDirectory;
     await server.close();
-    digester.destroy();
-    runtime.close();
+    realServer.close();
   }
 }
 
