@@ -1,9 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
+import type { AgentSessionIdentity } from './agent-session-identity.js';
 
 const STATE_FILE = join(borgConfigRoot(), 'lifecycle-log-state.json');
-const ARRIVAL_DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
+const UNKNOWN_SESSION: AgentSessionIdentity = { kind: 'unknown', reason: 'identity-not-resolved' };
 
 export type LifecycleSignal = 'arrival' | 'ready';
 
@@ -13,10 +14,7 @@ export interface LifecycleLogSubject {
 }
 
 interface LifecycleStateEntry {
-  lastArrival?: {
-    message: string;
-    at: string;
-  };
+  arrivedSessionIds?: string[];
   idleReady?: {
     message: string;
     open: boolean;
@@ -81,20 +79,14 @@ async function writeState(state: LifecycleStateFile): Promise<void> {
 export function shouldSuppressLifecycleLogFromState(
   message: string,
   state: LifecycleStateEntry | undefined,
-  nowMs: number = Date.now()
+  identity: AgentSessionIdentity = UNKNOWN_SESSION
 ): { suppress: boolean; signal: LifecycleSignal | null } {
   const signal = lifecycleSignalForMessage(message);
   if (!signal) return { suppress: false, signal: null };
 
   if (signal === 'arrival') {
-    const lastArrivalAt = state?.lastArrival?.at
-      ? new Date(state.lastArrival.at).getTime()
-      : NaN;
-    const isRecent =
-      Number.isFinite(lastArrivalAt) &&
-      nowMs - lastArrivalAt < ARRIVAL_DUPLICATE_WINDOW_MS;
     return {
-      suppress: state?.lastArrival?.message === message && isRecent,
+      suppress: identity.kind === 'known' && state?.arrivedSessionIds?.includes(identity.id) === true,
       signal,
     };
   }
@@ -107,26 +99,32 @@ export function shouldSuppressLifecycleLogFromState(
 
 export async function shouldSuppressLifecycleLog(
   subject: LifecycleLogSubject,
-  message: string
+  message: string,
+  identity: AgentSessionIdentity = UNKNOWN_SESSION
 ): Promise<{ suppress: boolean; signal: LifecycleSignal | null }> {
   const state = await readState();
   if (state === UNREADABLE_STATE) throw unreadableStateError();
   return shouldSuppressLifecycleLogFromState(
     message,
-    state.entries[stateKey(subject)]
+    state.entries[stateKey(subject)],
+    identity
   );
 }
 
 export function nextLifecycleStateAfterLog(
   message: string,
   current: LifecycleStateEntry | undefined,
-  nowIso: string = new Date().toISOString()
+  nowIso: string = new Date().toISOString(),
+  identity: AgentSessionIdentity = UNKNOWN_SESSION
 ): LifecycleStateEntry {
   const signal = lifecycleSignalForMessage(message);
   if (signal === 'arrival') {
+    if (identity.kind === 'unknown' || current?.arrivedSessionIds?.includes(identity.id)) return current ?? {};
     return {
       ...current,
-      lastArrival: { message, at: nowIso },
+      // Retain one opaque id per announced session so resuming an older session
+      // also deduplicates. Pruning needs an explicit history-retention contract.
+      arrivedSessionIds: [...(current?.arrivedSessionIds ?? []), identity.id],
     };
   }
   if (signal === 'ready') {
@@ -146,11 +144,12 @@ export function nextLifecycleStateAfterLog(
 
 export async function recordLifecycleLog(
   subject: LifecycleLogSubject,
-  message: string
+  message: string,
+  identity: AgentSessionIdentity = UNKNOWN_SESSION
 ): Promise<void> {
   const state = await readState();
   if (state === UNREADABLE_STATE) throw unreadableStateError();
   const key = stateKey(subject);
-  state.entries[key] = nextLifecycleStateAfterLog(message, state.entries[key]);
+  state.entries[key] = nextLifecycleStateAfterLog(message, state.entries[key], undefined, identity);
   await writeState(state);
 }

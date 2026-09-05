@@ -1247,6 +1247,22 @@ export function settleOpenCodeEntry(sourceEntryId) {
     if (bindingChanged)
         persistCurrentBinding();
 }
+/** Read the launch-selected identity without changing the injection binding. */
+export async function resolveOpenCodeAgentSessionId() {
+    const owner = state;
+    if (!owner?.connected)
+        return null;
+    const binding = readBinding();
+    if (!binding)
+        return null;
+    // The launch marker, unlike the injection binding, does not follow /new.
+    const launch = await findLaunchSession(owner.launchIdentity);
+    if (state !== owner || launch.kind !== 'found' || launch.session.id !== binding.sessionId ||
+        launch.knownRootSessionIds.some((id) => !binding.knownRootSessionIds.includes(id)))
+        return null;
+    const current = readBinding();
+    return current?.sessionId === binding.sessionId ? binding.sessionId : null;
+}
 export async function probeOpenCodeDroneArmed() {
     const owner = state;
     if (!owner?.connected)

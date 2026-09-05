@@ -7,6 +7,7 @@
 export type AgentKind = 'claude' | 'codex' | 'opencode';
 /** Pinned into MCP-child environments by Borg launch paths. */
 export declare const BORG_AGENT_KIND_ENV = "BORG_AGENT_KIND";
+export declare const BORG_CLAUDE_LAUNCH_CORRELATION_ENV = "BORG_CLAUDE_LAUNCH_CORRELATION";
 /** Transport capability only — never use it as the primary CLI identity. */
 export declare const BORG_CODEX_REMOTE_WAKE_ENV = "BORG_CODEX_REMOTE_WAKE";
 /** Legacy OpenCode runtime marker, retained for installed-config compatibility. */
