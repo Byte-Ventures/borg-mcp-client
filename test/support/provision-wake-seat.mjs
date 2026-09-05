@@ -19,9 +19,9 @@ if (input.mode === 'enroll') {
   const [{ getServerCredentialRecord }, seats, { loadBorgServerTrust }, cubes] = await Promise.all([
     load('config.js'), load('seats.js'), load('server-trust.js'), load('cubes.js'),
   ]);
-  const parent = await getServerCredentialRecord(input.origin);
-  assert.ok(parent);
   const trust = await loadBorgServerTrust(input.origin);
+  const parent = await getServerCredentialRecord(input.origin, trust.identity);
+  assert.ok(parent);
   const operation = { projectRoot: input.worktree, kind: 'seat', operationKey: input.name };
   const credential = randomBytes(32).toString('base64url');
   await seats.mintPendingSeat({ origin: input.origin, trustIdentity: trust.identity,
