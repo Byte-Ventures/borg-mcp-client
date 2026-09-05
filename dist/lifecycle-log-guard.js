@@ -1,7 +1,9 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 const STATE_FILE = join(borgConfigRoot(), 'lifecycle-log-state.json');
+const STATE_LOCK = `${STATE_FILE}.lock`;
 const UNKNOWN_SESSION = { kind: 'unknown', reason: 'identity-not-resolved' };
 const UNREADABLE_STATE = Symbol('unreadable-lifecycle-state');
 function unreadableStateError() {
@@ -40,8 +42,57 @@ async function readState() {
     return UNREADABLE_STATE;
 }
 async function writeState(state) {
-    await mkdir(dirname(STATE_FILE), { recursive: true });
-    await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+    const temporary = `${STATE_FILE}.${randomBytes(16).toString('hex')}.tmp`;
+    try {
+        await writeFile(temporary, JSON.stringify(state, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+        await rename(temporary, STATE_FILE);
+    }
+    finally {
+        await unlink(temporary).catch((error) => { if (error.code !== 'ENOENT')
+            throw error; });
+    }
+}
+// Same bounded exclusive-lock and stale-reclaim pattern as local-server-cursor.
+async function withLock(operation) {
+    await mkdir(dirname(STATE_LOCK), { recursive: true });
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+        let handle;
+        try {
+            handle = await open(STATE_LOCK, 'wx', 0o600);
+        }
+        catch (error) {
+            if (error.code !== 'EEXIST')
+                throw error;
+            try {
+                const metadata = await stat(STATE_LOCK);
+                if (Date.now() - metadata.mtimeMs > 30_000) {
+                    await unlink(STATE_LOCK);
+                    continue;
+                }
+            }
+            catch (inspectionError) {
+                if (inspectionError.code === 'ENOENT')
+                    continue;
+                throw inspectionError;
+            }
+            await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+            continue;
+        }
+        try {
+            return await operation();
+        }
+        finally {
+            await handle.close();
+            try {
+                await unlink(STATE_LOCK);
+            }
+            catch (error) {
+                if (error.code !== 'ENOENT')
+                    throw error;
+            }
+        }
+    }
+    throw new Error('Lifecycle log state is busy');
 }
 export function shouldSuppressLifecycleLogFromState(message, state, identity = UNKNOWN_SESSION) {
     const signal = lifecycleSignalForMessage(message);
@@ -91,11 +142,13 @@ export function nextLifecycleStateAfterLog(message, current, nowIso = new Date()
     return current ?? {};
 }
 export async function recordLifecycleLog(subject, message, identity = UNKNOWN_SESSION) {
-    const state = await readState();
-    if (state === UNREADABLE_STATE)
-        throw unreadableStateError();
-    const key = stateKey(subject);
-    state.entries[key] = nextLifecycleStateAfterLog(message, state.entries[key], undefined, identity);
-    await writeState(state);
+    await withLock(async () => {
+        const state = await readState();
+        if (state === UNREADABLE_STATE)
+            throw unreadableStateError();
+        const key = stateKey(subject);
+        state.entries[key] = nextLifecycleStateAfterLog(message, state.entries[key], undefined, identity);
+        await writeState(state);
+    });
 }
 //# sourceMappingURL=lifecycle-log-guard.js.map
