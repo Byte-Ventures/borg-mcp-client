@@ -1,10 +1,9 @@
 /**
  * gh#855 — pure helpers for FRESH codex wake-target re-resolution.
  *
- * Root cause of codex deaf-when-idle: the wake target (socket + thread) was
- * resolved once at launch and never refreshed, so a missed/stale launch probe
- * left the drone permanently deaf. Phase 1 makes the waking borg-mcp child
- * authoritative about its OWN live app-server socket — the socket is injected
+ * Root cause of codex deaf-when-idle: stale thread selection could leave the
+ * drone permanently deaf. The waking borg-mcp child is authoritative about its
+ * OWN live app-server socket — the socket is injected
  * into the child's pinned env at spawn (codex-remote.ts, via the #851 `-c
  * mcp_servers.borg.env.X` channel) — and re-resolves the loaded thread FRESH on
  * every wake (loadedThreadIds is a re-runnable RPC).
@@ -13,7 +12,7 @@
  */
 /** Pinned-env var carrying THIS drone's live app-server socket (set at spawn). */
 export const BORG_CODEX_APP_SERVER_SOCKET_ENV = 'BORG_CODEX_APP_SERVER_SOCKET';
-/** The live app-server socket for this borg-mcp child, or null (un-upgraded launch). */
+/** The live app-server socket for this borg-mcp child. */
 export function codexAppServerSocketFromEnv(env = process.env) {
     const v = env[BORG_CODEX_APP_SERVER_SOCKET_ENV];
     return v && v.length > 0 ? v : null;
@@ -29,6 +28,11 @@ export function codexAppServerSocketFromEnv(env = process.env) {
 export function codexAppServerSocketConfigArgs(socketPath) {
     return ['-c', `mcp_servers.borg.env.${BORG_CODEX_APP_SERVER_SOCKET_ENV}="${socketPath}"`];
 }
+export function isCodexSubagentSource(source) {
+    if (!source || typeof source !== 'object' || Array.isArray(source))
+        return false;
+    return 'subagent' in source || 'subAgent' in source;
+}
 /**
  * Pick the loaded thread to wake on the live socket. Each borg-owned app-server
  * is fresh-per-launch / single-session, so the common case is exactly one loaded
@@ -39,45 +43,19 @@ export function codexAppServerSocketConfigArgs(socketPath) {
  * permanent deafness).
  */
 export function pickFreshThread(threads, opts) {
-    if (threads.length === 0)
+    const rootThreads = threads.filter((thread) => !isCodexSubagentSource(thread.source));
+    if (rootThreads.length === 0)
         return null;
-    if (threads.length === 1)
-        return threads[0].id;
-    const cwdMatches = threads.filter((t) => t.cwd === opts.cwd);
-    const pool = cwdMatches.length > 0 ? cwdMatches : threads;
+    if (rootThreads.length === 1)
+        return rootThreads[0].id;
+    const cwdMatches = rootThreads.filter((t) => t.cwd === opts.cwd);
+    const pool = cwdMatches.length > 0 ? cwdMatches : rootThreads;
     let best = pool[0];
     for (const t of pool) {
         if ((t.updatedAt ?? 0) > (best.updatedAt ?? 0))
             best = t;
     }
     return best.id;
-}
-/**
- * Pure prune: drop wake-target entries whose app-server socket is positively
- * dead (liveness === false), so the file self-heals. Keeps alive (true) and
- * indeterminate (null) entries — false-deaf-avoidance, mirroring
- * checkCodexBridgeHealthy's tri-state. Returns the surviving map + whether
- * anything changed (so the caller writes only on change).
- */
-export function pruneDeadWakeTargets(targets, socketLiveness) {
-    const out = {};
-    let changed = false;
-    for (const [key, t] of Object.entries(targets)) {
-        if (socketLiveness(t.socketPath) === false) {
-            changed = true;
-            continue;
-        }
-        out[key] = t;
-    }
-    return { targets: out, changed };
-}
-/**
- * Whether the freshly-resolved target differs from what's already recorded —
- * so the self-healing cache write happens only on change (no file thrash on a
- * busy cube re-resolving the same socket+thread every wake).
- */
-export function wakeTargetChanged(existing, fresh) {
-    return (!existing || existing.socketPath !== fresh.socketPath || existing.threadId !== fresh.threadId);
 }
 // ─── gh#857 Phase 2: durable retry + heartbeat (pure helpers) ───────────────
 /** Base backoff for the first retry of a dropped/deferred wake. */

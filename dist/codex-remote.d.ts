@@ -17,13 +17,19 @@ export interface CodexAppServerHandle {
     /** Kill the owned app-server + remove its socket/pidfile. Wire to TUI exit. */
     cleanup: () => void;
 }
-export interface CodexRemoteLaunch {
+export interface CodexRemoteReadyLaunch {
+    ready: true;
     args: string[];
     env: Record<string, string>;
-    warning?: string;
-    /** Present when borg owns a per-launch app-server that must be cleaned up on TUI exit. */
-    server?: CodexAppServerHandle;
+    /** Borg owns this per-launch app-server and must clean it up on TUI exit. */
+    server: CodexAppServerHandle;
 }
+export interface CodexRemoteLaunchRefusal {
+    ready: false;
+    reason: string;
+    stderr: string;
+}
+export type CodexRemoteLaunch = CodexRemoteReadyLaunch | CodexRemoteLaunchRefusal;
 export interface CodexChild {
     pid: number | undefined;
     kill: () => void;
@@ -48,9 +54,11 @@ export interface PrepareCodexRemoteDeps {
     runtimeDir?: string;
     /** Unique socket id generator (default 32-hex). Injected for deterministic tests. */
     socketId?: () => string;
-    /** Readiness timeout (default 30000ms) + poll interval (default 250ms). */
+    /** Readiness timeout (default 60000ms) + poll interval (default 250ms). */
     readyTimeoutMs?: number;
     pollIntervalMs?: number;
+    /** Wall clock used to enforce the readiness budget. */
+    now?: () => number;
     /** Whether a pid is alive (default process.kill(pid, 0)). Injected for tests. */
     isAlive?: (pid: number) => boolean;
 }
@@ -102,9 +110,8 @@ export declare function checkCodexBridgeHealthy(socketPath: string | null, deps?
 }): boolean | null;
 /**
  * Start a borg-owned per-launch Codex app-server, probe it for readiness, and
- * return the `--remote` launch args + an owned handle (or a fail-loud warning).
- * Async + lifecycle-owning: the caller MUST call `result.server?.cleanup()` on
- * TUI exit.
+ * return the `--remote` launch args + an owned handle, or a typed refusal after
+ * one retry. The caller MUST call `result.server.cleanup()` on TUI exit.
  */
 export declare function prepareCodexRemoteLaunch(deps: PrepareCodexRemoteDeps): Promise<CodexRemoteLaunch>;
 /**

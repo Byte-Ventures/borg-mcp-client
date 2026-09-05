@@ -18,7 +18,6 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
 import { borgConfigRoot } from './private-root.js';
 import {
   getActiveSeatCredential,
@@ -38,15 +37,14 @@ import {
 // The unified 0600 seat store (seats.ts / seats.json) is now the SOLE home of the
 // per-worktree ACTIVE-CUBE seat map: each seat = credential + worktree binding +
 // display as ONE atomic record. cubes.json no longer holds a seat map — the
-// functions below are thin adapters over seats.ts. Only launch.json,
-// codex-wake-targets.json, and the inbox tree remain owned by this module.
+// functions below are thin adapters over seats.ts. Only launch.json and the
+// inbox tree remain owned by this module.
 
 /** Re-exported from seats.ts for call-site parity (the retired cross-store name). */
 export type { SeatExpectation as ExpectedBinding } from './seats.js';
 
 const CUBES_DIR = borgConfigRoot();
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
-const CODEX_WAKE_TARGETS_FILE = join(CUBES_DIR, 'codex-wake-targets.json');
 const INBOX_DIR = join(CUBES_DIR, 'inboxes');
 
 export type BorgCli = 'claude' | 'codex' | 'opencode';
@@ -206,16 +204,6 @@ function unreadableStateError(filePath: string): Error {
   return new Error(`Borg state file is unreadable; refusing to overwrite it: ${filePath}`);
 }
 
-export interface CodexWakeTargetRecord {
-  threadId: string;
-  socketPath: string;
-  updatedAt: string;
-}
-
-interface CodexWakeTargetsFile {
-  targets: Record<string, CodexWakeTargetRecord>;
-}
-
 /**
  * Walk up from cwd looking for a .git directory. If found, return that
  * directory. If not found by filesystem root, return the original cwd.
@@ -367,44 +355,6 @@ async function writeLaunchFile(data: LaunchFile): Promise<void> {
   // atomicWriteFile handles the mkdir + 0o600 mode, and the temp+rename keeps
   // a concurrent reader from seeing a half-written launch file (gh#894, gh#901).
   await atomicWriteFile(LAUNCH_FILE, JSON.stringify(data, null, 2) + '\n');
-}
-
-function codexWakeTargetKey(cubeId: string, droneId: string): string {
-  if (!UUID_RE.test(cubeId)) throw new Error(`Invalid cubeId: ${cubeId}`);
-  if (!UUID_RE.test(droneId)) throw new Error(`Invalid droneId: ${droneId}`);
-  return `${cubeId}:${droneId}`;
-}
-
-function isCodexWakeTargetsFile(data: any): data is CodexWakeTargetsFile {
-  return (
-    data !== null &&
-    typeof data === 'object' &&
-    typeof data.targets === 'object' &&
-    data.targets !== null &&
-    !Array.isArray(data.targets)
-  );
-}
-
-async function readCodexWakeTargetsFile(): Promise<StateFileRead<CodexWakeTargetsFile>> {
-  let raw: string;
-  try {
-    raw = await readFile(CODEX_WAKE_TARGETS_FILE, 'utf8');
-  } catch (error: any) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return isCodexWakeTargetsFile(parsed) ? parsed : UNREADABLE_STATE;
-  } catch {
-    return UNREADABLE_STATE;
-  }
-}
-
-async function writeCodexWakeTargetsFile(data: CodexWakeTargetsFile): Promise<void> {
-  // atomicWriteFile handles the mkdir + 0o600 mode, and the temp+rename keeps
-  // a concurrent reader from seeing a half-written file (gh#894, gh#901).
-  await atomicWriteFile(CODEX_WAKE_TARGETS_FILE, JSON.stringify(data, null, 2) + '\n');
 }
 
 /**
@@ -748,52 +698,4 @@ export async function setProjectCliPreference(cli: BorgCli, dir?: string): Promi
   const next = existing ?? { projects: {} };
   next.projects[findProjectRoot(dir)] = { cli };
   await writeLaunchFile(next);
-}
-
-export async function setCodexWakeTarget(
-  cubeId: string,
-  droneId: string,
-  target: Omit<CodexWakeTargetRecord, 'updatedAt'>
-): Promise<void> {
-  const existing = await readCodexWakeTargetsFile();
-  if (existing === UNREADABLE_STATE) throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
-  const next = existing ?? { targets: {} };
-  next.targets[codexWakeTargetKey(cubeId, droneId)] = {
-    ...target,
-    updatedAt: new Date().toISOString(),
-  };
-  await writeCodexWakeTargetsFile(next);
-}
-
-export async function getCodexWakeTarget(
-  cubeId: string,
-  droneId: string
-): Promise<CodexWakeTargetRecord | null> {
-  const existing = await readCodexWakeTargetsFile();
-  if (existing === UNREADABLE_STATE) throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
-  if (!existing) return null;
-  const target = existing.targets[codexWakeTargetKey(cubeId, droneId)];
-  if (!target || typeof target.threadId !== 'string' || typeof target.socketPath !== 'string') {
-    return null;
-  }
-  return target;
-}
-
-/**
- * gh#855: drop wake-target entries whose app-server socket is positively dead,
- * so the file self-heals (stale dead-socket entries from crashed prior launches
- * don't linger and mislead probeCodexBridgeArmed / health-beat). Pure prune
- * decision lives in codex-wake-resolve.ts (false-deaf-avoidance: keeps alive +
- * indeterminate); this is the thin read → prune → write-only-on-change glue.
- * The liveness check is injected (claude.ts wires checkCodexBridgeHealthy) so
- * cubes.ts stays free of the codex-remote dependency.
- */
-export async function pruneDeadCodexWakeTargets(
-  socketLiveness: (socketPath: string) => boolean | null
-): Promise<void> {
-  const existing = await readCodexWakeTargetsFile();
-  if (existing === UNREADABLE_STATE) throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
-  if (!existing) return;
-  const { targets, changed } = pruneDeadWakeTargets(existing.targets, socketLiveness);
-  if (changed) await writeCodexWakeTargetsFile({ ...existing, targets });
 }

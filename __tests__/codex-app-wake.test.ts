@@ -17,6 +17,18 @@ import {
 import { wakeRetryBackoffMs } from '../src/codex-wake-resolve';
 import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
 
+function liveTargetDeps(client: any, threadId = 'thread-123', socketPath = '/tmp/codex.sock') {
+  if (!client.loadedThreadIds) client.loadedThreadIds = vi.fn(async () => [threadId]);
+  return {
+    env: {
+      BORG_CODEX_REMOTE_WAKE: '1',
+      BORG_CODEX_APP_SERVER_SOCKET: socketPath,
+    } as NodeJS.ProcessEnv,
+    cwd: () => '/repo',
+    createClient: vi.fn(() => client),
+  };
+}
+
 describe('codex app-server wake gating', () => {
   beforeEach(() => {
     resetCodexWakeForTests();
@@ -48,17 +60,12 @@ describe('codex app-server wake gating', () => {
       BORG_AGENT_KIND: 'codex',
       BORG_CODEX_REMOTE_WAKE: '0',
     } as NodeJS.ProcessEnv;
-    const getCodexWakeTarget = vi.fn(async () => ({
-      threadId: 'stale-thread',
-      socketPath: '/tmp/stale.sock',
-    }));
     const createClient = vi.fn();
 
     expect(resolveSessionAgentKind(env)).toBe('codex');
     expect(isCodexRemoteWakeEnabled(env)).toBe(false);
     expect(resolveCodexWakeTarget(env)).toEqual({ enabled: false });
-    wakeCodexViaAppServer('must not bridge', env, { getCodexWakeTarget, createClient });
-    expect(getCodexWakeTarget).not.toHaveBeenCalled();
+    wakeCodexViaAppServer('must not bridge', env, { createClient });
     expect(createClient).not.toHaveBeenCalled();
     expect(startCodexHeartbeat({
       agentKind: resolveSessionAgentKind(env),
@@ -74,7 +81,7 @@ describe('codex app-server wake gating', () => {
     expect(prompt).not.toContain('follow the playbook');
   });
 
-  it('does not call the app-server when the persisted target is unavailable', async () => {
+  it('does not call the app-server when the env socket is unavailable', async () => {
     const client = {
       connect: vi.fn(),
       readThread: vi.fn(),
@@ -91,15 +98,15 @@ describe('codex app-server wake gating', () => {
         droneLabel: 'drone',
         apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => null),
       createClient: vi.fn(() => client),
+      env: {} as NodeJS.ProcessEnv,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(client.connect).not.toHaveBeenCalled();
   });
 
-  it('starts a turn on the persisted Codex thread target', async () => {
+  it('starts a turn on the thread resolved from the env socket', async () => {
     const client = {
       connect: vi.fn(async () => {}),
       readThread: vi.fn(async () => ({
@@ -122,19 +129,14 @@ describe('codex app-server wake gating', () => {
         droneLabel: 'drone',
         apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => ({
-        threadId: 'thread-123',
-        socketPath: '/tmp/codex.sock',
-        updatedAt: '2026-05-28T10:00:00.000Z',
-      })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client),
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(client.connect).toHaveBeenCalledTimes(2);
     expect(client.readThread).toHaveBeenCalledWith('thread-123');
     expect(client.startTurn).toHaveBeenCalledWith('thread-123', 'one');
-    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(client.close).toHaveBeenCalledTimes(2);
   });
 
   it('records a wake-path receipt after Codex remote-control delivery succeeds', async () => {
@@ -160,12 +162,7 @@ describe('codex app-server wake gating', () => {
         droneLabel: 'drone',
         apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => ({
-        threadId: 'thread-123',
-        socketPath: '/tmp/codex.sock',
-        updatedAt: '2026-05-28T10:00:00.000Z',
-      })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client),
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -195,19 +192,14 @@ describe('codex app-server wake gating', () => {
         droneLabel: 'drone',
         apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => ({
-        threadId: 'thread-123',
-        socketPath: '/tmp/codex.sock',
-        updatedAt: '2026-05-28T10:00:00.000Z',
-      })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client),
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(client.startTurn).not.toHaveBeenCalled();
   });
 
-  it('skips turn injection when the persisted Codex thread is already active', async () => {
+  it('skips turn injection when the resolved Codex thread is already active', async () => {
     const client = {
       connect: vi.fn(async () => {}),
       readThread: vi.fn(async () => ({
@@ -230,18 +222,13 @@ describe('codex app-server wake gating', () => {
         droneLabel: 'drone',
         apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => ({
-        threadId: 'thread-123',
-        socketPath: '/tmp/codex.sock',
-        updatedAt: '2026-05-28T10:00:00.000Z',
-      })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client),
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(client.readThread).toHaveBeenCalledWith('thread-123');
     expect(client.startTurn).not.toHaveBeenCalled();
-    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(client.close).toHaveBeenCalledTimes(2);
   });
 
   it('does not mark active-thread wake skips as delivered', async () => {
@@ -255,6 +242,20 @@ describe('codex app-server wake gating', () => {
           preview: 'preview',
           status: { type: 'active' },
           updatedAt: 1,
+        })
+        .mockResolvedValueOnce({
+          id: 'thread-123',
+          cwd: '/repo',
+          preview: 'preview',
+          status: { type: 'active' },
+          updatedAt: 1,
+        })
+        .mockResolvedValueOnce({
+          id: 'thread-123',
+          cwd: '/repo',
+          preview: 'preview',
+          status: { type: 'idle' },
+          updatedAt: 2,
         })
         .mockResolvedValueOnce({
           id: 'thread-123',
@@ -275,12 +276,7 @@ describe('codex app-server wake gating', () => {
         droneLabel: 'drone',
         apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => ({
-        threadId: 'thread-123',
-        socketPath: '/tmp/codex.sock',
-        updatedAt: '2026-05-28T10:00:00.000Z',
-      })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client),
     };
 
     wakeCodexViaAppServer('same-log-entry', { BORG_CODEX_REMOTE_WAKE: '1' } as any, deps);
@@ -288,7 +284,7 @@ describe('codex app-server wake gating', () => {
     wakeCodexViaAppServer('same-log-entry', { BORG_CODEX_REMOTE_WAKE: '1' } as any, deps);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(client.readThread).toHaveBeenCalledTimes(2);
+    expect(client.readThread).toHaveBeenCalledTimes(4);
     expect(client.startTurn).toHaveBeenCalledTimes(1);
     expect(client.startTurn).toHaveBeenCalledWith('thread-123', 'same-log-entry');
   });
@@ -316,12 +312,7 @@ describe('codex app-server wake gating', () => {
         droneLabel: 'drone',
         apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => ({
-        threadId: 'thread-123',
-        socketPath: '/tmp/codex.sock',
-        updatedAt: '2026-05-28T10:00:00.000Z',
-      })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client),
     };
 
     wakeCodexViaAppServer('one', { BORG_CODEX_REMOTE_WAKE: '1' } as any, deps);
@@ -335,7 +326,7 @@ describe('codex app-server wake gating', () => {
     expect(client.startTurn).toHaveBeenCalledTimes(2);
     expect(client.startTurn).toHaveBeenNthCalledWith(1, 'thread-123', 'one');
     expect(client.startTurn).toHaveBeenNthCalledWith(2, 'thread-123', 'two');
-    expect(client.connect).toHaveBeenCalledTimes(2);
+    expect(client.connect).toHaveBeenCalledTimes(4);
   });
 
   it('drops a queued wake after its durable entry is consumed', async () => {
@@ -353,11 +344,7 @@ describe('codex app-server wake gating', () => {
         cubeId: 'cube', droneId: 'drone', name: 'cube', sessionToken: 'token',
         droneLabel: 'drone', apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => ({
-        threadId: 'thread-123', socketPath: '/tmp/codex.sock',
-        updatedAt: '2026-05-28T10:00:00.000Z',
-      })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client),
       hasPendingEntry: vi.fn(async () => false),
     };
 
@@ -398,12 +385,7 @@ describe('codex app-server wake gating', () => {
         droneLabel: 'drone',
         apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => ({
-        threadId: 'thread-123',
-        socketPath: '/tmp/codex.sock',
-        updatedAt: '2026-05-28T10:00:00.000Z',
-      })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client),
     };
 
     wakeCodexViaAppServer('same-log-entry', { BORG_CODEX_REMOTE_WAKE: '1' } as any, deps);
@@ -438,12 +420,7 @@ describe('codex app-server wake gating', () => {
         droneLabel: 'drone',
         apiUrl: 'https://api.example.test',
       })),
-      getCodexWakeTarget: vi.fn(async () => ({
-        threadId: 'thread-123',
-        socketPath: '/tmp/codex.sock',
-        updatedAt: '2026-05-28T10:00:00.000Z',
-      })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client),
     };
 
     wakeCodexViaAppServer('same-log-entry', { BORG_CODEX_REMOTE_WAKE: '1' } as any, deps);
@@ -452,28 +429,33 @@ describe('codex app-server wake gating', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(client.startTurn).toHaveBeenCalledTimes(1);
-    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(client.connect).toHaveBeenCalledTimes(3);
   });
 });
 
 describe('gh#633 — probeCodexBridgeArmed (agnostic wake-armed for codex)', () => {
   const ACTIVE = { cubeId: 'c1', droneId: 'd1' };
-  const target = { threadId: 't1', socketPath: '/s/abc.sock', updatedAt: 'now' } as any;
 
-  it('no wake target registered → false (bridge cannot deliver a wake)', async () => {
+  it('env socket absent or missing on disk → false', async () => {
     const res = await probeCodexBridgeArmed(ACTIVE, {
-      getCodexWakeTarget: async () => null,
+      env: {},
       checkBridge: () => {
-        throw new Error('should not probe the bridge when there is no target');
+        throw new Error('should not probe the bridge when there is no socket');
       },
     });
     expect(res).toBe(false);
+    expect(await probeCodexBridgeArmed(ACTIVE, {
+      env: { BORG_CODEX_APP_SERVER_SOCKET: '/s/missing.sock' },
+      socketExists: () => false,
+      checkBridge: () => { throw new Error('should not probe a missing socket'); },
+    })).toBe(false);
   });
 
-  it('target resolves → passes the socketPath through to the bridge liveness check', async () => {
+  it('env socket exists → passes it through to the bridge liveness check', async () => {
     let seen = '';
     const res = await probeCodexBridgeArmed(ACTIVE, {
-      getCodexWakeTarget: async () => target,
+      env: { BORG_CODEX_APP_SERVER_SOCKET: '/s/abc.sock' },
+      socketExists: () => true,
       checkBridge: (sp) => {
         seen = sp as string;
         return true;
@@ -486,18 +468,18 @@ describe('gh#633 — probeCodexBridgeArmed (agnostic wake-armed for codex)', () 
   it('passes the bridge tri-state through: dead→false, indeterminate→null', async () => {
     const run = (bridge: boolean | null) =>
       probeCodexBridgeArmed(ACTIVE, {
-        getCodexWakeTarget: async () => target,
+        env: { BORG_CODEX_APP_SERVER_SOCKET: '/s/abc.sock' },
+        socketExists: () => true,
         checkBridge: () => bridge,
       });
     expect(await run(false)).toBe(false);
     expect(await run(null)).toBeNull();
   });
 
-  it('getCodexWakeTarget throws → null (indeterminate → caller maps to armed)', async () => {
+  it('socket inspection throws → null (indeterminate → caller maps to armed)', async () => {
     const res = await probeCodexBridgeArmed(ACTIVE, {
-      getCodexWakeTarget: async () => {
-        throw new Error('targets file read failed');
-      },
+      env: { BORG_CODEX_APP_SERVER_SOCKET: '/s/abc.sock' },
+      socketExists: () => { throw new Error('socket inspection failed'); },
     });
     expect(res).toBeNull();
   });
@@ -523,6 +505,7 @@ describe('gh#708: coalesced catch-up wake on a mid-turn-active thread', () => {
     let i = 0;
     return {
       connect: vi.fn(async () => {}),
+      loadedThreadIds: vi.fn(async () => ['th']),
       readThread: vi.fn(async () => ({
         id: 'th',
         status: { type: statuses[Math.min(i++, statuses.length - 1)] },
@@ -535,8 +518,7 @@ describe('gh#708: coalesced catch-up wake on a mid-turn-active thread', () => {
   function baseDeps(client: ReturnType<typeof clientWithStatuses>, now: () => number = () => 1000) {
     return {
       getActiveCube: vi.fn(async () => ACTIVE_CUBE),
-      getCodexWakeTarget: vi.fn(async () => ({ threadId: 'th', socketPath: '/s' })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client, 'th', '/s'),
       sleep: vi.fn(async () => {}), // immediate — no real timers in tests
       now,
     };
@@ -608,7 +590,7 @@ describe('gh#708: coalesced catch-up wake on a mid-turn-active thread', () => {
   });
 });
 
-describe('gh#855 — fresh wake-target re-resolution (deaf-when-idle fix)', () => {
+describe('gh#855/client#89 — env-socket wake-target resolution', () => {
   beforeEach(() => {
     resetCodexWakeForTests();
   });
@@ -623,7 +605,7 @@ describe('gh#855 — fresh wake-target re-resolution (deaf-when-idle fix)', () =
   };
   const flush = () => new Promise((r) => setTimeout(r, 10));
 
-  it('env socket present + STALE file → wakes via the LIVE env socket + re-resolved thread (ignores the stale file)', async () => {
+  it('wakes via the live env socket and re-resolved thread', async () => {
     const live = {
       connect: vi.fn(async () => {}),
       loadedThreadIds: vi.fn(async () => ['live-thread']),
@@ -631,12 +613,8 @@ describe('gh#855 — fresh wake-target re-resolution (deaf-when-idle fix)', () =
       startTurn: vi.fn(async () => {}),
       close: vi.fn(),
     };
-    const setTarget = vi.fn(async () => {});
     wakeCodexViaAppServer('hello', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
       getActiveCube: vi.fn(async () => ACTIVE),
-      // stale launch-recorded entry → a DEAD socket + old thread; MUST be ignored.
-      getCodexWakeTarget: vi.fn(async () => ({ threadId: 'stale-thread', socketPath: '/tmp/dead.sock', updatedAt: 'x' })),
-      setCodexWakeTarget: setTarget,
       createClient: vi.fn(() => live),
       env: { BORG_CODEX_APP_SERVER_SOCKET: '/run/live.sock' } as any,
       cwd: () => '/repo',
@@ -645,75 +623,81 @@ describe('gh#855 — fresh wake-target re-resolution (deaf-when-idle fix)', () =
 
     expect(live.loadedThreadIds).toHaveBeenCalled();
     expect(live.startTurn).toHaveBeenCalledWith('live-thread', 'hello');
-    // self-heal: file rewritten with the fresh target (socket + thread both changed).
-    expect(setTarget).toHaveBeenCalledWith('cube', 'drone', { socketPath: '/run/live.sock', threadId: 'live-thread' });
   });
 
-  it('env socket absent → falls back to the launch-recorded file (no regression for un-upgraded launches)', async () => {
+  it('env socket absent → returns without file access or app-server calls', async () => {
     const client = {
-      connect: vi.fn(async () => {}),
-      loadedThreadIds: vi.fn(async () => {
-        throw new Error('loadedThreadIds must NOT run on the file-fallback path');
-      }),
-      readThread: vi.fn(async (id: string) => ({ id, cwd: '/repo', preview: 'p', status: { type: 'idle' }, updatedAt: 1 })),
+      connect: vi.fn(),
+      loadedThreadIds: vi.fn(),
+      readThread: vi.fn(),
       startTurn: vi.fn(async () => {}),
       close: vi.fn(),
     };
     wakeCodexViaAppServer('hi', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
       getActiveCube: vi.fn(async () => ACTIVE),
-      getCodexWakeTarget: vi.fn(async () => ({ threadId: 'file-thread', socketPath: '/tmp/file.sock', updatedAt: 'x' })),
       createClient: vi.fn(() => client),
-      env: {} as any, // no live socket → fallback path
+      env: {} as any,
       cwd: () => '/repo',
     });
     await flush();
 
+    expect(client.connect).not.toHaveBeenCalled();
     expect(client.loadedThreadIds).not.toHaveBeenCalled();
-    expect(client.startTurn).toHaveBeenCalledWith('file-thread', 'hi');
+    expect(client.startTurn).not.toHaveBeenCalled();
   });
 
-  it('env socket present but NO loaded thread → no turn started (next wake retries; never permanent deafness)', async () => {
+  it('no loaded thread schedules retry-drain and delivers one catch-up after the thread loads', async () => {
+    let resolves = 0;
     const client = {
       connect: vi.fn(async () => {}),
-      loadedThreadIds: vi.fn(async () => []),
-      readThread: vi.fn(),
+      loadedThreadIds: vi.fn(async () => (++resolves === 1 ? [] : ['thread-1'])),
+      readThread: vi.fn(async (id: string) => ({ id, cwd: '/repo', preview: 'p', status: { type: 'idle' }, updatedAt: 1 })),
       startTurn: vi.fn(async () => {}),
       close: vi.fn(),
     };
     wakeCodexViaAppServer('x', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
       getActiveCube: vi.fn(async () => ACTIVE),
-      getCodexWakeTarget: vi.fn(async () => null),
       createClient: vi.fn(() => client),
       env: { BORG_CODEX_APP_SERVER_SOCKET: '/run/live.sock' } as any,
       cwd: () => '/repo',
-    });
+      hasPendingEntry: vi.fn(async () => true),
+      sleep: vi.fn(async () => {}),
+      now: () => 1000,
+      jitter: () => 0,
+      maxAttempts: 2,
+    }, 'delivery-1', 'entry-1');
     await flush();
 
-    expect(client.startTurn).not.toHaveBeenCalled();
+    expect(client.startTurn).toHaveBeenCalledTimes(1);
+    expect(client.startTurn).toHaveBeenCalledWith('thread-1', CODEX_CATCHUP_PROMPT);
   });
 
-  it('self-heal write is SKIPPED when the resolved target is unchanged (no file thrash on a busy cube)', async () => {
+  it('never targets a loaded Codex subagent thread', async () => {
     const client = {
       connect: vi.fn(async () => {}),
-      loadedThreadIds: vi.fn(async () => ['t1']),
-      readThread: vi.fn(async (id: string) => ({ id, cwd: '/repo', preview: 'p', status: { type: 'idle' }, updatedAt: 1 })),
+      loadedThreadIds: vi.fn(async () => ['root', 'guardian']),
+      readThread: vi.fn(async (id: string) => ({
+        id,
+        cwd: '/repo',
+        preview: 'p',
+        status: { type: 'idle' },
+        updatedAt: id === 'guardian' ? 999 : 1,
+        source: id === 'guardian' ? { subagent: { other: 'guardian' } } : 'cli',
+      })),
       startTurn: vi.fn(async () => {}),
       close: vi.fn(),
     };
-    const setTarget = vi.fn(async () => {});
-    wakeCodexViaAppServer('y', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
+
+    wakeCodexViaAppServer('wake root', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
       getActiveCube: vi.fn(async () => ACTIVE),
-      // file ALREADY matches the fresh resolution → must NOT rewrite.
-      getCodexWakeTarget: vi.fn(async () => ({ threadId: 't1', socketPath: '/run/live.sock', updatedAt: 'x' })),
-      setCodexWakeTarget: setTarget,
       createClient: vi.fn(() => client),
       env: { BORG_CODEX_APP_SERVER_SOCKET: '/run/live.sock' } as any,
       cwd: () => '/repo',
     });
     await flush();
 
-    expect(client.startTurn).toHaveBeenCalledWith('t1', 'y');
-    expect(setTarget).not.toHaveBeenCalled();
+    expect(client.startTurn).toHaveBeenCalledWith('root', 'wake root');
+    expect(client.startTurn).not.toHaveBeenCalledWith('guardian', expect.any(String));
   });
 });
 
@@ -739,6 +723,7 @@ describe('gh#857 WI-1 — durable per-entry retry (no more silent drop)', () => 
     let reads = 0;
     const client = {
       connect: vi.fn(async () => {}),
+      loadedThreadIds: vi.fn(async () => ['th']),
       readThread: vi.fn(async () => {
         reads++;
         if (reads === 1) throw new Error('transient socket read');
@@ -750,8 +735,7 @@ describe('gh#857 WI-1 — durable per-entry retry (no more silent drop)', () => 
     const sleep = vi.fn(async () => {});
     wakeCodexViaAppServer('entry-1', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
       getActiveCube: vi.fn(async () => ACTIVE),
-      getCodexWakeTarget: vi.fn(async () => ({ threadId: 'th', socketPath: '/s' })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client, 'th', '/s'),
       sleep,
       now: () => 1000, // constant → never hits the age cap; the retry succeeds first
       jitter: () => 250,
@@ -774,14 +758,14 @@ describe('gh#857 WI-1 — durable per-entry retry (no more silent drop)', () => 
     // count across two flushes (terminated, not still iterating).
     const client = {
       connect: vi.fn(async () => {}),
+      loadedThreadIds: vi.fn(async () => ['th']),
       readThread: vi.fn(async () => ({ id: 'th', status: { type: 'active' } })), // never idle
       startTurn: vi.fn(async () => {}),
       close: vi.fn(),
     };
     wakeCodexViaAppServer('entry-1', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
       getActiveCube: vi.fn(async () => ACTIVE),
-      getCodexWakeTarget: vi.fn(async () => ({ threadId: 'th', socketPath: '/s' })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client, 'th', '/s'),
       sleep: vi.fn(async () => {}),
       now: () => 1000, // constant → age cap never fires
       jitter: () => 0,
@@ -793,13 +777,14 @@ describe('gh#857 WI-1 — durable per-entry retry (no more silent drop)', () => 
     const afterSecond = client.readThread.mock.calls.length;
 
     expect(client.startTurn).not.toHaveBeenCalled(); // never idle → never delivered
-    expect(afterFirst).toBeLessThanOrEqual(4); // 1 immediate + ≤3 retry-drain attempts
+    expect(afterFirst).toBeLessThanOrEqual(8); // resolver + delivery reads for 1 immediate + ≤3 retries
     expect(afterSecond).toBe(afterFirst); // STABLE → loop terminated, not hot-spinning
   });
 
   it('records lastDeliveredAt on a successful immediate delivery (feeds the WI-2 heartbeat gate)', async () => {
     const client = {
       connect: vi.fn(async () => {}),
+      loadedThreadIds: vi.fn(async () => ['th']),
       readThread: vi.fn(async () => ({ id: 'th', status: { type: 'idle' } })),
       startTurn: vi.fn(async () => {}),
       close: vi.fn(),
@@ -807,8 +792,7 @@ describe('gh#857 WI-1 — durable per-entry retry (no more silent drop)', () => 
     expect(getLastDeliveredAt()).toBeNull();
     wakeCodexViaAppServer('entry-1', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
       getActiveCube: vi.fn(async () => ACTIVE),
-      getCodexWakeTarget: vi.fn(async () => ({ threadId: 'th', socketPath: '/s' })),
-      createClient: vi.fn(() => client),
+      ...liveTargetDeps(client, 'th', '/s'),
       now: () => 7777,
     });
     await flush();
@@ -834,12 +818,14 @@ describe('gh#857 WI-2 — codex /loop-equivalent heartbeat', () => {
   const CADENCE = 20 * 60_000;
   const idleClient = () => ({
     connect: vi.fn(async () => {}),
+    loadedThreadIds: vi.fn(async () => ['th']),
     readThread: vi.fn(async () => ({ id: 'th', status: { type: 'idle' } })),
     startTurn: vi.fn(async () => {}),
     close: vi.fn(),
   });
   const activeClient = () => ({
     connect: vi.fn(async () => {}),
+    loadedThreadIds: vi.fn(async () => ['th']),
     readThread: vi.fn(async () => ({ id: 'th', status: { type: 'active' } })),
     startTurn: vi.fn(async () => {}),
     close: vi.fn(),
@@ -847,8 +833,7 @@ describe('gh#857 WI-2 — codex /loop-equivalent heartbeat', () => {
   const deps = (client: any, now: number) => ({
     getActiveCube: vi.fn(async () => ACTIVE),
     hasPendingWork: vi.fn(async () => true),
-    getCodexWakeTarget: vi.fn(async () => ({ threadId: 'th', socketPath: '/s' })),
-    createClient: vi.fn(() => client),
+    ...liveTargetDeps(client, 'th', '/s'),
     now: () => now,
   });
 
@@ -951,8 +936,13 @@ describe('gh#857 WI-2 — codex /loop-equivalent heartbeat', () => {
     // the next interval). Tick 2 must see heartbeatInFlight and bail BEFORE its
     // own IO — otherwise both read the stale lastDeliveredAt and double-inject.
     let releaseConnect!: () => void;
+    let connects = 0;
     const c1 = {
-      connect: vi.fn(() => new Promise<void>((r) => { releaseConnect = r; })),
+      connect: vi.fn(() => {
+        connects++;
+        if (connects === 1) return Promise.resolve();
+        return new Promise<void>((r) => { releaseConnect = r; });
+      }),
       readThread: vi.fn(async () => ({ id: 'th', status: { type: 'idle' } })),
       startTurn: vi.fn(async () => {}),
       close: vi.fn(),
@@ -999,9 +989,9 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     apiUrl: 'https://api.example.test',
   };
   const CADENCE = 20 * 60_000;
-  const target = async () => ({ threadId: 'th', socketPath: '/s' });
   const idleClient = () => ({
     connect: vi.fn(async () => {}),
+    loadedThreadIds: vi.fn(async () => ['th']),
     readThread: vi.fn(async () => ({ id: 'th', status: { type: 'idle' } })),
     startTurn: vi.fn(async () => {}),
     close: vi.fn(),
@@ -1016,6 +1006,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     let releaseHb!: () => void;
     const hbClient = {
       connect: vi.fn(async () => {}),
+      loadedThreadIds: vi.fn(async () => ['th']),
       readThread: vi.fn(async () => ({ id: 'th', status: { type: 'idle' } })),
       startTurn: vi.fn(() => new Promise<void>((r) => { releaseHb = r; })), // hangs → holds lock
       close: vi.fn(),
@@ -1024,8 +1015,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
       {
         getActiveCube: async () => ACTIVE,
         hasPendingWork: async () => true,
-        getCodexWakeTarget: target as any,
-        createClient: () => hbClient as any,
+        ...liveTargetDeps(hbClient, 'th', '/s'),
         now: () => 100_000,
       },
       CADENCE
@@ -1036,8 +1026,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     const wakeClient = idleClient();
     wakeCodexViaAppServer('wake', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
       getActiveCube: async () => ACTIVE,
-      getCodexWakeTarget: target as any,
-      createClient: () => wakeClient as any,
+      ...liveTargetDeps(wakeClient, 'th', '/s'),
       sleep: async () => {},
       now: () => 0,
       jitter: () => 0,
@@ -1058,14 +1047,14 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
     let releaseWake!: () => void;
     const wakeClient = {
       connect: vi.fn(async () => {}),
+      loadedThreadIds: vi.fn(async () => ['th']),
       readThread: vi.fn(async () => ({ id: 'th', status: { type: 'idle' } })),
       startTurn: vi.fn(() => new Promise<void>((r) => { releaseWake = r; })), // hangs → holds lock
       close: vi.fn(),
     };
     wakeCodexViaAppServer('w', { BORG_CODEX_REMOTE_WAKE: '1' } as any, {
       getActiveCube: async () => ACTIVE,
-      getCodexWakeTarget: target as any,
-      createClient: () => wakeClient as any,
+      ...liveTargetDeps(wakeClient, 'th', '/s'),
     });
     await settle();
     expect(wakeClient.startTurn).toHaveBeenCalledTimes(1); // per-entry wake holds the lock (hung)
@@ -1075,8 +1064,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
       {
         getActiveCube: async () => ACTIVE,
         hasPendingWork: async () => true,
-        getCodexWakeTarget: target as any,
-        createClient: () => hbClient as any,
+        ...liveTargetDeps(hbClient, 'th', '/s'),
         now: () => 100_000,
       },
       CADENCE
@@ -1094,8 +1082,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
       {
         getActiveCube: async () => ACTIVE,
         hasPendingWork: async () => true,
-        getCodexWakeTarget: target as any,
-        createClient: () => client as any,
+        ...liveTargetDeps(client, 'th', '/s'),
         now: () => 100_000,
         isStreamOwner: () => false,
       },
@@ -1111,8 +1098,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
       {
         getActiveCube: async () => ACTIVE,
         hasPendingWork: async () => true,
-        getCodexWakeTarget: target as any,
-        createClient: () => client as any,
+        ...liveTargetDeps(client, 'th', '/s'),
         now: () => 100_000,
         isStreamOwner: () => true,
       },
@@ -1173,13 +1159,13 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
   it('finding 1: lock is released after a delivery — a later inject can proceed', async () => {
     const c1 = idleClient();
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => c1 as any, now: () => 0, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, ...liveTargetDeps(c1, 'th', '/s'), now: () => 0, isStreamOwner: () => true },
       CADENCE
     );
     expect(c1.startTurn).toHaveBeenCalledTimes(1);
     const c2 = idleClient();
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => c2 as any, now: () => CADENCE, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, ...liveTargetDeps(c2, 'th', '/s'), now: () => CADENCE, isStreamOwner: () => true },
       CADENCE
     );
     expect(c2.startTurn).toHaveBeenCalledTimes(1); // lock was freed; second tick delivers
@@ -1196,19 +1182,20 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
   it('finding 1 (mutation guard): the inject lock is RELEASED on a mid-turn SKIP — a later tick re-acquires', async () => {
     const activeClient = {
       connect: vi.fn(async () => {}),
+      loadedThreadIds: vi.fn(async () => ['th']),
       readThread: vi.fn(async () => ({ id: 'th', status: { type: 'active' } })),
       startTurn: vi.fn(async () => {}),
       close: vi.fn(),
     };
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => activeClient as any, now: () => 0, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, ...liveTargetDeps(activeClient, 'th', '/s'), now: () => 0, isStreamOwner: () => true },
       CADENCE
     );
     expect(activeClient.startTurn).not.toHaveBeenCalled(); // mid-turn → skipped (no inject, not delivered)
 
     const idle = idleClient();
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => idle as any, now: () => CADENCE, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, ...liveTargetDeps(idle, 'th', '/s'), now: () => CADENCE, isStreamOwner: () => true },
       CADENCE
     );
     // If the lock leaked on the mid-turn skip, this tick would early-return at
@@ -1240,7 +1227,7 @@ describe('gh#861 — cross-path inject mutex + lease-gated + teardown-aware hear
 
     const idle = idleClient();
     await fireCodexHeartbeatTick(
-      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, getCodexWakeTarget: target as any, createClient: () => idle as any, now: () => CADENCE, isStreamOwner: () => true },
+      { getActiveCube: async () => ACTIVE, hasPendingWork: async () => true, ...liveTargetDeps(idle, 'th', '/s'), now: () => CADENCE, isStreamOwner: () => true },
       CADENCE
     );
     // If the lock leaked on the error path, this tick would early-return → no inject.

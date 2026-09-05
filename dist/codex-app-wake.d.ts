@@ -1,4 +1,4 @@
-import { getActiveCube, getCodexWakeTarget, setCodexWakeTarget, type ActiveCube } from './cubes.js';
+import { getActiveCube, type ActiveCube } from './cubes.js';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { checkCodexBridgeHealthy } from './codex-remote.js';
 export declare const CODEX_WAKE_PROMPT = "Borg cube activity arrived while you were busy.\n1. Drain `borg_read-log unread_only=true` until caught up.\n2. Peer `ARRIVAL:` and `READY`-only entries are lifecycle-only and non-actionable. Do not reply to them.\n3. Resume interrupted or assigned work.\n4. If none remains, do not run a full regen. Make no reply/status/liveness `borg_log`. Wait.";
@@ -19,17 +19,17 @@ export declare function resolveCodexWakeTarget(env?: NodeJS.ProcessEnv): CodexWa
  * (which is false-by-design for codex and falsely flagged them, gh#633).
  *
  * Tri-state (boolean|null; caller maps null→armed for false-deaf-avoidance):
- *   - false ONLY on a positively-dead bridge: no wake target registered (the
- *     bridge cannot deliver wakes), OR the app-server pid is dead.
- *   - true when the wake target resolves AND the app-server pid is alive.
- *   - null when the bridge health is indeterminate (target read or pid check
- *     could not resolve) → armed (don't false-flag on uncertainty).
+ *   - false when this child has no live socket, the socket file is missing, or
+ *     the app-server pid is dead.
+ *   - true when the env socket exists and the app-server pid is alive.
+ *   - null when the pidfile cannot be read or parsed.
  */
-export declare function probeCodexBridgeArmed(active: {
+export declare function probeCodexBridgeArmed(_active: {
     cubeId: string;
     droneId: string;
 }, deps?: {
-    getCodexWakeTarget?: typeof getCodexWakeTarget;
+    env?: NodeJS.ProcessEnv;
+    socketExists?: (socketPath: string) => boolean;
     checkBridge?: typeof checkCodexBridgeHealthy;
 }): Promise<boolean | null>;
 /** gh#857 WI-2: last successful wake delivery time (for the heartbeat gate). */
@@ -66,8 +66,6 @@ export declare function getCodexDeliveryState(): CodexDeliveryState;
 export declare function codexWakePathHealthy(armed: boolean | null, state: CodexDeliveryState): boolean | null;
 export interface CodexWakeDeps {
     getActiveCube?: typeof getActiveCube;
-    getCodexWakeTarget?: typeof getCodexWakeTarget;
-    setCodexWakeTarget?: typeof setCodexWakeTarget;
     createClient?: (socketPath: string) => Pick<CodexAppServerClient, 'connect' | 'readThread' | 'startTurn' | 'loadedThreadIds' | 'close'>;
     env?: NodeJS.ProcessEnv;
     cwd?: () => string;

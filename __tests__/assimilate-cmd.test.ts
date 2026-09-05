@@ -185,9 +185,12 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
     probeMcpReady: vi.fn(async () => true),
     setCliPreferenceForWorktree: vi.fn(async () => {}),
     resolveCli: vi.fn(async (explicit) => explicit ?? 'claude'),
-    prepareCodexRemoteLaunch: vi.fn(async () => ({ args: ['--remote', 'unix:///tmp/codex.sock'], env: { BORG_CODEX_REMOTE_WAKE: '1' } })),
-    setCodexWakeTarget: vi.fn(async () => {}),
-    findLoadedCodexThread: vi.fn(async () => 'thread-123'),
+    prepareCodexRemoteLaunch: vi.fn(async () => ({
+      ready: true as const,
+      args: ['--remote', 'unix:///tmp/codex.sock'],
+      env: { BORG_CODEX_REMOTE_WAKE: '1' },
+      server: { pid: 123, socketPath: '/tmp/codex.sock', cleanup: vi.fn() },
+    })),
     ...overrides,
   };
   const assimilate = deps.assimilate;
@@ -1086,7 +1089,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     ]));
     const kickoff = (kickoffArgs as string[]).at(-1) as string;
     expect(kickoff.startsWith('/loop')).toBe(false);
-    expect(kickoff).toContain('Codex wake-path capability check passed');
+    expect(kickoff).toContain('Borg-owned remote-control socket');
     expect(kickoff).toContain('Call borg_regen and follow the playbook');
     expect(kickoff).not.toContain('borg-opencode-correlation:');
     expect(kickoff).not.toContain('borg-inbox-monitor');
@@ -1097,7 +1100,7 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
     expect(kickoff).not.toContain('Never reflexively call borg_regen for routine text-only wakes');
   });
 
-  it('surfaces failed Codex remote-wake capability in the kickoff prompt', async () => {
+  it('refuses to launch Codex when the owned app-server cannot become ready', async () => {
     const exec = vi.fn(async () => 0);
     const stderr = vi.fn();
     const runSync = vi.fn((cmd: string, args: string[]) =>
@@ -1108,30 +1111,22 @@ describe('runAssimilate: step 8 (launch Claude Code)', () => {
       stderr,
       runSync,
       prepareCodexRemoteLaunch: vi.fn(async () => ({
-        args: [],
-        env: {},
-        warning: 'Codex remote-wake disabled: test failure',
+        ready: false as const,
+        reason: 'the app-server remained unready after two attempts',
+        stderr: 'sanitized diagnostic',
       })),
       listCubes: vi.fn(async () => [{ id: 'c', name: 'myrepo' }]),
       getCube: vi.fn(async () => ({ id: 'c', name: 'myrepo', roles: [{ id: 'r', name: 'Drone', is_default: true, is_human_seat: false }] })),
     });
 
-    await runAssimilate({ role: undefined, flags: { yes: true, cli: 'codex' } }, deps);
+    const exit = await runAssimilate({ role: undefined, flags: { yes: true, cli: 'codex' } }, deps);
 
-    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('Codex remote-wake disabled');
-    const [, kickoffArgs] = exec.mock.calls[0];
-    const kickoff = (kickoffArgs as string[]).at(-1) as string;
-    expect(kickoff).toContain('Codex wake-path capability check failed');
-    expect(kickoff).toContain('Run borg_regen manually whenever you return');
-    const launchEnv = exec.mock.calls[0][3] as Record<string, string | undefined>;
-    expect(launchEnv.BORG_AGENT_KIND).toBe('codex');
-    expect(launchEnv.BORG_CODEX_REMOTE_WAKE).toBeUndefined();
-    expect(kickoffArgs).toContain('mcp_servers.borg.env.BORG_AGENT_KIND="codex"');
-    expect(kickoffArgs).not.toContain('mcp_servers.borg.env.BORG_CODEX_REMOTE_WAKE="1"');
-    // Codex MCP children read their pinned config instead of launchEnv. A
-    // no-socket fallback must therefore explicitly override an installed
-    // legacy BORG_CODEX_REMOTE_WAKE="1" config rather than merely omit 1.
-    expect(kickoffArgs).toContain('mcp_servers.borg.env.BORG_CODEX_REMOTE_WAKE="0"');
+    expect(exit).toBe(1);
+    expect(exec).not.toHaveBeenCalled();
+    const output = stderr.mock.calls.map((c) => String(c[0])).join('');
+    expect(output).toContain('Codex launch refused');
+    expect(output).toContain('remained unready after two attempts');
+    expect(output).toContain('sanitized diagnostic');
   });
 
   it('clears a stale Codex transport marker when an existing seat relaunches with Claude', async () => {

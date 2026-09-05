@@ -68,6 +68,7 @@ export class CodexAppServerClient {
             preview: thread.preview,
             status: thread.status,
             updatedAt: thread.updatedAt,
+            source: thread.source,
         };
     }
     async startTurn(threadId, text) {
@@ -140,31 +141,6 @@ export class CodexAppServerClient {
                 }
             }
         }
-    }
-}
-export async function findLoadedCodexThread(options) {
-    const client = new CodexAppServerClient(options.socketPath);
-    await client.connect();
-    try {
-        const ids = await client.loadedThreadIds();
-        let best = null;
-        for (const id of ids) {
-            const thread = await client.readThread(id);
-            if (!thread)
-                continue;
-            if (thread.cwd !== options.cwd)
-                continue;
-            if (!thread.preview.includes(options.previewIncludes))
-                continue;
-            if (thread.updatedAt < options.updatedAfter)
-                continue;
-            if (!best || thread.updatedAt > best.updatedAt)
-                best = thread;
-        }
-        return best?.id ?? null;
-    }
-    finally {
-        client.close();
     }
 }
 function encodeWebSocketTextFrame(text) {

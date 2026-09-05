@@ -26,13 +26,12 @@ import { readPersistedLocalSeat, } from './cubes.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { defaultProbeSeat } from './seat-probe.js';
 import { BorgServerError, CubeCreationConfirmationError } from './server-errors.js';
-import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, inboxPathForDrone, setProjectCliPreference, setCodexWakeTarget, } from './cubes.js';
+import { findProjectRoot as cubesFindProjectRoot, getActiveCube as cubesGetActive, hasPersistedActiveCube as cubesHasPersistedActive, inboxPathForDrone, setProjectCliPreference, } from './cubes.js';
 import { addProjectSessionStartHook, provisionLaunchAccess, } from './config-utils.js';
 import { findPendingServerEnrollment, listServerCredentialOrigins } from './config.js';
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
-import { findLoadedCodexThread } from './codex-app-server.js';
 import { defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
 import { getOrCreateRepositoryIdentity, getRepositoryAssociation, resolveGitRepositoryContext, saveRepositoryAssociation, } from './repository-identity.js';
@@ -477,8 +476,6 @@ export function buildDefaultAssimilateDeps(question = defaultPromptQuestion) {
         }, () => process.stdin.isTTY === true)),
         setCliPreferenceForWorktree: (cli, worktree) => setProjectCliPreference(cli, worktree),
         prepareCodexRemoteLaunch: () => prepareCodexRemoteLaunch(defaultCodexRemoteDeps()),
-        setCodexWakeTarget,
-        findLoadedCodexThread,
     };
 }
 //# sourceMappingURL=assimilate-deps.js.map

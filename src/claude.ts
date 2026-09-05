@@ -16,7 +16,6 @@
  */
 
 import { spawn } from 'child_process';
-import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename } from 'node:path';
@@ -30,8 +29,6 @@ import {
   getActiveCube,
   inboxPathForDrone,
   LaunchSeatIdentityChangedError,
-  setCodexWakeTarget,
-  pruneDeadCodexWakeTargets,
   type ActiveCube,
   type BorgCli,
 } from './cubes.js';
@@ -82,22 +79,15 @@ import { setTerminalTitle } from './terminal-title.js';
 import { initConsolePrefix, consolePrefix } from './console-prefix.js';
 import { initDebugFromArgv } from './debug.js';
 import { configuredCliNames, defaultCliChoiceDeps, detectCliAvailability, detectCliConfiguration, parseCliFlag, resolveCliChoice } from './cli-platform.js';
-import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, withCodexCwdArg, defaultCodexRemoteDeps, checkCodexBridgeHealthy } from './codex-remote.js';
+import { prepareCodexRemoteLaunch, resolveCodexLaunchCwd, defaultCodexRemoteDeps } from './codex-remote.js';
 import {
-  BORG_CODEX_REMOTE_WAKE_ENV,
-  codexAgentKindConfigArgs,
-  codexRemoteWakeConfigArgs,
-  codexStateRootConfigArgs,
   withAgentRuntimeEnv,
 } from './agent-runtime.js';
-import { findLoadedCodexThread } from './codex-app-server.js';
 import {
   buildAgentKickoffPrompt,
   buildKickoffWakePathClause,
-  recordCodexWakeTarget,
-  socketPathFromRemoteArgs,
+  buildCodexLaunchArgs,
 } from './codex-launch.js';
-import { codexBorgSessionConfigArgs } from './launch-gate.js';
 import {
   addCodexSessionStartHook,
   addCodexUserPromptSubmitHook,
@@ -639,9 +629,6 @@ async function main() {
       : null
   );
 
-  const codexWakeNonce = cli === 'codex' ? `borg-wake-${randomUUID()}` : null;
-  let codexWakePathClause: string | undefined;
-  let remoteArgs: string[] = [];
   // gh#673 P1: mark the agent session as borg-launched. Claude Code's MCP
   // child + hook commands inherit this env, gating the borg activation
   // surface (launch-gate.ts). ACTIVATION-only — never a security gate.
@@ -654,45 +641,33 @@ async function main() {
   if (cli === 'opencode' && launchApproval.openCodePermission) {
     launchEnv.OPENCODE_PERMISSION = launchApproval.openCodePermission;
   }
-  let codexSocketPath: string | null = null;
   let codexServerCleanup: (() => void) | null = null;
-  if (cli === 'codex' && !passthroughArgs.includes('--remote')) {
-    console.error(`${consolePrefix()}${chalk.gray('◼ Starting Codex remote-wake app-server…')}`);
-    const remote = await prepareCodexRemoteLaunch(defaultCodexRemoteDeps());
-    if (remote.warning) {
-      console.error(`${consolePrefix()}${chalk.yellow(`warning: ${remote.warning}`)}`);
-      codexWakePathClause =
-        `⚠ Codex wake-path capability check failed: remote-control is unavailable for this session. Run borg_regen manually whenever you return, and expect only fallback wakeups until relaunch.`;
-    } else {
-      codexWakePathClause =
-        `Codex wake-path capability check passed: remote-control socket established for this session.`;
+  let codexRemote: Awaited<ReturnType<typeof prepareCodexRemoteLaunch>> | null = null;
+  if (cli === 'codex') {
+    if (passthroughArgs.some((arg) => arg === '--remote' || arg.startsWith('--remote='))) {
+      console.error(`${consolePrefix()}${chalk.red('Codex launch refused: Borg owns Codex remote control; remove the passthrough --remote option and retry.')}`);
+      process.exit(1);
+      return;
     }
-    remoteArgs = remote.args;
+    console.error(`${consolePrefix()}${chalk.gray('◼ Starting Codex remote-wake app-server…')}`);
+    codexRemote = await prepareCodexRemoteLaunch(defaultCodexRemoteDeps());
+    if (!codexRemote.ready) {
+      const stderr = codexRemote.stderr ? `\n${codexRemote.stderr}` : '';
+      console.error(`${consolePrefix()}${chalk.red(`Codex launch refused: ${codexRemote.reason}${stderr}`)}`);
+      process.exit(1);
+      return;
+    }
     launchEnv = {
       ...withAgentRuntimeEnv(process.env, cli),
-      ...remote.env,
+      ...codexRemote.env,
       BORG_SESSION: '1',
     };
-    codexSocketPath = socketPathFromRemoteArgs(remote.args);
-    codexServerCleanup = remote.server?.cleanup ?? null;
-  } else if (cli === 'codex' && passthroughArgs.includes('--remote')) {
-    codexWakePathClause =
-      `Codex wake-path capability check: using caller-provided --remote socket; if no wake arrives, run borg_regen manually when returning to the session.`;
-    codexSocketPath = socketPathFromRemoteArgs(passthroughArgs);
-    if (codexSocketPath) {
-      launchEnv = {
-        ...withAgentRuntimeEnv(process.env, cli),
-        [BORG_CODEX_REMOTE_WAKE_ENV]: '1',
-        BORG_SESSION: '1',
-      };
-    }
+    codexServerCleanup = codexRemote.server.cleanup;
   }
 
   const kickoff = buildAgentKickoffPrompt({
     cli,
-    codexWakeNonce,
     monitorClause,
-    codexWakePathClause,
   });
   // This stays separate from the shared kickoff so OpenCode can carry
   // launch-only API and correlation identities outside argv and prompt text.
@@ -700,29 +675,26 @@ async function main() {
   let openCodePort: number | undefined;
   let launchArgs: string[];
   if (cli === 'codex') {
-    // gh#673 P1-codex: codex MCP children only see the pinned
-    // [mcp_servers.borg.env], never inherited env (V2 probe) — deliver
-    // the borg-launch marker and selected CLI identity via per-invocation
-    // -c overrides instead (V2b-proven). Remote wake remains a separate
-    // transport capability, explicitly disabled when this launch has no
-    // socket so legacy static config cannot spuriously arm a bridge.
-    // client#20: the exact approval overrides above are launch-scoped and
-    // consented. They remain separate from activation/identity/wake config.
-    launchArgs = [
-      ...launchApproval.codexArgs,
-      ...codexBorgSessionConfigArgs(),
-      ...codexAgentKindConfigArgs(),
-      ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
-      ...codexStateRootConfigArgs(),
-      ...codexLaunchSeatExpectationConfigArgs(),
-      ...remoteArgs,
-      ...withCodexCwdArg([...passthroughArgs, kickoff], process.cwd()),
-    ];
+    const plan = buildCodexLaunchArgs({
+      remote: codexRemote!,
+      cwd: process.cwd(),
+      kickoff,
+      approvalArgs: launchApproval.codexArgs,
+      seatExpectationArgs: codexLaunchSeatExpectationConfigArgs(),
+      passthroughArgs,
+    });
+    if (!plan.ready) {
+      codexServerCleanup?.();
+      console.error(`${consolePrefix()}${chalk.red(`Codex launch refused: ${plan.reason}`)}`);
+      process.exit(1);
+      return;
+    }
+    launchArgs = plan.args;
   } else if (cli === 'opencode') {
     // OpenCode launch: start TUI with the kickoff passed via --prompt
     // (auto-submits it as the first message). BORG_SESSION is pinned in
-    // opencode.json. The OS-selected loopback port lets the MCP child connect
-    // to OpenCode's local HTTP API without a shared deterministic collision space.
+    // opencode.json. Wake delivery uses HTTP entry injection through OpenCode's local HTTP API;
+    // the OS-selected port avoids a deterministic collision space.
     openCodePort = await allocateOpenCodePort();
     installBorgPlugin();
     openCodeKickoff = createOpenCodeLaunchKickoff(kickoff);
@@ -748,25 +720,6 @@ async function main() {
         kickoff: openCodeKickoff,
       })).process
     : spawn(cli, launchArgs, { stdio: 'inherit', shell: false, env: launchEnv });
-
-  // gh#857 WI-2: wake-target recording is codex-only (app-server bridge).
-  // OpenCode uses HTTP entry injection; Claude uses the inbox Monitor.
-  if (cli === 'codex' && active && codexSocketPath) {
-    void recordCodexWakeTarget({
-      deps: { setCodexWakeTarget, findLoadedCodexThread },
-      cubeId: active.cubeId,
-      droneId: active.droneId,
-      socketPath: codexSocketPath,
-      passthroughArgs,
-      previewNeedle: codexWakeNonce ?? kickoff.slice(0, 120),
-      cwd: process.cwd(),
-      launchedAtSeconds: Math.floor(Date.now() / 1000),
-    });
-    // gh#855: self-heal the wake-target file — drop entries whose app-server
-    // socket is positively dead (crashed prior launches), mirroring the
-    // socket-dir pruneStaleSockets. Best-effort; never blocks the launch.
-    void pruneDeadCodexWakeTargets((sock) => checkCodexBridgeHealthy(sock));
-  }
 
   agentProcess.on('error', (err: NodeJS.ErrnoException) => {
     if (codexServerCleanup) {

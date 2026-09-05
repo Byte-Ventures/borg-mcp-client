@@ -61,7 +61,6 @@ import {
   hasPersistedActiveCube as cubesHasPersistedActive,
   inboxPathForDrone,
   setProjectCliPreference,
-  setCodexWakeTarget,
 } from './cubes.js';
 import {
   addProjectSessionStartHook,
@@ -71,7 +70,6 @@ import { findPendingServerEnrollment, listServerCredentialOrigins } from './conf
 import { setTerminalTitle as setTitle } from './terminal-title.js';
 import { defaultCliChoiceDeps, resolveCliChoice } from './cli-platform.js';
 import { prepareCodexRemoteLaunch, defaultCodexRemoteDeps } from './codex-remote.js';
-import { findLoadedCodexThread } from './codex-app-server.js';
 import { defaultApprovalIo, resolveLaunchBorgApprovals } from './cli-tool-approval.js';
 import { ensurePrivateBorgConfigRoot } from './private-root.js';
 import {
@@ -577,7 +575,5 @@ export function buildDefaultAssimilateDeps(
     ),
     setCliPreferenceForWorktree: (cli, worktree) => setProjectCliPreference(cli, worktree),
     prepareCodexRemoteLaunch: () => prepareCodexRemoteLaunch(defaultCodexRemoteDeps()),
-    setCodexWakeTarget,
-    findLoadedCodexThread,
   };
 }

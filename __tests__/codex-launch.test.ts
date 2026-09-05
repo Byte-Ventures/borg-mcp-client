@@ -1,11 +1,9 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   buildAgentKickoffPrompt,
   buildKickoffWakePathClause,
-  recordCodexWakeTarget,
-  socketPathFromRemoteArgs,
-  threadIdFromPassthroughArgs,
+  buildCodexLaunchArgs,
 } from '../src/codex-launch';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from '../src/opencode-wake-copy';
 
@@ -21,17 +19,14 @@ describe('codex launch helpers', () => {
   it('builds the compacted kickoff prompt with runtime-specific clauses (gh#929)', () => {
     const claude = buildAgentKickoffPrompt({
       cli: 'claude',
-      codexWakeNonce: null,
       monitorClause: 'Monitor clause. ',
     });
     const codex = buildAgentKickoffPrompt({
       cli: 'codex',
-      codexWakeNonce: 'borg-wake-123',
       monitorClause: '',
     });
     const opencodePrompt = buildAgentKickoffPrompt({
       cli: 'opencode',
-      codexWakeNonce: null,
       monitorClause: '',
     });
 
@@ -41,9 +36,8 @@ describe('codex launch helpers', () => {
     expect(claude).toContain('Monitor clause.');
     expect(claude).toContain('MCP server disconnected'); // MCP-disconnect recovery fallback
     expect(claude).toContain('ToolSearch');
-    expect(codex).toContain('Wake target nonce: borg-wake-123.');
     expect(codex).toContain('MCP server disconnected');
-    expect(codex).toContain('Codex Borg wakeups use remote-control'); // codexWakePathClause default
+    expect(codex).toContain('Borg-owned remote-control socket');
     expect(opencodePrompt).toContain('MCP server disconnected');
     expect(opencodePrompt).toContain(OPENCODE_WAKE_PATH_GUIDANCE);
     expect(opencodePrompt).toContain('OpenCode wakes');
@@ -98,71 +92,58 @@ describe('codex launch helpers', () => {
     expect(buildKickoffWakePathClause('claude', null)).toBe('');
   });
 
-  it('renders explicit Codex wake-path capability status when supplied', () => {
-    const codex = buildAgentKickoffPrompt({
-      cli: 'codex',
-      codexWakeNonce: 'borg-wake-123',
-      monitorClause: '',
-      codexWakePathClause: 'Codex wake-path capability check passed: remote-control socket established for this session.',
-    });
-
-    expect(codex).toContain('Codex wake-path capability check passed');
-    expect(codex).not.toContain('Codex Borg wakeups use remote-control when available');
-  });
-
-  it('extracts Codex remote socket paths and resume thread ids', () => {
-    expect(socketPathFromRemoteArgs(['--remote', 'unix:///tmp/codex.sock'])).toBe('/tmp/codex.sock');
-    expect(socketPathFromRemoteArgs(['--remote', 'tcp://127.0.0.1'])).toBeNull();
-    expect(threadIdFromPassthroughArgs(['resume', 'thread-1'])).toBe('thread-1');
-    expect(threadIdFromPassthroughArgs(['--resume', 'thread-2'])).toBe('thread-2');
-  });
-
-  it('records an explicit resumed Codex thread without polling app-server threads', async () => {
-    const setCodexWakeTarget = vi.fn(async () => {});
-    const findLoadedCodexThread = vi.fn(async () => 'unexpected');
-
-    await recordCodexWakeTarget({
-      deps: { setCodexWakeTarget, findLoadedCodexThread },
-      cubeId: 'cube',
-      droneId: 'drone',
-      socketPath: '/tmp/codex.sock',
+  it('assembles every Codex launch with the Borg-owned remote socket', () => {
+    const remote = {
+      ready: true as const,
+      args: ['--remote', 'unix:///tmp/codex.sock'],
+      env: { BORG_CODEX_REMOTE_WAKE: '1' },
+      server: { pid: 123, socketPath: '/tmp/codex.sock', cleanup: () => {} },
+    };
+    const bare = buildCodexLaunchArgs({
+      remote,
       cwd: '/repo',
-      previewNeedle: 'wake',
-      launchedAtSeconds: 100,
+      kickoff: 'kickoff',
+      approvalArgs: ['--ask-for-approval', 'never'],
+      seatExpectationArgs: ['-c', 'mcp_servers.borg.env.BORG_LAUNCH_EXPECTED_SEAT="seat"'],
       passthroughArgs: ['resume', 'thread-123'],
     });
-
-    expect(findLoadedCodexThread).not.toHaveBeenCalled();
-    expect(setCodexWakeTarget).toHaveBeenCalledWith('cube', 'drone', {
-      threadId: 'thread-123',
-      socketPath: '/tmp/codex.sock',
+    const assimilated = buildCodexLaunchArgs({
+      remote,
+      cwd: '/repo',
+      kickoff: 'kickoff',
+      accessArgs: ['--add-dir', '/repo/.git'],
     });
+
+    for (const result of [bare, assimilated]) {
+      expect(result.ready).toBe(true);
+      if (!result.ready) throw new Error(result.reason);
+      expect(result.args.filter((arg) => arg === '--remote')).toHaveLength(1);
+      expect(result.args).toEqual(expect.arrayContaining([
+        '-c', 'mcp_servers.borg.env.BORG_CODEX_REMOTE_WAKE="1"',
+        '--remote', 'unix:///tmp/codex.sock',
+      ]));
+    }
   });
 
-  it('polls for a fresh Codex thread when no resume id is present', async () => {
-    const setCodexWakeTarget = vi.fn(async () => {});
-    const findLoadedCodexThread = vi.fn(async () => 'thread-new');
-
-    await recordCodexWakeTarget({
-      deps: { setCodexWakeTarget, findLoadedCodexThread },
-      cubeId: 'cube',
-      droneId: 'drone',
-      socketPath: '/tmp/codex.sock',
+  it.each([
+    ['--remote', 'unix:///tmp/caller.sock'],
+    ['--remote=unix:///tmp/caller.sock'],
+  ])('refuses a caller-provided Codex remote argument', (...passthroughArgs) => {
+    const result = buildCodexLaunchArgs({
+      remote: {
+        ready: true,
+        args: ['--remote', 'unix:///tmp/borg.sock'],
+        env: { BORG_CODEX_REMOTE_WAKE: '1' },
+        server: { pid: 123, socketPath: '/tmp/borg.sock', cleanup: () => {} },
+      },
       cwd: '/repo',
-      previewNeedle: 'wake',
-      launchedAtSeconds: 100,
-      passthroughArgs: [],
+      kickoff: 'kickoff',
+      passthroughArgs,
     });
 
-    expect(findLoadedCodexThread).toHaveBeenCalledWith({
-      socketPath: '/tmp/codex.sock',
-      cwd: '/repo',
-      previewIncludes: 'wake',
-      updatedAfter: 95,
-    });
-    expect(setCodexWakeTarget).toHaveBeenCalledWith('cube', 'drone', {
-      threadId: 'thread-new',
-      socketPath: '/tmp/codex.sock',
+    expect(result).toEqual({
+      ready: false,
+      reason: 'Borg owns Codex remote control; remove the passthrough --remote option and retry.',
     });
   });
 });

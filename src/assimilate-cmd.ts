@@ -10,20 +10,15 @@ import {
 import { validateName } from './name-validator.js';
 import { renderAssimilationWelcome } from './assimilate-welcome.js';
 import { shellEscape } from './shell-escape.js';
-import { withCodexCwdArg, type CodexRemoteLaunch } from './codex-remote.js';
+import { type CodexRemoteLaunch } from './codex-remote.js';
 import {
   buildAgentKickoffPrompt,
   buildKickoffWakePathClause,
-  recordCodexWakeTarget,
-  socketPathFromRemoteArgs,
+  buildCodexLaunchArgs,
 } from './codex-launch.js';
 import { perWorktreeBranchName, computeWorktreePath, localBranchExists, isMerged } from './worktree-lifecycle.js';
 import { DroneEvictedError } from './drone-lifecycle.js';
-import { codexBorgSessionConfigArgs } from './launch-gate.js';
 import {
-  codexAgentKindConfigArgs,
-  codexRemoteWakeConfigArgs,
-  codexStateRootConfigArgs,
   withAgentRuntimeEnv,
 } from './agent-runtime.js';
 import {
@@ -405,13 +400,6 @@ export interface AssimilateDeps {
   setCliPreferenceForWorktree: (cli: BorgCli, worktree: string) => Promise<void>;
   resolveCli: (explicit?: BorgCli) => Promise<BorgCli>;
   prepareCodexRemoteLaunch: () => Promise<CodexRemoteLaunch>;
-  setCodexWakeTarget: (cubeId: string, droneId: string, target: { threadId: string; socketPath: string }) => Promise<void>;
-  findLoadedCodexThread: (options: {
-    socketPath: string;
-    cwd: string;
-    previewIncludes: string;
-    updatedAfter: number;
-  }) => Promise<string | null>;
 
 }
 
@@ -952,13 +940,11 @@ export async function finalizeAssimilationSeat(
 export type LaunchDeps = Pick<
   AssimilateDeps,
   | 'exec'
-  | 'findLoadedCodexThread'
   | 'getInboxPath'
   | 'isTTY'
   | 'prepareCodexRemoteLaunch'
   | 'probeMcpReady'
   | 'resolveCliApprovals'
-  | 'setCodexWakeTarget'
   | 'setTerminalTitle'
   | 'stderr'
   | 'stdout'
@@ -1019,17 +1005,14 @@ export async function launchAssimilatedAgent(
     );
   }
   const inboxPath = deps.getInboxPath(result.cube_id, result.drone_id);
-  const codexWakeNonce = cli === 'codex' ? `borg-wake-${randomUUID()}` : null;
   const monitorClause = buildKickoffWakePathClause(
     cli,
     cli === 'claude' ? inboxPath : null,
     cli === 'claude' ? monitorStateRoot : null,
   );
-  let codexWakePathClause: string | undefined;
-  let remoteArgs: string[] = [];
   let launchArgs: string[];
-  let codexSocketPath: string | null = null;
   let codexServerCleanup: (() => void) | null = null;
+  let codexRemote: CodexRemoteLaunch | null = null;
   const launchApproval = deps.resolveCliApprovals
     ? await deps.resolveCliApprovals(cli, agentCwd, { skipOverride: flags.noBorgApprovalOverride })
     : { codexArgs: [] };
@@ -1050,39 +1033,36 @@ export async function launchAssimilatedAgent(
   for (const key of modelEnv.unset) delete childEnv[key];
 
   if (cli === 'codex') {
-    const remote = await deps.prepareCodexRemoteLaunch();
-    if (remote.warning) {
-      deps.stderr(`warning: ${remote.warning}\n`);
-      codexWakePathClause =
-        '⚠ Codex wake-path capability check failed: remote-control is unavailable for this session. Run borg_regen manually whenever you return, and expect only fallback wakeups until relaunch.';
-    } else {
-      codexWakePathClause = 'Codex wake-path capability check passed: remote-control socket established for this session.';
+    codexRemote = await deps.prepareCodexRemoteLaunch();
+    if (!codexRemote.ready) {
+      const stderr = codexRemote.stderr ? `\n${codexRemote.stderr}` : '';
+      deps.stderr(`Codex launch refused: ${codexRemote.reason}${stderr}\n`);
+      return 1;
     }
-    remoteArgs = remote.args;
-    if (Object.keys(remote.env).length > 0) Object.assign(childEnv, remote.env);
-    codexSocketPath = socketPathFromRemoteArgs(remote.args);
-    codexServerCleanup = remote.server?.cleanup ?? null;
+    Object.assign(childEnv, codexRemote.env);
+    codexServerCleanup = codexRemote.server.cleanup;
   }
   const kickoff = buildAgentKickoffPrompt({
     cli,
-    codexWakeNonce,
     monitorClause,
-    codexWakePathClause,
   });
   let openCodeKickoff: ReturnType<typeof createOpenCodeLaunchKickoff> | null = null;
   let dronePort: number | undefined;
   launchArgs = [kickoff];
   if (cli === 'codex') {
-    launchArgs = [
-      ...codexLaunchDirectoryArgs(launchAccessPaths),
-      ...launchApproval.codexArgs,
-      ...codexBorgSessionConfigArgs(),
-      ...codexAgentKindConfigArgs(),
-      ...codexRemoteWakeConfigArgs(codexSocketPath !== null),
-      ...codexStateRootConfigArgs(),
-      ...remoteArgs,
-      ...withCodexCwdArg(launchArgs, agentCwd),
-    ];
+    const plan = buildCodexLaunchArgs({
+      remote: codexRemote!,
+      cwd: agentCwd,
+      kickoff,
+      approvalArgs: launchApproval.codexArgs,
+      accessArgs: codexLaunchDirectoryArgs(launchAccessPaths),
+    });
+    if (!plan.ready) {
+      codexServerCleanup?.();
+      deps.stderr(`Codex launch refused: ${plan.reason}\n`);
+      return 1;
+    }
+    launchArgs = plan.args;
   } else if (cli === 'opencode') {
     dronePort = await allocateOpenCodePort();
     childEnv.BORG_OPENCODE_PORT = String(dronePort);
@@ -1094,17 +1074,12 @@ export async function launchAssimilatedAgent(
     launchArgs = buildOpenCodeLaunchArgs(agentCwd, dronePort, openCodeKickoff.prompt);
   }
 
-  const exitPromise = deps.exec(cli, launchArgs, agentCwd, childEnv);
-  if (cli === 'codex' && codexSocketPath && codexWakeNonce) {
-    void recordCodexWakeTarget({
-      deps,
-      cubeId: result.cube_id,
-      droneId: result.drone_id,
-      socketPath: codexSocketPath,
-      cwd: agentCwd,
-      previewNeedle: codexWakeNonce,
-      launchedAtSeconds: Math.floor(Date.now() / 1000),
-    });
+  let exitPromise: Promise<number>;
+  try {
+    exitPromise = deps.exec(cli, launchArgs, agentCwd, childEnv);
+  } catch (error) {
+    codexServerCleanup?.();
+    throw error;
   }
   if (cli === 'opencode' && openCodeKickoff) {
     const launchKickoff = openCodeKickoff;
@@ -1117,12 +1092,14 @@ export async function launchAssimilatedAgent(
       launchIdentity: launchKickoff.correlationIdentity,
     }).then(() => injectInitialKickoff(launchKickoff)).catch(() => {});
   }
-  const exitCode = await exitPromise;
-  if (codexServerCleanup) {
+  let exitCode: number;
+  try {
+    exitCode = await exitPromise;
+  } finally {
     try {
-      codexServerCleanup();
+      codexServerCleanup?.();
     } catch {
-      // Best-effort cleanup after a normal Codex exit.
+      // Best-effort cleanup after Codex exits or fails to spawn.
     }
   }
   if (spawnedWorktreePath && originalCwd !== spawnedWorktreePath) {

@@ -6,6 +6,7 @@ export interface CodexThreadSummary {
         type: string;
     };
     updatedAt: number;
+    source?: unknown;
 }
 export declare class CodexAppServerClient {
     private readonly socketPath;
@@ -26,10 +27,4 @@ export declare class CodexAppServerClient {
     private writeJson;
     private parseIncoming;
 }
-export declare function findLoadedCodexThread(options: {
-    socketPath: string;
-    cwd: string;
-    previewIncludes: string;
-    updatedAfter: number;
-}): Promise<string | null>;
 //# sourceMappingURL=codex-app-server.d.ts.map

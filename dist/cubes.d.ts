@@ -60,11 +60,6 @@ export declare function codexLaunchSeatExpectationConfigArgs(env?: NodeJS.Proces
 export type ActiveCubeInput = Omit<ActiveCube, 'sessionToken'> & {
     sessionToken?: string;
 };
-export interface CodexWakeTargetRecord {
-    threadId: string;
-    socketPath: string;
-    updatedAt: string;
-}
 export declare class McpSeatIdentityChangedError extends Error {
     readonly code = "SEAT_IDENTITY_CHANGED";
     constructor();
@@ -231,16 +226,4 @@ export declare function readAllProjectIdentities(): Promise<Array<{
  * sibling worktree but the process still began in the invoking checkout.
  */
 export declare function setProjectCliPreference(cli: BorgCli, dir?: string): Promise<void>;
-export declare function setCodexWakeTarget(cubeId: string, droneId: string, target: Omit<CodexWakeTargetRecord, 'updatedAt'>): Promise<void>;
-export declare function getCodexWakeTarget(cubeId: string, droneId: string): Promise<CodexWakeTargetRecord | null>;
-/**
- * gh#855: drop wake-target entries whose app-server socket is positively dead,
- * so the file self-heals (stale dead-socket entries from crashed prior launches
- * don't linger and mislead probeCodexBridgeArmed / health-beat). Pure prune
- * decision lives in codex-wake-resolve.ts (false-deaf-avoidance: keeps alive +
- * indeterminate); this is the thin read → prune → write-only-on-change glue.
- * The liveness check is injected (claude.ts wires checkCodexBridgeHealthy) so
- * cubes.ts stays free of the codex-remote dependency.
- */
-export declare function pruneDeadCodexWakeTargets(socketLiveness: (socketPath: string) => boolean | null): Promise<void>;
 //# sourceMappingURL=cubes.d.ts.map

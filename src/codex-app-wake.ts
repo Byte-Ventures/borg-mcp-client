@@ -1,11 +1,11 @@
 import {
   getActiveCube,
-  getCodexWakeTarget,
-  setCodexWakeTarget,
   type ActiveCube,
 } from './cubes.js';
+import { existsSync } from 'node:fs';
 import { CodexAppServerClient } from './codex-app-server.js';
 import { checkCodexBridgeHealthy } from './codex-remote.js';
+import { debugLog } from './debug.js';
 import { hasPendingWakeActivity, hasPendingWakeEntry } from './remote-client.js';
 import {
   BORG_CODEX_REMOTE_WAKE_ENV,
@@ -14,7 +14,6 @@ import {
 import {
   codexAppServerSocketFromEnv,
   pickFreshThread,
-  wakeTargetChanged,
   wakeRetryBackoffMs,
   wakeRetryExpired,
   WAKE_RETRY_MAX_ATTEMPTS,
@@ -69,26 +68,25 @@ export function resolveCodexWakeTarget(env: NodeJS.ProcessEnv = process.env): Co
  * (which is false-by-design for codex and falsely flagged them, gh#633).
  *
  * Tri-state (boolean|null; caller maps null→armed for false-deaf-avoidance):
- *   - false ONLY on a positively-dead bridge: no wake target registered (the
- *     bridge cannot deliver wakes), OR the app-server pid is dead.
- *   - true when the wake target resolves AND the app-server pid is alive.
- *   - null when the bridge health is indeterminate (target read or pid check
- *     could not resolve) → armed (don't false-flag on uncertainty).
+ *   - false when this child has no live socket, the socket file is missing, or
+ *     the app-server pid is dead.
+ *   - true when the env socket exists and the app-server pid is alive.
+ *   - null when the pidfile cannot be read or parsed.
  */
 export async function probeCodexBridgeArmed(
-  active: { cubeId: string; droneId: string },
+  _active: { cubeId: string; droneId: string },
   deps: {
-    getCodexWakeTarget?: typeof getCodexWakeTarget;
+    env?: NodeJS.ProcessEnv;
+    socketExists?: (socketPath: string) => boolean;
     checkBridge?: typeof checkCodexBridgeHealthy;
   } = {}
 ): Promise<boolean | null> {
   try {
-    const resolve = deps.getCodexWakeTarget ?? getCodexWakeTarget;
-    const target = await resolve(active.cubeId, active.droneId);
-    // No registered wake target → the bridge cannot deliver a wake → not armed.
-    if (!target) return false;
+    const socketPath = codexAppServerSocketFromEnv(deps.env ?? process.env);
+    if (!socketPath) return false;
+    if (!(deps.socketExists ?? existsSync)(socketPath)) return false;
     const check = deps.checkBridge ?? checkCodexBridgeHealthy;
-    return check(target.socketPath);
+    return check(socketPath);
   } catch {
     return null;
   }
@@ -280,9 +278,6 @@ function defaultSleep(ms: number): Promise<void> {
 
 export interface CodexWakeDeps {
   getActiveCube?: typeof getActiveCube;
-  getCodexWakeTarget?: typeof getCodexWakeTarget;
-  // gh#855: self-heal write of the freshly-resolved target (write-only-on-change).
-  setCodexWakeTarget?: typeof setCodexWakeTarget;
   createClient?: (
     socketPath: string
   ) => Pick<CodexAppServerClient, 'connect' | 'readThread' | 'startTurn' | 'loadedThreadIds' | 'close'>;
@@ -320,12 +315,9 @@ export interface CodexWakeDeps {
 /**
  * gh#855: FRESH wake-target resolution. Prefer THIS drone's live app-server
  * socket (pinned into the child's env at spawn) and re-resolve the loaded thread
- * NOW (loadedThreadIds is re-runnable) — so a missed/stale launch probe or a
- * thread change can never cause permanent deafness. Self-heals the file cache
- * (write-only-on-change) so other readers (probeCodexBridgeArmed / health-beat)
- * stay current. Falls back to the launch-recorded file when the env socket is
- * absent (un-upgraded launch) — no regression. Returns the resolved target, or
- * null (caller skips this wake; the next one retries). Does NOT keep a
+ * NOW (loadedThreadIds is re-runnable), so a thread change cannot cause
+ * permanent deafness. The live env socket is the sole source. Returns the
+ * resolved target, or null when the socket/thread is unavailable. Does NOT keep a
  * connection open — the env path opens a short-lived probe client to re-resolve
  * the thread, then closes it, so the caller can dedup BEFORE opening the wake
  * connection (no reconnect on an already-delivered wake).
@@ -338,52 +330,27 @@ function makeCodexClient(
 }
 
 async function resolveFreshCodexWakeTarget(
-  active: { cubeId: string; droneId: string },
+  _active: { cubeId: string; droneId: string },
   deps: CodexWakeDeps
 ): Promise<{ socketPath: string; threadId: string } | null> {
   const envSocket = codexAppServerSocketFromEnv(deps.env ?? process.env);
-  if (envSocket) {
-    const probe = makeCodexClient(envSocket, deps);
-    await probe.connect();
-    try {
-      const ids = await probe.loadedThreadIds();
-      const summaries: CodexThreadInfo[] = [];
-      for (const id of ids) {
-        const t = await probe.readThread(id);
-        if (t) summaries.push({ id: t.id, cwd: t.cwd, updatedAt: t.updatedAt });
-      }
-      const threadId = pickFreshThread(summaries, { cwd: (deps.cwd ?? (() => process.cwd()))() });
-      if (!threadId) return null; // no loaded thread yet — next wake retries (no permanent fail)
-      await maybePersistWakeTarget(active, { socketPath: envSocket, threadId }, deps);
-      return { socketPath: envSocket, threadId };
-    } finally {
-      probe.close();
-    }
+  if (!envSocket) {
+    debugLog('codex wake target unavailable: BORG_CODEX_APP_SERVER_SOCKET is absent');
+    return null;
   }
-
-  // Fallback: the launch-recorded file (un-upgraded launch / env absent) — no
-  // connect needed to resolve, so the caller dedups before opening any socket.
-  const target = await (deps.getCodexWakeTarget ?? getCodexWakeTarget)(active.cubeId, active.droneId);
-  if (!target) return null;
-  return { socketPath: target.socketPath, threadId: target.threadId };
-}
-
-/** Self-healing cache write — only when the resolved target actually changed. */
-async function maybePersistWakeTarget(
-  active: { cubeId: string; droneId: string },
-  fresh: { socketPath: string; threadId: string },
-  deps: CodexWakeDeps
-): Promise<void> {
+  const probe = makeCodexClient(envSocket, deps);
+  await probe.connect();
   try {
-    const get = deps.getCodexWakeTarget ?? getCodexWakeTarget;
-    const set = deps.setCodexWakeTarget ?? setCodexWakeTarget;
-    const existing = await get(active.cubeId, active.droneId);
-    const prev = existing ? { socketPath: existing.socketPath, threadId: existing.threadId } : null;
-    if (wakeTargetChanged(prev, fresh)) {
-      await set(active.cubeId, active.droneId, fresh);
+    const ids = await probe.loadedThreadIds();
+    const summaries: CodexThreadInfo[] = [];
+    for (const id of ids) {
+      const t = await probe.readThread(id);
+      if (t) summaries.push({ id: t.id, cwd: t.cwd, updatedAt: t.updatedAt, source: t.source });
     }
-  } catch {
-    // best-effort cache write; never break the wake path
+    const threadId = pickFreshThread(summaries, { cwd: (deps.cwd ?? (() => process.cwd()))() });
+    return threadId ? { socketPath: envSocket, threadId } : null;
+  } finally {
+    probe.close();
   }
 }
 
@@ -396,7 +363,12 @@ export function wakeCodexViaAppServer(
 ): void {
   const target = resolveCodexWakeTarget(env);
   if (!target.enabled) return;
-  pendingWakeRequests.push({ reason, deliveryIdentity, sourceEntryId, deps });
+  pendingWakeRequests.push({
+    reason,
+    deliveryIdentity,
+    sourceEntryId,
+    deps: deps.env ? deps : { ...deps, env },
+  });
   if (wakeInFlight) return;
 
   wakeInFlight = true;
@@ -432,17 +404,14 @@ async function wakeCodexTargeted(
     if (!active) return;
     const pendingEntry = deps.hasPendingEntry ?? hasPendingWakeEntry;
     if (sourceEntryId && !(await pendingEntry(active, sourceEntryId))) return;
-    // gh#855: resolve FRESH (live env socket + re-resolved thread), falling back
-    // to the launch-recorded file only when the env socket is absent.
+    // Resolve fresh from this child’s live env socket and loaded threads.
     const resolved = await resolveFreshCodexWakeTarget(active, deps);
     if (!resolved) {
-      // client#89: a scoped entry passed the pending check above but no target
-      // resolves — undeliverable, and this path does NOT schedule a retry-drain
-      // (the design leaves it to the next wake / the heartbeat backstop). Mark
-      // the deferral live so health reads degraded rather than armed. An
-      // unscoped wake carries no authoritative pending signal, so it does not
-      // set the marker. Retry behavior is unchanged.
+      // A scoped entry passed the pending check but its TUI thread is not loaded
+      // yet. Keep it in the coalesced retry-drain instead of waiting for another
+      // inbound event or the heartbeat.
       if (sourceEntryId) deliveryDeferred = true;
+      scheduleRetryDrain(deps, sourceEntryId);
       return;
     }
     const { socketPath, threadId } = resolved;

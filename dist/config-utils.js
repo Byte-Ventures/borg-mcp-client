@@ -1224,8 +1224,8 @@ export function addCodexMcpServer() {
         // Codex MCP config when the operator has explicitly set it.
         const apiUrl = process.env.BORG_API_URL;
         // Identity is durable configuration; remote wake is a per-launch
-        // transport capability. Do not persist a transport marker here: a future
-        // Codex child may launch without a live --remote socket.
+        // transport capability pinned by the Borg-owned app-server. Do not persist
+        // that transport marker in the user's static Codex configuration.
         const apiUrlEnvArg = apiUrl ? ` --env BORG_API_URL=${shellQuote(apiUrl)}` : '';
         const stateRoot = process.env[BORG_STATE_ROOT_ENV];
         const stateRootEnvArg = stateRoot

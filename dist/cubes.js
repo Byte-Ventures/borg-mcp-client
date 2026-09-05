@@ -17,12 +17,10 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { pruneDeadWakeTargets } from './codex-wake-resolve.js';
 import { borgConfigRoot } from './private-root.js';
 import { getActiveSeatCredential, getActiveSeatForWorktree, getSeatForWorktree, hasSeatForWorktree, observeSeat, readAllActiveSeats, refreshSeatMetadata, resetSeatForWorktree, seatRef, } from './seats.js';
 const CUBES_DIR = borgConfigRoot();
 const LAUNCH_FILE = join(CUBES_DIR, 'launch.json');
-const CODEX_WAKE_TARGETS_FILE = join(CUBES_DIR, 'codex-wake-targets.json');
 const INBOX_DIR = join(CUBES_DIR, 'inboxes');
 export const BORG_LAUNCH_EXPECTED_SEAT_ENV = 'BORG_LAUNCH_EXPECTED_SEAT';
 export class LaunchSeatIdentityChangedError extends Error {
@@ -238,43 +236,6 @@ async function writeLaunchFile(data) {
     // atomicWriteFile handles the mkdir + 0o600 mode, and the temp+rename keeps
     // a concurrent reader from seeing a half-written launch file (gh#894, gh#901).
     await atomicWriteFile(LAUNCH_FILE, JSON.stringify(data, null, 2) + '\n');
-}
-function codexWakeTargetKey(cubeId, droneId) {
-    if (!UUID_RE.test(cubeId))
-        throw new Error(`Invalid cubeId: ${cubeId}`);
-    if (!UUID_RE.test(droneId))
-        throw new Error(`Invalid droneId: ${droneId}`);
-    return `${cubeId}:${droneId}`;
-}
-function isCodexWakeTargetsFile(data) {
-    return (data !== null &&
-        typeof data === 'object' &&
-        typeof data.targets === 'object' &&
-        data.targets !== null &&
-        !Array.isArray(data.targets));
-}
-async function readCodexWakeTargetsFile() {
-    let raw;
-    try {
-        raw = await readFile(CODEX_WAKE_TARGETS_FILE, 'utf8');
-    }
-    catch (error) {
-        if (error?.code === 'ENOENT')
-            return null;
-        throw error;
-    }
-    try {
-        const parsed = JSON.parse(raw);
-        return isCodexWakeTargetsFile(parsed) ? parsed : UNREADABLE_STATE;
-    }
-    catch {
-        return UNREADABLE_STATE;
-    }
-}
-async function writeCodexWakeTargetsFile(data) {
-    // atomicWriteFile handles the mkdir + 0o600 mode, and the temp+rename keeps
-    // a concurrent reader from seeing a half-written file (gh#894, gh#901).
-    await atomicWriteFile(CODEX_WAKE_TARGETS_FILE, JSON.stringify(data, null, 2) + '\n');
 }
 /**
  * Get the currently-active cube for the current project, or null if not
@@ -530,47 +491,5 @@ export async function setProjectCliPreference(cli, dir) {
     const next = existing ?? { projects: {} };
     next.projects[findProjectRoot(dir)] = { cli };
     await writeLaunchFile(next);
-}
-export async function setCodexWakeTarget(cubeId, droneId, target) {
-    const existing = await readCodexWakeTargetsFile();
-    if (existing === UNREADABLE_STATE)
-        throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
-    const next = existing ?? { targets: {} };
-    next.targets[codexWakeTargetKey(cubeId, droneId)] = {
-        ...target,
-        updatedAt: new Date().toISOString(),
-    };
-    await writeCodexWakeTargetsFile(next);
-}
-export async function getCodexWakeTarget(cubeId, droneId) {
-    const existing = await readCodexWakeTargetsFile();
-    if (existing === UNREADABLE_STATE)
-        throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
-    if (!existing)
-        return null;
-    const target = existing.targets[codexWakeTargetKey(cubeId, droneId)];
-    if (!target || typeof target.threadId !== 'string' || typeof target.socketPath !== 'string') {
-        return null;
-    }
-    return target;
-}
-/**
- * gh#855: drop wake-target entries whose app-server socket is positively dead,
- * so the file self-heals (stale dead-socket entries from crashed prior launches
- * don't linger and mislead probeCodexBridgeArmed / health-beat). Pure prune
- * decision lives in codex-wake-resolve.ts (false-deaf-avoidance: keeps alive +
- * indeterminate); this is the thin read → prune → write-only-on-change glue.
- * The liveness check is injected (claude.ts wires checkCodexBridgeHealthy) so
- * cubes.ts stays free of the codex-remote dependency.
- */
-export async function pruneDeadCodexWakeTargets(socketLiveness) {
-    const existing = await readCodexWakeTargetsFile();
-    if (existing === UNREADABLE_STATE)
-        throw unreadableStateError(CODEX_WAKE_TARGETS_FILE);
-    if (!existing)
-        return;
-    const { targets, changed } = pruneDeadWakeTargets(existing.targets, socketLiveness);
-    if (changed)
-        await writeCodexWakeTargetsFile({ ...existing, targets });
 }
 //# sourceMappingURL=cubes.js.map

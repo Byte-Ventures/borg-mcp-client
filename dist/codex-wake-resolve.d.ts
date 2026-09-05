@@ -1,10 +1,9 @@
 /**
  * gh#855 — pure helpers for FRESH codex wake-target re-resolution.
  *
- * Root cause of codex deaf-when-idle: the wake target (socket + thread) was
- * resolved once at launch and never refreshed, so a missed/stale launch probe
- * left the drone permanently deaf. Phase 1 makes the waking borg-mcp child
- * authoritative about its OWN live app-server socket — the socket is injected
+ * Root cause of codex deaf-when-idle: stale thread selection could leave the
+ * drone permanently deaf. The waking borg-mcp child is authoritative about its
+ * OWN live app-server socket — the socket is injected
  * into the child's pinned env at spawn (codex-remote.ts, via the #851 `-c
  * mcp_servers.borg.env.X` channel) — and re-resolves the loaded thread FRESH on
  * every wake (loadedThreadIds is a re-runnable RPC).
@@ -13,7 +12,7 @@
  */
 /** Pinned-env var carrying THIS drone's live app-server socket (set at spawn). */
 export declare const BORG_CODEX_APP_SERVER_SOCKET_ENV = "BORG_CODEX_APP_SERVER_SOCKET";
-/** The live app-server socket for this borg-mcp child, or null (un-upgraded launch). */
+/** The live app-server socket for this borg-mcp child. */
 export declare function codexAppServerSocketFromEnv(env?: NodeJS.ProcessEnv): string | null;
 /**
  * The per-launch codex config override that pins THIS app-server's live socket
@@ -28,7 +27,9 @@ export interface CodexThreadInfo {
     id: string;
     cwd?: string;
     updatedAt?: number;
+    source?: unknown;
 }
+export declare function isCodexSubagentSource(source: unknown): boolean;
 /**
  * Pick the loaded thread to wake on the live socket. Each borg-owned app-server
  * is fresh-per-launch / single-session, so the common case is exactly one loaded
@@ -41,31 +42,6 @@ export interface CodexThreadInfo {
 export declare function pickFreshThread(threads: CodexThreadInfo[], opts: {
     cwd: string;
 }): string | null;
-/**
- * Pure prune: drop wake-target entries whose app-server socket is positively
- * dead (liveness === false), so the file self-heals. Keeps alive (true) and
- * indeterminate (null) entries — false-deaf-avoidance, mirroring
- * checkCodexBridgeHealthy's tri-state. Returns the surviving map + whether
- * anything changed (so the caller writes only on change).
- */
-export declare function pruneDeadWakeTargets<T extends {
-    socketPath: string;
-}>(targets: Record<string, T>, socketLiveness: (socketPath: string) => boolean | null): {
-    targets: Record<string, T>;
-    changed: boolean;
-};
-/**
- * Whether the freshly-resolved target differs from what's already recorded —
- * so the self-healing cache write happens only on change (no file thrash on a
- * busy cube re-resolving the same socket+thread every wake).
- */
-export declare function wakeTargetChanged(existing: {
-    socketPath: string;
-    threadId: string;
-} | null, fresh: {
-    socketPath: string;
-    threadId: string;
-}): boolean;
 /** Base backoff for the first retry of a dropped/deferred wake. */
 export declare const WAKE_RETRY_BASE_MS = 5000;
 /** Backoff ceiling — a wedged thread is retried at most this often. */
