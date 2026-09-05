@@ -60,7 +60,8 @@ export function isCodexSubagentSource(source: unknown): boolean {
  */
 export function pickFreshThread(threads: CodexThreadInfo[], opts: { cwd: string }): string | null {
   const rootThreads = threads.filter((thread) =>
-    !isCodexSubagentSource(thread.source));
+    !isCodexSubagentSource(thread.source) && thread.ephemeral !== true &&
+    (thread.threadSource === undefined || thread.threadSource === 'user'));
   if (rootThreads.length === 0) return null;
   if (rootThreads.length === 1) return rootThreads[0].id;
   const cwdMatches = rootThreads.filter((t) => t.cwd === opts.cwd);
