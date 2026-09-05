@@ -148,6 +148,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
       if (kind === 'codex') {
         const socket = join(home, 'codex.sock');
         seat.agent = await fakeCodex(socket, worktree);
+        await writeFile(join(home, 'codex.pid'), String(process.pid));
         cleanups.push(() => seat.agent.close());
         env.BORG_CODEX_REMOTE_WAKE = '1'; env.BORG_CODEX_APP_SERVER_SOCKET = socket;
       } else if (kind === 'opencode') {
@@ -187,6 +188,7 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     const author = fleet[0];
     const broadcast = await tool(author, 'borg_log', { message: 'E2E-broadcast', to: 'broadcast' });
     await until(() => fleet.slice(1).every((seat) => wakeCount(seat, 'E2E-broadcast') === 1), 'broadcast on nine agent endpoints');
+    await until(async () => (await tool(author, 'borg_stream-status')).status.lastPersistedEventId === broadcast.entry.id, 'author observes its silent broadcast');
     expect(wakeCount(author, 'E2E-broadcast')).toBe(0);
     for (const seat of fleet) {
       expect((await drain(seat)).ids.filter((id) => id === broadcast.entry.id)).toHaveLength(1);
@@ -195,20 +197,26 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     const recipients = [fleet[1], fleet[4], fleet[8]];
     const direct = await tool(author, 'borg_log', { message: 'E2E-direct', to: recipients.map((seat) => seat.droneId) });
     await until(() => recipients.every((seat) => wakeCount(seat, 'E2E-direct') === 1), 'direct recipients');
-    await pause(500);
+    await until(async () => (await Promise.all(fleet.map((seat) => tool(seat, 'borg_stream-status'))))
+      .every((status) => status.status.lastPersistedEventId === direct.entry.id), 'all seats observe the direct frame');
+    await pause(1000);
     for (const seat of fleet) {
       if (!recipients.includes(seat)) expect(wakeCount(seat, 'E2E-direct')).toBe(0);
       expect((await drain(seat)).ids.filter((id) => id === direct.entry.id)).toHaveLength(1);
       expect((await drain(seat)).ids).toEqual([]);
     }
     const ackBefore = await Promise.all(fleet.map(async (seat) => (await readFile(seat.inboxPath, 'utf8').catch(() => '')).length));
+    const observed = (seat: any) => seat.kind === 'claude' ? seat.monitorOutput.length
+      : seat.kind === 'codex' ? seat.agent.turns.length : seat.agent.injections.length;
+    const ackWakeBefore = fleet.map(observed);
     const authorMonitorBefore = author.monitorOutput.length;
     await tool(fleet[1], 'borg_ack', { entry_id: direct.entry.id });
     await until(async () => (await readFile(author.inboxPath, 'utf8').catch(() => '')).length > ackBefore[0], 'ack at author');
     await until(() => author.monitorOutput.length > authorMonitorBefore, 'ack wakes author monitor');
-    await pause(500);
+    await pause(1000);
     for (let index = 1; index < fleet.length; index++) {
       expect((await readFile(fleet[index].inboxPath, 'utf8')).length).toBe(ackBefore[index]);
+      expect(observed(fleet[index])).toBe(ackWakeBefore[index]);
     }
     const backlog: string[] = [];
     for (let index = 0; index < 12; index++) {
@@ -240,8 +248,10 @@ it.skipIf(!enabled)('delivers and drains a real ten-seat fleet through MCP, SSE 
     const replayDrain = await drain(replaySeat);
     for (const id of replayIds) expect(replayDrain.ids.filter((value) => value === id)).toHaveLength(1);
     expect((await drain(replaySeat)).ids).toEqual([]);
+    expect((await tool(fleet[1], 'borg_stream-status')).wake_path.healthy).toBe(true);
     await stop(fleet[1].monitor);
     await until(async () => (await tool(fleet[1], 'borg_stream-status')).wake_path.healthy === false, 'stopped monitor degradation');
+    expect((await tool(fleet[4], 'borg_stream-status')).wake_path.healthy).toBe(true);
     await fleet[4].agent.close();
     await until(async () => (await tool(fleet[4], 'borg_stream-status')).wake_path.healthy === false, 'missing Codex bridge');
     for (const seat of fleet.filter((seat) => seat.kind === 'codex')) {
