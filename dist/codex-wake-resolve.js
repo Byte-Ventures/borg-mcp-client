@@ -44,8 +44,7 @@ export function isCodexSubagentSource(source) {
  * permanent deafness).
  */
 export function pickFreshThread(threads, opts) {
-    const rootThreads = threads.filter((thread) => !isCodexSubagentSource(thread.source) && thread.ephemeral !== true &&
-        (thread.threadSource === undefined || thread.threadSource === 'user'));
+    const rootThreads = threads.filter((thread) => !isCodexSubagentSource(thread.source));
     if (rootThreads.length === 0)
         return null;
     if (rootThreads.length === 1)
