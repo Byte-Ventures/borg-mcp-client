@@ -67,6 +67,8 @@ describe('seat single-store writer guard (SR#5)', () => {
     expect(filesReferencing('withStore<', ['seat-store.ts', 'seats.ts'])).toEqual([]);
     expect(filesReferencing('atomicWrite0600', [
       'seat-store.ts', 'token-store.ts', 'repository-identity.ts', 'server-trust.ts',
+      // Only its explicit privateRoot lease option uses the shared secure writer.
+      'stream-owner.ts',
     ])).toEqual([]);
   });
 

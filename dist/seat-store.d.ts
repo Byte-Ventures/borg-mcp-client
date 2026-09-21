@@ -33,7 +33,15 @@
 export interface SecureStoreOptions {
     secureRoot?: string;
     rootMode?: 'private' | 'owner-controlled';
+    /** Harden leaf publication for private lease records; default store behavior is unchanged. */
+    verifyLeafIdentity?: boolean;
+    /** Publish without replacing an existing leaf (lease takeover marker). */
+    exclusive?: boolean;
+    /** Read-only lease inspection must not recreate a directory moved by its owner. */
+    createRoot?: boolean;
 }
+/** Shared directory policy; create=false validates without mutating and returns false if absent. */
+export declare function assertSecureRoot(root: string, rootMode?: SecureStoreOptions['rootMode'], create?: boolean): Promise<boolean>;
 /**
  * Atomic 0600 write (checklist #1 + #2): write to a same-dir temp opened
  * O_CREAT|O_EXCL at mode 0600 (never write-then-chmod), fsync the data, then

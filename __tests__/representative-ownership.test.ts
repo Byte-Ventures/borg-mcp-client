@@ -153,13 +153,20 @@ it.each(['SIGKILL', 'SIGTERM', 'clean'] as const)('takes over after owner %s wit
 });
 
 it('refreshes an idle owner while status acquires and changes nothing', async () => {
-  const first = await start(100), second = await start();
+  const first = await start(500), second = await start();
   await first.call('read');
-  const initial = JSON.parse(readFileSync(ownerPath(), 'utf8')).heartbeatAt;
-  await expect.poll(() => JSON.parse(readFileSync(ownerPath(), 'utf8')).heartbeatAt, { timeout: 10000, interval: 25 })
-    .not.toBe(initial);
+  const heartbeat = () => {
+    try { return JSON.parse(readFileSync(ownerPath(), 'utf8')).heartbeatAt as string; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
+  };
+  // Refresh temporarily renames the directory while holding its takeover claim.
+  let initial: string | null = null;
+  await expect.poll(() => initial = heartbeat(), { timeout: 10000, interval: 25 }).not.toBeNull();
+  await expect.poll(() => { const next = heartbeat(); return next !== null && next !== initial; },
+    { timeout: 10000, interval: 25 }).toBe(true);
   const before = snapshot();
-  expect((await second.call('status')).body.ownership.pid).toBe(first.child.pid);
+  await expect.poll(async () => (await second.call('status')).body.ownership?.pid,
+    { timeout: 10000, interval: 25 }).toBe(first.child.pid);
   expect(snapshot()).toEqual(before);
   // Heartbeats may continue during status, so file timestamps are not a status
   // side effect. The lazy-status control separately proves no lease creation.

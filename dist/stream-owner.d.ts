@@ -40,6 +40,16 @@ export interface StreamOwnerDeps {
     pid?: number;
     cwd?: string;
     locksDir?: string;
+    /** Production opt-in for private lease storage beneath this canonical root.
+     * Ancestors from boundary to root use the store owner-controlled policy;
+     * root and descendants require 0700. Uses private reads and exclusive,
+     * identity-checked leaf publication. Absent: ordinary stream I/O unchanged.
+     * Static hostile objects are in scope; same-UID syscall races are not.
+     */
+    privateRoot?: {
+        root: string;
+        boundary: string;
+    };
     processNonce?: string;
     processStartedAt?: string;
     worktree?: string;
