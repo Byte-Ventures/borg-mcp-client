@@ -132,7 +132,7 @@ describe('prepare', () => {
   });
   it('binds the existing dedicated seat to exactly the named Coordinator without launching or leaking the bearer', async () => {
     expect(await prepare()).toBe(0);
-    expect(prepareCalls).toEqual([{ role: DEFAULT_REPRESENTATIVE_ROLE, resume: true }]);
+    expect(prepareCalls).toEqual([{ role: DEFAULT_REPRESENTATIVE_ROLE, coordinator: 'coordinator-1', resume: true }]);
     const binding = await deps.store.getBinding(worktree);
     expect(binding).toMatchObject({
       cubeId: CUBE_ID, representativeDroneId: REP_ID, coordinatorDroneId: COORD_ID, coordinatorLabel: 'coordinator-1',
@@ -146,7 +146,7 @@ describe('prepare', () => {
   it('prepares a launch-free seat under the representative role when the worktree has none', async () => {
     seat = null;
     expect(await prepare({ worktreeName: 'hermes', host: 'localhost:7999' })).toBe(0);
-    expect(prepareCalls).toEqual([{ role: DEFAULT_REPRESENTATIVE_ROLE, worktreeName: 'hermes', host: 'localhost:7999' }]);
+    expect(prepareCalls).toEqual([{ role: DEFAULT_REPRESENTATIVE_ROLE, coordinator: 'coordinator-1', worktreeName: 'hermes', host: 'localhost:7999' }]);
     expect((await deps.store.getBinding(worktree))?.coordinatorDroneId).toBe(COORD_ID);
   });
 

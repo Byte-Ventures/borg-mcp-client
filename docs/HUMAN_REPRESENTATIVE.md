@@ -41,8 +41,13 @@ From the repository whose cube you want, name the exact Coordinator drone
 (`borg drones` lists labels):
 
 ```bash
-borg representative prepare --coordinator <coordinator-drone-label> --worktree hermes
+borg representative prepare --host <host:port> --coordinator <coordinator-drone-label> --worktree hermes
 ```
+
+Replace `<host:port>` with your existing Borg server's address. The bare
+`host:port` form is accepted (for example `127.0.0.1:7091`) and defaults to HTTPS.
+You can omit `--host` when this repository already has the intended server
+selected.
 
 This creates the representative's own drone in a new linked worktree through
 the same path as `borg assimilate --worktree`, but **launches no agent CLI** and
@@ -229,6 +234,10 @@ specifies, and on the single-process rule below.
   Coordinator is woken by the direct message through its own normal wake path.
 
 ## Recovery
+
+Run `borg` with the Node installation that owns the global `borgmcp` install;
+a different Node prefix can fail the local server-installation check even when
+the server is installed under the original prefix.
 
 | Error | Meaning and action |
 | --- | --- |

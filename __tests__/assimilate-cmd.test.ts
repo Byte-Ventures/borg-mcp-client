@@ -10,7 +10,8 @@ import {
 import type { ActiveCube } from '../src/cubes';
 import { BorgServerError, LegacySessionCredentialCollisionError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
-import { buildDefaultRepresentativeDeps } from '../src/representative-cmd';
+import { buildDefaultRepresentativeDeps, runRepresentativePrepare } from '../src/representative-cmd';
+import { shellEscape } from '../src/shell-escape';
 import { resolveCliChoice } from '../src/cli-platform';
 import { createHash } from 'node:crypto';
 import { createHmac } from 'node:crypto';
@@ -286,6 +287,30 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
 }
 
 describe('representative preparation at the real assimilation seam', () => {
+  it('preserves representative arguments in a no-authority refusal before mutation', async () => {
+    const deps = makeStubDeps({ isTTY: () => false, defaultAuthority: undefined });
+    representativePreparation.deps = deps;
+    const representative = await buildDefaultRepresentativeDeps();
+    const coordinator = "operator's $(label)";
+    const role = "relay's $role";
+    const worktreeName = 'relay-worktree';
+    expect(await runRepresentativePrepare({
+      action: 'prepare', coordinator, role, worktreeName, rebind: false,
+    }, {
+      ...representative, cwd: () => '/work/myrepo', findProjectRoot: (dir) => dir,
+      hydrateSeat: async () => null, stderr: deps.stderr,
+    })).toBe(1);
+    const output = vi.mocked(deps.stderr).mock.calls.map(([text]) => text).join('');
+    expect(output).toContain('borg representative prepare --host <host>' +
+      ` --coordinator ${shellEscape(coordinator)} --role ${shellEscape(role)} --worktree ${shellEscape(worktreeName)}`);
+    expect(output).not.toContain('assimilate');
+    for (const mutation of [deps.preparePrivateRoot, deps.ensureLocalServerInstalled,
+      deps.assimilate, deps.finalizeServerSeat, deps.mkdirp, deps.saveRepositoryAssociation,
+      deps.setCliPreferenceForWorktree, deps.installProjectSessionHook]) {
+      expect(mutation).not.toHaveBeenCalled();
+    }
+    expect(deps.connectServer).not.toHaveBeenCalled();
+  });
   it('prepares a worker without an installed agent CLI or launch side effects', async () => {
     const noClis = () => resolveCliChoice(undefined, {
       detectCli: () => ({ claude: null, codex: null, opencode: null }),

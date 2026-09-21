@@ -325,6 +325,7 @@ export interface AuthorityResolutionInput {
     args: AssimilateArgs;
     mode: 'assimilate' | 'cube-init';
     repositoryContext: GitRepositoryContext;
+    authoritySelectionCommand?: string;
 }
 export interface AuthorityResolutionOutcome {
     authority: AssimilationAuthority;
@@ -346,6 +347,7 @@ export declare function runAssimilate(args: AssimilateArgs, deps: AssimilateDeps
 export declare function prepareConnection(args: AssimilateArgs, deps: AssimilateDeps, options: {
     validateRole: (role: Role) => void;
     onPrepared: (prepared: PreparedAssimilation) => void;
+    authoritySelectionCommand?: string;
 }): Promise<number>;
 /**
  * Sprint 4 / gh#147 (drone-8 SR-PE-FINDING-1): strip ASCII control

@@ -46,6 +46,7 @@ export interface RepresentativeCmdDeps {
     /** Launch-free seat creation/resume; never starts an agent CLI. */
     prepareSeat(input: {
         role: string;
+        coordinator?: string;
         worktreeName?: string;
         host?: string;
         resume?: boolean;

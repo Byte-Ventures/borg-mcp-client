@@ -18,6 +18,7 @@ import { normalizeServerEndpoint } from './server-endpoint.js';
 import { validateName } from './name-validator.js';
 import { RepresentativeError, assertRepresentativeRole, representativeStatus, resolveCoordinator, } from './representative-core.js';
 import { RepresentativeStoreError, representativeRecoveryCommand, } from './representative-store.js';
+import { shellEscape } from './shell-escape.js';
 export const DEFAULT_REPRESENTATIVE_ROLE = 'hermes-representative';
 export function parseRepresentativeArgs(args) {
     const [action, ...rest] = args;
@@ -132,6 +133,7 @@ export async function runRepresentativePrepare(command, deps) {
         }
         const prepared = await deps.prepareSeat({
             role: command.role,
+            coordinator: command.coordinator,
             ...(existing ? { resume: true } : {}),
             ...(command.worktreeName ? { worktreeName: command.worktreeName } : {}),
             ...(command.host ? { host: command.host } : {}),
@@ -255,13 +257,20 @@ export async function buildDefaultRepresentativeDeps() {
         cwd: () => process.cwd(),
         findProjectRoot,
         hydrateSeat: (worktree) => getActiveCubeForWorktree(worktree),
-        prepareSeat: async ({ role, worktreeName, host, resume }) => {
+        prepareSeat: async ({ role, coordinator, worktreeName, host, resume }) => {
             const [{ prepareConnection }, { buildDefaultAssimilateDeps }] = await Promise.all([
                 import('./assimilate-cmd.js'),
                 import('./assimilate-deps.js'),
             ]);
             let worktree;
-            const code = await prepareConnection({ role, flags: { ...(resume ? { here: true } : {}), ...(worktreeName ? { worktree: worktreeName } : {}), ...(host ? { server: host } : {}) } }, buildDefaultAssimilateDeps(), { validateRole: assertRepresentativeRole, onPrepared: (prepared) => { worktree = prepared.worktree; } });
+            const code = await prepareConnection({ role, flags: { ...(resume ? { here: true } : {}), ...(worktreeName ? { worktree: worktreeName } : {}), ...(host ? { server: host } : {}) } }, buildDefaultAssimilateDeps(), {
+                validateRole: assertRepresentativeRole,
+                onPrepared: (prepared) => { worktree = prepared.worktree; },
+                authoritySelectionCommand: 'borg representative prepare --host <host>' +
+                    (coordinator ? ` --coordinator ${shellEscape(coordinator)}` : '') +
+                    ` --role ${shellEscape(role)}` +
+                    (worktreeName ? ` --worktree ${shellEscape(worktreeName)}` : ''),
+            });
             return { code, ...(worktree ? { worktree } : {}) };
         },
         backendFor: createSeatBackend,

@@ -441,6 +441,7 @@ async function selectAssimilationAuthority(
   flags: AssimilateFlags,
   deps: AuthorityResolutionDeps,
   mode: 'assimilate' | 'cube-init',
+  authoritySelectionCommand?: string,
 ): Promise<AssimilationAuthority | null> {
   if (flags.server !== undefined) {
     try {
@@ -460,7 +461,7 @@ async function selectAssimilationAuthority(
   }
   if (!deps.isTTY() || flags.yes) {
     if (deps.defaultAuthority) return deps.defaultAuthority;
-    const command = mode === 'cube-init'
+    const command = authoritySelectionCommand ? `\`${authoritySelectionCommand}\`` : mode === 'cube-init'
       ? '`borg server cube init --host <host>`'
       : '`borg assimilate --host <host> --here`';
     deps.stderr(`No local server selected. Use ${command} to select a local server.\n`);
@@ -1481,6 +1482,7 @@ export interface AuthorityResolutionInput {
   args: AssimilateArgs;
   mode: 'assimilate' | 'cube-init';
   repositoryContext: GitRepositoryContext;
+  authoritySelectionCommand?: string;
 }
 
 export interface AuthorityResolutionOutcome {
@@ -1503,6 +1505,13 @@ export async function resolveAssimilationAuthority(
   deps: AuthorityResolutionDeps,
 ): Promise<AssimilationPhaseOutcome<AuthorityResolutionOutcome>> {
   const { args, mode, repositoryContext } = input;
+  // Representative retries must refuse before private-state initialization or
+  // installation checks can mutate anything when no authority was selected.
+  if (input.authoritySelectionCommand && args.flags.server === undefined &&
+      deps.defaultAuthority === undefined && !args.flags.enroll && (!deps.isTTY() || args.flags.yes)) {
+    await selectAssimilationAuthority(args.flags, deps, mode, input.authoritySelectionCommand);
+    return { kind: 'stop', code: 1 };
+  }
   const hostlessEnrollment = args.flags.enroll === true &&
     args.flags.server === undefined && deps.defaultAuthority === undefined;
   const artifactOnlyEnrollment = hostlessEnrollment && deps.isTTY();
@@ -1634,7 +1643,7 @@ export async function resolveAssimilationAuthority(
     localSeatReadError = error;
   }
 
-  const selectedAuthority = await selectAssimilationAuthority(args.flags, deps, mode);
+  const selectedAuthority = await selectAssimilationAuthority(args.flags, deps, mode, input.authoritySelectionCommand);
   if (!selectedAuthority) return { kind: 'stop', code: 1 };
   let authority = selectedAuthority;
   if (localSeatReadError !== undefined) {
@@ -1768,9 +1777,9 @@ export async function runAssimilate(
 export async function prepareConnection(
   args: AssimilateArgs,
   deps: AssimilateDeps,
-  options: { validateRole: (role: Role) => void; onPrepared: (prepared: PreparedAssimilation) => void },
+  options: { validateRole: (role: Role) => void; onPrepared: (prepared: PreparedAssimilation) => void; authoritySelectionCommand?: string },
 ): Promise<number> {
-  return runAssimilationFlow(args, deps, { launch: false, ...options }, options.validateRole);
+  return runAssimilationFlow(args, deps, { launch: false, ...options }, options.validateRole, options.authoritySelectionCommand);
 }
 
 async function runAssimilationFlow(
@@ -1778,12 +1787,13 @@ async function runAssimilationFlow(
   deps: AssimilateDeps,
   options: RunAssimilateOptions,
   validateConnectionRole?: (role: Role) => void,
+  authoritySelectionCommand?: string,
 ): Promise<number> {
   const repository = await resolveAssimilationRepository(args, deps);
   if (repository.kind === 'stop') return repository.code;
   const { mode, repositoryContext } = repository.value;
 
-  const authorityResolution = await resolveAssimilationAuthority({ args, mode, repositoryContext }, deps);
+  const authorityResolution = await resolveAssimilationAuthority({ args, mode, repositoryContext, authoritySelectionCommand }, deps);
   if (authorityResolution.kind === 'stop') return authorityResolution.code;
   const {
     authority,
