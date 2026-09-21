@@ -226,6 +226,7 @@ async function localServerRequest(active, path, method, payload, options = {}) {
                 body: JSON.stringify(createProtocolEnvelope(randomUUID(), payload)),
             }),
         retryMode: options.retryMode,
+        continuationGuard: options.continuationGuard,
     }), true, options.decodePayload);
 }
 function manageCopyValue(value) {
@@ -319,12 +320,12 @@ async function localOwnerConnection(connection) {
         serverTrustIdentity: active.serverTrustIdentity,
     };
 }
-async function localCubeComposition(active) {
+async function localCubeComposition(active, continuationGuard) {
     const base = `/api/cubes/${active.cubeId}`;
     const [cubePayload, rolePayload, dronePayload] = await Promise.all([
-        localServerRequest(active, base, 'GET'),
-        localServerRequest(active, `${base}/roles`, 'GET'),
-        localServerRequest(active, `${base}/drones`, 'GET'),
+        localServerRequest(active, base, 'GET', undefined, { continuationGuard }),
+        localServerRequest(active, `${base}/roles`, 'GET', undefined, { continuationGuard }),
+        localServerRequest(active, `${base}/drones`, 'GET', undefined, { continuationGuard }),
     ]);
     if (!cubePayload || !rolePayload || !dronePayload) {
         throw new Error('Local Borg server returned an incomplete cube response');
@@ -368,7 +369,7 @@ async function localReadLogPage(active, opts = {}) {
     const payload = await localServerRequest(active, `/api/cubes/${active.cubeId}/logs`, 'PUT', {
         cursor: opts.cursor ?? null,
         ...(opts.limit === undefined ? {} : { limit: opts.limit }),
-    }, { retryMode: opts.retryMode, decodePayload: decodeReadLogResult });
+    }, { retryMode: opts.retryMode, continuationGuard: opts.continuationGuard, decodePayload: decodeReadLogResult });
     if (!payload)
         throw new Error('Local Borg server returned an empty log response');
     return payload;
@@ -435,7 +436,7 @@ export async function hasPendingWakeEntry(active, entryId, deps = {}) {
         cursor = page.cursor;
     }
 }
-async function resolveLocalLogCursor(active, since) {
+async function resolveLocalLogCursor(active, since, continuationGuard) {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
         .test(since);
     const timestamp = isUuid ? null : Date.parse(since);
@@ -445,7 +446,7 @@ async function resolveLocalLogCursor(active, since) {
     let scanCursor = null;
     let timestampCursor = null;
     for (;;) {
-        const page = await localReadLogPage(active, { cursor: scanCursor, limit: 500 });
+        const page = await localReadLogPage(active, { cursor: scanCursor, limit: 500, continuationGuard });
         for (const entry of page.entries) {
             if (isUuid && entry.id === since) {
                 return { id: entry.id, created_at: entry.created_at };
@@ -483,7 +484,7 @@ function sleep(ms) {
  * what BORG_API_URL was set to when this process started.
  */
 async function authedFetch(path, init = {}) {
-    const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, localSessionCredentialRef, retryMode, headers, ...rest } = init;
+    const { droneSession, apiUrl, authToken, serverTrustIdentity: suppliedTrustIdentity, localSessionCredentialRef, retryMode, continuationGuard, headers, ...rest } = init;
     if (apiUrl === undefined) {
         throw new Error('Selected Borg server authority state is missing or unreadable');
     }
@@ -528,6 +529,10 @@ async function authedFetch(path, init = {}) {
     }
     const method = (rest.method ?? 'GET').toUpperCase();
     const buildRequest = async (tok) => {
+        // Rechecked for every HTTP attempt, including transport and 429 retries.
+        // Keep this callback out of RequestInit and preserve unguarded callers.
+        if (continuationGuard)
+            await continuationGuard();
         const finalHeaders = {
             'Authorization': `Bearer ${tok}`,
             ...headers,
@@ -764,19 +769,24 @@ export async function getRoster(active, since) {
 export async function readLog(sessionToken, apiUrl, opts = {}) {
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     let cursor = null;
+    if (opts.continuationGuard)
+        await opts.continuationGuard();
     if (opts.unreadOnly)
         cursor = await getLocalServerCursor(localCursorBinding(local));
     if (opts.since !== undefined)
-        cursor = await resolveLocalLogCursor(local, opts.since);
+        cursor = await resolveLocalLogCursor(local, opts.since, opts.continuationGuard);
     let page = await localReadLogPage(local, {
         cursor,
         limit: opts.limit,
+        continuationGuard: opts.continuationGuard,
         // Keep the cursor payload stable across a lost response; do not re-read or
         // advance local state until one response has been decoded successfully.
         ...(opts.unreadOnly && opts.since === undefined ? { retryMode: 'unread-cursor' } : {}),
     });
     if (opts.unreadOnly && page.cursor) {
-        await advanceLocalServerCursor(localCursorBinding(local), page.cursor);
+        if (opts.continuationGuard)
+            await opts.continuationGuard();
+        await advanceLocalServerCursor(localCursorBinding(local), page.cursor, ...(opts.continuationGuard ? [opts.continuationGuard] : []));
     }
     const entries = [...page.entries];
     const backlog = entries.length + (typeof page.behind_by === 'number' ? page.behind_by : 0);
@@ -790,14 +800,17 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
                 cursor: page.cursor,
                 limit: Math.min(500, DIGEST_FETCH_CAP - entries.length),
                 retryMode: 'unread-cursor',
+                continuationGuard: opts.continuationGuard,
             });
             if (page.cursor) {
-                await advanceLocalServerCursor(localCursorBinding(local), page.cursor);
+                if (opts.continuationGuard)
+                    await opts.continuationGuard();
+                await advanceLocalServerCursor(localCursorBinding(local), page.cursor, ...(opts.continuationGuard ? [opts.continuationGuard] : []));
             }
             entries.push(...page.entries);
         }
     }
-    const composed = await localCubeComposition(local);
+    const composed = await localCubeComposition(local, opts.continuationGuard);
     return {
         entries,
         drones: composed.drones,
@@ -1011,7 +1024,7 @@ export async function removeDocument(sessionToken, apiUrl, input, serverTrustIde
  */
 export async function appendLog(sessionToken, apiUrl, message, opts) {
     const to = normalizeLogAudience(opts?.to);
-    const postId = randomUUID();
+    const postId = opts.postId ?? randomUUID();
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     const request = decodeAppendLogRequest({
         post_id: postId,
@@ -1020,7 +1033,10 @@ export async function appendLog(sessionToken, apiUrl, message, opts) {
         ...(opts.class ? { class: opts.class } : {}),
         ...(opts.documents ? { documents: opts.documents } : {}),
     });
-    const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs`, 'POST', { ...request }, { retryMode: 'append-log', decodePayload: decodeAppendLogResult });
+    const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs`, 'POST', { ...request }, {
+        ...(opts.transportRetry === false ? {} : { retryMode: 'append-log' }),
+        decodePayload: decodeAppendLogResult,
+    });
     if (!payload)
         throw new Error('Local Borg server returned an empty log response');
     return payload;

@@ -40,7 +40,8 @@ const LOCK_ATTEMPTS = 500;
 function expectedUid() {
     return typeof process.getuid === 'function' ? process.getuid() : null;
 }
-async function assertSecureRoot(root, rootMode = 'private') {
+/** Shared directory policy; create=false validates without mutating and returns false if absent. */
+export async function assertSecureRoot(root, rootMode = 'private', create = true) {
     if (!isCanonicalPath(root)) {
         throw new Error(`Borg credential store path ${root} is not canonical`);
     }
@@ -51,6 +52,8 @@ async function assertSecureRoot(root, rootMode = 'private') {
     catch (error) {
         if (error.code !== 'ENOENT')
             throw error;
+        if (!create)
+            return false;
         await mkdir(root, { recursive: true, mode: 0o700 });
         metadata = await lstat(root);
     }
@@ -69,6 +72,7 @@ async function assertSecureRoot(root, rootMode = 'private') {
     if (!isCanonicalPath(root)) {
         throw new Error(`Borg credential store root ${root} is not canonical or contains a symlink`);
     }
+    return true;
 }
 async function assertSecureFile(filePath) {
     let metadata;
@@ -97,7 +101,9 @@ async function assertSecurePath(filePath, options) {
     if (!isAbsolute(filePath) || resolve(filePath) !== filePath || dirname(filePath) !== secureRoot) {
         throw new Error(`Borg credential store file path ${filePath} is not canonical`);
     }
-    await assertSecureRoot(secureRoot, options.rootMode);
+    if (!await assertSecureRoot(secureRoot, options.rootMode, options.createRoot !== false)) {
+        throw Object.assign(new Error('Borg private store directory disappeared'), { code: 'ENOENT' });
+    }
 }
 /**
  * Liveness check for the alive/dead branch (RULED option b). `process.kill(pid, 0)`
@@ -199,14 +205,30 @@ export async function atomicWrite0600(filePath, data, options = {}) {
     if (options.secureRoot)
         await assertSecureFile(filePath);
     const tmp = `${filePath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-    const handle = await open(tmp, 'wx', 0o600);
+    const handle = await open(tmp, options.verifyLeafIdentity
+        ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW
+        : 'wx', 0o600);
+    let opened = null;
+    const cleanup = async () => {
+        if (options.verifyLeafIdentity) {
+            const current = await lstat(tmp).catch(() => null);
+            if (!opened || !current || current.dev !== opened.dev || current.ino !== opened.ino)
+                return;
+        }
+        await unlink(tmp).catch(() => { });
+    };
     try {
+        opened = options.verifyLeafIdentity ? await handle.stat() : null;
+        if (opened && (!opened.isFile() || (opened.mode & 0o777) !== 0o600 ||
+            (expectedUid() !== null && opened.uid !== expectedUid()))) {
+            throw new Error('Borg private store temporary file is not private');
+        }
         await handle.writeFile(data);
         await handle.sync();
     }
     catch (err) {
         await handle.close().catch(() => { });
-        await unlink(tmp).catch(() => { });
+        await cleanup();
         throw err;
     }
     await handle.close();
@@ -215,7 +237,19 @@ export async function atomicWrite0600(filePath, data, options = {}) {
             await assertSecurePath(filePath, options);
             await assertSecureFile(filePath);
         }
-        await rename(tmp, filePath);
+        if (opened) {
+            const current = await lstat(tmp);
+            if (!current.isFile() || current.dev !== opened.dev || current.ino !== opened.ino ||
+                current.uid !== opened.uid || (current.mode & 0o777) !== 0o600) {
+                throw new Error('Borg private store temporary file identity changed');
+            }
+        }
+        if (options.exclusive) {
+            await link(tmp, filePath);
+            await unlink(tmp);
+        }
+        else
+            await rename(tmp, filePath);
         const parent = await open(dirname(filePath), 'r');
         try {
             await parent.sync();
@@ -225,7 +259,7 @@ export async function atomicWrite0600(filePath, data, options = {}) {
         }
     }
     catch (err) {
-        await unlink(tmp).catch(() => { });
+        await cleanup();
         throw err;
     }
 }

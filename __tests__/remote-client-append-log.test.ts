@@ -77,6 +77,28 @@ describe('appendLog mandatory explicit audience', () => {
     expect(postBody()).not.toHaveProperty('recipientDroneIds');
   });
 
+  it('reuses a caller-owned post_id so a cross-call retry is one idempotent post', async () => {
+    const { appendLog } = await import('../src/remote-client.js');
+    const postId = '55555555-5555-4555-8555-555555555555';
+    await appendLog(SESSION, ORIGIN, 'relay', { to: [DRONE_ID], postId });
+    await appendLog(SESSION, ORIGIN, 'relay', { to: [DRONE_ID], postId });
+    const bodies = fetchSpy.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).payload);
+    expect(bodies.map((body) => body.post_id)).toEqual([postId, postId]);
+    expect(bodies[0]).not.toHaveProperty('postId');
+    await expect(appendLog(SESSION, ORIGIN, 'relay', { to: [DRONE_ID], postId: 'not-a-uuid' })).rejects.toThrow();
+  });
+
+  it('makes exactly one transport attempt when the caller owns retries (transportRetry: false)', async () => {
+    const reset = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    fetchSpy.mockImplementation(async () => { throw reset; });
+    const { appendLog } = await import('../src/remote-client.js');
+    await expect(appendLog(SESSION, ORIGIN, 'relay', { to: [DRONE_ID], transportRetry: false })).rejects.toBe(reset);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    fetchSpy.mockClear();
+    await expect(appendLog(SESSION, ORIGIN, 'relay', { to: [DRONE_ID] })).rejects.toThrow();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
   it('passes non-empty recipient selectors to the server without local resolution', async () => {
     const { appendLog } = await import('../src/remote-client.js');
     await appendLog(SESSION, ORIGIN, 'direct', { to: ['builder-1', 'id:12345678'] });

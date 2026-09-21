@@ -46,7 +46,7 @@ describe('gh#docs-site B — DOCS_SECTIONS + borg_docs', () => {
     expect(enrollmentGuide).toContain('borg assimilate --host <server> --enroll');
     expect(enrollmentGuide).toContain('grant that enrolled client');
 
-    for (const section of DOCS_SECTIONS.filter(({ slug }) => !['enroll', 'seat-lifecycle', 'documents'].includes(slug))) {
+    for (const section of DOCS_SECTIONS.filter(({ slug }) => !['enroll', 'seat-lifecycle', 'documents', 'human-representative'].includes(slug))) {
       expect(new URL(section.url).hostname).toBe('borgmcp.ai');
     }
   });

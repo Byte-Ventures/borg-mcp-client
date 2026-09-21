@@ -10,6 +10,9 @@ import {
 import type { ActiveCube } from '../src/cubes';
 import { BorgServerError, LegacySessionCredentialCollisionError } from '../src/server-errors';
 import { DroneEvictedError } from '../src/drone-lifecycle';
+import { buildDefaultRepresentativeDeps, runRepresentativePrepare } from '../src/representative-cmd';
+import { shellEscape } from '../src/shell-escape';
+import { resolveCliChoice } from '../src/cli-platform';
 import { createHash } from 'node:crypto';
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -36,6 +39,10 @@ const openCodeDroneMocks = vi.hoisted(() => ({
 }));
 const mcpConfigMocks = vi.hoisted(() => ({
   ensureCliMcpConfigured: vi.fn(),
+}));
+const representativePreparation = vi.hoisted(() => ({ deps: null as AssimilateDeps | null }));
+vi.mock('../src/assimilate-deps.js', () => ({
+  buildDefaultAssimilateDeps: () => representativePreparation.deps,
 }));
 const SERVER_TRUST_IDENTITY = 'spki-sha256:test-server';
 const TEST_ARTIFACT_SECRET = 'i'.repeat(43);
@@ -278,6 +285,78 @@ function makeStubDeps(overrides: Partial<AssimilateDeps> = {}): AssimilateDeps {
   }) as AssimilateDeps['createCube'];
   return deps;
 }
+
+describe('representative preparation at the real assimilation seam', () => {
+  it('preserves representative arguments in a no-authority refusal before mutation', async () => {
+    const deps = makeStubDeps({ isTTY: () => false, defaultAuthority: undefined });
+    representativePreparation.deps = deps;
+    const representative = await buildDefaultRepresentativeDeps();
+    const coordinator = "operator's $(label)";
+    const role = "relay's $role";
+    const worktreeName = 'relay-worktree';
+    expect(await runRepresentativePrepare({
+      action: 'prepare', coordinator, role, worktreeName, rebind: false,
+    }, {
+      ...representative, cwd: () => '/work/myrepo', findProjectRoot: (dir) => dir,
+      hydrateSeat: async () => null, stderr: deps.stderr,
+    })).toBe(1);
+    const output = vi.mocked(deps.stderr).mock.calls.map(([text]) => text).join('');
+    expect(output).toContain('borg representative prepare --host <host>' +
+      ` --coordinator ${shellEscape(coordinator)} --role ${shellEscape(role)} --worktree ${shellEscape(worktreeName)}`);
+    expect(output).not.toContain('assimilate');
+    for (const mutation of [deps.preparePrivateRoot, deps.ensureLocalServerInstalled,
+      deps.assimilate, deps.finalizeServerSeat, deps.mkdirp, deps.saveRepositoryAssociation,
+      deps.setCliPreferenceForWorktree, deps.installProjectSessionHook]) {
+      expect(mutation).not.toHaveBeenCalled();
+    }
+    expect(deps.connectServer).not.toHaveBeenCalled();
+  });
+  it('prepares a worker without an installed agent CLI or launch side effects', async () => {
+    const noClis = () => resolveCliChoice(undefined, {
+      detectCli: () => ({ claude: null, codex: null, opencode: null }),
+      detectConfigured: () => ({ claude: false, codex: false, opencode: false }),
+      getPreference: async () => null, setPreference: async () => {},
+      prompt: async () => '', isTTY: () => false,
+    });
+    await expect(noClis()).rejects.toThrow('No supported agent CLI found');
+    const deps = makeStubDeps({
+      resolveCli: vi.fn(noClis),
+      provisionLaunchAccess: vi.fn(),
+    });
+    representativePreparation.deps = deps;
+    const representative = await buildDefaultRepresentativeDeps();
+    expect((await representative.prepareSeat({ role: 'Drone', worktreeName: 'representative' })).code).toBe(0);
+    expect(deps.assimilate).toHaveBeenCalledTimes(1);
+    expect(deps.finalizeServerSeat).toHaveBeenCalledTimes(1);
+    expect(deps.preparePrivateRoot).toHaveBeenCalled();
+    const params = vi.mocked(deps.assimilate).mock.calls[0][2];
+    expect(params).not.toHaveProperty('agent_kind');
+    expect(params).not.toHaveProperty('model');
+    expect(deps.resolveCli).not.toHaveBeenCalled();
+    expect(mcpConfigMocks.ensureCliMcpConfigured).not.toHaveBeenCalled();
+    expect(deps.setCliPreferenceForWorktree).not.toHaveBeenCalled();
+    expect(deps.provisionLaunchAccess).not.toHaveBeenCalled();
+    expect(deps.installProjectSessionHook).not.toHaveBeenCalled();
+    expect(deps.exec).not.toHaveBeenCalled();
+  });
+  it.each([
+    { name: 'Coordinator', is_human_seat: true },
+    { name: 'Queen', is_human_seat: false, role_class: 'queen' as const },
+  ])('rejects $name before attach or finalization', async (role) => {
+    const deps = makeStubDeps({
+      listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+      getCube: vi.fn(async () => ({ id: 'cube-1', name: 'myrepo', roles: [
+        { id: 'role-default', ...role, is_default: true },
+      ] })),
+    });
+    representativePreparation.deps = deps;
+    const representative = await buildDefaultRepresentativeDeps();
+    await expect(representative.prepareSeat({ role: role.name, worktreeName: 'representative' }))
+      .rejects.toMatchObject({ code: 'REPRESENTATIVE_ROLE_NOT_PERMITTED' });
+    expect(deps.assimilate).not.toHaveBeenCalled();
+    expect(deps.finalizeServerSeat).not.toHaveBeenCalled();
+  });
+});
 
 describe('runAssimilate private-root preflight', () => {
   it('keeps the approved artifact and terminal copy byte-exact across TTY and NO_COLOR', async () => {
@@ -4554,6 +4633,30 @@ describe('runAssimilate: local saved-seat idempotency', () => {
     ],
     drones: occupied ? [{ role_id: 'role-default' }] : [],
   });
+
+  it.each(['evicted', 'revoked', 'rejected', 'trust-mismatch', 'unreachable'] as const)(
+    'representative preparation preserves the %s recovery classification', async (status) => {
+      const deps = makeStubDeps({
+        getActiveCube: vi.fn(async () => localActive()),
+        probeSeat: vi.fn(async () => status),
+        listCubes: vi.fn(async () => [{ id: 'cube-1', name: 'myrepo' }]),
+        getCube: vi.fn(async () => localCube()),
+        resolveCli: vi.fn(async () => { throw new Error('No supported agent CLI found'); }),
+      });
+      representativePreparation.deps = deps;
+      const representative = await buildDefaultRepresentativeDeps();
+      const result = await representative.prepareSeat({ role: 'Drone', host: 'localhost:8787', resume: true });
+      expect(result.code).toBe(status === 'evicted' ? 0 : 1);
+      expect(deps.probeSeat).toHaveBeenCalledTimes(1);
+      if (status === 'evicted') {
+        expect(deps.assimilate).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(deps.assimilate).mock.calls[0][2]).toMatchObject({ prior_drone_id: 'drone-saved', remint_invalid_prior: true });
+      } else {
+        expect(deps.assimilate).not.toHaveBeenCalled();
+        expect(deps.finalizeServerSeat).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it('reattaches an identical rerun after restart without minting another drone', async () => {
     let active: ActiveCube | null = null;

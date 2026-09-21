@@ -41,7 +41,7 @@ function strictAffirmative(answer) {
     const normalized = answer.trim().toLowerCase();
     return normalized === 'y' || normalized === 'yes';
 }
-async function selectAssimilationAuthority(flags, deps, mode) {
+async function selectAssimilationAuthority(flags, deps, mode, authoritySelectionCommand) {
     if (flags.server !== undefined) {
         try {
             return { kind: 'server', apiUrl: normalizeServerEndpoint(flags.server) };
@@ -61,7 +61,7 @@ async function selectAssimilationAuthority(flags, deps, mode) {
     if (!deps.isTTY() || flags.yes) {
         if (deps.defaultAuthority)
             return deps.defaultAuthority;
-        const command = mode === 'cube-init'
+        const command = authoritySelectionCommand ? `\`${authoritySelectionCommand}\`` : mode === 'cube-init'
             ? '`borg server cube init --host <host>`'
             : '`borg assimilate --host <host> --here`';
         deps.stderr(`No local server selected. Use ${command} to select a local server.\n`);
@@ -545,8 +545,8 @@ export async function launchAssimilatedAgent(input, deps) {
     }
     return exitCode;
 }
-export async function resolveAssimilationCubeRole(input, deps) {
-    const { requestedRole, flags, cubeDetail, isFirstDrone, savedLocalRole, apiUrl } = input;
+function resolveConnectionRole(input, deps) {
+    const { requestedRole, cubeDetail, isFirstDrone, savedLocalRole, apiUrl } = input;
     let resolvedRole;
     if (savedLocalRole) {
         resolvedRole = savedLocalRole;
@@ -573,6 +573,14 @@ export async function resolveAssimilationCubeRole(input, deps) {
             return { kind: 'stop', code: 1 };
         }
     }
+    return continueAssimilation({ resolvedRole });
+}
+export async function resolveAssimilationCubeRole(input, deps) {
+    const role = resolveConnectionRole(input, deps);
+    if (role.kind === 'stop')
+        return role;
+    const { resolvedRole } = role.value;
+    const { flags, apiUrl } = input;
     const effectiveModel = flags.model ?? null;
     const cli = await deps.resolveCli(flags.cli);
     try {
@@ -624,8 +632,7 @@ export async function prepareAssimilationSeat(input, deps) {
             cube_id: cubeDetail.id,
             role_id: resolvedRole.id,
             hostname: deps.getHostname(),
-            agent_kind: cli,
-            model: effectiveModel,
+            ...(cli !== undefined ? { agent_kind: cli, model: effectiveModel } : {}),
             working_repo: resolveWorkingRepo(projectRoot),
             ...(reattachPriorId ? { prior_drone_id: reattachPriorId } : {}),
             ...(remintInvalidPrior ? { remint_invalid_prior: true } : {}),
@@ -781,6 +788,13 @@ export async function prepareAssimilationWorktree(input, deps) {
 }
 export async function resolveAssimilationAuthority(input, deps) {
     const { args, mode, repositoryContext } = input;
+    // Representative retries must refuse before private-state initialization or
+    // installation checks can mutate anything when no authority was selected.
+    if (input.authoritySelectionCommand && args.flags.server === undefined &&
+        deps.defaultAuthority === undefined && !args.flags.enroll && (!deps.isTTY() || args.flags.yes)) {
+        await selectAssimilationAuthority(args.flags, deps, mode, input.authoritySelectionCommand);
+        return { kind: 'stop', code: 1 };
+    }
     const hostlessEnrollment = args.flags.enroll === true &&
         args.flags.server === undefined && deps.defaultAuthority === undefined;
     const artifactOnlyEnrollment = hostlessEnrollment && deps.isTTY();
@@ -904,7 +918,7 @@ export async function resolveAssimilationAuthority(input, deps) {
         }
         localSeatReadError = error;
     }
-    const selectedAuthority = await selectAssimilationAuthority(args.flags, deps, mode);
+    const selectedAuthority = await selectAssimilationAuthority(args.flags, deps, mode, input.authoritySelectionCommand);
     if (!selectedAuthority)
         return { kind: 'stop', code: 1 };
     let authority = selectedAuthority;
@@ -1012,11 +1026,18 @@ export async function resolveAssimilationAuthority(input, deps) {
     });
 }
 export async function runAssimilate(args, deps, options = {}) {
+    return runAssimilationFlow(args, deps, options);
+}
+/** Prepare a host-neutral connection using the same durable assimilation lifecycle. */
+export async function prepareConnection(args, deps, options) {
+    return runAssimilationFlow(args, deps, { launch: false, ...options }, options.validateRole, options.authoritySelectionCommand);
+}
+async function runAssimilationFlow(args, deps, options, validateConnectionRole, authoritySelectionCommand) {
     const repository = await resolveAssimilationRepository(args, deps);
     if (repository.kind === 'stop')
         return repository.code;
     const { mode, repositoryContext } = repository.value;
-    const authorityResolution = await resolveAssimilationAuthority({ args, mode, repositoryContext }, deps);
+    const authorityResolution = await resolveAssimilationAuthority({ args, mode, repositoryContext, authoritySelectionCommand }, deps);
     if (authorityResolution.kind === 'stop')
         return authorityResolution.code;
     const { authority, auth, existing, hasPersistedIdentity, projectRoot, wantSibling, verifiedHead, } = authorityResolution.value;
@@ -1368,17 +1389,19 @@ export async function runAssimilate(args, deps, options = {}) {
             return 1;
         }
     }
-    const cubeRole = await resolveAssimilationCubeRole({
-        requestedRole: args.role,
-        flags: args.flags,
-        cubeDetail,
-        isFirstDrone,
-        savedLocalRole,
-        apiUrl: authority.apiUrl,
-    }, deps);
+    const roleInput = {
+        requestedRole: args.role, flags: args.flags, cubeDetail, isFirstDrone,
+        savedLocalRole, apiUrl: authority.apiUrl,
+    };
+    const cubeRole = validateConnectionRole
+        ? resolveConnectionRole(roleInput, deps)
+        : await resolveAssimilationCubeRole(roleInput, deps);
     if (cubeRole.kind === 'stop')
         return cubeRole.code;
-    const { resolvedRole, effectiveModel, cli } = cubeRole.value;
+    const { resolvedRole } = cubeRole.value;
+    validateConnectionRole?.(resolvedRole);
+    const cli = 'cli' in cubeRole.value ? cubeRole.value.cli : undefined;
+    const effectiveModel = 'effectiveModel' in cubeRole.value ? cubeRole.value.effectiveModel : null;
     const seat = await prepareAssimilationSeat({
         apiUrl: auth.apiUrl,
         token: auth.token,
@@ -1399,6 +1422,7 @@ export async function runAssimilate(args, deps, options = {}) {
     if (seat.kind === 'stop')
         return seat.code;
     const { result, assignedRole, sessionExpected } = seat.value;
+    validateConnectionRole?.(assignedRole);
     const worktree = await prepareAssimilationWorktree({
         flags: args.flags,
         repositoryContext,
@@ -1459,7 +1483,7 @@ export async function runAssimilate(args, deps, options = {}) {
     // of that request. The resolver therefore saved the preference against the
     // invoking checkout. Once a sibling exists, save the same choice under its
     // own project key so a later --here launch in that worktree can read it.
-    if (spawnedWorktreePath) {
+    if (spawnedWorktreePath && cli !== undefined) {
         try {
             await deps.setCliPreferenceForWorktree(cli, spawnedWorktreePath);
         }
@@ -1472,8 +1496,10 @@ export async function runAssimilate(args, deps, options = {}) {
         }
     }
     try {
-        deps.mkdirp(scratchRoot);
-        deps.provisionLaunchAccess?.(cli, seatWorktree, launchAccessPaths);
+        if (cli !== undefined) {
+            deps.mkdirp(scratchRoot);
+            deps.provisionLaunchAccess?.(cli, seatWorktree, launchAccessPaths);
+        }
     }
     catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1502,6 +1528,13 @@ export async function runAssimilate(args, deps, options = {}) {
         catch {
             // This comparison is advisory and must never block assimilation.
         }
+    }
+    if (validateConnectionRole) {
+        options.onPrepared?.({
+            cubeId: result.cube_id, cubeName: cubeDetail.name, droneId: result.drone_id,
+            droneLabel: result.drone_label, roleName: assignedRole.name, worktree: seatWorktree,
+        });
+        return 0;
     }
     // gh#793: best-effort GC of orphaned inbox files (evicted/dead drones) in the
     // cube just joined — lazy-on-assimilate, no cron/new command. NEVER blocks or
@@ -1554,7 +1587,7 @@ export async function runAssimilate(args, deps, options = {}) {
         cubeDetail,
         assignedRole,
         apiUrl: auth.apiUrl,
-        cli,
+        cli: cli,
         effectiveModel,
         agentCwd,
         seatWorktree,

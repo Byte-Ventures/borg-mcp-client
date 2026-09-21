@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { borgConfigRoot } from './private-root.js';
+import { assertSecureRoot, atomicWrite0600, readStoreFile } from './seat-store.js';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STREAM_LOCKS_DIR = path.join(borgConfigRoot(), 'stream-locks');
 const OWNER_FILE = 'owner.json';
@@ -20,7 +21,10 @@ export function streamLockPath(cubeId, droneId, locksDir = STREAM_LOCKS_DIR) {
 }
 export async function acquireStreamLease(cubeId, droneId, staleMs = STREAM_OWNER_STALE_MS, deps = {}) {
     const lockPath = streamLockPath(cubeId, droneId, deps.locksDir);
-    await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+    if (deps.privateRoot)
+        await privateLeaseDirectory(path.dirname(lockPath), deps, true);
+    else
+        await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
     if (!(await recoverTakeoverClaim(lockPath, staleMs, deps)))
         return null;
     const lease = await tryCreateLease(lockPath, deps);
@@ -54,7 +58,7 @@ export async function acquireStreamLease(cubeId, droneId, staleMs = STREAM_OWNER
 }
 export async function readOwnershipSnapshot(cubeId, droneId, deps = {}) {
     const lockPath = streamLockPath(cubeId, droneId, deps.locksDir);
-    const inspected = await readBoundOwner(lockPath);
+    const inspected = await readBoundOwner(lockPath, deps);
     if (!inspected)
         return { state: 'unowned', lockPath };
     const { raw, stat: lockStat } = inspected;
@@ -118,6 +122,10 @@ export async function readOwnershipSnapshot(cubeId, droneId, deps = {}) {
     };
 }
 async function tryCreateLease(lockPath, deps) {
+    if (deps.privateRoot) {
+        await privateLeaseDirectory(lockPath, deps, false);
+        await privateLeaseDirectory(takeoverPath(lockPath), deps, false);
+    }
     if (await pathExists(takeoverPath(lockPath)))
         return null;
     try {
@@ -130,21 +138,21 @@ async function tryCreateLease(lockPath, deps) {
     }
     const record = makeRecord(deps);
     try {
-        await (deps.writeRecord ?? writeRecord)(lockPath, record);
+        await writeLeaseRecord(lockPath, record, deps);
         if (await pathExists(takeoverPath(lockPath))) {
-            await cleanupFailedInitialization(lockPath, record).catch(() => { });
+            await cleanupFailedInitialization(lockPath, record, deps).catch(() => { });
             return null;
         }
     }
     catch (err) {
-        await cleanupFailedInitialization(lockPath, record).catch(() => { });
+        await cleanupFailedInitialization(lockPath, record, deps).catch(() => { });
         throw err;
     }
-    const created = await readBoundOwner(lockPath);
+    const created = await readBoundOwner(lockPath, deps);
     const createdRecord = created?.raw ? parseOwnershipRecord(created.raw) : null;
     if (!created || !createdRecord ||
         !sameOwner(record, createdRecord)) {
-        await cleanupFailedInitialization(lockPath, record).catch(() => { });
+        await cleanupFailedInitialization(lockPath, record, deps).catch(() => { });
         throw new Error('Borg stream lease initialization lost ownership');
     }
     return makeLease(lockPath, record, { dev: created.stat.dev, ino: created.stat.ino }, deps);
@@ -154,7 +162,7 @@ async function tryCreateLease(lockPath, deps) {
  * first, then verify identity: if a racer installed a different valid owner in
  * the canonical path, restore/preserve it rather than recursively deleting it.
  */
-async function cleanupFailedInitialization(lockPath, attempted) {
+async function cleanupFailedInitialization(lockPath, attempted, deps) {
     const cleanupPath = `${lockPath}.failed-${attempted.processNonce}-${Date.now()}`;
     try {
         await fs.rename(lockPath, cleanupPath);
@@ -164,7 +172,7 @@ async function cleanupFailedInitialization(lockPath, attempted) {
             return;
         throw err;
     }
-    const current = await readOwnershipRecord(cleanupPath);
+    const current = await readOwnershipRecord(cleanupPath, deps);
     if (current && (current.pid !== attempted.pid || current.processNonce !== attempted.processNonce)) {
         try {
             await fs.rename(cleanupPath, lockPath);
@@ -182,6 +190,10 @@ async function cleanupFailedInitialization(lockPath, attempted) {
 }
 async function moveStaleLockAside(lockPath, snapshot, staleMs, deps) {
     const claimPath = takeoverPath(lockPath);
+    if (deps.privateRoot) {
+        await privateLeaseDirectory(lockPath, deps, false);
+        await privateLeaseDirectory(claimPath, deps, false);
+    }
     try {
         await fs.rename(lockPath, claimPath);
     }
@@ -212,9 +224,12 @@ async function moveStaleLockAside(lockPath, snapshot, staleMs, deps) {
         processNonce: deps.processNonce ?? processNonce,
         claimedAt: (deps.now ?? (() => new Date()))().toISOString(),
     };
-    await fs.writeFile(path.join(claimPath, TAKEOVER_FILE), JSON.stringify(claimant, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    if (deps.privateRoot)
+        await writePrivateLeaseFile(claimPath, TAKEOVER_FILE, claimant, deps, true);
+    else
+        await fs.writeFile(path.join(claimPath, TAKEOVER_FILE), JSON.stringify(claimant, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
     await deps.beforeTakeoverVerify?.(claimPath);
-    const verified = await readOwnershipRecord(claimPath);
+    const verified = await readOwnershipRecord(claimPath, deps);
     const verifiedStat = await fs.stat(claimPath).catch(() => null);
     if (!isStillReclaimable(snapshot, verified, verifiedStat, staleMs, deps)) {
         await fs.unlink(path.join(claimPath, TAKEOVER_FILE)).catch(() => { });
@@ -247,6 +262,10 @@ async function pathExists(filePath) {
 }
 async function recoverTakeoverClaim(lockPath, staleMs, deps) {
     const claimPath = takeoverPath(lockPath);
+    if (deps.privateRoot) {
+        await privateLeaseDirectory(lockPath, deps, false);
+        await privateLeaseDirectory(claimPath, deps, false);
+    }
     let claimStat;
     try {
         claimStat = await fs.stat(claimPath);
@@ -257,9 +276,14 @@ async function recoverTakeoverClaim(lockPath, staleMs, deps) {
         throw error;
     }
     const now = (deps.now ?? (() => new Date()))();
+    const privateClaim = deps.privateRoot
+        ? await readStoreFile(path.join(claimPath, TAKEOVER_FILE), { secureRoot: claimPath, createRoot: false })
+        : undefined;
     let claimant = null;
     try {
-        const parsed = JSON.parse(await fs.readFile(path.join(claimPath, TAKEOVER_FILE), 'utf8'));
+        const parsed = JSON.parse((deps.privateRoot
+            ? privateClaim
+            : await fs.readFile(path.join(claimPath, TAKEOVER_FILE), 'utf8')) ?? 'null');
         if (parsed?.schemaVersion === 1 &&
             Number.isSafeInteger(parsed.pid) && parsed.pid > 0 &&
             isSafeLeaseText(parsed.processNonce, 128) &&
@@ -279,7 +303,7 @@ async function recoverTakeoverClaim(lockPath, staleMs, deps) {
         return false;
     if (!claimant && claimAge <= STREAM_OWNER_TAKEOVER_STALE_MS)
         return false;
-    const owner = await readOwnershipRecord(claimPath);
+    const owner = await readOwnershipRecord(claimPath, deps);
     const ownerHeartbeat = owner ? Date.parse(owner.heartbeatAt) : Number.NaN;
     const ownerAge = Number.isFinite(ownerHeartbeat)
         ? now.getTime() - ownerHeartbeat
@@ -364,7 +388,7 @@ function makeLease(lockPath, record, identity, deps) {
             await deps.beforeLeaseRefreshMutation?.(lockPath);
             const next = { ...ownedRecord, heartbeatAt: (deps.now ?? (() => new Date()))().toISOString() };
             const refreshed = await mutateClaimedLease(lockPath, identity, ownedRecord, deps, async (claimPath) => {
-                await (deps.writeRecord ?? writeRecord)(claimPath, next);
+                await writeLeaseRecord(claimPath, next, deps);
                 return 'restore';
             });
             if (!refreshed)
@@ -381,6 +405,10 @@ function makeLease(lockPath, record, identity, deps) {
 }
 async function mutateClaimedLease(lockPath, identity, expected, deps, mutation) {
     const claimPath = takeoverPath(lockPath);
+    if (deps.privateRoot) {
+        await privateLeaseDirectory(lockPath, deps, false);
+        await privateLeaseDirectory(claimPath, deps, false);
+    }
     try {
         await fs.rename(lockPath, claimPath);
     }
@@ -401,8 +429,11 @@ async function mutateClaimedLease(lockPath, identity, expected, deps, mutation) 
         processNonce: deps.processNonce ?? processNonce,
         claimedAt: (deps.now ?? (() => new Date()))().toISOString(),
     };
-    await fs.writeFile(path.join(claimPath, TAKEOVER_FILE), JSON.stringify(claimant, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-    const inspected = await readBoundOwner(claimPath);
+    if (deps.privateRoot)
+        await writePrivateLeaseFile(claimPath, TAKEOVER_FILE, claimant, deps, true);
+    else
+        await fs.writeFile(path.join(claimPath, TAKEOVER_FILE), JSON.stringify(claimant, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    const inspected = await readBoundOwner(claimPath, deps);
     const current = inspected?.raw ? parseOwnershipRecord(inspected.raw) : null;
     if (!inspected || !sameIdentity(identity, inspected.stat) || !current ||
         !sameOwner(expected, current)) {
@@ -449,7 +480,11 @@ function sameOwner(left, right) {
         left.droneLabel === right.droneLabel &&
         left.cubeName === right.cubeName;
 }
-async function readOwnershipRecord(lockPath) {
+async function readOwnershipRecord(lockPath, deps = {}) {
+    if (deps.privateRoot) {
+        const inspected = await readBoundOwner(lockPath, deps);
+        return inspected?.raw ? parseOwnershipRecord(inspected.raw) : null;
+    }
     try {
         const raw = await fs.readFile(path.join(lockPath, OWNER_FILE), 'utf8');
         return parseOwnershipRecord(raw);
@@ -467,7 +502,9 @@ function parseOwnershipRecord(raw) {
         return null;
     }
 }
-async function readBoundOwner(lockPath) {
+async function readBoundOwner(lockPath, deps = {}) {
+    if (deps.privateRoot && !await privateLeaseDirectory(lockPath, deps, false))
+        return null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
         let handle;
         try {
@@ -482,7 +519,9 @@ async function readBoundOwner(lockPath) {
             const openedStat = await handle.stat();
             let raw;
             try {
-                raw = await fs.readFile(path.join(lockPath, OWNER_FILE), 'utf8');
+                raw = deps.privateRoot
+                    ? await readStoreFile(path.join(lockPath, OWNER_FILE), { secureRoot: lockPath, createRoot: false })
+                    : await fs.readFile(path.join(lockPath, OWNER_FILE), 'utf8');
             }
             catch (error) {
                 if (error?.code !== 'ENOENT')
@@ -508,6 +547,46 @@ async function readBoundOwner(lockPath) {
 }
 function sameIdentity(left, right) {
     return left.dev === right.dev && left.ino === right.ino;
+}
+/** Apply the existing private-store directory policy without creating on reads. */
+async function privateLeaseDirectory(directory, deps, create) {
+    const { root, boundary } = deps.privateRoot;
+    const ancestors = path.relative(boundary, root);
+    if (ancestors.startsWith('..') || path.isAbsolute(ancestors)) {
+        throw new Error('Borg private lease root escapes its trusted boundary');
+    }
+    const relative = path.relative(root, directory);
+    if (path.resolve(directory) !== directory || relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new Error('Borg private lease path escapes its private root');
+    }
+    let ancestor = boundary;
+    for (const component of ancestors.split(path.sep).filter(Boolean)) {
+        if (!await assertSecureRoot(ancestor, 'owner-controlled', create))
+            return false;
+        ancestor = path.join(ancestor, component);
+    }
+    if (!await assertSecureRoot(root, 'private', create))
+        return false;
+    let current = root;
+    for (const component of relative.split(path.sep).filter(Boolean)) {
+        current = path.join(current, component);
+        if (!await assertSecureRoot(current, 'private', create))
+            return false;
+    }
+    return true;
+}
+async function writePrivateLeaseFile(directory, name, value, deps, exclusive = false) {
+    if (!await privateLeaseDirectory(directory, deps, false))
+        throw new Error('Borg private lease directory disappeared');
+    await atomicWrite0600(path.join(directory, name), JSON.stringify(value, null, 2) + '\n', {
+        secureRoot: directory, verifyLeafIdentity: true, exclusive, createRoot: false,
+    });
+}
+async function writeLeaseRecord(directory, record, deps) {
+    if (deps.privateRoot)
+        await writePrivateLeaseFile(directory, OWNER_FILE, record, deps);
+    else
+        await (deps.writeRecord ?? writeRecord)(directory, record);
 }
 async function writeRecord(lockPath, record) {
     const ownerPath = path.join(lockPath, OWNER_FILE);
