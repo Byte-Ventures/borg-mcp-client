@@ -49,6 +49,11 @@ export declare function assertSecureRoot(root: string, rootMode?: SecureStoreOpt
  * cleans up the temp so no leftover file ever holds the secret.
  */
 export declare function atomicWrite0600(filePath: string, data: string, options?: SecureStoreOptions): Promise<void>;
+/** Identity drift is retryable only when inspecting an acquisition lock. */
+export declare class StoreFileIdentityChangedError extends Error {
+    readonly code = "STORE_FILE_IDENTITY_CHANGED";
+    constructor();
+}
 /**
  * Read the store file, or null when it does not exist (ONLY the missing-file
  * no-op path initializes empty). When the file exists, the 0600-store + 0700-parent
