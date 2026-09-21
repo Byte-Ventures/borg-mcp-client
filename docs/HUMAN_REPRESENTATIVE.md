@@ -46,8 +46,9 @@ borg representative prepare --host <host:port> --coordinator <coordinator-drone-
 
 Replace `<host:port>` with your existing Borg server's address. The bare
 `host:port` form is accepted (for example `127.0.0.1:7091`) and defaults to HTTPS.
-You can omit `--host` when this repository already has the intended server
-selected.
+Always pass `--host` for scripted or non-interactive runs. In an interactive
+terminal, omitting it makes `prepare` attempt server detection and ask you to
+confirm the detected server or enter its address.
 
 This creates the representative's own drone in a new linked worktree through
 the same path as `borg assimilate --worktree`, but **launches no agent CLI** and
