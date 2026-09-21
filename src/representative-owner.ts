@@ -23,7 +23,7 @@ export function representativeOwnership(binding: RepresentativeBinding): Promise
   return readOwnershipSnapshot(binding.cubeId, binding.representativeDroneId, representativeOwnerDeps(binding));
 }
 
-export function createRepresentativeOwner() {
+export function createRepresentativeOwner(heartbeatIntervalMs = 20_000) {
   let lease: StreamLease | null = null;
   let selected: RepresentativeBinding | undefined;
   let deps: StreamOwnerDeps;
@@ -73,7 +73,7 @@ export function createRepresentativeOwner() {
       lease = await acquireStreamLease(binding.cubeId, binding.representativeDroneId, STREAM_OWNER_STALE_MS, deps);
       if (!lease) return refuse(binding);
       selected = binding;
-      timer = setInterval(() => { void serial(refresh); }, 20_000);
+      timer = setInterval(() => { void serial(refresh); }, heartbeatIntervalMs);
       timer.unref();
     }),
     close: () => serial(async () => {

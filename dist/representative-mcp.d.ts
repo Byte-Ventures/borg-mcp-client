@@ -20,6 +20,8 @@ export interface ServeRepresentativeOptions {
     version: string;
     stdin?: Readable;
     stdout?: Writable;
+    /** Internal timing seam for heartbeat controls; production uses 20 seconds. */
+    heartbeatIntervalMs?: number;
 }
 export declare function serveRepresentativeMcp(options: ServeRepresentativeOptions): Promise<{
     close: () => Promise<void>;

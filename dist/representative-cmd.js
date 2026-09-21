@@ -233,6 +233,7 @@ export async function runRepresentativeMcp(command, deps, io) {
     const { serveRepresentativeMcp } = await import('./representative-mcp.js');
     const served = await serveRepresentativeMcp({
         version: io.version,
+        heartbeatIntervalMs: io.heartbeatIntervalMs,
         ...(io.stdin ? { stdin: io.stdin } : {}),
         ...(io.stdout ? { stdout: io.stdout } : {}),
         context: async () => {

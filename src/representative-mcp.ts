@@ -140,12 +140,14 @@ export interface ServeRepresentativeOptions {
   version: string;
   stdin?: Readable;
   stdout?: Writable;
+  /** Internal timing seam for heartbeat controls; production uses 20 seconds. */
+  heartbeatIntervalMs?: number;
 }
 
 export async function serveRepresentativeMcp(
   options: ServeRepresentativeOptions,
 ): Promise<{ close: () => Promise<void>; closed: Promise<void> }> {
-  const owner = createRepresentativeOwner();
+  const owner = createRepresentativeOwner(options.heartbeatIntervalMs);
   const server = new Server(
     { name: 'borg-human-representative', version: options.version },
     { capabilities: { tools: {} }, instructions: REPRESENTATIVE_INSTRUCTIONS },
@@ -170,6 +172,7 @@ export async function serveRepresentativeMcp(
       const backend = ctx.backend;
       const guarded = { ...ctx, backend: Object.fromEntries(['whoami', 'roster', 'append', 'readUnread', 'readEntry', 'ack'].map((key) => [key, async (...args: unknown[]) => {
         await owner.ensure(ctx.binding);
+        if (key === 'readUnread') args[1] = () => owner.ensure(ctx.binding);
         const result = await (backend[key as keyof typeof backend] as (...args: unknown[]) => Promise<unknown>).apply(backend, args);
         await owner.ensure(ctx.binding);
         return result;

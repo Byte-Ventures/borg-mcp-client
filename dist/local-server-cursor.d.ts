@@ -19,7 +19,7 @@ export interface LocalServerCursorBinding {
     purpose?: 'stream';
 }
 export declare function getLocalServerCursor(binding: LocalServerCursorBinding): Promise<LocalServerCursor | null>;
-export declare function advanceLocalServerCursor(binding: LocalServerCursorBinding, cursor: LocalServerCursor): Promise<void>;
+export declare function advanceLocalServerCursor(binding: LocalServerCursorBinding, cursor: LocalServerCursor, continuationGuard?: () => Promise<void>): Promise<void>;
 /**
  * client#42: reset (delete) a persisted cursor for `binding`. Used by the SSE
  * recovery path when the server returns 410 CURSOR_EXPIRED for the stream's

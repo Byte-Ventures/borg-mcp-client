@@ -48,7 +48,7 @@ export async function createSeatBackend(active) {
         append: ({ postId, message, to }) => client.appendLog(active.sessionToken, active.apiUrl, message, {
             to, postId, transportRetry: false, serverTrustIdentity: trust,
         }),
-        readUnread: (limit) => client.readLog(active.sessionToken, active.apiUrl, { unreadOnly: true, limit, serverTrustIdentity: trust }),
+        readUnread: (limit, continuationGuard) => client.readLog(active.sessionToken, active.apiUrl, { unreadOnly: true, limit, serverTrustIdentity: trust, continuationGuard }),
         readEntry: (entryId) => client.readLogEntry(active.sessionToken, active.apiUrl, { entry_id: entryId }, trust),
         ack: (entryId) => client.ackLogEntry(active.sessionToken, active.apiUrl, entryId, 'ack', trust),
     };

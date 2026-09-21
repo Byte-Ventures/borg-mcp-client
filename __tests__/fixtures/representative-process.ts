@@ -37,6 +37,6 @@ const code = await runRepresentativeMcp({ action: 'mcp', worktree }, {
   prepareSeat: async () => { throw new Error('preparation not part of this fixture'); },
   backendFor: () => backend, store,
   stdout: (text) => process.stdout.write(text), stderr: (text) => process.stderr.write(text),
-}, { version: '0.0.0-test' });
+}, { version: '0.0.0-test', heartbeatIntervalMs: process.argv[4] ? Number(process.argv[4]) : undefined });
 process.disconnect?.();
 process.exitCode = code;

@@ -102,7 +102,7 @@ export interface RepresentativeBackend {
    * here) — the WHOLE returned page, including entries the caller then filters
    * out. `limit` is a page-size hint: the client's digest mode may return more.
    */
-  readUnread(limit?: number): Promise<{ entries: LogEntry[]; has_more?: boolean }>;
+  readUnread(limit?: number, continuationGuard?: () => Promise<void>): Promise<{ entries: LogEntry[]; has_more?: boolean }>;
   readEntry(entryId: string): Promise<{ entry: LogEntry }>;
   ack(entryId: string): Promise<void>;
 }
@@ -125,8 +125,8 @@ export async function createSeatBackend(active: ActiveCube): Promise<Representat
       client.appendLog(active.sessionToken, active.apiUrl, message, {
         to, postId, transportRetry: false, serverTrustIdentity: trust,
       }),
-    readUnread: (limit) =>
-      client.readLog(active.sessionToken, active.apiUrl, { unreadOnly: true, limit, serverTrustIdentity: trust }),
+    readUnread: (limit, continuationGuard) =>
+      client.readLog(active.sessionToken, active.apiUrl, { unreadOnly: true, limit, serverTrustIdentity: trust, continuationGuard }),
     readEntry: (entryId) =>
       client.readLogEntry(active.sessionToken, active.apiUrl, { entry_id: entryId }, trust),
     ack: (entryId) => client.ackLogEntry(active.sessionToken, active.apiUrl, entryId, 'ack', trust),

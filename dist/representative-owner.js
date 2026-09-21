@@ -16,7 +16,7 @@ export function representativeOwnerDeps(binding) {
 export function representativeOwnership(binding) {
     return readOwnershipSnapshot(binding.cubeId, binding.representativeDroneId, representativeOwnerDeps(binding));
 }
-export function createRepresentativeOwner() {
+export function createRepresentativeOwner(heartbeatIntervalMs = 20_000) {
     let lease = null;
     let selected;
     let deps;
@@ -70,7 +70,7 @@ export function createRepresentativeOwner() {
             if (!lease)
                 return refuse(binding);
             selected = binding;
-            timer = setInterval(() => { void serial(refresh); }, 20_000);
+            timer = setInterval(() => { void serial(refresh); }, heartbeatIntervalMs);
             timer.unref();
         }),
         close: () => serial(async () => {

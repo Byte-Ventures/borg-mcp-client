@@ -283,7 +283,7 @@ export async function runRepresentativeStatus(
 export async function runRepresentativeMcp(
   command: Extract<RepresentativeCommand, { action: 'mcp' }>,
   deps: RepresentativeCmdDeps,
-  io: { version: string; pinSeat?: (active: ActiveCube) => void; stdin?: Readable; stdout?: Writable },
+  io: { version: string; pinSeat?: (active: ActiveCube) => void; stdin?: Readable; stdout?: Writable; heartbeatIntervalMs?: number },
 ): Promise<number> {
   let worktree: string;
   let pinned: RepresentativeBinding;
@@ -300,6 +300,7 @@ export async function runRepresentativeMcp(
   const { serveRepresentativeMcp } = await import('./representative-mcp.js');
   const served = await serveRepresentativeMcp({
     version: io.version,
+    heartbeatIntervalMs: io.heartbeatIntervalMs,
     ...(io.stdin ? { stdin: io.stdin } : {}),
     ...(io.stdout ? { stdout: io.stdout } : {}),
     context: async () => {

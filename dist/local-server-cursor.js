@@ -56,11 +56,19 @@ async function readState() {
         throw new Error('local Borg server cursor state is corrupt');
     }
 }
-async function writeState(state) {
+async function writeState(state, continuationGuard) {
     await mkdir(dirname(CURSOR_FILE), { recursive: true });
     const temporary = `${CURSOR_FILE}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(temporary, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
-    await rename(temporary, CURSOR_FILE);
+    try {
+        if (continuationGuard)
+            await continuationGuard();
+        await rename(temporary, CURSOR_FILE);
+    }
+    catch (error) {
+        await unlink(temporary).catch(() => undefined);
+        throw error;
+    }
 }
 async function withLock(operation) {
     await mkdir(dirname(CURSOR_LOCK), { recursive: true });
@@ -108,11 +116,13 @@ export async function getLocalServerCursor(binding) {
     const state = await readState();
     return state.cursors[key] ?? null;
 }
-export async function advanceLocalServerCursor(binding, cursor) {
+export async function advanceLocalServerCursor(binding, cursor, continuationGuard) {
     if (!validCursor(cursor))
         throw new Error('invalid local Borg server cursor');
     const key = cursorKey(binding);
     await withLock(async () => {
+        if (continuationGuard)
+            await continuationGuard();
         const state = await readState();
         const prior = state.cursors[key];
         if (prior &&
@@ -121,7 +131,7 @@ export async function advanceLocalServerCursor(binding, cursor) {
             return;
         }
         state.cursors[key] = cursor;
-        await writeState(state);
+        await writeState(state, continuationGuard);
     });
 }
 /**

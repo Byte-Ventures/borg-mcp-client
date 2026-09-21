@@ -166,6 +166,8 @@ export declare function readLog(sessionToken: string, apiUrl: string, opts?: {
     limit?: number;
     unreadOnly?: boolean;
     serverTrustIdentity?: string;
+    /** Refuse continuation before any cursor access/advance or HTTP attempt. */
+    continuationGuard?: () => Promise<void>;
 }): Promise<{
     entries: any[];
     drones: any[];

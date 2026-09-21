@@ -81,6 +81,7 @@ export declare function runRepresentativeMcp(command: Extract<RepresentativeComm
     pinSeat?: (active: ActiveCube) => void;
     stdin?: Readable;
     stdout?: Writable;
+    heartbeatIntervalMs?: number;
 }): Promise<number>;
 export declare function buildDefaultRepresentativeDeps(): Promise<RepresentativeCmdDeps>;
 //# sourceMappingURL=representative-cmd.d.ts.map

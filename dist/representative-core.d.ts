@@ -69,7 +69,7 @@ export interface RepresentativeBackend {
      * here) — the WHOLE returned page, including entries the caller then filters
      * out. `limit` is a page-size hint: the client's digest mode may return more.
      */
-    readUnread(limit?: number): Promise<{
+    readUnread(limit?: number, continuationGuard?: () => Promise<void>): Promise<{
         entries: LogEntry[];
         has_more?: boolean;
     }>;

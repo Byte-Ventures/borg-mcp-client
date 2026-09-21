@@ -112,7 +112,7 @@ const toolResult = (body, isError = false) => ({
     ...(isError ? { isError: true } : {}),
 });
 export async function serveRepresentativeMcp(options) {
-    const owner = createRepresentativeOwner();
+    const owner = createRepresentativeOwner(options.heartbeatIntervalMs);
     const server = new Server({ name: 'borg-human-representative', version: options.version }, { capabilities: { tools: {} }, instructions: REPRESENTATIVE_INSTRUCTIONS });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS.map((tool) => ({ ...tool })) }));
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -132,6 +132,8 @@ export async function serveRepresentativeMcp(options) {
             const backend = ctx.backend;
             const guarded = { ...ctx, backend: Object.fromEntries(['whoami', 'roster', 'append', 'readUnread', 'readEntry', 'ack'].map((key) => [key, async (...args) => {
                         await owner.ensure(ctx.binding);
+                        if (key === 'readUnread')
+                            args[1] = () => owner.ensure(ctx.binding);
                         const result = await backend[key].apply(backend, args);
                         await owner.ensure(ctx.binding);
                         return result;
