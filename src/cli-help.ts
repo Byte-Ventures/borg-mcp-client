@@ -113,6 +113,49 @@ export function launchSeatHelpText(version: string): string {
   );
 }
 
+export function representativeHelpText(version: string): string {
+  return (
+    `borg representative (borgmcp ${version}) — connect a human representative (e.g. Hermes) to one Coordinator\n\n` +
+    `Vocabulary:\n` +
+    `  cube                  One repository's shared coordination space on your Borg server.\n` +
+    `  drone                 One connected agent session in a cube; its role defines how it works.\n` +
+    `  human seat            The one role in a cube that speaks with the human's authority.\n` +
+    `  Coordinator           The drone holding the human seat. It plans the work and dispatches the other drones.\n` +
+    `  human representative  A SEPARATE automated drone, under its own non-human-seat role, that relays the\n` +
+    `                        human's requests, questions and decisions to that one Coordinator and reads its\n` +
+    `                        replies. It is not the human, never takes the human seat, and never addresses\n` +
+    `                        other drones or broadcasts.\n\n` +
+    `Usage:\n` +
+    `  borg representative prepare --coordinator <drone-label> [--role <name>] [--worktree <name>] [--host <host>] [--rebind]\n` +
+    `  borg representative status [--worktree <path>]\n` +
+    `  borg representative mcp [--worktree <path>]\n` +
+    `  borg representative --help\n\n` +
+    `Commands:\n` +
+    `  prepare   Create or resume the representative's own drone in this repository's cube and bind it to\n` +
+    `            exactly the named Coordinator drone. Launches no agent CLI and changes no other drone.\n` +
+    `            Fails if that Coordinator is missing, evicted, duplicated, or not in the human seat;\n` +
+    `            another drone is never chosen instead.\n` +
+    `  status    Show the saved binding, re-check it against the live cube, and list unresolved sends.\n` +
+    `  mcp       Serve the restricted stdio MCP tools (status, send, read, ack) for a generic MCP host.\n\n` +
+    `Options:\n` +
+    `  --coordinator <drone-label>  Exact label of the Coordinator drone (see \`borg drones\`). Required for prepare.\n` +
+    `  --role <name>                Existing non-human-seat role for the representative (default: hermes-representative)\n` +
+    `  --worktree <name>            prepare: create the drone in a new linked worktree of that name\n` +
+    `  --worktree <path>            status/mcp: absolute path of the prepared representative worktree\n` +
+    `  --host <host>                prepare: explicit Borg server, as in \`borg assimilate --host\`\n` +
+    `  --rebind                     prepare: explicitly replace the saved cube/Coordinator selection\n` +
+    `  --help, -h                   Show this help\n\n` +
+    `Limits: explicit send/read round trips only — there is no background wake or push to the MCP host.\n` +
+    `Reading drains everything it fetches, so relay replies at once; ack is only a signal to the Coordinator.\n` +
+    `Run exactly one MCP host process per representative worktree (not enforced).\n` +
+    `A retried send reuses its request id so the server stores it once; an unknown outcome is reported as\n` +
+    `ambiguous, with its cause, and never re-sent automatically. "User-authorized" is the representative's own label:\n` +
+    `the Borg server does not verify it, and one relayed decision is not broader human approval.\n` +
+    `No command takes a credential; the drone's saved connection stays in Borg's private store.\n` +
+    `Details: docs/HUMAN_REPRESENTATIVE.md\n`
+  );
+}
+
 export function doctorHelpText(version: string): string {
   return (
     `borg doctor (borgmcp ${version}) — inspect Borg agent integrations without changing them\n\n` +
@@ -139,6 +182,7 @@ export function clientSubcommandHelpText(
     case 'drones': return seatsHelpText(version);
     case 'launch': return launchSeatHelpText(version);
     case 'launch-all': return launchAllHelpText(version);
+    case 'representative': return representativeHelpText(version);
     case 'doctor': return doctorHelpText(version);
     default: return null;
   }
@@ -186,6 +230,7 @@ export function topLevelHelpText(version: string): string {
     `  borg drones              List this machine's registered drones and worktrees\n` +
     `  borg launch <drone-label-or-id-prefix>  Reopen one registered drone from its worktree\n` +
     `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
+    `  borg representative prepare|status|mcp  Let an MCP host (e.g. Hermes) speak for you to one Coordinator drone\n` +
     `  borg server <command> [arguments]\n` +
     `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
     `  borg --version           Show installed version\n\n` +

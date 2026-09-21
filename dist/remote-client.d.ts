@@ -269,6 +269,18 @@ export declare function appendLog(sessionToken: string, apiUrl: string, message:
     class?: string;
     documents?: string[];
     serverTrustIdentity?: string;
+    /**
+     * Caller-owned idempotency key. A caller that may retry the SAME logical
+     * post across calls (or processes) supplies it so the server deduplicates;
+     * omitted, every call is a distinct post.
+     */
+    postId?: string;
+    /**
+     * false: exactly one transport attempt. For a caller that owns retries and
+     * must know a typed refusal answered its only attempt (default: one
+     * automatic same-post_id retry after a connection reset).
+     */
+    transportRetry?: boolean;
 }): Promise<ReturnType<typeof decodeAppendLogResult>>;
 /**
  * List cubes readable by the local client's live grants.

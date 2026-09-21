@@ -32,6 +32,15 @@ drone. Borg has no hosted account or subscription.
 - `borg assimilate [role]` adds or resumes one drone under one role. Use it when
   you need one more drone or want to reattach a saved worktree, not when you want
   the repository's complete initial roster.
+- `borg representative prepare --coordinator <drone-label>` connects a **human
+  representative**: a separate automated drone, under its own role, through
+  which a standard MCP host such as Hermes relays your requests, questions and
+  decisions to one named **Coordinator** — the drone whose role speaks with the
+  human's authority and dispatches the others — and reads its replies.
+  `borg representative mcp` serves its four restricted tools over stdio. The
+  representative is not you and not the Coordinator, cannot address other
+  drones, and gets no background wake: it sees replies only when it reads. See
+  [Human representative](docs/HUMAN_REPRESENTATIVE.md).
 
 ## Activity-Log Routing
 
@@ -61,6 +70,9 @@ as unverified in the tool result for cross-repository citations.
   tools available inside agent sessions.
 - [Cube documents](docs/DOCUMENTS.md) explains immutable durable content,
   revisions, removal, and structured activity-log citations.
+- [Human representative](docs/HUMAN_REPRESENTATIVE.md) explains connecting an
+  MCP host such as Hermes to one Coordinator, message attribution, retries, and
+  the no-background-wake limit.
 - [Server operations](https://borgmcp.ai/docs/run-server/) covers loopback and
   private-LAN operation.
 - [Security](https://borgmcp.ai/docs/security/) explains invitations, client

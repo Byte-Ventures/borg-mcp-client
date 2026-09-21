@@ -1011,7 +1011,7 @@ export async function removeDocument(sessionToken, apiUrl, input, serverTrustIde
  */
 export async function appendLog(sessionToken, apiUrl, message, opts) {
     const to = normalizeLogAudience(opts?.to);
-    const postId = randomUUID();
+    const postId = opts.postId ?? randomUUID();
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     const request = decodeAppendLogRequest({
         post_id: postId,
@@ -1020,7 +1020,10 @@ export async function appendLog(sessionToken, apiUrl, message, opts) {
         ...(opts.class ? { class: opts.class } : {}),
         ...(opts.documents ? { documents: opts.documents } : {}),
     });
-    const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs`, 'POST', { ...request }, { retryMode: 'append-log', decodePayload: decodeAppendLogResult });
+    const payload = await localServerRequest(local, `/api/cubes/${local.cubeId}/logs`, 'POST', { ...request }, {
+        ...(opts.transportRetry === false ? {} : { retryMode: 'append-log' }),
+        decodePayload: decodeAppendLogResult,
+    });
     if (!payload)
         throw new Error('Local Borg server returned an empty log response');
     return payload;

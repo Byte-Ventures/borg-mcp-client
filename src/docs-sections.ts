@@ -15,6 +15,7 @@ const REPOSITORY_URL = "https://github.com/Byte-Ventures/borg-mcp-client";
 const LOCAL_SERVER_URL = `${REPOSITORY_URL}/blob/main/docs/LOCAL_SERVER.md`;
 const SEAT_LIFECYCLE_URL = `${REPOSITORY_URL}/blob/main/docs/SEAT_LIFECYCLE.md`;
 const DOCUMENTS_URL = `${REPOSITORY_URL}/blob/main/docs/DOCUMENTS.md`;
+const HUMAN_REPRESENTATIVE_URL = `${REPOSITORY_URL}/blob/main/docs/HUMAN_REPRESENTATIVE.md`;
 
 export interface DocsSection {
   /** logical topic key */
@@ -90,6 +91,13 @@ export const DOCS_SECTIONS: DocsSection[] = [
     url: DOCUMENTS_URL,
     summary: "Immutable cube-local Markdown or plain text, revisions, removal, and structured activity-log citations.",
     keywords: ["document", "documents", "citation", "cite", "durable content", "supersede", "revision", "borg_put-document", "borg_get-document"],
+  },
+  {
+    slug: "human-representative",
+    title: "Human representative (Hermes)",
+    url: HUMAN_REPRESENTATIVE_URL,
+    summary: "A separate non-human-seat drone that relays the human's requests and decisions to one bound Coordinator over a restricted stdio MCP facade: prepare, host configuration, idempotent sends, no background wake.",
+    keywords: ["representative", "hermes", "human representative", "delegate", "proxy", "borg representative", "borg_representative-send", "mcp host", "request_id", "ambiguous"],
   },
   {
     slug: "tools",

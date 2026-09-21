@@ -1,0 +1,216 @@
+# Human Representative (Hermes)
+
+`borg representative` lets a standard MCP host — for example Hermes — speak
+**for the human** to one existing Coordinator drone and read its replies. It is
+a client-side feature: it uses the ordinary cube log, addressing,
+acknowledgement and saved-connection mechanisms. The Borg server has no special
+"representative" concept and enforces nothing extra for it.
+
+## Vocabulary
+
+- **Cube**: one repository's shared coordination space on your Borg server.
+- **Drone**: one connected agent session in a cube. Its **role** defines how it
+  works.
+- **Human seat**: the one role in a cube that speaks with the human's
+  authority.
+- **Coordinator**: the drone holding the human seat. It owns the coordination
+  playbook and dispatches the other drones.
+- **Human representative**: a *separate* automated drone under its own
+  non-human-seat role. It relays the human's requests, questions and decisions
+  to that one Coordinator and reads the Coordinator's replies. It is not the
+  human, never takes or replaces the human seat, carries none of the
+  Coordinator's playbook, and cannot address other drones or broadcast.
+- **Binding**: the saved selection of one server, one cube, one representative
+  drone and one Coordinator drone for one worktree.
+
+## Lifecycle
+
+### 1. Create the representative role once
+
+The representative needs an existing role that is **not** the human seat and
+not a coordinating (queen-class) role. The default name is
+`hermes-representative`. Create it with the cube's normal role management (for
+example ask the Coordinator to run `borg_create-role`). Keep its text short,
+for example: *"Relays the human's requests, questions and decisions to the
+Coordinator and reports the Coordinator's replies back. Does not plan, dispatch
+or review work."* Do not copy the Coordinator role into it.
+
+### 2. Prepare the connection
+
+From the repository whose cube you want, name the exact Coordinator drone
+(`borg drones` lists labels):
+
+```bash
+borg representative prepare --coordinator <coordinator-drone-label> --worktree hermes
+```
+
+This creates the representative's own drone in a new linked worktree through
+the same path as `borg assimilate --worktree`, but **launches no agent CLI** and
+does not touch any other drone. It then verifies against the live cube that:
+
+- the new drone's role is the requested one, and is neither the human seat nor
+  a coordinating role;
+- exactly one active drone has the given label, it is not the representative
+  itself, and it holds the human seat.
+
+A missing, evicted, duplicated or non-human-seat Coordinator fails with a named
+error. Another drone is never chosen instead. On success the binding is saved
+in Borg's private configuration directory (`representative.json`, mode 0600).
+That file holds identifiers and a request ledger only — no credential and no
+message text. The drone's credential stays in Borg's existing private
+connection store.
+
+To resume later, run `prepare` again from inside the representative worktree
+(without `--worktree`). Changing the cube or Coordinator is refused unless you
+pass `--rebind`; a rebind also discards the old request ledger. A running
+`borg representative mcp` process never picks up a rebind: its calls fail
+closed until the MCP host restarts it.
+
+`prepare` reuses Borg's drone-preparation step, which also writes that
+worktree's project-local session hook file. Nothing is started.
+
+### 3. Configure the MCP host
+
+The Borg server speaks pinned-TLS HTTPS, not MCP, so the host starts a local
+stdio MCP process. A generic configuration (shown in Hermes-style YAML; adapt
+the keys to your host):
+
+```yaml
+mcp_servers:
+  borg-representative:
+    command: borg
+    args: ["representative", "mcp", "--worktree", "/absolute/path/to/representative/worktree"]
+```
+
+No token, key or URL belongs in this configuration. If the worktree is not
+prepared, or its saved connection no longer matches the binding, the process
+exits with an error on stderr and writes nothing to stdout.
+
+Check a connection at any time with
+`borg representative status --worktree <path>`.
+
+### 4. Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `borg_representative-status` | Bound cube, representative, Coordinator; live re-check; unresolved sends; limits. |
+| `borg_representative-send` | Relay one `request`, `question` or `decision` to the bound Coordinator. |
+| `borg_representative-read` | Unread replies from the bound Coordinator addressed to the representative. Drains everything it fetches. |
+| `borg_representative-ack` | Signal to the Coordinator that one direct reply was received. Nothing more. |
+
+There is no tool for logging to other drones, broadcasting, role or drone
+management, grants, eviction, release, regeneration or server lifecycle, and no
+generic dispatcher. `send` rejects any recipient field.
+
+Every call re-verifies the live cube first: the connection must still be the
+bound drone in the bound cube, still under a permitted role, and the bound
+Coordinator must still be an active human-seat drone. Otherwise the call fails
+and nothing is sent.
+
+## Attribution and authority
+
+Each relayed message starts with a fixed header:
+
+```text
+[HUMAN-REPRESENTATIVE · automated relay via <representative-label> · not typed by the human]
+request_id: <uuid>
+kind: request | question | decision
+authorization: user-authorized — … | model-advice — …
+reply: direct to <representative-label>, quoting the request_id.
+---
+<message>
+```
+
+- `user_authorized` means the representative asserts the human explicitly
+  authorized that exact text. `model_advice` marks the model's own suggestion.
+  A `decision` is refused unless it is `user_authorized`.
+- This label is the representative's own statement. **The Borg server does not
+  verify or enforce it.** On the server these are ordinary posts from the
+  representative drone. A relayed decision authorizes only its own text; it is
+  not proof of broader human approval, and the Coordinator should treat it that
+  way.
+
+## Request identity, retries and ambiguous sends
+
+`send` returns a `request_id`, which is also the protocol `post_id`
+idempotency key of the log append.
+
+- The lookup, the conflict decision, the id allocation and the `pending`
+  reservation happen in one locked ledger transaction, before any network use.
+  Two overlapping sends of the same content without a `request_id` therefore
+  cannot both go out: the second is refused (`AMBIGUOUS_SEND_UNRESOLVED`) and
+  names the first one's `request_id`. This is not a content filter: once a
+  request is settled, sending identical content again is a new, legitimate
+  request.
+- Re-sending the same `request_id` with identical content never creates a
+  second message: a request already recorded as sent is answered from the local
+  ledger, and otherwise the server deduplicates on `post_id`. The same
+  `request_id` with different content is refused (`REQUEST_ID_CONFLICT`).
+- Invalid input, and a payload the protocol would refuse, fail before anything
+  is reserved. The live cube is verified before posting; if that check fails,
+  nothing was sent and the reservation is released.
+- The representative makes exactly **one** transport attempt per call (the
+  client's usual automatic retry after a connection reset is switched off for
+  it). Only because of that, a typed refusal the server returns to that attempt
+  is reported as `SEND_REJECTED` — *this attempt was not stored*: a rejected,
+  revoked or superseded credential, an evicted drone or deleted cube, or an HTTP
+  4xx answer. The error carries the underlying cause code and a recovery step
+  (for example: restore the connection with `prepare`; wait out a rate limit
+  and retry the same `request_id`; a `POST_ID_CONFLICT` goes to the operator).
+  That is a statement about the one attempt, not about the server's internals:
+  it assumes a server that answers 4xx instead of storing.
+- Everything else is reported as `outcome: "ambiguous"`: no answer or a
+  timeout, an HTTP 5xx, a response that cannot be read or violates the protocol
+  (which can happen *after* the server stored the message), a TLS trust failure,
+  or any unrecognised error. The result names a bounded, sanitized `cause` and
+  a matching recovery hint. Nothing is re-sent across calls. The request stays
+  under `unresolved_requests` — across restarts — until a retry with the same
+  `request_id` settles it, and the same content under a new id is refused
+  meanwhile. There is deliberately no "forget it and resend under a new id"
+  operation.
+- If an earlier attempt under a `request_id` was ambiguous, a later definite
+  refusal of a retry does not clear it: the request stays unresolved, because
+  the earlier attempt may have been stored.
+
+Exactly-once delivery is therefore not claimed; at-most-once per `request_id`
+relies on the server honouring `post_id` deduplication as the shared protocol
+specifies, and on the single-process rule below.
+
+## Reading, cursors and wake limits
+
+- `read` drains only the representative drone's **own** unread cursor. Other
+  drones' cursors are separate server and client state and are never touched.
+- A read **consumes everything it fetched**, not only what it returns: the
+  Coordinator's replies, and equally the entries it ignores (other drones'
+  entries are counted in `ignored_entries` and never returned; the
+  Coordinator's broadcasts are returned only with `include_broadcast`). None
+  of them appear unread again.
+- If the MCP host stops between reading a reply and relaying it to the human,
+  that reply is gone from the unread view. It still exists in the cube log, but
+  this version offers no tool to list past replies again. Relay first.
+- `limit` is a page-size hint, not a hard cap: when the unread backlog is
+  large the client's digest mode fetches, and drains, more than `limit`.
+- `ack` is only a signal to the Coordinator that a direct reply was received.
+  It does not make delivery reliable, and it neither advances nor restores the
+  unread cursor.
+- Run **exactly one** MCP host process per representative worktree. This is not
+  technically enforced. Two processes would share one unread cursor (each sees
+  only part of the replies) and weaken the overlap protection above to what the
+  shared ledger lock alone provides.
+- `in_reply_to` is a textual match of a known `request_id` quoted in the reply.
+  It is a convenience, not a protocol guarantee.
+- **There is no background wake.** A generic MCP host receives nothing
+  unsolicited: replies are seen only when the host calls
+  `borg_representative-read`. This version provides explicit send/read round
+  trips only and makes no claim of automatic ongoing coordination. The
+  Coordinator is woken by the direct message through its own normal wake path.
+
+## Recovery
+
+| Error | Meaning and action |
+| --- | --- |
+| `NOT_PREPARED` | No binding for that worktree. Run `prepare`. |
+| `SEAT_UNAVAILABLE` | The representative drone's saved connection is gone or rejected. Run `prepare` again in its worktree. |
+| `BINDING_MISMATCH` | The worktree's connection is not the bound server/cube/drone, or the binding changed under a running process. Re-run `prepare --rebind` deliberately and restart the MCP process. |
+| `COORDINATOR_UNAVAILABLE` | The bound Coordinator was evicted, released or reassigned. Choose the new Coordinator explicitly with `prepare --coordinator <label> --rebind`. |
+| `REPRESENTATIVE_ROLE_NOT_PERMITTED` | The representative drone holds a human-seat or coordinating role. Give it its own worker role. |

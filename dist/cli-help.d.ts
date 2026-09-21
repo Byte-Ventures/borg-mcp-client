@@ -13,6 +13,7 @@ export declare function quickstartHelpText(version: string): string;
 export declare function cloneHelpText(version: string): string;
 export declare function seatsHelpText(version: string): string;
 export declare function launchSeatHelpText(version: string): string;
+export declare function representativeHelpText(version: string): string;
 export declare function doctorHelpText(version: string): string;
 export declare function clientSubcommandHelpText(command: string | undefined, args: readonly string[], version: string): string | null;
 export declare function setupNextStepsText(): string;

@@ -27,6 +27,7 @@ export const KNOWN_SUBCOMMANDS = [
   'drones',
   'launch',
   'launch-all',
+  'representative',
   'server',
 ] as const;
 

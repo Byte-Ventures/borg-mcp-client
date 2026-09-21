@@ -390,6 +390,28 @@ async function main() {
       buildDefaultSeatCommandDeps(),
     ));
   }
+  if (process.argv[2] === 'representative') {
+    // Loaded on demand: the representative facade is unrelated to agent launch.
+    const representative = await import('./representative-cmd.js');
+    const parsed = representative.parseRepresentativeArgs(process.argv.slice(3));
+    if (!parsed.ok) {
+      process.stderr.write(chalk.red(`${consolePrefix()}◼ borg representative: ${parsed.error}\n`));
+      process.stderr.write(`Run \`borg representative --help\` for usage.\n`);
+      process.exit(1);
+    }
+    const deps = await representative.buildDefaultRepresentativeDeps();
+    if (parsed.command.action === 'prepare') {
+      process.exit(await representative.runRepresentativePrepare(parsed.command, deps));
+    }
+    if (parsed.command.action === 'status') {
+      process.exit(await representative.runRepresentativeStatus(parsed.command, deps));
+    }
+    const { pinMcpSeatIdentity } = await import('./cubes.js');
+    process.exit(await representative.runRepresentativeMcp(parsed.command, deps, {
+      version: getPackageVersion(),
+      pinSeat: pinMcpSeatIdentity,
+    }));
+  }
   if (process.argv[2] === 'launch-all') {
     const parsed = parseLaunchAllArgs(process.argv.slice(3));
     if (!parsed.ok) {

@@ -1527,10 +1527,22 @@ export async function appendLog(
     class?: string;
     documents?: string[];
     serverTrustIdentity?: string;
+    /**
+     * Caller-owned idempotency key. A caller that may retry the SAME logical
+     * post across calls (or processes) supplies it so the server deduplicates;
+     * omitted, every call is a distinct post.
+     */
+    postId?: string;
+    /**
+     * false: exactly one transport attempt. For a caller that owns retries and
+     * must know a typed refusal answered its only attempt (default: one
+     * automatic same-post_id retry after a connection reset).
+     */
+    transportRetry?: boolean;
   },
 ): Promise<ReturnType<typeof decodeAppendLogResult>> {
   const to = normalizeLogAudience(opts?.to);
-  const postId = randomUUID();
+  const postId = opts.postId ?? randomUUID();
   const local = await localAuthorityContext(
     sessionToken,
     apiUrl,
@@ -1548,7 +1560,10 @@ export async function appendLog(
     `/api/cubes/${local.cubeId}/logs`,
     'POST',
     { ...request },
-    { retryMode: 'append-log', decodePayload: decodeAppendLogResult },
+    {
+      ...(opts.transportRetry === false ? {} : { retryMode: 'append-log' as const }),
+      decodePayload: decodeAppendLogResult,
+    },
   );
   if (!payload) throw new Error('Local Borg server returned an empty log response');
   return payload;
