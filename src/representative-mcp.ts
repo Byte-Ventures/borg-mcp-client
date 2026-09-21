@@ -27,6 +27,7 @@ import {
   type RepresentativeContext,
 } from './representative-core.js';
 import { RepresentativeStoreError } from './representative-store.js';
+import { createRepresentativeOwner } from './representative-owner.js';
 
 export const REPRESENTATIVE_TOOL_NAMES = [
   'borg_representative-status',
@@ -48,7 +49,7 @@ const TOOLS = [
     name: 'borg_representative-status',
     description:
       'Show which cube, representative drone and Coordinator this connection is bound to, whether the live cube still matches, ' +
-      'any unresolved (ambiguous) sends, and the delivery limits.',
+      'any unresolved (ambiguous) sends, process ownership and the delivery limits. Read-only; never takes ownership.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -85,7 +86,7 @@ const TOOLS = [
       'Read unread replies from the bound Coordinator addressed to this representative. Replies arrive only when this tool ' +
       'is called; there is no background wake. Each call DRAINS the whole fetched unread page for this drone — returned ' +
       'replies and ignored entries alike (other drones\' entries are counted, never returned) — so they will not appear ' +
-      'unread again: relay every returned reply to the human immediately. If the host stops before relaying, the reply ' +
+      'unread again: persist the result, then route each reply by in_reply_to to its conversation or hold it for the human. If the host stops before persisting, the reply ' +
       'is no longer in the unread view.',
     inputSchema: {
       type: 'object',
@@ -144,6 +145,7 @@ export interface ServeRepresentativeOptions {
 export async function serveRepresentativeMcp(
   options: ServeRepresentativeOptions,
 ): Promise<{ close: () => Promise<void>; closed: Promise<void> }> {
+  const owner = createRepresentativeOwner();
   const server = new Server(
     { name: 'borg-human-representative', version: options.version },
     { capabilities: { tools: {} }, instructions: REPRESENTATIVE_INSTRUCTIONS },
@@ -159,17 +161,28 @@ export async function serveRepresentativeMcp(
         throw new RepresentativeError(ErrorCode.INVALID_INPUT, `Unknown tool ${JSON.stringify(name)}; this connection exposes only the representative tools.`);
       }
       const ctx = await options.context();
+      if (name === 'borg_representative-status') {
+        return toolResult({ ...await representativeStatus(ctx), ownership: await owner.snapshot(ctx.binding) });
+      }
+      await owner.ensure(ctx.binding);
+      // Recheck at each network boundary, not just at tool dispatch: a process
+      // may have paused or lost its lease while awaiting live verification.
+      const backend = ctx.backend;
+      const guarded = { ...ctx, backend: Object.fromEntries(['whoami', 'roster', 'append', 'readUnread', 'readEntry', 'ack'].map((key) => [key, async (...args: unknown[]) => {
+        await owner.ensure(ctx.binding);
+        const result = await (backend[key as keyof typeof backend] as (...args: unknown[]) => Promise<unknown>).apply(backend, args);
+        await owner.ensure(ctx.binding);
+        return result;
+      }])) as unknown as typeof backend };
       switch (name) {
-        case 'borg_representative-status':
-          return toolResult(await representativeStatus(ctx));
         case 'borg_representative-send': {
-          const sent = await sendRepresentativeMessage(ctx, args);
+          const sent = await sendRepresentativeMessage(guarded, args);
           return toolResult(sent, sent.outcome === 'ambiguous');
         }
         case 'borg_representative-read':
-          return toolResult(await readRepresentativeReplies(ctx, args));
+          return toolResult(await readRepresentativeReplies(guarded, args));
         default:
-          return toolResult(await ackRepresentativeReply(ctx, args));
+          return toolResult(await ackRepresentativeReply(guarded, args));
       }
     } catch (error) {
       return toolResult(errorBody(error), true);
@@ -177,7 +190,17 @@ export async function serveRepresentativeMcp(
   });
 
   const transport = new StdioServerTransport(options.stdin, options.stdout);
-  const closed = new Promise<void>((resolve) => { server.onclose = () => resolve(); });
-  await server.connect(transport);
-  return { close: () => server.close(), closed };
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => { finish = resolve; });
+  const shutdown = async () => {
+    process.removeListener('SIGTERM', signalClose);
+    process.removeListener('SIGINT', signalClose);
+    try { await owner.close(); } finally { finish(); }
+  };
+  const signalClose = () => { void server.close(); };
+  server.onclose = () => { void shutdown().catch(() => {}); };
+  process.once('SIGTERM', signalClose);
+  process.once('SIGINT', signalClose);
+  try { await server.connect(transport); } catch (error) { await shutdown(); throw error; }
+  return { close: async () => { await server.close(); await closed; }, closed };
 }

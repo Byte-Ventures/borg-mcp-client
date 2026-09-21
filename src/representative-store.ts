@@ -15,7 +15,7 @@ import { decodeUuid } from 'borgmcp-shared/protocol';
 import { join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 import { shellEscape } from './shell-escape.js';
-import { withStore } from './seat-store.js';
+import { readStoreFile, withStore } from './seat-store.js';
 
 export function isRepresentativeUuid(value: unknown): value is string {
   try { decodeUuid(value); return true; } catch { return false; }
@@ -75,6 +75,7 @@ export class RepresentativeStoreError extends Error {
 
 export interface RepresentativeStore {
   getBinding(worktree: string): Promise<RepresentativeBinding | null>;
+  readRequests(worktree: string): Promise<RepresentativeRequestRecord[]>;
   saveBinding(
     binding: RepresentativeBinding,
     options: { rebind: boolean },
@@ -157,9 +158,19 @@ export function representativeStorePath(): string {
 }
 
 export function createRepresentativeStore(storePath: string = representativeStorePath()): RepresentativeStore {
+  // Atomic writer renames make a single read a complete snapshot, without a
+  // store-lock write or pruning settled history during read-only status.
+  const read = async () => {
+    const raw = await readStoreFile(storePath);
+    if (raw === null) return emptyFile();
+    let data: RepresentativeFile | null;
+    try { data = parseFile(raw); } catch { data = null; }
+    if (!data) throw new Error('Borg representative store is malformed or unsupported; refusing to read it');
+    return data;
+  };
   return {
-    getBinding: (worktree) => withStore(storePath, emptyFile, parseFile, async (txn) =>
-      txn.data.bindings[worktree] ?? null),
+    getBinding: async (worktree) => (await read()).bindings[worktree] ?? null,
+    readRequests: async (worktree) => (await read()).requests[worktree] ?? [],
 
     saveBinding: (binding, options) => withStore(storePath, emptyFile, parseFile, async (txn) => {
       if (!validBinding(binding, binding.worktree)) {

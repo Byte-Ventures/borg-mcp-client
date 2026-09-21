@@ -33,8 +33,12 @@ export const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
 export const REPRESENTATIVE_DELIVERY_NOTE =
   'Explicit send/read round trips only: this connection has no background wake or push delivery. ' +
   'Coordinator replies are seen only when borg_representative-read is called. Each read consumes the unread view of ' +
-  'everything it fetched, so relay replies to the human before doing anything else. An already-read reply cannot be ' +
-  'retrieved through this connection. Run exactly one MCP host process per representative worktree.';
+  'everything it fetched. The host must persist each read result before relaying it, map request_id to its conversation, ' +
+  'route replies by in_reply_to, and hold replies with an unknown or missing request_id for the human. An already-read ' +
+  'reply cannot be retrieved through this connection. The first send/read/ack takes an exclusive process lease for this ' +
+  'representative drone; other processes refuse those calls without ledger, cursor or network activity. Status stays ' +
+  'read-only and reports ownership. After owner exit, death or lease expiry another process can take over. ' +
+  'A process that loses its lease refuses further calls until restarted. Ownership does not route conversations inside the host.';
 
 export type RepresentativeErrorCode =
   | typeof ErrorCode.INVALID_INPUT
@@ -42,6 +46,7 @@ export type RepresentativeErrorCode =
   | 'REQUEST_ID_CONFLICT'
   | 'AMBIGUOUS_SEND_UNRESOLVED'
   | 'SEND_REJECTED'
+  | 'REPRESENTATIVE_OWNERSHIP_REQUIRED'
   | 'NOT_PREPARED'
   | 'SEAT_UNAVAILABLE'
   | 'BINDING_MISMATCH'
@@ -56,6 +61,7 @@ export type RepresentativeErrorCode =
   | 'NOT_A_COORDINATOR_REPLY';
 
 export interface RepresentativeErrorDetails {
+  owner?: import('./stream-owner.js').StreamOwnershipSnapshot;
   request_id?: string;
   cause_code?: string;
   cause_message?: string;
@@ -665,12 +671,11 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
       message: error instanceof Error ? error.message : 'Unknown error',
     };
   }
-  const unresolved = await ctx.store.transactRequests(binding.worktree, (records) =>
-    records
+  const unresolved = (await ctx.store.readRequests(binding.worktree))
       .filter((record) => record.state === 'pending' || record.state === 'ambiguous')
       .map((record) => ({
         request_id: record.requestId, state: record.state, kind: record.kind, updated_at: record.updatedAt,
-      })));
+      }));
   return {
     role: 'Human representative — an automated delegate speaking for the human. It is not the human and not the Coordinator.',
     connected: problem === undefined,

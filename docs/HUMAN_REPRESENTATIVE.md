@@ -213,7 +213,8 @@ specifies, and on the single-process rule below.
   of them appear unread again.
 - If the MCP host stops between reading a reply and relaying it to the human,
   that reply is gone from the unread view. It still exists in the cube log, but
-  this version offers no tool to list past replies again. Relay first.
+  this version offers no tool to list past replies again. Persist the read result
+  in the host before relaying it.
 - Replies preserve document citations (id, title and state). Document bodies are
   not included and cannot be fetched through this connection. Ask the Coordinator
   to provide the content through a supported channel.
@@ -222,10 +223,19 @@ specifies, and on the single-process rule below.
 - `ack` is only a signal to the Coordinator that a direct reply was received.
   It does not make delivery reliable, and it neither advances nor restores the
   unread cursor.
-- Run **exactly one** MCP host process per representative worktree. This is not
-  technically enforced. Two processes would share one unread cursor (each sees
-  only part of the replies) and weaken the overlap protection above to what the
-  shared ledger lock alone provides.
+- Exclusive process ownership is enforced for each representative drone. Processes
+  may start idle; the first `send`, `read` or `ack` takes the lease. Other processes
+  receive `REPRESENTATIVE_OWNERSHIP_REQUIRED` before any ledger reservation or
+  write, cursor access, or network call. The refusal names the owner's PID and
+  start time. Use that host, or wait for it to exit before using another.
+- `status` is allowed in every process, is read-only, and takes no lease. Its
+  `ownership` field reports the state, PID, start time, and heartbeat age in
+  milliseconds (`ageMs`). A clean exit releases ownership; a dead PID or a
+  heartbeat older than 70 seconds permits takeover without manual cleanup.
+  A process that loses its lease refuses further activity until restarted.
+  An already in-flight network operation cannot be cancelled by a local lease;
+  same-request retries across takeover still use the existing ledger and server
+  deduplication. Retry an ambiguous send with its original `request_id`.
 - `in_reply_to` is a textual match of a known `request_id` quoted in the reply.
   It is a convenience, not a protocol guarantee.
 - **There is no background wake.** A generic MCP host receives nothing
@@ -233,6 +243,15 @@ specifies, and on the single-process rule below.
   `borg_representative-read`. This version provides explicit send/read round
   trips only and makes no claim of automatic ongoing coordination. The
   Coordinator is woken by the direct message through its own normal wake path.
+
+### Host conversation routing
+
+The lease selects one consuming process, not a conversation within that host.
+The host must record which conversation owns each `request_id`, persist every
+read result before relaying it, and route replies using `in_reply_to`. Hold
+replies with an unknown or missing request ID for the human instead of dropping
+them. Borg cannot enforce these duties inside the host; it provides neither a
+durable inbox nor a separate unread cursor for each conversation.
 
 ## Recovery
 

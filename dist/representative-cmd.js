@@ -198,8 +198,11 @@ export async function runRepresentativePrepare(command, deps) {
 export async function runRepresentativeStatus(command, deps) {
     try {
         const worktree = canonicalWorktree(command.worktree ?? deps.cwd(), deps);
-        const status = await representativeStatus(await resolveRepresentativeContext(worktree, deps));
-        deps.stdout(`${JSON.stringify(status, null, 2)}\n`);
+        const ctx = await resolveRepresentativeContext(worktree, deps);
+        const status = await representativeStatus(ctx);
+        const { representativeOwnership } = await import('./representative-owner.js');
+        const ownership = await representativeOwnership(ctx.binding);
+        deps.stdout(`${JSON.stringify({ ...status, ownership }, null, 2)}\n`);
         return status.connected ? 0 : 1;
     }
     catch (error) {

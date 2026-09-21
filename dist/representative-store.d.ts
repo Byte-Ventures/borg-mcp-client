@@ -49,6 +49,7 @@ export declare class RepresentativeStoreError extends Error {
 }
 export interface RepresentativeStore {
     getBinding(worktree: string): Promise<RepresentativeBinding | null>;
+    readRequests(worktree: string): Promise<RepresentativeRequestRecord[]>;
     saveBinding(binding: RepresentativeBinding, options: {
         rebind: boolean;
     }): Promise<'created' | 'unchanged' | 'rebound'>;

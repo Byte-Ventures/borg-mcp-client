@@ -14,7 +14,7 @@ import { decodeUuid } from 'borgmcp-shared/protocol';
 import { join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 import { shellEscape } from './shell-escape.js';
-import { withStore } from './seat-store.js';
+import { readStoreFile, withStore } from './seat-store.js';
 export function isRepresentativeUuid(value) {
     try {
         decodeUuid(value);
@@ -103,8 +103,26 @@ export function representativeStorePath() {
     return join(borgConfigRoot(), 'representative.json');
 }
 export function createRepresentativeStore(storePath = representativeStorePath()) {
+    // Atomic writer renames make a single read a complete snapshot, without a
+    // store-lock write or pruning settled history during read-only status.
+    const read = async () => {
+        const raw = await readStoreFile(storePath);
+        if (raw === null)
+            return emptyFile();
+        let data;
+        try {
+            data = parseFile(raw);
+        }
+        catch {
+            data = null;
+        }
+        if (!data)
+            throw new Error('Borg representative store is malformed or unsupported; refusing to read it');
+        return data;
+    };
     return {
-        getBinding: (worktree) => withStore(storePath, emptyFile, parseFile, async (txn) => txn.data.bindings[worktree] ?? null),
+        getBinding: async (worktree) => (await read()).bindings[worktree] ?? null,
+        readRequests: async (worktree) => (await read()).requests[worktree] ?? [],
         saveBinding: (binding, options) => withStore(storePath, emptyFile, parseFile, async (txn) => {
             if (!validBinding(binding, binding.worktree)) {
                 throw new Error('Refusing to save an invalid representative binding');
