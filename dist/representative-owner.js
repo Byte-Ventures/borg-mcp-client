@@ -24,7 +24,16 @@ async function privateStorage(operation) {
     catch (error) {
         if (error instanceof RepresentativeError)
             throw error;
-        throw new RepresentativeError('REPRESENTATIVE_OWNERSHIP_REQUIRED', 'Representative lease storage refused: ' + (error instanceof Error ? error.message : 'invalid private state'));
+        const message = error instanceof Error ? error.message : 'invalid private state';
+        // Only this exact directory-mode refusal permits manual permission recovery.
+        // Symlink, ownership and other failures must not suggest chmod through a path.
+        const looseDirectory = /^Borg credential store root (.+) has insecure permissions; expected 0700$/s.exec(message);
+        const detail = looseDirectory
+            ? `directory ${looseDirectory[1]} has insecure permissions; expected 0700. ` +
+                'Check that the named path is a real directory you own and not a symlink, then set it to 0700 and retry. ' +
+                'Restart a process that had already lost ownership.'
+            : message.replace(/^Borg credential store /, '');
+        throw new RepresentativeError('REPRESENTATIVE_OWNERSHIP_REQUIRED', 'Representative lease storage refused: ' + detail);
     }
 }
 export function createRepresentativeOwner(heartbeatIntervalMs = 20_000) {

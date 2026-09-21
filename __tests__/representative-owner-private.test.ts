@@ -36,8 +36,22 @@ it.each(['symlink', 'mode'] as const)('refuses a static namespace %s before acqu
   await mkdir(join(root, '.config', 'borgmcp'), { recursive: true, mode: 0o700 });
   if (kind === 'symlink') await symlink(f.outside, f.namespace);
   else { await mkdir(f.namespace, { mode: 0o700 }); await chmod(f.namespace, 0o777); }
-  await expect(owner.ensure(f.binding)).rejects.toMatchObject({ code: 'REPRESENTATIVE_OWNERSHIP_REQUIRED' });
+  const refusal = await owner.ensure(f.binding).catch(error => error);
+  expect(refusal).toMatchObject({ code: 'REPRESENTATIVE_OWNERSHIP_REQUIRED' });
+  expect(refusal.message).toContain(f.namespace);
+  expect(refusal.message).not.toContain('credential store');
   await expect(owner.snapshot(f.binding)).rejects.toMatchObject({ code: 'REPRESENTATIVE_OWNERSHIP_REQUIRED' });
+  if (kind === 'mode') {
+    expect(refusal.message).toContain('real directory you own and not a symlink');
+    expect(refusal.message).toContain('set it to 0700');
+    expect(refusal.message).toContain('retry');
+    expect(refusal.message).toContain('Restart a process that had already lost ownership');
+    expect((await lstat(f.namespace)).mode & 0o777).toBe(0o777);
+    await chmod(f.namespace, 0o700);
+    await expect(owner.ensure(f.binding)).resolves.toBeUndefined();
+  } else {
+    expect(refusal.message).not.toMatch(/chmod|set it to 0700/);
+  }
   expect(await readdir(f.outside)).toEqual(['sentinel']);
   expect(await readFile(join(f.outside, 'sentinel'), 'utf8')).toBe('untouched');
 });

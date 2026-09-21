@@ -38,7 +38,8 @@ export const REPRESENTATIVE_DELIVERY_NOTE =
   'reply cannot be retrieved through this connection. The first send/read/ack takes an exclusive process lease for this ' +
   'representative drone; other processes refuse those calls without ledger, cursor or network activity. Status stays ' +
   'read-only and reports ownership. After owner exit, death or lease expiry another process can take over. ' +
-  'A process that loses its lease refuses further calls until restarted. Ownership does not route conversations inside the host.';
+  'A process that loses its lease refuses further calls until restarted. Ownership does not route conversations inside the host. ' +
+  'A local lease cannot cancel an in-flight request; retry an ambiguous send with its original request_id.';
 
 export type RepresentativeErrorCode =
   | typeof ErrorCode.INVALID_INPUT
