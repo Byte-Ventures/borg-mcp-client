@@ -15,7 +15,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { Buffer } from 'node:buffer';
-import { ProtocolContractError, decodeAppendLogRequest } from 'borgmcp-shared/protocol';
+import { ErrorCode, ProtocolContractError, decodeAppendLogRequest, type Role, type RosterDrone as ProtocolDrone, type EnrichedStreamEntry, type DocumentCitation } from 'borgmcp-shared/protocol';
 import type { ActiveCube } from './cubes.js';
 import { CUBE_DELETED_CODE, CubeDeletedError, DRONE_EVICTED_CODE, DroneEvictedError } from './drone-lifecycle.js';
 import {
@@ -25,20 +25,19 @@ import {
   BorgServerTrustError,
   BorgServerUnreachableError,
 } from './server-errors.js';
-import type { RepresentativeBinding, RepresentativeStore } from './representative-store.js';
+import { representativeRecoveryCommand, isRepresentativeUuid, type RepresentativeBinding, type RepresentativeStore } from './representative-store.js';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_SCAN_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 export const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
 
 export const REPRESENTATIVE_DELIVERY_NOTE =
   'Explicit send/read round trips only: this connection has no background wake or push delivery. ' +
   'Coordinator replies are seen only when borg_representative-read is called. Each read consumes the unread view of ' +
-  'everything it fetched, so relay replies to the human before doing anything else; a reply can afterwards be fetched ' +
-  'again only by its entry_id. Run exactly one MCP host process per representative worktree.';
+  'everything it fetched, so relay replies to the human before doing anything else. An already-read reply cannot be ' +
+  'retrieved through this connection. Run exactly one MCP host process per representative worktree.';
 
 export type RepresentativeErrorCode =
-  | 'INVALID_INPUT'
+  | typeof ErrorCode.INVALID_INPUT
   | 'DECISION_REQUIRES_USER_AUTHORIZATION'
   | 'REQUEST_ID_CONFLICT'
   | 'AMBIGUOUS_SEND_UNRESOLVED'
@@ -57,6 +56,7 @@ export type RepresentativeErrorCode =
   | 'NOT_A_COORDINATOR_REPLY';
 
 export interface RepresentativeErrorDetails {
+  request_id?: string;
   cause_code?: string;
   cause_message?: string;
   recovery?: string;
@@ -73,16 +73,9 @@ export class RepresentativeError extends Error {
   }
 }
 
-interface RosterRole { id: string; name: string; is_human_seat?: boolean; role_class?: string }
-interface RosterDrone { id: string; label: string; role_id: string; is_queen_class?: boolean }
-interface LogEntry {
-  id: string;
-  drone_id: string | null;
-  message: string;
-  visibility: string;
-  created_at: string;
-  recipient_drone_ids?: string[];
-}
+type RosterRole = Pick<Role, 'id' | 'name' | 'is_human_seat' | 'role_class'>;
+type RosterDrone = Pick<ProtocolDrone, 'id' | 'label' | 'role_id' | 'is_queen_class'>;
+type LogEntry = Pick<EnrichedStreamEntry, 'id' | 'drone_id' | 'message' | 'visibility' | 'created_at' | 'recipient_drone_ids' | 'documents'>;
 
 /** The only Borg operations the representative may perform, all seat-scoped. */
 export interface RepresentativeBackend {
@@ -170,7 +163,7 @@ export function resolveCoordinator(
   }
   const drone = matches[0];
   if (drone.id === selector.selfDroneId) {
-    throw new RepresentativeError('COORDINATOR_IS_SELF', 'The representative seat cannot be its own Coordinator.');
+    throw new RepresentativeError('COORDINATOR_IS_SELF', 'The representative drone cannot be its own Coordinator.');
   }
   const role = roster.roles.find((candidate) => candidate.id === drone.role_id);
   if (!role || role.is_human_seat !== true) {
@@ -190,8 +183,7 @@ async function verifyLiveBinding(ctx: RepresentativeContext): Promise<{ coordina
   if (me.cube_id !== binding.cubeId || me.drone_id !== binding.representativeDroneId) {
     throw new RepresentativeError(
       'BINDING_MISMATCH',
-      'The live seat is not the cube/drone this representative connection was prepared for. ' +
-        'Re-run `borg representative prepare` explicitly; nothing was sent.',
+      `The live connection is not the bound cube/drone. Run \`${representativeRecoveryCommand(binding)}\` explicitly; nothing was sent.`,
     );
   }
   const roster = await backend.roster();
@@ -207,8 +199,7 @@ async function verifyLiveBinding(ctx: RepresentativeContext): Promise<{ coordina
     throw new RepresentativeError(
       'COORDINATOR_UNAVAILABLE',
       `The bound Coordinator ${JSON.stringify(binding.coordinatorLabel)} is no longer an active human-seat drone in this cube ` +
-        '(evicted, released or reassigned). No other drone was selected; the operator must re-run ' +
-        '`borg representative prepare --coordinator <label> --rebind`.',
+        `(evicted, released or reassigned). Restore that Coordinator before running \`${representativeRecoveryCommand(binding)}\`, or explicitly select a replacement Coordinator; no other drone was selected.`,
     );
   }
   return { coordinator, self };
@@ -243,32 +234,32 @@ const SEND_FIELDS = new Set(['request_id', 'kind', 'authorization', 'message']);
 
 function validateSendInput(raw: unknown): RepresentativeSendInput {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new RepresentativeError('INVALID_INPUT', 'Arguments must be an object.');
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'Arguments must be an object.');
   }
   const input = raw as Record<string, unknown>;
   const unknown = Object.keys(input).filter((key) => !SEND_FIELDS.has(key) && input[key] !== undefined);
   if (unknown.length > 0) {
     throw new RepresentativeError(
-      'INVALID_INPUT',
+      ErrorCode.INVALID_INPUT,
       `Unsupported field(s): ${unknown.join(', ')}. The recipient is fixed to the bound Coordinator; ` +
         'this connection cannot address workers, broadcast, or classify messages.',
     );
   }
   if (input.kind !== 'request' && input.kind !== 'question' && input.kind !== 'decision') {
-    throw new RepresentativeError('INVALID_INPUT', 'kind must be "request", "question" or "decision".');
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'kind must be "request", "question" or "decision".');
   }
   if (input.authorization !== 'user_authorized' && input.authorization !== 'model_advice') {
-    throw new RepresentativeError('INVALID_INPUT', 'authorization must be "user_authorized" or "model_advice".');
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'authorization must be "user_authorized" or "model_advice".');
   }
   if (typeof input.message !== 'string' || input.message.trim() === '') {
-    throw new RepresentativeError('INVALID_INPUT', 'message must be a non-empty string.');
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'message must be a non-empty string.');
   }
   if (Buffer.byteLength(input.message, 'utf8') > REPRESENTATIVE_MESSAGE_LIMIT_BYTES) {
-    throw new RepresentativeError('INVALID_INPUT', `message exceeds ${REPRESENTATIVE_MESSAGE_LIMIT_BYTES} bytes.`);
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, `message exceeds ${REPRESENTATIVE_MESSAGE_LIMIT_BYTES} bytes.`);
   }
   if (input.request_id !== undefined && input.request_id !== null &&
-    (typeof input.request_id !== 'string' || !UUID_RE.test(input.request_id))) {
-    throw new RepresentativeError('INVALID_INPUT', 'request_id must be a UUID previously returned by this tool, or omitted.');
+    (typeof input.request_id !== 'string' || !isRepresentativeUuid(input.request_id))) {
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'request_id must be a UUID previously returned by this tool, or omitted.');
   }
   if (input.kind === 'decision' && input.authorization !== 'user_authorized') {
     throw new RepresentativeError(
@@ -326,9 +317,6 @@ function boundedMessage(error: unknown): string {
   return text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim().slice(0, 300);
 }
 
-const PREPARE_RECOVERY =
-  'The operator must restore this drone\'s connection: re-run `borg representative prepare` in the representative ' +
-  'worktree, then restart the MCP process.';
 const SAME_ID_RETRY =
   'Nothing was re-sent automatically. Retry ONLY by calling borg_representative-send again with the same request_id and ' +
   'identical content: the server deduplicates on that id (protocol post_id), so that retry cannot create a second ' +
@@ -342,17 +330,18 @@ const SAME_ID_RETRY =
  * failure of unknown timing, anything unrecognised) may follow a committed
  * write and stays ambiguous, but keeps its cause and a matching recovery.
  */
-function classifyAppendFailure(error: unknown): { definite: boolean; cause: SendFailureCause; recovery: string } {
+function classifyAppendFailure(error: unknown, binding: RepresentativeBinding): { definite: boolean; cause: SendFailureCause; recovery: string } {
   const message = boundedMessage(error);
+  const prepareRecovery = `The operator must restore this connection: run \`${representativeRecoveryCommand(binding)}\`, then restart the MCP process.`;
   if (error instanceof BorgServerError &&
-    (error.code === 'SESSION_REJECTED' || error.code === 'SESSION_REVOKED' || error.code === 'CREDENTIAL_REJECTED')) {
-    return { definite: true, cause: { code: error.code, message }, recovery: PREPARE_RECOVERY };
+    (error.code === ErrorCode.SESSION_REJECTED || error.code === ErrorCode.SESSION_REVOKED || error.code === 'CREDENTIAL_REJECTED')) {
+    return { definite: true, cause: { code: error.code, message }, recovery: prepareRecovery };
   }
   if (error instanceof DroneEvictedError || error instanceof CubeDeletedError) {
     return {
       definite: true,
       cause: { code: error instanceof DroneEvictedError ? DRONE_EVICTED_CODE : CUBE_DELETED_CODE, message },
-      recovery: PREPARE_RECOVERY,
+      recovery: prepareRecovery,
     };
   }
   if (error instanceof BorgServerHttpError) {
@@ -363,7 +352,7 @@ function classifyAppendFailure(error: unknown): { definite: boolean; cause: Send
         : error.status === 409
           ? 'The server already holds a DIFFERENT message under this request_id. Do not resend; ask the operator to inspect the cube log.'
           : error.status === 401 || error.status === 403
-            ? `The server denied this drone. ${PREPARE_RECOVERY}`
+            ? `The server denied this drone. ${prepareRecovery}`
             : 'The server refused this content. Correct it and send it as a new request, or ask the operator.';
       return { definite: true, cause: { code, message }, recovery };
     }
@@ -420,7 +409,7 @@ export async function sendRepresentativeMessage(
   try {
     decodeAppendLogRequest({ post_id: candidateId, message, to: [binding.coordinatorDroneId] });
   } catch (error) {
-    throw new RepresentativeError('INVALID_INPUT', `The message cannot be sent as written: ${boundedMessage(error)}`);
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, `The message cannot be sent as written: ${boundedMessage(error)}`);
   }
 
   // ONE locked transaction: look up, decide conflicts, allocate the id and
@@ -525,7 +514,7 @@ export async function sendRepresentativeMessage(
   try {
     result = await ctx.backend.append({ postId: requestId, message, to: [binding.coordinatorDroneId] });
   } catch (error) {
-    const failure = classifyAppendFailure(error);
+    const failure = classifyAppendFailure(error, binding);
     if (failure.definite) {
       const recorded = await settle('rejected');
       throw new RepresentativeError(
@@ -534,7 +523,7 @@ export async function sendRepresentativeMessage(
           (recorded === 'ambiguous'
             ? ' An EARLIER attempt under this request_id is still unresolved, so the request stays listed as unresolved.'
             : ''),
-        { cause_code: failure.cause.code, cause_message: failure.cause.message, recovery: failure.recovery },
+        { request_id: requestId, cause_code: failure.cause.code, cause_message: failure.cause.message, recovery: failure.recovery },
       );
     }
     await settle('ambiguous');
@@ -568,6 +557,8 @@ export async function sendRepresentativeMessage(
 }
 
 export interface RepresentativeReply {
+  documents?: DocumentCitation[];
+  document_delivery?: string;
   entry_id: string;
   created_at: string;
   from_drone_id: string;
@@ -592,12 +583,12 @@ export async function readRepresentativeReplies(
 ): Promise<{ replies: RepresentativeReply[]; ignored_entries: number; has_more: boolean; delivery: string }> {
   const input = (raw ?? {}) as Record<string, unknown>;
   const unknown = Object.keys(input).filter((key) => key !== 'include_broadcast' && key !== 'limit' && input[key] !== undefined);
-  if (unknown.length > 0) throw new RepresentativeError('INVALID_INPUT', `Unsupported field(s): ${unknown.join(', ')}.`);
+  if (unknown.length > 0) throw new RepresentativeError(ErrorCode.INVALID_INPUT, `Unsupported field(s): ${unknown.join(', ')}.`);
   if (input.include_broadcast !== undefined && typeof input.include_broadcast !== 'boolean') {
-    throw new RepresentativeError('INVALID_INPUT', 'include_broadcast must be a boolean.');
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'include_broadcast must be a boolean.');
   }
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > 200)) {
-    throw new RepresentativeError('INVALID_INPUT', 'limit must be an integer from 1 to 200.');
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'limit must be an integer from 1 to 200.');
   }
   await verifyLiveBinding(ctx);
   const page = await ctx.backend.readUnread(input.limit as number | undefined);
@@ -616,6 +607,10 @@ export async function readRepresentativeReplies(
       addressed,
       in_reply_to: quoted.find((id) => requestIds.has(id)) ?? null,
       message: entry.message,
+      ...(entry.documents?.length ? {
+        documents: entry.documents,
+        document_delivery: 'Document bodies are not included and cannot be fetched through this connection. Ask the Coordinator to provide the content through a supported channel.',
+      } : {}),
     });
   }
   return {
@@ -632,8 +627,8 @@ export async function ackRepresentativeReply(
 ): Promise<{ acknowledged: string }> {
   const input = (raw ?? {}) as Record<string, unknown>;
   const unknown = Object.keys(input).filter((key) => key !== 'entry_id');
-  if (unknown.length > 0 || typeof input.entry_id !== 'string' || !UUID_RE.test(input.entry_id)) {
-    throw new RepresentativeError('INVALID_INPUT', 'entry_id must be the full UUID of a reply returned by borg_representative-read.');
+  if (unknown.length > 0 || typeof input.entry_id !== 'string' || !isRepresentativeUuid(input.entry_id)) {
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'entry_id must be the full UUID of a reply returned by borg_representative-read.');
   }
   await verifyLiveBinding(ctx);
   const { entry } = await ctx.backend.readEntry(input.entry_id);
@@ -677,7 +672,7 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
         request_id: record.requestId, state: record.state, kind: record.kind, updated_at: record.updatedAt,
       })));
   return {
-    role: 'Hermes / human representative — an automated delegate speaking for the human. It is not the human and not the Coordinator.',
+    role: 'Human representative — an automated delegate speaking for the human. It is not the human and not the Coordinator.',
     connected: problem === undefined,
     ...(problem ? { problem } : {}),
     cube: { id: binding.cubeId, name: binding.cubeName },

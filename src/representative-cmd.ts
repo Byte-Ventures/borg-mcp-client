@@ -17,6 +17,7 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import type { ActiveCube } from './cubes.js';
+import { normalizeServerEndpoint } from './server-endpoint.js';
 import { validateName } from './name-validator.js';
 import {
   RepresentativeError,
@@ -28,6 +29,7 @@ import {
 } from './representative-core.js';
 import {
   RepresentativeStoreError,
+  representativeRecoveryCommand,
   type RepresentativeBinding,
   type RepresentativeStore,
 } from './representative-store.js';
@@ -49,7 +51,7 @@ export interface RepresentativeCmdDeps {
   /** Hydrates the saved seat bound to exactly this worktree, or null. */
   hydrateSeat(worktree: string): Promise<ActiveCube | null>;
   /** Launch-free seat creation/resume; never starts an agent CLI. */
-  prepareSeat(input: { role: string; worktreeName?: string; host?: string }): Promise<{ code: number; worktree?: string }>;
+  prepareSeat(input: { role: string; worktreeName?: string; host?: string; resume?: boolean }): Promise<{ code: number; worktree?: string }>;
   backendFor(active: ActiveCube): RepresentativeBackend | Promise<RepresentativeBackend>;
   store: RepresentativeStore;
   stdout(text: string): void;
@@ -154,14 +156,13 @@ export async function resolveRepresentativeContext(
   if (!active) {
     throw new RepresentativeError(
       'SEAT_UNAVAILABLE',
-      `The saved representative seat for ${worktree} is missing, reset or rejected. Re-run \`borg representative prepare\`.`,
+      `The saved representative connection is missing, reset or rejected. Run \`${representativeRecoveryCommand(binding)}\`.`,
     );
   }
   if (!sameSeat(binding, active)) {
     throw new RepresentativeError(
       'BINDING_MISMATCH',
-      'This worktree\'s saved seat is not the server/cube/drone the representative connection was bound to. ' +
-        'Re-run `borg representative prepare ... --rebind` explicitly; nothing is sent until then.',
+      `This worktree's saved connection is not the bound server/cube/drone. Run \`${representativeRecoveryCommand(binding)}\` to confirm a rebind; nothing is sent until then.`,
     );
   }
   return { binding, backend: await deps.backendFor(active), store: deps.store };
@@ -184,26 +185,28 @@ export async function runRepresentativePrepare(
     // Same canonical key as status/mcp, so a symlinked cwd cannot bind under a path they never look up.
     let worktree = canonicalWorktree(deps.cwd(), deps);
     const existing = command.worktreeName === undefined ? await deps.hydrateSeat(worktree) : null;
-    if (!existing) {
-      const prepared = await deps.prepareSeat({
-        role: command.role,
-        ...(command.worktreeName ? { worktreeName: command.worktreeName } : {}),
-        ...(command.host ? { host: command.host } : {}),
-      });
-      if (prepared.code !== 0) {
-        deps.stderr('borg representative: the representative seat could not be prepared; nothing was bound.\n');
-        return prepared.code || 1;
-      }
-      if (prepared.worktree) worktree = canonicalWorktree(prepared.worktree, deps);
+    if (existing && command.host && normalizeServerEndpoint(command.host) !== normalizeServerEndpoint(existing.apiUrl)) {
+      throw new RepresentativeError('BINDING_MISMATCH', 'The explicit --host does not match this worktree\'s saved connection. Use a worktree connected to the requested server; nothing was rebound.');
     }
+    const prepared = await deps.prepareSeat({
+      role: command.role,
+      ...(existing ? { resume: true } : {}),
+      ...(command.worktreeName ? { worktreeName: command.worktreeName } : {}),
+      ...(command.host ? { host: command.host } : {}),
+    });
+    if (prepared.code !== 0) {
+      deps.stderr('borg representative: the representative connection could not be prepared; nothing was bound.\n');
+      return prepared.code || 1;
+    }
+    if (prepared.worktree) worktree = canonicalWorktree(prepared.worktree, deps);
     const active = await deps.hydrateSeat(worktree);
     if (!active || !active.serverTrustIdentity) {
-      throw new RepresentativeError('SEAT_UNAVAILABLE', `No usable saved seat was found for ${worktree}.`);
+      throw new RepresentativeError('SEAT_UNAVAILABLE', `No usable saved connection was found for ${worktree}.`);
     }
     const backend = await deps.backendFor(active);
     const me = await backend.whoami();
     if (me.cube_id !== active.cubeId || me.drone_id !== active.droneId) {
-      throw new RepresentativeError('BINDING_MISMATCH', 'The server does not recognise this worktree\'s seat as saved.');
+      throw new RepresentativeError('BINDING_MISMATCH', 'The server does not recognise this worktree\'s saved connection.');
     }
     const roster = await backend.roster();
     const self = roster.drones.find((drone) => drone.id === me.drone_id);
@@ -214,7 +217,7 @@ export async function runRepresentativePrepare(
       throw new RepresentativeError(
         'REPRESENTATIVE_ROLE_MISMATCH',
         `This worktree's drone ${self.label} holds role ${JSON.stringify(selfRole.name)}, not ${JSON.stringify(command.role)}. ` +
-          'The representative needs its own dedicated seat: run prepare with `--worktree <name>`, or pass the intended `--role`.',
+          'The representative needs its own dedicated drone. Use the preparation syntax in `borg representative --help` with an explicit Coordinator and the intended role or new worktree name.',
       );
     }
     const coordinator = resolveCoordinator(roster, { label: command.coordinator, selfDroneId: me.drone_id });
@@ -325,16 +328,16 @@ export async function buildDefaultRepresentativeDeps(): Promise<RepresentativeCm
     cwd: () => process.cwd(),
     findProjectRoot,
     hydrateSeat: (worktree) => getActiveCubeForWorktree(worktree),
-    prepareSeat: async ({ role, worktreeName, host }) => {
-      const [{ runAssimilate }, { buildDefaultAssimilateDeps }] = await Promise.all([
+    prepareSeat: async ({ role, worktreeName, host, resume }) => {
+      const [{ prepareConnection }, { buildDefaultAssimilateDeps }] = await Promise.all([
         import('./assimilate-cmd.js'),
         import('./assimilate-deps.js'),
       ]);
       let worktree: string | undefined;
-      const code = await runAssimilate(
-        { role, flags: { ...(worktreeName ? { worktree: worktreeName } : {}), ...(host ? { server: host } : {}) } },
+      const code = await prepareConnection(
+        { role, flags: { ...(resume ? { here: true } : {}), ...(worktreeName ? { worktree: worktreeName } : {}), ...(host ? { server: host } : {}) } },
         buildDefaultAssimilateDeps(),
-        { launch: false, onPrepared: (prepared) => { worktree = prepared.worktree; } },
+        { validateRole: assertRepresentativeRole, onPrepared: (prepared) => { worktree = prepared.worktree; } },
       );
       return { code, ...(worktree ? { worktree } : {}) };
     },

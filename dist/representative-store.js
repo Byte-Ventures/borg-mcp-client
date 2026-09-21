@@ -10,11 +10,24 @@
  * The file never holds a bearer (the seat store owns credentials) and never
  * holds message text (only a payload digest).
  */
+import { decodeUuid } from 'borgmcp-shared/protocol';
 import { join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
+import { shellEscape } from './shell-escape.js';
 import { withStore } from './seat-store.js';
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isRepresentativeUuid(value) {
+    try {
+        decodeUuid(value);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 const SETTLED_REQUEST_LIMIT = 200;
+export function representativeRecoveryCommand(binding) {
+    return `cd ${shellEscape(binding.worktree)} && borg representative prepare --coordinator ${shellEscape(binding.coordinatorLabel)} --role ${shellEscape(binding.representativeRoleName)} --rebind`;
+}
 export class RepresentativeStoreError extends Error {
     code;
     constructor(code, message) {
@@ -34,9 +47,9 @@ function validBinding(value, key) {
     const binding = value;
     return BINDING_STRING_FIELDS.every((field) => typeof binding[field] === 'string' && binding[field] !== '') &&
         binding.worktree === key &&
-        UUID_RE.test(binding.cubeId) &&
-        UUID_RE.test(binding.representativeDroneId) &&
-        UUID_RE.test(binding.coordinatorDroneId) &&
+        isRepresentativeUuid(binding.cubeId) &&
+        isRepresentativeUuid(binding.representativeDroneId) &&
+        isRepresentativeUuid(binding.coordinatorDroneId) &&
         binding.representativeDroneId !== binding.coordinatorDroneId &&
         (binding.repositoryOrigin === undefined || typeof binding.repositoryOrigin === 'string');
 }
@@ -44,7 +57,7 @@ function validRequest(value) {
     if (value === null || typeof value !== 'object' || Array.isArray(value))
         return false;
     const record = value;
-    return UUID_RE.test(String(record.requestId ?? '')) &&
+    return isRepresentativeUuid(String(record.requestId ?? '')) &&
         typeof record.payloadDigest === 'string' &&
         typeof record.kind === 'string' &&
         typeof record.authorization === 'string' &&
@@ -101,7 +114,7 @@ export function createRepresentativeStore(storePath = representativeStorePath())
                 return 'unchanged';
             if (existing && !options.rebind) {
                 throw new RepresentativeStoreError('BINDING_CONFLICT', `This worktree is already bound to Coordinator ${existing.coordinatorLabel} in cube ${existing.cubeName}. ` +
-                    'Changing the selected cube or Coordinator requires an explicit `borg representative prepare ... --rebind`.');
+                    `To confirm the new selection, run \`${representativeRecoveryCommand(binding)}\`.`);
             }
             txn.data.bindings[binding.worktree] = binding;
             // A different selection invalidates the old ledger: its post ids belong to

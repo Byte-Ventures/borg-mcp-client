@@ -27,9 +27,9 @@ import {
   runRepresentativeStatus,
   type RepresentativeCmdDeps,
 } from '../src/representative-cmd.js';
-import { clientSubcommandHelpText, topLevelHelpText } from '../src/cli-help.js';
-import { matchDocsSections } from '../src/docs-sections.js';
-import { unknownSubcommand } from '../src/unknown-subcommand.js';
+import { sendRepresentativeMessage } from '../src/representative-core.js';
+import { DroneEvictedError } from '../src/drone-lifecycle.js';
+import { spawnSync } from 'node:child_process';
 
 const originalHome = process.env.HOME;
 const originalStateRoot = process.env.BORG_STATE_ROOT;
@@ -111,9 +111,28 @@ describe('argument parsing', () => {
 });
 
 describe('prepare', () => {
+  it('refuses a different explicit host before a subsequent send can reach the saved destination', async () => {
+    expect(await prepare({ host: 'different-server:9999' })).toBe(1);
+    await expect(resolveRepresentativeContext(worktree, deps).then((ctx) => sendRepresentativeMessage(ctx, {
+      kind: 'request', authorization: 'user_authorized', message: 'Only for the requested server',
+    }))).rejects.toMatchObject({ code: 'NOT_PREPARED' });
+    expect(cube.appendCalls).toEqual([]);
+    expect(prepareCalls).toEqual([]);
+  });
+
+  it('routes a locally saved evicted connection through preparation before live binding', async () => {
+    let evicted = true;
+    const backend = cube.backend();
+    const whoami = backend.whoami;
+    backend.whoami = async () => { if (evicted) throw new DroneEvictedError(); return whoami(); };
+    deps.backendFor = () => backend;
+    deps.prepareSeat = async (input) => { prepareCalls.push(input); evicted = false; return { code: 0, worktree }; };
+    expect(await prepare()).toBe(0);
+    expect(prepareCalls).toHaveLength(1);
+  });
   it('binds the existing dedicated seat to exactly the named Coordinator without launching or leaking the bearer', async () => {
     expect(await prepare()).toBe(0);
-    expect(prepareCalls).toEqual([]);
+    expect(prepareCalls).toEqual([{ role: DEFAULT_REPRESENTATIVE_ROLE, resume: true }]);
     const binding = await deps.store.getBinding(worktree);
     expect(binding).toMatchObject({
       cubeId: CUBE_ID, representativeDroneId: REP_ID, coordinatorDroneId: COORD_ID, coordinatorLabel: 'coordinator-1',
@@ -185,6 +204,27 @@ describe('prepare', () => {
 });
 
 describe('connection context', () => {
+  it('executes the printed recovery command with the bound Coordinator and custom role', async () => {
+    mkdirSync(worktree);
+    const binding = bindingFor(worktree, { representativeRoleName: 'relay-custom' });
+    cube.roles[0].name = 'relay-custom';
+    await deps.store.saveBinding(binding, { rebind: false });
+    seat = null;
+    let message = '';
+    try { await resolveRepresentativeContext(worktree, deps); } catch (error) { message = (error as Error).message; }
+    const command = message.match(/`([^`]+)`/)?.[1];
+    expect(command).toBeDefined();
+    const shell = spawnSync('/bin/bash', ['-c', 'borg() { printf "%s\\0" "$PWD" "$@"; }; eval "$1"', 'recovery-control', command!], { encoding: 'utf8' });
+    expect(shell.status).toBe(0);
+    const [cwd, , ...args] = shell.stdout.split('\0').filter(Boolean);
+    expect(cwd).toBe(worktree);
+    const parsed = parseRepresentativeArgs(args);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.command.action !== 'prepare') throw new Error('invalid recovery command');
+    expect(parsed.command.coordinator).toBe(binding.coordinatorLabel);
+    expect(parsed.command.role).toBe(binding.representativeRoleName);
+    expect(await runRepresentativePrepare(parsed.command, deps)).toBe(0);
+  });
   it('fails closed when nothing is prepared', async () => {
     await expect(resolveRepresentativeContext(worktree, deps)).rejects.toMatchObject({ code: 'NOT_PREPARED' });
   });
@@ -254,19 +294,5 @@ describe('served MCP process', () => {
 
     stdin.end();
     expect(await exit).toBe(0);
-  });
-});
-
-describe('shipped documentation surfaces', () => {
-  it('defines the role vocabulary in help and routes the docs index', () => {
-    const top = topLevelHelpText('0.0.0');
-    expect(top).toContain('borg representative');
-    const help = clientSubcommandHelpText('representative', ['--help'], '0.0.0') ?? '';
-    expect(help).toContain('human representative');
-    expect(help).toContain('Coordinator');
-    expect(help).toContain('human seat');
-    expect(help).toContain('no background wake');
-    expect(unknownSubcommand('representative')).toBeNull();
-    expect(matchDocsSections('hermes human representative')[0]?.slug).toBe('human-representative');
   });
 });

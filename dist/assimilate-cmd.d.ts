@@ -290,7 +290,7 @@ export interface SeatPreparationInput {
     serverTrustIdentity: string;
     cubeDetail: CubeDetail;
     resolvedRole: Role;
-    cli: BorgCli;
+    cli?: BorgCli;
     effectiveModel: string | null;
     projectRoot: string;
     existing: CanonicalActiveCube | null;
@@ -342,6 +342,11 @@ export interface AuthorityResolutionOutcome {
 }
 export declare function resolveAssimilationAuthority(input: AuthorityResolutionInput, deps: AuthorityResolutionDeps): Promise<AssimilationPhaseOutcome<AuthorityResolutionOutcome>>;
 export declare function runAssimilate(args: AssimilateArgs, deps: AssimilateDeps, options?: RunAssimilateOptions): Promise<number>;
+/** Prepare a host-neutral connection using the same durable assimilation lifecycle. */
+export declare function prepareConnection(args: AssimilateArgs, deps: AssimilateDeps, options: {
+    validateRole: (role: Role) => void;
+    onPrepared: (prepared: PreparedAssimilation) => void;
+}): Promise<number>;
 /**
  * Sprint 4 / gh#147 (drone-8 SR-PE-FINDING-1): strip ASCII control
  * characters before interpolating subprocess stderr into operator-

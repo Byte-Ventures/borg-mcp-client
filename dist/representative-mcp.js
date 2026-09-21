@@ -1,5 +1,5 @@
 /**
- * Restricted stdio MCP facade for the human representative ("Hermes").
+ * Restricted stdio MCP facade for the human representative.
  *
  * A Borg server speaks pinned-TLS HTTPS, not MCP, so a generic MCP host reaches
  * it through this local stdio process. The surface is four tools: status, send
@@ -10,6 +10,7 @@
  * The connection context is resolved per call and injected, so the same facade
  * runs over the real seat-scoped backend or a controlled test backend.
  */
+import { ErrorCode } from 'borgmcp-shared/protocol';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -21,7 +22,7 @@ export const REPRESENTATIVE_TOOL_NAMES = [
     'borg_representative-read',
     'borg_representative-ack',
 ];
-export const REPRESENTATIVE_INSTRUCTIONS = 'You are connected as the human representative ("Hermes") of one Borg cube: an automated delegate that relays the ' +
+export const REPRESENTATIVE_INSTRUCTIONS = 'You are connected as the human representative of one Borg cube: an automated delegate that relays the ' +
     'human\'s requests, questions and decisions to ONE bound Coordinator drone and reads its replies. You are not the ' +
     'Coordinator and not the human: never plan or dispatch work for other drones — the Coordinator does that. ' +
     'Mark content user_authorized ONLY when the human explicitly said it; everything you originate is model_advice. ' +
@@ -117,7 +118,7 @@ export async function serveRepresentativeMcp(options) {
         const args = request.params.arguments ?? {};
         try {
             if (!REPRESENTATIVE_TOOL_NAMES.includes(name)) {
-                throw new RepresentativeError('INVALID_INPUT', `Unknown tool ${JSON.stringify(name)}; this connection exposes only the representative tools.`);
+                throw new RepresentativeError(ErrorCode.INVALID_INPUT, `Unknown tool ${JSON.stringify(name)}; this connection exposes only the representative tools.`);
             }
             const ctx = await options.context();
             switch (name) {

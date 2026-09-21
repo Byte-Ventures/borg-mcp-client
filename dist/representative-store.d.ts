@@ -10,6 +10,7 @@
  * The file never holds a bearer (the seat store owns credentials) and never
  * holds message text (only a payload digest).
  */
+export declare function isRepresentativeUuid(value: unknown): value is string;
 export interface RepresentativeBinding {
     /** Canonical worktree holding the dedicated representative seat. */
     worktree: string;
@@ -26,6 +27,7 @@ export interface RepresentativeBinding {
     repositoryOrigin?: string;
     boundAt: string;
 }
+export declare function representativeRecoveryCommand(binding: RepresentativeBinding): string;
 export type RepresentativeRequestState = 'pending' | 'ambiguous' | 'sent' | 'rejected';
 export interface RepresentativeRequestRecord {
     /** Stable request identity; also the protocol `post_id` idempotency key. */

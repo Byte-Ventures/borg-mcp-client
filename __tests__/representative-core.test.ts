@@ -67,6 +67,14 @@ async function codeOf(promise: Promise<unknown>): Promise<string> {
 
 const REQUEST_ID = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
 
+it('preserves document citations on a direct Coordinator reply', async () => {
+  const entry = cube.post(COORD_ID, 'The requested design is attached.', [REP_ID]);
+  const documents = [{ id: REQUEST_ID, title: 'Design', state: 'active' as const }];
+  Object.assign(entry, { documents });
+  const result = await readRepresentativeReplies(ctx, {});
+  expect(result.replies[0]).toMatchObject({ entry_id: entry.id, message: entry.message, documents });
+});
+
 describe('Coordinator selection', () => {
   const roster = () => ({ drones: cube.drones, roles: cube.roles });
 

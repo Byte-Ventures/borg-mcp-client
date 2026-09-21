@@ -1,5 +1,5 @@
 /**
- * Restricted stdio MCP facade for the human representative ("Hermes").
+ * Restricted stdio MCP facade for the human representative.
  *
  * A Borg server speaks pinned-TLS HTTPS, not MCP, so a generic MCP host reaches
  * it through this local stdio process. The surface is four tools: status, send

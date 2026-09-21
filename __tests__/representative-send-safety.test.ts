@@ -50,6 +50,18 @@ afterEach(() => {
 });
 
 const base = { kind: 'request', authorization: 'user_authorized', message: 'Do X.' } as const;
+
+it('returns an omitted request id on 429 so the caller can retry that id', async () => {
+  cube.appendPlan.push({ error: new BorgServerHttpError(429, 'rate limited'), stored: false });
+  let failure: RepresentativeError | undefined;
+  try { await sendRepresentativeMessage(ctx, base); } catch (error) { failure = error as RepresentativeError; }
+  const requestId = failure?.details?.request_id;
+  expect(requestId).toEqual(expect.any(String));
+  const sent = await sendRepresentativeMessage(ctx, { ...base, request_id: requestId });
+  expect(sent.request_id).toBe(requestId);
+  expect(cube.appendCalls.map((call) => call.postId)).toEqual([requestId, requestId]);
+  expect(cube.entries).toHaveLength(1);
+});
 const ledger = () => {
   try {
     return (JSON.parse(readFileSync(storePath, 'utf8')).requests[WORKTREE] ?? []) as Array<{ requestId: string; state: string }>;

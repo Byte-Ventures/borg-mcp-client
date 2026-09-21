@@ -1,4 +1,4 @@
-# Human Representative (Hermes)
+# Human Representative
 
 `borg representative` lets a standard MCP host — for example Hermes — speak
 **for the human** to one existing Coordinator drone and read its replies. It is
@@ -60,14 +60,29 @@ That file holds identifiers and a request ledger only — no credential and no
 message text. The drone's credential stays in Borg's existing private
 connection store.
 
-To resume later, run `prepare` again from inside the representative worktree
-(without `--worktree`). Changing the cube or Coordinator is refused unless you
+To resume later, run `borg representative prepare --coordinator <coordinator-drone-label> --role <your-representative-role>` from inside the representative worktree (without `--worktree`), substituting
+your saved labels. Recovery errors for a bound connection print that complete
+command with its actual labels and worktree. Changing the cube or Coordinator
+is refused unless you
 pass `--rebind`; a rebind also discards the old request ledger. A running
 `borg representative mcp` process never picks up a rebind: its calls fail
 closed until the MCP host restarts it.
 
-`prepare` reuses Borg's drone-preparation step, which also writes that
-worktree's project-local session hook file. Nothing is started.
+`prepare` reuses Borg's connection and worktree preparation, including its
+private-state initialization and saved-connection checks. It does not require
+Claude Code, Codex or OpenCode, write their configuration or preferences,
+provision their launch access, report an agent identity, or install a session
+hook. Nothing is started. An explicit `--host` that conflicts with the saved
+connection is refused before preparation.
+
+A confirmed evicted drone uses the ordinary connection recovery path. Revoked,
+superseded, unreachable and changed-trust connections remain distinct refusals;
+they are not treated as eviction. After recovery changes the drone identity,
+confirm the new selection with the printed `--rebind` command.
+
+First-time role creation and actual linked-worktree provisioning have not yet
+been exercised live for this interface. The current evidence uses controlled
+backends; this is not a claim of live onboarding verification.
 
 ### 3. Configure the MCP host
 
@@ -102,10 +117,11 @@ There is no tool for logging to other drones, broadcasting, role or drone
 management, grants, eviction, release, regeneration or server lifecycle, and no
 generic dispatcher. `send` rejects any recipient field.
 
-Every call re-verifies the live cube first: the connection must still be the
+New network operations re-verify the live cube first: the connection must still be the
 bound drone in the bound cube, still under a permitted role, and the bound
 Coordinator must still be an active human-seat drone. Otherwise the call fails
-and nothing is sent.
+and nothing is sent. A cached sent retry returns its historical receipt without
+a live re-check; use `borg_representative-status` to check the current connection.
 
 ## Attribution and authority
 
@@ -142,10 +158,14 @@ idempotency key of the log append.
   names the first one's `request_id`. This is not a content filter: once a
   request is settled, sending identical content again is a new, legitimate
   request.
-- Re-sending the same `request_id` with identical content never creates a
-  second message: a request already recorded as sent is answered from the local
+- Within the same server database, cube and representative drone, re-sending
+  the same `request_id` with identical content never creates a second message:
+  a request already recorded as sent is answered from the local
   ledger, and otherwise the server deduplicates on `post_id`. The same
-  `request_id` with different content is refused (`REQUEST_ID_CONFLICT`).
+  `request_id` with different content is refused (`REQUEST_ID_CONFLICT`). The local
+  ledger retains only the newest 200 settled requests; unresolved requests are
+  retained. Older settled retries depend on server deduplication. Changing the
+  database, cube or drone is outside that guarantee.
 - Invalid input, and a payload the protocol would refuse, fail before anything
   is reserved. The live cube is verified before posting; if that check fails,
   nothing was sent and the reservation is released.
@@ -179,7 +199,7 @@ specifies, and on the single-process rule below.
 ## Reading, cursors and wake limits
 
 - `read` drains only the representative drone's **own** unread cursor. Other
-  drones' cursors are separate server and client state and are never touched.
+  drones' cursors are separate client-owned state and are never touched.
 - A read **consumes everything it fetched**, not only what it returns: the
   Coordinator's replies, and equally the entries it ignores (other drones'
   entries are counted in `ignored_entries` and never returned; the
@@ -188,6 +208,9 @@ specifies, and on the single-process rule below.
 - If the MCP host stops between reading a reply and relaying it to the human,
   that reply is gone from the unread view. It still exists in the cube log, but
   this version offers no tool to list past replies again. Relay first.
+- Replies preserve document citations (id, title and state). Document bodies are
+  not included and cannot be fetched through this connection. Ask the Coordinator
+  to provide the content through a supported channel.
 - `limit` is a page-size hint, not a hard cap: when the unread backlog is
   large the client's digest mode fetches, and drains, more than `limit`.
 - `ack` is only a signal to the Coordinator that a direct reply was received.
@@ -209,8 +232,8 @@ specifies, and on the single-process rule below.
 
 | Error | Meaning and action |
 | --- | --- |
-| `NOT_PREPARED` | No binding for that worktree. Run `prepare`. |
-| `SEAT_UNAVAILABLE` | The representative drone's saved connection is gone or rejected. Run `prepare` again in its worktree. |
-| `BINDING_MISMATCH` | The worktree's connection is not the bound server/cube/drone, or the binding changed under a running process. Re-run `prepare --rebind` deliberately and restart the MCP process. |
-| `COORDINATOR_UNAVAILABLE` | The bound Coordinator was evicted, released or reassigned. Choose the new Coordinator explicitly with `prepare --coordinator <label> --rebind`. |
+| `NOT_PREPARED` | No binding for that worktree. Follow the initial preparation command above with an explicitly chosen Coordinator. |
+| `SEAT_UNAVAILABLE` | The representative drone's saved connection is gone or rejected. Run the complete recovery command printed in the error; it includes the worktree, Coordinator and role. |
+| `BINDING_MISMATCH` | The worktree's connection is not the bound server/cube/drone, or the binding changed under a running process. Run the printed command to confirm the rebind, then restart the MCP process. |
+| `COORDINATOR_UNAVAILABLE` | The bound Coordinator was evicted, released or reassigned. Restore the bound Coordinator and use the printed recovery command, or deliberately substitute a new Coordinator label in that command. |
 | `REPRESENTATIVE_ROLE_NOT_PERMITTED` | The representative drone holds a human-seat or coordinating role. Give it its own worker role. |

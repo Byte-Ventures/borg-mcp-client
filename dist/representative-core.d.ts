@@ -12,12 +12,14 @@
  * The backend is injected so the same logic runs against the real seat-scoped
  * client (`createSeatBackend`) or a controlled test double.
  */
+import { ErrorCode, type Role, type RosterDrone as ProtocolDrone, type EnrichedStreamEntry, type DocumentCitation } from 'borgmcp-shared/protocol';
 import type { ActiveCube } from './cubes.js';
-import type { RepresentativeBinding, RepresentativeStore } from './representative-store.js';
+import { type RepresentativeBinding, type RepresentativeStore } from './representative-store.js';
 export declare const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
 export declare const REPRESENTATIVE_DELIVERY_NOTE: string;
-export type RepresentativeErrorCode = 'INVALID_INPUT' | 'DECISION_REQUIRES_USER_AUTHORIZATION' | 'REQUEST_ID_CONFLICT' | 'AMBIGUOUS_SEND_UNRESOLVED' | 'SEND_REJECTED' | 'NOT_PREPARED' | 'SEAT_UNAVAILABLE' | 'BINDING_MISMATCH' | 'BINDING_CONFLICT' | 'COORDINATOR_NOT_FOUND' | 'COORDINATOR_AMBIGUOUS' | 'COORDINATOR_NOT_HUMAN_SEAT' | 'COORDINATOR_IS_SELF' | 'COORDINATOR_UNAVAILABLE' | 'REPRESENTATIVE_ROLE_NOT_PERMITTED' | 'REPRESENTATIVE_ROLE_MISMATCH' | 'NOT_A_COORDINATOR_REPLY';
+export type RepresentativeErrorCode = typeof ErrorCode.INVALID_INPUT | 'DECISION_REQUIRES_USER_AUTHORIZATION' | 'REQUEST_ID_CONFLICT' | 'AMBIGUOUS_SEND_UNRESOLVED' | 'SEND_REJECTED' | 'NOT_PREPARED' | 'SEAT_UNAVAILABLE' | 'BINDING_MISMATCH' | 'BINDING_CONFLICT' | 'COORDINATOR_NOT_FOUND' | 'COORDINATOR_AMBIGUOUS' | 'COORDINATOR_NOT_HUMAN_SEAT' | 'COORDINATOR_IS_SELF' | 'COORDINATOR_UNAVAILABLE' | 'REPRESENTATIVE_ROLE_NOT_PERMITTED' | 'REPRESENTATIVE_ROLE_MISMATCH' | 'NOT_A_COORDINATOR_REPLY';
 export interface RepresentativeErrorDetails {
+    request_id?: string;
     cause_code?: string;
     cause_message?: string;
     recovery?: string;
@@ -27,26 +29,9 @@ export declare class RepresentativeError extends Error {
     readonly details?: RepresentativeErrorDetails | undefined;
     constructor(code: RepresentativeErrorCode, message: string, details?: RepresentativeErrorDetails | undefined);
 }
-interface RosterRole {
-    id: string;
-    name: string;
-    is_human_seat?: boolean;
-    role_class?: string;
-}
-interface RosterDrone {
-    id: string;
-    label: string;
-    role_id: string;
-    is_queen_class?: boolean;
-}
-interface LogEntry {
-    id: string;
-    drone_id: string | null;
-    message: string;
-    visibility: string;
-    created_at: string;
-    recipient_drone_ids?: string[];
-}
+type RosterRole = Pick<Role, 'id' | 'name' | 'is_human_seat' | 'role_class'>;
+type RosterDrone = Pick<ProtocolDrone, 'id' | 'label' | 'role_id' | 'is_queen_class'>;
+type LogEntry = Pick<EnrichedStreamEntry, 'id' | 'drone_id' | 'message' | 'visibility' | 'created_at' | 'recipient_drone_ids' | 'documents'>;
 /** The only Borg operations the representative may perform, all seat-scoped. */
 export interface RepresentativeBackend {
     whoami(): Promise<{
@@ -155,6 +140,8 @@ export interface SendFailureCause {
 }
 export declare function sendRepresentativeMessage(ctx: RepresentativeContext, raw: unknown): Promise<RepresentativeSendResult>;
 export interface RepresentativeReply {
+    documents?: DocumentCitation[];
+    document_delivery?: string;
     entry_id: string;
     created_at: string;
     from_drone_id: string;

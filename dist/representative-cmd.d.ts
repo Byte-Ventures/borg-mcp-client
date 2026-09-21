@@ -48,6 +48,7 @@ export interface RepresentativeCmdDeps {
         role: string;
         worktreeName?: string;
         host?: string;
+        resume?: boolean;
     }): Promise<{
         code: number;
         worktree?: string;

@@ -280,15 +280,16 @@ describe('representative stdio MCP (mock backend)', () => {
     await server.close();
   });
 
-  it('describes read as draining, ack as a signal only, and limit as a hint', async () => {
+  it('does not promise by-id recovery after the only read tool consumes a reply', async () => {
+    const entry = cube.post(COORD_ID, 'A reply to relay now', [REP_ID]);
     const { client, server } = await connect();
-    await client.initialize();
-    const tools = (await client.request('tools/list')).result.tools;
-    const read = tools.find((tool: any) => tool.name === 'borg_representative-read');
-    const ack = tools.find((tool: any) => tool.name === 'borg_representative-ack');
-    expect(read.description).toMatch(/DRAINS the whole fetched unread page/);
-    expect(read.inputSchema.properties.limit.description).toMatch(/not a hard cap/);
-    expect(ack.description).toMatch(/does not make delivery reliable/);
+    const init = await client.initialize();
+    const read = await client.call('borg_representative-read', {});
+    expect(read.body.replies[0].entry_id).toBe(entry.id);
+    expect((await client.call('borg_representative-read', { entry_id: entry.id })).body.error.code).toBe('INVALID_INPUT');
+    expect((await client.call('borg_representative-read', {})).body.replies).toEqual([]);
+    expect(init.result.instructions).not.toMatch(/fetched\s+again only by its entry_id/);
+    expect(read.body.delivery).not.toMatch(/fetched\s+again only by its entry_id/);
     await server.close();
   });
 

@@ -11,11 +11,15 @@
  * holds message text (only a payload digest).
  */
 
+import { decodeUuid } from 'borgmcp-shared/protocol';
 import { join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
+import { shellEscape } from './shell-escape.js';
 import { withStore } from './seat-store.js';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isRepresentativeUuid(value: unknown): value is string {
+  try { decodeUuid(value); return true; } catch { return false; }
+}
 const SETTLED_REQUEST_LIMIT = 200;
 
 export interface RepresentativeBinding {
@@ -33,6 +37,10 @@ export interface RepresentativeBinding {
   coordinatorRoleName: string;
   repositoryOrigin?: string;
   boundAt: string;
+}
+
+export function representativeRecoveryCommand(binding: RepresentativeBinding): string {
+  return `cd ${shellEscape(binding.worktree)} && borg representative prepare --coordinator ${shellEscape(binding.coordinatorLabel)} --role ${shellEscape(binding.representativeRoleName)} --rebind`;
 }
 
 export type RepresentativeRequestState = 'pending' | 'ambiguous' | 'sent' | 'rejected';
@@ -89,9 +97,9 @@ function validBinding(value: unknown, key: string): value is RepresentativeBindi
   const binding = value as Record<string, unknown>;
   return BINDING_STRING_FIELDS.every((field) => typeof binding[field] === 'string' && binding[field] !== '') &&
     binding.worktree === key &&
-    UUID_RE.test(binding.cubeId as string) &&
-    UUID_RE.test(binding.representativeDroneId as string) &&
-    UUID_RE.test(binding.coordinatorDroneId as string) &&
+    isRepresentativeUuid(binding.cubeId as string) &&
+    isRepresentativeUuid(binding.representativeDroneId as string) &&
+    isRepresentativeUuid(binding.coordinatorDroneId as string) &&
     binding.representativeDroneId !== binding.coordinatorDroneId &&
     (binding.repositoryOrigin === undefined || typeof binding.repositoryOrigin === 'string');
 }
@@ -99,7 +107,7 @@ function validBinding(value: unknown, key: string): value is RepresentativeBindi
 function validRequest(value: unknown): value is RepresentativeRequestRecord {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return UUID_RE.test(String(record.requestId ?? '')) &&
+  return isRepresentativeUuid(String(record.requestId ?? '')) &&
     typeof record.payloadDigest === 'string' &&
     typeof record.kind === 'string' &&
     typeof record.authorization === 'string' &&
@@ -163,7 +171,7 @@ export function createRepresentativeStore(storePath: string = representativeStor
         throw new RepresentativeStoreError(
           'BINDING_CONFLICT',
           `This worktree is already bound to Coordinator ${existing.coordinatorLabel} in cube ${existing.cubeName}. ` +
-            'Changing the selected cube or Coordinator requires an explicit `borg representative prepare ... --rebind`.',
+            `To confirm the new selection, run \`${representativeRecoveryCommand(binding)}\`.`,
         );
       }
       txn.data.bindings[binding.worktree] = binding;
