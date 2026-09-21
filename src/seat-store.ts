@@ -320,6 +320,20 @@ async function assertSecureStorePerms(
   }
 }
 
+/** Identity drift is retryable only when inspecting an acquisition lock. */
+export class StoreFileIdentityChangedError extends Error {
+  readonly code = 'STORE_FILE_IDENTITY_CHANGED';
+
+  constructor() {
+    super('Borg credential store file changed while it was being opened');
+  }
+}
+
+function isLockTurnover(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'STORE_FILE_IDENTITY_CHANGED';
+}
+
 /**
  * Read the store file, or null when it does not exist (ONLY the missing-file
  * no-op path initializes empty). When the file exists, the 0600-store + 0700-parent
@@ -347,7 +361,7 @@ export async function readStoreFile(
     try {
       const opened = await handle.stat();
       if (opened.dev !== before.dev || opened.ino !== before.ino) {
-        throw new Error('Borg credential store file changed while it was being opened');
+        throw new StoreFileIdentityChangedError();
       }
       const raw = await handle.readFile('utf8');
       const after = await handle.stat();
@@ -436,7 +450,7 @@ export async function withStoreLock<T>(
           if (stored === null) continue;
           raw = stored;
         } catch (readErr) {
-          if ((readErr as NodeJS.ErrnoException).code === 'ENOENT') continue; // released — retry
+          if (isLockTurnover(readErr)) continue; // released or replaced — retry
           throw readErr;
         }
         const held = parseLockPayload(raw);
@@ -459,7 +473,7 @@ export async function withStoreLock<T>(
               : {},
           );
         } catch (readErr) {
-          if ((readErr as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          if (isLockTurnover(readErr)) continue;
           throw readErr;
         }
         if (currentRaw === null || currentRaw !== raw) continue;

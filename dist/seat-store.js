@@ -289,6 +289,17 @@ async function assertSecureStorePerms(filePath, fileMode) {
             `(0${(dirStat.mode & 0o777).toString(8)}, expected 0700); refusing to read a credential under it`);
     }
 }
+/** Identity drift is retryable only when inspecting an acquisition lock. */
+export class StoreFileIdentityChangedError extends Error {
+    code = 'STORE_FILE_IDENTITY_CHANGED';
+    constructor() {
+        super('Borg credential store file changed while it was being opened');
+    }
+}
+function isLockTurnover(error) {
+    const code = error.code;
+    return code === 'ENOENT' || code === 'STORE_FILE_IDENTITY_CHANGED';
+}
 /**
  * Read the store file, or null when it does not exist (ONLY the missing-file
  * no-op path initializes empty). When the file exists, the 0600-store + 0700-parent
@@ -317,7 +328,7 @@ export async function readStoreFile(filePath, options = {}) {
         try {
             const opened = await handle.stat();
             if (opened.dev !== before.dev || opened.ino !== before.ino) {
-                throw new Error('Borg credential store file changed while it was being opened');
+                throw new StoreFileIdentityChangedError();
             }
             const raw = await handle.readFile('utf8');
             const after = await handle.stat();
@@ -410,8 +421,8 @@ export async function withStoreLock(lockPath, op, opts = {}) {
                     raw = stored;
                 }
                 catch (readErr) {
-                    if (readErr.code === 'ENOENT')
-                        continue; // released — retry
+                    if (isLockTurnover(readErr))
+                        continue; // released or replaced — retry
                     throw readErr;
                 }
                 const held = parseLockPayload(raw);
@@ -432,7 +443,7 @@ export async function withStoreLock(lockPath, op, opts = {}) {
                         : {});
                 }
                 catch (readErr) {
-                    if (readErr.code === 'ENOENT')
+                    if (isLockTurnover(readErr))
                         continue;
                     throw readErr;
                 }
