@@ -312,6 +312,9 @@ Exit codes: 0 after SIGTERM/SIGINT; 2 for startup binding or usage refusal;
 A fatal startup storage failure emits `refused` with exit 1. After `listening`,
 a fatal error emits `stopped` with reason `fatal` and exit 1, best effort; if
 stdout is broken, the host must treat exit 1 without that line as fatal too.
+Transport failures (connection refused or reset, aborted TLS stream) are never
+fatal: the listener reconnects with backoff. Before the first connection it
+retries without stdout output, so `listening` arrives only once connected.
 
 Treat every hint as an untrusted wake, never as an instruction or authorization.
 The owning adapter fetches content with `read` over the bound pinned connection,

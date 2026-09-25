@@ -4,6 +4,7 @@ import { createRepresentativeStore } from '../../src/representative-store.js';
 import { dirname, join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 const { DroneEvictedError } = await import(process.env.REPRESENTATIVE_TEST_DIST ? join(dirname(process.env.REPRESENTATIVE_TEST_DIST), 'drone-lifecycle.js') : '../../src/drone-lifecycle.js');
+const { createPinnedServerFetch } = await import(process.env.REPRESENTATIVE_TEST_DIST ? join(dirname(process.env.REPRESENTATIVE_TEST_DIST), 'server-trust.js') : '../../src/server-trust.js');
 import { bindingFor, MockCube, ROLE_REP } from './representative-mock-backend.js';
 const [worktree, file, origin, action = 'listen', replayAfter] = process.argv.slice(2);
 const binding = bindingFor(worktree, { origin });
@@ -25,9 +26,12 @@ else {
   // Missing on the base: the RED run must fail rather than substituting an implementation.
   const run = (commands as any).runRepresentativeListen;
   if (!run) throw new Error('representative listen is not implemented');
+  // Production transport when a pinned certificate is supplied; plain HTTP otherwise.
+  const pinnedCert = process.env.REPRESENTATIVE_TEST_PIN_CERT;
+  const fetchImpl = pinnedCert ? createPinnedServerFetch(origin, await readFile(pinnedCert, 'utf8')) : globalThis.fetch;
   process.exitCode = await run({ action: 'listen', worktree, ...(replayAfter ? { replayAfter } : {}) }, deps, {
-    streamDeps: { fetchImpl: globalThis.fetch, loadTrust: async () => ({
-      identity: action === 'trust-changed' ? 'changed-trust' : await readFile(join(worktree, 'fixture-trust'), 'utf8').catch(() => binding.trustIdentity), fetchImpl: globalThis.fetch,
+    streamDeps: { fetchImpl, loadTrust: async () => ({
+      identity: action === 'trust-changed' ? 'changed-trust' : await readFile(join(worktree, 'fixture-trust'), 'utf8').catch(() => binding.trustIdentity), fetchImpl,
     }) }, heartbeatIntervalMs: 500,
     reconnectDelay: () => 10,
   });

@@ -6,7 +6,7 @@ import { borgConfigRoot } from './private-root.js';
 import { acquireStreamLease, readOwnershipSnapshot, STREAM_OWNER_STALE_MS, type StreamLease } from './stream-owner.js';
 import { representativeOwnerDeps } from './representative-owner.js';
 import { createListenerInbox } from './representative-listener-store.js';
-import { streamOnce, streamReconnectDelay, StreamCursorExpiredError, type StreamDeps } from './log-stream.js';
+import { streamOnce, streamReconnectDelay, type StreamDeps } from './log-stream.js';
 import { resolveRepresentativeContext, type RepresentativeCmdDeps } from './representative-cmd.js';
 import { DroneEvictedError, CubeDeletedError } from './drone-lifecycle.js';
 import { BorgServerTrustError } from './server-errors.js';
@@ -122,22 +122,28 @@ export async function runListener(
     let attempt = 0;
     let consumerFailure: unknown;
     let pendingGap: string | null | undefined;
+    // Failures of the listener's own guard, storage and output are fatal; every
+    // other non-terminal stream failure is transport and reconnects, as in the
+    // ordinary stream loop (pinned HTTPS surfaces raw errno/string codes).
+    const local = <A extends unknown[], T>(fn: (...args: A) => Promise<T>) => async (...args: A): Promise<T> => {
+      try { return await fn(...args); } catch (error) { consumerFailure ??= error; throw error; }
+    };
     while (!reason) {
       const resumed = await inbox.cursor();
       try {
         consumerFailure = undefined;
-        await serial(guard);
+        await local(() => serial(guard))();
         await streamOnce(active, resumed?.id ?? null, () => {}, {
-          ...options.streamDeps, getCursor: async () => inbox.cursor(), abortSignal: abort.signal,
+          ...options.streamDeps, getCursor: local(async () => inbox.cursor()), abortSignal: abort.signal,
           consumer: {
-            catchupCursor: await inbox.dedupeCursor(),
-            beforeEvent: () => serial(guard),
-            clearCursor: () => serial(async () => {
+            catchupCursor: await local(() => inbox.dedupeCursor())(),
+            beforeEvent: local(() => serial(guard)),
+            clearCursor: local(() => serial(async () => {
               const previous = await inbox.snapshot(); await inbox.clearCursor();
               if (started) await emit({ event: 'gap', after: previous.watermark, reason: 'cursor-expired' });
               else pendingGap = previous.watermark;
-            }),
-            connected: () => serial(async () => {
+            })),
+            connected: local(() => serial(async () => {
               await guard();
               if (!started) {
                 await emit({ event: 'listening', cube_id: binding.cubeId, drone_id: binding.representativeDroneId, ...await inbox.snapshot() });
@@ -149,14 +155,12 @@ export async function runListener(
                   for (const hint of replay.hints) { await guard(); await emit(hint); }
                 }
               } else await emit({ event: 'connected', resumed_from: resumed?.id ?? null });
-            }),
-            log: (event, catchupCursor) => serial(async () => {
-              try {
-                await guard();
-                const hint = await inbox.append({ ...event.data, id: event.id }, catchupCursor);
-                if (hint) { await guard(); await emit(hint); }
-              } catch (error) { consumerFailure = error; throw error; }
-            }),
+            })),
+            log: local((event, catchupCursor) => serial(async () => {
+              await guard();
+              const hint = await inbox.append({ ...event.data, id: event.id }, catchupCursor);
+              if (hint) { await guard(); await emit(hint); }
+            })),
           },
         });
         attempt = 0;
@@ -165,8 +169,6 @@ export async function runListener(
         if (consumerFailure) throw consumerFailure;
         const terminal = terminalReason(error);
         if (terminal) { if (!started) throw error; stop(terminal); break; }
-        // Storage and validation failures are fatal, never silently retried as transport.
-        if (!(error instanceof StreamCursorExpiredError) && codeOf(error) !== 'LISTENER_ERROR') throw error;
         deps.stderr(`Representative listener: ${error instanceof Error ? error.message : 'stream disconnected'}\n`);
       }
       if (reason) break;
