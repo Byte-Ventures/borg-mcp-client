@@ -1041,6 +1041,8 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         if (watchdog)
             clearTimeout(watchdog);
         clearPendingHwmDivergence();
+        if (deps.consumer)
+            ac.abort(); // release the transport when a consumer stops or throws
         state.connected = false;
     }
 }

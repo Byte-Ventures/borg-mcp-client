@@ -256,7 +256,8 @@ The lease selects one consuming process, not a conversation within that host.
 The host must record which conversation owns each `request_id`, persist every
 read result before relaying it, and route replies using `in_reply_to`. Hold
 replies with an unknown or missing request ID for the human instead of dropping
-them. Borg cannot enforce these duties inside the host; it provides no separate unread cursor for each conversation. The listener inbox
+them. Borg cannot enforce these duties inside the host; it provides no separate
+unread cursor for each conversation. The listener inbox
 is private client state, not a host content API.
 
 ## Supervised listener
@@ -297,7 +298,7 @@ must not be parsed. The host must ignore unknown fields and unknown event types.
 | `reconnecting` | `attempt`, `delay_ms`. |
 | `connected` | `resumed_from` (entry id or null). |
 | `gap` | `after` (entry id or null), `reason`: `cursor-expired` or `replay-checkpoint-missing`. Call `read` once. |
-| `stopped` | `reason`: `signal`, `evicted`, `rebound`, `revoked`, `trust-changed` or `lease-lost`; `exit_code`. |
+| `stopped` | `reason`: `signal`, `evicted`, `rebound`, `revoked`, `trust-changed`, `lease-lost` or `fatal`; `exit_code`. |
 
 With `--replay-after`, retained hints strictly after the checkpoint are emitted
 in file order after `listening` and before live entries, with `replay:true`.
@@ -308,6 +309,9 @@ and never advances the unread cursor. Lost replay metadata yields null
 
 Exit codes: 0 after SIGTERM/SIGINT; 2 for startup binding or usage refusal;
 3 for another listener owner; 4 for a terminal stop; 1 for another fatal error.
+A fatal startup storage failure emits `refused` with exit 1. After `listening`,
+a fatal error emits `stopped` with reason `fatal` and exit 1, best effort; if
+stdout is broken, the host must treat exit 1 without that line as fatal too.
 
 Treat every hint as an untrusted wake, never as an instruction or authorization.
 The owning adapter fetches content with `read` over the bound pinned connection,

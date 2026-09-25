@@ -1,6 +1,5 @@
 /** Supervised body-free wake channel; independent of the lazy MCP tools lease. */
 import { createHash } from 'node:crypto';
-import { once } from 'node:events';
 import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { borgConfigRoot } from './private-root.js';
@@ -11,11 +10,12 @@ import { streamOnce, streamReconnectDelay, StreamCursorExpiredError, type Stream
 import { resolveRepresentativeContext, type RepresentativeCmdDeps } from './representative-cmd.js';
 import { DroneEvictedError, CubeDeletedError } from './drone-lifecycle.js';
 import { BorgServerTrustError } from './server-errors.js';
+import { loadBorgServerTrust } from './server-trust.js';
 import { RepresentativeError, verifyLiveBinding } from './representative-core.js';
 import type { RepresentativeBinding } from './representative-store.js';
 import type { ActiveCube } from './cubes.js';
 
-type StopReason = 'signal' | 'evicted' | 'rebound' | 'revoked' | 'trust-changed' | 'lease-lost';
+type StopReason = 'signal' | 'evicted' | 'rebound' | 'revoked' | 'trust-changed' | 'lease-lost' | 'fatal';
 export interface ListenerOptions {
   /** Controlled transport/timing seams; the CLI supplies no overrides. */
   streamDeps?: StreamDeps;
@@ -28,7 +28,12 @@ function listenerOwnerDeps(binding: RepresentativeBinding) {
 }
 export async function representativeListenerStatus(binding: RepresentativeBinding) {
   const ownership = await readOwnershipSnapshot(binding.cubeId, binding.representativeDroneId, listenerOwnerDeps(binding));
-  return { ...ownership, running: ownership.state === 'owner' || ownership.state === 'owned-by-other-process',
+  let alive = false;
+  if (ownership.pid) {
+    try { process.kill(ownership.pid, 0); alive = true; }
+    catch (error) { alive = (error as NodeJS.ErrnoException).code === 'EPERM'; }
+  }
+  return { ...ownership, running: alive && (ownership.ageMs ?? Infinity) <= STREAM_OWNER_STALE_MS,
     ...await createListenerInbox(binding).snapshot() };
 }
 function codeOf(error: unknown): string {
@@ -51,7 +56,8 @@ export async function runListener(
 ): Promise<number> {
   const emit = async (event: unknown) => {
     deps.stdout(JSON.stringify(event) + '\n');
-    if (process.stdout.writableNeedDrain) await once(process.stdout, 'drain');
+    // The command exits after its final event; wait for the pipe to flush.
+    await new Promise<void>((resolve, reject) => process.stdout.write('', error => error ? reject(error) : resolve()));
   };
   let lease: StreamLease | null = null;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -63,6 +69,10 @@ export async function runListener(
   };
   const stop = (why: StopReason) => { reason ??= why; abort.abort(); };
   const signal = () => stop('signal');
+  let outputBroken = false;
+  const outputError = () => { outputBroken = true; reason = 'fatal'; abort.abort(); };
+  process.stdout.on('error', outputError);
+  const exitCode = () => reason === 'signal' ? 0 : reason === 'fatal' ? 1 : 4;
   try {
     let worktree = command.worktree ?? deps.cwd();
     try { worktree = realpathSync(worktree); } catch { /* resolve refuses missing bindings */ }
@@ -88,9 +98,17 @@ export async function runListener(
       }
       const saved = await deps.hydrateSeat(worktree);
       if (!saved) { stop('revoked'); throw new RepresentativeError('SEAT_UNAVAILABLE', 'Representative seat unavailable'); }
-      if (saved.serverTrustIdentity !== binding.trustIdentity) { stop('trust-changed'); throw new Error('Representative trust changed'); }
+      if (saved.serverTrustIdentity !== binding.trustIdentity) { stop('trust-changed'); throw new BorgServerTrustError('Representative trust changed'); }
       if (saved.cubeId !== binding.cubeId || saved.droneId !== binding.representativeDroneId || saved.apiUrl !== binding.origin) {
         stop('rebound'); throw new RepresentativeError('BINDING_MISMATCH', 'Representative seat changed');
+      }
+      // Recheck authority trust while the stream stays open, not only on reconnect.
+      // Controlled transports may omit trust loading; production never does.
+      if (!options.streamDeps?.fetchImpl || options.streamDeps.loadTrust) {
+        try {
+          const trust = await (options.streamDeps?.loadTrust ?? loadBorgServerTrust)(binding.origin);
+          if (trust.identity !== binding.trustIdentity) throw new BorgServerTrustError('Representative authority trust changed');
+        } catch (error) { stop('trust-changed'); throw error; }
       }
       const observed = await readOwnershipSnapshot(binding.cubeId, binding.representativeDroneId, ownerDeps);
       if (observed.processNonce !== lease!.record.processNonce) { stop('lease-lost'); throw new Error('Listener ownership lost'); }
@@ -143,7 +161,7 @@ export async function runListener(
         });
         attempt = 0;
       } catch (error) {
-        if (reason) break;
+        if (reason) { if (!started) throw error; break; }
         if (consumerFailure) throw consumerFailure;
         const terminal = terminalReason(error);
         if (terminal) { if (!started) throw error; stop(terminal); break; }
@@ -160,18 +178,25 @@ export async function runListener(
         if (abort.signal.aborted) done();
       });
     }
-    return reason === 'signal' ? 0 : 4;
+    return exitCode();
   } catch (error) {
     deps.stderr(`Representative listener refused: ${error instanceof Error ? error.message : String(error)}\n`);
     if (!started && (error instanceof RepresentativeError || terminalReason(error))) {
       await emit({ event: 'refused', code: typeof (error as any)?.code === 'string' ? (error as any).code : 'BACKEND_ERROR', exit_code: 2 }); return 2;
     }
+    if (started) reason = 'fatal';
+    else if (!outputBroken) await emit({ event: 'refused', code: 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 });
     return 1;
   } finally {
     if (timer) clearInterval(timer);
     process.removeListener('SIGTERM', signal); process.removeListener('SIGINT', signal);
     await pending;
-    await lease?.release();
-    if (started && reason) await emit({ event: 'stopped', reason, exit_code: reason === 'signal' ? 0 : 4 });
+    let releaseFailed = false;
+    try { await lease?.release(); } catch (error) { releaseFailed = true; reason = 'fatal'; deps.stderr(`Listener lease release failed: ${String(error)}\n`); }
+    if (started && reason && !outputBroken) {
+      try { await emit({ event: 'stopped', reason, exit_code: exitCode() }); } catch { /* stdout failure is fatal to the host */ }
+    }
+    process.stdout.removeListener('error', outputError);
+    if (releaseFailed || outputBroken) return 1;
   }
 }

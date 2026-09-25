@@ -69,6 +69,9 @@ describe('seat single-store writer guard (SR#5)', () => {
       'seat-store.ts', 'token-store.ts', 'repository-identity.ts', 'server-trust.ts',
       // Only its explicit privateRoot lease option uses the shared secure writer.
       'stream-owner.ts',
+      // Separate listener inbox/metadata, guarded by its exclusive stream lease.
+      // It never writes seats, credentials, the request ledger or unread cursors.
+      'representative-listener-store.ts',
     ])).toEqual([]);
   });
 

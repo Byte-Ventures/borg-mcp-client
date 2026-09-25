@@ -95,12 +95,16 @@ it('persists a burst once in order and emits body-free hints with positive and n
   await stop(client); expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'signal', exit_code: 0 });
 });
 it('resumes after SIGKILL mid-burst from the persisted cursor without duplicate appends', async () => {
-  const first = start(), hello = await ready(first); await send([entry(1), entry(2)]);
-  await first.wait(() => first.events.filter(e => e.event === 'entry').length === 2); await stop(first, 'SIGKILL');
-  entries.push(entry(3), entry(4)); const second = start(); await ready(second);
-  await second.wait(() => second.events.filter(e => e.event === 'entry').length === 2);
+  const first = start(), hello = await ready(first);
+  await send(Array.from({ length: 20 }, (_, i) => entry(i)));
+  await first.wait(() => first.events.some(e => e.event === 'entry')); await stop(first, 'SIGKILL');
+  const persisted = (await readFile(hello.inbox, 'utf8')).trim().split('\n');
+  expect(persisted.length).toBeLessThan(entries.length);
+  const lastId = /\[entry_id: ([^\]]+)\]/.exec(persisted.at(-1)!)![1];
+  const second = start(); await ready(second);
+  await second.wait(() => second.events.filter(e => e.event === 'entry').length === entries.length - persisted.length);
   const cursor = JSON.parse(Buffer.from(requests.at(-1)!.searchParams.get('cursor')!, 'base64url').toString());
-  expect(cursor.id).toBe(entries[1].id);
+  expect(cursor.id).toBe(lastId);
   const raw = await readFile(hello.inbox, 'utf8'); entries.forEach(e => expect(raw.split(`[entry_id: ${e.id}]`).length - 1).toBe(1));
 });
 it('deduplicates five reconnect bursts including already-written hint events', async () => {
@@ -114,9 +118,14 @@ it('deduplicates five reconnect bursts including already-written hint events', a
 });
 it('refuses a second listener without changing inbox or lock and takes over after kill', async () => {
   const first = start(), hello = await ready(first); await send([entry(1)]); await first.wait(() => first.events.some(e => e.event === 'entry'));
+  first.child.kill('SIGSTOP'); // freeze its own heartbeat while checking contender writes
+  const paths = await files(join(root, '.config')); const before = await Promise.all(paths.map(path => readFile(path, 'utf8')));
   const raw = await readFile(hello.inbox, 'utf8'); const second = start(); const [code] = await second.exited;
   expect(code).toBe(3); expect(second.events).toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_OWNED', exit_code: 3, owner_pid: first.child.pid, owner_started_at: expect.any(String) }]);
-  expect(await readFile(hello.inbox, 'utf8')).toBe(raw); await stop(first, 'SIGKILL'); await ready(start());
+  expect(await readFile(hello.inbox, 'utf8')).toBe(raw);
+  expect(await files(join(root, '.config'))).toEqual(paths);
+  expect(await Promise.all(paths.map(path => readFile(path, 'utf8')))).toEqual(before);
+  await stop(first, 'SIGKILL'); await ready(start());
 });
 it.each(['evicted', 'rebound'])('stops on %s, releases lease and never reconnects', async reason => {
   const client = start(); await ready(client);
@@ -150,6 +159,10 @@ it.each(['in-tail', 'missing', 'none'])('replays hints for %s checkpoint before 
   const first = start(), hello = await ready(first); await send([entry(1), entry(2), entry(3)]);
   await first.wait(() => first.events.filter(e => e.event === 'entry').length === 3); await stop(first);
   const raw = await readFile(hello.inbox, 'utf8');
+  const ledger = await readFile(file, 'utf8');
+  const unread = join(root, '.config', 'borgmcp', 'local-server-cursors.json');
+  await writeFile(unread, 'UNREAD_SENTINEL', { mode: 0o600 });
+  const requestCount = requests.length;
   const checkpoint = mode === 'in-tail' ? entries[0].id : mode === 'missing' ? randomUUID() : undefined;
   const second = start('listen', checkpoint); await ready(second); await send([entry(4)]);
   await second.wait(() => second.events.some(e => e.event === 'entry' && e.entry_id === entries[3].id));
@@ -159,6 +172,9 @@ it.each(['in-tail', 'missing', 'none'])('replays hints for %s checkpoint before 
   expect(second.events.at(-1)).toMatchObject({ event: 'entry', entry_id: entries[3].id, replay: false });
   expect(second.raw()).not.toContain('BODY_SENTINEL');
   expect(await readFile(hello.inbox, 'utf8')).toContain(raw);
+  expect(requests).toHaveLength(requestCount + 1); // stream connection only; replay fetches nothing
+  expect(await readFile(unread, 'utf8')).toBe('UNREAD_SENTINEL');
+  expect(await readFile(file, 'utf8')).toBe(ledger);
 });
 it('trims above 1024 to 512 and never re-appends a trimmed id', async () => {
   const first = start(), hello = await ready(first);
@@ -226,4 +242,46 @@ it('reports an expired resume cursor after listening and preserves the durable t
   expect(second.events[1]).toEqual({ event: 'gap', after: entries[0].id, reason: 'cursor-expired' });
   expect(requests.at(-1)!.searchParams.has('cursor')).toBe(false);
   expect((await readFile(hello.inbox, 'utf8')).trim().split('\n')).toHaveLength(2);
+});
+it('reports fatal write failure after listening and releases its lease', async () => {
+  const client = start(), hello = await ready(client); await send([entry(1)]);
+  await client.wait(() => client.events.some(e => e.event === 'entry'));
+  await chmod(join(hello.inbox, '..'), 0o777); await send([entry(2)]);
+  const [code] = await client.exited; expect(code).toBe(1);
+  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'fatal', exit_code: 1 });
+  expect((await files(join(root, '.config'))).filter(p => p.endsWith('owner.json'))).toEqual([]);
+});
+it('emits one typed fatal startup storage refusal without a lease or inbox', async () => {
+  const config = join(root, '.config', 'borgmcp'); await mkdir(config, { recursive: true, mode: 0o700 }); await chmod(config, 0o777);
+  const client = start(); const [code] = await client.exited; expect(code).toBe(1);
+  expect(client.events).toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 }]);
+  expect(await files(config)).toEqual([]);
+});
+it('reports a killed listener as not running without reclaiming its lock', async () => {
+  const client = start(); await ready(client); await stop(client, 'SIGKILL');
+  const paths = await files(join(root, '.config')); const before = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+  const probe = start('status'); await probe.exited;
+  expect(JSON.parse(probe.raw()).listener.running).toBe(false);
+  expect(await Promise.all(paths.map(path => readFile(path, 'utf8')))).toEqual(before);
+});
+
+it('stops on changed authority trust during an open connection before another append', async () => {
+  const client = start(), hello = await ready(client);
+  await writeFile(join(worktree, 'fixture-trust'), 'changed-trust');
+  await send([entry(1)]);
+  await client.wait(() => client.events.some(e => e.event === 'stopped'));
+  expect((await client.exited)[0]).toBe(4);
+  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'trust-changed', exit_code: 4 });
+  expect(client.events.filter(e => e.event === 'entry')).toEqual([]);
+  expect(await readFile(hello.inbox, 'utf8').catch(() => '')).toBe('');
+  expect(requests).toHaveLength(1);
+  expect((await files(join(root, '.config'))).filter(p => p.endsWith('owner.json'))).toEqual([]);
+});
+
+it('refuses trust drift before listening with one startup binding refusal', async () => {
+  const client = start('trust-changed');
+  expect((await client.exited)[0]).toBe(2);
+  expect(JSON.parse(client.raw())).toEqual({ event: 'refused', code: 'BACKEND_ERROR', exit_code: 2 });
+  expect(requests).toHaveLength(0);
+  expect((await files(join(root, '.config'))).filter(p => p.endsWith('owner.json'))).toEqual([]);
 });

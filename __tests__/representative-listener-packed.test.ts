@@ -38,3 +38,22 @@ it('reserves stdout for a typed usage refusal', async () => {
   expect(result.code).toBe(2);
   expect(JSON.parse(result.stdout)).toEqual({ event: 'refused', code: 'INVALID_INPUT', exit_code: 2 });
 });
+it('runs the printed preparation command through packed command logic with a controlled binding backend', async () => {
+  const commands = await import(join(root, 'package', 'dist', 'representative-cmd.js'));
+  const { createRepresentativeStore } = await import(join(root, 'package', 'dist', 'representative-store.js'));
+  const { bindingFor, MockCube, ROLE_REP } = await import('./fixtures/representative-mock-backend.js');
+  const guide = await readFile(join(root, 'package', 'docs', 'HUMAN_REPRESENTATIVE.md'), 'utf8');
+  const printed = guide.match(/^borg representative prepare .*$/m)![0];
+  const parsed = commands.parseRepresentativeArgs(printed.replace('<host:port>', '127.0.0.1:65530').replace('<coordinator-drone-label>', 'coordinator-1').split(' ').slice(2));
+  expect(parsed.ok).toBe(true);
+  const binding = bindingFor(root), cube = new MockCube(); let output = '', preparations = 0;
+  const code = await commands.runRepresentativePrepare(parsed.command, {
+    cwd: () => root, findProjectRoot: () => root,
+    hydrateSeat: async () => ({ cubeId: binding.cubeId, droneId: binding.representativeDroneId, apiUrl: binding.origin,
+      serverTrustIdentity: binding.trustIdentity, sessionToken: 'fixture-only', roleId: ROLE_REP }),
+    prepareSeat: async (input: any) => { expect(input.worktreeName).toBe('hermes'); preparations++; return { code: 0, worktree: root }; },
+    backendFor: () => cube.backend(), store: createRepresentativeStore(join(root, 'binding.json')),
+    stdout: (text: string) => { output += text; }, stderr: (text: string) => { throw new Error(text); },
+  });
+  expect(code).toBe(0); expect(preparations).toBe(1); expect(output).toContain('No agent CLI was launched');
+});

@@ -1296,6 +1296,7 @@ export async function streamOnce(
     abortSignal.removeEventListener('abort', abortFromExternal);
     if (watchdog) clearTimeout(watchdog);
     clearPendingHwmDivergence();
+    if (deps.consumer) ac.abort(); // release the transport when a consumer stops or throws
     state.connected = false;
   }
 }
