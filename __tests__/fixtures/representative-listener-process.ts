@@ -8,7 +8,9 @@ const { BorgServerUnreachableError } = await import(process.env.REPRESENTATIVE_T
 const { createPinnedServerFetch } = await import(process.env.REPRESENTATIVE_TEST_DIST ? join(dirname(process.env.REPRESENTATIVE_TEST_DIST), 'server-trust.js') : '../../src/server-trust.js');
 import { bindingFor, MockCube, ROLE_REP } from './representative-mock-backend.js';
 const [worktree, file, origin, action = 'listen', replayAfter] = process.argv.slice(2);
-const binding = bindingFor(worktree, { origin });
+// Production trust mode: the bound identity comes from the real authority files.
+const productionTrust = process.env.REPRESENTATIVE_TEST_TRUST_IDENTITY;
+const binding = bindingFor(worktree, { origin, ...(productionTrust ? { trustIdentity: productionTrust } : {}) });
 const store = createRepresentativeStore(file);
 const cube = new MockCube();
 const deps = {
@@ -40,7 +42,10 @@ else {
   // Production transport when a pinned certificate is supplied; plain HTTP otherwise.
   const pinnedCert = process.env.REPRESENTATIVE_TEST_PIN_CERT;
   const fetchImpl = pinnedCert ? createPinnedServerFetch(origin, await readFile(pinnedCert, 'utf8')) : globalThis.fetch;
-  process.exitCode = await run({ action: 'listen', worktree, ...(replayAfter ? { replayAfter } : {}) }, deps, {
+  process.exitCode = await run({ action: 'listen', worktree, ...(replayAfter ? { replayAfter } : {}) }, deps, productionTrust
+    // No transport or trust overrides: the real loader, cache and pinned fetch.
+    ? { heartbeatIntervalMs: 50, reconnectDelay: () => 10 }
+    : {
     streamDeps: { fetchImpl, loadTrust: async () => ({
       identity: action === 'trust-changed' ? 'changed-trust' : await readFile(join(worktree, 'fixture-trust'), 'utf8').catch(() => binding.trustIdentity), fetchImpl,
     }) }, heartbeatIntervalMs: 500,

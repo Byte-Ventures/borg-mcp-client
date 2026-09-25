@@ -11,7 +11,7 @@ import { resolveRepresentativeContext } from './representative-cmd.js';
 import { DroneEvictedError, CubeDeletedError } from './drone-lifecycle.js';
 import { BorgServerTrustError, BorgServerUnreachableError } from './server-errors.js';
 import { isTransportFailure } from './seat-probe.js';
-import { loadBorgServerTrust } from './server-trust.js';
+import { readBorgServerTrustIdentity } from './server-trust.js';
 import { RepresentativeError, verifyLiveBinding } from './representative-core.js';
 function listenerOwnerDeps(binding) {
     const authority = createHash('sha256').update(JSON.stringify([binding.origin, binding.trustIdentity])).digest('hex');
@@ -125,8 +125,11 @@ export async function runListener(command, deps, options = {}) {
             // Controlled transports may omit trust loading; production never does.
             if (!options.streamDeps?.fetchImpl || options.streamDeps.loadTrust) {
                 try {
-                    const trust = await (options.streamDeps?.loadTrust ?? loadBorgServerTrust)(binding.origin);
-                    if (trust.identity !== binding.trustIdentity)
+                    // Read fresh: the loader's local-authority cache never observes a change.
+                    const identity = options.streamDeps?.loadTrust
+                        ? (await options.streamDeps.loadTrust(binding.origin)).identity
+                        : await readBorgServerTrustIdentity(binding.origin);
+                    if (identity !== binding.trustIdentity)
                         throw new BorgServerTrustError('Representative authority trust changed');
                 }
                 catch (error) {

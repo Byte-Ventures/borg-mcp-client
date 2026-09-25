@@ -11,7 +11,7 @@ import { resolveRepresentativeContext, type RepresentativeCmdDeps } from './repr
 import { DroneEvictedError, CubeDeletedError } from './drone-lifecycle.js';
 import { BorgServerTrustError, BorgServerUnreachableError } from './server-errors.js';
 import { isTransportFailure } from './seat-probe.js';
-import { loadBorgServerTrust } from './server-trust.js';
+import { readBorgServerTrustIdentity } from './server-trust.js';
 import { RepresentativeError, verifyLiveBinding } from './representative-core.js';
 import type { RepresentativeBinding } from './representative-store.js';
 import type { ActiveCube } from './cubes.js';
@@ -112,8 +112,11 @@ export async function runListener(
       // Controlled transports may omit trust loading; production never does.
       if (!options.streamDeps?.fetchImpl || options.streamDeps.loadTrust) {
         try {
-          const trust = await (options.streamDeps?.loadTrust ?? loadBorgServerTrust)(binding.origin);
-          if (trust.identity !== binding.trustIdentity) throw new BorgServerTrustError('Representative authority trust changed');
+          // Read fresh: the loader's local-authority cache never observes a change.
+          const identity = options.streamDeps?.loadTrust
+            ? (await options.streamDeps.loadTrust(binding.origin)).identity
+            : await readBorgServerTrustIdentity(binding.origin);
+          if (identity !== binding.trustIdentity) throw new BorgServerTrustError('Representative authority trust changed');
         } catch (error) { stop('trust-changed'); throw error; }
       }
       const observed = await readOwnershipSnapshot(binding.cubeId, binding.representativeDroneId, ownerDeps);

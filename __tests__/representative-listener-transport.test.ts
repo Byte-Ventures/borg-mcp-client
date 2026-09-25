@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:https';
+import { X509Certificate, createHash } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, realpath, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, mkdir, readFile, rm, writeFile, rename, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRepresentativeStore } from '../src/representative-store.js';
@@ -35,7 +36,7 @@ beforeEach(async () => {
   worktree = join(root, 'work'); await mkdir(worktree, { mode: 0o700 });
   file = join(root, 'representative.json'); responses = []; entries = []; requests = 0; handle = (_req, res) => stream(res);
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'), '-out', join(root, 'cert.pem'),
-    '-days', '1', '-subj', '/CN=localhost'], { stdio: 'ignore' });
+    '-days', '1', '-subj', '/CN=localhost', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' });
   cert = join(root, 'cert.pem');
   server = createServer({ key: await readFile(join(root, 'key.pem')), cert: await readFile(cert) }, (req, res) => { requests++; handle(req, res); });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
@@ -49,10 +50,10 @@ afterEach(async () => {
   server.closeAllConnections(); await new Promise<void>(done => server.close(() => done()));
   await rm(root, { recursive: true, force: true });
 });
-function start() {
+function start(extraEnv: Record<string, string> = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_')));
   const child = spawn(process.execPath, ['--import', 'tsx', resolve('__tests__/fixtures/representative-listener-process.ts'), worktree, file, origin, 'listen'],
-    { env: { ...env, HOME: root, XDG_CONFIG_HOME: join(root, '.config'), REPRESENTATIVE_TEST_PIN_CERT: cert }, stdio: ['pipe', 'pipe', 'pipe'] });
+    { env: { ...env, HOME: root, XDG_CONFIG_HOME: join(root, '.config'), REPRESENTATIVE_TEST_PIN_CERT: cert, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
   children.push(child);
   const events: any[] = []; let stderr = '', buffer = '';
   child.stderr!.on('data', chunk => { stderr += chunk; });
@@ -102,4 +103,40 @@ it('retries a pinned-TLS reset before listening instead of refusing startup', as
   expect(client.events.map(e => e.event)).toEqual(['listening']);
   client.child.kill('SIGTERM'); const [code] = await client.exited;
   expect(code).toBe(0); expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'signal', exit_code: 0 });
+});
+
+// Production trust: no injected loader or fetch, so the process-lifetime cache
+// of the local-authority loader is exercised. Trust files change A -> B after
+// `listening` while the A connection stays open; the next frame must not land.
+it('stops on local authority trust replaced during an open connection with the production loader', async () => {
+  const spki = (pem: string) => createHash('sha256').update(new X509Certificate(pem).publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
+  const authority = join(root, 'authority'); await mkdir(authority, { mode: 0o700 });
+  const certA = await readFile(cert, 'utf8');
+  const writeTrust = async (pem: string) => {
+    for (const [name, value] of [['ca.crt', pem], ['server.json', JSON.stringify({ ca_spki_sha256: spki(pem) })]]) {
+      await writeFile(join(authority, `${name}.tmp`), value, { mode: 0o600 }); await rename(join(authority, `${name}.tmp`), join(authority, name));
+    }
+  };
+  await writeTrust(certA);
+  const identityA = `spki-sha256:${spki(certA)}`;
+  await createRepresentativeStore(file).saveBinding(bindingFor(worktree, { origin, trustIdentity: identityA }), { rebind: true });
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'b-key.pem'), '-out', join(root, 'b-cert.pem'),
+    '-days', '1', '-subj', '/CN=localhost', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' });
+  const client = start({ BORG_SERVER_DATA_DIR: authority, REPRESENTATIVE_TEST_TRUST_IDENTITY: identityA });
+  await client.wait(() => count(client.events, 'listening') === 1);
+  const inbox = client.events.find(e => e.event === 'listening').inbox;
+  // Positive control: before the change a frame is delivered over the same connection.
+  const before = entry(1); entries.push(before); responses.at(-1)!.write(frame(before));
+  await client.wait(() => count(client.events, 'entry') === 1);
+  await writeTrust(await readFile(join(root, 'b-cert.pem'), 'utf8'));
+  const after = { ...entry(2), message: 'POST_TRUST_CHANGE_SENTINEL' }; responses.at(-1)!.write(frame(after));
+  // Either outcome ends the wait: the listener exits, or it delivers the post-change hint.
+  for (let i = 0; i < 1000 && client.child.exitCode === null && !client.events.some(e => e.entry_id === after.id); i++) await delay(10);
+  expect(client.events.filter(e => e.event === 'entry').map(e => e.entry_id)).toEqual([before.id]);
+  const [code] = await client.exited;
+  expect(code).toBe(4);
+  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'trust-changed', exit_code: 4 });
+  expect(await readFile(inbox, 'utf8')).not.toContain(after.id);
+  expect(count(client.events, 'reconnecting')).toBe(0); expect(requests).toBe(1);
+  expect((await readdir(join(root, '.config'), { recursive: true })).filter(p => String(p).endsWith('owner.json'))).toEqual([]);
 });

@@ -20,6 +20,14 @@ type EnrollmentTrustFaultPoint = 'after-account-activation' | 'after-pointer-pub
  */
 export declare function createPinnedServerFetch(origin: string, caCertificate: string): ServerFetch;
 export declare function loadBorgServerTrust(origin: string, dataDirectory?: string): Promise<BorgServerTrust>;
+/**
+ * The current trust identity for `origin`, read from disk on every call with the
+ * same source selection and file checks as loadBorgServerTrust. Its local-authority
+ * branch caches for the process lifetime, which a continuation guard on a
+ * long-lived connection must not rely on; the enrollment branch already rereads
+ * its pointer per call. Identity only: it never builds a fetch or grants trust.
+ */
+export declare function readBorgServerTrustIdentity(origin: string): Promise<string>;
 /** Bootstrap a remote pinned transport from the CA chain presented by the server. */
 export declare function loadBorgServerTrustFromPresentedChain(origin: string, caSpkiSha256: string): Promise<StagedBorgServerTrust>;
 export declare function stageBorgServerTrust(origin: string, certificate: string, identity: string): Promise<StagedBorgServerTrust>;
