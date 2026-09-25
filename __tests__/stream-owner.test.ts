@@ -527,22 +527,23 @@ describe('stream-owner lease', () => {
     };
     const lease = await acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, deps);
     expect(lease).not.toBeNull();
-    let stop = false, refreshes = 0;
-    const loop = (async () => {
-      while (!stop) {
-        expect(await lease!.refresh()).toBe(true); refreshes++;
-        await new Promise((resolve) => setTimeout(resolve, 2));
-      }
-    })();
-    // Deterministic overlap: keep reading until many refreshes have completed.
+    // Each refresh runs while snapshots are read back to back; the next refresh
+    // starts only after the last overlapping read returned, so every read
+    // overlaps at most one refresh (production refreshes are 20 s apart).
     const states: Record<string, number> = {};
-    let reads = 0;
-    while (refreshes < 40 || reads < 500) {
-      const snapshot = await readOwnershipSnapshot(CUBE_ID, DRONE_ID, deps);
-      states[snapshot.state] = (states[snapshot.state] ?? 0) + 1; reads++;
-      if (snapshot.state === 'owner') expect(snapshot.pid).toBe(process.pid);
+    let reads = 0, overlapped = 0;
+    for (let refresh = 0; refresh < 60; refresh++) {
+      let done = false;
+      const pending = lease!.refresh().finally(() => { done = true; });
+      while (!done) {
+        const snapshot = await readOwnershipSnapshot(CUBE_ID, DRONE_ID, deps);
+        states[snapshot.state] = (states[snapshot.state] ?? 0) + 1; reads++;
+        if (!done) overlapped++;
+        if (snapshot.state === 'owner') expect(snapshot.pid).toBe(process.pid);
+      }
+      expect(await pending).toBe(true);
     }
-    stop = true; await loop;
+    expect(overlapped).toBeGreaterThan(60);
     expect(states).toEqual({ owner: reads });
     await lease!.release();
     expect((await readOwnershipSnapshot(CUBE_ID, DRONE_ID, deps)).state).toBe('unowned');

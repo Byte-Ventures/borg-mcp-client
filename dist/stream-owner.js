@@ -540,6 +540,10 @@ async function readBoundOwner(lockPath, deps = {}) {
                     : await fs.readFile(path.join(lockPath, OWNER_FILE), 'utf8');
             }
             catch (error) {
+                // A concurrent refresh atomically replaces the owner file; like other
+                // lock inspection, that identity drift is turnover and is re-read.
+                if (error?.code === 'STORE_FILE_IDENTITY_CHANGED')
+                    continue;
                 if (error?.code !== 'ENOENT')
                     throw error;
                 raw = null;
