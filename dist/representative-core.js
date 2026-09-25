@@ -412,11 +412,16 @@ async function deliveryState(ctx) {
     const saved = await store.load();
     if (saved)
         return saved;
-    // Migration: start where the pre-checkpoint destructive read left the unread
-    // view, so nothing unread is lost and nothing read is replayed. Only reads
-    // happen before this one atomic write, so a crash anywhere repeats it.
+    // A new generation of an already-upgraded seat (rebind, new Coordinator)
+    // starts empty and replays its addressed history; the unread cursor has no
+    // Coordinator or generation in its key and must not be reimported.
+    if (await store.otherGenerationExists())
+        return (await store.advance({}, ctx.guard)).after;
+    // One-time upgrade: start where the pre-checkpoint destructive read left the
+    // unread view, so nothing unread is lost and nothing read is replayed. Only
+    // reads happen before this one atomic write, so a crash anywhere repeats it.
     const cursor = await ctx.backend.unreadCursor();
-    return store.advance({ checkpoint: cursor, readThrough: cursor }, ctx.guard);
+    return (await store.advance({ checkpoint: cursor, readThrough: cursor }, ctx.guard)).after;
 }
 const checkpointView = (point) => ({ entry_id: point?.id ?? null, created_at: point?.created_at ?? null });
 export async function readRepresentativeReplies(ctx, raw) {
@@ -538,10 +543,11 @@ export async function deliverRepresentativeReplies(ctx, raw) {
     }
     if (state.readThrough === null || comparePoints(point, state.readThrough) > 0)
         throw outside();
-    const next = await createDeliveryStore(ctx.binding).advance({ checkpoint: point }, ctx.guard);
+    const { before, after } = await createDeliveryStore(ctx.binding).advance({ checkpoint: point }, ctx.guard);
     return {
-        checkpoint: checkpointView(next.checkpoint),
-        advanced: comparePoints(next.checkpoint, state.checkpoint) > 0,
+        checkpoint: checkpointView(after.checkpoint),
+        // The serialized transition, not this call's earlier snapshot.
+        advanced: comparePoints(after.checkpoint, before?.checkpoint ?? null) > 0,
         binding_fingerprint: fingerprint,
     };
 }

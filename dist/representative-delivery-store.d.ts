@@ -18,10 +18,21 @@ export declare function createDeliveryStore(binding: RepresentativeBinding): {
     /** Null when this binding generation has no checkpoint yet. A corrupt file fails closed. */
     load: () => Promise<DeliveryState | null>;
     /**
+     * Whether any other generation of this seat already has a checkpoint, which
+     * means the one-time upgrade from the unread cursor already happened. An
+     * unreadable or unsafe sibling counts as one: the new generation then
+     * replays its history (duplicates, never loss) instead of trusting it.
+     */
+    otherGenerationExists(): Promise<boolean>;
+    /**
      * Move either field forward only, from the state on disk at write time, in
      * one atomic durable 0600 write. Always writes when no file exists yet, so a
      * completed migration is never repeated. `guard` runs just before the write.
+     * Returns the states before and after, so callers report the real transition.
      */
-    advance(update: Partial<DeliveryState>, guard?: () => Promise<void>): Promise<DeliveryState>;
+    advance(update: Partial<DeliveryState>, guard?: () => Promise<void>): Promise<{
+        before: DeliveryState | null;
+        after: DeliveryState;
+    }>;
 };
 //# sourceMappingURL=representative-delivery-store.d.ts.map

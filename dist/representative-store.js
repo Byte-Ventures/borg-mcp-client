@@ -141,7 +141,9 @@ export function createRepresentativeStore(storePath = representativeStorePath())
                 throw new Error('Refusing to save an invalid representative binding');
             }
             const existing = txn.data.bindings[binding.worktree];
-            if (existing && sameSelection(existing, binding))
+            // An explicit rebind always starts a new generation (new boundAt, so a new
+            // binding_fingerprint), even for the same selection.
+            if (existing && sameSelection(existing, binding) && !options.rebind)
                 return 'unchanged';
             if (existing && !options.rebind) {
                 throw new RepresentativeStoreError('BINDING_CONFLICT', `This worktree is already bound to Coordinator ${existing.coordinatorLabel} in cube ${existing.cubeName}. ` +
@@ -150,7 +152,7 @@ export function createRepresentativeStore(storePath = representativeStorePath())
             txn.data.bindings[binding.worktree] = binding;
             // A different selection invalidates the old ledger: its post ids belong to
             // another cube/Coordinator conversation.
-            if (existing)
+            if (existing && !sameSelection(existing, binding))
                 delete txn.data.requests[binding.worktree];
             await txn.commit();
             return existing ? 'rebound' : 'created';

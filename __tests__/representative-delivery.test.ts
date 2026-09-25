@@ -142,6 +142,23 @@ describe('replayable read and deliver', () => {
     expect(ids(after)).not.toContain(a.id);
   });
 
+  it('reports exactly one advance for two overlapping identical delivers', async () => {
+    const entry = toRep();
+    const ctx = context();
+    await readRepresentativeReplies(ctx, {});
+    let reached!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => { reached = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const slow = { ...ctx, backend: { ...ctx.backend, readEntry: async (id: string) => {
+      reached(); await gate; return ctx.backend.readEntry(id);
+    } } };
+    const first = deliverRepresentativeReplies(slow, { through: entry.id });
+    await entered;
+    expect((await deliverRepresentativeReplies(ctx, { through: entry.id })).advanced).toBe(true);
+    release();
+    expect(await first).toMatchObject({ advanced: false, checkpoint: { entry_id: entry.id } });
+  });
+
   it('stores the checkpoint privately, without message text', async () => {
     const entry = toRep('PRIVATE_MESSAGE_SENTINEL');
     const ctx = context();
@@ -274,6 +291,38 @@ describe('migration from the client unread cursor', () => {
       serverTrustIdentity: binding.trustIdentity, sessionToken: 'fixture-only' } as never);
     expect(await backend.unreadCursor()).toEqual(point);
     expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('does not import the unread cursor into a new generation after any generation has a checkpoint', async () => {
+    const old = toRep('old generation read this');
+    cube.unreadCursorValue = { id: old.id, created_at: old.created_at };
+    const later = toRep('later');
+    await readRepresentativeReplies(context(), {}); // the one-time upgrade bootstrap for this seat
+    const rebound = context(bindingFor(WORKTREE, { boundAt: '2026-06-01T00:00:00.000Z' }));
+    expect(ids(await readRepresentativeReplies(rebound, {}))).toEqual([old.id, later.id]);
+    expect((await readRepresentativeReplies(rebound, {})).checkpoint).toEqual({ entry_id: null, created_at: null });
+  });
+
+  it('replays a changed Coordinator\'s addressed history from before the old unread cursor after a rebind', async () => {
+    const otherId = '77777777-7777-4777-8777-777777777777';
+    cube.drones.push({ id: otherId, label: 'coordinator-2', role_id: cube.drones.find((d) => d.id === COORD_ID)!.role_id });
+    const hidden = cube.post(otherId, 'new Coordinator historical reply', [REP_ID]);
+    const old = toRep('old Coordinator read watermark');
+    cube.unreadCursorValue = { id: old.id, created_at: old.created_at };
+    await readRepresentativeReplies(context(), {}); // the old binding generation upgraded first
+    const ctx = context(bindingFor(WORKTREE, {
+      coordinatorDroneId: otherId, coordinatorLabel: 'coordinator-2', boundAt: '2026-06-01T00:00:00.000Z',
+    }));
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([hidden.id]);
+  });
+
+  it('bootstraps from the unread cursor only for its own seat: another seat\'s checkpoint does not count', async () => {
+    const read = toRep('read before upgrade');
+    cube.unreadCursorValue = { id: read.id, created_at: read.created_at };
+    const unread = toRep('unread');
+    const otherSeat = context(bindingFor(WORKTREE, { trustIdentity: 'sha256:another-authority' }));
+    await readRepresentativeReplies(otherSeat, {});
+    expect(ids(await readRepresentativeReplies(context(), {}))).toEqual([unread.id]);
   });
 
   it('starts from the beginning when the binding never read', async () => {

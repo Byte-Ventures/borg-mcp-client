@@ -70,7 +70,8 @@ To resume later, run `borg representative prepare --coordinator <coordinator-dro
 your saved labels. Recovery errors for a bound connection print that complete
 command with its actual labels and worktree. Changing the cube or Coordinator
 is refused unless you
-pass `--rebind`; a rebind also discards the old request ledger. A running
+pass `--rebind`; a rebind that changes the cube or Coordinator also discards the
+old request ledger. A running
 `borg representative mcp` process never picks up a rebind: its calls fail
 closed until the MCP host restarts it.
 
@@ -229,8 +230,9 @@ Reading:
   Replies are whole or omitted, never truncated; a reply that alone exceeds
   `max_bytes` is returned alone with `"oversize": true`. `has_more` is true when
   more replies follow the returned window. Page by delivering and reading again.
-- The result includes `checkpoint` (`entry_id` and `created_at`, both null before
-  the first delivery) and `binding_fingerprint`.
+- The result includes `checkpoint` (`entry_id` and `created_at`; null until the
+  first delivery, unless the upgrade below started it at the old read position)
+  and `binding_fingerprint`.
 
 Delivering:
 
@@ -249,7 +251,8 @@ Binding fence:
 - `binding_fingerprint` is the hex SHA-256 of the canonical JSON array
   `[origin, trustIdentity, cubeId, representativeDroneId, coordinatorDroneId, boundAt]`.
   It changes on every rebind and on a server trust change, and contains no path or
-  credential. It appears in `status`, `read`, `send`, `deliver` and the listener's
+  credential. `prepare --rebind` always starts a new generation, even when the
+  cube and Coordinator stay the same. It appears in `status`, `read`, `send`, `deliver` and the listener's
   `listening` event. Persist it at binding time; if any result shows a different
   value, stop routing and hold for the human.
 
@@ -260,8 +263,9 @@ Upgrading from a version without `deliver`:
   unread at upgrade time are returned, replies already read are not. When the
   binding never read, every addressed reply in the cube log is returned. This
   bootstrap reads first and persists once, so an interruption simply repeats it.
-- After a rebind or a trust change the old unread cursor no longer applies, so the
-  first read of the new binding returns its addressed history. Deduplicate by
+- That upgrade happens once per representative drone and server authority. A later
+  binding generation (any `prepare --rebind`, or a trust change) starts with an
+  empty checkpoint, so its first read returns its addressed history. Deduplicate by
   `entry_id` (the host persists everything it delivers) and page with `limit`.
 
 Known limits:

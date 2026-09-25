@@ -17,7 +17,7 @@ import {
   bindingFor,
 } from './fixtures/representative-mock-backend.js';
 import type { ActiveCube } from '../src/cubes.js';
-import { createRepresentativeStore } from '../src/representative-store.js';
+import { bindingFingerprint, createRepresentativeStore } from '../src/representative-store.js';
 import {
   DEFAULT_REPRESENTATIVE_ROLE,
   parseRepresentativeArgs,
@@ -27,7 +27,9 @@ import {
   runRepresentativeStatus,
   type RepresentativeCmdDeps,
 } from '../src/representative-cmd.js';
-import { sendRepresentativeMessage } from '../src/representative-core.js';
+import {
+  deliverRepresentativeReplies, readRepresentativeReplies, representativeStatus, sendRepresentativeMessage,
+} from '../src/representative-core.js';
 import { DroneEvictedError } from '../src/drone-lifecycle.js';
 import { spawnSync } from 'node:child_process';
 
@@ -190,6 +192,26 @@ describe('prepare', () => {
     cube.drones[0].role_id = cube.roles[2].id;
     expect(await prepare()).toBe(1);
     expect(out).toContain('REPRESENTATIVE_ROLE_MISMATCH');
+  });
+
+  it('starts a new generation on an explicit same-selection rebind, visible in every fingerprint surface', async () => {
+    const initial = bindingFor(worktree);
+    await deps.store.saveBinding(initial, { rebind: false });
+    expect(await prepare({ rebind: true })).toBe(0);
+    const rebound = (await deps.store.getBinding(worktree))!;
+    expect(rebound.boundAt).not.toBe(initial.boundAt);
+    const fingerprint = bindingFingerprint(rebound);
+    expect(fingerprint).not.toBe(bindingFingerprint(initial));
+    const ctx = await resolveRepresentativeContext(worktree, deps);
+    const entry = cube.post(COORD_ID, 'reply', [REP_ID]);
+    expect((await representativeStatus(ctx)).binding_fingerprint).toBe(fingerprint);
+    expect((await readRepresentativeReplies(ctx, {})).binding_fingerprint).toBe(fingerprint);
+    expect((await deliverRepresentativeReplies(ctx, { through: entry.id })).binding_fingerprint).toBe(fingerprint);
+    expect((await sendRepresentativeMessage(ctx, { kind: 'question', authorization: 'model_advice', message: 'hi' })).binding_fingerprint)
+      .toBe(fingerprint);
+    // An ordinary resume without --rebind keeps the generation.
+    expect(await prepare()).toBe(0);
+    expect((await deps.store.getBinding(worktree))!.boundAt).toBe(rebound.boundAt);
   });
 
   it('requires --rebind to change the Coordinator', async () => {
