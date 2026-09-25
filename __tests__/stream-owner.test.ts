@@ -531,8 +531,10 @@ describe('stream-owner lease', () => {
     // starts only after the last overlapping read returned, so every read
     // overlaps at most one refresh (production refreshes are 20 s apart).
     const states: Record<string, number> = {};
+    // Refresh until 60 reads have demonstrably finished inside a pending refresh
+    // (bounded), instead of assuming how many reads fit in one refresh.
     let reads = 0, overlapped = 0;
-    for (let refresh = 0; refresh < 60; refresh++) {
+    for (let refresh = 0; overlapped < 60 && refresh < 5000; refresh++) {
       let done = false;
       const pending = lease!.refresh().finally(() => { done = true; });
       while (!done) {
@@ -543,7 +545,7 @@ describe('stream-owner lease', () => {
       }
       expect(await pending).toBe(true);
     }
-    expect(overlapped).toBeGreaterThan(60);
+    expect(overlapped).toBeGreaterThanOrEqual(60);
     expect(states).toEqual({ owner: reads });
     await lease!.release();
     expect((await readOwnershipSnapshot(CUBE_ID, DRONE_ID, deps)).state).toBe('unowned');
