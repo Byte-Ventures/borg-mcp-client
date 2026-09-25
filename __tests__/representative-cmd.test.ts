@@ -271,8 +271,12 @@ describe('connection context', () => {
 });
 
 describe('served MCP process', () => {
-  it('pins the prepared seat, and fails calls closed after an operator rebind until restarted', async () => {
+  it.each([
+    ['a changed Coordinator', { coordinator: 'coordinator-2', rebind: true }],
+    ['the same selection', { rebind: true }],
+  ] as const)('pins the prepared generation, and fails calls closed after a rebind to %s until restarted', async (_label, rebind) => {
     await prepare();
+    const pinnedFingerprint = bindingFingerprint((await deps.store.getBinding(worktree))!);
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const responses = new Map<number, (message: any) => void>();
@@ -307,14 +311,36 @@ describe('served MCP process', () => {
     expect(before.result.isError).toBeUndefined();
     expect(cube.appendCalls.map((call) => call.to)).toEqual([[COORD_ID]]);
 
+    const reply = cube.post(COORD_ID, 'reply', [REP_ID]);
     cube.drones.push({ id: '77777777-7777-4777-8777-777777777777', label: 'coordinator-2', role_id: cube.roles[1].id });
-    expect(await prepare({ coordinator: 'coordinator-2', rebind: true })).toBe(0);
-    const after = await rpc(3, 'tools/call', { ...send, arguments: { ...send.arguments, message: 'Do Y.' } });
-    expect(after.result.isError).toBe(true);
-    expect(JSON.parse(after.result.content[0].text).error.code).toBe('BINDING_MISMATCH');
-    expect(cube.appendCalls).toHaveLength(1);
-
-    stdin.end();
-    expect(await exit).toBe(0);
+    try {
+      expect(await prepare(rebind)).toBe(0);
+      const currentFingerprint = bindingFingerprint((await deps.store.getBinding(worktree))!);
+      expect(currentFingerprint).not.toBe(pinnedFingerprint);
+      const calls = cube.calls.length;
+      const refused = [
+        { ...send, arguments: { ...send.arguments, message: 'Do Y.' } },
+        { name: 'borg_representative-read', arguments: {} },
+        { name: 'borg_representative-deliver', arguments: { through: reply.id } },
+        { name: 'borg_representative-ack', arguments: { entry_id: reply.id } },
+      ];
+      for (const [index, call] of refused.entries()) {
+        const after = await rpc(3 + index, 'tools/call', call);
+        expect(after.result.isError).toBe(true);
+        expect(JSON.parse(after.result.content[0].text).error.code).toBe('BINDING_MISMATCH');
+      }
+      expect(cube.appendCalls).toHaveLength(1);
+      expect(cube.acks).toEqual([]);
+      expect(cube.calls).toHaveLength(calls); // no network call at all after the rebind
+      // Status stays available and names both generations.
+      const status = await rpc(10, 'tools/call', { name: 'borg_representative-status', arguments: {} });
+      expect(status.result.isError).toBeUndefined();
+      expect(JSON.parse(status.result.content[0].text)).toMatchObject({
+        binding_fingerprint: currentFingerprint, pinned_binding_fingerprint: pinnedFingerprint,
+      });
+    } finally {
+      stdin.end();
+      expect(await exit).toBe(0);
+    }
   });
 });

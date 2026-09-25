@@ -86,6 +86,15 @@ it('names the binding generation in the listening event', async () => {
   expect(hello.binding_fingerprint).toMatch(/^[0-9a-f]{64}$/);
   await stop(client);
 });
+it('stops a running listener with rebound after a same-selection rebind starts a new generation', async () => {
+  const client = start(); await ready(client);
+  await createRepresentativeStore(file).saveBinding(bindingFor(worktree, { origin, boundAt: '2026-06-01T00:00:00.000Z' }), { rebind: true });
+  await send([entry(1)]);
+  const [code] = await client.exited;
+  expect(code).toBe(4);
+  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'rebound', exit_code: 4 });
+  expect(client.events.filter(e => e.event === 'entry')).toEqual([]);
+});
 it('routes the documented listen command', () => {
   expect(parseRepresentativeArgs(['listen', '--worktree', '/fixture'])).toEqual({ ok: true, command: { action: 'listen', worktree: '/fixture' } });
 });

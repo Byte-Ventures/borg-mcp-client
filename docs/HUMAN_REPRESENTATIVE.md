@@ -71,9 +71,13 @@ your saved labels. Recovery errors for a bound connection print that complete
 command with its actual labels and worktree. Changing the cube or Coordinator
 is refused unless you
 pass `--rebind`; a rebind that changes the cube or Coordinator also discards the
-old request ledger. A running
-`borg representative mcp` process never picks up a rebind: its calls fail
-closed until the MCP host restarts it.
+old request ledger. A rebind of any kind, including one with the same cube and
+Coordinator, requires restarting every adapter and the listener; running ones
+refuse. A running `borg representative mcp` process answers `send`, `read`,
+`deliver` and `ack` with `BINDING_MISMATCH` until the MCP host restarts it;
+its `status` reports the new `binding_fingerprint` beside the
+`pinned_binding_fingerprint` it started with. A running listener stops with
+reason `rebound`.
 
 `prepare` reuses Borg's connection and worktree preparation, including its
 private-state initialization and saved-connection checks. It does not require

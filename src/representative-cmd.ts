@@ -29,6 +29,7 @@ import {
 } from './representative-core.js';
 import {
   RepresentativeStoreError,
+  bindingFingerprint,
   representativeRecoveryCommand,
   type RepresentativeBinding,
   type RepresentativeStore,
@@ -310,20 +311,9 @@ export async function runRepresentativeMcp(
     heartbeatIntervalMs: io.heartbeatIntervalMs,
     ...(io.stdin ? { stdin: io.stdin } : {}),
     ...(io.stdout ? { stdout: io.stdout } : {}),
-    context: async () => {
-      const ctx = await resolveRepresentativeContext(worktree, deps);
-      if (
-        ctx.binding.cubeId !== pinned.cubeId ||
-        ctx.binding.coordinatorDroneId !== pinned.coordinatorDroneId ||
-        ctx.binding.representativeDroneId !== pinned.representativeDroneId
-      ) {
-        throw new RepresentativeError(
-          'BINDING_MISMATCH',
-          'The operator changed this connection\'s cube or Coordinator while it was running. Restart the MCP server to use the new binding.',
-        );
-      }
-      return ctx;
-    },
+    // The full generation, so any rebind (same selection included) is refused.
+    pinnedFingerprint: bindingFingerprint(pinned),
+    context: () => resolveRepresentativeContext(worktree, deps),
   });
   const stdin = io.stdin ?? process.stdin;
   stdin.once('end', () => { void served.close(); });

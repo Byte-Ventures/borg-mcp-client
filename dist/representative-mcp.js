@@ -16,7 +16,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { REPRESENTATIVE_DELIVERY_NOTE, REPRESENTATIVE_MESSAGE_LIMIT_BYTES, RepresentativeError, ackRepresentativeReply, deliverRepresentativeReplies, readRepresentativeReplies, serializeRepresentativeResult, representativeStatus, sendRepresentativeMessage, } from './representative-core.js';
-import { RepresentativeStoreError } from './representative-store.js';
+import { RepresentativeStoreError, bindingFingerprint } from './representative-store.js';
 import { createRepresentativeOwner } from './representative-owner.js';
 export const REPRESENTATIVE_TOOL_NAMES = [
     'borg_representative-status',
@@ -140,8 +140,12 @@ export async function serveRepresentativeMcp(options) {
                 throw new RepresentativeError(ErrorCode.INVALID_INPUT, `Unknown tool ${JSON.stringify(name)}; this connection exposes only the representative tools.`);
             }
             const ctx = await options.context();
+            const pinned = options.pinnedFingerprint ? { pinned_binding_fingerprint: options.pinnedFingerprint } : {};
             if (name === 'borg_representative-status') {
-                return toolResult({ ...await representativeStatus(ctx), ownership: await owner.snapshot(ctx.binding) });
+                return toolResult({ ...await representativeStatus(ctx), ...pinned, ownership: await owner.snapshot(ctx.binding) });
+            }
+            if (options.pinnedFingerprint && bindingFingerprint(ctx.binding) !== options.pinnedFingerprint) {
+                throw new RepresentativeError('BINDING_MISMATCH', 'The operator rebound this connection (a new binding generation) while it was running. Restart the MCP server to use the new binding.');
             }
             await owner.ensure(ctx.binding);
             // Recheck at each network boundary, not just at tool dispatch: a process

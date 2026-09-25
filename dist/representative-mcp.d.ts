@@ -18,6 +18,12 @@ export declare const REPRESENTATIVE_INSTRUCTIONS: string;
 export interface ServeRepresentativeOptions {
     /** Resolved on every call; a throw fails that call closed. */
     context: () => Promise<RepresentativeContext>;
+    /**
+     * The binding generation this process started with. Every call except status
+     * refuses with BINDING_MISMATCH, before any lease, ledger, checkpoint, cursor
+     * or network activity, once the saved binding's fingerprint differs.
+     */
+    pinnedFingerprint?: string;
     version: string;
     stdin?: Readable;
     stdout?: Writable;
