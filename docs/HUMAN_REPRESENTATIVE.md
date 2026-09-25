@@ -271,7 +271,9 @@ Upgrading from a version without `deliver`:
   own, not a symlink, not writable by group or others, in the private config
   directory); otherwise the checkpoint starts empty and every addressed reply is
   returned.
-- That upgrade happens once per representative drone and server authority. A later
+- That upgrade happens once per representative drone and server authority, and is
+  recorded in a private marker, so it never runs again, even after a checkpoint
+  file is removed. A later
   binding generation (any `prepare --rebind`, or a trust change) starts with an
   empty checkpoint, so its first read returns its addressed history. Deduplicate by
   `entry_id` (the host persists everything it delivers) and page with `limit`.

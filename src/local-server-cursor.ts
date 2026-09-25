@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 
@@ -158,14 +158,25 @@ export async function getLocalServerCursor(
 export async function readPrivateLocalServerCursor(
   binding: LocalServerCursorBinding,
 ): Promise<LocalServerCursor | null> {
+  // lstat first: a FIFO or device is refused without ever being opened (an
+  // open would block). The non-blocking open and the identity recheck keep a
+  // swapped-in object from being read in its place.
+  let before;
+  try {
+    before = await lstat(CURSOR_FILE);
+  } catch {
+    return null;
+  }
+  if (!before.isFile()) return null;
   let handle;
   try {
-    handle = await open(CURSOR_FILE, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await open(CURSOR_FILE, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     return null;
   }
   try {
     const metadata = await handle.stat();
+    if (metadata.dev !== before.dev || metadata.ino !== before.ino) return null;
     if (!metadata.isFile() || (metadata.mode & 0o022) !== 0 ||
         (typeof process.getuid === 'function' && metadata.uid !== process.getuid())) return null;
     const parsed = JSON.parse(await handle.readFile('utf8')) as Partial<CursorFile>;

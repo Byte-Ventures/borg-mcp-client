@@ -618,16 +618,31 @@ const READ_SCAN_PAGE = 500;
 async function deliveryState(ctx: RepresentativeContext): Promise<DeliveryState> {
   const store = createDeliveryStore(ctx.binding);
   const saved = await store.load();
-  if (saved) return saved;
-  // A new generation of an already-upgraded seat (rebind, new Coordinator)
-  // starts empty and replays its addressed history; the unread cursor has no
-  // Coordinator or generation in its key and must not be reimported.
-  if (await store.otherGenerationExists()) return (await store.advance({}, ctx.guard)).after;
+  const marker = await store.readMarker();
+  if (saved) {
+    // Heal an upgrade interrupted after its checkpoint was written.
+    if (!marker?.complete) await store.writeMarker({ cursor: marker?.cursor ?? null, complete: true }, ctx.guard);
+    return saved;
+  }
+  // The seat already upgraded (or a sibling generation exists): this generation
+  // (rebind, new Coordinator, or a removed invalid checkpoint) starts empty and
+  // replays its addressed history. The legacy cursor is never imported again.
+  if (marker?.complete || (!marker && await store.otherGenerationExists())) {
+    const state = (await store.advance({}, ctx.guard)).after;
+    if (!marker) await store.writeMarker({ cursor: null, complete: true }, ctx.guard);
+    return state;
+  }
   // One-time upgrade: start where the pre-checkpoint destructive read left the
-  // unread view, so nothing unread is lost and nothing read is replayed. Only
-  // reads happen before this one atomic write, so a crash anywhere repeats it.
-  const cursor = await ctx.backend.unreadCursor();
-  return (await store.advance({ checkpoint: cursor, readThrough: cursor }, ctx.guard)).after;
+  // unread view. The value is recorded before it is used, so an interrupted
+  // upgrade repeats with the same value and the legacy cursor is read once.
+  let cursor = marker?.cursor ?? null;
+  if (!marker) {
+    cursor = await ctx.backend.unreadCursor();
+    await store.writeMarker({ cursor, complete: false }, ctx.guard);
+  }
+  const state = (await store.advance({ checkpoint: cursor, readThrough: cursor }, ctx.guard)).after;
+  await store.writeMarker({ cursor, complete: true }, ctx.guard);
+  return state;
 }
 
 const checkpointView = (point: LocalServerCursor | null) =>

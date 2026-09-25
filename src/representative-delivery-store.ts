@@ -82,9 +82,22 @@ const queues = new Map<string, Promise<unknown>>();
 const later = (a: LocalServerCursor | null, b: LocalServerCursor | null) =>
   a === null ? b : b === null ? a : comparePoints(a, b) >= 0 ? a : b;
 
+/**
+ * The one-time upgrade record for a seat: the legacy unread cursor as it was
+ * read, stored before it is used. `complete` flips once the first checkpoint is
+ * written. Its directory name is not 64 hex characters, so the generation scan
+ * never mistakes it for a checkpoint.
+ */
+export interface MigrationMarker {
+  cursor: LocalServerCursor | null;
+  complete: boolean;
+}
+
 export function createDeliveryStore(binding: RepresentativeBinding) {
   const paths = deliveryPaths(binding);
   const seat = seatKey(binding);
+  const marker = { directory: join(deliveryRoot(), `seat-${seat}`), file: join(deliveryRoot(), `seat-${seat}`, 'migration.json') };
+  const markerOptions = { secureRoot: marker.directory, verifyLeafIdentity: true, createRoot: false };
   const options = { secureRoot: paths.directory, verifyLeafIdentity: true, createRoot: false };
   const load = async (): Promise<DeliveryState | null> => {
     let saved;
@@ -104,6 +117,31 @@ export function createDeliveryStore(binding: RepresentativeBinding) {
   return {
     /** Null when this binding generation has no checkpoint yet. A corrupt file fails closed. */
     load,
+    /**
+     * The seat's migration marker; null when the upgrade never started. An
+     * unreadable, unsafe or foreign marker reads as complete, so the outcome is
+     * replay from the start (duplicates), never a second import.
+     */
+    async readMarker(): Promise<MigrationMarker | null> {
+      try {
+        if (!await validatePrivateDirectory(marker.directory, false)) return null;
+        const raw = await readStoreFile(marker.file, markerOptions);
+        if (raw === null) return null;
+        const parsed = JSON.parse(raw) as { version?: unknown; seat?: unknown; cursor?: unknown; complete?: unknown };
+        if (parsed?.version !== 1 || parsed.seat !== seat || typeof parsed.complete !== 'boolean') {
+          return { cursor: null, complete: true };
+        }
+        return { cursor: point(parsed.cursor), complete: parsed.complete };
+      } catch {
+        return { cursor: null, complete: true };
+      }
+    },
+    /** One atomic durable 0600 write of the marker; `guard` runs just before it. */
+    async writeMarker(value: MigrationMarker, guard?: () => Promise<void>): Promise<void> {
+      await guard?.();
+      await validatePrivateDirectory(marker.directory, true);
+      await atomicWrite0600(marker.file, JSON.stringify({ version: 1, seat, ...value }) + '\n', markerOptions);
+    },
     /**
      * Whether any other generation of this seat already has a checkpoint, which
      * means the one-time upgrade from the unread cursor already happened. An

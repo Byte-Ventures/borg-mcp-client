@@ -134,7 +134,7 @@ it('starts lazily, status is read-only, and non-owner send/read/deliver/ack have
   expect(typeof status.body.ownership.ageMs).toBe('number');
   expect((await first.call('read')).isError).toBe(false);
   const stable = snapshot(), calls = cube.calls.length;
-  expect(deliveryState()).toHaveLength(1); // the owner's checkpoint file exists and must stay unchanged
+  expect(deliveryState()).toHaveLength(2); // the owner's checkpoint and migration marker exist and must stay unchanged
   for (const [name, args] of [['send', input], ['read', {}], ['deliver', { through: input.request_id }], ['ack', { entry_id: input.request_id }]] as const) {
     const denied = await second.call(name, args);
     expect(denied.body.error.code).toBe('REPRESENTATIVE_OWNERSHIP_REQUIRED');

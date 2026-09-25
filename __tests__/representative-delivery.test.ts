@@ -6,6 +6,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BUILDER_ID, COORD_ID, MockCube, REP_ID, bindingFor } from './fixtures/representative-mock-backend.js';
@@ -166,11 +168,14 @@ describe('replayable read and deliver', () => {
     await readRepresentativeReplies(ctx, {});
     await deliverRepresentativeReplies(ctx, { through: entry.id });
     const files = deliveryFiles();
-    expect(files).toHaveLength(1);
-    expect(statSync(files[0]).mode & 0o777).toBe(0o600);
-    expect(statSync(join(files[0], '..')).mode & 0o777).toBe(0o700);
-    expect(readFileSync(files[0], 'utf8')).not.toContain('PRIVATE_MESSAGE_SENTINEL');
-    expect(readFileSync(files[0], 'utf8')).not.toContain(WORKTREE);
+    // The generation's checkpoint and the seat's migration marker.
+    expect(files.map((file) => file.split('/').at(-1)).sort()).toEqual(['checkpoint.json', 'migration.json']);
+    for (const file of files) {
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(statSync(join(file, '..')).mode & 0o777).toBe(0o700);
+      expect(readFileSync(file, 'utf8')).not.toContain('PRIVATE_MESSAGE_SENTINEL');
+      expect(readFileSync(file, 'utf8')).not.toContain(WORKTREE);
+    }
   });
 
   it('refuses before writing when the continuation guard fails', async () => {
@@ -327,6 +332,21 @@ describe('migration from the client unread cursor', () => {
     expect(ids(await readRepresentativeReplies(context(), {}))).toEqual([unread.id]);
   });
 
+  it('repeats an upgrade interrupted after the marker with the recorded cursor, never re-reading the legacy one', async () => {
+    const read = toRep('read before upgrade');
+    cube.unreadCursorValue = { id: read.id, created_at: read.created_at };
+    const unread = toRep('unread at upgrade');
+    let writes = 0;
+    // The first guarded write (the marker) succeeds; the checkpoint write "crashes".
+    const crashed = { ...context(), guard: async () => { if (++writes === 2) throw new Error('killed after the marker'); } };
+    expect(await codeOf(readRepresentativeReplies(crashed, {}))).not.toBe('NO_ERROR');
+    expect(deliveryFiles().map((file) => file.split('/').at(-1))).toEqual(['migration.json']);
+    cube.unreadCursorValue = null; // the legacy cursor changes afterwards
+    const calls = cube.calls.filter((call) => call === 'unreadCursor').length;
+    expect(ids(await readRepresentativeReplies(context(), {}))).toEqual([unread.id]);
+    expect(cube.calls.filter((call) => call === 'unreadCursor')).toHaveLength(calls); // not read again
+  });
+
   it('starts from the beginning when the binding never read', async () => {
     const entries = [toRep('first'), toRep('second')];
     expect(ids(await readRepresentativeReplies(context(), {}))).toEqual(entries.map((entry) => entry.id));
@@ -418,6 +438,53 @@ describe('hostile migration input and checkpoint files', () => {
     writeFileSync(target, cursorFile(read)); chmodSync(target, mode);
     const { core, ctx } = await productionContext();
     expect(ids(await core.readRepresentativeReplies(ctx, {}))).toEqual([unread.id]);
+  });
+
+  it('never blocks on a planted FIFO in place of the legacy cursor file', () => {
+    privateTree(config());
+    execFileSync('mkfifo', ['-m', '600', join(config(), 'local-server-cursors.json')]);
+    const payload = `
+      const { createSeatBackend } = await import(${JSON.stringify(join(process.cwd(), 'src', 'representative-core.ts'))});
+      const backend = await createSeatBackend({ apiUrl: 'https://127.0.0.1:65530', serverTrustIdentity: 'sha256:mock-server',
+        cubeId: '${bindingFor(WORKTREE).cubeId}', droneId: '${REP_ID}', sessionToken: 'fixture-only' });
+      console.log('RESULT', JSON.stringify(await backend.unreadCursor()));`;
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_')));
+    // Bounded: a blocking open would hang the child, which this timeout turns into a failure.
+    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', payload],
+      { env: { ...env, HOME: root, BORG_STATE_ROOT: root }, timeout: 15_000, encoding: 'utf8' });
+    expect(child.error).toBeUndefined();
+    expect(child.stdout).toContain('RESULT null');
+    expect(child.status).toBe(0);
+  });
+
+  it.each(['another seat', 'a checkpoint beyond its read fence'])(
+    'replays from the start after the operator removes an invalid checkpoint of %s', async (kind) => {
+      const before = toRep('read before upgrade');
+      const after = toRep('unread at upgrade');
+      cube.unreadCursorValue = { id: before.id, created_at: before.created_at };
+      const ctx = context();
+      expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([after.id]); // the one-time upgrade
+      const file = deliveryFiles().find((path) => path.endsWith('checkpoint.json'))!;
+      const data = JSON.parse(readFileSync(file, 'utf8'));
+      if (kind === 'another seat') data.seat = 'f'.repeat(64);
+      else { data.checkpoint = { id: after.id, created_at: after.created_at }; data.readThrough = null; }
+      writeFileSync(file, JSON.stringify(data));
+      expect((await representativeStatus(ctx)).checkpoint_problem?.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
+      unlinkSync(file);
+      expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([before.id, after.id]);
+    });
+
+  it('never loses a read-but-undelivered reply when recovery follows a later move of the old unread cursor', async () => {
+    const entry = toRep('read, not yet delivered');
+    const ctx = context();
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([entry.id]); // bootstrap with no legacy cursor
+    // An older version's destructive read later moves the legacy cursor past the entry.
+    cube.unreadCursorValue = { id: entry.id, created_at: entry.created_at };
+    const file = deliveryFiles().find((path) => path.endsWith('checkpoint.json'))!;
+    const data = JSON.parse(readFileSync(file, 'utf8')); data.seat = 'f'.repeat(64);
+    writeFileSync(file, JSON.stringify(data));
+    unlinkSync(file); // the documented recovery
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([entry.id]);
   });
 
   const plant = (content: object) => {

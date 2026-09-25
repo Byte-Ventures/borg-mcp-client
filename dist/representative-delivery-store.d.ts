@@ -23,9 +23,27 @@ export declare function deliveryPaths(binding: RepresentativeBinding): {
 };
 /** (created_at, id) order, the server log order. */
 export declare function comparePoints(a: LocalServerCursor, b: LocalServerCursor | null): number;
+/**
+ * The one-time upgrade record for a seat: the legacy unread cursor as it was
+ * read, stored before it is used. `complete` flips once the first checkpoint is
+ * written. Its directory name is not 64 hex characters, so the generation scan
+ * never mistakes it for a checkpoint.
+ */
+export interface MigrationMarker {
+    cursor: LocalServerCursor | null;
+    complete: boolean;
+}
 export declare function createDeliveryStore(binding: RepresentativeBinding): {
     /** Null when this binding generation has no checkpoint yet. A corrupt file fails closed. */
     load: () => Promise<DeliveryState | null>;
+    /**
+     * The seat's migration marker; null when the upgrade never started. An
+     * unreadable, unsafe or foreign marker reads as complete, so the outcome is
+     * replay from the start (duplicates), never a second import.
+     */
+    readMarker(): Promise<MigrationMarker | null>;
+    /** One atomic durable 0600 write of the marker; `guard` runs just before it. */
+    writeMarker(value: MigrationMarker, guard?: () => Promise<void>): Promise<void>;
     /**
      * Whether any other generation of this seat already has a checkpoint, which
      * means the one-time upgrade from the unread cursor already happened. An
