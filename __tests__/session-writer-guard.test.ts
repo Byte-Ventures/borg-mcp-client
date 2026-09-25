@@ -72,6 +72,9 @@ describe('seat single-store writer guard (SR#5)', () => {
       // Separate listener inbox/metadata, guarded by its exclusive stream lease.
       // It never writes seats, credentials, the request ledger or unread cursors.
       'representative-listener-store.ts',
+      // Per-binding delivered checkpoint and read fence, under the tools lease.
+      // It never writes seats, credentials, the request ledger or unread cursors.
+      'representative-delivery-store.ts',
     ])).toEqual([]);
   });
 

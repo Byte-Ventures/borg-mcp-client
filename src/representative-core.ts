@@ -25,21 +25,18 @@ import {
   BorgServerTrustError,
   BorgServerUnreachableError,
 } from './server-errors.js';
-import { representativeRecoveryCommand, isRepresentativeUuid, type RepresentativeBinding, type RepresentativeStore } from './representative-store.js';
+import { bindingFingerprint, representativeRecoveryCommand, isRepresentativeUuid, type RepresentativeBinding, type RepresentativeStore } from './representative-store.js';
+import { comparePoints, createDeliveryStore, type DeliveryState } from './representative-delivery-store.js';
+import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
 
 const UUID_SCAN_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 export const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
 
 export const REPRESENTATIVE_DELIVERY_NOTE =
-  'The MCP process has no background wake; a separate borg representative listen process emits body-free wake hints. ' +
-  'Coordinator replies are seen only when borg_representative-read is called. Each read consumes the unread view of ' +
-  'everything it fetched. The host must persist each read result before relaying it, map request_id to its conversation, ' +
-  'route replies by in_reply_to, and hold replies with an unknown or missing request_id for the human. An already-read ' +
-  'reply cannot be retrieved through this connection. The first send/read/ack takes an exclusive process lease for this ' +
-  'representative drone; other processes refuse those calls without ledger, cursor or network activity. Status stays ' +
-  'read-only and reports ownership. After owner exit, death or lease expiry another process can take over. ' +
-  'A process that loses its lease refuses further calls until restarted. Ownership does not route conversations inside the host. ' +
-  'A local lease cannot cancel an in-flight request; retry an ambiguous send with its original request_id.';
+  'read returns undelivered replies without consuming them; persist, route by in_reply_to (unknown: hold for the ' +
+  'human), then deliver through the last persisted entry_id. ack only notifies the Coordinator. A separate ' +
+  'borg representative listen process emits body-free wake hints. One process at a time owns send/read/deliver/ack; ' +
+  'status is read-only. Stop routing if binding_fingerprint changes.';
 
 export type RepresentativeErrorCode =
   | typeof ErrorCode.INVALID_INPUT
@@ -59,7 +56,8 @@ export type RepresentativeErrorCode =
   | 'COORDINATOR_UNAVAILABLE'
   | 'REPRESENTATIVE_ROLE_NOT_PERMITTED'
   | 'REPRESENTATIVE_ROLE_MISMATCH'
-  | 'NOT_A_COORDINATOR_REPLY';
+  | 'NOT_A_COORDINATOR_REPLY'
+  | 'REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY';
 
 export interface RepresentativeErrorDetails {
   owner?: import('./stream-owner.js').StreamOwnershipSnapshot;
@@ -99,11 +97,12 @@ export interface RepresentativeBackend {
     unreachableRecipients?: Array<{ id: string; label: string }>;
   }>;
   /**
-   * Drains THIS seat's own unread cursor only (no other drone's cursor exists
-   * here) — the WHOLE returned page, including entries the caller then filters
-   * out. `limit` is a page-size hint: the client's digest mode may return more.
+   * One stateless page of the cube log strictly after an exact (created_at, id)
+   * cursor, ascending. Reads and advances no unread cursor; never digest mode.
    */
-  readUnread(limit?: number, continuationGuard?: () => Promise<void>): Promise<{ entries: LogEntry[]; has_more?: boolean }>;
+  readAfter(cursor: LocalServerCursor | null, limit: number, continuationGuard?: () => Promise<void>): Promise<{ entries: LogEntry[]; has_more?: boolean }>;
+  /** This seat's client-owned unread cursor, read only; the slice 2 migration input. */
+  unreadCursor(): Promise<LocalServerCursor | null>;
   readEntry(entryId: string): Promise<{ entry: LogEntry }>;
   ack(entryId: string): Promise<void>;
 }
@@ -113,6 +112,8 @@ export interface RepresentativeContext {
   backend: RepresentativeBackend;
   store: RepresentativeStore;
   now?: () => Date;
+  /** Checked immediately before each private delivery-state write (the tools lease in MCP). */
+  guard?: () => Promise<void>;
 }
 
 /** Real backend: the existing seat-scoped client calls for one hydrated seat. */
@@ -126,8 +127,11 @@ export async function createSeatBackend(active: ActiveCube): Promise<Representat
       client.appendLog(active.sessionToken, active.apiUrl, message, {
         to, postId, transportRetry: false, serverTrustIdentity: trust,
       }),
-    readUnread: (limit, continuationGuard) =>
-      client.readLog(active.sessionToken, active.apiUrl, { unreadOnly: true, limit, serverTrustIdentity: trust, continuationGuard }),
+    readAfter: (cursor, limit, continuationGuard) =>
+      client.readLog(active.sessionToken, active.apiUrl, { cursor, limit, serverTrustIdentity: trust, continuationGuard }),
+    unreadCursor: () => getLocalServerCursor({
+      origin: active.apiUrl, trustIdentity: trust!, cubeId: active.cubeId, droneId: active.droneId,
+    }),
     readEntry: (entryId) =>
       client.readLogEntry(active.sessionToken, active.apiUrl, { entry_id: entryId }, trust),
     ack: (entryId) => client.ackLogEntry(active.sessionToken, active.apiUrl, entryId, 'ack', trust),
@@ -402,6 +406,13 @@ function classifyAppendFailure(error: unknown, binding: RepresentativeBinding): 
 export async function sendRepresentativeMessage(
   ctx: RepresentativeContext,
   raw: unknown,
+): Promise<RepresentativeSendResult & { binding_fingerprint: string }> {
+  return { ...await sendOnce(ctx, raw), binding_fingerprint: bindingFingerprint(ctx.binding) };
+}
+
+async function sendOnce(
+  ctx: RepresentativeContext,
+  raw: unknown,
 ): Promise<RepresentativeSendResult> {
   const input = validateSendInput(raw);
   const { binding, store } = ctx;
@@ -574,6 +585,8 @@ export interface RepresentativeReply {
   /** A ledger request id quoted in the reply text. Textual correlation only. */
   in_reply_to: string | null;
   message: string;
+  /** This entry alone exceeds max_bytes; it is returned whole and alone. */
+  oversize?: true;
 }
 
 function isAddressedCoordinatorEntry(binding: RepresentativeBinding, entry: LogEntry): 'direct' | 'broadcast' | null {
@@ -584,47 +597,153 @@ function isAddressedCoordinatorEntry(binding: RepresentativeBinding, entry: LogE
   return 'broadcast';
 }
 
+/** The exact text an MCP tool result carries; `max_bytes` measures this. */
+export function serializeRepresentativeResult(body: unknown): string {
+  return JSON.stringify(body, null, 2);
+}
+
+const READ_SCAN_PAGE = 500;
+
+async function deliveryState(ctx: RepresentativeContext): Promise<DeliveryState> {
+  const store = createDeliveryStore(ctx.binding);
+  const saved = await store.load();
+  if (saved) return saved;
+  // Migration: start where the pre-checkpoint destructive read left the unread
+  // view, so nothing unread is lost and nothing read is replayed. Only reads
+  // happen before this one atomic write, so a crash anywhere repeats it.
+  const cursor = await ctx.backend.unreadCursor();
+  return store.advance({ checkpoint: cursor, readThrough: cursor }, ctx.guard);
+}
+
+const checkpointView = (point: LocalServerCursor | null) =>
+  ({ entry_id: point?.id ?? null, created_at: point?.created_at ?? null });
+
 export async function readRepresentativeReplies(
   ctx: RepresentativeContext,
   raw: unknown,
-): Promise<{ replies: RepresentativeReply[]; ignored_entries: number; has_more: boolean; delivery: string }> {
+): Promise<{
+  replies: RepresentativeReply[]; checkpoint: { entry_id: string | null; created_at: string | null };
+  has_more: boolean; ignored_entries: number; binding_fingerprint: string; delivery: string;
+}> {
   const input = (raw ?? {}) as Record<string, unknown>;
-  const unknown = Object.keys(input).filter((key) => key !== 'include_broadcast' && key !== 'limit' && input[key] !== undefined);
+  const allowed = ['include_broadcast', 'limit', 'max_bytes'];
+  const unknown = Object.keys(input).filter((key) => !allowed.includes(key) && input[key] !== undefined);
   if (unknown.length > 0) throw new RepresentativeError(ErrorCode.INVALID_INPUT, `Unsupported field(s): ${unknown.join(', ')}.`);
   if (input.include_broadcast !== undefined && typeof input.include_broadcast !== 'boolean') {
     throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'include_broadcast must be a boolean.');
   }
-  if (input.limit !== undefined && (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > 200)) {
-    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'limit must be an integer from 1 to 200.');
-  }
+  const bounded = (name: string, min: number, max: number, fallback: number) => {
+    const value = input[name];
+    if (value === undefined) return fallback;
+    if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) {
+      throw new RepresentativeError(ErrorCode.INVALID_INPUT, `${name} must be an integer from ${min} to ${max}.`);
+    }
+    return value as number;
+  };
+  const limit = bounded('limit', 1, 50, 10);
+  const maxBytes = bounded('max_bytes', 4096, 60000, 32768);
   await verifyLiveBinding(ctx);
-  const page = await ctx.backend.readUnread(input.limit as number | undefined);
+  const state = await deliveryState(ctx);
   const requestIds = await ctx.store.transactRequests(ctx.binding.worktree, (records) =>
     new Set(records.map((record) => record.requestId)));
-  const replies: RepresentativeReply[] = [];
-  for (const entry of page.entries) {
-    const addressed = isAddressedCoordinatorEntry(ctx.binding, entry);
-    if (addressed === null || (addressed === 'broadcast' && input.include_broadcast !== true)) continue;
-    const quoted = (entry.message.match(UUID_SCAN_RE) ?? []).map((id) => id.toLowerCase());
-    replies.push({
-      entry_id: entry.id,
-      created_at: entry.created_at,
-      from_drone_id: ctx.binding.coordinatorDroneId,
-      from_label: ctx.binding.coordinatorLabel,
-      addressed,
-      in_reply_to: quoted.find((id) => requestIds.has(id)) ?? null,
-      message: entry.message,
-      ...(entry.documents?.length ? {
-        documents: entry.documents,
-        document_delivery: 'Document bodies are not included and cannot be fetched through this connection. Ask the Coordinator to provide the content through a supported channel.',
-      } : {}),
-    });
+
+  // Deliberate ceiling: every read scans the cube log from the checkpoint,
+  // including entries not addressed here, so an undelivered backlog costs a
+  // growing scan. Upgrade path: a separate scan hint that deliver advances.
+  // One addressed entry beyond `limit` is collected only to answer has_more.
+  const candidates: Array<{ reply: RepresentativeReply; point: LocalServerCursor; ignoredBefore: number }> = [];
+  let ignored = 0;
+  let cursor = state.checkpoint;
+  let last = state.checkpoint;
+  scan: for (;;) {
+    const page = await ctx.backend.readAfter(cursor, READ_SCAN_PAGE);
+    for (const entry of page.entries) {
+      const point = { id: entry.id, created_at: entry.created_at };
+      // Client-side (created_at, id) filter: never repeat or regress.
+      if (comparePoints(point, last) <= 0) continue;
+      last = point;
+      const addressed = isAddressedCoordinatorEntry(ctx.binding, entry);
+      if (addressed === null || (addressed === 'broadcast' && input.include_broadcast !== true)) { ignored += 1; continue; }
+      const quoted = (entry.message.match(UUID_SCAN_RE) ?? []).map((id) => id.toLowerCase());
+      candidates.push({ point, ignoredBefore: ignored, reply: {
+        entry_id: entry.id,
+        created_at: entry.created_at,
+        from_drone_id: ctx.binding.coordinatorDroneId,
+        from_label: ctx.binding.coordinatorLabel,
+        addressed,
+        in_reply_to: quoted.find((id) => requestIds.has(id)) ?? null,
+        message: entry.message,
+        ...(entry.documents?.length ? {
+          documents: entry.documents,
+          document_delivery: 'Document bodies are not included and cannot be fetched through this connection. Ask the Coordinator to provide the content through a supported channel.',
+        } : {}),
+      } });
+      if (candidates.length > limit) break scan;
+    }
+    const tail = page.entries.at(-1);
+    if (!page.has_more || !tail) break;
+    cursor = { id: tail.id, created_at: tail.created_at };
   }
+
+  const result = (count: number, oversize = false) => {
+    const taken = candidates.slice(0, count);
+    const replies: RepresentativeReply[] = taken.map(({ reply }, index) =>
+      (oversize && index === 0 ? { ...reply, oversize: true as const } : reply));
+    return {
+      replies,
+      checkpoint: checkpointView(state.checkpoint),
+      has_more: candidates.length > count,
+      ignored_entries: count < candidates.length ? candidates[count].ignoredBefore : ignored,
+      binding_fingerprint: bindingFingerprint(ctx.binding),
+      delivery: REPRESENTATIVE_DELIVERY_NOTE,
+    };
+  };
+  // Measure the real serialized result; entries are whole or omitted.
+  let count = 0;
+  while (count < Math.min(limit, candidates.length) &&
+    Buffer.byteLength(serializeRepresentativeResult(result(count + 1))) <= maxBytes) count += 1;
+  const oversize = count === 0 && candidates.length > 0;
+  const final = result(oversize ? 1 : count, oversize);
+  const returned = candidates[final.replies.length - 1]?.point;
+  if (returned && comparePoints(returned, state.readThrough) > 0) {
+    // The deliver fence widens before the caller can see the entries.
+    await createDeliveryStore(ctx.binding).advance({ readThrough: returned }, ctx.guard);
+  }
+  return final;
+}
+
+export async function deliverRepresentativeReplies(
+  ctx: RepresentativeContext,
+  raw: unknown,
+): Promise<{ checkpoint: { entry_id: string | null; created_at: string | null }; advanced: boolean; binding_fingerprint: string }> {
+  const input = (raw ?? {}) as Record<string, unknown>;
+  const unknown = Object.keys(input).filter((key) => key !== 'through');
+  if (unknown.length > 0 || !isRepresentativeUuid(input.through)) {
+    throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'through must be the full UUID of a reply returned by borg_representative-read.');
+  }
+  await verifyLiveBinding(ctx);
+  const state = await deliveryState(ctx);
+  const outside = () => new RepresentativeError('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY',
+    'That entry is not in the current read window: deliver only a reply that borg_representative-read returned. Nothing changed.');
+  let entry: LogEntry;
+  try {
+    ({ entry } = await ctx.backend.readEntry(input.through));
+  } catch (error) {
+    if ((error as { status?: unknown })?.status === 404) throw outside();
+    throw error;
+  }
+  if (entry.id !== input.through || isAddressedCoordinatorEntry(ctx.binding, entry) === null) throw outside();
+  const point = { id: entry.id, created_at: entry.created_at };
+  const fingerprint = bindingFingerprint(ctx.binding);
+  if (state.checkpoint && comparePoints(point, state.checkpoint) <= 0) {
+    return { checkpoint: checkpointView(state.checkpoint), advanced: false, binding_fingerprint: fingerprint };
+  }
+  if (state.readThrough === null || comparePoints(point, state.readThrough) > 0) throw outside();
+  const next = await createDeliveryStore(ctx.binding).advance({ checkpoint: point }, ctx.guard);
   return {
-    replies,
-    ignored_entries: page.entries.length - replies.length,
-    has_more: page.has_more === true,
-    delivery: REPRESENTATIVE_DELIVERY_NOTE,
+    checkpoint: checkpointView(next.checkpoint),
+    advanced: comparePoints(next.checkpoint!, state.checkpoint) > 0,
+    binding_fingerprint: fingerprint,
   };
 }
 
@@ -661,6 +780,7 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
   unresolved_requests: Array<{ request_id: string; state: string; kind: string; updated_at: string }>;
   delivery: string;
   authority: string;
+  binding_fingerprint: string;
 }> {
   const { binding } = ctx;
   let problem: { code: string; message: string } | undefined;
@@ -695,5 +815,6 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
     authority:
       'Borg records these messages as posts from the representative drone. The user-authorized / model-advice label is this ' +
       'connection\'s own attribution and is not verified or enforced by the Borg server.',
+    binding_fingerprint: bindingFingerprint(binding),
   };
 }

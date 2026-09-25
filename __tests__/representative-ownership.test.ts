@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, realpathSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, realpathSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRepresentativeStore } from '../src/representative-store.js';
@@ -12,7 +12,6 @@ import { acquireStreamLease, readOwnershipSnapshot } from '../src/stream-owner.j
 let root: string;
 let worktree: string;
 let ledger: string;
-let cursor: string;
 let log: string;
 let cube: MockCube;
 let appendBarrier: { entered: () => void; wait: Promise<void> } | undefined;
@@ -22,8 +21,8 @@ beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'rep-owner-')));
   worktree = join(root, 'work'); mkdirSync(worktree);
   ledger = join(root, 'representative.json');
-  cursor = join(root, 'cursor.json'); log = join(root, 'backend.json');
-  writeFileSync(cursor, '0'); writeFileSync(log, '[]');
+  log = join(root, 'backend.json');
+  writeFileSync(log, '[]');
   cube = new MockCube();
   appendBarrier = undefined;
   await createRepresentativeStore(ledger).saveBinding(bindingFor(worktree), { rebind: false });
@@ -53,7 +52,6 @@ async function start(heartbeatIntervalMs?: number) {
         barrier.entered(); await barrier.wait;
       }
       const result = await (backend as any)[message.method](...message.args);
-      if (message.method === 'readUnread') writeFileSync(cursor, String(Number(readFileSync(cursor, 'utf8')) + 1));
       writeFileSync(log, JSON.stringify(cube.entries));
       if (child.connected) child.send({ id: message.id, result });
     } catch (error: any) {
@@ -88,7 +86,13 @@ async function start(heartbeatIntervalMs?: number) {
     },
   };
 }
-const snapshot = () => [ledger, cursor, log].map((file) => readFileSync(file, 'utf8'));
+// Ledger, backend log and every private delivery-state file (checkpoint and read fence).
+function deliveryState(): string[] {
+  const base = join(root, '.config', 'borgmcp', 'representative-delivery');
+  if (!existsSync(base)) return [];
+  return readdirSync(base).flatMap((dir) => readdirSync(join(base, dir)).map((file) => readFileSync(join(base, dir, file), 'utf8')));
+}
+const snapshot = () => [...[ledger, log].map((file) => readFileSync(file, 'utf8')), ...deliveryState()];
 const input = { request_id: '55555555-5555-4555-8555-555555555555', kind: 'question', authorization: 'model_advice', message: 'Once only' };
 function ownerPath() {
   const binding = bindingFor(worktree);
@@ -102,7 +106,7 @@ function expireOwner() {
   writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
 }
 
-it('refuses a second real process read before cursor, ledger or backend changes', async () => {
+it('refuses a second real process read before delivery state, ledger or backend changes', async () => {
   const first = await start(), second = await start();
   expect((await first.call('read')).isError).toBe(false);
   const reply = cube.post(COORD_ID, 'Only the owner may consume this reply', [REP_ID]);
@@ -115,7 +119,7 @@ it('refuses a second real process read before cursor, ledger or backend changes'
   expect((await first.call('read')).body.replies.map((entry: any) => entry.entry_id)).toEqual([reply.id]);
 });
 
-it('starts lazily, status is read-only, and non-owner send/read/ack have no effects', async () => {
+it('starts lazily, status is read-only, and non-owner send/read/deliver/ack have no effects', async () => {
   const first = await start(), second = await start();
   const before = snapshot();
   const stamp = statSync(ledger).mtimeMs;
@@ -128,8 +132,10 @@ it('starts lazily, status is read-only, and non-owner send/read/ack have no effe
   expect(status.body.ownership).toMatchObject({ state: 'owned-by-other-process', pid: first.child.pid });
   expect(typeof status.body.ownership.startedAt).toBe('string');
   expect(typeof status.body.ownership.ageMs).toBe('number');
+  expect((await first.call('read')).isError).toBe(false);
   const stable = snapshot(), calls = cube.calls.length;
-  for (const [name, args] of [['send', input], ['read', {}], ['ack', { entry_id: input.request_id }]] as const) {
+  expect(deliveryState()).toHaveLength(1); // the owner's checkpoint file exists and must stay unchanged
+  for (const [name, args] of [['send', input], ['read', {}], ['deliver', { through: input.request_id }], ['ack', { entry_id: input.request_id }]] as const) {
     const denied = await second.call(name, args);
     expect(denied.body.error.code).toBe('REPRESENTATIVE_OWNERSHIP_REQUIRED');
     expect(denied.body.error.details.owner.pid).toBe(first.child.pid);
@@ -138,6 +144,18 @@ it('starts lazily, status is read-only, and non-owner send/read/ack have no effe
     expect(cube.calls).toHaveLength(calls);
   }
   expect((await first.call('status')).body.ownership.state).toBe('owner');
+});
+
+it('replays an undelivered reply to the successor after the owner is killed between read and deliver', async () => {
+  const first = await start();
+  const reply = cube.post(COORD_ID, 'Persist me before deliver', [REP_ID]);
+  writeFileSync(log, JSON.stringify(cube.entries));
+  expect((await first.call('read')).body.replies.map((entry: any) => entry.entry_id)).toEqual([reply.id]);
+  const exited = once(first.child, 'exit'); first.child.kill('SIGKILL'); await exited;
+  const second = await start();
+  expect((await second.call('read')).body.replies.map((entry: any) => entry.entry_id)).toEqual([reply.id]);
+  expect((await second.call('deliver', { through: reply.id })).body.advanced).toBe(true);
+  expect((await second.call('read')).body.replies).toEqual([]);
 });
 
 it.each(['SIGKILL', 'SIGTERM', 'clean'] as const)('takes over after owner %s without manual cleanup', async (mode) => {

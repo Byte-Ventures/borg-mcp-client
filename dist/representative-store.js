@@ -11,6 +11,7 @@
  * holds message text (only a payload digest).
  */
 import { decodeUuid } from 'borgmcp-shared/protocol';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 import { shellEscape } from './shell-escape.js';
@@ -25,6 +26,18 @@ export function isRepresentativeUuid(value) {
     }
 }
 const SETTLED_REQUEST_LIMIT = 200;
+/**
+ * Host fence for one binding generation: hex SHA-256 of the canonical JSON array
+ * [origin, trustIdentity, cubeId, representativeDroneId, coordinatorDroneId,
+ * boundAt]. It changes on every rebind (boundAt) and trust change, and carries
+ * no path or credential.
+ */
+export function bindingFingerprint(binding) {
+    return createHash('sha256').update(JSON.stringify([
+        binding.origin, binding.trustIdentity, binding.cubeId,
+        binding.representativeDroneId, binding.coordinatorDroneId, binding.boundAt,
+    ])).digest('hex');
+}
 export function representativeRecoveryCommand(binding) {
     return `cd ${shellEscape(binding.worktree)} && borg representative prepare --coordinator ${shellEscape(binding.coordinatorLabel)} --role ${shellEscape(binding.representativeRoleName)} --rebind`;
 }

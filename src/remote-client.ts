@@ -1100,6 +1100,9 @@ export async function readLog(
   apiUrl: string,
   opts: {
     since?: string;
+    /** Exact (created_at, id) resume point, strictly after; null = log start.
+     * Stateless: never reads or advances the unread cursor, never digest. */
+    cursor?: LocalServerCursor | null;
     limit?: number;
     unreadOnly?: boolean;
     serverTrustIdentity?: string;
@@ -1122,7 +1125,11 @@ export async function readLog(
     opts.serverTrustIdentity,
   );
   let cursor: LocalServerCursor | null = null;
+  if (opts.cursor !== undefined && (opts.unreadOnly || opts.since !== undefined)) {
+    throw new Error('readLog cursor cannot be combined with since or unreadOnly');
+  }
   if (opts.continuationGuard) await opts.continuationGuard();
+  if (opts.cursor !== undefined) cursor = opts.cursor;
   if (opts.unreadOnly) cursor = await getLocalServerCursor(localCursorBinding(local));
   if (opts.since !== undefined) cursor = await resolveLocalLogCursor(local, opts.since, opts.continuationGuard);
   let page = await localReadLogPage(local, {
@@ -1131,7 +1138,8 @@ export async function readLog(
     continuationGuard: opts.continuationGuard,
     // Keep the cursor payload stable across a lost response; do not re-read or
     // advance local state until one response has been decoded successfully.
-    ...(opts.unreadOnly && opts.since === undefined ? { retryMode: 'unread-cursor' as const } : {}),
+    // An exact-cursor read is stateless, so the same bounded retries are safe.
+    ...((opts.unreadOnly && opts.since === undefined) || opts.cursor !== undefined ? { retryMode: 'unread-cursor' as const } : {}),
   });
   if (opts.unreadOnly && page.cursor) {
     if (opts.continuationGuard) await opts.continuationGuard();

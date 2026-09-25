@@ -2,8 +2,9 @@
  * Restricted stdio MCP facade for the human representative.
  *
  * A Borg server speaks pinned-TLS HTTPS, not MCP, so a generic MCP host reaches
- * it through this local stdio process. The surface is four tools: status, send
- * (to the ONE bound Coordinator), read (that Coordinator's replies) and ack.
+ * it through this local stdio process. The surface is five tools: status, send
+ * (to the ONE bound Coordinator), read (that Coordinator's replies), deliver
+ * (the host's durable delivery checkpoint) and ack.
  * There is deliberately no log/broadcast/dispatch, roster-management, grant,
  * evict, release, regen or server-lifecycle tool, and no dispatcher escape hatch.
  *
@@ -14,13 +15,14 @@ import { ErrorCode } from 'borgmcp-shared/protocol';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { REPRESENTATIVE_DELIVERY_NOTE, REPRESENTATIVE_MESSAGE_LIMIT_BYTES, RepresentativeError, ackRepresentativeReply, readRepresentativeReplies, representativeStatus, sendRepresentativeMessage, } from './representative-core.js';
+import { REPRESENTATIVE_DELIVERY_NOTE, REPRESENTATIVE_MESSAGE_LIMIT_BYTES, RepresentativeError, ackRepresentativeReply, deliverRepresentativeReplies, readRepresentativeReplies, serializeRepresentativeResult, representativeStatus, sendRepresentativeMessage, } from './representative-core.js';
 import { RepresentativeStoreError } from './representative-store.js';
 import { createRepresentativeOwner } from './representative-owner.js';
 export const REPRESENTATIVE_TOOL_NAMES = [
     'borg_representative-status',
     'borg_representative-send',
     'borg_representative-read',
+    'borg_representative-deliver',
     'borg_representative-ack',
 ];
 export const REPRESENTATIVE_INSTRUCTIONS = 'You are connected as the human representative of one Borg cube: an automated delegate that relays the ' +
@@ -64,28 +66,43 @@ const TOOLS = [
     },
     {
         name: 'borg_representative-read',
-        description: 'Read unread replies from the bound Coordinator addressed to this representative. Replies arrive only when this tool ' +
-            'is called; there is no background wake. Each call DRAINS the whole fetched unread page for this drone — returned ' +
-            'replies and ignored entries alike (other drones\' entries are counted, never returned) — so they will not appear ' +
-            'unread again: persist the result, then route each reply by in_reply_to to its conversation or hold it for the human. If the host stops before persisting, the reply ' +
-            'is no longer in the unread view.',
+        description: 'Read the bound Coordinator\'s replies addressed to this representative that come after your delivered checkpoint, ' +
+            'oldest first. Reading changes nothing: the same replies return on every call until you call ' +
+            'borg_representative-deliver. Persist each reply durably, route it by in_reply_to or hold it for the human, then ' +
+            'deliver through the last one you persisted. At most `limit` replies and `max_bytes` of serialized result; a reply ' +
+            'larger than max_bytes is returned whole and alone with oversize:true. has_more means more replies follow the window. ' +
+            'Stop routing if binding_fingerprint differs from the value you persisted at binding time.',
         inputSchema: {
             type: 'object',
             properties: {
                 include_broadcast: { type: 'boolean', description: 'Also return the Coordinator\'s cube-wide broadcasts (marked as such).' },
-                limit: {
-                    type: 'integer', minimum: 1, maximum: 200,
-                    description: 'Page-size hint, not a hard cap: a large unread backlog may return (and drain) more entries.',
+                limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Hard cap on returned replies. Default 10.' },
+                max_bytes: {
+                    type: 'integer', minimum: 4096, maximum: 60000,
+                    description: 'Hard cap on the serialized result size in bytes. Default 32768.',
                 },
             },
             additionalProperties: false,
         },
     },
     {
+        name: 'borg_representative-deliver',
+        description: 'Record that every reply up to and including `through` is durably persisted by the host. Only this call moves the ' +
+            'read window. `through` must be a reply borg_representative-read returned; the same or an older id is a no-op ' +
+            '(advanced:false). Call it only after durable persistence: a delivered reply is not returned again. It does not ' +
+            'notify the Coordinator; that is borg_representative-ack.',
+        inputSchema: {
+            type: 'object',
+            properties: { through: { type: 'string', description: 'entry_id of the last reply you persisted.' } },
+            required: ['through'],
+            additionalProperties: false,
+        },
+    },
+    {
         name: 'borg_representative-ack',
         description: 'Signal to the Coordinator that one of its direct replies (entry_id from borg_representative-read) was received. ' +
-            'It is only that signal: it does not make delivery reliable, does not move or restore the unread cursor, and is ' +
-            'not needed for reading.',
+            'It is only that signal: it is not delivery, does not move the read window (that is borg_representative-deliver), ' +
+            'and is not needed for reading.',
         inputSchema: {
             type: 'object',
             properties: { entry_id: { type: 'string' } },
@@ -108,7 +125,7 @@ function errorBody(error) {
     };
 }
 const toolResult = (body, isError = false) => ({
-    content: [{ type: 'text', text: JSON.stringify(body, null, 2) }],
+    content: [{ type: 'text', text: serializeRepresentativeResult(body) }],
     ...(isError ? { isError: true } : {}),
 });
 export async function serveRepresentativeMcp(options) {
@@ -130,10 +147,10 @@ export async function serveRepresentativeMcp(options) {
             // Recheck at each network boundary, not just at tool dispatch: a process
             // may have paused or lost its lease while awaiting live verification.
             const backend = ctx.backend;
-            const guarded = { ...ctx, backend: Object.fromEntries(['whoami', 'roster', 'append', 'readUnread', 'readEntry', 'ack'].map((key) => [key, async (...args) => {
+            const guarded = { ...ctx, guard: () => owner.ensure(ctx.binding), backend: Object.fromEntries(['whoami', 'roster', 'append', 'readAfter', 'unreadCursor', 'readEntry', 'ack'].map((key) => [key, async (...args) => {
                         await owner.ensure(ctx.binding);
-                        if (key === 'readUnread')
-                            args[1] = () => owner.ensure(ctx.binding);
+                        if (key === 'readAfter')
+                            args[2] = () => owner.ensure(ctx.binding);
                         const result = await backend[key].apply(backend, args);
                         await owner.ensure(ctx.binding);
                         return result;
@@ -145,6 +162,8 @@ export async function serveRepresentativeMcp(options) {
                 }
                 case 'borg_representative-read':
                     return toolResult(await readRepresentativeReplies(guarded, args));
+                case 'borg_representative-deliver':
+                    return toolResult(await deliverRepresentativeReplies(guarded, args));
                 default:
                     return toolResult(await ackRepresentativeReply(guarded, args));
             }

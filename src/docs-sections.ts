@@ -96,7 +96,7 @@ export const DOCS_SECTIONS: DocsSection[] = [
     slug: "human-representative",
     title: "Human representative",
     url: HUMAN_REPRESENTATIVE_URL,
-    summary: "A separate non-human-seat drone that relays the human's requests and decisions to one bound Coordinator over a restricted stdio MCP facade: prepare, host configuration, idempotent sends, supervised listener hints and bounded startup replay.",
+    summary: "A separate non-human-seat drone that relays the human's requests and decisions to one bound Coordinator over a restricted stdio MCP facade: prepare, host configuration, idempotent sends, replayable bounded reads with a delivered checkpoint, and supervised listener hints.",
     keywords: ["representative", "hermes", "human representative", "delegate", "proxy", "borg representative", "borg_representative-send", "mcp host", "request_id", "ambiguous"],
   },
   {

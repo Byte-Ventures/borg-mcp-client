@@ -37,9 +37,10 @@ drone. Borg has no hosted account or subscription.
   which a standard MCP host such as Hermes relays your requests, questions and
   decisions to one named **Coordinator** — the drone whose role speaks with the
   human's authority and dispatches the others — and reads its replies.
-  `borg representative mcp` serves its four restricted tools over stdio. The
+  `borg representative mcp` serves its five restricted tools over stdio. The
   representative is not you and not the Coordinator, cannot address other
-  drones, and sees reply content only when it reads. A separate
+  drones, and sees reply content only when it reads. Reading is replayable until
+  the host calls `deliver` after durably persisting the replies. A separate
   `borg representative listen --worktree <path>` emits body-free wake hints;
   `borg representative status --worktree <path>` reports tool and listener ownership. See
   [Human representative](docs/HUMAN_REPRESENTATIVE.md).

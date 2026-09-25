@@ -114,7 +114,7 @@ export function representativeHelpText(version) {
         `            Fails if that Coordinator is missing, evicted, duplicated, or not in the human seat;\n` +
         `            another drone is never chosen instead.\n` +
         `  status    Show the saved binding, re-check it against the live cube, and list unresolved sends.\n` +
-        `  mcp       Serve the restricted stdio MCP tools (status, send, read, ack) for a generic MCP host.\n\n` +
+        `  mcp       Serve the restricted stdio MCP tools (status, send, read, deliver, ack) for a generic MCP host.\n\n` +
         `  listen    Emit body-free JSON wake hints from the server stream; supervise this separate process.\n` +
         `Options:\n` +
         `  --replay-after <entry_id>    listen: replay later retained hints after the last durably enqueued entry\n` +
@@ -126,8 +126,8 @@ export function representativeHelpText(version) {
         `  --rebind                     prepare: explicitly replace the saved cube/Coordinator selection\n` +
         `  --help, -h                   Show this help\n\n` +
         `Limits: the MCP process has no background wake; a separate listen process emits wake hints, not content.\n` +
-        `Reading drains everything it fetches: persist before relaying. On a listener gap, call read once.\n` +
-        `The first send/read/ack takes an exclusive tools lease; listen owns a separate exclusive listener lease.\n` +
+        `Reading changes nothing: persist replies durably, then deliver through the last one. On a listener gap, call read.\n` +
+        `The first send/read/deliver/ack takes an exclusive tools lease; listen owns a separate exclusive listener lease.\n` +
         `A retried send reuses its request id so the server stores it once; an unknown outcome is reported as\n` +
         `ambiguous, with its cause, and never re-sent automatically. "User-authorized" is the representative's own label:\n` +
         `the Borg server does not verify it, and one relayed decision is not broader human approval.\n` +

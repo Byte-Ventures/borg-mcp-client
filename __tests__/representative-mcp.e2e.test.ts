@@ -127,6 +127,7 @@ describe('representative stdio MCP (mock backend)', () => {
     expect(names).toEqual([...REPRESENTATIVE_TOOL_NAMES].sort());
     expect(names).toEqual([
       'borg_representative-ack',
+      'borg_representative-deliver',
       'borg_representative-read',
       'borg_representative-send',
       'borg_representative-status',
@@ -151,7 +152,8 @@ describe('representative stdio MCP (mock backend)', () => {
     expect(status.isError).toBe(false);
     expect(status.body.coordinator.drone_id).toBe(COORD_ID);
     expect(status.body.representative.drone_id).toBe(REP_ID);
-    expect(status.body.delivery).toContain('no background wake');
+    expect(status.body.delivery).toContain('deliver');
+    expect(status.body.binding_fingerprint).toMatch(/^[0-9a-f]{64}$/);
 
     const sent = await client.call('borg_representative-send', {
       request_id: REQUEST_ID,
@@ -280,13 +282,16 @@ describe('representative stdio MCP (mock backend)', () => {
     await server.close();
   });
 
-  it('does not promise by-id recovery after the only read tool consumes a reply', async () => {
+  it('replays an undelivered reply until deliver, with no by-id read path', async () => {
     const entry = cube.post(COORD_ID, 'A reply to relay now', [REP_ID]);
     const { client, server } = await connect();
     const init = await client.initialize();
     const read = await client.call('borg_representative-read', {});
     expect(read.body.replies[0].entry_id).toBe(entry.id);
     expect((await client.call('borg_representative-read', { entry_id: entry.id })).body.error.code).toBe('INVALID_INPUT');
+    expect((await client.call('borg_representative-read', {})).body.replies.map((r: any) => r.entry_id)).toEqual([entry.id]);
+    const delivered = await client.call('borg_representative-deliver', { through: entry.id });
+    expect(delivered.body).toMatchObject({ advanced: true, binding_fingerprint: read.body.binding_fingerprint });
     expect((await client.call('borg_representative-read', {})).body.replies).toEqual([]);
     expect(init.result.instructions).not.toMatch(/fetched\s+again only by its entry_id/);
     expect(read.body.delivery).not.toMatch(/fetched\s+again only by its entry_id/);

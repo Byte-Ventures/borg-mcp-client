@@ -2,8 +2,9 @@
  * Restricted stdio MCP facade for the human representative.
  *
  * A Borg server speaks pinned-TLS HTTPS, not MCP, so a generic MCP host reaches
- * it through this local stdio process. The surface is four tools: status, send
- * (to the ONE bound Coordinator), read (that Coordinator's replies) and ack.
+ * it through this local stdio process. The surface is five tools: status, send
+ * (to the ONE bound Coordinator), read (that Coordinator's replies), deliver
+ * (the host's durable delivery checkpoint) and ack.
  * There is deliberately no log/broadcast/dispatch, roster-management, grant,
  * evict, release, regen or server-lifecycle tool, and no dispatcher escape hatch.
  *
@@ -21,7 +22,9 @@ import {
   REPRESENTATIVE_MESSAGE_LIMIT_BYTES,
   RepresentativeError,
   ackRepresentativeReply,
+  deliverRepresentativeReplies,
   readRepresentativeReplies,
+  serializeRepresentativeResult,
   representativeStatus,
   sendRepresentativeMessage,
   type RepresentativeContext,
@@ -33,6 +36,7 @@ export const REPRESENTATIVE_TOOL_NAMES = [
   'borg_representative-status',
   'borg_representative-send',
   'borg_representative-read',
+  'borg_representative-deliver',
   'borg_representative-ack',
 ] as const;
 
@@ -83,20 +87,36 @@ const TOOLS = [
   {
     name: 'borg_representative-read',
     description:
-      'Read unread replies from the bound Coordinator addressed to this representative. Replies arrive only when this tool ' +
-      'is called; there is no background wake. Each call DRAINS the whole fetched unread page for this drone — returned ' +
-      'replies and ignored entries alike (other drones\' entries are counted, never returned) — so they will not appear ' +
-      'unread again: persist the result, then route each reply by in_reply_to to its conversation or hold it for the human. If the host stops before persisting, the reply ' +
-      'is no longer in the unread view.',
+      'Read the bound Coordinator\'s replies addressed to this representative that come after your delivered checkpoint, ' +
+      'oldest first. Reading changes nothing: the same replies return on every call until you call ' +
+      'borg_representative-deliver. Persist each reply durably, route it by in_reply_to or hold it for the human, then ' +
+      'deliver through the last one you persisted. At most `limit` replies and `max_bytes` of serialized result; a reply ' +
+      'larger than max_bytes is returned whole and alone with oversize:true. has_more means more replies follow the window. ' +
+      'Stop routing if binding_fingerprint differs from the value you persisted at binding time.',
     inputSchema: {
       type: 'object',
       properties: {
         include_broadcast: { type: 'boolean', description: 'Also return the Coordinator\'s cube-wide broadcasts (marked as such).' },
-        limit: {
-          type: 'integer', minimum: 1, maximum: 200,
-          description: 'Page-size hint, not a hard cap: a large unread backlog may return (and drain) more entries.',
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Hard cap on returned replies. Default 10.' },
+        max_bytes: {
+          type: 'integer', minimum: 4096, maximum: 60000,
+          description: 'Hard cap on the serialized result size in bytes. Default 32768.',
         },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'borg_representative-deliver',
+    description:
+      'Record that every reply up to and including `through` is durably persisted by the host. Only this call moves the ' +
+      'read window. `through` must be a reply borg_representative-read returned; the same or an older id is a no-op ' +
+      '(advanced:false). Call it only after durable persistence: a delivered reply is not returned again. It does not ' +
+      'notify the Coordinator; that is borg_representative-ack.',
+    inputSchema: {
+      type: 'object',
+      properties: { through: { type: 'string', description: 'entry_id of the last reply you persisted.' } },
+      required: ['through'],
       additionalProperties: false,
     },
   },
@@ -104,8 +124,8 @@ const TOOLS = [
     name: 'borg_representative-ack',
     description:
       'Signal to the Coordinator that one of its direct replies (entry_id from borg_representative-read) was received. ' +
-      'It is only that signal: it does not make delivery reliable, does not move or restore the unread cursor, and is ' +
-      'not needed for reading.',
+      'It is only that signal: it is not delivery, does not move the read window (that is borg_representative-deliver), ' +
+      'and is not needed for reading.',
     inputSchema: {
       type: 'object',
       properties: { entry_id: { type: 'string' } },
@@ -130,7 +150,7 @@ function errorBody(error: unknown): { error: { code: string; message: string; de
 }
 
 const toolResult = (body: unknown, isError = false) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify(body, null, 2) }],
+  content: [{ type: 'text' as const, text: serializeRepresentativeResult(body) }],
   ...(isError ? { isError: true } : {}),
 });
 
@@ -170,9 +190,9 @@ export async function serveRepresentativeMcp(
       // Recheck at each network boundary, not just at tool dispatch: a process
       // may have paused or lost its lease while awaiting live verification.
       const backend = ctx.backend;
-      const guarded = { ...ctx, backend: Object.fromEntries(['whoami', 'roster', 'append', 'readUnread', 'readEntry', 'ack'].map((key) => [key, async (...args: unknown[]) => {
+      const guarded = { ...ctx, guard: () => owner.ensure(ctx.binding), backend: Object.fromEntries(['whoami', 'roster', 'append', 'readAfter', 'unreadCursor', 'readEntry', 'ack'].map((key) => [key, async (...args: unknown[]) => {
         await owner.ensure(ctx.binding);
-        if (key === 'readUnread') args[1] = () => owner.ensure(ctx.binding);
+        if (key === 'readAfter') args[2] = () => owner.ensure(ctx.binding);
         const result = await (backend[key as keyof typeof backend] as (...args: unknown[]) => Promise<unknown>).apply(backend, args);
         await owner.ensure(ctx.binding);
         return result;
@@ -184,6 +204,8 @@ export async function serveRepresentativeMcp(
         }
         case 'borg_representative-read':
           return toolResult(await readRepresentativeReplies(guarded, args));
+        case 'borg_representative-deliver':
+          return toolResult(await deliverRepresentativeReplies(guarded, args));
         default:
           return toolResult(await ackRepresentativeReply(guarded, args));
       }

@@ -1,6 +1,6 @@
 import { type StreamDeps } from './log-stream.js';
 import { type RepresentativeCmdDeps } from './representative-cmd.js';
-import type { RepresentativeBinding } from './representative-store.js';
+import { type RepresentativeBinding } from './representative-store.js';
 export interface ListenerOptions {
     /** Controlled transport/timing seams; the CLI supplies no overrides. */
     streamDeps?: StreamDeps;

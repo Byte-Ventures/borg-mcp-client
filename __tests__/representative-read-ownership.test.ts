@@ -125,7 +125,7 @@ async function fixture(failure: 'page' | 'reset' | '429' = 'page', hold = true) 
  };
 }
 
-it.each(['page','reset','429'] as const)('stops production unread %s continuation after takeover without consuming replies', async failure => {
+it.each(['page','reset','429'] as const)('stops production read %s continuation after takeover and never advances the unread cursor', async failure => {
  const f = await fixture(failure);
  const old = await f.connect(), next = await f.connect();
  try {
@@ -143,7 +143,9 @@ it.each(['page','reset','429'] as const)('stops production unread %s continuatio
   const result = await next.client.call('borg_representative-read');
   expect(result.isError).toBe(false);
   expect(result.body.replies.map((r:any)=>r.entry_id)).toEqual(f.entries.map(e=>e.id));
-  expect(f.advances).toHaveLength(2);
+  // Slice 2: read is replayable; neither read touched the client unread cursor.
+  expect(f.advances).toEqual([]);
+  expect((await next.client.call('borg_representative-read')).body.replies.map((r:any)=>r.entry_id)).toEqual(f.entries.map(e=>e.id));
  } finally {f.release();await old.server.close();await next.server.close();}
 });
 
