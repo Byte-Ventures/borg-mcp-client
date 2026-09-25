@@ -219,11 +219,15 @@ it.each([['evicted', 'BACKEND_ERROR'], ['rebound', 'BINDING_MISMATCH']])('refuse
   expect(await files(join(root, '.config'))).toEqual([]); expect(requests).toHaveLength(0);
 });
 // The guide documents this startup boundary: stream retries begin only after it.
-it('exits 1 with one refused line when the server is unreachable at startup verification', async () => {
-  const client = start('unreachable'); const [exit] = await client.exited;
+it.each(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNRESET', 'typed'])('refuses startup with SERVER_UNREACHABLE when verification fails with %s', async code => {
+  const client = start(`unreachable:${code}`); const [exit] = await client.exited;
   expect(exit).toBe(1); expect(client.raw().trim().split('\n').map(line => JSON.parse(line)))
-    .toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 }]);
-  expect(requests).toHaveLength(0);
+    .toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_SERVER_UNREACHABLE', exit_code: 1 }]);
+  expect(await files(join(root, '.config'))).toEqual([]); expect(requests).toHaveLength(0);
+});
+it('keeps a permanent untyped verification failure off SERVER_UNREACHABLE', async () => {
+  const client = start('unreachable:'); const [exit] = await client.exited;
+  expect(exit).toBe(1); expect(JSON.parse(client.raw())).toEqual({ event: 'refused', code: 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 });
 });
 
 it('latches lost ownership before another inbox write and leaves the successor lock intact', async () => {

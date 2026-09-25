@@ -24,6 +24,7 @@ import type { ActiveCube } from './cubes.js';
  *                        delete or a seat reset
  */
 export type SeatStatus = 'evicted' | 'revoked' | 'rejected' | 'live' | 'credential-rejected' | 'trust-mismatch' | 'unreachable' | 'endpoint-mismatch' | 'server-failure' | 'indeterminate';
+export declare function isTransportFailure(err: unknown): boolean;
 /**
  * Default seat probe: a lightweight drone-authed `whoami` with the seat's OWN
  * saved token. authedFetch throws TYPED errors on the authoritative outcomes

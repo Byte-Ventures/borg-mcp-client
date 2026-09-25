@@ -309,12 +309,14 @@ and never advances the unread cursor. Lost replay metadata yields null
 
 Exit codes: 0 after SIGTERM/SIGINT; 2 for startup binding or usage refusal;
 3 for another listener owner; 4 for a terminal stop; 1 for another fatal error.
-A fatal startup storage failure emits `refused` with exit 1. After `listening`,
+A fatal startup storage failure emits `refused` with code
+`REPRESENTATIVE_LISTENER_STORAGE_REFUSED` and exit 1. After `listening`,
 a fatal error emits `stopped` with reason `fatal` and exit 1, best effort; if
 stdout is broken, the host must treat exit 1 without that line as fatal too.
 Startup first verifies the binding with the server once; if the server cannot
-be reached then, the listener exits 1 with `refused` and the diagnostic on
-stderr. After that check, failures of the stream connection (connection
+be reached then, the listener exits 1 with `refused` and code
+`REPRESENTATIVE_LISTENER_SERVER_UNREACHABLE` (retry later; a server that
+answers and rejects the binding keeps its exit-2 binding code). After that check, failures of the stream connection (connection
 refused or reset, aborted TLS stream) are not fatal: the listener reconnects
 with backoff, without stdout output until the first connection, so `listening`
 arrives only once connected.

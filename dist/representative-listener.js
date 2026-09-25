@@ -9,7 +9,8 @@ import { createListenerInbox } from './representative-listener-store.js';
 import { streamOnce, streamReconnectDelay } from './log-stream.js';
 import { resolveRepresentativeContext } from './representative-cmd.js';
 import { DroneEvictedError, CubeDeletedError } from './drone-lifecycle.js';
-import { BorgServerTrustError } from './server-errors.js';
+import { BorgServerTrustError, BorgServerUnreachableError } from './server-errors.js';
+import { isTransportFailure } from './seat-probe.js';
 import { loadBorgServerTrust } from './server-trust.js';
 import { RepresentativeError, verifyLiveBinding } from './representative-core.js';
 function listenerOwnerDeps(binding) {
@@ -82,7 +83,12 @@ export async function runListener(command, deps, options = {}) {
         catch { /* resolve refuses missing bindings */ }
         worktree = deps.findProjectRoot(worktree);
         const ctx = await resolveRepresentativeContext(worktree, deps);
-        await verifyLiveBinding(ctx);
+        // Only this server step maps transport failures to SERVER_UNREACHABLE; typed
+        // rejections keep their binding codes and storage keeps STORAGE_REFUSED.
+        await verifyLiveBinding(ctx).catch((error) => {
+            throw isTransportFailure(error) && !(error instanceof BorgServerUnreachableError)
+                ? new BorgServerUnreachableError('Borg server unreachable during startup verification', { cause: error }) : error;
+        });
         const binding = ctx.binding;
         active = (await deps.hydrateSeat(worktree));
         const ownerDeps = listenerOwnerDeps(binding);
@@ -249,7 +255,8 @@ export async function runListener(command, deps, options = {}) {
         if (started)
             reason = 'fatal';
         else if (!outputBroken)
-            await emit({ event: 'refused', code: 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 });
+            await emit({ event: 'refused', code: error instanceof BorgServerUnreachableError
+                    ? 'REPRESENTATIVE_LISTENER_SERVER_UNREACHABLE' : 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 });
         return 1;
     }
     finally {
