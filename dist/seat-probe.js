@@ -23,7 +23,7 @@ const TRANSPORT_ERRNOS = new Set([
     'UND_ERR_SOCKET',
     'ABORT_ERR',
 ]);
-function isTransportFailure(err) {
+export function isTransportFailure(err) {
     if (err instanceof BorgServerUnreachableError)
         return true;
     const e = err;

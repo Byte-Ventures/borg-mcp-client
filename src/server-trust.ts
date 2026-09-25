@@ -457,12 +457,7 @@ export async function loadBorgServerTrust(
     let pending = trustCache.get(key);
     if (!pending) {
       pending = (async () => {
-        const [certificate, configText] = await Promise.all([
-          readTrustFile(join(directory, 'ca.crt')),
-          readTrustFile(join(directory, 'server.json')),
-        ]);
-        const config = decodeTrustConfig(configText);
-        const identity = verifyCaIdentity(certificate, config.ca_spki_sha256);
+        const { certificate, identity } = await readLocalAuthorityTrust(directory);
         return { identity, fetchImpl: createPinnedServerFetch(origin, certificate) };
       })();
       trustCache.set(key, pending);
@@ -492,6 +487,30 @@ export async function loadBorgServerTrust(
     }
     return pending;
   });
+}
+
+async function readLocalAuthorityTrust(directory: string): Promise<{ certificate: string; identity: string }> {
+  const [certificate, configText] = await Promise.all([
+    readTrustFile(join(directory, 'ca.crt')),
+    readTrustFile(join(directory, 'server.json')),
+  ]);
+  return { certificate, identity: verifyCaIdentity(certificate, decodeTrustConfig(configText).ca_spki_sha256) };
+}
+
+/**
+ * The current trust identity for `origin`, read from disk on every call with the
+ * same source selection and file checks as loadBorgServerTrust. Its local-authority
+ * branch caches for the process lifetime, which a continuation guard on a
+ * long-lived connection must not rely on; the enrollment branch already rereads
+ * its pointer per call. It returns the identity only and grants no trust. The
+ * local-authority branch builds no fetch; the enrollment delegation may construct
+ * the loader's pinned fetch on a cache miss, but this function sends no request.
+ */
+export async function readBorgServerTrustIdentity(origin: string): Promise<string> {
+  if (!await remoteTrustStateExists(origin) && await trustFilesExist(serverDataDirectory())) {
+    return (await readLocalAuthorityTrust(serverDataDirectory())).identity;
+  }
+  return (await loadBorgServerTrust(origin)).identity;
 }
 
 function pemCertificate(raw: Buffer): string {

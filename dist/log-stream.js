@@ -36,7 +36,7 @@ import { CubeDeletedError, CUBE_DELETED_CODE, DroneEvictedError, DRONE_EVICTED_C
 import { CODEX_HEARTBEAT_CADENCE_MS, fireCodexHeartbeatTick, formatCodexWakePrompt, startCodexHeartbeat, wakeCodexViaAppServer, } from './codex-app-wake.js';
 import { formatCubeActivityWakeMessage } from './cube-activity-wake-copy.js';
 import { readBoundedResponseBody } from './server-response.js';
-import { BorgServerError } from './server-errors.js';
+import { BorgServerError, BorgServerTrustError } from './server-errors.js';
 import { markSeatRejected } from './seats.js';
 import { formatDocumentCitations } from './document-render.js';
 import { hasPendingWakeEntry as hasPendingDurableWakeEntry } from './remote-client.js';
@@ -295,6 +295,13 @@ export function startLogStream(opts = {}) {
     // start above) without spawning the real network/keychain loop (QA 75f18e8f).
     (opts.runForever ?? runStreamLoopForever)();
 }
+// ------------------------------------------------------------------
+// Dependency injection seams (for tests)
+// ------------------------------------------------------------------
+/** Production adapter for a separate private stream consumer. Ordinary drone defaults are unchanged. */
+export function streamReconnectDelay(attempt) {
+    return Math.min(RECONNECT_MIN_MS * 2 ** attempt, RECONNECT_MAX_MS) + Math.random() * 500;
+}
 const defaultDeps = {
     fetchImpl: globalThis.fetch.bind(globalThis),
     loadTrust: loadBorgServerTrust,
@@ -460,8 +467,7 @@ async function runLoop(testDeps = {}) {
                     throw new TerminalStreamError();
                 }
                 streamState.connected = false;
-                const delay = Math.min(RECONNECT_MIN_MS * 2 ** attempt, RECONNECT_MAX_MS) +
-                    Math.random() * 500;
+                const delay = streamReconnectDelay(attempt);
                 process.stderr.write(`[borg-mcp log stream] reconnect in ${Math.round(delay)}ms: ${err?.message ?? err}\n`);
                 attempt += 1;
                 streamState.reconnectAttempts = attempt;
@@ -489,6 +495,8 @@ export function __runLoopForTest(testDeps) {
     return runLoop(testDeps);
 }
 export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
+    // A representative consumer must never alter borg_stream-status's singleton.
+    const state = deps.consumer ? { ...streamState } : streamState;
     const { fetchImpl, loadTrust, getCursor, appendLine, hasInboxEntryId, wakeCodex, heartbeatTimeoutMs, hwmDivergenceGraceMs, abortSignal, injectOpenCode, hasPendingWakeEntry, settleOpenCodeEntry, } = { ...defaultDeps, ...deps };
     assertUuidShape(active.cubeId, 'cube_id');
     assertUuidShape(active.droneId, 'drone_id');
@@ -504,6 +512,8 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     if (deps.fetchImpl === undefined) {
         const trust = await loadTrust(active.apiUrl);
         if (trust.identity !== active.serverTrustIdentity) {
+            if (deps.consumer)
+                throw new BorgServerTrustError('Borg server trust identity changed; refusing the stream');
             throw new Error('Borg server trust identity changed; refusing the stream');
         }
         requestFetch = trust.fetchImpl;
@@ -591,7 +601,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         }
         lastPersistedHwm = next;
         lastPersistedEventId = id;
-        streamState.lastPersistedEventId = id;
+        state.lastPersistedEventId = id;
         onEventId(id);
     };
     const markBroadcastPersisted = (hwm) => {
@@ -640,7 +650,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     // Set + FIFO array for O(1) membership + bounded memory.
     const recentIds = new Set();
     const recentIdsOrder = [];
-    let isCatchingUp = lastEventId !== null || cursor !== null;
+    let isCatchingUp = lastEventId !== null || cursor !== null || deps.consumer?.catchupCursor != null;
     // gh#29 quality-stream (#5): shared inbox-write + cursor-advance helpers,
     // extracted from the previously-duplicated ack / regular-log branches in the
     // event loop below. Behavior-preserving — the per-branch comments document
@@ -746,11 +756,15 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
     catch (err) {
         if (watchdog)
             clearTimeout(watchdog);
+        if (deps.consumer)
+            abortSignal.removeEventListener('abort', abortFromExternal);
         throw err;
     }
     if (!response.ok || !response.body) {
         if (watchdog)
             clearTimeout(watchdog);
+        if (deps.consumer)
+            abortSignal.removeEventListener('abort', abortFromExternal);
         // gh#877 Path-B (stream bootstrap): an evicted drone's stream re-subscribe
         // returns the authoritative 410 DRONE_EVICTED. Surface it as the terminal
         // typed error so the reconnect loop stops retrying (B25) instead of backing
@@ -803,29 +817,31 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
             // the dead cursor. The unread watermark (client#41) is untouched, so no
             // undrained wake is lost across the reset.
             if (code === CURSOR_EXPIRED_CODE) {
-                await clearLocalServerCursor({
+                await (deps.consumer ? deps.consumer.clearCursor() : clearLocalServerCursor({
                     origin: active.apiUrl,
                     trustIdentity: active.serverTrustIdentity,
                     cubeId: active.cubeId,
                     droneId: active.droneId,
                     purpose: 'stream',
-                });
+                }));
                 throw new StreamCursorExpiredError();
             }
         }
         throw new Error(`stream HTTP ${response.status}`);
     }
-    streamState.connected = true;
+    state.connected = true;
     try {
+        await deps.consumer?.connected();
         for await (const event of parseSSE(response.body, LOCAL_SERVER_SSE_FRAME_LIMIT_BYTES)) {
+            await deps.consumer?.beforeEvent();
             bumpWatchdog();
             const nowIso = new Date().toISOString();
-            streamState.lastWireActivityAt = nowIso;
+            state.lastWireActivityAt = nowIso;
             // Content vs wire split (T1.2): content freshness is what a reader
             // skimming the top-line verdict actually cares about. Heartbeats
             // bump wire-activity only; log and bookmark events bump both.
             if (event.type === 'log' || event.type === 'bookmark') {
-                streamState.lastContentEventAt = nowIso;
+                state.lastContentEventAt = nowIso;
             }
             // gh#877 Path-A: terminal eviction control frame. Handled EARLY (before
             // log/heartbeat) so a replayed frame on reconnect still fires. This is a
@@ -837,8 +853,10 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
             // (the client process cannot reach the agent loop); we only deliver the
             // wake. The reconnect's stream-bootstrap 410 (authoritative) is what flips
             // this loop terminal below.
+            if (event.type === 'eviction' && deps.consumer)
+                break;
             if (event.type === 'eviction') {
-                streamState.lastContentEventAt = nowIso;
+                state.lastContentEventAt = nowIso;
                 try {
                     const line = formatEvictionSentinelLine(event.reason);
                     await appendLine(active.cubeId, active.droneId, line);
@@ -863,7 +881,7 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
                 throw new BorgServerError('CREDENTIAL_REJECTED', 'Borg server terminated the stream');
             }
             if (event.type === 'heartbeat') {
-                streamState.lastHeartbeatAt = nowIso;
+                state.lastHeartbeatAt = nowIso;
                 // First/baseline heartbeat absorb: until this session has seen
                 // a broadcast entry, the server's broadcast HWM is our baseline.
                 // Direct messages may advance the persistence cursor past this
@@ -896,6 +914,18 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
             }
             if (event.type === 'bookmark') {
                 isCatchingUp = false;
+                continue;
+            }
+            if (event.type === 'log' && deps.consumer) {
+                if (!recentIds.has(event.id)) {
+                    await deps.consumer.log(event, isCatchingUp ? cursor ?? deps.consumer.catchupCursor ?? null : null);
+                    recentIds.add(event.id);
+                    recentIdsOrder.push(event.id);
+                    while (recentIdsOrder.length > RECENT_IDS_CAP)
+                        recentIds.delete(recentIdsOrder.shift());
+                }
+                markEventPersisted(event.id, event.data?.created_at ?? '');
+                markBroadcastPersisted(broadcastHwmFromLogEvent(event));
                 continue;
             }
             if (event.type === 'log') {
@@ -1011,7 +1041,9 @@ export async function streamOnce(active, lastEventId, onEventId, deps = {}) {
         if (watchdog)
             clearTimeout(watchdog);
         clearPendingHwmDivergence();
-        streamState.connected = false;
+        if (deps.consumer)
+            ac.abort(); // release the transport when a consumer stops or throws
+        state.connected = false;
     }
 }
 export async function streamOnceIfOwner(active, lastEventId, onEventId, deps = {}) {

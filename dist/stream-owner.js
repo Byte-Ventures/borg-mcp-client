@@ -58,9 +58,34 @@ export async function acquireStreamLease(cubeId, droneId, staleMs = STREAM_OWNER
 }
 export async function readOwnershipSnapshot(cubeId, droneId, deps = {}) {
     const lockPath = streamLockPath(cubeId, droneId, deps.locksDir);
-    const inspected = await readBoundOwner(lockPath, deps);
-    if (!inspected)
-        return { state: 'unowned', lockPath };
+    // A refresh renames the lock to `<lock>.takeover` while it rewrites the record
+    // and then restores it. Read-only: report an intact, fresh, live in-flight
+    // owner there; a stale, future-dated, dead or malformed leftover stays
+    // `unowned`. A missing directory or owner leaf is re-resolved from the lock
+    // path, so one refresh overlapping any step cannot hide the owner; genuine
+    // initialization still reports `initializing` after the bounded attempts.
+    let initializing;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const inspected = await readBoundOwner(lockPath, deps);
+        if (inspected) {
+            const snapshot = snapshotFromOwner(lockPath, inspected, deps);
+            if (inspected.raw !== null)
+                return snapshot;
+            initializing = snapshot;
+            continue;
+        }
+        const claimed = await readBoundOwner(takeoverPath(lockPath), deps);
+        if (!claimed || claimed.raw === null)
+            continue;
+        const snapshot = snapshotFromOwner(lockPath, claimed, deps);
+        const ageMs = snapshot.ageMs ?? Infinity;
+        const live = snapshot.pid !== undefined && ageMs >= 0 && ageMs <= STREAM_OWNER_STALE_MS &&
+            isPidAlive(snapshot.pid, deps);
+        return live ? snapshot : { state: 'unowned', lockPath };
+    }
+    return initializing ?? { state: 'unowned', lockPath };
+}
+function snapshotFromOwner(lockPath, inspected, deps) {
     const { raw, stat: lockStat } = inspected;
     if (raw === null) {
         const now = (deps.now ?? (() => new Date()))();
@@ -524,6 +549,10 @@ async function readBoundOwner(lockPath, deps = {}) {
                     : await fs.readFile(path.join(lockPath, OWNER_FILE), 'utf8');
             }
             catch (error) {
+                // A concurrent refresh atomically replaces the owner file; like other
+                // lock inspection, that identity drift is turnover and is re-read.
+                if (error?.code === 'STORE_FILE_IDENTITY_CHANGED')
+                    continue;
                 if (error?.code !== 'ENOENT')
                     throw error;
                 raw = null;
