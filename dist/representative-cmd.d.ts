@@ -30,6 +30,10 @@ export type RepresentativeCommand = {
 } | {
     action: 'mcp';
     worktree?: string;
+} | {
+    action: 'listen';
+    worktree?: string;
+    replayAfter?: string;
 };
 export type ParsedRepresentativeArgs = {
     ok: true;
@@ -84,4 +88,7 @@ export declare function runRepresentativeMcp(command: Extract<RepresentativeComm
     heartbeatIntervalMs?: number;
 }): Promise<number>;
 export declare function buildDefaultRepresentativeDeps(): Promise<RepresentativeCmdDeps>;
+export declare function runRepresentativeListen(command: Extract<RepresentativeCommand, {
+    action: 'listen';
+}>, deps: RepresentativeCmdDeps, options?: import('./representative-listener.js').ListenerOptions): Promise<number>;
 //# sourceMappingURL=representative-cmd.d.ts.map

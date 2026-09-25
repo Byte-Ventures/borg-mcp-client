@@ -107,6 +107,11 @@ export declare function resolveCoordinator(roster: {
     drone: RosterDrone;
     role: RosterRole;
 };
+/** Re-prove, against the live cube, that this seat and the bound Coordinator are still the bound ones. */
+export declare function verifyLiveBinding(ctx: RepresentativeContext): Promise<{
+    coordinator: RosterDrone;
+    self: RosterDrone;
+}>;
 export type RepresentativeKind = 'request' | 'question' | 'decision';
 export type RepresentativeAuthorization = 'user_authorized' | 'model_advice';
 export interface RepresentativeSendInput {
