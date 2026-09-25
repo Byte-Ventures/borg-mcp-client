@@ -5,7 +5,7 @@
  * is evidence of acceptance by a real Borg server.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -295,6 +295,33 @@ describe('representative stdio MCP (mock backend)', () => {
     expect((await client.call('borg_representative-read', {})).body.replies).toEqual([]);
     expect(init.result.instructions).not.toMatch(/fetched\s+again only by its entry_id/);
     expect(read.body.delivery).not.toMatch(/fetched\s+again only by its entry_id/);
+    await server.close();
+  });
+
+  it('refuses every tool except status while the delivery checkpoint file is invalid', async () => {
+    const { deliveryPaths } = await import('../src/representative-delivery-store.js');
+    const { directory, file } = deliveryPaths(bindingFor(WORKTREE));
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    for (let current = directory; current.startsWith(join(root, '.config')); current = join(current, '..')) chmodSync(current, 0o700);
+    writeFileSync(file, JSON.stringify({ version: 1, seat: 'f'.repeat(64), checkpoint: null, readThrough: null }), { mode: 0o600 });
+    const reply = cube.post(COORD_ID, 'reply', [REP_ID]);
+    const { client, server } = await connect();
+    await client.initialize();
+    for (const [name, args] of [
+      ['borg_representative-send', { kind: 'question', authorization: 'model_advice', message: 'hi' }],
+      ['borg_representative-read', {}],
+      ['borg_representative-deliver', { through: reply.id }],
+      ['borg_representative-ack', { entry_id: reply.id }],
+    ] as const) {
+      const refused = await client.call(name, args);
+      expect(refused.isError).toBe(true);
+      expect(refused.body.error.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
+    }
+    expect(cube.appendCalls).toHaveLength(0);
+    expect(cube.acks).toEqual([]);
+    const status = await client.call('borg_representative-status');
+    expect(status.isError).toBe(false);
+    expect(status.body.checkpoint_problem.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
     await server.close();
   });
 

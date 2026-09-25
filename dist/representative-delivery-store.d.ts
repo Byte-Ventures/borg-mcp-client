@@ -8,6 +8,15 @@ export interface DeliveryState {
     checkpoint: LocalServerCursor | null;
     readThrough: LocalServerCursor | null;
 }
+/**
+ * This binding's own checkpoint file exists but cannot be trusted. It is never
+ * used and never silently reset: every tool except status refuses until the
+ * operator inspects and removes it.
+ */
+export declare class DeliveryCheckpointError extends Error {
+    readonly code = "REPRESENTATIVE_CHECKPOINT_INVALID";
+    constructor(file: string, reason: string);
+}
 export declare function deliveryPaths(binding: RepresentativeBinding): {
     directory: string;
     file: string;

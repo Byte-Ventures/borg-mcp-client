@@ -103,7 +103,7 @@ async function fixture(failure: 'page' | 'reset' | '429' = 'page', hold = true) 
  });
  vi.doMock('../src/server-trust.js',()=>({loadBorgServerTrust:async()=>({identity:binding.trustIdentity,fetchImpl})}));
  vi.doMock('../src/cubes.js',()=>({getActiveCube:async()=>active}));
- vi.doMock('../src/local-server-cursor.js',()=>({getLocalServerCursor:async()=>cursor,advanceLocalServerCursor:async (_:any,next:any)=>{advances.push(next);cursor=next;}}));
+ vi.doMock('../src/local-server-cursor.js',()=>({getLocalServerCursor:async()=>cursor,readPrivateLocalServerCursor:async()=>cursor,advanceLocalServerCursor:async (_:any,next:any)=>{advances.push(next);cursor=next;}}));
  const { readLog } = await import('../src/remote-client.js');
  const { createSeatBackend } = await import('../src/representative-core.js');
  const { serveRepresentativeMcp } = await import('../src/representative-mcp.js');

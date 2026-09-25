@@ -19,6 +19,20 @@ export interface DeliveryState {
 
 const deliveryRoot = () => join(borgConfigRoot(), 'representative-delivery');
 
+/**
+ * This binding's own checkpoint file exists but cannot be trusted. It is never
+ * used and never silently reset: every tool except status refuses until the
+ * operator inspects and removes it.
+ */
+export class DeliveryCheckpointError extends Error {
+  readonly code = 'REPRESENTATIVE_CHECKPOINT_INVALID';
+  constructor(file: string, reason: string) {
+    super(`The representative delivery checkpoint ${file} is invalid (${reason}). Nothing was read or delivered. ` +
+      'Inspect the file and remove it; the next read then replays every addressed reply from the start.');
+    this.name = 'DeliveryCheckpointError';
+  }
+}
+
 export function deliveryPaths(binding: RepresentativeBinding) {
   const directory = join(deliveryRoot(), bindingFingerprint(binding));
   return { directory, file: join(directory, 'checkpoint.json') };
@@ -72,7 +86,21 @@ export function createDeliveryStore(binding: RepresentativeBinding) {
   const paths = deliveryPaths(binding);
   const seat = seatKey(binding);
   const options = { secureRoot: paths.directory, verifyLeafIdentity: true, createRoot: false };
-  const load = async (): Promise<DeliveryState | null> => (await readFile(paths.directory, paths.file))?.state ?? null;
+  const load = async (): Promise<DeliveryState | null> => {
+    let saved;
+    try {
+      saved = await readFile(paths.directory, paths.file);
+    } catch (error) {
+      throw new DeliveryCheckpointError(paths.file, error instanceof Error ? error.message : 'unreadable');
+    }
+    if (!saved) return null;
+    if (saved.seat !== seat) throw new DeliveryCheckpointError(paths.file, 'it belongs to another representative seat');
+    const { checkpoint, readThrough } = saved.state;
+    if (checkpoint && (readThrough === null || comparePoints(checkpoint, readThrough) > 0)) {
+      throw new DeliveryCheckpointError(paths.file, 'its checkpoint is beyond its read fence');
+    }
+    return saved.state;
+  };
   return {
     /** Null when this binding generation has no checkpoint yet. A corrupt file fails closed. */
     load,

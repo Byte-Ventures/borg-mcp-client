@@ -4,7 +4,7 @@
  * Backend evidence is the controlled in-memory mock, not a real Borg server.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +18,7 @@ import {
   type RepresentativeContext,
 } from '../src/representative-core.js';
 import { bindingFingerprint, createRepresentativeStore } from '../src/representative-store.js';
+import { deliveryPaths } from '../src/representative-delivery-store.js';
 
 const originalHome = process.env.HOME;
 const originalStateRoot = process.env.BORG_STATE_ROOT;
@@ -285,6 +286,7 @@ describe('migration from the client unread cursor', () => {
     const point = { id: '12345678-1234-4123-8123-123456789abc', created_at: '2026-03-01T00:00:00.000Z' };
     await cursors.advanceLocalServerCursor(seat, point);
     await cursors.advanceLocalServerCursor({ ...seat, droneId: BUILDER_ID }, { ...point, id: '87654321-4321-4321-8321-cba987654321' });
+    chmodSync(join(root, '.config', 'borgmcp'), 0o700); // a prepared install's private root
     const file = join(root, '.config', 'borgmcp', 'local-server-cursors.json');
     const before = readFileSync(file, 'utf8');
     const backend = await createSeatBackend({ cubeId: binding.cubeId, droneId: REP_ID, apiUrl: binding.origin,
@@ -364,5 +366,84 @@ describe('binding fingerprint', () => {
     await deliverRepresentativeReplies(ctx, { through: entry.id });
     const rebound = context(bindingFor(WORKTREE, { boundAt: '2026-06-01T00:00:00.000Z' }));
     expect(ids(await readRepresentativeReplies(rebound, {}))).toEqual([entry.id]);
+  });
+});
+
+describe('hostile migration input and checkpoint files', () => {
+  const config = () => join(root, '.config', 'borgmcp');
+  const seatHash = (binding = bindingFor(WORKTREE)) => createHash('sha256').update(JSON.stringify([
+    binding.origin, binding.trustIdentity, binding.cubeId, binding.representativeDroneId,
+  ])).digest('hex');
+  const cursorKey = (binding = bindingFor(WORKTREE)) => createHash('sha256').update(binding.origin).update('\0')
+    .update(binding.trustIdentity).update('\0').update(binding.cubeId).update('\0').update(binding.representativeDroneId).digest('hex');
+  function privateTree(directory: string) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    for (let current = directory; current.startsWith(join(root, '.config')); current = join(current, '..')) chmodSync(current, 0o700);
+  }
+  // The production migration reader, over the mock log for everything else.
+  async function productionContext() {
+    vi.resetModules();
+    const core = await import('../src/representative-core.js');
+    const binding = bindingFor(WORKTREE);
+    const seat = await core.createSeatBackend({ cubeId: binding.cubeId, droneId: REP_ID, apiUrl: binding.origin,
+      serverTrustIdentity: binding.trustIdentity, sessionToken: 'fixture-only' } as never);
+    return { core, ctx: { ...context(binding), backend: { ...cube.backend(), unreadCursor: seat.unreadCursor } } };
+  }
+  const cursorFile = (entry: { id: string; created_at: string }) =>
+    JSON.stringify({ version: 1, cursors: { [cursorKey()]: { id: entry.id, created_at: entry.created_at } } });
+
+  it.each(['symlink to an outside 0666 file', 'world-writable file', 'group-writable file'])(
+    'never imports a legacy unread cursor from a %s: the undelivered reply replays', async (kind) => {
+      const entry = toRep('never read or delivered');
+      privateTree(config());
+      const target = join(config(), 'local-server-cursors.json');
+      if (kind.startsWith('symlink')) {
+        const outside = join(root, 'outside-cursor.json');
+        writeFileSync(outside, cursorFile(entry)); chmodSync(outside, 0o666);
+        symlinkSync(outside, target);
+      } else {
+        writeFileSync(target, cursorFile(entry)); chmodSync(target, kind.startsWith('world') ? 0o666 : 0o620);
+      }
+      const { core, ctx } = await productionContext();
+      const result = await core.readRepresentativeReplies(ctx, {});
+      expect(ids(result)).toEqual([entry.id]);
+      expect(result.checkpoint).toEqual({ entry_id: null, created_at: null });
+    });
+
+  it.each([0o600, 0o644])('still imports a genuine private cursor file of mode %o', async (mode) => {
+    const read = toRep('read before upgrade');
+    const unread = toRep('unread at upgrade');
+    privateTree(config());
+    const target = join(config(), 'local-server-cursors.json');
+    writeFileSync(target, cursorFile(read)); chmodSync(target, mode);
+    const { core, ctx } = await productionContext();
+    expect(ids(await core.readRepresentativeReplies(ctx, {}))).toEqual([unread.id]);
+  });
+
+  const plant = (content: object) => {
+    const { directory, file } = deliveryPaths(bindingFor(WORKTREE));
+    privateTree(directory);
+    writeFileSync(file, JSON.stringify(content), { mode: 0o600 });
+    return file;
+  };
+  const point = (entry: { id: string; created_at: string }) => ({ id: entry.id, created_at: entry.created_at });
+
+  it.each([
+    ['another seat', (e: any) => ({ version: 1, seat: 'f'.repeat(64), checkpoint: point(e), readThrough: point(e) })],
+    ['a checkpoint beyond its read fence', (e: any) => ({ version: 1, seat: seatHash(), checkpoint: point(e), readThrough: null })],
+    ['a missing seat key', (e: any) => ({ version: 1, checkpoint: point(e), readThrough: point(e) })],
+  ])('refuses read and deliver on a checkpoint file of %s, and status reports it', async (_label, content) => {
+    const entry = toRep('never delivered');
+    const file = plant(content(entry));
+    const before = readFileSync(file, 'utf8');
+    const ctx = context();
+    for (const call of [readRepresentativeReplies(ctx, {}), deliverRepresentativeReplies(ctx, { through: entry.id })]) {
+      const error = await call.then(() => null, (e) => e);
+      expect(error?.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
+      expect(error.message).toContain(file);
+    }
+    const status = await representativeStatus(ctx);
+    expect(status.checkpoint_problem).toMatchObject({ code: 'REPRESENTATIVE_CHECKPOINT_INVALID' });
+    expect(readFileSync(file, 'utf8')).toBe(before); // never silently reset
   });
 });

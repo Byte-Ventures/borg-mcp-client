@@ -19,7 +19,9 @@ import { CUBE_DELETED_CODE, CubeDeletedError, DRONE_EVICTED_CODE, DroneEvictedEr
 import { BorgProtocolMismatchError, BorgServerError, BorgServerHttpError, BorgServerTrustError, BorgServerUnreachableError, } from './server-errors.js';
 import { bindingFingerprint, representativeRecoveryCommand, isRepresentativeUuid } from './representative-store.js';
 import { comparePoints, createDeliveryStore } from './representative-delivery-store.js';
-import { getLocalServerCursor } from './local-server-cursor.js';
+import { readPrivateLocalServerCursor } from './local-server-cursor.js';
+import { validatePrivateDirectory } from './representative-listener-store.js';
+import { borgConfigRoot } from './private-root.js';
 const UUID_SCAN_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 export const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
 export const REPRESENTATIVE_DELIVERY_NOTE = 'read returns undelivered replies without consuming them; persist, route by in_reply_to (unknown: hold for the ' +
@@ -47,9 +49,20 @@ export async function createSeatBackend(active) {
             to, postId, transportRetry: false, serverTrustIdentity: trust,
         }),
         readAfter: (cursor, limit, continuationGuard) => client.readLog(active.sessionToken, active.apiUrl, { cursor, limit, serverTrustIdentity: trust, continuationGuard }),
-        unreadCursor: () => getLocalServerCursor({
-            origin: active.apiUrl, trustIdentity: trust, cubeId: active.cubeId, droneId: active.droneId,
-        }),
+        // Migration input only: an unsafe private root or cursor file is no cursor,
+        // so the checkpoint starts empty and replays instead of trusting it.
+        unreadCursor: async () => {
+            try {
+                if (!await validatePrivateDirectory(borgConfigRoot(), false))
+                    return null;
+            }
+            catch {
+                return null;
+            }
+            return readPrivateLocalServerCursor({
+                origin: active.apiUrl, trustIdentity: trust, cubeId: active.cubeId, droneId: active.droneId,
+            });
+        },
         readEntry: (entryId) => client.readLogEntry(active.sessionToken, active.apiUrl, { entry_id: entryId }, trust),
         ack: (entryId) => client.ackLogEntry(active.sessionToken, active.apiUrl, entryId, 'ack', trust),
     };
@@ -577,6 +590,13 @@ export async function representativeStatus(ctx) {
             message: error instanceof Error ? error.message : 'Unknown error',
         };
     }
+    let checkpointProblem;
+    try {
+        await createDeliveryStore(binding).load();
+    }
+    catch (error) {
+        checkpointProblem = { code: error.code ?? 'BACKEND_ERROR', message: error instanceof Error ? error.message : 'Unknown error' };
+    }
     const unresolved = (await ctx.store.readRequests(binding.worktree))
         .filter((record) => record.state === 'pending' || record.state === 'ambiguous')
         .map((record) => ({
@@ -600,6 +620,7 @@ export async function representativeStatus(ctx) {
         authority: 'Borg records these messages as posts from the representative drone. The user-authorized / model-advice label is this ' +
             'connection\'s own attribution and is not verified or enforced by the Borg server.',
         binding_fingerprint: bindingFingerprint(binding),
+        ...(checkpointProblem ? { checkpoint_problem: checkpointProblem } : {}),
     };
 }
 //# sourceMappingURL=representative-core.js.map

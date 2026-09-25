@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
@@ -115,6 +116,40 @@ export async function getLocalServerCursor(binding) {
     const key = cursorKey(binding);
     const state = await readState();
     return state.cursors[key] ?? null;
+}
+/**
+ * Fail-closed read for importing the unread watermark into other private
+ * state. The product writes this file 0600 (writeState); a symlink, a file
+ * that is not a regular file, not owned by this user, or group- or
+ * world-writable, and any unparsable state all read as null, never as a
+ * position. Read-only: nothing is written or locked. The caller validates
+ * the private root the file lives in.
+ */
+export async function readPrivateLocalServerCursor(binding) {
+    let handle;
+    try {
+        handle = await open(CURSOR_FILE, constants.O_RDONLY | constants.O_NOFOLLOW);
+    }
+    catch {
+        return null;
+    }
+    try {
+        const metadata = await handle.stat();
+        if (!metadata.isFile() || (metadata.mode & 0o022) !== 0 ||
+            (typeof process.getuid === 'function' && metadata.uid !== process.getuid()))
+            return null;
+        const parsed = JSON.parse(await handle.readFile('utf8'));
+        if (parsed?.version !== 1 || typeof parsed.cursors !== 'object' || parsed.cursors === null)
+            return null;
+        const cursor = parsed.cursors[cursorKey(binding)];
+        return validCursor(cursor) ? { id: cursor.id, created_at: cursor.created_at } : null;
+    }
+    catch {
+        return null;
+    }
+    finally {
+        await handle.close();
+    }
 }
 export async function advanceLocalServerCursor(binding, cursor, continuationGuard) {
     if (!validCursor(cursor))

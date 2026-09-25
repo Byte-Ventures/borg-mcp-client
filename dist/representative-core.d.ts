@@ -221,6 +221,10 @@ export declare function representativeStatus(ctx: RepresentativeContext): Promis
     delivery: string;
     authority: string;
     binding_fingerprint: string;
+    checkpoint_problem?: {
+        code: string;
+        message: string;
+    };
 }>;
 export {};
 //# sourceMappingURL=representative-core.d.ts.map

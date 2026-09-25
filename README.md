@@ -74,8 +74,8 @@ as unverified in the tool result for cross-repository citations.
 - [Cube documents](docs/DOCUMENTS.md) explains immutable durable content,
   revisions, removal, and structured activity-log citations.
 - [Human representative](docs/HUMAN_REPRESENTATIVE.md) explains connecting an
-  MCP host such as Hermes to one Coordinator, message attribution, retries, and
-  supervised wake hints, replay and the remaining read-before-persist loss window.
+  MCP host such as Hermes to one Coordinator, message attribution, retries,
+  replayable reads with a delivered checkpoint, and supervised wake hints.
 - [Server operations](https://borgmcp.ai/docs/run-server/) covers loopback and
   private-LAN operation.
 - [Security](https://borgmcp.ai/docs/security/) explains invitations, client

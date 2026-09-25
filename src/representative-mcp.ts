@@ -30,6 +30,7 @@ import {
   type RepresentativeContext,
 } from './representative-core.js';
 import { RepresentativeStoreError, bindingFingerprint } from './representative-store.js';
+import { createDeliveryStore } from './representative-delivery-store.js';
 import { createRepresentativeOwner } from './representative-owner.js';
 
 export const REPRESENTATIVE_TOOL_NAMES = [
@@ -199,6 +200,9 @@ export async function serveRepresentativeMcp(
           'The operator rebound this connection (a new binding generation) while it was running. Restart the MCP server to use the new binding.',
         );
       }
+      // An untrustworthy delivery checkpoint stops every effect, not only read
+      // and deliver, so the refusal reaches the human. Read-only; status stays.
+      await createDeliveryStore(ctx.binding).load();
       await owner.ensure(ctx.binding);
       // Recheck at each network boundary, not just at tool dispatch: a process
       // may have paused or lost its lease while awaiting live verification.

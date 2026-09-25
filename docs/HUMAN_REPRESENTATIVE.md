@@ -267,6 +267,10 @@ Upgrading from a version without `deliver`:
   unread at upgrade time are returned, replies already read are not. When the
   binding never read, every addressed reply in the cube log is returned. This
   bootstrap reads first and persists once, so an interruption simply repeats it.
+  The old position is taken only from a genuine private file (a regular file you
+  own, not a symlink, not writable by group or others, in the private config
+  directory); otherwise the checkpoint starts empty and every addressed reply is
+  returned.
 - That upgrade happens once per representative drone and server authority. A later
   binding generation (any `prepare --rebind`, or a trust change) starts with an
   empty checkpoint, so its first read returns its addressed history. Deduplicate by
@@ -406,4 +410,5 @@ the server is installed under the original prefix.
 | `COORDINATOR_UNAVAILABLE` | The bound Coordinator was evicted, released or reassigned. Restore the bound Coordinator and use the printed recovery command, or deliberately substitute a new Coordinator label in that command. |
 | `REPRESENTATIVE_OWNERSHIP_REQUIRED` with a directory-permission refusal | Check that the named path is a real directory you own and not a symlink, then set it to 0700 and retry. Restart a process that had already lost ownership. Do not change permissions through a symlink. |
 | `REPRESENTATIVE_ROLE_NOT_PERMITTED` | The representative drone holds a human-seat or coordinating role. Give it its own worker role. |
+| `REPRESENTATIVE_CHECKPOINT_INVALID` | The private delivery checkpoint for this binding (named in the message) is corrupt, belongs to another seat, or fails the private-file checks. Every tool except `status` refuses and `status` reports it as `checkpoint_problem`; nothing is used or reset automatically. Inspect the file, then remove it; the next `read` returns every addressed reply again, so deduplicate by `entry_id`. |
 | `REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY` | `deliver` named an entry that `read` has not returned (or no Coordinator reply). Nothing changed. Call `read`, persist what it returns, then deliver through its last `entry_id`. |

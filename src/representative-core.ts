@@ -27,7 +27,9 @@ import {
 } from './server-errors.js';
 import { bindingFingerprint, representativeRecoveryCommand, isRepresentativeUuid, type RepresentativeBinding, type RepresentativeStore } from './representative-store.js';
 import { comparePoints, createDeliveryStore, type DeliveryState } from './representative-delivery-store.js';
-import { getLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
+import { readPrivateLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
+import { validatePrivateDirectory } from './representative-listener-store.js';
+import { borgConfigRoot } from './private-root.js';
 
 const UUID_SCAN_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 export const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
@@ -129,9 +131,18 @@ export async function createSeatBackend(active: ActiveCube): Promise<Representat
       }),
     readAfter: (cursor, limit, continuationGuard) =>
       client.readLog(active.sessionToken, active.apiUrl, { cursor, limit, serverTrustIdentity: trust, continuationGuard }),
-    unreadCursor: () => getLocalServerCursor({
-      origin: active.apiUrl, trustIdentity: trust!, cubeId: active.cubeId, droneId: active.droneId,
-    }),
+    // Migration input only: an unsafe private root or cursor file is no cursor,
+    // so the checkpoint starts empty and replays instead of trusting it.
+    unreadCursor: async () => {
+      try {
+        if (!await validatePrivateDirectory(borgConfigRoot(), false)) return null;
+      } catch {
+        return null;
+      }
+      return readPrivateLocalServerCursor({
+        origin: active.apiUrl, trustIdentity: trust!, cubeId: active.cubeId, droneId: active.droneId,
+      });
+    },
     readEntry: (entryId) =>
       client.readLogEntry(active.sessionToken, active.apiUrl, { entry_id: entryId }, trust),
     ack: (entryId) => client.ackLogEntry(active.sessionToken, active.apiUrl, entryId, 'ack', trust),
@@ -786,6 +797,7 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
   delivery: string;
   authority: string;
   binding_fingerprint: string;
+  checkpoint_problem?: { code: string; message: string };
 }> {
   const { binding } = ctx;
   let problem: { code: string; message: string } | undefined;
@@ -796,6 +808,12 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
       code: error instanceof RepresentativeError ? error.code : 'BACKEND_ERROR',
       message: error instanceof Error ? error.message : 'Unknown error',
     };
+  }
+  let checkpointProblem: { code: string; message: string } | undefined;
+  try {
+    await createDeliveryStore(binding).load();
+  } catch (error) {
+    checkpointProblem = { code: (error as { code?: string }).code ?? 'BACKEND_ERROR', message: error instanceof Error ? error.message : 'Unknown error' };
   }
   const unresolved = (await ctx.store.readRequests(binding.worktree))
       .filter((record) => record.state === 'pending' || record.state === 'ambiguous')
@@ -821,5 +839,6 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
       'Borg records these messages as posts from the representative drone. The user-authorized / model-advice label is this ' +
       'connection\'s own attribution and is not verified or enforced by the Borg server.',
     binding_fingerprint: bindingFingerprint(binding),
+    ...(checkpointProblem ? { checkpoint_problem: checkpointProblem } : {}),
   };
 }
