@@ -437,8 +437,9 @@ describe('hostile migration input and checkpoint files', () => {
     const file = plant(content(entry));
     const before = readFileSync(file, 'utf8');
     const ctx = context();
-    for (const call of [readRepresentativeReplies(ctx, {}), deliverRepresentativeReplies(ctx, { through: entry.id })]) {
-      const error = await call.then(() => null, (e) => e);
+    // Start each call only when it is awaited, so no rejection is ever unobserved.
+    for (const call of [() => readRepresentativeReplies(ctx, {}), () => deliverRepresentativeReplies(ctx, { through: entry.id })]) {
+      const error = await call().then(() => null, (e) => e);
       expect(error?.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
       expect(error.message).toContain(file);
     }
