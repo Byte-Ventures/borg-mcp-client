@@ -15,7 +15,12 @@ const deps = {
   hydrateSeat: async () => ({ cubeId: action === 'rebound' ? '99999999-9999-4999-8999-999999999999' : binding.cubeId, droneId: binding.representativeDroneId,
     apiUrl: origin, serverTrustIdentity: binding.trustIdentity, sessionToken: 'fixture-only',
     roleId: ROLE_REP, worktree, droneLabel: binding.representativeLabel }),
-  backendFor: () => { const backend = cube.backend(); if (action === 'evicted') backend.whoami = async () => { throw new DroneEvictedError(); }; return backend; }, store,
+  backendFor: () => {
+    const backend = cube.backend();
+    if (action === 'evicted') backend.whoami = async () => { throw new DroneEvictedError(); };
+    if (action === 'unreachable') backend.whoami = async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }); };
+    return backend;
+  }, store,
   prepareSeat: async () => { throw new Error('not used'); },
   stdout: (text: string) => { process.stdout.write(text); },
   stderr: (text: string) => { process.stderr.write(text); },

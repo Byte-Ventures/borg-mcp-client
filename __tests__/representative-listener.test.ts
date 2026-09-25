@@ -218,6 +218,13 @@ it.each([['evicted', 'BACKEND_ERROR'], ['rebound', 'BINDING_MISMATCH']])('refuse
   expect(exit).toBe(2); expect(JSON.parse(client.raw())).toEqual({ event: 'refused', code, exit_code: 2 });
   expect(await files(join(root, '.config'))).toEqual([]); expect(requests).toHaveLength(0);
 });
+// The guide documents this startup boundary: stream retries begin only after it.
+it('exits 1 with one refused line when the server is unreachable at startup verification', async () => {
+  const client = start('unreachable'); const [exit] = await client.exited;
+  expect(exit).toBe(1); expect(client.raw().trim().split('\n').map(line => JSON.parse(line)))
+    .toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 }]);
+  expect(requests).toHaveLength(0);
+});
 
 it('latches lost ownership before another inbox write and leaves the successor lock intact', async () => {
   const client = start(), hello = await ready(client);

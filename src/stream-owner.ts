@@ -141,19 +141,28 @@ export async function readOwnershipSnapshot(
   const lockPath = streamLockPath(cubeId, droneId, deps.locksDir);
   // A refresh renames the lock to `<lock>.takeover` while it rewrites the record
   // and then restores it. Read-only: report an intact, fresh, live in-flight
-  // owner there; a stale, dead or malformed leftover stays `unowned`. Bounded
-  // retries cover the restore landing between the two reads.
+  // owner there; a stale, future-dated, dead or malformed leftover stays
+  // `unowned`. A missing directory or owner leaf is re-resolved from the lock
+  // path, so one refresh overlapping any step cannot hide the owner; genuine
+  // initialization still reports `initializing` after the bounded attempts.
+  let initializing: StreamOwnershipSnapshot | undefined;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const inspected = await readBoundOwner(lockPath, deps);
-    if (inspected) return snapshotFromOwner(lockPath, inspected, deps);
+    if (inspected) {
+      const snapshot = snapshotFromOwner(lockPath, inspected, deps);
+      if (inspected.raw !== null) return snapshot;
+      initializing = snapshot;
+      continue;
+    }
     const claimed = await readBoundOwner(takeoverPath(lockPath), deps);
-    if (!claimed) continue;
+    if (!claimed || claimed.raw === null) continue;
     const snapshot = snapshotFromOwner(lockPath, claimed, deps);
-    const live = snapshot.pid !== undefined && (snapshot.ageMs ?? Infinity) <= STREAM_OWNER_STALE_MS &&
+    const ageMs = snapshot.ageMs ?? Infinity;
+    const live = snapshot.pid !== undefined && ageMs >= 0 && ageMs <= STREAM_OWNER_STALE_MS &&
       isPidAlive(snapshot.pid, deps);
     return live ? snapshot : { state: 'unowned', lockPath };
   }
-  return { state: 'unowned', lockPath };
+  return initializing ?? { state: 'unowned', lockPath };
 }
 
 function snapshotFromOwner(
