@@ -265,8 +265,9 @@ Upgrading from a version without `deliver`:
 - The first `read` or `deliver` for a binding starts the checkpoint where the old
   destructive read left the representative's unread cursor: replies that were
   unread at upgrade time are returned, replies already read are not. When the
-  binding never read, every addressed reply in the cube log is returned. This
-  bootstrap reads first and persists once, so an interruption simply repeats it.
+  binding never read, every addressed reply in the cube log is returned. If the
+  upgrade is interrupted before its checkpoint is written, the next read returns
+  every addressed reply instead; deduplicate by `entry_id`.
   The old position is taken only from a genuine private file (a regular file you
   own, not a symlink, not writable by group or others, in the private config
   directory); otherwise the checkpoint starts empty and every addressed reply is

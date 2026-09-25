@@ -1,6 +1,7 @@
 /** Private per-binding DELIVERED checkpoint and read fence for the representative. */
 import { createHash } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 import { atomicWrite0600, readStoreFile } from './seat-store.js';
@@ -72,11 +73,16 @@ async function readFile(directory, file) {
 // from a stale load. Other processes are excluded by the tools lease.
 const queues = new Map();
 const later = (a, b) => a === null ? b : b === null ? a : comparePoints(a, b) >= 0 ? a : b;
+/**
+ * The one-time upgrade tombstone for a seat. Its existence alone means the
+ * legacy import was attempted; nothing in it is ever read back as a position.
+ * Its directory name is not 64 hex characters, so the generation scan never
+ * mistakes it for a checkpoint.
+ */
 export function createDeliveryStore(binding) {
     const paths = deliveryPaths(binding);
     const seat = seatKey(binding);
     const marker = { directory: join(deliveryRoot(), `seat-${seat}`), file: join(deliveryRoot(), `seat-${seat}`, 'migration.json') };
-    const markerOptions = { secureRoot: marker.directory, verifyLeafIdentity: true, createRoot: false };
     const options = { secureRoot: paths.directory, verifyLeafIdentity: true, createRoot: false };
     const load = async () => {
         let saved;
@@ -100,32 +106,58 @@ export function createDeliveryStore(binding) {
         /** Null when this binding generation has no checkpoint yet. A corrupt file fails closed. */
         load,
         /**
-         * The seat's migration marker; null when the upgrade never started. An
-         * unreadable, unsafe or foreign marker reads as complete, so the outcome is
-         * replay from the start (duplicates), never a second import.
+         * Whether the seat's upgrade tombstone exists. Any object at that path,
+         * readable or not, counts, so a planted or damaged marker can only cause a
+         * replay (duplicates), never an import or a skip.
          */
-        async readMarker() {
+        async migrated() {
             try {
                 if (!await validatePrivateDirectory(marker.directory, false))
-                    return null;
-                const raw = await readStoreFile(marker.file, markerOptions);
-                if (raw === null)
-                    return null;
-                const parsed = JSON.parse(raw);
-                if (parsed?.version !== 1 || parsed.seat !== seat || typeof parsed.complete !== 'boolean') {
-                    return { cursor: null, complete: true };
-                }
-                return { cursor: point(parsed.cursor), complete: parsed.complete };
+                    return false;
+                await lstat(marker.file);
+                return true;
             }
-            catch {
-                return { cursor: null, complete: true };
+            catch (error) {
+                return error.code !== 'ENOENT';
             }
         },
-        /** One atomic durable 0600 write of the marker; `guard` runs just before it. */
-        async writeMarker(value, guard) {
+        /**
+         * Create the tombstone exclusively (O_EXCL, no-follow, 0600, fsynced).
+         * False when it already exists: another initializer got there first.
+         * `guard` runs just before the create.
+         */
+        async markMigrated(guard) {
             await guard?.();
             await validatePrivateDirectory(marker.directory, true);
-            await atomicWrite0600(marker.file, JSON.stringify({ version: 1, seat, ...value }) + '\n', markerOptions);
+            let handle;
+            try {
+                handle = await open(marker.file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+            }
+            catch (error) {
+                if (error.code === 'EEXIST')
+                    return false;
+                throw error;
+            }
+            try {
+                await handle.writeFile(JSON.stringify({ version: 1, seat }) + '\n');
+                await handle.sync();
+            }
+            finally {
+                await handle.close();
+            }
+            return true;
+        },
+        /**
+         * Run a first-call initialization alone for this seat within the process:
+         * overlapping first reads see each other's result instead of both
+         * importing. Other processes are excluded by the tools lease, and the
+         * exclusive tombstone create backs that up.
+         */
+        initialize(operation) {
+            const key = `seat:${seat}`;
+            const result = (queues.get(key) ?? Promise.resolve()).then(operation, operation);
+            queues.set(key, result.catch(() => { }));
+            return result;
         },
         /**
          * Whether any other generation of this seat already has a checkpoint, which

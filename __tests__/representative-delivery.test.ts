@@ -332,7 +332,7 @@ describe('migration from the client unread cursor', () => {
     expect(ids(await readRepresentativeReplies(context(), {}))).toEqual([unread.id]);
   });
 
-  it('repeats an upgrade interrupted after the marker with the recorded cursor, never re-reading the legacy one', async () => {
+  it('replays after an upgrade interrupted between the marker and the checkpoint, never re-reading the legacy cursor', async () => {
     const read = toRep('read before upgrade');
     cube.unreadCursorValue = { id: read.id, created_at: read.created_at };
     const unread = toRep('unread at upgrade');
@@ -341,10 +341,59 @@ describe('migration from the client unread cursor', () => {
     const crashed = { ...context(), guard: async () => { if (++writes === 2) throw new Error('killed after the marker'); } };
     expect(await codeOf(readRepresentativeReplies(crashed, {}))).not.toBe('NO_ERROR');
     expect(deliveryFiles().map((file) => file.split('/').at(-1))).toEqual(['migration.json']);
-    cube.unreadCursorValue = null; // the legacy cursor changes afterwards
     const calls = cube.calls.filter((call) => call === 'unreadCursor').length;
-    expect(ids(await readRepresentativeReplies(context(), {}))).toEqual([unread.id]);
-    expect(cube.calls.filter((call) => call === 'unreadCursor')).toHaveLength(calls); // not read again
+    // A replay of the already-read reply (a duplicate the host dedupes), never a skip.
+    expect(ids(await readRepresentativeReplies(context(), {}))).toEqual([read.id, unread.id]);
+    expect(cube.calls.filter((call) => call === 'unreadCursor')).toHaveLength(calls);
+  });
+
+  it.each([true, false])('treats a planted migration marker (complete %s) as a tombstone: its cursor is never used', async (complete) => {
+    const entry = toRep('never read or delivered');
+    const binding = bindingFor(WORKTREE);
+    const seat = createHash('sha256').update(JSON.stringify([binding.origin, binding.trustIdentity, binding.cubeId, binding.representativeDroneId])).digest('hex');
+    const directory = join(root, '.config', 'borgmcp', 'representative-delivery', `seat-${seat}`);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    for (let current = directory; current.startsWith(join(root, '.config')); current = join(current, '..')) chmodSync(current, 0o700);
+    writeFileSync(join(directory, 'migration.json'),
+      JSON.stringify({ version: 1, seat, cursor: { id: entry.id, created_at: entry.created_at }, complete }), { mode: 0o600 });
+    cube.unreadCursorValue = { id: entry.id, created_at: entry.created_at };
+    const result = await readRepresentativeReplies(context(), {});
+    expect(ids(result)).toEqual([entry.id]);
+    expect(result.checkpoint).toEqual({ entry_id: null, created_at: null });
+    expect(cube.calls).not.toContain('unreadCursor');
+  });
+
+  it('initializes once when two first reads overlap: one import, no checkpoint past an undelivered reply', async () => {
+    const entry = toRep('undelivered');
+    const ctx = context();
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    ctx.backend.unreadCursor = async () => { calls += 1; if (calls === 1) { entered(); await held; } return null; };
+    const first = readRepresentativeReplies(ctx, {});
+    await started;
+    let secondDone = false;
+    const second = readRepresentativeReplies(ctx, {}).finally(() => { secondDone = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(secondDone).toBe(false); // the second first-read waits for the initializer
+    // The old destructive cursor moves past the entry meanwhile; it must not be read again.
+    cube.unreadCursorValue = { id: entry.id, created_at: entry.created_at };
+    release();
+    expect(ids(await first)).toEqual([entry.id]);
+    expect(ids(await second)).toEqual([entry.id]);
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([entry.id]);
+    expect(calls).toBe(1);
+  });
+
+  it('starts a later generation empty after an upgrade interrupted between the marker and the checkpoint', async () => {
+    const entry = toRep('unread for the new generation');
+    const ctx = context();
+    cube.unreadCursorValue = { id: entry.id, created_at: entry.created_at };
+    let writes = 0;
+    await codeOf(readRepresentativeReplies({ ...ctx, guard: async () => { if (++writes === 2) throw new Error('crash'); } }, {}));
+    const next = context({ ...ctx.binding, boundAt: '2099-01-01T00:00:00.000Z' });
+    expect(ids(await readRepresentativeReplies(next, {}))).toEqual([entry.id]);
   });
 
   it('starts from the beginning when the binding never read', async () => {

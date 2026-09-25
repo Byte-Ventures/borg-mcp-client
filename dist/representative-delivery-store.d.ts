@@ -24,26 +24,33 @@ export declare function deliveryPaths(binding: RepresentativeBinding): {
 /** (created_at, id) order, the server log order. */
 export declare function comparePoints(a: LocalServerCursor, b: LocalServerCursor | null): number;
 /**
- * The one-time upgrade record for a seat: the legacy unread cursor as it was
- * read, stored before it is used. `complete` flips once the first checkpoint is
- * written. Its directory name is not 64 hex characters, so the generation scan
- * never mistakes it for a checkpoint.
+ * The one-time upgrade tombstone for a seat. Its existence alone means the
+ * legacy import was attempted; nothing in it is ever read back as a position.
+ * Its directory name is not 64 hex characters, so the generation scan never
+ * mistakes it for a checkpoint.
  */
-export interface MigrationMarker {
-    cursor: LocalServerCursor | null;
-    complete: boolean;
-}
 export declare function createDeliveryStore(binding: RepresentativeBinding): {
     /** Null when this binding generation has no checkpoint yet. A corrupt file fails closed. */
     load: () => Promise<DeliveryState | null>;
     /**
-     * The seat's migration marker; null when the upgrade never started. An
-     * unreadable, unsafe or foreign marker reads as complete, so the outcome is
-     * replay from the start (duplicates), never a second import.
+     * Whether the seat's upgrade tombstone exists. Any object at that path,
+     * readable or not, counts, so a planted or damaged marker can only cause a
+     * replay (duplicates), never an import or a skip.
      */
-    readMarker(): Promise<MigrationMarker | null>;
-    /** One atomic durable 0600 write of the marker; `guard` runs just before it. */
-    writeMarker(value: MigrationMarker, guard?: () => Promise<void>): Promise<void>;
+    migrated(): Promise<boolean>;
+    /**
+     * Create the tombstone exclusively (O_EXCL, no-follow, 0600, fsynced).
+     * False when it already exists: another initializer got there first.
+     * `guard` runs just before the create.
+     */
+    markMigrated(guard?: () => Promise<void>): Promise<boolean>;
+    /**
+     * Run a first-call initialization alone for this seat within the process:
+     * overlapping first reads see each other's result instead of both
+     * importing. Other processes are excluded by the tools lease, and the
+     * exclusive tombstone create backs that up.
+     */
+    initialize<T>(operation: () => Promise<T>): Promise<T>;
     /**
      * Whether any other generation of this seat already has a checkpoint, which
      * means the one-time upgrade from the unread cursor already happened. An

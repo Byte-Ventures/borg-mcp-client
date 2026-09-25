@@ -423,33 +423,34 @@ const READ_SCAN_PAGE = 500;
 async function deliveryState(ctx) {
     const store = createDeliveryStore(ctx.binding);
     const saved = await store.load();
-    const marker = await store.readMarker();
     if (saved) {
-        // Heal an upgrade interrupted after its checkpoint was written.
-        if (!marker?.complete)
-            await store.writeMarker({ cursor: marker?.cursor ?? null, complete: true }, ctx.guard);
+        // A checkpoint always implies an upgraded seat; restore a lost tombstone.
+        if (!await store.migrated())
+            await store.markMigrated(ctx.guard);
         return saved;
     }
-    // The seat already upgraded (or a sibling generation exists): this generation
-    // (rebind, new Coordinator, or a removed invalid checkpoint) starts empty and
-    // replays its addressed history. The legacy cursor is never imported again.
-    if (marker?.complete || (!marker && await store.otherGenerationExists())) {
-        const state = (await store.advance({}, ctx.guard)).after;
-        if (!marker)
-            await store.writeMarker({ cursor: null, complete: true }, ctx.guard);
-        return state;
-    }
-    // One-time upgrade: start where the pre-checkpoint destructive read left the
-    // unread view. The value is recorded before it is used, so an interrupted
-    // upgrade repeats with the same value and the legacy cursor is read once.
-    let cursor = marker?.cursor ?? null;
-    if (!marker) {
-        cursor = await ctx.backend.unreadCursor();
-        await store.writeMarker({ cursor, complete: false }, ctx.guard);
-    }
-    const state = (await store.advance({ checkpoint: cursor, readThrough: cursor }, ctx.guard)).after;
-    await store.writeMarker({ cursor, complete: true }, ctx.guard);
-    return state;
+    // First call for this generation: decide alone, re-checking under the queue.
+    return store.initialize(async () => {
+        const again = await store.load();
+        if (again)
+            return again;
+        // The seat already upgraded (a tombstone or a sibling generation exists):
+        // this generation (rebind, new Coordinator, or a removed invalid checkpoint)
+        // starts empty and replays its addressed history. Nothing on disk is ever
+        // read back as a position, and the legacy cursor is never imported again.
+        if (await store.migrated() || await store.otherGenerationExists()) {
+            await store.markMigrated(ctx.guard);
+            return (await store.advance({}, ctx.guard)).after;
+        }
+        // One-time upgrade: start where the pre-checkpoint destructive read left
+        // the unread view. The tombstone is created exclusively first and the
+        // cursor is used only in memory, so an interruption before the checkpoint
+        // replays (duplicates the host dedupes) and a racing initializer that loses
+        // the create starts empty.
+        const cursor = await ctx.backend.unreadCursor();
+        const imported = await store.markMigrated(ctx.guard) ? cursor : null;
+        return (await store.advance({ checkpoint: imported, readThrough: imported }, ctx.guard)).after;
+    });
 }
 const checkpointView = (point) => ({ entry_id: point?.id ?? null, created_at: point?.created_at ?? null });
 export async function readRepresentativeReplies(ctx, raw) {
