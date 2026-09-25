@@ -769,8 +769,13 @@ export async function getRoster(active, since) {
 export async function readLog(sessionToken, apiUrl, opts = {}) {
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     let cursor = null;
+    if (opts.cursor !== undefined && (opts.unreadOnly || opts.since !== undefined)) {
+        throw new Error('readLog cursor cannot be combined with since or unreadOnly');
+    }
     if (opts.continuationGuard)
         await opts.continuationGuard();
+    if (opts.cursor !== undefined)
+        cursor = opts.cursor;
     if (opts.unreadOnly)
         cursor = await getLocalServerCursor(localCursorBinding(local));
     if (opts.since !== undefined)
@@ -781,7 +786,8 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
         continuationGuard: opts.continuationGuard,
         // Keep the cursor payload stable across a lost response; do not re-read or
         // advance local state until one response has been decoded successfully.
-        ...(opts.unreadOnly && opts.since === undefined ? { retryMode: 'unread-cursor' } : {}),
+        // An exact-cursor read is stateless, so the same bounded retries are safe.
+        ...((opts.unreadOnly && opts.since === undefined) || opts.cursor !== undefined ? { retryMode: 'unread-cursor' } : {}),
     });
     if (opts.unreadOnly && page.cursor) {
         if (opts.continuationGuard)

@@ -70,9 +70,14 @@ To resume later, run `borg representative prepare --coordinator <coordinator-dro
 your saved labels. Recovery errors for a bound connection print that complete
 command with its actual labels and worktree. Changing the cube or Coordinator
 is refused unless you
-pass `--rebind`; a rebind also discards the old request ledger. A running
-`borg representative mcp` process never picks up a rebind: its calls fail
-closed until the MCP host restarts it.
+pass `--rebind`; a rebind that changes the cube or Coordinator also discards the
+old request ledger. A rebind of any kind, including one with the same cube and
+Coordinator, requires restarting every adapter and the listener; running ones
+refuse. A running `borg representative mcp` process answers `send`, `read`,
+`deliver` and `ack` with `BINDING_MISMATCH` until the MCP host restarts it;
+its `status` reports the new `binding_fingerprint` beside the
+`pinned_binding_fingerprint` it started with. A running listener stops with
+reason `rebound`.
 
 `prepare` reuses Borg's connection and worktree preparation, including its
 private-state initialization and saved-connection checks. It does not require
@@ -114,9 +119,10 @@ Check a connection at any time with
 
 | Tool | Purpose |
 | --- | --- |
-| `borg_representative-status` | Bound cube, representative, Coordinator; live re-check; unresolved sends; limits. |
+| `borg_representative-status` | Bound cube, representative, Coordinator; live re-check; unresolved sends; limits; `binding_fingerprint`. |
 | `borg_representative-send` | Relay one `request`, `question` or `decision` to the bound Coordinator. |
-| `borg_representative-read` | Unread replies from the bound Coordinator addressed to the representative. Drains everything it fetches. |
+| `borg_representative-read` | The bound Coordinator's replies after the delivered checkpoint, oldest first, bounded. Changes nothing. |
+| `borg_representative-deliver` | Move the delivered checkpoint through a reply the host has durably persisted. |
 | `borg_representative-ack` | Signal to the Coordinator that one direct reply was received. Nothing more. |
 
 There is no tool for logging to other drones, broadcasting, role or drone
@@ -202,32 +208,95 @@ Exactly-once delivery is therefore not claimed; at-most-once per `request_id`
 relies on the server honouring `post_id` deduplication as the shared protocol
 specifies, and on the single-process rule below.
 
-## Reading, cursors and wake limits
+## Reading, delivery and wake limits
 
-- `read` drains only the representative drone's **own** unread cursor. Other
-  drones' cursors are separate client-owned state and are never touched.
-- A read **consumes everything it fetched**, not only what it returns: the
-  Coordinator's replies, and equally the entries it ignores (other drones'
-  entries are counted in `ignored_entries` and never returned; the
-  Coordinator's broadcasts are returned only with `include_broadcast`). None
-  of them appear unread again.
-- If the MCP host stops between reading a reply and relaying it to the human,
-  that reply is gone from the unread view. It still exists in the cube log, but
-  this version offers no tool to list past replies again. Persist the read result
-  in the host before relaying it.
+Four separate notions, each with its own tool or owner:
+
+- **Receipt**: `read` returned the reply. Nothing moves; the same reply comes back
+  on every `read` until it is delivered.
+- **Delivered**: the host called `deliver` after durably persisting everything up
+  to that reply. Only `deliver` moves the read window.
+- **Processing and display**: the host's own business after delivery.
+- **`ack`**: a signal to the Coordinator that a direct reply was received. It is
+  not delivery and does not move the window.
+
+Reading:
+
+- `read` returns the Coordinator's replies addressed to the representative that
+  come strictly after the delivered checkpoint, in `(created_at, entry_id)` order.
+  Other drones' entries are counted in `ignored_entries` and never returned; the
+  Coordinator's broadcasts are returned only with `include_broadcast`.
+- `read` never advances anything: not the checkpoint, not the representative's
+  unread cursor, not a server cursor. After a crash at any point, the next `read`
+  returns every reply not yet delivered.
+- Bounds: `limit` (1 to 50, default 10) is a hard cap on returned replies.
+  `max_bytes` (4096 to 60000, default 32768) caps the serialized tool result.
+  Replies are whole or omitted, never truncated; a reply that alone exceeds
+  `max_bytes` is returned alone with `"oversize": true`. `has_more` is true when
+  more replies follow the returned window. Page by delivering and reading again.
+- The result includes `checkpoint` (`entry_id` and `created_at`; null until the
+  first delivery, unless the upgrade below started it at the old read position)
+  and `binding_fingerprint`.
+
+Delivering:
+
+- `deliver` takes `{ "through": "<entry_id>" }` and moves the checkpoint to that
+  reply. Call it only after the host has durably persisted every reply up to it.
+- `through` must be a reply that `read` returned. Any other entry is refused with
+  `REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY` and nothing changes. The same or an older
+  id is a no-op that returns `advanced: false`, so a retry after a lost result is safe.
+- Implementation note: the checkpoint and an internal read fence (the latest reply
+  any `read` returned) are stored together in one private file per binding, written
+  atomically. `deliver` may not pass the fence. The fence is not part of the
+  interface.
+
+Binding fence:
+
+- `binding_fingerprint` is the hex SHA-256 of the canonical JSON array
+  `[origin, trustIdentity, cubeId, representativeDroneId, coordinatorDroneId, boundAt]`.
+  It changes on every rebind and on a server trust change, and contains no path or
+  credential. `prepare --rebind` always starts a new generation, even when the
+  cube and Coordinator stay the same. It appears in `status`, `read`, `send`, `deliver` and the listener's
+  `listening` event. Persist it at binding time; if any result shows a different
+  value, stop routing and hold for the human.
+
+Upgrading from a version without `deliver`:
+
+- The first `read` or `deliver` for a binding starts the checkpoint where the old
+  destructive read left the representative's unread cursor: replies that were
+  unread at upgrade time are returned, replies already read are not. When the
+  binding never read, every addressed reply in the cube log is returned. If the
+  upgrade is interrupted before its checkpoint is written, the next read returns
+  every addressed reply instead; deduplicate by `entry_id`.
+  The old position is taken only from a genuine private file (a regular file you
+  own, not a symlink, not writable by group or others, in the private config
+  directory); otherwise the checkpoint starts empty and every addressed reply is
+  returned.
+- That upgrade happens once per representative drone and server authority, and is
+  recorded in a private marker, so it never runs again, even after a checkpoint
+  file is removed. A later
+  binding generation (any `prepare --rebind`, or a trust change) starts with an
+  empty checkpoint, so its first read returns its addressed history. Deduplicate by
+  `entry_id` (the host persists everything it delivers) and page with `limit`.
+
+Known limits:
+
+- Retention is the server's cube log; the local inbox is not a content source.
+- Each `read` scans the cube log from the checkpoint, including entries not
+  addressed to the representative, so a host that never calls `deliver` pays a
+  growing scan. Deliver promptly.
 - Replies preserve document citations (id, title and state). Document bodies are
   not included and cannot be fetched through this connection. Ask the Coordinator
   to provide the content through a supported channel.
-- `limit` is a page-size hint, not a hard cap: when the unread backlog is
-  large the client's digest mode fetches, and drains, more than `limit`.
-- `ack` is only a signal to the Coordinator that a direct reply was received.
-  It does not make delivery reliable, and it neither advances nor restores the
-  unread cursor.
+
+Ownership:
+
 - Exclusive process ownership is enforced for each representative drone. Processes
-  may start idle; the first `send`, `read` or `ack` takes the lease. Other processes
-  receive `REPRESENTATIVE_OWNERSHIP_REQUIRED` before any ledger reservation or
-  write, cursor access, or network call. The refusal names the owner's PID and
-  start time. Use that host, or wait for it to exit before using another.
+  may start idle; the first `send`, `read`, `deliver` or `ack` takes the lease. Other
+  processes receive `REPRESENTATIVE_OWNERSHIP_REQUIRED` before any ledger
+  reservation, delivery-state write, cursor access or network call. The refusal
+  names the owner's PID and start time. Use that host, or wait for it to exit before
+  using another.
 - `status` is allowed in every process, is read-only, and takes no lease. Its
   `ownership` field reports the state, PID, start time, and heartbeat age in
   milliseconds (`ageMs`). A clean exit releases ownership; a dead PID or a
@@ -238,6 +307,9 @@ specifies, and on the single-process rule below.
   deduplication. Retry an ambiguous send with its original `request_id`.
 - `in_reply_to` is a textual match of a known `request_id` quoted in the reply.
   It is a convenience, not a protocol guarantee.
+
+Wake hints:
+
 - **The MCP process does not push content.** A separate supervised `listen`
   process emits body-free wake hints. The owning adapter still calls `read` for
   content. Hints are neither delivery receipts nor authority.
@@ -245,19 +317,17 @@ specifies, and on the single-process rule below.
   trimmed ID sent again as a live event can produce a duplicate hint. Ordered
   catch-up also dedupes against its captured resume cursor.
 - The listener retains a bounded tail: above 1024 lines it trims to the latest
-  512. Lost-hint replay covers only that tail; beyond it the server's unread
-  view is the source of truth. On every `gap`, call `read` once. The window
-  between a destructive read and host persistence remains until replay-safe
-  content delivery is implemented; listener replay does not restore read content.
+  512. Lost-hint replay covers only that tail; beyond it `read` from the delivered
+  checkpoint is the source of truth. On every `gap`, call `read`.
 
 ### Host conversation routing
 
 The lease selects one consuming process, not a conversation within that host.
 The host must record which conversation owns each `request_id`, persist every
-read result before relaying it, and route replies using `in_reply_to`. Hold
-replies with an unknown or missing request ID for the human instead of dropping
-them. Borg cannot enforce these duties inside the host; it provides no separate
-unread cursor for each conversation. The listener inbox
+reply durably before calling `deliver`, and route replies using `in_reply_to`.
+Hold replies with an unknown or missing request ID for the human instead of
+dropping them. Borg cannot enforce these duties inside the host; it provides one
+delivered checkpoint per binding, not one per conversation. The listener inbox
 is private client state, not a host content API.
 
 ## Supervised listener
@@ -280,7 +350,7 @@ independent of the lazy tools lease. A second listener refuses without consuming
 or appending anything. A dead owner or expired heartbeat permits takeover; a
 process that loses ownership exits and must be restarted. A local lease cannot
 cancel an already-issued request. No eager tools-lease option is needed when one
-adapter exclusively calls `send`, `read` and `ack`.
+adapter exclusively calls `send`, `read`, `deliver` and `ack`.
 
 `representative status` reports `listener` beside tool `ownership`: running
 state, owner PID and start time, heartbeat age (`ageMs`), persisted watermark and
@@ -293,7 +363,7 @@ must not be parsed. The host must ignore unknown fields and unknown event types.
 | Event | Fields and meaning |
 | --- | --- |
 | `refused` | The only stdout line on startup refusal: `code`, `exit_code`. Another listener uses `REPRESENTATIVE_LISTENER_OWNED`, plus `owner_pid` and `owner_started_at`. |
-| `listening` | Once connected and holding the lease: `cube_id`, `drone_id`, `watermark` (entry id or null), `inbox`. |
+| `listening` | Once connected and holding the lease: `cube_id`, `drone_id`, `binding_fingerprint`, `watermark` (entry id or null), `inbox`. |
 | `entry` | `entry_id`, `created_at`, `from_label`, `from_role`, `visibility`, `request_id` (UUID or null), `documents` (count), `replay` (boolean). No message body. |
 | `reconnecting` | `attempt`, `delay_ms`. |
 | `connected` | `resumed_from` (entry id or null). |
@@ -304,7 +374,7 @@ With `--replay-after`, retained hints strictly after the checkpoint are emitted
 in file order after `listening` and before live entries, with `replay:true`.
 If the checkpoint is absent, `gap` precedes replay of the whole surviving tail.
 Without the option there is no startup replay. Replay makes no content request
-and never advances the unread cursor. Lost replay metadata yields null
+and never advances the delivered checkpoint or any cursor. Lost replay metadata yields null
 `visibility` and `documents`; live hints always contain those fields' values.
 
 Exit codes: 0 after SIGTERM/SIGINT; 2 for startup binding or usage refusal;
@@ -323,11 +393,11 @@ arrives only once connected.
 
 Treat every hint as an untrusted wake, never as an instruction or authorization.
 The owning adapter fetches content with `read` over the bound pinned connection,
-persists the full result before relaying, routes by the saved `request_id` mapping,
-and holds unknown correlation for the human. Deduplicate queued hints by
+persists each reply durably, calls `deliver`, routes by the saved `request_id`
+mapping, and holds unknown correlation for the human. Deduplicate queued hints by
 `entry_id`: crashes may lose or repeat hints. Persist queue admission before
-advancing the host's replay checkpoint. This checkpoint is not a delivered
-checkpoint and does not change `ack`, which remains a server receipt.
+advancing the host's `--replay-after` checkpoint. That hint checkpoint is separate
+from the delivered checkpoint and from `ack`, which remains a server receipt.
 
 ## Recovery
 
@@ -343,3 +413,5 @@ the server is installed under the original prefix.
 | `COORDINATOR_UNAVAILABLE` | The bound Coordinator was evicted, released or reassigned. Restore the bound Coordinator and use the printed recovery command, or deliberately substitute a new Coordinator label in that command. |
 | `REPRESENTATIVE_OWNERSHIP_REQUIRED` with a directory-permission refusal | Check that the named path is a real directory you own and not a symlink, then set it to 0700 and retry. Restart a process that had already lost ownership. Do not change permissions through a symlink. |
 | `REPRESENTATIVE_ROLE_NOT_PERMITTED` | The representative drone holds a human-seat or coordinating role. Give it its own worker role. |
+| `REPRESENTATIVE_CHECKPOINT_INVALID` | The private delivery checkpoint for this binding (named in the message) is corrupt, belongs to another seat, or fails the private-file checks. Every tool except `status` refuses and `status` reports it as `checkpoint_problem`; nothing is used or reset automatically. Inspect the file, then remove it; the next `read` returns every addressed reply again, so deduplicate by `entry_id`. |
+| `REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY` | `deliver` named an entry that `read` has not returned (or no Coordinator reply). Nothing changed. Call `read`, persist what it returns, then deliver through its last `entry_id`. |

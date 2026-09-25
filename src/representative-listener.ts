@@ -13,7 +13,7 @@ import { BorgServerTrustError, BorgServerUnreachableError } from './server-error
 import { isTransportFailure } from './seat-probe.js';
 import { readBorgServerTrustIdentity } from './server-trust.js';
 import { RepresentativeError, verifyLiveBinding } from './representative-core.js';
-import type { RepresentativeBinding } from './representative-store.js';
+import { bindingFingerprint, type RepresentativeBinding } from './representative-store.js';
 import type { ActiveCube } from './cubes.js';
 
 type StopReason = 'signal' | 'evicted' | 'rebound' | 'revoked' | 'trust-changed' | 'lease-lost' | 'fatal';
@@ -155,7 +155,8 @@ export async function runListener(
             connected: local(() => serial(async () => {
               await guard();
               if (!started) {
-                await emit({ event: 'listening', cube_id: binding.cubeId, drone_id: binding.representativeDroneId, ...await inbox.snapshot() });
+                await emit({ event: 'listening', cube_id: binding.cubeId, drone_id: binding.representativeDroneId,
+                  binding_fingerprint: bindingFingerprint(binding), ...await inbox.snapshot() });
                 started = true;
                 if (pendingGap !== undefined) await emit({ event: 'gap', after: pendingGap, reason: 'cursor-expired' });
                 if (command.replayAfter) {

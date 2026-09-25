@@ -17,7 +17,7 @@ import {
   bindingFor,
 } from './fixtures/representative-mock-backend.js';
 import type { ActiveCube } from '../src/cubes.js';
-import { createRepresentativeStore } from '../src/representative-store.js';
+import { bindingFingerprint, createRepresentativeStore } from '../src/representative-store.js';
 import {
   DEFAULT_REPRESENTATIVE_ROLE,
   parseRepresentativeArgs,
@@ -27,7 +27,9 @@ import {
   runRepresentativeStatus,
   type RepresentativeCmdDeps,
 } from '../src/representative-cmd.js';
-import { sendRepresentativeMessage } from '../src/representative-core.js';
+import {
+  deliverRepresentativeReplies, readRepresentativeReplies, representativeStatus, sendRepresentativeMessage,
+} from '../src/representative-core.js';
 import { DroneEvictedError } from '../src/drone-lifecycle.js';
 import { spawnSync } from 'node:child_process';
 
@@ -192,6 +194,26 @@ describe('prepare', () => {
     expect(out).toContain('REPRESENTATIVE_ROLE_MISMATCH');
   });
 
+  it('starts a new generation on an explicit same-selection rebind, visible in every fingerprint surface', async () => {
+    const initial = bindingFor(worktree);
+    await deps.store.saveBinding(initial, { rebind: false });
+    expect(await prepare({ rebind: true })).toBe(0);
+    const rebound = (await deps.store.getBinding(worktree))!;
+    expect(rebound.boundAt).not.toBe(initial.boundAt);
+    const fingerprint = bindingFingerprint(rebound);
+    expect(fingerprint).not.toBe(bindingFingerprint(initial));
+    const ctx = await resolveRepresentativeContext(worktree, deps);
+    const entry = cube.post(COORD_ID, 'reply', [REP_ID]);
+    expect((await representativeStatus(ctx)).binding_fingerprint).toBe(fingerprint);
+    expect((await readRepresentativeReplies(ctx, {})).binding_fingerprint).toBe(fingerprint);
+    expect((await deliverRepresentativeReplies(ctx, { through: entry.id })).binding_fingerprint).toBe(fingerprint);
+    expect((await sendRepresentativeMessage(ctx, { kind: 'question', authorization: 'model_advice', message: 'hi' })).binding_fingerprint)
+      .toBe(fingerprint);
+    // An ordinary resume without --rebind keeps the generation.
+    expect(await prepare()).toBe(0);
+    expect((await deps.store.getBinding(worktree))!.boundAt).toBe(rebound.boundAt);
+  });
+
   it('requires --rebind to change the Coordinator', async () => {
     expect(await prepare()).toBe(0);
     cube.drones.push({ id: BUILDER_ID.replace(/4/g, '7'), label: 'coordinator-2', role_id: cube.roles[1].id });
@@ -249,8 +271,12 @@ describe('connection context', () => {
 });
 
 describe('served MCP process', () => {
-  it('pins the prepared seat, and fails calls closed after an operator rebind until restarted', async () => {
+  it.each([
+    ['a changed Coordinator', { coordinator: 'coordinator-2', rebind: true }],
+    ['the same selection', { rebind: true }],
+  ] as const)('pins the prepared generation, and fails calls closed after a rebind to %s until restarted', async (_label, rebind) => {
     await prepare();
+    const pinnedFingerprint = bindingFingerprint((await deps.store.getBinding(worktree))!);
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const responses = new Map<number, (message: any) => void>();
@@ -285,14 +311,36 @@ describe('served MCP process', () => {
     expect(before.result.isError).toBeUndefined();
     expect(cube.appendCalls.map((call) => call.to)).toEqual([[COORD_ID]]);
 
+    const reply = cube.post(COORD_ID, 'reply', [REP_ID]);
     cube.drones.push({ id: '77777777-7777-4777-8777-777777777777', label: 'coordinator-2', role_id: cube.roles[1].id });
-    expect(await prepare({ coordinator: 'coordinator-2', rebind: true })).toBe(0);
-    const after = await rpc(3, 'tools/call', { ...send, arguments: { ...send.arguments, message: 'Do Y.' } });
-    expect(after.result.isError).toBe(true);
-    expect(JSON.parse(after.result.content[0].text).error.code).toBe('BINDING_MISMATCH');
-    expect(cube.appendCalls).toHaveLength(1);
-
-    stdin.end();
-    expect(await exit).toBe(0);
+    try {
+      expect(await prepare(rebind)).toBe(0);
+      const currentFingerprint = bindingFingerprint((await deps.store.getBinding(worktree))!);
+      expect(currentFingerprint).not.toBe(pinnedFingerprint);
+      const calls = cube.calls.length;
+      const refused = [
+        { ...send, arguments: { ...send.arguments, message: 'Do Y.' } },
+        { name: 'borg_representative-read', arguments: {} },
+        { name: 'borg_representative-deliver', arguments: { through: reply.id } },
+        { name: 'borg_representative-ack', arguments: { entry_id: reply.id } },
+      ];
+      for (const [index, call] of refused.entries()) {
+        const after = await rpc(3 + index, 'tools/call', call);
+        expect(after.result.isError).toBe(true);
+        expect(JSON.parse(after.result.content[0].text).error.code).toBe('BINDING_MISMATCH');
+      }
+      expect(cube.appendCalls).toHaveLength(1);
+      expect(cube.acks).toEqual([]);
+      expect(cube.calls).toHaveLength(calls); // no network call at all after the rebind
+      // Status stays available and names both generations.
+      const status = await rpc(10, 'tools/call', { name: 'borg_representative-status', arguments: {} });
+      expect(status.result.isError).toBeUndefined();
+      expect(JSON.parse(status.result.content[0].text)).toMatchObject({
+        binding_fingerprint: currentFingerprint, pinned_binding_fingerprint: pinnedFingerprint,
+      });
+    } finally {
+      stdin.end();
+      expect(await exit).toBe(0);
+    }
   });
 });

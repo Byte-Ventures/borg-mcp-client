@@ -19,6 +19,15 @@ export interface LocalServerCursorBinding {
     purpose?: 'stream';
 }
 export declare function getLocalServerCursor(binding: LocalServerCursorBinding): Promise<LocalServerCursor | null>;
+/**
+ * Fail-closed read for importing the unread watermark into other private
+ * state. The product writes this file 0600 (writeState); a symlink, a file
+ * that is not a regular file, not owned by this user, or group- or
+ * world-writable, and any unparsable state all read as null, never as a
+ * position. Read-only: nothing is written or locked. The caller validates
+ * the private root the file lives in.
+ */
+export declare function readPrivateLocalServerCursor(binding: LocalServerCursorBinding): Promise<LocalServerCursor | null>;
 export declare function advanceLocalServerCursor(binding: LocalServerCursorBinding, cursor: LocalServerCursor, continuationGuard?: () => Promise<void>): Promise<void>;
 /**
  * client#42: reset (delete) a persisted cursor for `binding`. Used by the SSE

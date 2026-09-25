@@ -24,19 +24,21 @@ function parseLine(line) {
 function newer(a, b) {
     return b === null || a.created_at > b.created_at || (a.created_at === b.created_at && a.id > b.id);
 }
+/** Validate a private directory under the Borg config root and every ancestor
+ * with the store's policy; never repairs unsafe state. False when absent. */
+export async function validatePrivateDirectory(directory, create) {
+    let current = borgHomeRoot();
+    for (const component of relative(current, directory).split(sep)) {
+        if (!await assertSecureRoot(current, current === borgConfigRoot() || current.startsWith(borgConfigRoot() + sep) ? 'private' : 'owner-controlled', create))
+            return false;
+        current = join(current, component);
+    }
+    return assertSecureRoot(current, 'private', create);
+}
 export function createListenerInbox(binding, guard = async () => { }) {
     const paths = listenerPaths(binding);
     const options = { secureRoot: paths.directory, verifyLeafIdentity: true, createRoot: false };
-    // Reuse the store's policy for every ancestor; never repair unsafe state.
-    const validate = async (create) => {
-        let current = borgHomeRoot();
-        for (const component of relative(current, paths.directory).split(sep)) {
-            if (!await assertSecureRoot(current, current === borgConfigRoot() || current.startsWith(borgConfigRoot() + sep) ? 'private' : 'owner-controlled', create))
-                return false;
-            current = join(current, component);
-        }
-        return assertSecureRoot(current, 'private', create);
-    };
+    const validate = (create) => validatePrivateDirectory(paths.directory, create);
     const load = async () => {
         if (!await validate(false))
             return { state: empty(), lines: [] };

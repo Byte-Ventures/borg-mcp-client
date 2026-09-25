@@ -11,6 +11,13 @@
  * holds message text (only a payload digest).
  */
 export declare function isRepresentativeUuid(value: unknown): value is string;
+/**
+ * Host fence for one binding generation: hex SHA-256 of the canonical JSON array
+ * [origin, trustIdentity, cubeId, representativeDroneId, coordinatorDroneId,
+ * boundAt]. It changes on every rebind (boundAt) and trust change, and carries
+ * no path or credential.
+ */
+export declare function bindingFingerprint(binding: RepresentativeBinding): string;
 export interface RepresentativeBinding {
     /** Canonical worktree holding the dedicated representative seat. */
     worktree: string;

@@ -17,6 +17,9 @@ export declare function listenerPaths(binding: RepresentativeBinding): {
     inbox: string;
     state: string;
 };
+/** Validate a private directory under the Borg config root and every ancestor
+ * with the store's policy; never repairs unsafe state. False when absent. */
+export declare function validatePrivateDirectory(directory: string, create: boolean): Promise<boolean>;
 export declare function createListenerInbox(binding: RepresentativeBinding, guard?: () => Promise<void>): {
     paths: {
         directory: string;
