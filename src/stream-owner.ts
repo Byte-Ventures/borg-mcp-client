@@ -139,8 +139,28 @@ export async function readOwnershipSnapshot(
   deps: StreamOwnerDeps = {}
 ): Promise<StreamOwnershipSnapshot> {
   const lockPath = streamLockPath(cubeId, droneId, deps.locksDir);
-  const inspected = await readBoundOwner(lockPath, deps);
-  if (!inspected) return { state: 'unowned', lockPath };
+  // A refresh renames the lock to `<lock>.takeover` while it rewrites the record
+  // and then restores it. Read-only: report an intact, fresh, live in-flight
+  // owner there; a stale, dead or malformed leftover stays `unowned`. Bounded
+  // retries cover the restore landing between the two reads.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const inspected = await readBoundOwner(lockPath, deps);
+    if (inspected) return snapshotFromOwner(lockPath, inspected, deps);
+    const claimed = await readBoundOwner(takeoverPath(lockPath), deps);
+    if (!claimed) continue;
+    const snapshot = snapshotFromOwner(lockPath, claimed, deps);
+    const live = snapshot.pid !== undefined && (snapshot.ageMs ?? Infinity) <= STREAM_OWNER_STALE_MS &&
+      isPidAlive(snapshot.pid, deps);
+    return live ? snapshot : { state: 'unowned', lockPath };
+  }
+  return { state: 'unowned', lockPath };
+}
+
+function snapshotFromOwner(
+  lockPath: string,
+  inspected: { raw: string | null; stat: { dev: number; ino: number; mtimeMs: number } },
+  deps: StreamOwnerDeps,
+): StreamOwnershipSnapshot {
   const { raw, stat: lockStat } = inspected;
   if (raw === null) {
     const now = (deps.now ?? (() => new Date()))();

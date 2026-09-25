@@ -514,4 +514,62 @@ describe('stream-owner lease', () => {
       now: () => new Date('2026-05-28T12:00:02.000Z'),
     })).resolves.toBeNull();
   });
+
+  // A refresh renames the lock directory to `<lock>.takeover` while it
+  // rewrites the record; a concurrent status read must still see the owner.
+  it.each([false, true])('reports the owner during concurrent refreshes (privateRoot %s)', async (privateStorage) => {
+    const home = await tempLocksDir();
+    const root = path.join(home, '.config', 'borgmcp');
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    const deps = {
+      locksDir: path.join(root, 'locks'),
+      ...(privateStorage ? { privateRoot: { root, boundary: home } } : {}),
+    };
+    const lease = await acquireStreamLease(CUBE_ID, DRONE_ID, 70_000, deps);
+    expect(lease).not.toBeNull();
+    let stop = false, refreshes = 0;
+    const loop = (async () => {
+      while (!stop) {
+        expect(await lease!.refresh()).toBe(true); refreshes++;
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+    })();
+    // Deterministic overlap: keep reading until many refreshes have completed.
+    const states: Record<string, number> = {};
+    let reads = 0;
+    while (refreshes < 40 || reads < 500) {
+      const snapshot = await readOwnershipSnapshot(CUBE_ID, DRONE_ID, deps);
+      states[snapshot.state] = (states[snapshot.state] ?? 0) + 1; reads++;
+      if (snapshot.state === 'owner') expect(snapshot.pid).toBe(process.pid);
+    }
+    stop = true; await loop;
+    expect(states).toEqual({ owner: reads });
+    await lease!.release();
+    expect((await readOwnershipSnapshot(CUBE_ID, DRONE_ID, deps)).state).toBe('unowned');
+  });
+
+  it.each([
+    ['stale heartbeat', { heartbeatAt: '2026-05-28T11:58:00.000Z' }, true],
+    ['dead pid', {}, false],
+    ['malformed record', { pid: 'not-a-pid' }, true],
+  ])('reads a planted takeover leftover with a %s as unowned', async (_label, override, alive) => {
+    const locksDir = await tempLocksDir();
+    const claimPath = `${streamLockPath(CUBE_ID, DRONE_ID, locksDir)}.takeover`;
+    await mkdir(claimPath, { recursive: true, mode: 0o700 });
+    await writeFile(path.join(claimPath, 'owner.json'), JSON.stringify({
+      schemaVersion: 1, pid: 4242, processNonce: 'planted', cwd: '/work/planted',
+      startedAt: '2026-05-28T11:00:00.000Z', heartbeatAt: '2026-05-28T12:00:00.000Z', ...override,
+    }));
+    const deps = { locksDir, pid: 1001, processNonce: 'reader', now: () => new Date('2026-05-28T12:00:05.000Z'), isPidAlive: () => alive };
+    expect(await readOwnershipSnapshot(CUBE_ID, DRONE_ID, deps)).toEqual({ state: 'unowned', lockPath: streamLockPath(CUBE_ID, DRONE_ID, locksDir) });
+    // Positive control: the same leftover, fresh and alive, is the in-flight owner.
+    if (!alive || 'heartbeatAt' in override) {
+      await writeFile(path.join(claimPath, 'owner.json'), JSON.stringify({
+        schemaVersion: 1, pid: 4242, processNonce: 'planted', cwd: '/work/planted',
+        startedAt: '2026-05-28T11:00:00.000Z', heartbeatAt: '2026-05-28T12:00:00.000Z',
+      }));
+      const live = await readOwnershipSnapshot(CUBE_ID, DRONE_ID, { ...deps, isPidAlive: () => true });
+      expect(live).toMatchObject({ state: 'owned-by-other-process', pid: 4242, ageMs: 5000 });
+    }
+  });
 });
