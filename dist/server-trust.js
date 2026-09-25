@@ -451,7 +451,9 @@ async function readLocalAuthorityTrust(directory) {
  * same source selection and file checks as loadBorgServerTrust. Its local-authority
  * branch caches for the process lifetime, which a continuation guard on a
  * long-lived connection must not rely on; the enrollment branch already rereads
- * its pointer per call. Identity only: it never builds a fetch or grants trust.
+ * its pointer per call. It returns the identity only and grants no trust. The
+ * local-authority branch builds no fetch; the enrollment delegation may construct
+ * the loader's pinned fetch on a cache miss, but this function sends no request.
  */
 export async function readBorgServerTrustIdentity(origin) {
     if (!await remoteTrustStateExists(origin) && await trustFilesExist(serverDataDirectory())) {
