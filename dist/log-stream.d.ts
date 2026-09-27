@@ -109,7 +109,20 @@ export declare function __setCodexReArmDelayForTest(ms: number): void;
 export declare function startLogStream(opts?: {
     runForever?: () => void;
 }): void;
+/** Production adapter for a separate private stream consumer. Ordinary drone defaults are unchanged. */
+export declare function streamReconnectDelay(attempt: number): number;
+export interface StreamConsumer {
+    /** Retained dedupe horizon when an expired wire resume cursor has been cleared. */
+    catchupCursor?: LocalServerCursor | null;
+    connected(): Promise<void>;
+    beforeEvent(): Promise<void>;
+    log(event: Extract<ParsedEvent, {
+        type: 'log';
+    }>, catchupCursor: LocalServerCursor | null): Promise<void>;
+    clearCursor(): Promise<void>;
+}
 export interface StreamDeps {
+    consumer?: StreamConsumer;
     /** Override the global fetch (tests inject a controlled Response). */
     fetchImpl?: typeof fetch;
     /** Override persisted trust loading to verify pre-network confinement. */

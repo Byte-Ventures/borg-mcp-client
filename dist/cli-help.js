@@ -106,6 +106,7 @@ export function representativeHelpText(version) {
         `  borg representative prepare --coordinator <drone-label> [--role <name>] [--worktree <name>] [--host <host>] [--rebind]\n` +
         `  borg representative status [--worktree <path>]\n` +
         `  borg representative mcp [--worktree <path>]\n` +
+        `  borg representative listen --worktree <path> [--replay-after <entry_id>]\n` +
         `  borg representative --help\n\n` +
         `Commands:\n` +
         `  prepare   Create or resume the representative's own drone in this repository's cube and bind it to\n` +
@@ -114,17 +115,19 @@ export function representativeHelpText(version) {
         `            another drone is never chosen instead.\n` +
         `  status    Show the saved binding, re-check it against the live cube, and list unresolved sends.\n` +
         `  mcp       Serve the restricted stdio MCP tools (status, send, read, ack) for a generic MCP host.\n\n` +
+        `  listen    Emit body-free JSON wake hints from the server stream; supervise this separate process.\n` +
         `Options:\n` +
+        `  --replay-after <entry_id>    listen: replay later retained hints after the last durably enqueued entry\n` +
         `  --coordinator <drone-label>  Exact label of the Coordinator drone (see \`borg drones\`). Required for prepare.\n` +
         `  --role <name>                Existing non-human-seat role for the representative (default: hermes-representative)\n` +
         `  --worktree <name>            prepare: create the drone in a new linked worktree of that name\n` +
-        `  --worktree <path>            status/mcp: absolute path of the prepared representative worktree\n` +
+        `  --worktree <path>            status/mcp/listen: absolute path of the prepared representative worktree\n` +
         `  --host <host>                prepare: explicit Borg server, as in \`borg assimilate --host\`\n` +
         `  --rebind                     prepare: explicitly replace the saved cube/Coordinator selection\n` +
         `  --help, -h                   Show this help\n\n` +
-        `Limits: explicit send/read round trips only — there is no background wake or push to the MCP host.\n` +
-        `Reading drains everything it fetches, so relay replies at once; ack is only a signal to the Coordinator.\n` +
-        `Run exactly one MCP host process per representative worktree (not enforced).\n` +
+        `Limits: the MCP process has no background wake; a separate listen process emits wake hints, not content.\n` +
+        `Reading drains everything it fetches: persist before relaying. On a listener gap, call read once.\n` +
+        `The first send/read/ack takes an exclusive tools lease; listen owns a separate exclusive listener lease.\n` +
         `A retried send reuses its request id so the server stores it once; an unknown outcome is reported as\n` +
         `ambiguous, with its cause, and never re-sent automatically. "User-authorized" is the representative's own label:\n` +
         `the Borg server does not verify it, and one relayed decision is not broader human approval.\n` +
@@ -194,7 +197,7 @@ export function topLevelHelpText(version) {
         `  borg drones              List this machine's registered drones and worktrees\n` +
         `  borg launch <drone-label-or-id-prefix>  Reopen one registered drone from its worktree\n` +
         `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
-        `  borg representative prepare|status|mcp  Let an MCP host (e.g. Hermes) speak for you to one Coordinator drone\n` +
+        `  borg representative prepare|status|mcp|listen  Let an MCP host (e.g. Hermes) speak for you to one Coordinator drone\n` +
         `  borg server <command> [arguments]\n` +
         `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
         `  borg --version           Show installed version\n\n` +

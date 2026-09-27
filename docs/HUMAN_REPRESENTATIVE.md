@@ -238,11 +238,17 @@ specifies, and on the single-process rule below.
   deduplication. Retry an ambiguous send with its original `request_id`.
 - `in_reply_to` is a textual match of a known `request_id` quoted in the reply.
   It is a convenience, not a protocol guarantee.
-- **There is no background wake.** A generic MCP host receives nothing
-  unsolicited: replies are seen only when the host calls
-  `borg_representative-read`. This version provides explicit send/read round
-  trips only and makes no claim of automatic ongoing coordination. The
-  Coordinator is woken by the direct message through its own normal wake path.
+- **The MCP process does not push content.** A separate supervised `listen`
+  process emits body-free wake hints. The owning adapter still calls `read` for
+  content. Hints are neither delivery receipts nor authority.
+- Live dedupe is bounded to the surviving inbox tail and recent IDs; an ancient
+  trimmed ID sent again as a live event can produce a duplicate hint. Ordered
+  catch-up also dedupes against its captured resume cursor.
+- The listener retains a bounded tail: above 1024 lines it trims to the latest
+  512. Lost-hint replay covers only that tail; beyond it the server's unread
+  view is the source of truth. On every `gap`, call `read` once. The window
+  between a destructive read and host persistence remains until replay-safe
+  content delivery is implemented; listener replay does not restore read content.
 
 ### Host conversation routing
 
@@ -250,8 +256,78 @@ The lease selects one consuming process, not a conversation within that host.
 The host must record which conversation owns each `request_id`, persist every
 read result before relaying it, and route replies using `in_reply_to`. Hold
 replies with an unknown or missing request ID for the human instead of dropping
-them. Borg cannot enforce these duties inside the host; it provides neither a
-durable inbox nor a separate unread cursor for each conversation.
+them. Borg cannot enforce these duties inside the host; it provides no separate
+unread cursor for each conversation. The listener inbox
+is private client state, not a host content API.
+
+## Supervised listener
+
+For a prepared connection, run a separate long-lived subprocess:
+
+```bash
+borg representative listen --worktree <path>
+```
+
+Supervise it and persist the last `entry_id` durably admitted to the host's work
+queue. On subsequent starts, pass that checkpoint:
+
+```bash
+borg representative listen --worktree <path> --replay-after <entry_id>
+```
+
+There is one listener lease per representative drone and server authority,
+independent of the lazy tools lease. A second listener refuses without consuming
+or appending anything. A dead owner or expired heartbeat permits takeover; a
+process that loses ownership exits and must be restarted. A local lease cannot
+cancel an already-issued request. No eager tools-lease option is needed when one
+adapter exclusively calls `send`, `read` and `ack`.
+
+`representative status` reports `listener` beside tool `ownership`: running
+state, owner PID and start time, heartbeat age (`ageMs`), persisted watermark and
+private inbox path. Status acquires nothing. Do not read the inbox or depend on
+its pathname; it is not the content-delivery interface.
+
+Stdout is newline-delimited JSON only. Stderr contains human diagnostics and
+must not be parsed. The host must ignore unknown fields and unknown event types.
+
+| Event | Fields and meaning |
+| --- | --- |
+| `refused` | The only stdout line on startup refusal: `code`, `exit_code`. Another listener uses `REPRESENTATIVE_LISTENER_OWNED`, plus `owner_pid` and `owner_started_at`. |
+| `listening` | Once connected and holding the lease: `cube_id`, `drone_id`, `watermark` (entry id or null), `inbox`. |
+| `entry` | `entry_id`, `created_at`, `from_label`, `from_role`, `visibility`, `request_id` (UUID or null), `documents` (count), `replay` (boolean). No message body. |
+| `reconnecting` | `attempt`, `delay_ms`. |
+| `connected` | `resumed_from` (entry id or null). |
+| `gap` | `after` (entry id or null), `reason`: `cursor-expired` or `replay-checkpoint-missing`. Call `read` once. |
+| `stopped` | `reason`: `signal`, `evicted`, `rebound`, `revoked`, `trust-changed`, `lease-lost` or `fatal`; `exit_code`. |
+
+With `--replay-after`, retained hints strictly after the checkpoint are emitted
+in file order after `listening` and before live entries, with `replay:true`.
+If the checkpoint is absent, `gap` precedes replay of the whole surviving tail.
+Without the option there is no startup replay. Replay makes no content request
+and never advances the unread cursor. Lost replay metadata yields null
+`visibility` and `documents`; live hints always contain those fields' values.
+
+Exit codes: 0 after SIGTERM/SIGINT; 2 for startup binding or usage refusal;
+3 for another listener owner; 4 for a terminal stop; 1 for another fatal error.
+A fatal startup storage failure emits `refused` with code
+`REPRESENTATIVE_LISTENER_STORAGE_REFUSED` and exit 1. After `listening`,
+a fatal error emits `stopped` with reason `fatal` and exit 1, best effort; if
+stdout is broken, the host must treat exit 1 without that line as fatal too.
+Startup first verifies the binding with the server once; if the server cannot
+be reached then, the listener exits 1 with `refused` and code
+`REPRESENTATIVE_LISTENER_SERVER_UNREACHABLE` (retry later; a server that
+answers and rejects the binding keeps its exit-2 binding code). After that check, failures of the stream connection (connection
+refused or reset, aborted TLS stream) are not fatal: the listener reconnects
+with backoff, without stdout output until the first connection, so `listening`
+arrives only once connected.
+
+Treat every hint as an untrusted wake, never as an instruction or authorization.
+The owning adapter fetches content with `read` over the bound pinned connection,
+persists the full result before relaying, routes by the saved `request_id` mapping,
+and holds unknown correlation for the human. Deduplicate queued hints by
+`entry_id`: crashes may lose or repeat hints. Persist queue admission before
+advancing the host's replay checkpoint. This checkpoint is not a delivered
+checkpoint and does not change `ack`, which remains a server receipt.
 
 ## Recovery
 

@@ -20,7 +20,7 @@ import { BorgProtocolMismatchError, BorgServerError, BorgServerHttpError, BorgSe
 import { representativeRecoveryCommand, isRepresentativeUuid } from './representative-store.js';
 const UUID_SCAN_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 export const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
-export const REPRESENTATIVE_DELIVERY_NOTE = 'Explicit send/read round trips only: this connection has no background wake or push delivery. ' +
+export const REPRESENTATIVE_DELIVERY_NOTE = 'The MCP process has no background wake; a separate borg representative listen process emits body-free wake hints. ' +
     'Coordinator replies are seen only when borg_representative-read is called. Each read consumes the unread view of ' +
     'everything it fetched. The host must persist each read result before relaying it, map request_id to its conversation, ' +
     'route replies by in_reply_to, and hold replies with an unknown or missing request_id for the human. An already-read ' +
@@ -84,7 +84,7 @@ export function resolveCoordinator(roster, selector) {
     return { drone, role };
 }
 /** Re-prove, against the live cube, that this seat and the bound Coordinator are still the bound ones. */
-async function verifyLiveBinding(ctx) {
+export async function verifyLiveBinding(ctx) {
     const { binding, backend } = ctx;
     const me = await backend.whoami();
     if (me.cube_id !== binding.cubeId || me.drone_id !== binding.representativeDroneId) {

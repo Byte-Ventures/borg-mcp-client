@@ -68,7 +68,7 @@ const TRANSPORT_ERRNOS = new Set([
   'ABORT_ERR',
 ]);
 
-function isTransportFailure(err: unknown): boolean {
+export function isTransportFailure(err: unknown): boolean {
   if (err instanceof BorgServerUnreachableError) return true;
   const e = err as { name?: string; code?: string; cause?: { code?: string } };
   if (e?.name === 'AbortError') return true;

@@ -395,6 +395,11 @@ async function main() {
     const representative = await import('./representative-cmd.js');
     const parsed = representative.parseRepresentativeArgs(process.argv.slice(3));
     if (!parsed.ok) {
+      if (process.argv[3] === 'listen') {
+        process.stdout.write(JSON.stringify({ event: 'refused', code: 'INVALID_INPUT', exit_code: 2 }) + '\n');
+        process.stderr.write(parsed.error + '\n');
+        process.exit(2);
+      }
       process.stderr.write(chalk.red(`${consolePrefix()}◼ borg representative: ${parsed.error}\n`));
       process.stderr.write(`Run \`borg representative --help\` for usage.\n`);
       process.exit(1);
@@ -407,6 +412,9 @@ async function main() {
       process.exit(await representative.runRepresentativeStatus(parsed.command, deps));
     }
     const { pinMcpSeatIdentity } = await import('./cubes.js');
+    if (parsed.command.action === 'listen') {
+      process.exit(await representative.runRepresentativeListen(parsed.command, deps));
+    }
     process.exit(await representative.runRepresentativeMcp(parsed.command, deps, {
       version: getPackageVersion(),
       pinSeat: pinMcpSeatIdentity,
