@@ -18,7 +18,7 @@ process.on('message', (message: any) => {
     ? new DroneEvictedError() : Object.assign(new Error(message.error.message), message.error));
   else waiter.resolve(message.result);
 });
-const backend = Object.fromEntries(['whoami', 'roster', 'append', 'readUnread', 'readEntry', 'ack'].map((method) => [
+const backend = Object.fromEntries(['whoami', 'roster', 'append', 'readAfter', 'unreadCursor', 'readEntry', 'ack'].map((method) => [
   method, (...args: unknown[]) => new Promise((resolve, reject) => {
     const id = ++nextId;
     pending.set(id, { resolve, reject });

@@ -163,6 +163,9 @@ export declare function getRoster(active: ActiveCube, since?: string): Promise<{
  */
 export declare function readLog(sessionToken: string, apiUrl: string, opts?: {
     since?: string;
+    /** Exact (created_at, id) resume point, strictly after; null = log start.
+     * Stateless: never reads or advances the unread cursor, never digest. */
+    cursor?: LocalServerCursor | null;
     limit?: number;
     unreadOnly?: boolean;
     serverTrustIdentity?: string;

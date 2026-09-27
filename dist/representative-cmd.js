@@ -17,7 +17,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { validateName } from './name-validator.js';
 import { RepresentativeError, assertRepresentativeRole, representativeStatus, resolveCoordinator, } from './representative-core.js';
-import { RepresentativeStoreError, representativeRecoveryCommand, } from './representative-store.js';
+import { RepresentativeStoreError, bindingFingerprint, representativeRecoveryCommand, } from './representative-store.js';
 import { shellEscape } from './shell-escape.js';
 export const DEFAULT_REPRESENTATIVE_ROLE = 'hermes-representative';
 export function parseRepresentativeArgs(args) {
@@ -242,15 +242,9 @@ export async function runRepresentativeMcp(command, deps, io) {
         heartbeatIntervalMs: io.heartbeatIntervalMs,
         ...(io.stdin ? { stdin: io.stdin } : {}),
         ...(io.stdout ? { stdout: io.stdout } : {}),
-        context: async () => {
-            const ctx = await resolveRepresentativeContext(worktree, deps);
-            if (ctx.binding.cubeId !== pinned.cubeId ||
-                ctx.binding.coordinatorDroneId !== pinned.coordinatorDroneId ||
-                ctx.binding.representativeDroneId !== pinned.representativeDroneId) {
-                throw new RepresentativeError('BINDING_MISMATCH', 'The operator changed this connection\'s cube or Coordinator while it was running. Restart the MCP server to use the new binding.');
-            }
-            return ctx;
-        },
+        // The full generation, so any rebind (same selection included) is refused.
+        pinnedFingerprint: bindingFingerprint(pinned),
+        context: () => resolveRepresentativeContext(worktree, deps),
     });
     const stdin = io.stdin ?? process.stdin;
     stdin.once('end', () => { void served.close(); });

@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, realpath, mkdir, readFile, writeFile, rm, readdir, chmod, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createRepresentativeStore } from '../src/representative-store.js';
+import { bindingFingerprint, createRepresentativeStore } from '../src/representative-store.js';
 import { bindingFor, CUBE_ID, REP_ID, COORD_ID } from './fixtures/representative-mock-backend.js';
 import { formatInboxLine } from '../src/log-stream.js';
 import { parseRepresentativeArgs } from '../src/representative-cmd.js';
@@ -80,6 +80,21 @@ async function files(dir: string): Promise<string[]> {
   }
   return result;
 }
+it('names the binding generation in the listening event', async () => {
+  const client = start(), hello = await ready(client);
+  expect(hello.binding_fingerprint).toBe(bindingFingerprint(bindingFor(worktree, { origin })));
+  expect(hello.binding_fingerprint).toMatch(/^[0-9a-f]{64}$/);
+  await stop(client);
+});
+it('stops a running listener with rebound after a same-selection rebind starts a new generation', async () => {
+  const client = start(); await ready(client);
+  await createRepresentativeStore(file).saveBinding(bindingFor(worktree, { origin, boundAt: '2026-06-01T00:00:00.000Z' }), { rebind: true });
+  await send([entry(1)]);
+  const [code] = await client.exited;
+  expect(code).toBe(4);
+  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'rebound', exit_code: 4 });
+  expect(client.events.filter(e => e.event === 'entry')).toEqual([]);
+});
 it('routes the documented listen command', () => {
   expect(parseRepresentativeArgs(['listen', '--worktree', '/fixture'])).toEqual({ ok: true, command: { action: 'listen', worktree: '/fixture' } });
 });

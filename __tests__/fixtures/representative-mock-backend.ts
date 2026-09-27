@@ -71,7 +71,6 @@ export class MockCube {
   appendGate: Promise<void> | null = null;
   /** Simulated latency of the live-binding check, to expose check-then-act races. */
   verifyDelayMs = 0;
-  private cursor = 0;
   private tick = 0;
 
   private stamp(): string {
@@ -79,7 +78,10 @@ export class MockCube {
     return new Date(Date.UTC(2026, 0, 1, 0, 0, this.tick)).toISOString();
   }
 
-  post(from: string, message: string, to: string[] | 'broadcast'): MockEntry {
+  /** Client-owned unread cursor as an earlier (5.5.0) read left it; migration input. */
+  unreadCursorValue: { id: string; created_at: string } | null = null;
+
+  post(from: string, message: string, to: string[] | 'broadcast', createdAt?: string): MockEntry {
     const drone = this.drones.find((candidate) => candidate.id === from);
     const role = this.roles.find((candidate) => candidate.id === drone?.role_id);
     const entry: MockEntry = {
@@ -88,7 +90,7 @@ export class MockCube {
       drone_id: from,
       message,
       visibility: to === 'broadcast' ? 'broadcast' : 'direct',
-      created_at: this.stamp(),
+      created_at: createdAt ?? this.stamp(),
       drone_label: drone?.label ?? 'unknown',
       role_name: role?.name ?? 'unknown',
       recipient_drone_ids: to === 'broadcast' ? [] : [...to],
@@ -150,11 +152,25 @@ export class MockCube {
         }
         return { entry, deduplicated };
       },
-      readUnread: async (limit) => {
-        this.calls.push('readUnread');
-        const page = this.entries.slice(this.cursor, this.cursor + (limit ?? 100));
-        this.cursor += page.length;
-        return { entries: page.map((e) => ({ ...e })), has_more: this.cursor < this.entries.length };
+      // Stateless page strictly after an exact (created_at, id) cursor, ascending.
+      readAfter: async (cursor, limit) => {
+        this.calls.push('readAfter');
+        const after = (e: MockEntry) => cursor === null || e.created_at > cursor.created_at ||
+          (e.created_at === cursor.created_at && e.id > cursor.id);
+        const ordered = [...this.entries].sort((a, b) =>
+          a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+        const remaining = ordered.filter(after);
+        const page = remaining.slice(0, limit);
+        const last = page.at(-1);
+        return {
+          entries: page.map((e) => ({ ...e })),
+          has_more: remaining.length > page.length,
+          cursor: last ? { id: last.id, created_at: last.created_at } : cursor,
+        };
+      },
+      unreadCursor: async () => {
+        this.calls.push('unreadCursor');
+        return this.unreadCursorValue ? { ...this.unreadCursorValue } : null;
       },
       readEntry: async (entryId) => {
         this.calls.push('readEntry');

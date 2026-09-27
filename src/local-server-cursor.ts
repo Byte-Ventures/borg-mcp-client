@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 
@@ -144,6 +145,49 @@ export async function getLocalServerCursor(
   const key = cursorKey(binding);
   const state = await readState();
   return state.cursors[key] ?? null;
+}
+
+/**
+ * Fail-closed read for importing the unread watermark into other private
+ * state. The product writes this file 0600 (writeState); a symlink, a file
+ * that is not a regular file, not owned by this user, or group- or
+ * world-writable, and any unparsable state all read as null, never as a
+ * position. Read-only: nothing is written or locked. The caller validates
+ * the private root the file lives in.
+ */
+export async function readPrivateLocalServerCursor(
+  binding: LocalServerCursorBinding,
+): Promise<LocalServerCursor | null> {
+  // lstat first: a FIFO or device is refused without ever being opened (an
+  // open would block). The non-blocking open and the identity recheck keep a
+  // swapped-in object from being read in its place.
+  let before;
+  try {
+    before = await lstat(CURSOR_FILE);
+  } catch {
+    return null;
+  }
+  if (!before.isFile()) return null;
+  let handle;
+  try {
+    handle = await open(CURSOR_FILE, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch {
+    return null;
+  }
+  try {
+    const metadata = await handle.stat();
+    if (metadata.dev !== before.dev || metadata.ino !== before.ino) return null;
+    if (!metadata.isFile() || (metadata.mode & 0o022) !== 0 ||
+        (typeof process.getuid === 'function' && metadata.uid !== process.getuid())) return null;
+    const parsed = JSON.parse(await handle.readFile('utf8')) as Partial<CursorFile>;
+    if (parsed?.version !== 1 || typeof parsed.cursors !== 'object' || parsed.cursors === null) return null;
+    const cursor = parsed.cursors[cursorKey(binding)];
+    return validCursor(cursor) ? { id: cursor.id, created_at: cursor.created_at } : null;
+  } catch {
+    return null;
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function advanceLocalServerCursor(

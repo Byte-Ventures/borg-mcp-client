@@ -5,7 +5,7 @@
  * is evidence of acceptance by a real Borg server.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -127,6 +127,7 @@ describe('representative stdio MCP (mock backend)', () => {
     expect(names).toEqual([...REPRESENTATIVE_TOOL_NAMES].sort());
     expect(names).toEqual([
       'borg_representative-ack',
+      'borg_representative-deliver',
       'borg_representative-read',
       'borg_representative-send',
       'borg_representative-status',
@@ -151,7 +152,8 @@ describe('representative stdio MCP (mock backend)', () => {
     expect(status.isError).toBe(false);
     expect(status.body.coordinator.drone_id).toBe(COORD_ID);
     expect(status.body.representative.drone_id).toBe(REP_ID);
-    expect(status.body.delivery).toContain('no background wake');
+    expect(status.body.delivery).toContain('deliver');
+    expect(status.body.binding_fingerprint).toMatch(/^[0-9a-f]{64}$/);
 
     const sent = await client.call('borg_representative-send', {
       request_id: REQUEST_ID,
@@ -280,16 +282,46 @@ describe('representative stdio MCP (mock backend)', () => {
     await server.close();
   });
 
-  it('does not promise by-id recovery after the only read tool consumes a reply', async () => {
+  it('replays an undelivered reply until deliver, with no by-id read path', async () => {
     const entry = cube.post(COORD_ID, 'A reply to relay now', [REP_ID]);
     const { client, server } = await connect();
     const init = await client.initialize();
     const read = await client.call('borg_representative-read', {});
     expect(read.body.replies[0].entry_id).toBe(entry.id);
     expect((await client.call('borg_representative-read', { entry_id: entry.id })).body.error.code).toBe('INVALID_INPUT');
+    expect((await client.call('borg_representative-read', {})).body.replies.map((r: any) => r.entry_id)).toEqual([entry.id]);
+    const delivered = await client.call('borg_representative-deliver', { through: entry.id });
+    expect(delivered.body).toMatchObject({ advanced: true, binding_fingerprint: read.body.binding_fingerprint });
     expect((await client.call('borg_representative-read', {})).body.replies).toEqual([]);
     expect(init.result.instructions).not.toMatch(/fetched\s+again only by its entry_id/);
     expect(read.body.delivery).not.toMatch(/fetched\s+again only by its entry_id/);
+    await server.close();
+  });
+
+  it('refuses every tool except status while the delivery checkpoint file is invalid', async () => {
+    const { deliveryPaths } = await import('../src/representative-delivery-store.js');
+    const { directory, file } = deliveryPaths(bindingFor(WORKTREE));
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    for (let current = directory; current.startsWith(join(root, '.config')); current = join(current, '..')) chmodSync(current, 0o700);
+    writeFileSync(file, JSON.stringify({ version: 1, seat: 'f'.repeat(64), checkpoint: null, readThrough: null }), { mode: 0o600 });
+    const reply = cube.post(COORD_ID, 'reply', [REP_ID]);
+    const { client, server } = await connect();
+    await client.initialize();
+    for (const [name, args] of [
+      ['borg_representative-send', { kind: 'question', authorization: 'model_advice', message: 'hi' }],
+      ['borg_representative-read', {}],
+      ['borg_representative-deliver', { through: reply.id }],
+      ['borg_representative-ack', { entry_id: reply.id }],
+    ] as const) {
+      const refused = await client.call(name, args);
+      expect(refused.isError).toBe(true);
+      expect(refused.body.error.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
+    }
+    expect(cube.appendCalls).toHaveLength(0);
+    expect(cube.acks).toEqual([]);
+    const status = await client.call('borg_representative-status');
+    expect(status.isError).toBe(false);
+    expect(status.body.checkpoint_problem.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
     await server.close();
   });
 

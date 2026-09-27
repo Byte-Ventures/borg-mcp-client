@@ -13,6 +13,7 @@ import { BorgServerTrustError, BorgServerUnreachableError } from './server-error
 import { isTransportFailure } from './seat-probe.js';
 import { readBorgServerTrustIdentity } from './server-trust.js';
 import { RepresentativeError, verifyLiveBinding } from './representative-core.js';
+import { bindingFingerprint } from './representative-store.js';
 function listenerOwnerDeps(binding) {
     const authority = createHash('sha256').update(JSON.stringify([binding.origin, binding.trustIdentity])).digest('hex');
     return { ...representativeOwnerDeps(binding), locksDir: join(borgConfigRoot(), 'representative-listener-locks', authority) };
@@ -188,7 +189,8 @@ export async function runListener(command, deps, options = {}) {
                         connected: local(() => serial(async () => {
                             await guard();
                             if (!started) {
-                                await emit({ event: 'listening', cube_id: binding.cubeId, drone_id: binding.representativeDroneId, ...await inbox.snapshot() });
+                                await emit({ event: 'listening', cube_id: binding.cubeId, drone_id: binding.representativeDroneId,
+                                    binding_fingerprint: bindingFingerprint(binding), ...await inbox.snapshot() });
                                 started = true;
                                 if (pendingGap !== undefined)
                                     await emit({ event: 'gap', after: pendingGap, reason: 'cursor-expired' });
