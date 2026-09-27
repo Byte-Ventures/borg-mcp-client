@@ -114,8 +114,8 @@ export function representativeHelpText(version) {
         `            Fails if that Coordinator is missing, evicted, duplicated, or not in the human seat;\n` +
         `            another drone is never chosen instead.\n` +
         `  status    Show the saved binding, re-check it against the live cube, and list unresolved sends.\n` +
-        `  mcp       Serve the restricted stdio MCP tools (status, send, read, deliver, ack) for a generic MCP host.\n\n` +
-        `  listen    Emit body-free JSON wake hints from the server stream; supervise this separate process.\n` +
+        `  mcp       Serve the restricted stdio MCP tools (status, send, read, deliver, ack) for a generic MCP host.\n` +
+        `  listen    Emit body-free JSON wake hints from the server stream; supervise this separate process.\n\n` +
         `Options:\n` +
         `  --replay-after <entry_id>    listen: replay later retained hints after the last durably enqueued entry\n` +
         `  --coordinator <drone-label>  Exact label of the Coordinator drone (see \`borg drones\`). Required for prepare.\n` +
