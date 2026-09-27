@@ -85,6 +85,27 @@ describe('replayable read and deliver', () => {
     expect(await deliverRepresentativeReplies(ctx, { through: a.id })).toMatchObject({ advanced: true });
   });
 
+  it('refuses an addressed id that no read returned, advances a returned one, and keeps an older id a no-op after restart', async () => {
+    const [a, b, c] = [toRep('a'), toRep('b'), toRep('c')];
+    await readRepresentativeReplies(context(), { limit: 2 }); // returns a, b
+    expect(await codeOf(deliverRepresentativeReplies(context(), { through: c.id }))).toBe('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY');
+    expect(await deliverRepresentativeReplies(context(), { through: b.id })).toMatchObject({ advanced: true });
+    // Restart: fresh context and store objects over the persisted state.
+    expect(await deliverRepresentativeReplies(context(), { through: a.id }))
+      .toMatchObject({ advanced: false, checkpoint: { entry_id: b.id } });
+  });
+
+  it('refuses a broadcast id a read skipped (include_broadcast false) although it lies inside the returned range', async () => {
+    const a = toRep('a');
+    const broadcast = cube.post(COORD_ID, 'to everyone', 'broadcast');
+    const b = toRep('b');
+    const ctx = context();
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([a.id, b.id]);
+    expect(await codeOf(deliverRepresentativeReplies(ctx, { through: broadcast.id }))).toBe('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY');
+    expect((await readRepresentativeReplies(ctx, {})).checkpoint).toEqual({ entry_id: null, created_at: null });
+    expect(await deliverRepresentativeReplies(ctx, { through: b.id })).toMatchObject({ advanced: true });
+  });
+
   it('treats the same or an older id as a no-op', async () => {
     const [a, b] = [toRep('a'), toRep('b')];
     const ctx = context();
@@ -239,6 +260,61 @@ describe('bounds', () => {
     const after = await readRepresentativeReplies(ctx, { max_bytes: 4096 });
     expect(ids(after)).toEqual([next.id]);
     expect(after.replies[0].oversize).toBeUndefined();
+  });
+
+  const withCitations = (count: number, message = 'z'.repeat(4000)) => {
+    const entry = toRep(message) as ReturnType<typeof toRep> & { documents?: unknown[] };
+    entry.documents = Array.from({ length: count }, (_, i) => ({
+      id: `${String(i).padStart(8, '0')}-1111-4111-8111-111111111111`, title: `Document ${i} `.padEnd(80, 't'), state: 'active',
+    }));
+    return entry;
+  };
+
+  it('bounds an oversize entry with many citations by max(max_bytes, 16384), reducing citations to ids', async () => {
+    const entry = withCitations(100);
+    const result = await readRepresentativeReplies(context(), { max_bytes: 4096 });
+    expect(ids(result)).toEqual([entry.id]);
+    expect(result.replies[0]).toMatchObject({ oversize: true, documents_reduced: true, message: entry.message });
+    expect(result.replies[0].documents).toHaveLength(100);
+    for (const citation of result.replies[0].documents!) expect(Object.keys(citation)).toEqual(['id']);
+    expect(Buffer.byteLength(serializeRepresentativeResult(result))).toBeLessThanOrEqual(16384);
+  });
+
+  it('keeps full citations when they fit max_bytes', async () => {
+    const entry = withCitations(100);
+    const result = await readRepresentativeReplies(context(), { max_bytes: 60000 });
+    expect(ids(result)).toEqual([entry.id]);
+    expect(result.replies[0].documents).toEqual(entry.documents);
+    expect(result.replies[0].documents_reduced).toBeUndefined();
+    expect(Buffer.byteLength(serializeRepresentativeResult(result))).toBeLessThanOrEqual(60000);
+  });
+
+  it('refuses an entry that cannot fit even reduced, without advancing anything, and returns it at max_bytes 60000', async () => {
+    const huge = toRep('h'.repeat(20000)); // a server configured above the default post limit
+    const ctx = context();
+    const error = await readRepresentativeReplies(ctx, { max_bytes: 4096 }).then(() => null, (e) => e);
+    expect(error?.code).toBe('REPRESENTATIVE_READ_OVERSIZE');
+    expect(error.details).toMatchObject({ entry_id: huge.id, bound: 16384 });
+    expect(error.details.measured_bytes).toBeGreaterThan(16384);
+    const file = deliveryFiles().find((path) => path.endsWith('checkpoint.json'))!;
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ checkpoint: null, readThrough: null });
+    expect(await codeOf(deliverRepresentativeReplies(ctx, { through: huge.id }))).toBe('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY');
+    const result = await readRepresentativeReplies(ctx, { max_bytes: 60000 });
+    expect(ids(result)).toEqual([huge.id]);
+    expect(Buffer.byteLength(serializeRepresentativeResult(result))).toBeLessThanOrEqual(60000);
+  });
+
+  it('reports the envelope floor in status', async () => {
+    expect((await representativeStatus(context())).envelope_floor).toBe(16384);
+  });
+
+  it('scans past 200 ignored entries to the next addressed one, never an empty page with has_more', async () => {
+    Array.from({ length: 200 }, (_, i) => cube.post(BUILDER_ID, `worker ${i}`, [REP_ID]));
+    const addressed = toRep('after the noise');
+    const result = await readRepresentativeReplies(context(), {});
+    expect(ids(result)).toEqual([addressed.id]);
+    expect(result.has_more).toBe(false);
+    expect(result.ignored_entries).toBe(200);
   });
 
   it('orders same-millisecond entries by entry id with no skip or repeat across pages', async () => {

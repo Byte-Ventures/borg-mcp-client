@@ -7,6 +7,13 @@ import { type RepresentativeBinding } from './representative-store.js';
 export interface DeliveryState {
     checkpoint: LocalServerCursor | null;
     readThrough: LocalServerCursor | null;
+    /**
+     * Entries a read returned since the checkpoint last moved: `deliver` checks
+     * membership here, not just the range. Every window starts at the
+     * checkpoint, so this stays within the largest window (two, with and without
+     * broadcasts), and deliver prunes it.
+     */
+    returned: LocalServerCursor[];
 }
 /**
  * This binding's own checkpoint file exists but cannot be trusted. It is never

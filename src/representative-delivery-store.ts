@@ -16,7 +16,17 @@ import { validatePrivateDirectory } from './representative-listener-store.js';
 export interface DeliveryState {
   checkpoint: LocalServerCursor | null;
   readThrough: LocalServerCursor | null;
+  /**
+   * Entries a read returned since the checkpoint last moved: `deliver` checks
+   * membership here, not just the range. Every window starts at the
+   * checkpoint, so this stays within the largest window (two, with and without
+   * broadcasts), and deliver prunes it.
+   */
+  returned: LocalServerCursor[];
 }
+
+/** Two windows of at most 50 replies (with and without broadcasts). */
+const RETURNED_CAP = 100;
 
 const deliveryRoot = () => join(borgConfigRoot(), 'representative-delivery');
 
@@ -70,10 +80,15 @@ async function readFile(directory: string, file: string): Promise<{ seat: string
   if (!await validatePrivateDirectory(directory, false)) return null;
   const raw = await readStoreFile(file, { secureRoot: directory, verifyLeafIdentity: true, createRoot: false });
   if (raw === null) return null;
-  let parsed: { version?: unknown; seat?: unknown; checkpoint?: unknown; readThrough?: unknown };
+  let parsed: { version?: unknown; seat?: unknown; checkpoint?: unknown; readThrough?: unknown; returned?: unknown };
   try { parsed = JSON.parse(raw); } catch { throw new Error('Representative delivery checkpoint is invalid'); }
   if (parsed?.version !== 1 || typeof parsed.seat !== 'string') throw new Error('Representative delivery checkpoint is invalid');
-  return { seat: parsed.seat, state: { checkpoint: point(parsed.checkpoint), readThrough: point(parsed.readThrough) } };
+  const returned = parsed.returned ?? [];
+  if (!Array.isArray(returned) || returned.length > RETURNED_CAP) throw new Error('Representative delivery checkpoint is invalid');
+  return { seat: parsed.seat, state: {
+    checkpoint: point(parsed.checkpoint), readThrough: point(parsed.readThrough),
+    returned: returned.map((value) => point(value)!).map((value) => { if (!value) throw new Error('Representative delivery checkpoint is invalid'); return value; }),
+  } };
 }
 
 // One queue per state file: overlapping tool calls in one process never write
@@ -106,6 +121,9 @@ export function createDeliveryStore(binding: RepresentativeBinding) {
     const { checkpoint, readThrough } = saved.state;
     if (checkpoint && (readThrough === null || comparePoints(checkpoint, readThrough) > 0)) {
       throw new DeliveryCheckpointError(paths.file, 'its checkpoint is beyond its read fence');
+    }
+    if (saved.state.returned.some((entry) => comparePoints(entry, checkpoint) <= 0 || comparePoints(entry, readThrough) > 0)) {
+      throw new DeliveryCheckpointError(paths.file, 'a returned entry lies outside its window');
     }
     return saved.state;
   };
@@ -190,10 +208,15 @@ export function createDeliveryStore(binding: RepresentativeBinding) {
     advance(update: Partial<DeliveryState>, guard?: () => Promise<void>): Promise<{ before: DeliveryState | null; after: DeliveryState }> {
       const run = async () => {
         const before = await load();
-        const after = {
-          checkpoint: later(before?.checkpoint ?? null, update.checkpoint ?? null),
-          readThrough: later(before?.readThrough ?? null, update.readThrough ?? null),
-        };
+        const checkpoint = later(before?.checkpoint ?? null, update.checkpoint ?? null);
+        const readThrough = later(before?.readThrough ?? null, update.readThrough ?? null);
+        // Union of returned windows, pruned to entries still after the checkpoint.
+        const returned = [...(before?.returned ?? []), ...(update.returned ?? [])]
+          .filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index)
+          .filter((entry) => comparePoints(entry, checkpoint) > 0)
+          .sort((a, b) => comparePoints(a, b))
+          .slice(-RETURNED_CAP);
+        const after = { checkpoint, readThrough, returned };
         if (before && JSON.stringify(before) === JSON.stringify(after)) return { before, after: before };
         await guard?.();
         await validatePrivateDirectory(paths.directory, true);

@@ -420,6 +420,13 @@ export function serializeRepresentativeResult(body) {
     return JSON.stringify(body, null, 2);
 }
 const READ_SCAN_PAGE = 500;
+/**
+ * A serialized read result never exceeds max(max_bytes, this). An oversize
+ * entry is returned alone; if it still exceeds the bound, its citations are
+ * reduced to ids. Message text is never cut: the server caps a post (4096
+ * bytes by default), so the reduced entry fits.
+ */
+export const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
 async function deliveryState(ctx) {
     const store = createDeliveryStore(ctx.binding);
     const saved = await store.load();
@@ -537,11 +544,25 @@ export async function readRepresentativeReplies(ctx, raw) {
         Buffer.byteLength(serializeRepresentativeResult(result(count + 1))) <= maxBytes)
         count += 1;
     const oversize = count === 0 && candidates.length > 0;
-    const final = result(oversize ? 1 : count, oversize);
-    const returned = candidates[final.replies.length - 1]?.point;
-    if (returned && comparePoints(returned, state.readThrough) > 0) {
-        // The deliver fence widens before the caller can see the entries.
-        await createDeliveryStore(ctx.binding).advance({ readThrough: returned }, ctx.guard);
+    let final = result(oversize ? 1 : count, oversize);
+    const bound = Math.max(maxBytes, REPRESENTATIVE_ENVELOPE_FLOOR);
+    if (oversize && final.replies[0].documents?.length &&
+        Buffer.byteLength(serializeRepresentativeResult(final)) > bound) {
+        const reply = final.replies[0];
+        final = { ...final, replies: [{
+                    ...reply, documents: reply.documents.map(({ id }) => ({ id })), documents_reduced: true,
+                }] };
+    }
+    const measured = Buffer.byteLength(serializeRepresentativeResult(final));
+    if (oversize && measured > bound) {
+        // Nothing is cut or overrun, and nothing moves: no content, no deliver.
+        throw new RepresentativeError('REPRESENTATIVE_READ_OVERSIZE', `The next reply does not fit ${bound} bytes even alone with its citations reduced to ids. Nothing was read or ` +
+            'advanced. Raise max_bytes (up to 60000); beyond that the operator must reduce the server post limit.', { entry_id: final.replies[0].entry_id, measured_bytes: measured, bound });
+    }
+    const window = candidates.slice(0, final.replies.length).map(({ point }) => point);
+    if (window.length > 0) {
+        // The deliver fence and membership widen before the caller sees the entries.
+        await createDeliveryStore(ctx.binding).advance({ readThrough: window.at(-1), returned: window }, ctx.guard);
     }
     return final;
 }
@@ -570,7 +591,8 @@ export async function deliverRepresentativeReplies(ctx, raw) {
     if (state.checkpoint && comparePoints(point, state.checkpoint) <= 0) {
         return { checkpoint: checkpointView(state.checkpoint), advanced: false, binding_fingerprint: fingerprint };
     }
-    if (state.readThrough === null || comparePoints(point, state.readThrough) > 0)
+    // Membership, not range: only an entry a read actually returned.
+    if (!state.returned.some((returned) => returned.id === point.id))
         throw outside();
     const { before, after } = await createDeliveryStore(ctx.binding).advance({ checkpoint: point }, ctx.guard);
     return {
@@ -637,6 +659,7 @@ export async function representativeStatus(ctx) {
             'connection\'s own attribution and is not verified or enforced by the Borg server.',
         binding_fingerprint: bindingFingerprint(binding),
         ...(checkpointProblem ? { checkpoint_problem: checkpointProblem } : {}),
+        envelope_floor: REPRESENTATIVE_ENVELOPE_FLOOR,
     };
 }
 //# sourceMappingURL=representative-core.js.map

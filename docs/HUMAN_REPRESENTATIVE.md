@@ -232,8 +232,19 @@ Reading:
 - Bounds: `limit` (1 to 50, default 10) is a hard cap on returned replies.
   `max_bytes` (4096 to 60000, default 32768) caps the serialized tool result.
   Replies are whole or omitted, never truncated; a reply that alone exceeds
-  `max_bytes` is returned alone with `"oversize": true`. `has_more` is true when
-  more replies follow the returned window. Page by delivering and reading again.
+  `max_bytes` is returned alone with `"oversize": true`. The serialized result
+  never exceeds `max(max_bytes, 16384)` bytes: if an oversize reply is still
+  larger than that, its document citations are reduced to ids and it carries
+  `"documents_reduced": true`; message text is never cut. `status` reports this
+  floor as `envelope_floor`; set the host's tool-result ceiling at or above it.
+  With the server's default post limit (4096 bytes) every reply fits. If a server
+  allows larger posts and a reply cannot fit even reduced, `read` refuses with
+  `REPRESENTATIVE_READ_OVERSIZE` (`entry_id`, `measured_bytes`, `bound`) and
+  changes nothing.
+- `read` scans past entries that are not for the representative until the page
+  is full or the log ends, so it never returns no replies with `has_more: true`.
+  `has_more` is true only when another reply follows the returned window.
+  Page by delivering and reading again.
 - The result includes `checkpoint` (`entry_id` and `created_at`; null until the
   first delivery, unless the upgrade below started it at the old read position)
   and `binding_fingerprint`.
@@ -242,13 +253,16 @@ Delivering:
 
 - `deliver` takes `{ "through": "<entry_id>" }` and moves the checkpoint to that
   reply. Call it only after the host has durably persisted every reply up to it.
-- `through` must be a reply that `read` returned. Any other entry is refused with
-  `REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY` and nothing changes. The same or an older
+- `through` must be a reply that `read` actually returned since the checkpoint
+  last moved; membership is checked, not only the range, so a broadcast skipped
+  by a read without `include_broadcast` is refused too. Any other entry is refused
+  with `REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY` and nothing changes. The same or an older
   id is a no-op that returns `advanced: false`, so a retry after a lost result is safe.
-- Implementation note: the checkpoint and an internal read fence (the latest reply
-  any `read` returned) are stored together in one private file per binding, written
-  atomically. `deliver` may not pass the fence. The fence is not part of the
-  interface.
+- Implementation note: the checkpoint, an internal read fence (the latest reply
+  any `read` returned) and the replies returned since the checkpoint last moved
+  are stored together in one private file per binding, written atomically.
+  `deliver` accepts only one of those returned replies. None of this is part of
+  the interface.
 
 Binding fence:
 
@@ -414,4 +428,5 @@ the server is installed under the original prefix.
 | `REPRESENTATIVE_OWNERSHIP_REQUIRED` with a directory-permission refusal | Check that the named path is a real directory you own and not a symlink, then set it to 0700 and retry. Restart a process that had already lost ownership. Do not change permissions through a symlink. |
 | `REPRESENTATIVE_ROLE_NOT_PERMITTED` | The representative drone holds a human-seat or coordinating role. Give it its own worker role. |
 | `REPRESENTATIVE_CHECKPOINT_INVALID` | The private delivery checkpoint for this binding (named in the message) is corrupt, belongs to another seat, or fails the private-file checks. Every tool except `status` refuses and `status` reports it as `checkpoint_problem`; nothing is used or reset automatically. Inspect the file, then remove it; the next `read` returns every addressed reply again, so deduplicate by `entry_id`. |
+| `REPRESENTATIVE_READ_OVERSIZE` | The next reply does not fit `max(max_bytes, 16384)` bytes even with its citations reduced to ids (a server allowing posts above its default 4096-byte limit). Nothing was read or advanced. Retry with a larger `max_bytes` (up to 60000); beyond that the operator must lower the server's post limit. |
 | `REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY` | `deliver` named an entry that `read` has not returned (or no Coordinator reply). Nothing changed. Call `read`, persist what it returns, then deliver through its last `entry_id`. |

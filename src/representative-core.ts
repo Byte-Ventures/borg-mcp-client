@@ -59,7 +59,8 @@ export type RepresentativeErrorCode =
   | 'REPRESENTATIVE_ROLE_NOT_PERMITTED'
   | 'REPRESENTATIVE_ROLE_MISMATCH'
   | 'NOT_A_COORDINATOR_REPLY'
-  | 'REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY';
+  | 'REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY'
+  | 'REPRESENTATIVE_READ_OVERSIZE';
 
 export interface RepresentativeErrorDetails {
   owner?: import('./stream-owner.js').StreamOwnershipSnapshot;
@@ -67,6 +68,9 @@ export interface RepresentativeErrorDetails {
   cause_code?: string;
   cause_message?: string;
   recovery?: string;
+  entry_id?: string;
+  measured_bytes?: number;
+  bound?: number;
 }
 
 export class RepresentativeError extends Error {
@@ -598,6 +602,8 @@ export interface RepresentativeReply {
   message: string;
   /** This entry alone exceeds max_bytes; it is returned whole and alone. */
   oversize?: true;
+  /** Oversize and still above the envelope bound: citations were reduced to ids. */
+  documents_reduced?: true;
 }
 
 function isAddressedCoordinatorEntry(binding: RepresentativeBinding, entry: LogEntry): 'direct' | 'broadcast' | null {
@@ -614,6 +620,13 @@ export function serializeRepresentativeResult(body: unknown): string {
 }
 
 const READ_SCAN_PAGE = 500;
+/**
+ * A serialized read result never exceeds max(max_bytes, this). An oversize
+ * entry is returned alone; if it still exceeds the bound, its citations are
+ * reduced to ids. Message text is never cut: the server caps a post (4096
+ * bytes by default), so the reduced entry fits.
+ */
+export const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
 
 async function deliveryState(ctx: RepresentativeContext): Promise<DeliveryState> {
   const store = createDeliveryStore(ctx.binding);
@@ -734,11 +747,27 @@ export async function readRepresentativeReplies(
   while (count < Math.min(limit, candidates.length) &&
     Buffer.byteLength(serializeRepresentativeResult(result(count + 1))) <= maxBytes) count += 1;
   const oversize = count === 0 && candidates.length > 0;
-  const final = result(oversize ? 1 : count, oversize);
-  const returned = candidates[final.replies.length - 1]?.point;
-  if (returned && comparePoints(returned, state.readThrough) > 0) {
-    // The deliver fence widens before the caller can see the entries.
-    await createDeliveryStore(ctx.binding).advance({ readThrough: returned }, ctx.guard);
+  let final = result(oversize ? 1 : count, oversize);
+  const bound = Math.max(maxBytes, REPRESENTATIVE_ENVELOPE_FLOOR);
+  if (oversize && final.replies[0].documents?.length &&
+      Buffer.byteLength(serializeRepresentativeResult(final)) > bound) {
+    const reply = final.replies[0];
+    final = { ...final, replies: [{
+      ...reply, documents: reply.documents!.map(({ id }) => ({ id }) as DocumentCitation), documents_reduced: true as const,
+    }] };
+  }
+  const measured = Buffer.byteLength(serializeRepresentativeResult(final));
+  if (oversize && measured > bound) {
+    // Nothing is cut or overrun, and nothing moves: no content, no deliver.
+    throw new RepresentativeError('REPRESENTATIVE_READ_OVERSIZE',
+      `The next reply does not fit ${bound} bytes even alone with its citations reduced to ids. Nothing was read or ` +
+      'advanced. Raise max_bytes (up to 60000); beyond that the operator must reduce the server post limit.',
+      { entry_id: final.replies[0].entry_id, measured_bytes: measured, bound });
+  }
+  const window = candidates.slice(0, final.replies.length).map(({ point }) => point);
+  if (window.length > 0) {
+    // The deliver fence and membership widen before the caller sees the entries.
+    await createDeliveryStore(ctx.binding).advance({ readThrough: window.at(-1)!, returned: window }, ctx.guard);
   }
   return final;
 }
@@ -769,7 +798,8 @@ export async function deliverRepresentativeReplies(
   if (state.checkpoint && comparePoints(point, state.checkpoint) <= 0) {
     return { checkpoint: checkpointView(state.checkpoint), advanced: false, binding_fingerprint: fingerprint };
   }
-  if (state.readThrough === null || comparePoints(point, state.readThrough) > 0) throw outside();
+  // Membership, not range: only an entry a read actually returned.
+  if (!state.returned.some((returned) => returned.id === point.id)) throw outside();
   const { before, after } = await createDeliveryStore(ctx.binding).advance({ checkpoint: point }, ctx.guard);
   return {
     checkpoint: checkpointView(after.checkpoint),
@@ -814,6 +844,7 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
   authority: string;
   binding_fingerprint: string;
   checkpoint_problem?: { code: string; message: string };
+  envelope_floor: number;
 }> {
   const { binding } = ctx;
   let problem: { code: string; message: string } | undefined;
@@ -856,5 +887,6 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
       'connection\'s own attribution and is not verified or enforced by the Borg server.',
     binding_fingerprint: bindingFingerprint(binding),
     ...(checkpointProblem ? { checkpoint_problem: checkpointProblem } : {}),
+    envelope_floor: REPRESENTATIVE_ENVELOPE_FLOOR,
   };
 }

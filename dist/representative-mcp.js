@@ -71,7 +71,9 @@ const TOOLS = [
             'oldest first. Reading changes nothing: the same replies return on every call until you call ' +
             'borg_representative-deliver. Persist each reply durably, route it by in_reply_to or hold it for the human, then ' +
             'deliver through the last one you persisted. At most `limit` replies and `max_bytes` of serialized result; a reply ' +
-            'larger than max_bytes is returned whole and alone with oversize:true. has_more means more replies follow the window. ' +
+            'larger than max_bytes is returned whole and alone with oversize:true, and the result never exceeds ' +
+            'max(max_bytes, 16384) bytes (oversize citations reduced to ids, documents_reduced:true). has_more means more ' +
+            'replies follow the window; an empty page never has has_more. ' +
             'Stop routing if binding_fingerprint differs from the value you persisted at binding time.',
         inputSchema: {
             type: 'object',

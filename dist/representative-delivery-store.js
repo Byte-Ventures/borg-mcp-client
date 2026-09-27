@@ -7,6 +7,8 @@ import { borgConfigRoot } from './private-root.js';
 import { atomicWrite0600, readStoreFile } from './seat-store.js';
 import { bindingFingerprint, isRepresentativeUuid } from './representative-store.js';
 import { validatePrivateDirectory } from './representative-listener-store.js';
+/** Two windows of at most 50 replies (with and without broadcasts). */
+const RETURNED_CAP = 100;
 const deliveryRoot = () => join(borgConfigRoot(), 'representative-delivery');
 /**
  * This binding's own checkpoint file exists but cannot be trusted. It is never
@@ -67,7 +69,14 @@ async function readFile(directory, file) {
     }
     if (parsed?.version !== 1 || typeof parsed.seat !== 'string')
         throw new Error('Representative delivery checkpoint is invalid');
-    return { seat: parsed.seat, state: { checkpoint: point(parsed.checkpoint), readThrough: point(parsed.readThrough) } };
+    const returned = parsed.returned ?? [];
+    if (!Array.isArray(returned) || returned.length > RETURNED_CAP)
+        throw new Error('Representative delivery checkpoint is invalid');
+    return { seat: parsed.seat, state: {
+            checkpoint: point(parsed.checkpoint), readThrough: point(parsed.readThrough),
+            returned: returned.map((value) => point(value)).map((value) => { if (!value)
+                throw new Error('Representative delivery checkpoint is invalid'); return value; }),
+        } };
 }
 // One queue per state file: overlapping tool calls in one process never write
 // from a stale load. Other processes are excluded by the tools lease.
@@ -99,6 +108,9 @@ export function createDeliveryStore(binding) {
         const { checkpoint, readThrough } = saved.state;
         if (checkpoint && (readThrough === null || comparePoints(checkpoint, readThrough) > 0)) {
             throw new DeliveryCheckpointError(paths.file, 'its checkpoint is beyond its read fence');
+        }
+        if (saved.state.returned.some((entry) => comparePoints(entry, checkpoint) <= 0 || comparePoints(entry, readThrough) > 0)) {
+            throw new DeliveryCheckpointError(paths.file, 'a returned entry lies outside its window');
         }
         return saved.state;
     };
@@ -192,10 +204,15 @@ export function createDeliveryStore(binding) {
         advance(update, guard) {
             const run = async () => {
                 const before = await load();
-                const after = {
-                    checkpoint: later(before?.checkpoint ?? null, update.checkpoint ?? null),
-                    readThrough: later(before?.readThrough ?? null, update.readThrough ?? null),
-                };
+                const checkpoint = later(before?.checkpoint ?? null, update.checkpoint ?? null);
+                const readThrough = later(before?.readThrough ?? null, update.readThrough ?? null);
+                // Union of returned windows, pruned to entries still after the checkpoint.
+                const returned = [...(before?.returned ?? []), ...(update.returned ?? [])]
+                    .filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index)
+                    .filter((entry) => comparePoints(entry, checkpoint) > 0)
+                    .sort((a, b) => comparePoints(a, b))
+                    .slice(-RETURNED_CAP);
+                const after = { checkpoint, readThrough, returned };
                 if (before && JSON.stringify(before) === JSON.stringify(after))
                     return { before, after: before };
                 await guard?.();

@@ -18,13 +18,16 @@ import { type RepresentativeBinding, type RepresentativeStore } from './represen
 import { type LocalServerCursor } from './local-server-cursor.js';
 export declare const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
 export declare const REPRESENTATIVE_DELIVERY_NOTE: string;
-export type RepresentativeErrorCode = typeof ErrorCode.INVALID_INPUT | 'DECISION_REQUIRES_USER_AUTHORIZATION' | 'REQUEST_ID_CONFLICT' | 'AMBIGUOUS_SEND_UNRESOLVED' | 'SEND_REJECTED' | 'REPRESENTATIVE_OWNERSHIP_REQUIRED' | 'NOT_PREPARED' | 'SEAT_UNAVAILABLE' | 'BINDING_MISMATCH' | 'BINDING_CONFLICT' | 'COORDINATOR_NOT_FOUND' | 'COORDINATOR_AMBIGUOUS' | 'COORDINATOR_NOT_HUMAN_SEAT' | 'COORDINATOR_IS_SELF' | 'COORDINATOR_UNAVAILABLE' | 'REPRESENTATIVE_ROLE_NOT_PERMITTED' | 'REPRESENTATIVE_ROLE_MISMATCH' | 'NOT_A_COORDINATOR_REPLY' | 'REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY';
+export type RepresentativeErrorCode = typeof ErrorCode.INVALID_INPUT | 'DECISION_REQUIRES_USER_AUTHORIZATION' | 'REQUEST_ID_CONFLICT' | 'AMBIGUOUS_SEND_UNRESOLVED' | 'SEND_REJECTED' | 'REPRESENTATIVE_OWNERSHIP_REQUIRED' | 'NOT_PREPARED' | 'SEAT_UNAVAILABLE' | 'BINDING_MISMATCH' | 'BINDING_CONFLICT' | 'COORDINATOR_NOT_FOUND' | 'COORDINATOR_AMBIGUOUS' | 'COORDINATOR_NOT_HUMAN_SEAT' | 'COORDINATOR_IS_SELF' | 'COORDINATOR_UNAVAILABLE' | 'REPRESENTATIVE_ROLE_NOT_PERMITTED' | 'REPRESENTATIVE_ROLE_MISMATCH' | 'NOT_A_COORDINATOR_REPLY' | 'REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY' | 'REPRESENTATIVE_READ_OVERSIZE';
 export interface RepresentativeErrorDetails {
     owner?: import('./stream-owner.js').StreamOwnershipSnapshot;
     request_id?: string;
     cause_code?: string;
     cause_message?: string;
     recovery?: string;
+    entry_id?: string;
+    measured_bytes?: number;
+    bound?: number;
 }
 export declare class RepresentativeError extends Error {
     readonly code: RepresentativeErrorCode;
@@ -164,9 +167,18 @@ export interface RepresentativeReply {
     message: string;
     /** This entry alone exceeds max_bytes; it is returned whole and alone. */
     oversize?: true;
+    /** Oversize and still above the envelope bound: citations were reduced to ids. */
+    documents_reduced?: true;
 }
 /** The exact text an MCP tool result carries; `max_bytes` measures this. */
 export declare function serializeRepresentativeResult(body: unknown): string;
+/**
+ * A serialized read result never exceeds max(max_bytes, this). An oversize
+ * entry is returned alone; if it still exceeds the bound, its citations are
+ * reduced to ids. Message text is never cut: the server caps a post (4096
+ * bytes by default), so the reduced entry fits.
+ */
+export declare const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
 export declare function readRepresentativeReplies(ctx: RepresentativeContext, raw: unknown): Promise<{
     replies: RepresentativeReply[];
     checkpoint: {
@@ -225,6 +237,7 @@ export declare function representativeStatus(ctx: RepresentativeContext): Promis
         code: string;
         message: string;
     };
+    envelope_floor: number;
 }>;
 export {};
 //# sourceMappingURL=representative-core.d.ts.map
