@@ -213,6 +213,10 @@ export function createDeliveryStore(binding) {
                     .sort((a, b) => comparePoints(a, b))
                     .slice(-RETURNED_CAP);
                 const after = { checkpoint, readThrough, returned };
+                // Invariant on every write: the delivered checkpoint never passes the read fence.
+                if (checkpoint && (readThrough === null || comparePoints(checkpoint, readThrough) > 0)) {
+                    throw new DeliveryCheckpointError(paths.file, 'a write would move the checkpoint beyond the read fence');
+                }
                 if (before && JSON.stringify(before) === JSON.stringify(after))
                     return { before, after: before };
                 await guard?.();

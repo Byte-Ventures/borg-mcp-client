@@ -106,6 +106,21 @@ describe('replayable read and deliver', () => {
     expect(await deliverRepresentativeReplies(ctx, { through: b.id })).toMatchObject({ advanced: true });
   });
 
+  it('refuses a planted returned record whose timestamp differs from the entry, keeping checkpoint <= readThrough', async () => {
+    const [a, b] = [toRep('a'), toRep('b')];
+    const ctx = context();
+    await readRepresentativeReplies(ctx, {}); // returned a, b; readThrough b
+    const e = toRep('never returned');
+    const file = deliveryFiles().find((path) => path.endsWith('checkpoint.json'))!;
+    const data = JSON.parse(readFileSync(file, 'utf8'));
+    data.returned.push({ id: e.id, created_at: a.created_at }); // e's id inside the window, with a forged earlier time
+    writeFileSync(file, JSON.stringify(data));
+    expect(await codeOf(deliverRepresentativeReplies(ctx, { through: e.id }))).toBe('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY');
+    const after = JSON.parse(readFileSync(file, 'utf8'));
+    expect(after.checkpoint).toBeNull();
+    expect(after.readThrough).toEqual({ id: b.id, created_at: b.created_at });
+  });
+
   it('treats the same or an older id as a no-op', async () => {
     const [a, b] = [toRep('a'), toRep('b')];
     const ctx = context();
@@ -296,12 +311,23 @@ describe('bounds', () => {
     expect(error?.code).toBe('REPRESENTATIVE_READ_OVERSIZE');
     expect(error.details).toMatchObject({ entry_id: huge.id, bound: 16384 });
     expect(error.details.measured_bytes).toBeGreaterThan(16384);
-    const file = deliveryFiles().find((path) => path.endsWith('checkpoint.json'))!;
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ checkpoint: null, readThrough: null });
+    expect(deliveryFiles()).toEqual([]); // nothing advanced, nothing written
     expect(await codeOf(deliverRepresentativeReplies(ctx, { through: huge.id }))).toBe('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY');
     const result = await readRepresentativeReplies(ctx, { max_bytes: 60000 });
     expect(ids(result)).toEqual([huge.id]);
     expect(Buffer.byteLength(serializeRepresentativeResult(result))).toBeLessThanOrEqual(60000);
+  });
+
+  it.each([false, true])('writes nothing before an oversize refusal on the first call (legacy cursor present: %s)', async (legacy) => {
+    if (legacy) {
+      const read = toRep('read before upgrade');
+      cube.unreadCursorValue = { id: read.id, created_at: read.created_at };
+    }
+    const huge = toRep('h'.repeat(20000)); // the first unread reply after the start
+    const error = await readRepresentativeReplies(context(), { max_bytes: 4096 }).then(() => null, (e) => e);
+    expect(error?.code).toBe('REPRESENTATIVE_READ_OVERSIZE');
+    expect(error.details.entry_id).toBe(huge.id);
+    expect(deliveryFiles()).toEqual([]); // no tombstone, no checkpoint, no fence
   });
 
   it('reports the envelope floor in status', async () => {

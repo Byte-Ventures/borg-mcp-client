@@ -237,10 +237,12 @@ Reading:
   larger than that, its document citations are reduced to ids and it carries
   `"documents_reduced": true`; message text is never cut. `status` reports this
   floor as `envelope_floor`; set the host's tool-result ceiling at or above it.
-  With the server's default post limit (4096 bytes) every reply fits. If a server
-  allows larger posts and a reply cannot fit even reduced, `read` refuses with
+  The floor covers a message at the server's default post limit (4096 bytes)
+  with ordinary metadata. JSON escaping (a message full of tabs or quotes) or
+  heavy citation metadata can still push a single reply above it, as can a
+  server that allows larger posts. Then `read` refuses with
   `REPRESENTATIVE_READ_OVERSIZE` (`entry_id`, `measured_bytes`, `bound`) and
-  changes nothing.
+  changes nothing; retry with a larger `max_bytes` (up to 60000).
 - `read` scans past entries that are not for the representative until the page
   is full or the log ends, so it never returns no replies with `has_more: true`.
   `has_more` is true only when another reply follows the returned window.
@@ -428,5 +430,5 @@ the server is installed under the original prefix.
 | `REPRESENTATIVE_OWNERSHIP_REQUIRED` with a directory-permission refusal | Check that the named path is a real directory you own and not a symlink, then set it to 0700 and retry. Restart a process that had already lost ownership. Do not change permissions through a symlink. |
 | `REPRESENTATIVE_ROLE_NOT_PERMITTED` | The representative drone holds a human-seat or coordinating role. Give it its own worker role. |
 | `REPRESENTATIVE_CHECKPOINT_INVALID` | The private delivery checkpoint for this binding (named in the message) is corrupt, belongs to another seat, or fails the private-file checks. Every tool except `status` refuses and `status` reports it as `checkpoint_problem`; nothing is used or reset automatically. Inspect the file, then remove it; the next `read` returns every addressed reply again, so deduplicate by `entry_id`. |
-| `REPRESENTATIVE_READ_OVERSIZE` | The next reply does not fit `max(max_bytes, 16384)` bytes even with its citations reduced to ids (a server allowing posts above its default 4096-byte limit). Nothing was read or advanced. Retry with a larger `max_bytes` (up to 60000); beyond that the operator must lower the server's post limit. |
+| `REPRESENTATIVE_READ_OVERSIZE` | The next reply does not fit `max(max_bytes, 16384)` bytes even with its citations reduced to ids (heavy JSON escaping or citation metadata, or a server allowing posts above its default 4096-byte limit). Nothing was read or advanced. Retry with a larger `max_bytes` (up to 60000); beyond that the operator must lower the server's post limit. |
 | `REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY` | `deliver` named an entry that `read` has not returned (or no Coordinator reply). Nothing changed. Call `read`, persist what it returns, then deliver through its last `entry_id`. |

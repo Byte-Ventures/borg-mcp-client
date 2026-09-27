@@ -628,34 +628,43 @@ const READ_SCAN_PAGE = 500;
  */
 export const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
 
-async function deliveryState(ctx: RepresentativeContext): Promise<DeliveryState> {
+/**
+ * Run `use` with this generation's delivery state. On the first call for a
+ * generation, `use` runs alone in the per-seat queue with the proposed start,
+ * and nothing is written until it calls `commit`: a read refused as oversize
+ * leaves no tombstone and no checkpoint behind.
+ */
+async function withDeliveryState<T>(
+  ctx: RepresentativeContext,
+  use: (state: DeliveryState, commit: () => Promise<void>) => Promise<T>,
+): Promise<T> {
   const store = createDeliveryStore(ctx.binding);
   const saved = await store.load();
   if (saved) {
     // A checkpoint always implies an upgraded seat; restore a lost tombstone.
     if (!await store.migrated()) await store.markMigrated(ctx.guard);
-    return saved;
+    return use(saved, async () => {});
   }
-  // First call for this generation: decide alone, re-checking under the queue.
   return store.initialize(async () => {
     const again = await store.load();
-    if (again) return again;
+    if (again) return use(again, async () => {});
     // The seat already upgraded (a tombstone or a sibling generation exists):
     // this generation (rebind, new Coordinator, or a removed invalid checkpoint)
     // starts empty and replays its addressed history. Nothing on disk is ever
     // read back as a position, and the legacy cursor is never imported again.
-    if (await store.migrated() || await store.otherGenerationExists()) {
-      await store.markMigrated(ctx.guard);
-      return (await store.advance({}, ctx.guard)).after;
-    }
+    const upgraded = await store.migrated() || await store.otherGenerationExists();
     // One-time upgrade: start where the pre-checkpoint destructive read left
-    // the unread view. The tombstone is created exclusively first and the
-    // cursor is used only in memory, so an interruption before the checkpoint
-    // replays (duplicates the host dedupes) and a racing initializer that loses
-    // the create starts empty.
-    const cursor = await ctx.backend.unreadCursor();
-    const imported = await store.markMigrated(ctx.guard) ? cursor : null;
-    return (await store.advance({ checkpoint: imported, readThrough: imported }, ctx.guard)).after;
+    // the unread view. The cursor is used only in memory.
+    const cursor = upgraded ? null : await ctx.backend.unreadCursor();
+    return use({ checkpoint: cursor, readThrough: cursor, returned: [] }, async () => {
+      // The tombstone is created exclusively first, so an interruption before
+      // the checkpoint replays (duplicates the host dedupes). An initializer in
+      // another process that won the create (excluded by the tools lease in
+      // practice) makes this one start empty.
+      const start = !upgraded && await store.markMigrated(ctx.guard) ? cursor : null;
+      if (upgraded) await store.markMigrated(ctx.guard);
+      await store.advance({ checkpoint: start, readThrough: start }, ctx.guard);
+    });
   });
 }
 
@@ -687,7 +696,7 @@ export async function readRepresentativeReplies(
   const limit = bounded('limit', 1, 50, 10);
   const maxBytes = bounded('max_bytes', 4096, 60000, 32768);
   await verifyLiveBinding(ctx);
-  const state = await deliveryState(ctx);
+  return withDeliveryState(ctx, async (state, commit) => {
   const requestIds = await ctx.store.transactRequests(ctx.binding.worktree, (records) =>
     new Set(records.map((record) => record.requestId)));
 
@@ -764,12 +773,14 @@ export async function readRepresentativeReplies(
       'advanced. Raise max_bytes (up to 60000); beyond that the operator must reduce the server post limit.',
       { entry_id: final.replies[0].entry_id, measured_bytes: measured, bound });
   }
+  await commit();
   const window = candidates.slice(0, final.replies.length).map(({ point }) => point);
   if (window.length > 0) {
     // The deliver fence and membership widen before the caller sees the entries.
     await createDeliveryStore(ctx.binding).advance({ readThrough: window.at(-1)!, returned: window }, ctx.guard);
   }
   return final;
+  });
 }
 
 export async function deliverRepresentativeReplies(
@@ -781,25 +792,29 @@ export async function deliverRepresentativeReplies(
   if (unknown.length > 0 || !isRepresentativeUuid(input.through)) {
     throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'through must be the full UUID of a reply returned by borg_representative-read.');
   }
+  const through = input.through;
   await verifyLiveBinding(ctx);
-  const state = await deliveryState(ctx);
+  return withDeliveryState(ctx, async (state, commit) => {
+  await commit();
   const outside = () => new RepresentativeError('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY',
     'That entry is not in the current read window: deliver only a reply that borg_representative-read returned. Nothing changed.');
   let entry: LogEntry;
   try {
-    ({ entry } = await ctx.backend.readEntry(input.through));
+    ({ entry } = await ctx.backend.readEntry(through));
   } catch (error) {
     if ((error as { status?: unknown })?.status === 404) throw outside();
     throw error;
   }
-  if (entry.id !== input.through || isAddressedCoordinatorEntry(ctx.binding, entry) === null) throw outside();
+  if (entry.id !== through || isAddressedCoordinatorEntry(ctx.binding, entry) === null) throw outside();
   const point = { id: entry.id, created_at: entry.created_at };
   const fingerprint = bindingFingerprint(ctx.binding);
   if (state.checkpoint && comparePoints(point, state.checkpoint) <= 0) {
     return { checkpoint: checkpointView(state.checkpoint), advanced: false, binding_fingerprint: fingerprint };
   }
-  // Membership, not range: only an entry a read actually returned.
-  if (!state.returned.some((returned) => returned.id === point.id)) throw outside();
+  // Membership of the full tuple, not the range or the id alone: only an entry
+  // a read actually returned, as the server reports it now, inside the window.
+  if (!state.returned.some((returned) => returned.id === point.id && returned.created_at === point.created_at) ||
+      state.readThrough === null || comparePoints(point, state.readThrough) > 0) throw outside();
   const { before, after } = await createDeliveryStore(ctx.binding).advance({ checkpoint: point }, ctx.guard);
   return {
     checkpoint: checkpointView(after.checkpoint),
@@ -807,6 +822,7 @@ export async function deliverRepresentativeReplies(
     advanced: comparePoints(after.checkpoint!, before?.checkpoint ?? null) > 0,
     binding_fingerprint: fingerprint,
   };
+  });
 }
 
 export async function ackRepresentativeReply(

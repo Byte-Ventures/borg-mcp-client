@@ -427,36 +427,43 @@ const READ_SCAN_PAGE = 500;
  * bytes by default), so the reduced entry fits.
  */
 export const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
-async function deliveryState(ctx) {
+/**
+ * Run `use` with this generation's delivery state. On the first call for a
+ * generation, `use` runs alone in the per-seat queue with the proposed start,
+ * and nothing is written until it calls `commit`: a read refused as oversize
+ * leaves no tombstone and no checkpoint behind.
+ */
+async function withDeliveryState(ctx, use) {
     const store = createDeliveryStore(ctx.binding);
     const saved = await store.load();
     if (saved) {
         // A checkpoint always implies an upgraded seat; restore a lost tombstone.
         if (!await store.migrated())
             await store.markMigrated(ctx.guard);
-        return saved;
+        return use(saved, async () => { });
     }
-    // First call for this generation: decide alone, re-checking under the queue.
     return store.initialize(async () => {
         const again = await store.load();
         if (again)
-            return again;
+            return use(again, async () => { });
         // The seat already upgraded (a tombstone or a sibling generation exists):
         // this generation (rebind, new Coordinator, or a removed invalid checkpoint)
         // starts empty and replays its addressed history. Nothing on disk is ever
         // read back as a position, and the legacy cursor is never imported again.
-        if (await store.migrated() || await store.otherGenerationExists()) {
-            await store.markMigrated(ctx.guard);
-            return (await store.advance({}, ctx.guard)).after;
-        }
+        const upgraded = await store.migrated() || await store.otherGenerationExists();
         // One-time upgrade: start where the pre-checkpoint destructive read left
-        // the unread view. The tombstone is created exclusively first and the
-        // cursor is used only in memory, so an interruption before the checkpoint
-        // replays (duplicates the host dedupes) and a racing initializer that loses
-        // the create starts empty.
-        const cursor = await ctx.backend.unreadCursor();
-        const imported = await store.markMigrated(ctx.guard) ? cursor : null;
-        return (await store.advance({ checkpoint: imported, readThrough: imported }, ctx.guard)).after;
+        // the unread view. The cursor is used only in memory.
+        const cursor = upgraded ? null : await ctx.backend.unreadCursor();
+        return use({ checkpoint: cursor, readThrough: cursor, returned: [] }, async () => {
+            // The tombstone is created exclusively first, so an interruption before
+            // the checkpoint replays (duplicates the host dedupes). An initializer in
+            // another process that won the create (excluded by the tools lease in
+            // practice) makes this one start empty.
+            const start = !upgraded && await store.markMigrated(ctx.guard) ? cursor : null;
+            if (upgraded)
+                await store.markMigrated(ctx.guard);
+            await store.advance({ checkpoint: start, readThrough: start }, ctx.guard);
+        });
     });
 }
 const checkpointView = (point) => ({ entry_id: point?.id ?? null, created_at: point?.created_at ?? null });
@@ -481,90 +488,92 @@ export async function readRepresentativeReplies(ctx, raw) {
     const limit = bounded('limit', 1, 50, 10);
     const maxBytes = bounded('max_bytes', 4096, 60000, 32768);
     await verifyLiveBinding(ctx);
-    const state = await deliveryState(ctx);
-    const requestIds = await ctx.store.transactRequests(ctx.binding.worktree, (records) => new Set(records.map((record) => record.requestId)));
-    // Deliberate ceiling: every read scans the cube log from the checkpoint,
-    // including entries not addressed here, so an undelivered backlog costs a
-    // growing scan. Upgrade path: a separate scan hint that deliver advances.
-    // One addressed entry beyond `limit` is collected only to answer has_more.
-    const candidates = [];
-    let ignored = 0;
-    let cursor = state.checkpoint;
-    let last = state.checkpoint;
-    scan: for (;;) {
-        const page = await ctx.backend.readAfter(cursor, READ_SCAN_PAGE);
-        for (const entry of page.entries) {
-            const point = { id: entry.id, created_at: entry.created_at };
-            // Client-side (created_at, id) filter: never repeat or regress.
-            if (comparePoints(point, last) <= 0)
-                continue;
-            last = point;
-            const addressed = isAddressedCoordinatorEntry(ctx.binding, entry);
-            if (addressed === null || (addressed === 'broadcast' && input.include_broadcast !== true)) {
-                ignored += 1;
-                continue;
+    return withDeliveryState(ctx, async (state, commit) => {
+        const requestIds = await ctx.store.transactRequests(ctx.binding.worktree, (records) => new Set(records.map((record) => record.requestId)));
+        // Deliberate ceiling: every read scans the cube log from the checkpoint,
+        // including entries not addressed here, so an undelivered backlog costs a
+        // growing scan. Upgrade path: a separate scan hint that deliver advances.
+        // One addressed entry beyond `limit` is collected only to answer has_more.
+        const candidates = [];
+        let ignored = 0;
+        let cursor = state.checkpoint;
+        let last = state.checkpoint;
+        scan: for (;;) {
+            const page = await ctx.backend.readAfter(cursor, READ_SCAN_PAGE);
+            for (const entry of page.entries) {
+                const point = { id: entry.id, created_at: entry.created_at };
+                // Client-side (created_at, id) filter: never repeat or regress.
+                if (comparePoints(point, last) <= 0)
+                    continue;
+                last = point;
+                const addressed = isAddressedCoordinatorEntry(ctx.binding, entry);
+                if (addressed === null || (addressed === 'broadcast' && input.include_broadcast !== true)) {
+                    ignored += 1;
+                    continue;
+                }
+                const quoted = (entry.message.match(UUID_SCAN_RE) ?? []).map((id) => id.toLowerCase());
+                candidates.push({ point, ignoredBefore: ignored, reply: {
+                        entry_id: entry.id,
+                        created_at: entry.created_at,
+                        from_drone_id: ctx.binding.coordinatorDroneId,
+                        from_label: ctx.binding.coordinatorLabel,
+                        addressed,
+                        in_reply_to: quoted.find((id) => requestIds.has(id)) ?? null,
+                        message: entry.message,
+                        ...(entry.documents?.length ? {
+                            documents: entry.documents,
+                            document_delivery: 'Document bodies are not included and cannot be fetched through this connection. Ask the Coordinator to provide the content through a supported channel.',
+                        } : {}),
+                    } });
+                if (candidates.length > limit)
+                    break scan;
             }
-            const quoted = (entry.message.match(UUID_SCAN_RE) ?? []).map((id) => id.toLowerCase());
-            candidates.push({ point, ignoredBefore: ignored, reply: {
-                    entry_id: entry.id,
-                    created_at: entry.created_at,
-                    from_drone_id: ctx.binding.coordinatorDroneId,
-                    from_label: ctx.binding.coordinatorLabel,
-                    addressed,
-                    in_reply_to: quoted.find((id) => requestIds.has(id)) ?? null,
-                    message: entry.message,
-                    ...(entry.documents?.length ? {
-                        documents: entry.documents,
-                        document_delivery: 'Document bodies are not included and cannot be fetched through this connection. Ask the Coordinator to provide the content through a supported channel.',
-                    } : {}),
-                } });
-            if (candidates.length > limit)
-                break scan;
+            const tail = page.entries.at(-1);
+            if (!page.has_more || !tail)
+                break;
+            cursor = { id: tail.id, created_at: tail.created_at };
         }
-        const tail = page.entries.at(-1);
-        if (!page.has_more || !tail)
-            break;
-        cursor = { id: tail.id, created_at: tail.created_at };
-    }
-    const result = (count, oversize = false) => {
-        const taken = candidates.slice(0, count);
-        const replies = taken.map(({ reply }, index) => (oversize && index === 0 ? { ...reply, oversize: true } : reply));
-        return {
-            replies,
-            checkpoint: checkpointView(state.checkpoint),
-            has_more: candidates.length > count,
-            ignored_entries: count < candidates.length ? candidates[count].ignoredBefore : ignored,
-            binding_fingerprint: bindingFingerprint(ctx.binding),
-            delivery: REPRESENTATIVE_DELIVERY_NOTE,
+        const result = (count, oversize = false) => {
+            const taken = candidates.slice(0, count);
+            const replies = taken.map(({ reply }, index) => (oversize && index === 0 ? { ...reply, oversize: true } : reply));
+            return {
+                replies,
+                checkpoint: checkpointView(state.checkpoint),
+                has_more: candidates.length > count,
+                ignored_entries: count < candidates.length ? candidates[count].ignoredBefore : ignored,
+                binding_fingerprint: bindingFingerprint(ctx.binding),
+                delivery: REPRESENTATIVE_DELIVERY_NOTE,
+            };
         };
-    };
-    // Measure the real serialized result; entries are whole or omitted.
-    let count = 0;
-    while (count < Math.min(limit, candidates.length) &&
-        Buffer.byteLength(serializeRepresentativeResult(result(count + 1))) <= maxBytes)
-        count += 1;
-    const oversize = count === 0 && candidates.length > 0;
-    let final = result(oversize ? 1 : count, oversize);
-    const bound = Math.max(maxBytes, REPRESENTATIVE_ENVELOPE_FLOOR);
-    if (oversize && final.replies[0].documents?.length &&
-        Buffer.byteLength(serializeRepresentativeResult(final)) > bound) {
-        const reply = final.replies[0];
-        final = { ...final, replies: [{
-                    ...reply, documents: reply.documents.map(({ id }) => ({ id })), documents_reduced: true,
-                }] };
-    }
-    const measured = Buffer.byteLength(serializeRepresentativeResult(final));
-    if (oversize && measured > bound) {
-        // Nothing is cut or overrun, and nothing moves: no content, no deliver.
-        throw new RepresentativeError('REPRESENTATIVE_READ_OVERSIZE', `The next reply does not fit ${bound} bytes even alone with its citations reduced to ids. Nothing was read or ` +
-            'advanced. Raise max_bytes (up to 60000); beyond that the operator must reduce the server post limit.', { entry_id: final.replies[0].entry_id, measured_bytes: measured, bound });
-    }
-    const window = candidates.slice(0, final.replies.length).map(({ point }) => point);
-    if (window.length > 0) {
-        // The deliver fence and membership widen before the caller sees the entries.
-        await createDeliveryStore(ctx.binding).advance({ readThrough: window.at(-1), returned: window }, ctx.guard);
-    }
-    return final;
+        // Measure the real serialized result; entries are whole or omitted.
+        let count = 0;
+        while (count < Math.min(limit, candidates.length) &&
+            Buffer.byteLength(serializeRepresentativeResult(result(count + 1))) <= maxBytes)
+            count += 1;
+        const oversize = count === 0 && candidates.length > 0;
+        let final = result(oversize ? 1 : count, oversize);
+        const bound = Math.max(maxBytes, REPRESENTATIVE_ENVELOPE_FLOOR);
+        if (oversize && final.replies[0].documents?.length &&
+            Buffer.byteLength(serializeRepresentativeResult(final)) > bound) {
+            const reply = final.replies[0];
+            final = { ...final, replies: [{
+                        ...reply, documents: reply.documents.map(({ id }) => ({ id })), documents_reduced: true,
+                    }] };
+        }
+        const measured = Buffer.byteLength(serializeRepresentativeResult(final));
+        if (oversize && measured > bound) {
+            // Nothing is cut or overrun, and nothing moves: no content, no deliver.
+            throw new RepresentativeError('REPRESENTATIVE_READ_OVERSIZE', `The next reply does not fit ${bound} bytes even alone with its citations reduced to ids. Nothing was read or ` +
+                'advanced. Raise max_bytes (up to 60000); beyond that the operator must reduce the server post limit.', { entry_id: final.replies[0].entry_id, measured_bytes: measured, bound });
+        }
+        await commit();
+        const window = candidates.slice(0, final.replies.length).map(({ point }) => point);
+        if (window.length > 0) {
+            // The deliver fence and membership widen before the caller sees the entries.
+            await createDeliveryStore(ctx.binding).advance({ readThrough: window.at(-1), returned: window }, ctx.guard);
+        }
+        return final;
+    });
 }
 export async function deliverRepresentativeReplies(ctx, raw) {
     const input = (raw ?? {});
@@ -572,35 +581,40 @@ export async function deliverRepresentativeReplies(ctx, raw) {
     if (unknown.length > 0 || !isRepresentativeUuid(input.through)) {
         throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'through must be the full UUID of a reply returned by borg_representative-read.');
     }
+    const through = input.through;
     await verifyLiveBinding(ctx);
-    const state = await deliveryState(ctx);
-    const outside = () => new RepresentativeError('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY', 'That entry is not in the current read window: deliver only a reply that borg_representative-read returned. Nothing changed.');
-    let entry;
-    try {
-        ({ entry } = await ctx.backend.readEntry(input.through));
-    }
-    catch (error) {
-        if (error?.status === 404)
+    return withDeliveryState(ctx, async (state, commit) => {
+        await commit();
+        const outside = () => new RepresentativeError('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY', 'That entry is not in the current read window: deliver only a reply that borg_representative-read returned. Nothing changed.');
+        let entry;
+        try {
+            ({ entry } = await ctx.backend.readEntry(through));
+        }
+        catch (error) {
+            if (error?.status === 404)
+                throw outside();
+            throw error;
+        }
+        if (entry.id !== through || isAddressedCoordinatorEntry(ctx.binding, entry) === null)
             throw outside();
-        throw error;
-    }
-    if (entry.id !== input.through || isAddressedCoordinatorEntry(ctx.binding, entry) === null)
-        throw outside();
-    const point = { id: entry.id, created_at: entry.created_at };
-    const fingerprint = bindingFingerprint(ctx.binding);
-    if (state.checkpoint && comparePoints(point, state.checkpoint) <= 0) {
-        return { checkpoint: checkpointView(state.checkpoint), advanced: false, binding_fingerprint: fingerprint };
-    }
-    // Membership, not range: only an entry a read actually returned.
-    if (!state.returned.some((returned) => returned.id === point.id))
-        throw outside();
-    const { before, after } = await createDeliveryStore(ctx.binding).advance({ checkpoint: point }, ctx.guard);
-    return {
-        checkpoint: checkpointView(after.checkpoint),
-        // The serialized transition, not this call's earlier snapshot.
-        advanced: comparePoints(after.checkpoint, before?.checkpoint ?? null) > 0,
-        binding_fingerprint: fingerprint,
-    };
+        const point = { id: entry.id, created_at: entry.created_at };
+        const fingerprint = bindingFingerprint(ctx.binding);
+        if (state.checkpoint && comparePoints(point, state.checkpoint) <= 0) {
+            return { checkpoint: checkpointView(state.checkpoint), advanced: false, binding_fingerprint: fingerprint };
+        }
+        // Membership of the full tuple, not the range or the id alone: only an entry
+        // a read actually returned, as the server reports it now, inside the window.
+        if (!state.returned.some((returned) => returned.id === point.id && returned.created_at === point.created_at) ||
+            state.readThrough === null || comparePoints(point, state.readThrough) > 0)
+            throw outside();
+        const { before, after } = await createDeliveryStore(ctx.binding).advance({ checkpoint: point }, ctx.guard);
+        return {
+            checkpoint: checkpointView(after.checkpoint),
+            // The serialized transition, not this call's earlier snapshot.
+            advanced: comparePoints(after.checkpoint, before?.checkpoint ?? null) > 0,
+            binding_fingerprint: fingerprint,
+        };
+    });
 }
 export async function ackRepresentativeReply(ctx, raw) {
     const input = (raw ?? {});
