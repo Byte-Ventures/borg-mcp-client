@@ -562,6 +562,12 @@ from borgmcp 5.x is changed: its `representative.json` and delivery files are
 read once, when the database is first created (see "Where a binding's replies
 start"), and never written.
 
+Wake state is derived data. When a binding's wake state or one of its wake
+records is invalid (for example hand-edited), the listener discards that
+binding's wake state in one transaction, logs one line on stderr, and rebuilds
+it from the delivered checkpoint and the log. The delivered checkpoint and the
+rest of the database are unchanged; this needs no `reset-state`.
+
 The lock is local: exclusivity holds between processes on this host and this
 filesystem, not across hosts sharing a network filesystem.
 
