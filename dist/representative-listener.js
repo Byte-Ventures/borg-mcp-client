@@ -86,7 +86,7 @@ export async function runListener(command, deps, options = {}) {
         }
         catch { /* resolve refuses missing bindings */ }
         worktree = deps.findProjectRoot(worktree);
-        const ctx = await resolveRepresentativeContext(worktree, deps);
+        const ctx = await resolveRepresentativeContext(worktree, deps, { initialize: true });
         // Only this server step maps transport failures to SERVER_UNREACHABLE; typed
         // rejections keep their binding codes and storage keeps STORAGE_REFUSED.
         await verifyLiveBinding(ctx).catch((error) => {

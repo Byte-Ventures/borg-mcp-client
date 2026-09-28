@@ -115,6 +115,8 @@ describe('Coordinator selection', () => {
 });
 
 describe('send', () => {
+  beforeEach(async () => { await ctx.store.saveBinding(ctx.binding, { rebind: false }); });
+
   it('delivers only to the bound Coordinator with automated-representation attribution', async () => {
     const result = await sendRepresentativeMessage(ctx, {
       request_id: REQUEST_ID,
@@ -264,6 +266,8 @@ describe('send', () => {
 });
 
 describe('read and acknowledge', () => {
+  beforeEach(async () => { await ctx.store.saveBinding(ctx.binding, { rebind: false }); });
+
   it('returns only the bound Coordinator\'s entries and correlates quoted request ids', async () => {
     await sendRepresentativeMessage(ctx, {
       request_id: REQUEST_ID, kind: 'question', authorization: 'user_authorized', message: 'A or B?',
@@ -327,12 +331,15 @@ describe('binding store', () => {
       .rejects.toMatchObject({ code: 'REPRESENTATIVE_STATE_VERSION' });
   });
 
-  it('treats a malformed 5.x binding file as not prepared: it is only ever an import source', async () => {
+  it('reads no 5.x file on a lookup: 5.x bindings are imported only when the state is created', async () => {
     plantLegacyBindings(root, [bindingFor(WORKTREE)]);
+    expect(await ctx.store.getBinding(WORKTREE)).toBeNull(); // no state yet, and status-style lookups create none
+    expect(stateInitialized()).toBe(false);
+    await ctx.store.initialize();
     expect((await ctx.store.getBinding(WORKTREE))?.coordinatorDroneId).toBe(COORD_ID);
-    const { writeFileSync } = await import('node:fs');
-    writeFileSync(join(root, '.config', 'borgmcp', 'representative.json'), '{"version":7}', { mode: 0o600 });
-    expect(await ctx.store.getBinding(WORKTREE)).toBeNull();
-    expect(stateInitialized()).toBe(false); // reading never creates state
+    // A 5.x file that appears or changes afterwards is never read again.
+    plantLegacyBindings(root, [bindingFor('/work/later')]);
+    expect(await ctx.store.getBinding('/work/later')).toBeNull();
+    expect((await ctx.store.listBindings()).map((binding) => binding.worktree)).toEqual([WORKTREE]);
   });
 });

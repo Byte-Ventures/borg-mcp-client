@@ -13,6 +13,7 @@
  */
 import type { Readable, Writable } from 'node:stream';
 import { type RepresentativeContext } from './representative-core.js';
+import { RepresentativeStateError } from './representative-db.js';
 export declare const REPRESENTATIVE_TOOL_NAMES: readonly ["borg_representative-status", "borg_representative-send", "borg_representative-read", "borg_representative-deliver", "borg_representative-ack"];
 export declare const REPRESENTATIVE_INSTRUCTIONS: string;
 export interface ServeRepresentativeOptions {
@@ -29,6 +30,8 @@ export interface ServeRepresentativeOptions {
     stdout?: Writable;
     /** Called once on shutdown (closes the state database handle). */
     onClose?: () => void;
+    /** Status body when the context cannot be resolved because the state database is unusable. */
+    stateProblemStatus?: (error: RepresentativeStateError) => unknown;
 }
 export declare function serveRepresentativeMcp(options: ServeRepresentativeOptions): Promise<{
     close: () => Promise<void>;

@@ -269,9 +269,10 @@ export function createRepresentativeState(options = {}) {
     const currentGeneration = async () => {
         let current = readCurrent(root);
         if (current === null) {
+            const fill = options.seed ? await options.seed() : () => { };
             await withPublishMutex(root, (sqlite, lockedRoot) => {
                 if (readCurrent(lockedRoot) === null)
-                    publishGeneration(sqlite, lockedRoot, () => { }, now, hook);
+                    publishGeneration(sqlite, lockedRoot, fill, now, hook);
             }, { create: true, ensureTree });
             current = readCurrent(root);
             if (current === null)

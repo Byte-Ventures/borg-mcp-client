@@ -105,11 +105,12 @@ async function connect(context?: () => Promise<RepresentativeContext>) {
   return { client, server };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-representative-mcp-')));
   process.env.HOME = root;
   process.env.BORG_STATE_ROOT = root;
   cube = new MockCube();
+  await prepared();
 });
 
 afterEach(() => {

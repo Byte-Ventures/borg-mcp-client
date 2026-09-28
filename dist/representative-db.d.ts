@@ -36,6 +36,13 @@ export interface RepresentativeStateOptions {
     now?: () => Date;
     /** How long a transaction waits for another writer (default 10 s). */
     busyTimeoutMs?: number;
+    /**
+     * Rows for the FIRST generation only (clean slate): gathered before the
+     * publish mutex (it may read files), then written inside the creating
+     * transaction. Never used again once any generation exists, including after
+     * a reset.
+     */
+    seed?: () => Promise<(db: DatabaseSync) => void>;
     /** Test seams: run between the named steps (kill/pause controls). */
     hooks?: Partial<Record<'beforeOpen' | 'beforeBegin' | 'afterBegin' | 'publish:dir' | 'publish:schema' | 'publish:rows' | 'publish:fsync' | 'publish:tmp' | 'publish:rename' | 'publish:done', () => void>>;
 }

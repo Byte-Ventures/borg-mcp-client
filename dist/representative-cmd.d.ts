@@ -70,8 +70,15 @@ export interface RepresentativeCmdDeps {
     stderr(text: string): void;
 }
 export declare function parseRepresentativeArgs(args: readonly string[]): ParsedRepresentativeArgs;
-/** Load the saved binding and prove the worktree's hydrated seat is still that exact seat. Fails closed. */
-export declare function resolveRepresentativeContext(worktree: string, deps: Pick<RepresentativeCmdDeps, 'hydrateSeat' | 'backendFor' | 'store'>): Promise<RepresentativeContext>;
+/**
+ * Load the saved binding and prove the worktree's hydrated seat is still that
+ * exact seat. Fails closed. `initialize` creates the state first when none
+ * exists (mcp and listen; the first generation imports 5.x bindings once);
+ * status never creates anything.
+ */
+export declare function resolveRepresentativeContext(worktree: string, deps: Pick<RepresentativeCmdDeps, 'hydrateSeat' | 'backendFor' | 'store'>, options?: {
+    initialize?: boolean;
+}): Promise<RepresentativeContext>;
 export declare function hermesConfigSnippet(worktree: string): string;
 export declare function runRepresentativePrepare(command: Extract<RepresentativeCommand, {
     action: 'prepare';

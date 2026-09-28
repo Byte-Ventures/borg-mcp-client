@@ -37,8 +37,8 @@ export const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
 export const REPRESENTATIVE_DELIVERY_NOTE =
   'read returns undelivered replies without consuming them; persist, route by in_reply_to (unknown: hold for the ' +
   'human), then deliver through the last persisted entry_id. ack only notifies the Coordinator. A separate ' +
-  'borg representative listen process emits body-free wake hints. One process at a time owns send/read/deliver/ack; ' +
-  'status is read-only. Any number of host processes may use these tools at once. Stop routing if binding_fingerprint changes.';
+  'borg representative listen process emits body-free wake hints. Any number of host processes may use these tools at ' +
+  'once; status is read-only. Stop routing if binding_fingerprint changes.';
 
 export type RepresentativeErrorCode =
   | typeof ErrorCode.INVALID_INPUT
@@ -819,6 +819,23 @@ export async function ackRepresentativeReply(
   }
   await ctx.backend.ack(entry.id);
   return { acknowledged: entry.id };
+}
+
+/**
+ * Status when the state database cannot be used (corrupt, unsafe, another
+ * version): no binding can be read, so only the problem and its recovery are
+ * reported. Every other tool refuses with the same error.
+ */
+export function representativeStateProblemStatus(worktree: string, error: { code: string; message: string }): {
+  role: string; connected: false; worktree: string; state_problem: { code: string; message: string }; delivery: string;
+} {
+  return {
+    role: 'Human representative — an automated delegate speaking for the human. It is not the human and not the Coordinator.',
+    connected: false,
+    worktree,
+    state_problem: { code: error.code, message: error.message },
+    delivery: REPRESENTATIVE_DELIVERY_NOTE,
+  };
 }
 
 export async function representativeStatus(ctx: RepresentativeContext): Promise<{

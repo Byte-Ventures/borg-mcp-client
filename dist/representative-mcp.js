@@ -140,6 +140,16 @@ export async function serveRepresentativeMcp(options) {
             if (!REPRESENTATIVE_TOOL_NAMES.includes(name)) {
                 throw new RepresentativeError(ErrorCode.INVALID_INPUT, `Unknown tool ${JSON.stringify(name)}; this connection exposes only the representative tools.`);
             }
+            if (name === 'borg_representative-status' && options.stateProblemStatus) {
+                // Status needs no binding to report an unusable state database.
+                const resolved = await options.context().then((ctx) => ({ ctx }), (error) => {
+                    if (error instanceof RepresentativeStateError)
+                        return { problem: error };
+                    throw error;
+                });
+                if ('problem' in resolved)
+                    return toolResult(options.stateProblemStatus(resolved.problem));
+            }
             const ctx = await options.context();
             const pinned = options.pinnedFingerprint ? { pinned_binding_fingerprint: options.pinnedFingerprint } : {};
             if (name === 'borg_representative-status') {

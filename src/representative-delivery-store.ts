@@ -3,8 +3,9 @@
  * generation, in the representative state database.
  *
  * - `start`: where this generation's history begins (the imported 5.x
- *   checkpoint, the server head, or the binding start). Scans never consider
- *   entries at or before it.
+ *   checkpoint, the server head, or the binding start; 'head-pending' until an
+ *   imported generation's first use resolves it). Scans never consider entries
+ *   at or before it.
  * - `checkpoint`: the host's durable delivery point; only `deliver` moves it.
  * - `readThrough`: the highest entry any `read` returned; `deliver` may not pass it.
  * - `returned`: entries a read returned since the checkpoint last moved;
@@ -16,10 +17,10 @@
 import type { Transaction } from './representative-db.js';
 import type { LocalServerCursor } from './local-server-cursor.js';
 import {
-  bindingFingerprint, currentBindingRow, insertBindingRow, RepresentativeGenerationError,
+  bindingFingerprint, currentBindingRow, RepresentativeGenerationError,
   type RepresentativeBinding, type RepresentativeStore,
 } from './representative-store.js';
-import { readLegacyDelivery, seatKey } from './representative-legacy.js';
+import { seatKey } from './representative-legacy.js';
 
 export type StartKind = 'checkpoint' | 'head' | 'binding';
 
@@ -71,6 +72,7 @@ export function loadDelivery(db: Transaction, generation: string): DeliveryState
  * never sent to the server as a cursor.
  */
 export function scanStart(state: DeliveryState): { cursor: LocalServerCursor | null; floor: LocalServerCursor } {
+  if ((state.startKind as string) === 'head-pending') throw new Error('The delivery start is not resolved yet');
   const floor = later(state.start, state.checkpoint)!;
   if (state.checkpoint) return { cursor: state.checkpoint, floor };
   return { cursor: state.startKind === 'binding' ? null : state.start, floor };
@@ -123,60 +125,47 @@ export interface EnsureStateContext {
 }
 
 /**
- * Make sure the binding's generation has its binding row and delivery row,
- * creating them on first use with the start rule:
- *   1. a valid 5.x checkpoint for this generation, non-null → that checkpoint;
- *   2. a valid 5.x checkpoint that is null → the binding start;
- *   3. history enumerable and empty (no tombstone, no checkpoint for any
- *      generation of the seat in 5.x files or in this database) → the server
- *      head (the binding start for an empty log);
- *   4. anything else → the binding start (replays; never skips).
- * Network and file reads run before the creating transaction, which re-checks
- * only local facts.
+ * Make sure the binding's generation has a resolved delivery row. The binding
+ * row must already exist (prepare, or the one-time 5.x import when the state was
+ * created); this never reads 5.x files.
+ * - A prepared generation without a row starts at its binding start.
+ * - An imported 5.x generation left 'head-pending' (no 5.x history for its
+ *   seat) starts at the server head, read outside any transaction; if another
+ *   generation of the seat has delivery state by the time it is written, it
+ *   starts at the binding start instead (replays, never skips).
  */
 export async function ensureDeliveryState(ctx: EnsureStateContext): Promise<void> {
   const generation = bindingFingerprint(ctx.binding);
   const seat = seatKey(ctx.binding);
-  const probe = await ctx.store.state.transact((db) => {
-    const row = currentBindingRow(db, ctx.binding.worktree);
-    if (row && row.generation !== generation) throw new RepresentativeGenerationError();
-    if (row && loadDelivery(db, generation)) return 'ready' as const;
-    // A binding this version prepared always starts at its binding start: every
-    // reply after it was bound is delivered, and nothing older was ever tracked.
-    if (row?.origin === 'prepared') return 'prepared' as const;
-    const seatHistory = db.prepare('SELECT 1 AS present FROM delivery WHERE seat = ? LIMIT 1').get(seat) !== undefined;
-    return seatHistory ? 'history' as const : 'none' as const;
-  });
-  if (probe === 'ready') return;
-
   const bindingStart = { id: NIL_UUID, created_at: ctx.binding.boundAt };
-  let kind: StartKind = 'binding';
-  let start: LocalServerCursor = bindingStart;
-  let checkpoint: LocalServerCursor | null = null;
-  const legacy = probe === 'prepared'
-    ? { checkpoint: { kind: 'absent' as const }, history: 'present' as const }
-    : await readLegacyDelivery(ctx.binding);
-  if (legacy.checkpoint.kind === 'valid' && legacy.checkpoint.checkpoint) {
-    kind = 'checkpoint';
-    start = legacy.checkpoint.checkpoint;
-    checkpoint = legacy.checkpoint.checkpoint;
-  } else if (legacy.checkpoint.kind !== 'valid' && legacy.history === 'empty' && probe === 'none') {
-    const head = await ctx.serverHead();
-    if (head) { kind = 'head'; start = head; }
-  }
-
-  await ctx.store.state.transact((db) => {
+  const current = (db: Transaction) => {
     const row = currentBindingRow(db, ctx.binding.worktree);
-    if (row && row.generation !== generation) throw new RepresentativeGenerationError();
-    if (!row) insertBindingRow(db, ctx.binding, seat, 'legacy');
-    if (loadDelivery(db, generation)) return;
-    // A concurrent first use of another generation of this seat made history
-    // appear: never start at the head then.
-    const historyNow = db.prepare('SELECT 1 AS present FROM delivery WHERE seat = ? LIMIT 1').get(seat) !== undefined;
-    if (kind === 'head' && historyNow) { kind = 'binding'; start = bindingStart; }
-    db.prepare(`INSERT INTO delivery (generation, seat, start_id, start_at, start_kind, checkpoint_id, checkpoint_at,
-      read_through_id, read_through_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      generation, seat, start.id, start.created_at, kind,
-      checkpoint?.id ?? null, checkpoint?.created_at ?? null, checkpoint?.id ?? null, checkpoint?.created_at ?? null);
+    if (!row || row.generation !== generation) throw new RepresentativeGenerationError();
+    return row;
+  };
+  const insert = (db: Transaction, kind: StartKind, start: LocalServerCursor) => db.prepare(`INSERT INTO delivery
+    (generation, seat, start_id, start_at, start_kind, checkpoint_id, checkpoint_at, read_through_id, read_through_at)
+    VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)`).run(generation, seat, start.id, start.created_at, kind);
+  const pending = await ctx.store.state.transact((db) => {
+    current(db);
+    const kind = startKindOf(db, generation);
+    if (kind === null) { insert(db, 'binding', bindingStart); return false; }
+    return kind === 'head-pending';
   });
+  if (!pending) return;
+  const head = await ctx.serverHead();
+  await ctx.store.state.transact((db) => {
+    current(db);
+    if (startKindOf(db, generation) !== 'head-pending') return;
+    const seatHistory = db.prepare('SELECT 1 AS present FROM delivery WHERE seat = ? AND generation != ? LIMIT 1')
+      .get(seat, generation) !== undefined;
+    const [kind, start] = head && !seatHistory ? ['head' as const, head] : ['binding' as const, bindingStart];
+    db.prepare('UPDATE delivery SET start_kind = ?, start_id = ?, start_at = ? WHERE generation = ?')
+      .run(kind, start.id, start.created_at, generation);
+  });
+}
+
+function startKindOf(db: Transaction, generation: string): StartKind | 'head-pending' | null {
+  const row = db.prepare('SELECT start_kind FROM delivery WHERE generation = ?').get(generation) as { start_kind: string } | undefined;
+  return (row?.start_kind ?? null) as StartKind | 'head-pending' | null;
 }

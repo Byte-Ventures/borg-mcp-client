@@ -60,9 +60,16 @@ export declare class RepresentativeStoreError extends Error {
 }
 export interface RepresentativeStore {
     readonly state: RepresentativeState;
-    /** The worktree's binding: its 6.x row, else its 5.x binding (read-only). Never creates anything. */
+    /**
+     * Create the state if none exists (the first generation imports 5.x
+     * bindings, once). Status never calls this: it creates nothing.
+     */
+    initialize(): Promise<void>;
+    /** Whether a generation is published. Read-only. */
+    initialized(): Promise<boolean>;
+    /** The worktree's binding row, or null. Read-only; never creates anything and never reads 5.x files. */
     getBinding(worktree: string): Promise<RepresentativeBinding | null>;
-    /** Every binding: 6.x rows, plus 5.x bindings for worktrees without a row. Read-only. */
+    /** Every binding row. Read-only. */
     listBindings(): Promise<RepresentativeBinding[]>;
     /** The current generation's ledger for a worktree. Read-only. */
     readRequests(worktree: string): Promise<RepresentativeRequestRecord[]>;
@@ -106,9 +113,9 @@ export declare function requireCurrentGeneration(db: Transaction, binding: Repre
 export declare function insertBindingRow(db: Transaction, binding: RepresentativeBinding, seat: string, origin: 'prepared' | 'legacy'): void;
 export interface RepresentativeStoreDeps {
     state: RepresentativeState;
-    readLegacyBinding(worktree: string): Promise<RepresentativeBinding | null>;
-    readLegacyBindings(): Promise<RepresentativeBinding[]>;
     seatKey(binding: RepresentativeBinding): string;
 }
+/** The production state: its first generation is seeded once from 5.x files. */
+export declare function createDefaultRepresentativeState(): RepresentativeState;
 export declare function createRepresentativeStore(overrides?: Partial<RepresentativeStoreDeps>): RepresentativeStore;
 //# sourceMappingURL=representative-store.d.ts.map

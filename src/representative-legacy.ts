@@ -1,9 +1,11 @@
 /**
  * The only reads of borgmcp 5.x representative files (decision
- * clean-slate-no-backwards-compat): when 6.x first creates a worktree's state
- * it reads that worktree's binding and decides the delivery start from the 5.x
- * delivered checkpoint, the seat tombstone and sibling generations. Nothing
- * here writes, and nothing else ever reads these files.
+ * clean-slate-no-backwards-compat). They run once, when 6.x creates the state
+ * database's FIRST generation (`legacySeed`): every valid 5.x binding becomes a
+ * 'legacy' row, and its delivery start is decided from the 5.x delivered
+ * checkpoint, the seat tombstone and sibling generations. Nothing here writes
+ * 5.x files, and no other code path reads them — not status, not a lookup, not
+ * after a reset.
  *
  * Every file read uses the private-file checks of the 5.x loaders: a secure
  * root, lstat, no-follow, owner, mode, a regular file and a size cap.
@@ -16,6 +18,8 @@ import { readStoreFile } from './seat-store.js';
 import { validatePrivateDirectory } from './representative-listener-store.js';
 import { bindingFingerprint, isRepresentativeUuid, parseBinding, type RepresentativeBinding } from './representative-store.js';
 import type { LocalServerCursor } from './local-server-cursor.js';
+import type { Transaction } from './representative-db.js';
+import { insertBindingRow } from './representative-store.js';
 
 const LEGACY_FILE_CAP_BYTES = 1024 * 1024;
 
@@ -45,25 +49,7 @@ async function readCapped(path: string, secureRoot: string): Promise<string | nu
   return readStoreFile(path, { secureRoot, verifyLeafIdentity: true, createRoot: false });
 }
 
-/** The worktree's 5.x binding, or null. An unreadable or invalid file yields null (not prepared). */
-export async function readLegacyBinding(worktree: string): Promise<RepresentativeBinding | null> {
-  let raw: string | null;
-  try {
-    raw = await readCapped(legacyStorePath(), borgConfigRoot());
-  } catch {
-    return null;
-  }
-  if (raw === null) return null;
-  try {
-    const parsed = JSON.parse(raw) as { version?: unknown; bindings?: Record<string, unknown> };
-    if (parsed?.version !== 1 || parsed.bindings === null || typeof parsed.bindings !== 'object') return null;
-    return parseBinding(parsed.bindings[worktree], worktree);
-  } catch {
-    return null;
-  }
-}
-
-/** Every 5.x binding (for listings). Unreadable input yields none. */
+/** Every valid 5.x binding. Unreadable input yields none (those worktrees are not prepared). */
 export async function readLegacyBindings(): Promise<RepresentativeBinding[]> {
   let raw: string | null;
   try {
@@ -175,4 +161,41 @@ export async function readLegacyDelivery(binding: RepresentativeBinding): Promis
   }
   if (checkpoint.kind !== 'absent') return { checkpoint, history: 'present' };
   return { checkpoint, history: unknown ? 'unknown' : 'empty' };
+}
+
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * The first generation's rows from 5.x state, gathered outside any transaction.
+ * Each binding's delivery start:
+ *   1. a valid non-null 5.x checkpoint for its generation: that checkpoint;
+ *   2. a valid null checkpoint: the binding start;
+ *   3. no 5.x history for the seat at all (enumerable and empty): the server
+ *      head, resolved on first use ('head-pending', the network is never read
+ *      here), or the binding start if the database has seat history by then;
+ *   4. anything else, including unreadable history: the binding start.
+ * A second worktree whose binding has the same generation is skipped.
+ */
+export async function legacySeed(): Promise<(db: Transaction) => void> {
+  const imports = await Promise.all((await readLegacyBindings()).map(async (binding) => ({
+    binding, delivery: await readLegacyDelivery(binding),
+  })));
+  return (db) => {
+    const seen = new Set<string>();
+    const insert = db.prepare(`INSERT INTO delivery (generation, seat, start_id, start_at, start_kind, checkpoint_id, checkpoint_at,
+      read_through_id, read_through_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const { binding, delivery } of imports) {
+      const generation = bindingFingerprint(binding);
+      if (seen.has(generation)) continue;
+      seen.add(generation);
+      const seat = seatKey(binding);
+      insertBindingRow(db, binding, seat, 'legacy');
+      const checkpoint = delivery.checkpoint.kind === 'valid' ? delivery.checkpoint.checkpoint : null;
+      const kind = checkpoint ? 'checkpoint'
+        : delivery.checkpoint.kind !== 'valid' && delivery.history === 'empty' ? 'head-pending' : 'binding';
+      const start = checkpoint ?? { id: NIL_UUID, created_at: binding.boundAt };
+      insert.run(generation, seat, start.id, start.created_at, kind,
+        checkpoint?.id ?? null, checkpoint?.created_at ?? null, checkpoint?.id ?? null, checkpoint?.created_at ?? null);
+    }
+  };
 }

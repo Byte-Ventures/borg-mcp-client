@@ -17,7 +17,7 @@ import { decodeUuid } from 'borgmcp-shared/protocol';
 import { createHash } from 'node:crypto';
 import { shellEscape } from './shell-escape.js';
 import { createRepresentativeState } from './representative-db.js';
-import { readLegacyBinding, readLegacyBindings, seatKey } from './representative-legacy.js';
+import { legacySeed, seatKey } from './representative-legacy.js';
 export function isRepresentativeUuid(value) {
     try {
         decodeUuid(value);
@@ -173,23 +173,23 @@ function storeRequests(db, generation, records) {
     const insert = db.prepare('INSERT INTO requests (generation, seq, request_id, record) VALUES (?, ?, ?, ?)');
     records.forEach((record, index) => insert.run(generation, index, record.requestId, JSON.stringify(record)));
 }
+/** The production state: its first generation is seeded once from 5.x files. */
+export function createDefaultRepresentativeState() {
+    return createRepresentativeState({ seed: legacySeed });
+}
 export function createRepresentativeStore(overrides = {}) {
     const deps = {
-        state: overrides.state ?? createRepresentativeState(),
-        readLegacyBinding: overrides.readLegacyBinding ?? readLegacyBinding,
-        readLegacyBindings: overrides.readLegacyBindings ?? readLegacyBindings,
+        state: overrides.state ?? createDefaultRepresentativeState(),
         seatKey: overrides.seatKey ?? seatKey,
     };
     const readRow = async (worktree) => deps.state.readOnly((db) => currentBindingRow(db, worktree)?.binding ?? null);
     return {
         state: deps.state,
-        getBinding: async (worktree) => (await readRow(worktree)) ?? deps.readLegacyBinding(worktree),
-        listBindings: async () => {
-            const rows = await deps.state.readOnly((db) => db.prepare('SELECT worktree FROM bindings').all()
-                .map((row) => currentBindingRow(db, row.worktree).binding)) ?? [];
-            const known = new Set(rows.map((binding) => binding.worktree));
-            return [...rows, ...(await deps.readLegacyBindings()).filter((binding) => !known.has(binding.worktree))];
-        },
+        initialize: async () => { await deps.state.transact(() => undefined); },
+        initialized: async () => (await deps.state.readOnly(() => true)) ?? false,
+        getBinding: readRow,
+        listBindings: async () => (await deps.state.readOnly((db) => db.prepare('SELECT worktree FROM bindings ORDER BY worktree').all()
+            .map((row) => currentBindingRow(db, row.worktree).binding))) ?? [],
         readRequests: async (worktree) => (await deps.state.readOnly((db) => {
             const current = currentBindingRow(db, worktree);
             return current ? loadRequests(db, current.generation) : [];
@@ -198,18 +198,13 @@ export function createRepresentativeStore(overrides = {}) {
             if (!validBinding(binding, binding.worktree)) {
                 throw new Error('Refusing to save an invalid representative binding');
             }
-            // The 5.x binding is the existing selection only while no 6.x row exists.
-            const legacy = await deps.readLegacyBinding(binding.worktree);
             return deps.state.transact((db) => {
                 const row = currentBindingRow(db, binding.worktree);
-                const existing = row?.binding ?? legacy;
+                const existing = row?.binding;
                 // An explicit rebind always starts a new generation (new boundAt, so a new
                 // binding_fingerprint), even for the same selection.
-                if (existing && sameSelection(existing, binding) && !options.rebind) {
-                    if (!row)
-                        insertBindingRow(db, existing, deps.seatKey(existing), legacy === existing ? 'legacy' : 'prepared');
+                if (existing && sameSelection(existing, binding) && !options.rebind)
                     return 'unchanged';
-                }
                 if (existing && !options.rebind) {
                     throw new RepresentativeStoreError('BINDING_CONFLICT', `This worktree is already bound to Coordinator ${existing.coordinatorLabel} in cube ${existing.cubeName}. ` +
                         `To confirm the new selection, run \`${representativeRecoveryCommand(binding)}\`.`);

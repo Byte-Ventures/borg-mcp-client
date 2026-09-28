@@ -16,8 +16,9 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { normalizeServerEndpoint } from './server-endpoint.js';
 import { validateName } from './name-validator.js';
-import { RepresentativeError, assertRepresentativeRole, representativeStatus, resolveCoordinator, } from './representative-core.js';
+import { RepresentativeError, assertRepresentativeRole, representativeStateProblemStatus, representativeStatus, resolveCoordinator, } from './representative-core.js';
 import { RepresentativeStoreError, bindingFingerprint, representativeRecoveryCommand, } from './representative-store.js';
+import { RepresentativeStateError } from './representative-db.js';
 import { shellEscape } from './shell-escape.js';
 export const DEFAULT_REPRESENTATIVE_ROLE = 'hermes-representative';
 export function parseRepresentativeArgs(args) {
@@ -140,11 +141,21 @@ function sameSeat(binding, active) {
         active.apiUrl === binding.origin &&
         active.serverTrustIdentity === binding.trustIdentity;
 }
-/** Load the saved binding and prove the worktree's hydrated seat is still that exact seat. Fails closed. */
-export async function resolveRepresentativeContext(worktree, deps) {
+/**
+ * Load the saved binding and prove the worktree's hydrated seat is still that
+ * exact seat. Fails closed. `initialize` creates the state first when none
+ * exists (mcp and listen; the first generation imports 5.x bindings once);
+ * status never creates anything.
+ */
+export async function resolveRepresentativeContext(worktree, deps, options = {}) {
+    if (options.initialize)
+        await deps.store.initialize();
     const binding = await deps.store.getBinding(worktree);
     if (!binding) {
-        throw new RepresentativeError('NOT_PREPARED', `No representative connection is prepared for ${worktree}. Run \`borg representative prepare --coordinator <drone-label>\` there first.`);
+        const created = options.initialize || await deps.store.initialized();
+        throw new RepresentativeError('NOT_PREPARED', `No representative connection is prepared for ${worktree}. Run \`borg representative prepare --coordinator <drone-label>\` there first.` +
+            (created ? '' : ' No representative state exists yet: a worktree prepared by borgmcp 5.x is imported when ' +
+                '`borg representative mcp` or `listen` first starts.'));
     }
     const active = await deps.hydrateSeat(worktree);
     if (!active) {
@@ -236,7 +247,18 @@ export async function runRepresentativePrepare(command, deps) {
 export async function runRepresentativeStatus(command, deps) {
     try {
         const worktree = canonicalWorktree(command.worktree ?? deps.cwd(), deps);
-        const ctx = await resolveRepresentativeContext(worktree, deps);
+        let ctx;
+        try {
+            ctx = await resolveRepresentativeContext(worktree, deps);
+        }
+        catch (error) {
+            // An unusable state database is itself the status to report: status
+            // never needs a binding to say so.
+            if (!(error instanceof RepresentativeStateError))
+                throw error;
+            deps.stdout(`${JSON.stringify(representativeStateProblemStatus(worktree, error), null, 2)}\n`);
+            return 1;
+        }
         const status = await representativeStatus(ctx);
         const { representativeListenerStatus } = await import('./representative-listener.js');
         const listener = await representativeListenerStatus(ctx.binding);
@@ -255,10 +277,20 @@ export async function runRepresentativeStatus(command, deps) {
  */
 export async function runRepresentativeMcp(command, deps, io) {
     let worktree;
-    let pinned;
+    let pinned = null;
+    let unusable = null;
     try {
         worktree = canonicalWorktree(command.worktree ?? deps.cwd(), deps);
-        pinned = (await resolveRepresentativeContext(worktree, deps)).binding;
+        try {
+            pinned = (await resolveRepresentativeContext(worktree, deps, { initialize: true })).binding;
+        }
+        catch (error) {
+            // An unusable state database still serves status (reporting it); every
+            // other tool refuses with this error until reset-state and a restart.
+            if (!(error instanceof RepresentativeStateError))
+                throw error;
+            unusable = error;
+        }
         const active = await deps.hydrateSeat(worktree);
         if (active)
             io.pinSeat?.(active);
@@ -275,8 +307,13 @@ export async function runRepresentativeMcp(command, deps, io) {
         ...(io.stdin ? { stdin: io.stdin } : {}),
         ...(io.stdout ? { stdout: io.stdout } : {}),
         // The full generation, so any rebind (same selection included) is refused.
-        pinnedFingerprint: bindingFingerprint(pinned),
-        context: () => resolveRepresentativeContext(worktree, deps),
+        ...(pinned ? { pinnedFingerprint: bindingFingerprint(pinned) } : {}),
+        context: async () => {
+            if (unusable)
+                throw unusable;
+            return resolveRepresentativeContext(worktree, deps);
+        },
+        stateProblemStatus: (error) => representativeStateProblemStatus(worktree, error),
     });
     const stdin = io.stdin ?? process.stdin;
     stdin.once('end', () => { void served.close(); });

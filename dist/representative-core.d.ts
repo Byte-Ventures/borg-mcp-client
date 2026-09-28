@@ -200,6 +200,24 @@ export declare function deliverRepresentativeReplies(ctx: RepresentativeContext,
 export declare function ackRepresentativeReply(ctx: RepresentativeContext, raw: unknown): Promise<{
     acknowledged: string;
 }>;
+/**
+ * Status when the state database cannot be used (corrupt, unsafe, another
+ * version): no binding can be read, so only the problem and its recovery are
+ * reported. Every other tool refuses with the same error.
+ */
+export declare function representativeStateProblemStatus(worktree: string, error: {
+    code: string;
+    message: string;
+}): {
+    role: string;
+    connected: false;
+    worktree: string;
+    state_problem: {
+        code: string;
+        message: string;
+    };
+    delivery: string;
+};
 export declare function representativeStatus(ctx: RepresentativeContext): Promise<{
     role: string;
     connected: boolean;

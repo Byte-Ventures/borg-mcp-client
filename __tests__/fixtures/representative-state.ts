@@ -2,7 +2,7 @@
  * Test helpers for the representative state database and 5.x inputs.
  * Everything resolves under the isolated HOME/BORG_STATE_ROOT the test set.
  */
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, openSync, writeFileSync, writeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -81,4 +81,21 @@ export function plantLegacyTombstone(root: string, binding: RepresentativeBindin
   privateTree(root, directory);
   writeFileSync(join(directory, 'migration.json'), JSON.stringify({ version: 1, seat: seatHash(binding), cursor: null, complete: true }), { mode: 0o600 });
   return directory;
+}
+
+/** Corrupt one table's root page header of a generation (still openable; quick_check fails). */
+export function corruptTable(gen: string, table = 'requests'): void {
+  const path = join(representativeStateRoot(), gen, 'state.sqlite');
+  const db = new DatabaseSync(path);
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  const { rootpage } = db.prepare('SELECT rootpage FROM sqlite_schema WHERE name = ?').get(table) as { rootpage: number };
+  const { page_size: pageSize } = db.prepare('PRAGMA page_size').get() as { page_size: number };
+  db.close();
+  const fd = openSync(path, 'r+');
+  try { writeSync(fd, Buffer.alloc(8, 0xff), 0, 8, (rootpage - 1) * pageSize); } finally { closeSync(fd); }
+}
+
+/** Replace a generation's database with non-database bytes (mode kept). */
+export function notADatabase(gen: string): void {
+  writeFileSync(join(representativeStateRoot(), gen, 'state.sqlite'), Buffer.alloc(8192, 0x5a));
 }

@@ -3,8 +3,9 @@
  * generation, in the representative state database.
  *
  * - `start`: where this generation's history begins (the imported 5.x
- *   checkpoint, the server head, or the binding start). Scans never consider
- *   entries at or before it.
+ *   checkpoint, the server head, or the binding start; 'head-pending' until an
+ *   imported generation's first use resolves it). Scans never consider entries
+ *   at or before it.
  * - `checkpoint`: the host's durable delivery point; only `deliver` moves it.
  * - `readThrough`: the highest entry any `read` returned; `deliver` may not pass it.
  * - `returned`: entries a read returned since the checkpoint last moved;
@@ -50,16 +51,14 @@ export interface EnsureStateContext {
     serverHead(): Promise<LocalServerCursor | null>;
 }
 /**
- * Make sure the binding's generation has its binding row and delivery row,
- * creating them on first use with the start rule:
- *   1. a valid 5.x checkpoint for this generation, non-null → that checkpoint;
- *   2. a valid 5.x checkpoint that is null → the binding start;
- *   3. history enumerable and empty (no tombstone, no checkpoint for any
- *      generation of the seat in 5.x files or in this database) → the server
- *      head (the binding start for an empty log);
- *   4. anything else → the binding start (replays; never skips).
- * Network and file reads run before the creating transaction, which re-checks
- * only local facts.
+ * Make sure the binding's generation has a resolved delivery row. The binding
+ * row must already exist (prepare, or the one-time 5.x import when the state was
+ * created); this never reads 5.x files.
+ * - A prepared generation without a row starts at its binding start.
+ * - An imported 5.x generation left 'head-pending' (no 5.x history for its
+ *   seat) starts at the server head, read outside any transaction; if another
+ *   generation of the seat has delivery state by the time it is written, it
+ *   starts at the binding start instead (replays, never skips).
  */
 export declare function ensureDeliveryState(ctx: EnsureStateContext): Promise<void>;
 //# sourceMappingURL=representative-delivery-store.d.ts.map

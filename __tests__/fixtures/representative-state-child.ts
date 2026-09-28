@@ -6,6 +6,10 @@
  *   reset                          `borg representative reset-state`, prints its output
  *   reset-kill-at <hook>           reset, SIGKILL itself at that publish hook
  *   stress <n> <go-file>           wait for <go-file>, then n read-modify-write increments
+ *   workload <backend-url> <worktree> <iterations> <go-file>
+ *                                  real tool calls against a shared backend (the parent's
+ *                                  MockCube over HTTP): each iteration sends one request,
+ *                                  reads and delivers through the last reply it read
  *   pause <hook> <ready-file> <go-file> <worktree>
  *                                  stall at the first <hook> (beforeOpen, beforeBegin,
  *                                  afterBegin) until <go-file> exists, then save a binding
@@ -84,6 +88,36 @@ if (mode === 'bind') {
     print({ ok: false, code: (error as { code?: string }).code, message: (error as Error).message, counts });
   }
   state.close();
+} else if (mode === 'workload') {
+  const { deliverRepresentativeReplies, readRepresentativeReplies, sendRepresentativeMessage } = await import('../../src/representative-core.js');
+  const call = async (method: string, args: unknown[]) => {
+    const response = await fetch(a, { method: 'POST', body: JSON.stringify({ method, args }) });
+    const body = await response.json() as { result?: unknown; error?: { message: string; status?: number; code?: string } };
+    if (body.error) throw Object.assign(new Error(body.error.message), body.error);
+    return body.result;
+  };
+  const backend = Object.fromEntries(['whoami', 'roster', 'append', 'readAfter', 'readEntry', 'ack']
+    .map((method) => [method, (...args: unknown[]) => call(method, args)])) as never;
+  const ctx = { binding: bindingFor(b), backend, store: createRepresentativeStore() };
+  await waitFor(process.argv[6]);
+  const seen: string[] = [], checkpoints: string[] = [], sent: string[] = [], errors: string[] = [];
+  for (let i = 0; i < Number(c); i += 1) {
+    try {
+      const result = await sendRepresentativeMessage(ctx, { kind: 'request', authorization: 'model_advice', message: `pid ${process.pid} request ${i}` });
+      if (result.outcome === 'sent') sent.push(result.request_id); else errors.push(`send ${result.outcome}`);
+      const read = await readRepresentativeReplies(ctx, { limit: 5 });
+      seen.push(...read.replies.map((reply) => reply.entry_id));
+      const last = read.replies.at(-1);
+      if (last) {
+        const delivered = await deliverRepresentativeReplies(ctx, { through: last.entry_id });
+        checkpoints.push(`${delivered.checkpoint.created_at}|${delivered.checkpoint.entry_id}`);
+      }
+    } catch (error) {
+      errors.push(`${(error as { code?: string }).code ?? 'UNTYPED'}: ${(error as Error).message}`);
+    }
+  }
+  ctx.store.state.close();
+  print({ seen, checkpoints, sent, errors });
 } else {
   throw new Error(`unknown mode ${mode}`);
 }

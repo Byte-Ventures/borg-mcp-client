@@ -208,7 +208,9 @@ idempotency key of the log append.
 
 Exactly-once delivery is therefore not claimed; at-most-once per `request_id`
 relies on the server honouring `post_id` deduplication as the shared protocol
-specifies, and on the single-process rule below.
+specifies, and on the request ledger: every reservation is one state-database
+transaction, so overlapping sends from any number of processes see each other
+(see "Concurrency" below).
 
 ## Reading, delivery and wake limits
 
@@ -281,14 +283,19 @@ Where a binding's replies start:
 - A binding prepared by this version starts at its binding time: `read` returns
   every addressed reply created after `prepare` (or `prepare --rebind`) and none
   from before it. A rebind of any kind starts a new generation this way.
-- A binding prepared by borgmcp 5.x is taken over on its first use, once, from
-  the 5.x files (they are only read, never changed):
+- Bindings prepared by borgmcp 5.x are imported once, when this version first
+  creates its state database (the first `prepare`, `mcp`, `listen` or tool call;
+  `status` creates nothing). The 5.x files are only read, never changed, and
+  never read again afterwards — not by a lookup and not after `reset-state`. A
+  worktree whose 5.x binding cannot be read then is not prepared. Each imported
+  binding's replies start from:
   - its valid 5.x delivered checkpoint: replies after that checkpoint are
     returned, and the checkpoint is kept;
   - a valid 5.x checkpoint that never delivered anything: the binding start;
   - no 5.x delivery history at all for the representative drone (no checkpoint
-    for any generation, no upgrade marker) and none in the state database: the
-    newest entry of the cube log, so only new replies are returned;
+    for any generation, no upgrade marker): the newest entry of the cube log at
+    its first use, so only new replies are returned (the binding start instead
+    if another generation of the drone already has delivery state by then);
   - anything else, including a 5.x file that cannot be read or fails the
     private-file checks (a regular file you own, no group or other access, not a
     symlink): the
@@ -534,7 +541,7 @@ Every path is checked on every open (a real file or directory you own, the
 modes above, never a symlink); a failing check refuses with
 `REPRESENTATIVE_STATE_INVALID` and nothing is repaired automatically. Nothing
 from borgmcp 5.x is changed: its `representative.json` and delivery files are
-read once, when a 5.x binding is first used (see "Where a binding's replies
+read once, when the database is first created (see "Where a binding's replies
 start"), and never written.
 
 The lock is local: exclusivity holds between processes on this host and this
@@ -544,7 +551,9 @@ filesystem, not across hosts sharing a network filesystem.
 only; it refuses a healthy one and a database of another version. It builds a
 new generation holding every binding that still reads back and passes the same
 checks as `prepare`, publishes it over `CURRENT`, and prints what was kept and
-lost. The damaged generation is left in place; the three most recent earlier
+lost. A binding it cannot keep is not restored from anywhere else: that
+worktree reports `NOT_PREPARED` until it is prepared again. The damaged
+generation is left in place; the three most recent earlier
 generations are kept, older ones removed (only the database files, never
 anything else in the directory). Lost in a reset:
 
@@ -573,7 +582,7 @@ the server is installed under the original prefix.
 | `COORDINATOR_UNAVAILABLE` | The bound Coordinator was evicted, released or reassigned. Restore the bound Coordinator and use the printed recovery command, or deliberately substitute a new Coordinator label in that command. |
 | `BINDING_CONFLICT` | `prepare` would change the saved cube or Coordinator (confirm with the printed `--rebind` command), or another worktree already holds this binding generation (give each worktree its own representative seat). |
 | `REPRESENTATIVE_STATE_INVALID` | A state path (named in the message) is not safe: a symlink, a wrong owner or mode, a missing generation, or damaged `CURRENT`. Nothing was read or written and nothing is repaired automatically. Fix the named path (a real directory 0700 or file 0600 that you own); do not change permissions through a symlink. |
-| `REPRESENTATIVE_STATE_CORRUPT` | The state database is corrupt (SQLite reported corruption). Every tool except `status` refuses; `status` reports it as `state_problem`. Run `borg representative reset-state`; read its report of what was kept and lost. |
+| `REPRESENTATIVE_STATE_CORRUPT` | The state database is corrupt (SQLite reported corruption). Every tool except `status` refuses; `status` (the CLI command and the MCP tool, which still starts) reports it as `state_problem` without a binding. Run `borg representative reset-state`, read its report of what was kept and lost, then restart the MCP server and the listener. |
 | `REPRESENTATIVE_STATE_VERSION` | The state database was written by a different borgmcp version. Nothing was read or written. Use the borgmcp version that wrote it. This is not corruption, and `reset-state` refuses it. |
 | `REPRESENTATIVE_STATE_BUSY` | The state moved to a new generation twice during one call (concurrent resets). Nothing was changed; retry. |
 | `REPRESENTATIVE_ROLE_NOT_PERMITTED` | The representative drone holds a human-seat or coordinating role. Give it its own worker role. |

@@ -1,11 +1,10 @@
 import { type RepresentativeBinding } from './representative-store.js';
 import type { LocalServerCursor } from './local-server-cursor.js';
+import type { Transaction } from './representative-db.js';
 export declare function legacyStorePath(): string;
 /** The 5.x per-seat key: the same fields as the client unread-cursor key. */
 export declare function seatKey(binding: Pick<RepresentativeBinding, 'origin' | 'trustIdentity' | 'cubeId' | 'representativeDroneId'>): string;
-/** The worktree's 5.x binding, or null. An unreadable or invalid file yields null (not prepared). */
-export declare function readLegacyBinding(worktree: string): Promise<RepresentativeBinding | null>;
-/** Every 5.x binding (for listings). Unreadable input yields none. */
+/** Every valid 5.x binding. Unreadable input yields none (those worktrees are not prepared). */
 export declare function readLegacyBindings(): Promise<RepresentativeBinding[]>;
 type CheckpointRead = {
     kind: 'absent';
@@ -28,5 +27,17 @@ export declare function readLegacyDelivery(binding: RepresentativeBinding): Prom
     checkpoint: CheckpointRead;
     history: 'empty' | 'present' | 'unknown';
 }>;
+/**
+ * The first generation's rows from 5.x state, gathered outside any transaction.
+ * Each binding's delivery start:
+ *   1. a valid non-null 5.x checkpoint for its generation: that checkpoint;
+ *   2. a valid null checkpoint: the binding start;
+ *   3. no 5.x history for the seat at all (enumerable and empty): the server
+ *      head, resolved on first use ('head-pending', the network is never read
+ *      here), or the binding start if the database has seat history by then;
+ *   4. anything else, including unreadable history: the binding start.
+ * A second worktree whose binding has the same generation is skipped.
+ */
+export declare function legacySeed(): Promise<(db: Transaction) => void>;
 export {};
 //# sourceMappingURL=representative-legacy.d.ts.map

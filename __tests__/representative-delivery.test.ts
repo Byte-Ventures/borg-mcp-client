@@ -20,7 +20,7 @@ import {
 import { bindingFingerprint, createRepresentativeStore, type RepresentativeBinding } from '../src/representative-store.js';
 import { representativeStateRoot } from '../src/representative-db.js';
 import {
-  configRoot, deliveryRow, legacyDeliveryRoot, plantLegacyCheckpoint, plantLegacyTombstone, privateTree, returnedRows,
+  configRoot, deliveryRow, plantLegacyBindings, legacyDeliveryRoot, plantLegacyCheckpoint, plantLegacyTombstone, privateTree, returnedRows,
   seatHash, stateInitialized, withStateDb,
 } from './fixtures/representative-state.js';
 
@@ -409,12 +409,15 @@ describe('binding fingerprint', () => {
 });
 
 describe('the 6.0 start rule for a binding 5.x prepared', () => {
-  // No 6.x state at all: the worktree's binding comes from 5.x, and its first
-  // use decides the start from 5.x delivery files and this database.
+  // No 6.x state at all: the worktree's binding comes from 5.x. The state's
+  // creation imports it with its start decided from the 5.x delivery files
+  // (a head start is resolved at first use, against this database).
   let legacy: RepresentativeBinding;
   beforeEach(() => {
+    // No 6.x state yet: the 5.x binding file is imported when the state is created.
     rmSync(representativeStateRoot(), { recursive: true, force: true });
     legacy = bindingFor(WORKTREE);
+    plantLegacyBindings(root, [legacy]);
   });
   const valid = (checkpoint: { id: string; created_at: string } | null, readThrough = checkpoint) =>
     ({ version: 1, seat: seatHash(legacy), checkpoint, readThrough, returned: [] });
@@ -550,8 +553,10 @@ describe('the 6.0 start rule for a binding 5.x prepared', () => {
 describe('hostile 5.x checkpoint input (C4)', () => {
   let legacy: RepresentativeBinding;
   beforeEach(() => {
+    // No 6.x state yet: the 5.x binding file is imported when the state is created.
     rmSync(representativeStateRoot(), { recursive: true, force: true });
     legacy = bindingFor(WORKTREE);
+    plantLegacyBindings(root, [legacy]);
   });
   // A forged checkpoint past every reply would skip them all if it were imported.
   const forged = (entry: { id: string; created_at: string }) =>

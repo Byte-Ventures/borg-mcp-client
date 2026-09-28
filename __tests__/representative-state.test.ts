@@ -10,8 +10,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync,
-  symlinkSync, writeFileSync, writeSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync,
+  symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -23,8 +23,9 @@ import {
 import { bindingFingerprint, createRepresentativeStore, parseBinding } from '../src/representative-store.js';
 import { seatKey } from '../src/representative-legacy.js';
 import { runRepresentativeResetState } from '../src/representative-cmd.js';
-import { readRepresentativeReplies, sendRepresentativeMessage } from '../src/representative-core.js';
+import { deliverRepresentativeReplies, readRepresentativeReplies, sendRepresentativeMessage } from '../src/representative-core.js';
 import { COORD_ID, MockCube, REP_ID, bindingFor } from './fixtures/representative-mock-backend.js';
+import { corruptTable, notADatabase } from './fixtures/representative-state.js';
 
 const originalHome = process.env.HOME;
 const originalStateRoot = process.env.BORG_STATE_ROOT;
@@ -88,21 +89,6 @@ async function waitFile(path: string, timeoutMs = 30_000): Promise<void> {
   }
 }
 
-/** Corrupt one table's root page header (the database stays openable; quick_check fails). */
-function corruptTable(gen: string, table = 'requests'): void {
-  const path = databaseOf(gen);
-  const db = new DatabaseSync(path);
-  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-  const { rootpage } = db.prepare('SELECT rootpage FROM sqlite_schema WHERE name = ?').get(table) as { rootpage: number };
-  const { page_size: pageSize } = db.prepare('PRAGMA page_size').get() as { page_size: number };
-  db.close();
-  const fd = openSync(path, 'r+');
-  try { writeSync(fd, Buffer.alloc(8, 0xff), 0, 8, (rootpage - 1) * pageSize); } finally { closeSync(fd); }
-}
-/** Replace the whole database file with non-database bytes (mode kept). */
-function notADatabase(gen: string): void {
-  writeFileSync(databaseOf(gen), Buffer.alloc(8192, 0x5a));
-}
 function rowsOf(gen: string, table: string): unknown[] {
   const db = new DatabaseSync(databaseOf(gen), { readOnly: true });
   try { return db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all(); } finally { db.close(); }
@@ -687,6 +673,83 @@ describe('reset-state', () => {
 });
 
 describe('multi-process stress', () => {
+  it('keeps send, read and deliver consistent across eight processes interleaving real tool calls', async () => {
+    const { createServer } = await import('node:http');
+    const cube = new MockCube();
+    const worktree = '/work/stress';
+    await prepareBinding(worktree);
+    const backend = cube.backend() as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const server = createServer((request, response) => {
+      let raw = '';
+      request.on('data', (chunk) => { raw += chunk; });
+      request.on('end', async () => {
+        const { method, args } = JSON.parse(raw) as { method: string; args: unknown[] };
+        try {
+          response.end(JSON.stringify({ result: await backend[method](...args) }));
+        } catch (error) {
+          const { message, status, code } = error as { message: string; status?: number; code?: string };
+          response.end(JSON.stringify({ error: { message, status, code } }));
+        }
+      });
+    });
+    await new Promise<void>((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+    const go = join(root, 'go-workload');
+    const ITERATIONS = 25;
+    try {
+      const workers = Array.from({ length: 8 }, () => child(['workload', url, worktree, String(ITERATIONS), go]));
+      await new Promise((resolveStart) => setTimeout(resolveStart, 1500));
+      writeFileSync(go, 'go');
+      // The Coordinator keeps replying while the workers run.
+      let running = true;
+      const replies: string[] = [];
+      const poster = (async () => {
+        while (running) {
+          replies.push(cube.post(COORD_ID, `reply ${replies.length}`, [REP_ID]).id);
+          await new Promise((resolveTick) => setTimeout(resolveTick, 3));
+        }
+      })();
+      const results = await Promise.all(workers.map((worker) => worker.done));
+      running = false;
+      await poster;
+      for (const result of results) {
+        expect(result.code).toBe(0);
+        expect(result.out.errors).toEqual([]);
+        expect(result.out.sent).toHaveLength(ITERATIONS);
+        // Each process observes a checkpoint that never moves backwards.
+        expect([...result.out.checkpoints].sort()).toEqual(result.out.checkpoints);
+      }
+      // Every send reached the log exactly once, under its own request id.
+      const sentIds = results.flatMap((result) => result.out.sent as string[]);
+      expect(new Set(sentIds).size).toBe(8 * ITERATIONS);
+      expect(cube.entries.filter((entry) => entry.drone_id === REP_ID)).toHaveLength(8 * ITERATIONS);
+      expect(new Set(cube.appendCalls.map((call) => call.postId)).size).toBe(8 * ITERATIONS);
+      const gen = readCurrent(stateRoot)!;
+      const ledger = rowsOf(gen, 'requests') as Array<{ record: string }>;
+      expect(ledger.map((row) => JSON.parse(row.record).state).filter((state) => state !== 'sent')).toEqual([]);
+      // No reply was skipped: what any process read, plus a final drain, is every reply, in order.
+      const ctx = { binding: bind(worktree), backend: cube.backend(), store: createRepresentativeStore() };
+      const drained: string[] = [];
+      for (;;) {
+        const page = await readRepresentativeReplies(ctx, { limit: 50 });
+        if (page.replies.length === 0) break;
+        drained.push(...page.replies.map((reply) => reply.entry_id));
+        await deliverRepresentativeReplies(ctx, { through: page.replies.at(-1)!.entry_id });
+      }
+      ctx.store.state.close();
+      // The workers really overlapped on replies: several of them read and delivered.
+      expect(results.filter((result) => (result.out.checkpoints as string[]).length > 0).length).toBeGreaterThan(1);
+      const union = new Set([...results.flatMap((result) => result.out.seen as string[]), ...drained]);
+      expect(replies.filter((id) => !union.has(id))).toEqual([]);
+      const [delivery] = rowsOf(gen, 'delivery') as Array<{ checkpoint_id: string; read_through_id: string }>;
+      expect(delivery.checkpoint_id).toBe(replies.at(-1));
+      expect(delivery.read_through_id).toBe(replies.at(-1));
+    } finally {
+      server.close();
+    }
+  }, 240_000);
+
+
   it('loses no update across eight processes each committing 250 read-modify-write transactions', async () => {
     await createRepresentativeState().transact(() => {});
     const go = join(root, 'go');

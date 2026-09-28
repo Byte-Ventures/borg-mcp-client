@@ -1,17 +1,16 @@
 /** Controls for the real-HOME guard (__tests__/global/real-home-guard.ts). */
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { TEST_MARKERS, realBorgConfig, scanForMarkers } from './global/real-home-guard.js';
+import { LIVE_WRITERS, TEST_MARKERS, realBorgConfig, scanForMarkers, snapshotTree, treeChanges } from './global/real-home-guard.js';
 import { borgConfigRoot } from '../src/private-root.js';
 
 describe('the run never resolves Borg state under the real home', () => {
-  const real = userInfo().homedir;
   it('gives this worker a private HOME', () => {
-    expect(homedir()).not.toBe(real);
+    expect(homedir()).not.toBe(userInfo().homedir);
     expect(borgConfigRoot()).not.toBe(realBorgConfig());
     expect(borgConfigRoot().startsWith(realBorgConfig() + sep)).toBe(false);
   });
@@ -26,7 +25,63 @@ describe('the run never resolves Borg state under the real home', () => {
   });
 });
 
-describe('the marker scan', () => {
+function fakeConfig(): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'guard-protected-')));
+  mkdirSync(join(root, 'stream-locks', 'cube'), { recursive: true });
+  writeFileSync(join(root, 'existing.json'), '{"a":1}');
+  writeFileSync(join(root, 'stream-locks', 'cube', 'owner.json'), '{"beat":1}');
+  return root;
+}
+
+describe('the tree comparison', () => {
+  it.each([
+    ['a created marker-free file', (dir: string) => writeFileSync(join(dir, 'representative.json'), '{"version":1,"bindings":{}}'), 'created representative.json'],
+    ['a created directory', (dir: string) => mkdirSync(join(dir, 'representative')), 'created representative'],
+    ['a modified file (same size)', (dir: string) => writeFileSync(join(dir, 'existing.json'), '{"a":2}'), 'modified existing.json'],
+    ['a truncated file', (dir: string) => writeFileSync(join(dir, 'existing.json'), ''), 'modified existing.json'],
+    ['a deleted file', (dir: string) => rmSync(join(dir, 'existing.json')), 'deleted existing.json'],
+    ['a file replaced by a symlink', (dir: string) => { rmSync(join(dir, 'existing.json')); symlinkSync('/dev/null', join(dir, 'existing.json')); }, 'modified existing.json'],
+  ])('reports %s', async (_label, act, expected) => {
+    const dir = fakeConfig();
+    try {
+      const before = snapshotTree(dir);
+      await new Promise((resolve) => setTimeout(resolve, 20)); // an mtime tick
+      act(dir);
+      expect(treeChanges(before, snapshotTree(dir))).toContain(expected);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores only the live-writer paths, and still counts a test marker written there', () => {
+    const dir = fakeConfig();
+    try {
+      const before = snapshotTree(dir);
+      const markers = scanForMarkers(dir);
+      writeFileSync(join(dir, 'stream-locks', 'cube', 'owner.json'), '{"beat":2}');
+      writeFileSync(join(dir, 'lifecycle-log-state.json.123.abcdef.tmp'), 'x');
+      expect(treeChanges(before, snapshotTree(dir))).toEqual([]);
+      writeFileSync(join(dir, 'stream-locks', 'cube', 'owner.json'), `{"cube":"${TEST_MARKERS[3]}"}`);
+      expect(scanForMarkers(dir)[TEST_MARKERS[3]]).toBe(markers[TEST_MARKERS[3]] + 1);
+      expect(LIVE_WRITERS.some((pattern) => pattern.test('representative.json'))).toBe(false);
+      expect(LIVE_WRITERS.some((pattern) => pattern.test('representative/state/CURRENT'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on an unreadable tree', () => {
+    const dir = fakeConfig();
+    try {
+      mkdirSync(join(dir, 'sealed'));
+      chmodSync(join(dir, 'sealed'), 0o000);
+      expect(() => snapshotTree(dir)).toThrow();
+      chmodSync(join(dir, 'sealed'), 0o700);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('counts markers in file contents, file names and SQLite databases, and never follows a link', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'guard-scan-')));
     try {
@@ -52,4 +107,39 @@ describe('the marker scan', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe('a real vitest run under the guard', () => {
+  // The protected directory is a fake one: the operator's configuration is never touched.
+  const runFixture = (action: string) => {
+    const dir = fakeConfig();
+    try {
+      const result = spawnSync(process.execPath, [join('node_modules', 'vitest', 'vitest.mjs'), 'run',
+        '--config', '__tests__/fixtures/guard-run/vitest.config.ts'], {
+        encoding: 'utf8', timeout: 120_000,
+        env: { ...process.env, BORG_TEST_GUARD_PROTECTED_CONFIG: dir, GUARD_FIXTURE_TARGET: dir, GUARD_FIXTURE_ACTION: action },
+      });
+      return { status: result.status, output: `${result.stdout}${result.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('passes when nothing touches the protected directory', () => {
+    const run = runFixture('none');
+    expect(run.output).not.toContain('wrote the real Borg config');
+    expect(run.status).toBe(0);
+  }, 120_000);
+
+  it.each([
+    ['create', 'created representative.json'],
+    ['modify', 'modified existing.json'],
+    ['delete', 'deleted existing.json'],
+    ['child', 'created from-child'],
+  ])('fails the run when a test (%s) writes marker-free content there', (action, expected) => {
+    const run = runFixture(action);
+    expect(run.output).toContain('wrote the real Borg config');
+    expect(run.output).toContain(expected);
+    expect(run.status).not.toBe(0);
+  }, 120_000);
 });

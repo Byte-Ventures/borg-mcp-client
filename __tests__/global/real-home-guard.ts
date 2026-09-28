@@ -4,15 +4,21 @@
  * 1. Before any worker starts, the run gets a private HOME and no inherited
  *    BORG_* variables; workers and every child they spawn with the inherited
  *    environment resolve Borg state there, never under the real home.
- * 2. The control: the operator's real <home>/.config/borgmcp is scanned for
- *    test-only markers (the fixture cube and drone ids, the mock server trust,
- *    this run's private HOME) before and after the run. Any new occurrence
- *    means a test wrote real Borg state, and the run fails.
+ * 2. The control: every entry under the operator's real <home>/.config/borgmcp
+ *    (path, type, size, mtime, inode) is snapshotted before the run and
+ *    compared after it. Any created, deleted or modified entry fails the run,
+ *    whatever it contains. The only exceptions are the files running Borg
+ *    processes on this machine rewrite continuously (LIVE_WRITERS: lease
+ *    heartbeats, inbox tails, cursors); even there, any new test marker fails
+ *    the run. An unreadable tree fails the run too.
  * The real home comes from the account database (os.userInfo), not $HOME.
+ * BORG_TEST_GUARD_PROTECTED_CONFIG replaces the protected directory; it exists
+ * only so the guard's own control can prove a violation fails a real run
+ * without touching the operator's configuration.
  */
 import { lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 /** Markers only test fixtures ever write. */
 export const TEST_MARKERS = [
@@ -23,32 +29,74 @@ export const TEST_MARKERS = [
   'borg-test-run-home-',
 ];
 
-const FILE_CAP_BYTES = 16 * 1024 * 1024;
+/**
+ * Entries live Borg processes (drones, MCP servers, listeners of the running
+ * cube) rewrite on their own schedule, relative to the protected directory.
+ * Test code resolves none of them: every test runs under a private HOME.
+ */
+export const LIVE_WRITERS: RegExp[] = [
+  /^stream-locks(\/.*)?$/, // stream lease heartbeats
+  /^locks(\/.*)?$/,
+  /^representative-host-locks(\/.*)?$/, // the running 5.x representative's lease
+  /^inboxes(\/.*)?$/, // inbox tails of the running drones
+  // Rewritten atomically: the file and its transient `<file>.<pid>.<hex>.tmp`.
+  /^(local-server-cursors|lifecycle-log-state|launch|codex-wake-targets)\.json(\.\d+\.[0-9a-f]+\.tmp)?$/,
+  /^opencode-drone-[0-9a-z-]+\.log$/,
+];
 
-/** Occurrences of each marker under `directory` (lstat walk, never follows links). */
+export interface EntrySnapshot { type: 'file' | 'dir' | 'link' | 'other'; size: number; mtimeMs: number; ino: number }
+export type TreeSnapshot = Map<string, EntrySnapshot>;
+
+/** Every entry under `directory` (lstat walk, never follows links). An absent directory is empty; a read failure throws. */
+export function snapshotTree(directory: string): TreeSnapshot {
+  const entries: TreeSnapshot = new Map();
+  const walk = (path: string) => {
+    let metadata;
+    try {
+      metadata = lstatSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && path === directory) return;
+      throw error;
+    }
+    const type = metadata.isFile() ? 'file' : metadata.isDirectory() ? 'dir' : metadata.isSymbolicLink() ? 'link' : 'other';
+    entries.set(relative(directory, path) || '.', { type, size: metadata.size, mtimeMs: metadata.mtimeMs, ino: metadata.ino });
+    if (type === 'dir') for (const name of readdirSync(path)) walk(join(path, name));
+  };
+  walk(directory);
+  return entries;
+}
+
+const isLive = (path: string, live: RegExp[]) => live.some((pattern) => pattern.test(path.split(sep).join('/')));
+
+/** Entries created, deleted or changed between two snapshots, except live-writer paths. */
+export function treeChanges(before: TreeSnapshot, after: TreeSnapshot, live: RegExp[] = LIVE_WRITERS): string[] {
+  const changes: string[] = [];
+  for (const [path, entry] of after) {
+    if (isLive(path, live)) continue;
+    const prior = before.get(path);
+    if (!prior) changes.push(`created ${path}`);
+    else if (prior.type !== entry.type || prior.size !== entry.size || prior.mtimeMs !== entry.mtimeMs || prior.ino !== entry.ino) {
+      changes.push(`modified ${path}`);
+    }
+  }
+  for (const path of before.keys()) if (!after.has(path) && !isLive(path, live)) changes.push(`deleted ${path}`);
+  // The protected directory's own entry changes when a live writer creates a
+  // top-level file; its children are compared individually above.
+  return changes.filter((change) => change !== 'modified .');
+}
+
+/** Occurrences of each marker in names and file contents under `directory` (never follows links). */
 export function scanForMarkers(directory: string, markers = TEST_MARKERS): Record<string, number> {
   const counts: Record<string, number> = Object.fromEntries(markers.map((marker) => [marker, 0]));
   const needles = markers.map((marker) => [marker, Buffer.from(marker)] as const);
-  const walk = (path: string) => {
-    let metadata;
-    try { metadata = lstatSync(path); } catch { return; }
-    if (metadata.isDirectory()) {
-      let names: string[] = [];
-      try { names = readdirSync(path); } catch { return; }
-      for (const name of names) {
-        for (const [marker] of needles) if (name.includes(marker)) counts[marker] += 1;
-        walk(join(path, name));
-      }
-      return;
-    }
-    if (!metadata.isFile() || metadata.size > FILE_CAP_BYTES) return;
-    let data: Buffer;
-    try { data = readFileSync(path); } catch { return; }
+  for (const [path, entry] of snapshotTree(directory)) {
+    for (const [marker] of needles) if (path.includes(marker)) counts[marker] += 1;
+    if (entry.type !== 'file') continue;
+    const data = readFileSync(join(directory, path));
     for (const [marker, needle] of needles) {
       for (let at = data.indexOf(needle); at >= 0; at = data.indexOf(needle, at + 1)) counts[marker] += 1;
     }
-  };
-  walk(directory);
+  }
   return counts;
 }
 
@@ -57,19 +105,22 @@ export function realBorgConfig(): string {
 }
 
 export default function setup(): () => void {
-  const realConfig = realBorgConfig();
-  const before = scanForMarkers(realConfig);
+  const protectedConfig = process.env.BORG_TEST_GUARD_PROTECTED_CONFIG ?? realBorgConfig();
+  const before = snapshotTree(protectedConfig);
+  const markers = scanForMarkers(protectedConfig);
   for (const key of Object.keys(process.env)) if (key.startsWith('BORG_')) delete process.env[key];
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'borg-test-run-home-')));
   process.env.HOME = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');
   return () => {
     rmSync(home, { recursive: true, force: true });
-    const after = scanForMarkers(realConfig);
-    const grew = Object.keys(after).filter((marker) => after[marker] > before[marker]);
-    if (grew.length > 0) {
-      throw new Error(`A test wrote the real Borg config ${realConfig}: new test markers ${grew.map((marker) =>
-        `${marker} (${before[marker]} -> ${after[marker]})`).join(', ')}. Every test must use an explicit temporary root.`);
+    const changes = treeChanges(before, snapshotTree(protectedConfig));
+    const after = scanForMarkers(protectedConfig);
+    const grew = Object.keys(after).filter((marker) => after[marker] > markers[marker]);
+    if (changes.length > 0 || grew.length > 0) {
+      throw new Error(`A test wrote the real Borg config ${protectedConfig}: ` +
+        [...changes, ...grew.map((marker) => `new test marker ${marker} (${markers[marker]} -> ${after[marker]})`)].join(', ') +
+        '. Every test must use an explicit temporary root.');
     }
   };
 }

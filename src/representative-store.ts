@@ -18,7 +18,7 @@ import { decodeUuid } from 'borgmcp-shared/protocol';
 import { createHash } from 'node:crypto';
 import { shellEscape } from './shell-escape.js';
 import { createRepresentativeState, type RepresentativeState, type Transaction } from './representative-db.js';
-import { readLegacyBinding, readLegacyBindings, seatKey } from './representative-legacy.js';
+import { legacySeed, seatKey } from './representative-legacy.js';
 
 export function isRepresentativeUuid(value: unknown): value is string {
   try { decodeUuid(value); return true; } catch { return false; }
@@ -85,9 +85,16 @@ export class RepresentativeStoreError extends Error {
 
 export interface RepresentativeStore {
   readonly state: RepresentativeState;
-  /** The worktree's binding: its 6.x row, else its 5.x binding (read-only). Never creates anything. */
+  /**
+   * Create the state if none exists (the first generation imports 5.x
+   * bindings, once). Status never calls this: it creates nothing.
+   */
+  initialize(): Promise<void>;
+  /** Whether a generation is published. Read-only. */
+  initialized(): Promise<boolean>;
+  /** The worktree's binding row, or null. Read-only; never creates anything and never reads 5.x files. */
   getBinding(worktree: string): Promise<RepresentativeBinding | null>;
-  /** Every binding: 6.x rows, plus 5.x bindings for worktrees without a row. Read-only. */
+  /** Every binding row. Read-only. */
   listBindings(): Promise<RepresentativeBinding[]>;
   /** The current generation's ledger for a worktree. Read-only. */
   readRequests(worktree: string): Promise<RepresentativeRequestRecord[]>;
@@ -241,16 +248,17 @@ function storeRequests(db: Transaction, generation: string, records: Representat
 
 export interface RepresentativeStoreDeps {
   state: RepresentativeState;
-  readLegacyBinding(worktree: string): Promise<RepresentativeBinding | null>;
-  readLegacyBindings(): Promise<RepresentativeBinding[]>;
   seatKey(binding: RepresentativeBinding): string;
+}
+
+/** The production state: its first generation is seeded once from 5.x files. */
+export function createDefaultRepresentativeState(): RepresentativeState {
+  return createRepresentativeState({ seed: legacySeed });
 }
 
 export function createRepresentativeStore(overrides: Partial<RepresentativeStoreDeps> = {}): RepresentativeStore {
   const deps: RepresentativeStoreDeps = {
-    state: overrides.state ?? createRepresentativeState(),
-    readLegacyBinding: overrides.readLegacyBinding ?? readLegacyBinding,
-    readLegacyBindings: overrides.readLegacyBindings ?? readLegacyBindings,
+    state: overrides.state ?? createDefaultRepresentativeState(),
     seatKey: overrides.seatKey ?? seatKey,
   };
   const readRow = async (worktree: string) =>
@@ -259,14 +267,15 @@ export function createRepresentativeStore(overrides: Partial<RepresentativeStore
   return {
     state: deps.state,
 
-    getBinding: async (worktree) => (await readRow(worktree)) ?? deps.readLegacyBinding(worktree),
+    initialize: async () => { await deps.state.transact(() => undefined); },
 
-    listBindings: async () => {
-      const rows = await deps.state.readOnly((db) => (db.prepare('SELECT worktree FROM bindings').all() as Array<{ worktree: string }>)
-        .map((row) => currentBindingRow(db, row.worktree)!.binding)) ?? [];
-      const known = new Set(rows.map((binding) => binding.worktree));
-      return [...rows, ...(await deps.readLegacyBindings()).filter((binding) => !known.has(binding.worktree))];
-    },
+    initialized: async () => (await deps.state.readOnly(() => true)) ?? false,
+
+    getBinding: readRow,
+
+    listBindings: async () => (await deps.state.readOnly((db) =>
+      (db.prepare('SELECT worktree FROM bindings ORDER BY worktree').all() as Array<{ worktree: string }>)
+        .map((row) => currentBindingRow(db, row.worktree)!.binding))) ?? [],
 
     readRequests: async (worktree) => (await deps.state.readOnly((db) => {
       const current = currentBindingRow(db, worktree);
@@ -277,17 +286,12 @@ export function createRepresentativeStore(overrides: Partial<RepresentativeStore
       if (!validBinding(binding, binding.worktree)) {
         throw new Error('Refusing to save an invalid representative binding');
       }
-      // The 5.x binding is the existing selection only while no 6.x row exists.
-      const legacy = await deps.readLegacyBinding(binding.worktree);
       return deps.state.transact((db) => {
         const row = currentBindingRow(db, binding.worktree);
-        const existing = row?.binding ?? legacy;
+        const existing = row?.binding;
         // An explicit rebind always starts a new generation (new boundAt, so a new
         // binding_fingerprint), even for the same selection.
-        if (existing && sameSelection(existing, binding) && !options.rebind) {
-          if (!row) insertBindingRow(db, existing, deps.seatKey(existing), legacy === existing ? 'legacy' : 'prepared');
-          return 'unchanged' as const;
-        }
+        if (existing && sameSelection(existing, binding) && !options.rebind) return 'unchanged' as const;
         if (existing && !options.rebind) {
           throw new RepresentativeStoreError(
             'BINDING_CONFLICT',

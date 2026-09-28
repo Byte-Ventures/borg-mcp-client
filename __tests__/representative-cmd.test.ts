@@ -18,12 +18,15 @@ import {
 } from './fixtures/representative-mock-backend.js';
 import type { ActiveCube } from '../src/cubes.js';
 import { bindingFingerprint, createRepresentativeStore } from '../src/representative-store.js';
+import { readCurrent, representativeStateRoot } from '../src/representative-db.js';
+import { corruptTable, notADatabase, plantLegacyBindings } from './fixtures/representative-state.js';
 import {
   DEFAULT_REPRESENTATIVE_ROLE,
   parseRepresentativeArgs,
   resolveRepresentativeContext,
   runRepresentativeMcp,
   runRepresentativePrepare,
+  runRepresentativeResetState,
   runRepresentativeStatus,
   type RepresentativeCmdDeps,
 } from '../src/representative-cmd.js';
@@ -343,5 +346,117 @@ describe('served MCP process', () => {
       stdin.end();
       expect(await exit).toBe(0);
     }
+  });
+});
+
+describe('an unusable or reset state database at the real command seam', () => {
+  const stateRoot = () => representativeStateRoot();
+  function mcpSession() {
+    const stdin = new PassThrough(), stdout = new PassThrough();
+    let buffered = '';
+    const responses = new Map<number, (message: any) => void>();
+    stdout.on('data', (chunk) => {
+      buffered += chunk.toString();
+      let index;
+      while ((index = buffered.indexOf('\n')) >= 0) {
+        const line = buffered.slice(0, index);
+        buffered = buffered.slice(index + 1);
+        if (line.trim()) { const message = JSON.parse(line); responses.get(message.id)?.(message); }
+      }
+    });
+    const rpc = (id: number, method: string, params: unknown) => {
+      const response = new Promise<any>((resolve) => responses.set(id, resolve));
+      stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+      return response;
+    };
+    const exit = runRepresentativeMcp({ action: 'mcp', worktree }, deps, { version: '0.0.0-test', stdin, stdout });
+    return { rpc, exit, stdin };
+  }
+  const call = async (session: ReturnType<typeof mcpSession>, id: number, name: string, args: Record<string, unknown> = {}) => {
+    const response = await session.rpc(id, 'tools/call', { name, arguments: args });
+    return { isError: response.result.isError === true, body: JSON.parse(response.result.content[0].text) };
+  };
+  async function corruptPrepared(kind: 'notadb' | 'table' = 'notadb'): Promise<string> {
+    expect(await prepare()).toBe(0);
+    return corrupt(kind);
+  }
+  function corrupt(kind: 'notadb' | 'table'): string {
+    deps.store.state.close();
+    const gen = readCurrent(stateRoot())!;
+    if (kind === 'notadb') notADatabase(gen); else corruptTable(gen);
+    deps = { ...deps, store: createRepresentativeStore() }; // a new process over the damaged state
+    out = '';
+    cube.calls.length = 0;
+    return gen;
+  }
+
+  it('prints status JSON with state_problem from the CLI when the database is corrupt, reading no binding', async () => {
+    await corruptPrepared();
+    expect(await runRepresentativeStatus({ action: 'status', worktree }, deps)).toBe(1);
+    const status = JSON.parse(out);
+    expect(status).toMatchObject({ connected: false, worktree, state_problem: { code: 'REPRESENTATIVE_STATE_CORRUPT' } });
+    expect(status.state_problem.message).toContain('borg representative reset-state');
+    expect(status.cube).toBeUndefined();
+    expect(cube.calls).toEqual([]);
+  });
+
+  it('starts the MCP server on a corrupt database: status reports state_problem, every other tool refuses', async () => {
+    await corruptPrepared();
+    const session = mcpSession();
+    try {
+      await session.rpc(1, 'initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'host', version: '0' } });
+      const status = await call(session, 2, 'borg_representative-status');
+      expect(status.isError).toBe(false);
+      expect(status.body).toMatchObject({ connected: false, state_problem: { code: 'REPRESENTATIVE_STATE_CORRUPT' } });
+      const reply = cube.post(COORD_ID, 'reply', [REP_ID]);
+      for (const [index, [name, args]] of ([
+        ['borg_representative-send', { kind: 'question', authorization: 'model_advice', message: 'hi' }],
+        ['borg_representative-read', {}],
+        ['borg_representative-deliver', { through: reply.id }],
+        ['borg_representative-ack', { entry_id: reply.id }],
+      ] as const).entries()) {
+        const refused = await call(session, 3 + index, name, args);
+        expect(refused.isError).toBe(true);
+        expect(refused.body.error.code).toBe('REPRESENTATIVE_STATE_CORRUPT');
+      }
+      expect(cube.appendCalls).toEqual([]);
+      expect(cube.acks).toEqual([]);
+    } finally {
+      session.stdin.end();
+      expect(await session.exit).toBe(0);
+    }
+  });
+
+  it('never brings back a superseded 5.x binding after a reset that keeps no binding: NOT_PREPARED everywhere', async () => {
+    // 5.x bound this worktree to coordinator-1; 6.x imported it, then the operator rebound to coordinator-2.
+    plantLegacyBindings(root, [bindingFor(worktree)]);
+    cube.drones.push({ id: '77777777-7777-4777-8777-777777777777', label: 'coordinator-2', role_id: cube.roles[1].id });
+    expect(await prepare({ coordinator: 'coordinator-2', rebind: true })).toBe(0);
+    expect((await deps.store.getBinding(worktree))?.coordinatorLabel).toBe('coordinator-2');
+    corrupt('notadb');
+    let report = '';
+    expect(await runRepresentativeResetState({ stdout: (text) => { report += text; }, stderr: (text) => { report += text; } })).toBe(0);
+    expect(report).toContain('Bindings kept: none');
+    const store = createRepresentativeStore();
+    expect(await store.getBinding(worktree)).toBeNull();
+    expect(await store.listBindings()).toEqual([]);
+    await expect(resolveRepresentativeContext(worktree, { ...deps, store }, { initialize: true }))
+      .rejects.toMatchObject({ code: 'NOT_PREPARED' });
+    out = '';
+    expect(await runRepresentativeStatus({ action: 'status', worktree }, { ...deps, store })).toBe(1);
+    expect(out).toContain('NOT_PREPARED');
+    out = '';
+    expect(await runRepresentativeMcp({ action: 'mcp', worktree }, { ...deps, store }, { version: '0.0.0-test' })).toBe(1);
+    expect(out).toContain('NOT_PREPARED');
+  });
+
+  it('keeps the newer 6.x selection when the reset salvages it, never the 5.x one', async () => {
+    plantLegacyBindings(root, [bindingFor(worktree)]);
+    cube.drones.push({ id: '77777777-7777-4777-8777-777777777777', label: 'coordinator-2', role_id: cube.roles[1].id });
+    expect(await prepare({ coordinator: 'coordinator-2', rebind: true })).toBe(0);
+    corrupt('table');
+    expect(await runRepresentativeResetState({ stdout: () => {}, stderr: () => {} })).toBe(0);
+    const ctx = await resolveRepresentativeContext(worktree, { ...deps, store: createRepresentativeStore() }, { initialize: true });
+    expect(ctx.binding.coordinatorLabel).toBe('coordinator-2');
   });
 });
