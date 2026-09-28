@@ -145,6 +145,7 @@ class Supervisor:
         except subprocess.TimeoutExpired:
             child.terminate()
         except (OSError, ValueError):
+            # Ignored: the pipe or process is already gone: nothing is left to shut down.
             pass
 
     def _run(self) -> None:
@@ -218,6 +219,7 @@ class Supervisor:
             try:
                 stream.close()
             except (OSError, ValueError):
+                # Ignored: the stream is already closed or broken; closing is best-effort cleanup.
                 pass
         with self._lock:
             self._child = None
@@ -255,6 +257,7 @@ class Supervisor:
                 try:
                     signal_child()
                 except OSError:
+                    # Ignored: the child already exited (ESRCH); the wait below reaps it.
                     pass
             try:
                 child.wait(timeout=self._reject_grace_s)
@@ -268,6 +271,7 @@ class Supervisor:
         try:
             child.stdin.close()
         except (OSError, ValueError):
+            # Ignored: the pipe is already closed or broken; the listener sees EOF either way.
             pass
 
     @staticmethod
@@ -279,6 +283,7 @@ class Supervisor:
                 if text:
                     logger.info("%s: listener: %s", PLUGIN_NAME, text[:STDERR_LINE_MAX])
         except (OSError, ValueError):
+            # Ignored: the pipe closed while draining: the listener exited, and its exit is handled by the run loop.
             pass
 
     @staticmethod
