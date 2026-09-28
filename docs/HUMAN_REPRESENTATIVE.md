@@ -509,8 +509,13 @@ The command then does everything, printing each step before it runs:
    that gateway runs, and a later run counts it done once that gateway's PID
    has changed. A stopped gateway loads the plugin when it starts. Every Hermes
    call has a hard timeout that ends only Borg's own `hermes` process.
-   Until this step is done the activation stays pending, in Borg's own state
-   (`<Borg config>/hermes-plugin/`), and a rerun finishes it.
+   Borg records what it wrote (a digest of its files and keys) and what the
+   gateway is confirmed to have loaded, in its own state
+   (`<Borg config>/hermes-plugin/`, 0600 files in a 0700 directory; an unsafe
+   path there is refused). The gateway PID is sampled for each new write, so a
+   restart before a later change never confirms that change, and an unknown
+   PID never counts as a restart. Until the two match the activation is
+   pending, and a rerun finishes it.
    Borg stops and restarts nothing in Hermes Desktop. When the Borg MCP entry is
    new, it prints "Hermes Desktop: new chats get the Borg tools." When the entry
    changed, it prints that open Desktop chats need `/reload-mcp` (or a Desktop
@@ -522,8 +527,11 @@ The command then does everything, printing each step before it runs:
    Coordinator replies and send as the representative.
 
 If a step fails, Borg reverses its own keys one by one through the Hermes CLI,
-newest first, and only where a key still holds what Borg wrote; a key someone
-else changed meanwhile, and every other key, is left as it is and named. Borg's
+newest first, and restores a key only when it still held Borg's value at the
+check; a key that differed then is left as it is and named, and every other key
+is left alone. The check and the reversal are separate Hermes commands, and
+Hermes writes its config without a lock, so an edit to the same key in between
+is not detected: finish Hermes config edits before running the command. Borg's
 plugin files are put back as they were only when every key was reversed. The
 output ends with the backup path.
 When every value and file already matches and the activation is done, the
@@ -541,7 +549,8 @@ from its schema cache and start `borg representative mcp` on first use.
 **Updates.** `borg update` activates an installed plugin (`plugin.yaml` present):
 it refreshes the files, rewrites the settings and MCP entry with the same rules,
 and finishes step 5. Without an install it runs no `hermes` command. It never
-asks a question, and an incomplete activation never fails the update: it ends
+asks a question (with several DM conversations and none configured it reports
+that and the activation stays pending), and an incomplete activation never fails the update: it ends
 with a warning that names `borg representative hermes-plugin install`. A running Hermes CLI session reloads the MCP entry itself when it goes
 idle. A session with `mcp.auto_reload_on_config_change: false`, or one that
 never goes idle, keeps its old Borg adapter until it reloads MCP or ends; Borg
@@ -567,8 +576,10 @@ files and Python's bytecode cache for them (`plugin.yaml` last), then the
 directory when nothing else is in it, and handles the gateway as in step 5.
 Files that are not Borg's stay, and a directory without `plugin.yaml` is no
 install: `borg update` leaves it alone. When the MCP entry was removed, it
-prints the Desktop `/reload-mcp` line. The backup and rollback rules are the
-same.
+prints the Desktop `/reload-mcp` line. The unload stays pending until the
+gateway is confirmed to have dropped the plugin, exactly like an install:
+rerunning uninstall after a failed or `--no-restart` restart finishes it. The
+backup and rollback rules are the same.
 
 **Which process delivers.** Any Hermes process may read and deliver: Desktop,
 the CLI or the gateway conversation. Borg stops waking for a reply once it is

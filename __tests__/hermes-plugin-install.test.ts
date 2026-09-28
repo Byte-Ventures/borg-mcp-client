@@ -4,7 +4,7 @@
  * No test runs the real `hermes` (decision ebbfb45c): every Hermes CLI in this
  * file is built from the fake's absolute path, never resolved from PATH.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   chmodSync,
   existsSync,
@@ -13,6 +13,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -27,6 +28,7 @@ import {
   HERMES_PLUGIN_NAME,
   activateHermesPlugin,
   configSetText,
+  activationPending,
   execFileHermesCli,
   fileActivationStore,
   hermesPluginStatus,
@@ -39,6 +41,7 @@ import {
   type HermesPluginInstallCommand,
 } from '../src/hermes-plugin-install.js';
 import { parseRepresentativeArgs } from '../src/representative-cmd.js';
+import * as guarded from '../src/guarded-fs.js';
 
 const FAKE_SOURCE = fileURLToPath(new URL('./fixtures/fake-hermes.mjs', import.meta.url));
 const BORG = '/opt/borg/bin/borg';
@@ -633,7 +636,10 @@ describe('hermes-plugin uninstall', () => {
     writeFileSync(join(pluginDir(), '__pycache__', '__init__.cpython-313.pyc'), 'cache');
     expect(await uninstall({ noRestart: true })).toBe(0);
     expect(existsSync(pluginDir())).toBe(false);
-    expect(readdirSync(join(root, 'borg-config', 'hermes-plugin'))).toEqual([]); // no pending record left
+    // --no-restart: the unload stays pending until a rerun confirms it.
+    expect(activationPending(await deps().activation.read(home))).toBe(true);
+    expect(await uninstall()).toBe(0);
+    expect(readdirSync(join(root, 'borg-config', 'hermes-plugin'))).toEqual([]);
   });
 });
 
@@ -791,7 +797,7 @@ describe('activation state (F2, F6)', () => {
     setGateway({ mode: 'manual', pid: 201 });
     resetLog(); out = [];
     expect(await install()).toBe(0);
-    expect(out.join('')).toContain('was restarted since the config was written (PID 201)');
+    expect(out.join('')).toContain('was restarted since this change was written (PID 201)');
     expect(restartsIn(calls())).toEqual([]);
     resetLog(); out = [];
     expect(await install()).toBe(0);
@@ -845,6 +851,143 @@ describe('backup directory mode (P3)', () => {
     chmodSync(join(home, 'backups', 'borg-representative'), 0o755);
     expect(await install()).toBe(0);
     expect(statSync(join(home, 'backups', 'borg-representative')).mode & 0o777).toBe(0o700);
+  });
+});
+
+// Review 40f9dcf8 (round 2) probes as regression controls. The record is now a
+// desired-generation model (dispatch 350da38d), so "gateway_pending" reads as
+// activationPending(record), and the PID field is desired_gateway_pid.
+describe('CR round 2 boundary probes', () => {
+  const recordPath = () => {
+    const dir = join(root, 'borg-config', 'hermes-plugin');
+    return join(dir, readdirSync(dir).find((name) => name.endsWith('.json'))!);
+  };
+
+  it('keeps new config pending when the manual PID changed before this write', async () => {
+    setGateway({ mode: 'manual', pid: 200 });
+    expect(await install()).toBe(0);
+    setGateway({ mode: 'manual', pid: 201 });
+    const other = join(root, 'second'); mkdirSync(other);
+    expect(await install({ worktree: other }, deps({ worktrees: [worktree, other] }))).toBe(0);
+    expect(activationPending(await deps().activation.read(home))).toBe(true);
+    expect((await deps().activation.read(home))?.desired_gateway_pid).toBe('201'); // sampled at this write
+  });
+
+  it('refuses an unsafe symlink ancestor activation record', async () => {
+    expect(await install({ noRestart: true })).toBe(0);
+    const dir = join(root, 'borg-config', 'hermes-plugin');
+    const outside = join(root, 'untrusted-state');
+    renameSync(dir, outside); chmodSync(outside, 0o777); symlinkSync(outside, dir);
+    const path = join(outside, readdirSync(outside)[0]);
+    const record = JSON.parse(readFileSync(path, 'utf8'));
+    writeFileSync(path, JSON.stringify({ ...record, activated: record.desired })); chmodSync(path, 0o666);
+    err = [];
+    expect(await install()).toBe(1);
+    expect(err.join('')).toContain(`Unsafe Borg state directory ${dir}`);
+  });
+
+  it('refuses a record file with a loose mode or another shape, naming it', async () => {
+    expect(await install({ noRestart: true })).toBe(0);
+    const path = recordPath();
+    chmodSync(path, 0o644);
+    err = [];
+    expect(await install()).toBe(1);
+    expect(err.join('')).toContain(`Unsafe Borg state file ${path}`);
+    chmodSync(path, 0o600);
+    const target = join(root, 'elsewhere.json'); writeFileSync(target, readFileSync(path)); chmodSync(target, 0o600);
+    rmSync(path); symlinkSync(target, path);
+    err = [];
+    expect(await install()).toBe(1);
+    expect(err.join('')).toContain(`Unsafe Borg state file ${path}`);
+  });
+
+  it('malformed PID cannot falsely complete manual activation', async () => {
+    setGateway({ mode: 'manual', pid: 200 });
+    expect(await install()).toBe(0);
+    const path = recordPath();
+    const record = JSON.parse(readFileSync(path, 'utf8'));
+    writeFileSync(path, JSON.stringify({ ...record, desired_gateway_pid: 'not-a-pid' }));
+    expect(await install()).toBe(0);
+    expect(activationPending(await deps().activation.read(home))).toBe(true);
+    expect(out.join('')).not.toContain('was restarted since');
+  });
+
+  it('chmod cannot follow a replacement symlink after the owner check', async () => {
+    const dir = join(home, 'backups', 'borg-representative');
+    mkdirSync(dir, { recursive: true }); chmodSync(dir, 0o755);
+    const victim = join(root, 'unrelated'); mkdirSync(victim); chmodSync(victim, 0o755);
+    // The mode is set through a no-follow descriptor, so the swap is placed at
+    // the open of that descriptor, the last point before the mode change.
+    const originalOpen = guarded.open;
+    let swapped = false;
+    const spy = vi.spyOn(guarded, 'open').mockImplementation((async (path: unknown, ...rest: unknown[]) => {
+      if (path === dir && !swapped) {
+        swapped = true; renameSync(dir, `${dir}-old`); symlinkSync(victim, dir);
+      }
+      return (originalOpen as (...args: unknown[]) => unknown)(path, ...rest);
+    }) as typeof guarded.open);
+    try { await install(); } finally { spy.mockRestore(); }
+    expect(swapped).toBe(true);
+    expect(statSync(victim).mode & 0o777).toBe(0o755);
+  });
+
+  it('rerun finishes a failed uninstall restart', async () => {
+    expect(await install()).toBe(0);
+    setGateway({ mode: 'launchd', pid: 101, restartKeepsPid: true });
+    const command = { hermesHome: home, dryRun: false, noRestart: false };
+    expect(await runHermesPluginUninstall(command, deps())).toBe(1);
+    setGateway({ mode: 'launchd', pid: 101 }); resetLog();
+    expect(await runHermesPluginUninstall(command, deps())).toBe(0);
+    expect(restartsIn(calls()).length).toBe(1);
+    expect(await deps().activation.read(home)).toBeNull();
+  });
+});
+
+describe('CR round 2 rollback and prompt probes', () => {
+  it('documents the accepted same-key interval between the rollback check and the reversal (decision 350da38d)', async () => {
+    // Not a guarantee: Hermes writes config without lock or compare, so an edit
+    // to the same key between Borg's check and its reversal is not detected.
+    const d = deps(); const original = d.hermes;
+    let rollback = false; let swapped = false;
+    d.hermes = (h) => {
+      const cli = original(h);
+      return async (argv) => {
+        if (argv[0] === 'config' && argv[1] === 'set' && argv[2].endsWith('.worktree')) {
+          rollback = true; return { code: 1, stdout: '', stderr: 'fail worktree' };
+        }
+        const result = await cli(argv);
+        if (rollback && !swapped && argv[0] === 'config' && argv[1] === 'get' && argv[2].endsWith('.session_key')) {
+          swapped = true;
+          const current = config(); current.plugins.entries[HERMES_PLUGIN_NAME].settings.session_key = 'agent:main:slack:dm:THEIRS';
+          writeFileSync(join(home, 'config.yaml'), JSON.stringify(current));
+        }
+        return result;
+      };
+    };
+    expect(await install({}, d)).toBe(1);
+    expect(swapped).toBe(true);
+    // The accepted residual: the edit made inside the interval is not preserved.
+    expect(config().plugins.entries?.[HERMES_PLUGIN_NAME]?.settings?.session_key).toBeUndefined();
+  });
+
+  it('update activation never prompts even on a TTY with several choices', async () => {
+    expect(await install()).toBe(0);
+    const current = config(); delete current.plugins.entries[HERMES_PLUGIN_NAME].settings.session_key;
+    writeFileSync(join(home, 'config.yaml'), JSON.stringify(current));
+    writeSessions({ [DM]: {}, 'agent:main:slack:dm:OTHER': {} });
+    let prompted = false;
+    const d = deps({ env: { HERMES_HOME: home }, isTTY: () => true, prompt: async () => { prompted = true; return null; } });
+    expect(await activateHermesPlugin(d)).toBe(1);
+    expect(prompted).toBe(false);
+    expect(err.join('')).toContain('pass one with --session-key');
+  });
+});
+
+describe('no pathname chmod in the installer (P3a)', () => {
+  it('sets modes only through descriptors', () => {
+    const source = readFileSync(join(process.cwd(), 'src', 'hermes-plugin-install.ts'), 'utf8');
+    expect(source).not.toMatch(/(?<![.\w])chmod\(/);
+    expect(source).not.toMatch(/import \{[^}]*\bchmod\b[^}]*\} from '\.\/guarded-fs\.js'/);
   });
 });
 

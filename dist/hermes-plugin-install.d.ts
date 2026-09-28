@@ -67,25 +67,34 @@ export declare function printableUntrusted(text: string, max?: number): string;
 export declare function resolveHermesHome(explicit: string | undefined, deps: Pick<HermesPluginDeps, 'env' | 'homedir'>): string;
 /** The value text for `hermes config set`: containers and booleans as JSON, strings raw. */
 export declare function configSetText(value: unknown): string;
+/** The generation of an uninstall: nothing of Borg's in Hermes. */
+export declare const ABSENT_GENERATION = "absent";
+/** A gateway identity is a positive integer PID; anything else is unknown. */
+export declare function validPid(value: unknown): string | null;
 /**
- * `<borg config>/hermes-plugin/<sha256(home)>.json` exists while an activation
- * step is pending:
- * - gateway_pending: config was written (or --no-restart was used) and the
- *   gateway has not been seen to load it. gateway_pid is the gateway PID at
- *   write time, so a later run can tell that a hand-started gateway was
- *   restarted since.
+ * `<borg config>/hermes-plugin/<sha256(home)>.json`, per Hermes home:
+ * - desired: the generation Borg last wrote, a digest of Borg's managed files
+ *   and keys, or `absent` for an uninstall;
+ * - activated: the generation the gateway is confirmed to have loaded (null:
+ *   none confirmed);
+ * - desired_gateway_pid: the gateway PID sampled when `desired` was written,
+ *   never inherited from an earlier generation;
  * - desktop_reload: the Borg MCP entry changed, and a running Hermes Desktop
  *   keeps the previous one until /reload-mcp or a restart. Borg cannot confirm
  *   that step; the next run that finds the entry unchanged clears it.
+ * The activation is pending while desired differs from activated.
  */
 export interface ActivationRecord {
-    version: 1;
+    version: 2;
     hermes_home: string;
-    gateway_pending: boolean;
-    gateway_pid: string | null;
+    desired: string;
+    activated: string | null;
+    desired_gateway_pid: string | null;
     desktop_reload: boolean;
 }
+export declare const activationPending: (record: ActivationRecord | null) => boolean;
 export interface ActivationStore {
+    /** null when there is no record; a record whose content cannot be trusted reads as nothing confirmed. */
     read(home: string): Promise<ActivationRecord | null>;
     write(record: ActivationRecord): Promise<void>;
     clear(home: string): Promise<void>;
@@ -121,14 +130,17 @@ export declare function parseGatewayStatus(stdout: string): GatewaySupervision;
 export declare function runHermesPluginInstall(command: HermesPluginInstallCommand, deps: HermesPluginDeps): Promise<number>;
 /**
  * `borg update`: activate the installed plugin (Borg's plugin.yaml is the
- * marker). Without it this does nothing and runs no hermes command. The caller
- * reports a non-zero result as an incomplete activation, never as a failed update.
+ * marker). Without it this does nothing and runs no hermes command. It is
+ * non-interactive by construction: its deps have no terminal and cannot
+ * prompt, so an ambiguous conversation is reported and the activation stays
+ * pending. The caller reports a non-zero result as an incomplete activation,
+ * never as a failed update.
  */
 export declare function activateHermesPlugin(deps: HermesPluginDeps): Promise<number>;
 export interface HermesPluginStatus {
     installed: boolean;
     hermes_home: string;
-    /** Configured, but the gateway has not been seen to load it yet. */
+    /** The gateway is not confirmed to have loaded what Borg last wrote. */
     activation_pending?: boolean;
     /**
      * The Borg MCP entry changed; a running Hermes Desktop keeps the previous one
@@ -146,5 +158,10 @@ export interface HermesPluginStatus {
  * `hermes config get`. Without an install no hermes command runs.
  */
 export declare function hermesPluginStatus(deps: Pick<HermesPluginDeps, 'env' | 'homedir' | 'hermes' | 'activation'>): Promise<HermesPluginStatus>;
+/**
+ * Uninstall is the same generation machinery with desired = absent: the
+ * record stays until the gateway is confirmed to have unloaded the plugin, so
+ * a rerun finishes a failed or --no-restart uninstall.
+ */
 export declare function runHermesPluginUninstall(command: HermesPluginUninstallCommand, deps: HermesPluginDeps): Promise<number>;
 //# sourceMappingURL=hermes-plugin-install.d.ts.map
