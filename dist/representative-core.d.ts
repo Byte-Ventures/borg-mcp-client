@@ -38,7 +38,8 @@ type RosterDrone = Pick<ProtocolDrone, 'id' | 'label' | 'role_id' | 'is_queen_cl
 export type LogEntry = Pick<EnrichedStreamEntry, 'id' | 'drone_id' | 'message' | 'visibility' | 'created_at' | 'recipient_drone_ids' | 'documents'>;
 /** The only Borg operations the representative may perform, all seat-scoped. */
 export interface RepresentativeBackend {
-    whoami(): Promise<{
+    /** `signal`, where accepted, cancels the call: the request in flight is aborted and no retry, backoff or later request starts. */
+    whoami(signal?: AbortSignal): Promise<{
         cube_id: string;
         cube_name: string;
         drone_id: string;
@@ -46,7 +47,7 @@ export interface RepresentativeBackend {
         role_id: string;
         role_name: string;
     }>;
-    roster(): Promise<{
+    roster(signal?: AbortSignal): Promise<{
         drones: RosterDrone[];
         roles: RosterRole[];
     }>;
@@ -71,7 +72,7 @@ export interface RepresentativeBackend {
      * One stateless page of the cube log strictly after an exact (created_at, id)
      * cursor, ascending. Reads and advances no unread cursor; never digest mode.
      */
-    readAfter(cursor: LocalServerCursor | null, limit: number): Promise<{
+    readAfter(cursor: LocalServerCursor | null, limit: number, signal?: AbortSignal): Promise<{
         entries: LogEntry[];
         has_more?: boolean;
         behind_by?: number;
@@ -111,7 +112,12 @@ export declare function resolveCoordinator(roster: {
     role: RosterRole;
 };
 /** Re-prove, against the live cube, that this seat and the bound Coordinator are still the bound ones. */
-export declare function verifyLiveBinding(ctx: RepresentativeContext): Promise<{
+/**
+ * Settles with `work`, or rejects with the abort reason as soon as `signal`
+ * fires: a caller that stops never waits on a backend that ignores the signal.
+ */
+export declare function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T>;
+export declare function verifyLiveBinding(ctx: RepresentativeContext, signal?: AbortSignal): Promise<{
     coordinator: RosterDrone;
     self: RosterDrone;
 }>;
@@ -184,9 +190,13 @@ export declare const SERVER_HEAD_MAX_PAGES = 40;
  * keeps growing faster than it is read, is 'unbounded': the caller must not
  * wait for a head it may never reach.
  */
-export declare function serverHead(backend: RepresentativeBackend): Promise<LocalServerCursor | null | 'unbounded'>;
-/** First use of a binding generation creates its state (binding row and delivery start). */
-export declare function ensureRepresentativeState(ctx: RepresentativeContext): Promise<void>;
+export declare function serverHead(backend: RepresentativeBackend, signal?: AbortSignal): Promise<LocalServerCursor | null | 'unbounded'>;
+/**
+ * First use of a binding generation creates its state (binding row and delivery
+ * start). `signal` cancels the head walk of an imported binding between and
+ * during pages; nothing is written after it fires.
+ */
+export declare function ensureRepresentativeState(ctx: RepresentativeContext, signal?: AbortSignal): Promise<void>;
 export declare function readRepresentativeReplies(ctx: RepresentativeContext, raw: unknown): Promise<{
     replies: RepresentativeReply[];
     checkpoint: {

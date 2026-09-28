@@ -166,16 +166,25 @@ export async function runListener(
     return work;
   };
   try {
+    // Every handler is live before the first startup step: a signal or EOF at
+    // any point cancels whatever runs (server checks, the head walk, discovery).
+    process.once('SIGTERM', signal); process.once('SIGINT', signal);
+    stdin.on('data', onData);
+    stdin.once('end', onEnd);
+    stdin.once('close', onEnd);
     let worktree = command.worktree ?? deps.cwd();
     try { worktree = realpathSync(worktree); } catch { /* resolve refuses missing bindings */ }
     worktree = deps.findProjectRoot(worktree);
     const ctx = await resolveRepresentativeContext(worktree, deps, { initialize: true });
+    if (reason) return exitCode();
     // Only this server step maps transport failures to SERVER_UNREACHABLE; typed
     // rejections keep their binding codes and storage keeps STORAGE_REFUSED.
-    await verifyLiveBinding(ctx).catch((error: unknown) => {
+    await verifyLiveBinding(ctx, abort.signal).catch((error: unknown) => {
+      if (reason) throw error;
       throw isTransportFailure(error) && !(error instanceof BorgServerUnreachableError)
         ? new BorgServerUnreachableError('Borg server unreachable during startup verification', { cause: error }) : error;
     });
+    if (reason) return exitCode();
     const binding = ctx.binding;
     active = (await deps.hydrateSeat(worktree))!;
     const ownerDeps = listenerOwnerDeps(binding);
@@ -213,22 +222,26 @@ export async function runListener(
       if (observed.processNonce !== lease!.record.processNonce) { stop('lease-lost'); throw new Error('Listener ownership lost'); }
     };
 
-    await ensureRepresentativeState(ctx);
     const push = new PushEngine({
       binding, store: deps.store, backend: ctx.backend, now,
       emit: async (wake) => { if (!reason) await emit({ event: 'wake', ...wake }); },
       ...(options.hooks ? { hooks: options.hooks } : {}),
     });
     engine = push;
-    // Every handler is live before any log read: signals, EOF, acks.
-    process.once('SIGTERM', signal); process.once('SIGINT', signal);
-    stdin.on('data', onData);
-    stdin.once('end', onEnd);
-    stdin.once('close', onEnd);
+    if (reason) return exitCode();
+    let beating: Promise<unknown> | null = null;
+    heartbeat = setInterval(() => {
+      // One heartbeat at a time: overlapping refreshes of one lease would race each other.
+      if (reason || beating) return;
+      beating = track((async () => { await guard(); if (!await lease!.refresh()) stop('lease-lost'); })()
+        .catch(error => { if (!reason) stop(terminalReason(error) ?? 'lease-lost'); })
+        .finally(() => { beating = null; }));
+    }, options.heartbeatIntervalMs ?? 20_000);
     const summary = await push.summary();
     await emit({ event: 'listening', protocol: LISTENER_PROTOCOL, binding_fingerprint: bindingFingerprint(binding),
       undelivered: summary.undelivered });
     started = true;
+    if (reason) return exitCode();
 
     // The scheduler sleeps until the next eligible instant only.
     reschedule = () => {
@@ -247,16 +260,13 @@ export async function runListener(
     // Discovery waits for the startup cohort capture (one bounded request, after `listening`).
     let captured = false;
     const discover = () => { if (!reason && captured) void track(push.discover().then(() => reschedule(), fail)); };
-    let beating: Promise<unknown> | null = null;
-    heartbeat = setInterval(() => {
-      // One heartbeat at a time: overlapping refreshes of one lease would race each other.
-      if (reason || beating) return;
-      beating = track((async () => { await guard(); if (!await lease!.refresh()) stop('lease-lost'); })()
-        .catch(error => { if (!reason) stop(terminalReason(error) ?? 'lease-lost'); })
-        .finally(() => { beating = null; }));
-    }, options.heartbeatIntervalMs ?? 20_000);
     reconcile = setInterval(discover, options.reconcileMs ?? RECONCILE_MS);
-    void track(push.captureCohort().then(() => { captured = true; reschedule(); discover(); }, fail));
+    // Startup work after `listening`: the first use of an imported 5.x binding
+    // walks to the server head, then the cohort capture. Both honor the stop signal.
+    void track((async () => {
+      await ensureRepresentativeState(ctx, abort.signal);
+      await push.captureCohort();
+    })().then(() => { captured = true; reschedule(); discover(); }, fail));
 
     let attempt = 0;
     let consumerFailure: unknown;
@@ -296,6 +306,8 @@ export async function runListener(
     }
     return exitCode();
   } catch (error) {
+    // Stopped (EOF or a signal) during a startup step: not a refusal.
+    if (reason && !started) return exitCode();
     deps.stderr(`Representative listener refused: ${error instanceof Error ? error.message : String(error)}\n`);
     if (!started && (error instanceof RepresentativeError || terminalReason(error))) {
       await emit({ event: 'refused', code: typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : 'BACKEND_ERROR', exit_code: 2 });

@@ -176,11 +176,15 @@ function waitForLocalRequest(promise, signal) {
         });
     });
 }
-async function decodeLocalProtocolResponse(request, allowNoContent, decodePayload = (value) => value) {
+async function decodeLocalProtocolResponse(request, allowNoContent, decodePayload = (value) => value, cancel) {
+    cancel?.throwIfAborted();
     const controller = new AbortController();
     const timeout = setTimeout(() => {
         controller.abort(new Error('Local Borg server request timed out'));
     }, LOCAL_SERVER_REQUEST_TIMEOUT_MS);
+    // The caller's cancellation aborts the request in flight (and its retries).
+    const onCancel = () => controller.abort(cancel.reason);
+    cancel?.addEventListener('abort', onCancel, { once: true });
     try {
         const response = await waitForLocalRequest(request(controller.signal), controller.signal);
         if (response.status === 204 && allowNoContent)
@@ -196,6 +200,8 @@ async function decodeLocalProtocolResponse(request, allowNoContent, decodePayloa
         return decodeProtocolEnvelope(body, decodePayload).payload;
     }
     catch (error) {
+        if (cancel?.aborted)
+            throw cancel.reason;
         if (controller.signal.aborted) {
             // CR5: a TYPED transport-timeout verdict (message kept for call-site parity).
             throw new BorgServerUnreachableError('Local Borg server request timed out');
@@ -208,6 +214,7 @@ async function decodeLocalProtocolResponse(request, allowNoContent, decodePayloa
     }
     finally {
         clearTimeout(timeout);
+        cancel?.removeEventListener('abort', onCancel);
     }
 }
 async function localServerRequest(active, path, method, payload, options = {}) {
@@ -227,7 +234,7 @@ async function localServerRequest(active, path, method, payload, options = {}) {
             }),
         retryMode: options.retryMode,
         continuationGuard: options.continuationGuard,
-    }), true, options.decodePayload);
+    }), true, options.decodePayload, options.signal);
 }
 function manageCopyValue(value) {
     return JSON.stringify(value);
@@ -320,12 +327,12 @@ async function localOwnerConnection(connection) {
         serverTrustIdentity: active.serverTrustIdentity,
     };
 }
-async function localCubeComposition(active, continuationGuard) {
+async function localCubeComposition(active, continuationGuard, signal) {
     const base = `/api/cubes/${active.cubeId}`;
     const [cubePayload, rolePayload, dronePayload] = await Promise.all([
-        localServerRequest(active, base, 'GET', undefined, { continuationGuard }),
-        localServerRequest(active, `${base}/roles`, 'GET', undefined, { continuationGuard }),
-        localServerRequest(active, `${base}/drones`, 'GET', undefined, { continuationGuard }),
+        localServerRequest(active, base, 'GET', undefined, { continuationGuard, signal }),
+        localServerRequest(active, `${base}/roles`, 'GET', undefined, { continuationGuard, signal }),
+        localServerRequest(active, `${base}/drones`, 'GET', undefined, { continuationGuard, signal }),
     ]);
     if (!cubePayload || !rolePayload || !dronePayload) {
         throw new Error('Local Borg server returned an incomplete cube response');
@@ -369,7 +376,7 @@ async function localReadLogPage(active, opts = {}) {
     const payload = await localServerRequest(active, `/api/cubes/${active.cubeId}/logs`, 'PUT', {
         cursor: opts.cursor ?? null,
         ...(opts.limit === undefined ? {} : { limit: opts.limit }),
-    }, { retryMode: opts.retryMode, continuationGuard: opts.continuationGuard, decodePayload: decodeReadLogResult });
+    }, { retryMode: opts.retryMode, continuationGuard: opts.continuationGuard, signal: opts.signal, decodePayload: decodeReadLogResult });
     if (!payload)
         throw new Error('Local Borg server returned an empty log response');
     return payload;
@@ -468,8 +475,18 @@ async function resolveLocalLogCursor(active, since, continuationGuard) {
 /**
  * Sleep for specified milliseconds
  */
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+function sleep(ms, signal) {
+    if (!signal)
+        return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve, reject) => {
+        if (signal.aborted) {
+            reject(signal.reason);
+            return;
+        }
+        const onAbort = () => { clearTimeout(timer); reject(signal.reason); };
+        const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
 }
 /**
  * Authenticated fetch helper.
@@ -575,7 +592,8 @@ async function authedFetch(path, init = {}) {
     let rateLimitRetryExhausted = false;
     if (retryMode === 'unread-cursor') {
         response = await retryOn429(response, requestWithRetry, {
-            sleep,
+            // A cancelled or timed-out request stops backing off at once.
+            sleep: (ms) => sleep(ms, rest.signal),
             log: debugLog,
         });
         rateLimitRetryExhausted = response.status === 429;
@@ -707,9 +725,9 @@ export async function getRoleInfoByName(sessionToken, apiUrl, role, serverTrustI
         throw new Error(`Local Borg server has no role named ${JSON.stringify(role)}`);
     return { role: matched };
 }
-export async function whoami(active) {
+export async function whoami(active, opts = {}) {
     const local = assertSeatAuthority(active);
-    const composed = await localCubeComposition(local);
+    const composed = await localCubeComposition(local, undefined, opts.signal);
     return {
         cube_id: composed.cube.id,
         cube_name: composed.cube.name,
@@ -738,13 +756,13 @@ export async function whoami(active) {
  *     (echoed back so the renderer can label the column accurately
  *     even when the caller passed an entry-id)
  */
-export async function getRoster(active, since) {
+export async function getRoster(active, since, opts = {}) {
     const local = assertSeatAuthority(active);
     if (since !== undefined) {
         const [dronePayload, rolePayload, cubePayload] = await Promise.all([
-            localServerRequest(local, `/api/cubes/${local.cubeId}/drones?since=${encodeURIComponent(since)}`, 'GET'),
-            localServerRequest(local, `/api/cubes/${local.cubeId}/roles`, 'GET'),
-            localServerRequest(local, `/api/cubes/${local.cubeId}`, 'GET'),
+            localServerRequest(local, `/api/cubes/${local.cubeId}/drones?since=${encodeURIComponent(since)}`, 'GET', undefined, { signal: opts.signal }),
+            localServerRequest(local, `/api/cubes/${local.cubeId}/roles`, 'GET', undefined, { signal: opts.signal }),
+            localServerRequest(local, `/api/cubes/${local.cubeId}`, 'GET', undefined, { signal: opts.signal }),
         ]);
         if (!dronePayload || !rolePayload || !cubePayload) {
             throw new Error('Local Borg server returned an incomplete roster response');
@@ -756,7 +774,7 @@ export async function getRoster(active, since) {
             since: dronePayload.since ?? since,
         };
     }
-    const composed = await localCubeComposition(local);
+    const composed = await localCubeComposition(local, undefined, opts.signal);
     return {
         drones: composed.drones,
         roles: composed.roles,
@@ -767,32 +785,40 @@ export async function getRoster(active, since) {
  * Read recent log entries for the cube.
  */
 export async function readLog(sessionToken, apiUrl, opts = {}) {
+    const signal = opts.signal;
+    signal?.throwIfAborted();
+    const outerGuard = opts.continuationGuard;
+    const continuationGuard = signal
+        ? async () => { signal.throwIfAborted(); if (outerGuard)
+            await outerGuard(); }
+        : outerGuard;
     const local = await localAuthorityContext(sessionToken, apiUrl, opts.serverTrustIdentity);
     let cursor = null;
     if (opts.cursor !== undefined && (opts.unreadOnly || opts.since !== undefined)) {
         throw new Error('readLog cursor cannot be combined with since or unreadOnly');
     }
-    if (opts.continuationGuard)
-        await opts.continuationGuard();
+    if (continuationGuard)
+        await continuationGuard();
     if (opts.cursor !== undefined)
         cursor = opts.cursor;
     if (opts.unreadOnly)
         cursor = await getLocalServerCursor(localCursorBinding(local));
     if (opts.since !== undefined)
-        cursor = await resolveLocalLogCursor(local, opts.since, opts.continuationGuard);
+        cursor = await resolveLocalLogCursor(local, opts.since, continuationGuard);
     let page = await localReadLogPage(local, {
         cursor,
         limit: opts.limit,
-        continuationGuard: opts.continuationGuard,
+        continuationGuard,
+        signal,
         // Keep the cursor payload stable across a lost response; do not re-read or
         // advance local state until one response has been decoded successfully.
         // An exact-cursor read is stateless, so the same bounded retries are safe.
         ...((opts.unreadOnly && opts.since === undefined) || opts.cursor !== undefined ? { retryMode: 'unread-cursor' } : {}),
     });
     if (opts.unreadOnly && page.cursor) {
-        if (opts.continuationGuard)
-            await opts.continuationGuard();
-        await advanceLocalServerCursor(localCursorBinding(local), page.cursor, ...(opts.continuationGuard ? [opts.continuationGuard] : []));
+        if (continuationGuard)
+            await continuationGuard();
+        await advanceLocalServerCursor(localCursorBinding(local), page.cursor, ...(continuationGuard ? [continuationGuard] : []));
     }
     const entries = [...page.entries];
     const backlog = entries.length + (typeof page.behind_by === 'number' ? page.behind_by : 0);
@@ -806,17 +832,18 @@ export async function readLog(sessionToken, apiUrl, opts = {}) {
                 cursor: page.cursor,
                 limit: Math.min(500, DIGEST_FETCH_CAP - entries.length),
                 retryMode: 'unread-cursor',
-                continuationGuard: opts.continuationGuard,
+                continuationGuard,
+                signal,
             });
             if (page.cursor) {
-                if (opts.continuationGuard)
-                    await opts.continuationGuard();
-                await advanceLocalServerCursor(localCursorBinding(local), page.cursor, ...(opts.continuationGuard ? [opts.continuationGuard] : []));
+                if (continuationGuard)
+                    await continuationGuard();
+                await advanceLocalServerCursor(localCursorBinding(local), page.cursor, ...(continuationGuard ? [continuationGuard] : []));
             }
             entries.push(...page.entries);
         }
     }
-    const composed = await localCubeComposition(local, opts.continuationGuard);
+    const composed = await localCubeComposition(local, continuationGuard, signal);
     return {
         entries,
         drones: composed.drones,

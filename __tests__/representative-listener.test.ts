@@ -329,3 +329,47 @@ describe('review controls (S2 round 1): EOF and startup under a growing log', ()
     expect(await ownerFiles()).toEqual([]);
   });
 });
+
+describe('review controls (S2 round 3): every startup step honors EOF', () => {
+  it('exits on EOF during the imported 5.x binding head walk, with page 1 held, after announcing listening', async () => {
+    const { plantLegacyBindings } = await import('./fixtures/representative-state.js');
+    const { representativeStateRoot } = await import('../src/representative-db.js');
+    await rm(representativeStateRoot(), { recursive: true, force: true });
+    plantLegacyBindings(root, [bindingFor(worktree, { origin, boundAt: '2020-01-01T00:00:00.000Z' })]);
+    const original = cube.backend.bind(cube); let calls = 0; let release!: () => void;
+    const hold = new Promise<void>((done) => { release = done; });
+    cube.backend = () => ({ ...original(), readAfter: async (cursor, limit) => { calls++; await hold; return original().readAfter(cursor, limit); } });
+    const client = start();
+    await client.wait(() => calls > 0);
+    // The head walk runs after `listening`: the host sees the listener up while page 1 is held.
+    expect(client.events.map((event) => event.event)).toEqual(['listening']);
+    const stoppedAt = Date.now();
+    client.child.stdin!.end();
+    for (let i = 0; i < 400 && client.child.exitCode === null; i++) await delay(10);
+    const exitBeforeRelease = client.child.exitCode;
+    const eventsBeforeRelease = client.events.map((event) => event.event);
+    release();
+    await client.exited;
+    expect(exitBeforeRelease).toBe(0);
+    expect(Date.now() - stoppedAt).toBeLessThan(4_000);
+    expect(eventsBeforeRelease).toEqual(['listening', 'stopped']);
+    expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'eof', exit_code: 0 });
+    expect(calls).toBe(1);
+    expect(await ownerFiles()).toEqual([]);
+  }, 15_000);
+
+  it('exits 0 on EOF while the startup server verification is held, before announcing anything', async () => {
+    const original = cube.backend.bind(cube); let calls = 0;
+    cube.backend = () => ({ ...original(), whoami: async () => { calls++; return new Promise(() => {}); } });
+    const client = start();
+    await client.wait(() => calls > 0);
+    const stoppedAt = Date.now();
+    client.child.stdin!.end();
+    const [code] = await client.exited;
+    expect(code).toBe(0);
+    expect(Date.now() - stoppedAt).toBeLessThan(4_000);
+    expect(client.events).toEqual([]);
+    expect(await ownerFiles()).toEqual([]);
+  }, 15_000);
+});
+

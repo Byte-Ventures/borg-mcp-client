@@ -111,7 +111,7 @@ it('retries a pinned-TLS reset before listening instead of refusing startup', as
   expect(requests).toBe(2);
   expect(client.events.map(e => e.event)).toEqual(['listening']);
   client.child.kill('SIGTERM'); const [code] = await client.exited;
-  expect(code).toBe(0); expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'signal', exit_code: 0 });
+  expect(code, client.stderr() + JSON.stringify(client.events)).toBe(0); expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'signal', exit_code: 0 });
 });
 
 // Production trust: no injected loader or fetch, so the process-lifetime cache
