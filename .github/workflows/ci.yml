@@ -29,6 +29,18 @@ jobs:
         run: |
           node --test test/release-lane.test.mjs
 
+  hermes-plugin:
+    name: hermes plugin (python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Run Hermes plugin tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: timeout 5m python3 -m unittest discover -s hermes-plugin/tests -v
+
   client:
     name: client source (${{ matrix.node-version }})
     runs-on: ubuntu-latest

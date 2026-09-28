@@ -22,8 +22,10 @@ import { shellEscape } from './shell-escape.js';
 export const DEFAULT_REPRESENTATIVE_ROLE = 'hermes-representative';
 export function parseRepresentativeArgs(args) {
     const [action, ...rest] = args;
+    if (action === 'hermes-plugin')
+        return parseHermesPluginArgs(rest);
     if (action !== 'prepare' && action !== 'status' && action !== 'mcp' && action !== 'listen') {
-        return { ok: false, error: 'expected one of: prepare, status, mcp, listen' };
+        return { ok: false, error: 'expected one of: prepare, status, mcp, listen, hermes-plugin' };
     }
     const values = {};
     let rebind = false;
@@ -83,6 +85,33 @@ export function parseRepresentativeArgs(args) {
             ...(values['--host'] ? { host: values['--host'] } : {}),
         },
     };
+}
+function parseHermesPluginArgs(args) {
+    const [subcommand, ...rest] = args;
+    if (subcommand !== 'install')
+        return { ok: false, error: 'expected: hermes-plugin install [--hermes-home <path>] [--force]' };
+    let hermesHome;
+    let force = false;
+    for (let i = 0; i < rest.length; i += 1) {
+        const arg = rest[i];
+        if (arg === '--force') {
+            force = true;
+        }
+        else if (arg === '--hermes-home') {
+            const next = rest[i + 1];
+            if (typeof next !== 'string' || next.length === 0 || next.startsWith('-')) {
+                return { ok: false, error: '--hermes-home requires a value' };
+            }
+            if (!isAbsolute(next))
+                return { ok: false, error: '--hermes-home must be an absolute path' };
+            hermesHome = next;
+            i += 1;
+        }
+        else {
+            return { ok: false, error: `unknown argument: ${arg}. Supported: --hermes-home, --force` };
+        }
+    }
+    return { ok: true, command: { action: 'hermes-plugin-install', force, ...(hermesHome ? { hermesHome } : {}) } };
 }
 function canonicalWorktree(path, deps) {
     let real = resolve(path);

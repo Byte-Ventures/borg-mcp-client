@@ -1,0 +1,39 @@
+name: borg-representative-push
+version: 1.0.0
+manifest_version: 2
+api_version: 1
+description: >-
+  Wakes one Hermes gateway conversation when the bound Borg Coordinator replies
+  to the human representative. Supervises `borg representative listen` inside
+  the messaging gateway and injects a fixed, body-free prompt; reply content is
+  only ever fetched by the conversation through borg_representative-read.
+license: Apache-2.0
+homepage: https://github.com/Byte-Ventures/borg-mcp-client
+tags: [borg, gateway, representative]
+# Hooks are registered only when the settings below are valid (a post_tool_call
+# observer for the deliver tool), so none is declared unconditionally here.
+config_schema:
+  session_key:
+    type: str
+    required: true
+    description: Gateway session key of the conversation to wake, e.g. agent:main:telegram:dm:<chat id>.
+  worktree:
+    type: str
+    required: true
+    description: Absolute path of the prepared representative worktree.
+  borg_command:
+    type: str
+    default: borg
+    description: The borg executable (borgmcp >= 5.6.0).
+  mcp_server:
+    type: str
+    default: borg-representative
+    description: Name of the mcp_servers entry that runs `borg representative mcp`.
+  reinject_after_s:
+    type: int
+    default: 600
+    description: Seconds before an undelivered reply wakes the conversation again.
+  max_reinjects:
+    type: int
+    default: 3
+    description: Maximum repeat wakes for one undelivered reply.

@@ -415,6 +415,103 @@ mapping, and holds unknown correlation for the human. Deduplicate queued hints b
 advancing the host's `--replay-after` checkpoint. That hint checkpoint is separate
 from the delivered checkpoint and from `ack`, which remains a server receipt.
 
+## Hermes push plugin
+
+For Hermes, Borg ships a Hermes user plugin, `borg-representative-push`, that
+supervises the listener for you. When the bound Coordinator replies, the plugin
+wakes one Hermes conversation right away. Hermes source is not changed; the
+plugin is installed and enabled through Hermes's documented plugin mechanism.
+
+**Which conversations can be woken.** Only a Hermes *messaging-gateway*
+conversation (Telegram, Discord, Slack and the other gateway platforms), named
+by its gateway `session_key`, for example `agent:main:telegram:dm:<chat id>`.
+A Hermes Desktop chat cannot be woken: Desktop runs its chats in `hermes serve`,
+and Hermes injects plugin messages only into gateway conversations. The
+`session_key` stays the same across `/new` and `/reset` in that chat.
+
+### Install
+
+```bash
+borg representative hermes-plugin install [--hermes-home <path>] [--force]
+```
+
+This copies the plugin's two files into `<Hermes home>/plugins/borg-representative-push/`
+(the Hermes home is `--hermes-home`, else `$HERMES_HOME`, else `~/.hermes`) and
+prints the configuration to add. It refuses to replace an existing install
+without `--force`, refuses a symbolic-link target, never edits Hermes config and
+never starts or restarts Hermes. Rerun it with `--force` after upgrading
+borgmcp to update the plugin.
+
+### Configure
+
+Add to the Hermes `config.yaml`:
+
+```yaml
+plugins:
+  enabled:
+    - borg-representative-push
+  entries:
+    borg-representative-push:
+      allow_gateway_injection: true
+      settings:
+        session_key: "agent:main:<platform>:<chat type>:<chat id>"
+        worktree: "<absolute path of the prepared representative worktree>"
+        # optional: borg_command (default borg), mcp_server (default
+        # borg-representative), reinject_after_s (default 600), max_reinjects (default 3)
+mcp_servers:
+  borg-representative:
+    command: borg
+    args: ["representative", "mcp", "--worktree", "<same absolute worktree path>"]
+    lazy: true
+```
+
+`allow_gateway_injection` is Hermes's per-plugin permission to start gateway
+turns; it is off by default. `mcp_server` must name the `mcp_servers` entry that
+runs `borg representative mcp`, because the plugin recognises the deliver tool
+by that name. Then restart the gateway (`hermes gateway restart`).
+
+**One tool owner.** Hermes starts a separate MCP process in every Hermes
+process that uses the server, and only one process may hold the representative
+tools lease. The woken conversation runs in the gateway, so the gateway must be
+the process that uses the tools. With `lazy: true`, a process starts the Borg
+MCP server only when one of its conversations calls a Borg tool. Run `hermes
+tools` and disable the `mcp-borg-representative` toolset on every platform except
+the one in `session_key`, Desktop and CLI included. If another process already
+holds the lease (`borg representative status` shows `owned-by-other-process`),
+restart that process once so it releases the lease.
+
+### Behaviour
+
+- The listener starts only inside the Hermes messaging gateway, when the platform
+  named in `session_key` connects. The CLI, Desktop and worker processes load the
+  plugin but start nothing. A platform reconnect does not start a second listener.
+- A burst of hints (about 2 seconds) becomes one injected message with fixed
+  text: `Borg: new Coordinator reply. Call borg_representative-read, persist and
+  relay, then borg_representative-deliver through the last persisted entry_id.`
+  No message body, sender or document ever passes through the plugin. A busy
+  conversation queues the message; it does not interrupt the running turn.
+- The plugin watches this gateway's `borg_representative-deliver` results. A
+  hinted reply that is still undelivered after `reinject_after_s` wakes the
+  conversation again, at most `max_reinjects` times, then the plugin logs it and
+  stops. Hermes reports only that it accepted a message, not that the turn ran,
+  so this is how a dropped wake is recovered.
+- Listener exits: 0 stops; 1 restarts with capped backoff; 2 stops and logs
+  (fix the binding, then restart the gateway); 3 (another listener owns the
+  lease) retries with backoff; 4 restarts after `lease-lost` and otherwise stops
+  and logs (evicted, rebound, revoked, trust-changed).
+- On restart the listener replays retained hints after the last delivered
+  checkpoint the plugin observed (`--replay-after`). The delivered checkpoint
+  stays the source of truth: `read` returns every reply not yet delivered.
+- On a normal gateway exit the plugin stops the listener. If the gateway is killed,
+  the listener it started keeps its lease until its next hint fails to write.
+  The next gateway stops that orphan only if it is the recorded listener and its
+  parent is gone. Otherwise it retries with backoff until the lease is free. A
+  dead owner's lease expires after about 70 seconds; a live orphan releases it
+  when its next hint fails to write.
+- State (the recorded listener and the observed delivered checkpoint) and the
+  listener's stderr live under `<Hermes home>/plugin-data/borg-representative-push/`,
+  in files created with mode 0600.
+
 ## Recovery
 
 Run `borg` with the Node installation that owns the global `borgmcp` install;

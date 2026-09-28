@@ -34,6 +34,10 @@ export type RepresentativeCommand = {
     action: 'listen';
     worktree?: string;
     replayAfter?: string;
+} | {
+    action: 'hermes-plugin-install';
+    hermesHome?: string;
+    force: boolean;
 };
 export type ParsedRepresentativeArgs = {
     ok: true;

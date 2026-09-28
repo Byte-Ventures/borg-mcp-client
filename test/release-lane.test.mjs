@@ -421,6 +421,10 @@ async function validPackage(directory) {
   await cp(join(root, 'NOTICE'), join(packageRoot, 'NOTICE'));
   await cp(join(root, 'THIRD_PARTY_NOTICES.md'), join(packageRoot, 'THIRD_PARTY_NOTICES.md'));
   await writeFile(join(packageRoot, 'docs', 'usage.md'), '# Usage\n');
+  const hermesPlugin = join(packageRoot, 'hermes-plugin', 'borg-representative-push');
+  await mkdir(hermesPlugin, { recursive: true });
+  await writeFile(join(hermesPlugin, 'plugin.yaml'), 'name: borg-representative-push\n');
+  await writeFile(join(hermesPlugin, '__init__.py'), 'def register(ctx):\n    pass\n');
   await writeFile(join(packageRoot, 'src', 'claude.ts'), 'export const cli = true;\n');
   await writeFile(join(packageRoot, 'src', 'index.ts'), 'export const mcp = true;\n');
   for (const name of ['claude', 'index']) {
@@ -1046,6 +1050,25 @@ test('packed smoke derives cube-init help from the built contract without a loca
     /await import\(new URL\('\.\.\/dist\/cli-help\.js', import\.meta\.url\)\)/,
   );
   assert.doesNotMatch(source, /CUBE_INIT_HELP_TEXT|function cubeInitHelpText|borg server cube init \(borgmcp/);
+});
+
+test('packed artifact verifier ships exactly the Hermes plugin files', async (t) => {
+  const extra = await packedFixture(async ({ packageRoot }) => {
+    await writeFile(join(packageRoot, 'hermes-plugin', 'borg-representative-push', 'notes.txt'), 'x\n');
+  });
+  t.after(() => rm(extra.directory, { recursive: true, force: true }));
+  await assert.rejects(
+    () => verifyPackedArtifact(extra.tarball, { repositoryRoot: extra.directory }),
+    /Unexpected Hermes plugin artifact: hermes-plugin\/borg-representative-push\/notes\.txt/,
+  );
+  const missing = await packedFixture(async ({ packageRoot }) => {
+    await rm(join(packageRoot, 'hermes-plugin', 'borg-representative-push', '__init__.py'));
+  });
+  t.after(() => rm(missing.directory, { recursive: true, force: true }));
+  await assert.rejects(
+    () => verifyPackedArtifact(missing.tarball, { repositoryRoot: missing.directory }),
+    /Packed artifact is missing hermes-plugin\/borg-representative-push\/__init__\.py/,
+  );
 });
 
 test('packed artifact verifier rejects credential-shaped content', async (t) => {
