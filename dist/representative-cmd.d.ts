@@ -16,6 +16,7 @@ import type { Readable, Writable } from 'node:stream';
 import type { ActiveCube } from './cubes.js';
 import { type RepresentativeBackend, type RepresentativeContext } from './representative-core.js';
 import { type RepresentativeStore } from './representative-store.js';
+import { type HermesPluginInstallCommand, type HermesPluginUninstallCommand } from './hermes-plugin-install.js';
 export declare const DEFAULT_REPRESENTATIVE_ROLE = "hermes-representative";
 export type RepresentativeCommand = {
     action: 'prepare';
@@ -36,11 +37,11 @@ export type RepresentativeCommand = {
     protocol?: number;
 } | {
     action: 'reset-state';
-} | {
+} | ({
     action: 'hermes-plugin-install';
-    hermesHome?: string;
-    force: boolean;
-};
+} & HermesPluginInstallCommand) | ({
+    action: 'hermes-plugin-uninstall';
+} & HermesPluginUninstallCommand);
 export type ParsedRepresentativeArgs = {
     ok: true;
     command: RepresentativeCommand;
@@ -66,6 +67,8 @@ export interface RepresentativeCmdDeps {
     }>;
     backendFor(active: ActiveCube): RepresentativeBackend | Promise<RepresentativeBackend>;
     store: RepresentativeStore;
+    /** status: the Hermes plugin install and open-gateway report; omitted when absent. */
+    hermesPluginStatus?(): Promise<unknown>;
     stdout(text: string): void;
     stderr(text: string): void;
 }

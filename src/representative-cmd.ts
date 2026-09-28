@@ -67,6 +67,8 @@ export interface RepresentativeCmdDeps {
   prepareSeat(input: { role: string; coordinator?: string; worktreeName?: string; host?: string; resume?: boolean }): Promise<{ code: number; worktree?: string }>;
   backendFor(active: ActiveCube): RepresentativeBackend | Promise<RepresentativeBackend>;
   store: RepresentativeStore;
+  /** status: the Hermes plugin install and open-gateway report; omitted when absent. */
+  hermesPluginStatus?(): Promise<unknown>;
   stdout(text: string): void;
   stderr(text: string): void;
 }
@@ -332,7 +334,9 @@ export async function runRepresentativePrepare(
       `  worktree:        ${worktree}\n\n` +
       `No agent CLI was launched. Serve it to a generic MCP host with:\n` +
       `  borg representative mcp --worktree ${worktree}\n\n` +
-      `Example host configuration (no secrets belong here):\n${hermesConfigSnippet(worktree)}`,
+      `Example host configuration (no secrets belong here):\n${hermesConfigSnippet(worktree)}\n` +
+      `For Hermes, one command sets up the MCP entry and the push plugin:\n` +
+      `  borg representative hermes-plugin install\n`,
     );
     return 0;
   } catch (error) {
@@ -360,7 +364,8 @@ export async function runRepresentativeStatus(
     const status = await representativeStatus(ctx);
     const { representativeListenerStatus } = await import('./representative-listener.js');
     const listener = await representativeListenerStatus(ctx.binding, deps.store);
-    deps.stdout(`${JSON.stringify({ ...status, listener }, null, 2)}\n`);
+    const hermes = deps.hermesPluginStatus ? { hermes_plugin: await deps.hermesPluginStatus() } : {};
+    deps.stdout(`${JSON.stringify({ ...status, listener, ...hermes }, null, 2)}\n`);
     return status.connected ? 0 : 1;
   } catch (error) {
     deps.stderr(`◼ borg representative status: ${describeError(error)}\n`);
@@ -451,6 +456,10 @@ export async function buildDefaultRepresentativeDeps(): Promise<RepresentativeCm
     },
     backendFor: createSeatBackend,
     store: createRepresentativeStore(),
+    hermesPluginStatus: async () => {
+      const plugin = await import('./hermes-plugin-install.js');
+      return plugin.hermesPluginStatus(plugin.defaultHermesPluginDeps());
+    },
     stdout: (text) => { process.stdout.write(text); },
     stderr: (text) => { process.stderr.write(text); },
   };

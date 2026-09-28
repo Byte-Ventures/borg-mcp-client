@@ -631,7 +631,7 @@ export function platformOf(sessionKey: string): string {
   return sessionKey.split(':')[2] ?? '';
 }
 
-export async function openGatewaySwitches(
+async function openGatewaySwitches(
   config: HermesConfig,
   platform: string,
   env: NodeJS.ProcessEnv,
@@ -947,6 +947,40 @@ export async function activateHermesPlugin(deps: HermesPluginDeps): Promise<numb
     const code = failure(error, deps, 'Hermes plugin activation');
     deps.stderr('Rerun `borg representative hermes-plugin install` to finish the activation.\n');
     return code;
+  }
+}
+
+export interface HermesPluginStatus {
+  installed: boolean;
+  hermes_home: string;
+  session_key?: string | null;
+  /** Allow-all switches that open the gateway to anyone; empty when none. */
+  open_gateway?: string[];
+  error?: string;
+}
+
+/**
+ * For `borg representative status`: whether the plugin is installed (its
+ * directory is the marker) and, when it is, the open-gateway report read
+ * through `hermes config get`. Without the directory no hermes command runs.
+ */
+export async function hermesPluginStatus(deps: Pick<HermesPluginDeps, 'env' | 'homedir' | 'hermes'>): Promise<HermesPluginStatus> {
+  const home = resolveHermesHome(undefined, deps);
+  try {
+    if ((await pluginDirState(home)) === 'absent') return { installed: false, hermes_home: home };
+    const config = new HermesConfig(deps.hermes(home));
+    const sessionKey = await config.get(KEYS.sessionKey);
+    if (typeof sessionKey !== 'string' || !SESSION_KEY_PATTERN.test(sessionKey)) {
+      return { installed: true, hermes_home: home, session_key: null, error: 'settings.session_key is not a gateway DM key; rerun `borg representative hermes-plugin install`' };
+    }
+    return {
+      installed: true,
+      hermes_home: home,
+      session_key: sessionKey,
+      open_gateway: await openGatewaySwitches(config, platformOf(sessionKey), deps.env),
+    };
+  } catch (error) {
+    return { installed: true, hermes_home: home, error: printableUntrusted(error instanceof Error ? error.message : String(error), 300) };
   }
 }
 

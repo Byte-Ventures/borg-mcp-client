@@ -107,7 +107,8 @@ export function representativeHelpText(version) {
         `  borg representative status [--worktree <path>]\n` +
         `  borg representative mcp [--worktree <path>]\n` +
         `  borg representative listen --worktree <path> --protocol 2\n` +
-        `  borg representative hermes-plugin install [--hermes-home <path>] [--force]\n` +
+        `  borg representative hermes-plugin install [--hermes-home <path>] [--worktree <path>] [--session-key <key>] [--dry-run] [--no-restart]\n` +
+        `  borg representative hermes-plugin uninstall [--hermes-home <path>] [--dry-run] [--no-restart]\n` +
         `  borg representative reset-state\n` +
         `  borg representative --help\n\n` +
         `Commands:\n` +
@@ -120,9 +121,15 @@ export function representativeHelpText(version) {
         `  listen    The push engine: emit body-free JSON wakes for undelivered Coordinator replies and read\n` +
         `            the host's acks on stdin. Run by the host with a stdin pipe; EOF on stdin stops it.\n` +
         `  hermes-plugin install\n` +
-        `            Copy the Borg-owned Hermes push plugin into <Hermes home>/plugins and print the config to add.\n` +
-        `            It wakes one Hermes messaging-gateway conversation (not a Desktop chat). Never edits Hermes\n` +
-        `            config and never starts or restarts Hermes.\n` +
+        `            One command sets up Hermes: installs the Borg-owned push plugin into <Hermes home>/plugins,\n` +
+        `            writes its settings, gateway permission and the borg-representative MCP entry through the\n` +
+        `            Hermes CLI (each value read back), enables it, stops the Desktop backend and restarts a\n` +
+        `            service-managed gateway. The conversation it wakes is your gateway DM, found in Hermes's\n` +
+        `            sessions.json; the worktree comes from the prepared binding. config.yaml is backed up first\n` +
+        `            and restored on failure. Reports an open gateway. A rerun changes nothing; \`borg update\`\n` +
+        `            refreshes an installed plugin.\n` +
+        `  hermes-plugin uninstall\n` +
+        `            Remove only Borg's entries from Hermes config and the plugin's files.\n` +
         `  reset-state\n` +
         `            Recover from a corrupt representative state database (REPRESENTATIVE_STATE_CORRUPT) only;\n` +
         `            refuses when the state is healthy. Keeps readable bindings; loses delivery checkpoints (replies\n` +
@@ -135,8 +142,11 @@ export function representativeHelpText(version) {
         `  --worktree <path>            status/mcp/listen: absolute path of the prepared representative worktree\n` +
         `  --host <host>                prepare: explicit Borg server, as in \`borg assimilate --host\`\n` +
         `  --rebind                     prepare: explicitly replace the saved cube/Coordinator selection\n` +
-        `  --hermes-home <path>         hermes-plugin install: absolute Hermes home (default: $HERMES_HOME or ~/.hermes)\n` +
-        `  --force                      hermes-plugin install: replace the files of an existing install\n` +
+        `  --hermes-home <path>         hermes-plugin: absolute Hermes home (default: $HERMES_HOME or ~/.hermes)\n` +
+        `  --worktree <path>            hermes-plugin install: the prepared worktree, when several are prepared\n` +
+        `  --session-key <key>          hermes-plugin install: the gateway DM to wake (agent:main:<platform>:dm:<chat id>)\n` +
+        `  --dry-run                    hermes-plugin: print the planned steps; only reads Hermes config\n` +
+        `  --no-restart                 hermes-plugin: skip stopping the Desktop backend and restarting the gateway\n` +
         `  --help, -h                   Show this help\n\n` +
         `Limits: the MCP process has no background wake; the listen process emits wakes, not content.\n` +
         `Reading changes nothing: persist replies durably, then deliver through the last one.\n` +
@@ -245,7 +255,9 @@ export function updateHelpText(version) {
         `in MCP registrations and managed agent hooks while preserving their other settings. It\n` +
         `leaves absent registrations and borg entries that point to another command unchanged. Borg\n` +
         `never restarts agent processes;\n` +
-        `restart active agent sessions yourself.\n`);
+        `restart active agent sessions yourself. When the Borg Hermes plugin is installed (its directory\n` +
+        `exists), Borg refreshes it and its Hermes settings through the Hermes CLI, runs\n` +
+        `\`hermes serve --stop\`, and restarts the Hermes gateway only when it runs as a service.\n`);
 }
 /** Product Design-approved client-owned copy for `borg server --help`. */
 export function serverHelpText() {

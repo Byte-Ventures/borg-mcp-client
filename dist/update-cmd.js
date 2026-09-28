@@ -616,7 +616,7 @@ export async function runUpdate(options, deps) {
         }
         deps.stdout(`Updated ${CLIENT_PACKAGE}@${pair.client.version}. Local server: skipped (not installed).\n` +
             `Restart active agent sessions to load the updated client.\n`);
-        return 0;
+        return deps.activateHermesPlugin();
     }
     let server;
     try {
@@ -736,7 +736,7 @@ export async function runUpdate(options, deps) {
                 renderStoppedServiceRecovery(status))
             : `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; running identities and protocol verified.\n`);
         deps.stdout('Restart active agent sessions to load the updated client.\n');
-        return 0;
+        return await deps.activateHermesPlugin();
     }
     catch (error) {
         const interrupted = signalExitCode(error);
@@ -1094,6 +1094,10 @@ export function buildDefaultUpdateDeps(acknowledgedRegistry) {
             await preflightBorgServerTag(origin, trust.fetchImpl);
         },
         refreshAgentIntegrations: async () => refreshAndVerifyManagedAgentIntegrations(),
+        activateHermesPlugin: async () => {
+            const plugin = await import('./hermes-plugin-install.js');
+            return plugin.activateHermesPlugin(plugin.defaultHermesPluginDeps());
+        },
         confirm: defaultConfirm,
         isTTY: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
         stdout: (text) => process.stdout.write(text),

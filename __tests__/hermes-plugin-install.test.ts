@@ -28,7 +28,9 @@ import {
   activateHermesPlugin,
   configSetText,
   execFileHermesCli,
+  hermesPluginStatus,
   packagedHermesPluginDir,
+  parseGatewayStatus,
   printableUntrusted,
   runHermesPluginInstall,
   runHermesPluginUninstall,
@@ -610,3 +612,35 @@ describe('value encoding', () => {
     expect(printableUntrusted('x'.repeat(100)).length).toBe(80);
   });
 });
+
+describe('status report', () => {
+  const statusDeps = (d = deps()) => ({ ...d, env: { ...d.env, HERMES_HOME: home } });
+
+  it('reports not installed without running hermes', async () => {
+    expect(await hermesPluginStatus(statusDeps())).toEqual({ installed: false, hermes_home: home });
+    expect(calls()).toEqual([]);
+  });
+
+  it('reports the conversation and the open-gateway switches of an installed plugin, through reads only', async () => {
+    expect(await install({ noRestart: true })).toBe(0);
+    writeFileSync(join(home, '.env'), 'TELEGRAM_ALLOW_ALL_USERS=1\n');
+    resetLog();
+    expect(await hermesPluginStatus(statusDeps())).toEqual({
+      installed: true, hermes_home: home, session_key: DM, open_gateway: ['TELEGRAM_ALLOW_ALL_USERS'],
+    });
+    expect(writes()).toEqual([]);
+  });
+});
+
+describe('gateway status parsing', () => {
+  it('counts only positive service lines as supervised', () => {
+    expect(parseGatewayStatus('✓ Gateway is supervised by launchd (PID 42)\n')).toEqual({ kind: 'service', pid: '42' });
+    expect(parseGatewayStatus('✓ User gateway service is running\n Main PID: 7 (python)\n')).toEqual({ kind: 'service', pid: '7' });
+    expect(parseGatewayStatus('✓ System gateway service is running\n')).toEqual({ kind: 'service', pid: null });
+    expect(parseGatewayStatus('✓ Gateway is running (PID: 9)\n  (Running manually, not as a system service)\n')).toEqual({ kind: 'manual' });
+    expect(parseGatewayStatus('⚠ Gateway service is registered but launchd is not supervising it\n')).toEqual({ kind: 'unknown' });
+    expect(parseGatewayStatus('✗ Gateway service is not loaded\n')).toEqual({ kind: 'stopped' });
+    expect(parseGatewayStatus('')).toEqual({ kind: 'unknown' });
+  });
+});
+
