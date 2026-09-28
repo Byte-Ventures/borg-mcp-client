@@ -67,6 +67,11 @@ export interface UpdateDeps {
   serverJson(binPath: string, command: 'update' | 'status'): Promise<ServerJsonExecution>;
   verifyRunningProtocol(origin: string): Promise<void>;
   refreshAgentIntegrations(): Promise<void>;
+  /**
+   * Activates the Borg Hermes plugin when its directory exists (the install
+   * marker); otherwise does nothing. Returns an exit code; it reports its own errors.
+   */
+  activateHermesPlugin(): Promise<number>;
   confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
   isTTY(): boolean;
   stdout(text: string): void;
@@ -834,7 +839,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       `Updated ${CLIENT_PACKAGE}@${pair.client.version}. Local server: skipped (not installed).\n` +
       `Restart active agent sessions to load the updated client.\n`,
     );
-    return 0;
+    return deps.activateHermesPlugin();
   }
 
   let server: InstalledPackage;
@@ -965,7 +970,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
         : `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; running identities and protocol verified.\n`,
     );
     deps.stdout('Restart active agent sessions to load the updated client.\n');
-    return 0;
+    return await deps.activateHermesPlugin();
   } catch (error) {
     const interrupted = signalExitCode(error);
     if (updateAttempted && !recoveryStatusAttempted && observedStatus === null) {
@@ -1359,6 +1364,10 @@ export function buildDefaultUpdateDeps(acknowledgedRegistry?: string): UpdateDep
       await preflightBorgServerTag(origin, trust.fetchImpl);
     },
     refreshAgentIntegrations: async () => refreshAndVerifyManagedAgentIntegrations(),
+    activateHermesPlugin: async () => {
+      const plugin = await import('./hermes-plugin-install.js');
+      return plugin.activateHermesPlugin(plugin.defaultHermesPluginDeps());
+    },
     confirm: defaultConfirm,
     isTTY: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
     stdout: (text) => process.stdout.write(text),

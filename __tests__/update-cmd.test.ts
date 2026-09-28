@@ -158,6 +158,7 @@ function deps(overrides: TestUpdateOverrides = {}): UpdateDeps {
     }),
     verifyRunningProtocol: vi.fn(async () => { calls.push('protocol'); }),
     refreshAgentIntegrations: vi.fn(async () => { calls.push('refresh-agent-integrations'); }),
+    activateHermesPlugin: vi.fn(async () => { calls.push('activate-hermes-plugin'); return 0; }),
     confirm: vi.fn(async () => 'yes'),
     isTTY: () => true,
     stdout: vi.fn(),
@@ -467,6 +468,7 @@ describe('runUpdate', () => {
       'server:status',
       'protocol',
       'refresh-agent-integrations',
+      'activate-hermes-plugin',
     ]);
     expect(d.verifyRunningProtocol).toHaveBeenCalledWith('https://127.0.0.1:7091');
   });
@@ -502,6 +504,36 @@ describe('runUpdate', () => {
 
     expect(d.refreshAgentIntegrations).toHaveBeenCalledOnce();
     expect(d.serverJson).not.toHaveBeenCalled();
+  });
+
+  it('activates the Hermes plugin after the integration refresh, with and without a server', async () => {
+    for (const serverPresent of [true, false]) {
+      const d = targetDeps(serverPresent ? {} : { currentServer: vi.fn(async () => null) });
+      await expect(runUpdate({
+        yes: true,
+        target: { clientVersion: CLIENT_TARGET.version, serverVersion: SERVER_TARGET.version, serverPresent },
+      }, d)).resolves.toBe(0);
+      expect(d.activateHermesPlugin).toHaveBeenCalledOnce();
+      expect(vi.mocked(d.refreshAgentIntegrations).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(d.activateHermesPlugin).mock.invocationCallOrder[0]);
+    }
+  });
+
+  it('returns the Hermes plugin activation failure and skips activation after a failed refresh', async () => {
+    const failing = targetDeps({ activateHermesPlugin: vi.fn(async () => 1) });
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: CLIENT_TARGET.version, serverVersion: SERVER_TARGET.version, serverPresent: true },
+    }, failing)).resolves.toBe(1);
+
+    const refreshFails = targetDeps({
+      refreshAgentIntegrations: vi.fn(async () => { throw new Error('borg-clear-rewake: missing'); }),
+    });
+    await expect(runUpdate({
+      yes: true,
+      target: { clientVersion: CLIENT_TARGET.version, serverVersion: SERVER_TARGET.version, serverPresent: true },
+    }, refreshFails)).resolves.toBe(1);
+    expect(refreshFails.activateHermesPlugin).not.toHaveBeenCalled();
   });
 
   it('reports partial completion when agent integration refresh or health fails', async () => {
@@ -778,7 +810,7 @@ describe('runUpdate', () => {
       yes: true,
       target: { clientVersion: '2.3.0', serverVersion: '0.4.0' },
     }, d)).resolves.toBe(0);
-    expect(d.calls).toEqual(['server:status', 'protocol', 'refresh-agent-integrations']);
+    expect(d.calls).toEqual(['server:status', 'protocol', 'refresh-agent-integrations', 'activate-hermes-plugin']);
   });
 
   it('updates only the client when the server was absent and never installs it', async () => {
