@@ -7,6 +7,17 @@
 export declare const BORG_STATE_ROOT_ENV = "BORG_STATE_ROOT";
 /** Return whether a path and every existing ancestor are free of symlinks. */
 export declare function isCanonicalPath(root: string): boolean;
+/**
+ * Set by the test runner (never in production) to the operator's real home.
+ * While it is set, no Borg path may resolve into that home's Borg state: every
+ * resolver derives from borgHomeRoot, which then refuses the real home before
+ * any path is built or any I/O happens. Children inherit it with the
+ * environment (it deliberately lacks the BORG_ prefix tests strip).
+ */
+export declare const TEST_FORBIDDEN_HOME_ENV = "BORGMCP_TEST_FORBIDDEN_HOME";
+export declare class TestIsolationError extends Error {
+    constructor(root: string);
+}
 /** Resolve the effective home root used by all Borg-owned local state. */
 export declare function borgHomeRoot(env?: NodeJS.ProcessEnv): string;
 export declare const borgConfigRoot: () => string;

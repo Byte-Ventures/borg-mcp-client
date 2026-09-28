@@ -6,7 +6,7 @@ import { homedir, tmpdir, userInfo } from 'node:os';
 import { join, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { LIVE_WRITERS, TEST_MARKERS, realBorgConfig, scanForMarkers, snapshotTree, treeChanges } from './global/real-home-guard.js';
-import { borgConfigRoot } from '../src/private-root.js';
+import { TEST_FORBIDDEN_HOME_ENV, TestIsolationError, borgConfigRoot, borgHomeRoot } from '../src/private-root.js';
 
 describe('the run never resolves Borg state under the real home', () => {
   it('gives this worker a private HOME', () => {
@@ -22,6 +22,60 @@ describe('the run never resolves Borg state under the real home', () => {
     expect(child.status).toBe(0);
     expect(child.stdout.trim()).not.toBe(realBorgConfig());
     expect(child.stdout.trim().startsWith(realBorgConfig() + sep)).toBe(false);
+  });
+});
+
+describe('prevention: no Borg resolver can compute a path in the real home during a test', () => {
+  const realHome = realpathSync(userInfo().homedir);
+  const src = (name: string) => JSON.stringify(join(process.cwd(), 'src', name));
+
+  it('records the real home for every worker', () => {
+    expect(process.env[TEST_FORBIDDEN_HOME_ENV]).toBe(realHome);
+  });
+
+  it('refuses the real home in every lazy resolver in this worker, before building any path', async () => {
+    const saved = { home: process.env.HOME, root: process.env.BORG_STATE_ROOT };
+    const { representativeStateRoot } = await import('../src/representative-db.js');
+    const { legacyStorePath } = await import('../src/representative-legacy.js');
+    const { createRepresentativeStore } = await import('../src/representative-store.js');
+    try {
+      for (const set of [() => { process.env.HOME = realHome; delete process.env.BORG_STATE_ROOT; },
+        () => { process.env.BORG_STATE_ROOT = realHome; }]) {
+        set();
+        expect(() => borgHomeRoot()).toThrow(TestIsolationError);
+        expect(() => borgConfigRoot()).toThrow(TestIsolationError);
+        expect(() => representativeStateRoot()).toThrow(TestIsolationError);
+        expect(() => legacyStorePath()).toThrow(TestIsolationError); // <real home>/.config/borgmcp/representative.json
+        expect(() => createRepresentativeStore()).toThrow(TestIsolationError); // refused before any state access
+      }
+    } finally {
+      if (saved.home === undefined) delete process.env.HOME; else process.env.HOME = saved.home;
+      if (saved.root === undefined) delete process.env.BORG_STATE_ROOT; else process.env.BORG_STATE_ROOT = saved.root;
+    }
+    expect(borgConfigRoot()).not.toBe(realBorgConfig());
+  });
+
+  // Each child only resolves: if prevention ever failed it stops instead of writing.
+  it.each([
+    ['local-server-cursors.json', 'local-server-cursor.ts', 'advanceLocalServerCursor'],
+    ['stream-locks/<cube>/<drone>.lock/owner.json', 'stream-owner.ts', 'acquireStreamLease'],
+    ['representative.json and the state database', 'representative-store.ts', 'createRepresentativeStore'],
+  ])('refuses %s in a spawned child pointed at the real home, before any I/O', (_target, module, entry) => {
+    const payload = `
+      let mod;
+      try { mod = await import(${src(module)}); if (${JSON.stringify(entry)} === 'createRepresentativeStore') mod.createRepresentativeStore(); }
+      catch (error) { console.log('REFUSED', error.name); process.exit(3); }
+      console.log('NOT REFUSED'); process.exit(4);`;
+    for (const env of [
+      { ...process.env, HOME: realHome }, // inherited environment, real HOME
+      { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_'))), HOME: realHome }, // BORG_* stripped
+      { ...process.env, BORG_STATE_ROOT: realHome }, // explicit state root
+    ]) {
+      const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', payload],
+        { encoding: 'utf8', timeout: 30_000, env });
+      expect(child.stdout.trim()).toBe('REFUSED TestIsolationError');
+      expect(child.status).toBe(3);
+    }
   });
 });
 

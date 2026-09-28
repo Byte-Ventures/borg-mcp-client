@@ -1,16 +1,20 @@
 /**
  * The real-HOME guard for the whole test run (vitest globalSetup).
  *
- * 1. Before any worker starts, the run gets a private HOME and no inherited
- *    BORG_* variables; workers and every child they spawn with the inherited
- *    environment resolve Borg state there, never under the real home.
- * 2. The control: every entry under the operator's real <home>/.config/borgmcp
- *    (path, type, size, mtime, inode) is snapshotted before the run and
- *    compared after it. Any created, deleted or modified entry fails the run,
- *    whatever it contains. The only exceptions are the files running Borg
- *    processes on this machine rewrite continuously (LIVE_WRITERS: lease
- *    heartbeats, inbox tails, cursors); even there, any new test marker fails
- *    the run. An unreadable tree fails the run too.
+ * 1. Prevention (the primary defence): the real home is recorded in
+ *    BORGMCP_TEST_FORBIDDEN_HOME, and the run gets a private HOME and no
+ *    inherited BORG_* variables. Every Borg path resolver derives from
+ *    borgHomeRoot (src/private-root.ts), which throws TestIsolationError
+ *    before building any path while the resolved home is the recorded real
+ *    one. Workers and children inherit both variables, so no test can compute
+ *    a real Borg path, live-writer paths included, whatever it writes.
+ * 2. Detection (a second line): every entry under the operator's real
+ *    <home>/.config/borgmcp (path, type, size, mtime, inode) is snapshotted
+ *    before the run and compared after it; any created, deleted or modified
+ *    entry fails the run, whatever it contains, as does an unreadable tree or
+ *    a new test marker anywhere. LIVE_WRITERS are skipped by the comparison
+ *    only because running Borg processes rewrite them continuously; tests are
+ *    kept out of them by (1), not by this comparison.
  * The real home comes from the account database (os.userInfo), not $HOME.
  * BORG_TEST_GUARD_PROTECTED_CONFIG replaces the protected directory; it exists
  * only so the guard's own control can prove a violation fails a real run
@@ -19,6 +23,7 @@
 import { lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join, relative, sep } from 'node:path';
+import { TEST_FORBIDDEN_HOME_ENV } from '../../src/private-root.js';
 
 /** Markers only test fixtures ever write. */
 export const TEST_MARKERS = [
@@ -109,6 +114,7 @@ export default function setup(): () => void {
   const before = snapshotTree(protectedConfig);
   const markers = scanForMarkers(protectedConfig);
   for (const key of Object.keys(process.env)) if (key.startsWith('BORG_')) delete process.env[key];
+  process.env[TEST_FORBIDDEN_HOME_ENV] = realpathSync(userInfo().homedir);
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'borg-test-run-home-')));
   process.env.HOME = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');

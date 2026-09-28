@@ -41,9 +41,38 @@ function configuredStateRoot(env = process.env) {
     }
     return configured;
 }
+/**
+ * Set by the test runner (never in production) to the operator's real home.
+ * While it is set, no Borg path may resolve into that home's Borg state: every
+ * resolver derives from borgHomeRoot, which then refuses the real home before
+ * any path is built or any I/O happens. Children inherit it with the
+ * environment (it deliberately lacks the BORG_ prefix tests strip).
+ */
+export const TEST_FORBIDDEN_HOME_ENV = 'BORGMCP_TEST_FORBIDDEN_HOME';
+export class TestIsolationError extends Error {
+    constructor(root) {
+        super(`Test isolation: Borg state resolved to the real home ${root}. Every test must use an explicit temporary root ` +
+            `(HOME or ${BORG_STATE_ROOT_ENV}); nothing was read or written.`);
+        this.name = 'TestIsolationError';
+    }
+}
+function refuseForbiddenHome(root, env) {
+    const forbidden = env[TEST_FORBIDDEN_HOME_ENV];
+    if (forbidden && (root === forbidden || safeRealpath(root) === safeRealpath(forbidden)))
+        throw new TestIsolationError(root);
+    return root;
+}
+function safeRealpath(path) {
+    try {
+        return realpathSync(path);
+    }
+    catch {
+        return path;
+    }
+}
 /** Resolve the effective home root used by all Borg-owned local state. */
 export function borgHomeRoot(env = process.env) {
-    return configuredStateRoot(env) ?? realpathSync(homedir());
+    return refuseForbiddenHome(configuredStateRoot(env) ?? realpathSync(homedir()), env);
 }
 export const borgConfigRoot = () => join(borgHomeRoot(), '.config', 'borgmcp');
 /**
