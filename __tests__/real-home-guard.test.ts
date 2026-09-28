@@ -1,12 +1,13 @@
 /** Controls for the real-HOME guard (__tests__/global/real-home-guard.ts). */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { LIVE_WRITERS, TEST_MARKERS, realBorgConfig, scanForMarkers, snapshotTree, treeChanges } from './global/real-home-guard.js';
-import { TEST_FORBIDDEN_HOME_ENV, TestIsolationError, borgConfigRoot, borgHomeRoot } from '../src/private-root.js';
+import { TEST_ALLOWED_ROOTS_ENV, TEST_FORBIDDEN_HOME_ENV, TestIsolationError, borgConfigRoot, borgHomeRoot } from '../src/private-root.js';
+import { randomUUID } from 'node:crypto';
 
 describe('the run never resolves Borg state under the real home', () => {
   it('gives this worker a private HOME', () => {
@@ -76,6 +77,99 @@ describe('prevention: no Borg resolver can compute a path in the real home durin
       expect(child.stdout.trim()).toBe('REFUSED TestIsolationError');
       expect(child.status).toBe(3);
     }
+  });
+});
+
+describe('prevention at the I/O layer: every src mutation refuses the forbidden home', () => {
+  // A fake forbidden home stands in for the real one, so a broken guard could
+  // never write the operator's files. S is a safe root outside it.
+  let base: string, forbidden: string, safe: string;
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'guard-io-')));
+    forbidden = join(base, 'forbidden-home');
+    safe = join(base, 'safe');
+    mkdirSync(join(forbidden, '.config', 'borgmcp'), { recursive: true });
+    mkdirSync(safe);
+    for (const key of [TEST_FORBIDDEN_HOME_ENV, TEST_ALLOWED_ROOTS_ENV]) saved[key] = process.env[key];
+    process.env[TEST_FORBIDDEN_HOME_ENV] = forbidden;
+    process.env[TEST_ALLOWED_ROOTS_ENV] = safe;
+  });
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    rmSync(base, { recursive: true, force: true });
+  });
+  const untouched = () => expect(snapshotTree(forbidden).size).toBe(3); // ., .config, .config/borgmcp
+
+  it('refuses every guarded mutation into the forbidden home, and allows reads and the safe root', async () => {
+    const guarded = await import('../src/guarded-fs.js');
+    const inside = join(forbidden, '.config', 'borgmcp', 'x.json');
+    writeFileSync(join(safe, 'source'), 'S');
+    const attempts: Array<[string, () => unknown]> = [
+      ['writeFileSync', () => guarded.writeFileSync(inside, '{}')],
+      ['appendFileSync', () => guarded.appendFileSync(inside, '{}')],
+      ['mkdirSync', () => guarded.mkdirSync(join(forbidden, 'new'), { recursive: true })],
+      ['mkdtempSync', () => guarded.mkdtempSync(join(forbidden, 'tmp-'))],
+      ['renameSync into', () => guarded.renameSync(join(safe, 'source'), inside)],
+      ['unlinkSync', () => guarded.unlinkSync(inside)],
+      ['rmSync', () => guarded.rmSync(join(forbidden, '.config'), { recursive: true })],
+      ['openSync for write', () => guarded.openSync(inside, 'w')],
+      ['openSync with O_CREAT', () => guarded.openSync(inside, constants.O_WRONLY | constants.O_CREAT)],
+      ['copyFileSync into', () => guarded.copyFileSync(join(safe, 'source'), inside)],
+      ['chmodSync', () => guarded.chmodSync(join(forbidden, '.config'), 0o700)],
+      ['symlinkSync at', () => guarded.symlinkSync(join(safe, 'source'), inside)],
+      ['linkSync from', () => guarded.linkSync(join(forbidden, '.config'), join(safe, 'hard'))],
+      ['openSqlite', () => guarded.openSqlite(DatabaseSync, join(forbidden, 'state.sqlite'))],
+      ['fs namespace', () => guarded.fs.writeFileSync(inside, '{}')],
+    ];
+    for (const [label, attempt] of attempts) expect(attempt, label).toThrow(guarded.TestIsolationError);
+    for (const attempt of [() => guarded.writeFile(inside, '{}'), () => guarded.mkdir(join(forbidden, 'n')),
+      () => guarded.rename(join(safe, 'source'), inside), () => guarded.rm(inside, { force: true }),
+      () => guarded.open(inside, 'a'), () => guarded.fsp.writeFile(inside, '{}')]) {
+      await expect(attempt()).rejects.toBeInstanceOf(guarded.TestIsolationError);
+    }
+    untouched();
+    // Reads and read-only opens are not mutations; the safe root is writable.
+    expect(() => closeSync(guarded.openSync(join(forbidden, '.config'), 'r'))).not.toThrow();
+    guarded.writeFileSync(join(safe, 'ok'), 'ok');
+  });
+
+  it('refuses a descendant root and a symlink from a safe path into the forbidden home', async () => {
+    const guarded = await import('../src/guarded-fs.js');
+    symlinkSync(forbidden, join(safe, 'link'));
+    expect(() => guarded.writeFileSync(join(safe, 'link', 'x'), 'x')).toThrow(guarded.TestIsolationError);
+    expect(() => guarded.mkdirSync(join(safe, 'link', 'deep', 'er'), { recursive: true })).toThrow(guarded.TestIsolationError);
+    expect(() => guarded.mkdirSync(join(forbidden, 'nested', 'root'), { recursive: true })).toThrow(guarded.TestIsolationError);
+    const savedRoot = process.env.BORG_STATE_ROOT;
+    try {
+      process.env.BORG_STATE_ROOT = join(forbidden, 'nested');
+      expect(() => borgHomeRoot()).toThrow(TestIsolationError);
+    } finally {
+      if (savedRoot === undefined) delete process.env.BORG_STATE_ROOT; else process.env.BORG_STATE_ROOT = savedRoot;
+    }
+    const { createRepresentativeState } = await import('../src/representative-db.js');
+    await expect(createRepresentativeState({ root: join(forbidden, 'nested', 'state') }).transact(() => 'wrote'))
+      .rejects.toBeInstanceOf(guarded.TestIsolationError);
+    untouched();
+  });
+
+  it('refuses the reviewer\'s explicit locksDir override in a spawned child before any lock is created', () => {
+    const cube = randomUUID(), drone = randomUUID(); // marker-free identifiers
+    const payload = `
+      const { acquireStreamLease } = await import(${JSON.stringify(join(process.cwd(), 'src', 'stream-owner.ts'))});
+      const locksDir = ${JSON.stringify(join('FORBIDDEN', '.config', 'borgmcp', 'stream-locks'))}.replace('FORBIDDEN', process.env.${TEST_FORBIDDEN_HOME_ENV});
+      try { await acquireStreamLease(${JSON.stringify(cube)}, ${JSON.stringify(drone)}, 70000, { locksDir }); console.log('ACQUIRED'); process.exit(4); }
+      catch (error) { console.log('REFUSED', error.name); process.exit(3); }`;
+    for (const env of [
+      { ...process.env, HOME: safe }, // inherited guard, safe HOME
+      { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_'))), HOME: safe },
+    ]) {
+      const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', payload],
+        { encoding: 'utf8', timeout: 30_000, env });
+      expect(child.stdout.trim()).toBe('REFUSED TestIsolationError');
+      expect(child.status).toBe(3);
+    }
+    untouched();
   });
 });
 

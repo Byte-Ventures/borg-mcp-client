@@ -14,7 +14,8 @@
  * body. No database file is ever renamed or moved.
  */
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, renameSync, rmdirSync, unlinkSync, writeSync, } from 'node:fs';
+import { closeSync, constants, fsyncSync, lstatSync, readdirSync, readSync, writeSync } from 'node:fs';
+import { mkdirSync, openSqlite, openSync, renameSync, rmdirSync, unlinkSync } from './guarded-fs.js';
 import { join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 import { validatePrivateDirectory } from './representative-listener-store.js';
@@ -236,7 +237,7 @@ export function createRepresentativeState(options = {}) {
             throw invalid(path, 'generation has no database');
         let db;
         try {
-            db = new DatabaseSync(path);
+            db = openSqlite(DatabaseSync, path);
             configure(db, busyTimeoutMs);
             const check = db.prepare('PRAGMA quick_check').all();
             if (check.length !== 1 || check[0].quick_check !== 'ok') {
@@ -365,7 +366,7 @@ export function createRepresentativeState(options = {}) {
                 throw invalid(path, 'generation has no database');
             let db;
             try {
-                db = new DatabaseSync(path, { readOnly: true });
+                db = openSqlite(DatabaseSync, path, { readOnly: true });
                 db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
                 verifyVersion(db, path);
                 const result = body(db);
@@ -413,7 +414,7 @@ export async function withPublishMutex(root, body, options) {
         }
         assertPrivateFile(path);
     }
-    const mutex = new DatabaseSync(path);
+    const mutex = openSqlite(DatabaseSync, path);
     try {
         mutex.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
         const journal = mutex.prepare('PRAGMA journal_mode = MEMORY').get()?.journal_mode;
@@ -444,7 +445,7 @@ export function publishGeneration(sqlite, root, fill, now = () => new Date(), ho
     hook('publish:dir');
     const path = join(directory, 'state.sqlite');
     createPrivateFile(path);
-    const db = new DatabaseSync(path);
+    const db = openSqlite(DatabaseSync, path);
     try {
         configure(db);
         db.exec('BEGIN IMMEDIATE');
@@ -563,7 +564,7 @@ export async function resetRepresentativeState(options) {
         try {
             // Revalidate the target under the mutex; a healthy database is never reset.
             try {
-                const db = new DatabaseSync(path);
+                const db = openSqlite(DatabaseSync, path);
                 exclusive = db;
                 db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
                 const check = db.prepare('PRAGMA quick_check').all();
@@ -591,7 +592,7 @@ export async function resetRepresentativeState(options) {
             const salvaged = [];
             const dropped = [];
             try {
-                const reader = new DatabaseSync(path, { readOnly: true });
+                const reader = openSqlite(DatabaseSync, path, { readOnly: true });
                 try {
                     const rows = reader.prepare('SELECT worktree, binding FROM bindings ORDER BY worktree').all();
                     for (const row of rows) {

@@ -24,7 +24,7 @@
  * connection, no second auth — just an in-process state snapshot).
  */
 import { Buffer } from 'node:buffer';
-import { promises as fs } from 'node:fs';
+import { fsp as fs } from './guarded-fs.js';
 import path from 'node:path';
 import { compareBroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import { decodeDocumentCitations, decodeProtocolErrorEnvelope, ErrorCode, } from 'borgmcp-shared/protocol';

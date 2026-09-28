@@ -2,12 +2,15 @@
  * The real-HOME guard for the whole test run (vitest globalSetup).
  *
  * 1. Prevention (the primary defence): the real home is recorded in
- *    BORGMCP_TEST_FORBIDDEN_HOME, and the run gets a private HOME and no
- *    inherited BORG_* variables. Every Borg path resolver derives from
- *    borgHomeRoot (src/private-root.ts), which throws TestIsolationError
- *    before building any path while the resolved home is the recorded real
- *    one. Workers and children inherit both variables, so no test can compute
- *    a real Borg path, live-writer paths included, whatever it writes.
+ *    BORGMCP_TEST_FORBIDDEN_HOME and the run's own roots (TMPDIR and a
+ *    private HOME) in BORGMCP_TEST_ALLOWED_ROOTS; the run gets that private
+ *    HOME and no inherited BORG_* variables. Every filesystem mutation in src
+ *    goes through src/guarded-fs.ts, which throws TestIsolationError before any
+ *    I/O when the canonical target is in the real home (descendants included,
+ *    symlinks followed) outside the run's roots; borgHomeRoot applies the same
+ *    rule to the Borg home root. Workers and children inherit the variables,
+ *    so no src code path writes the real home during a test, whatever path it
+ *    is given, live-writer paths included.
  * 2. Detection (a second line): every entry under the operator's real
  *    <home>/.config/borgmcp (path, type, size, mtime, inode) is snapshotted
  *    before the run and compared after it; any created, deleted or modified
@@ -22,8 +25,13 @@
  */
 import { lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
-import { join, relative, sep } from 'node:path';
-import { TEST_FORBIDDEN_HOME_ENV } from '../../src/private-root.js';
+import { delimiter, join, relative, sep } from 'node:path';
+import { TEST_ALLOWED_ROOTS_ENV, TEST_FORBIDDEN_HOME_ENV } from '../../src/guarded-fs.js';
+
+const within = (path: string, root: string) => {
+  const rel = relative(root, path);
+  return rel === '' || (!rel.startsWith('..') && !rel.startsWith(sep));
+};
 
 /** Markers only test fixtures ever write. */
 export const TEST_MARKERS = [
@@ -114,8 +122,16 @@ export default function setup(): () => void {
   const before = snapshotTree(protectedConfig);
   const markers = scanForMarkers(protectedConfig);
   for (const key of Object.keys(process.env)) if (key.startsWith('BORG_')) delete process.env[key];
-  process.env[TEST_FORBIDDEN_HOME_ENV] = realpathSync(userInfo().homedir);
+  const realHome = realpathSync(userInfo().homedir);
+  const temporary = realpathSync(tmpdir());
+  // The run's own roots may lie inside the real home only in the cube's scratch area.
+  if (within(temporary, realHome) && !within(temporary, join(realHome, '.borg', 'scratch'))) {
+    throw new Error(`TMPDIR ${temporary} is inside the real home ${realHome}: set it outside the home or under ` +
+      `${join(realHome, '.borg', 'scratch')} before running the tests.`);
+  }
+  process.env[TEST_FORBIDDEN_HOME_ENV] = realHome;
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'borg-test-run-home-')));
+  process.env[TEST_ALLOWED_ROOTS_ENV] = [temporary, home].join(delimiter);
   process.env.HOME = home;
   process.env.XDG_CONFIG_HOME = join(home, '.config');
   return () => {

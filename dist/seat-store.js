@@ -31,7 +31,8 @@
  * callers keeps the raw bearer from leaving the store owner.
  */
 import { constants } from 'node:fs';
-import { open, link, lstat, mkdir, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { lstat, readFile, stat } from 'node:fs/promises';
+import { open, link, mkdir, rename, unlink } from './guarded-fs.js';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { isCanonicalPath } from './private-root.js';

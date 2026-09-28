@@ -6,7 +6,8 @@
  * enables the plugin and never starts or restarts Hermes: the operator does
  * those steps from the printed snippet.
  */
-import { lstat, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, readFile, stat } from 'node:fs/promises';
+import { mkdir, rename, unlink, writeFile } from './guarded-fs.js';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

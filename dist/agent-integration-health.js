@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import { fs } from './guarded-fs.js';
 import path from 'node:path';
 import which from 'which';
 import { inspectManagedAgentHookConfigs, isOpenCodeMcpServerConfigured, refreshManagedAgentHookConfigs, refreshManagedAgentMcpConfigs, } from './config-utils.js';

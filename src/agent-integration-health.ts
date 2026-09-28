@@ -1,4 +1,5 @@
-import fs from 'node:fs';
+import { fs } from './guarded-fs.js';
+import type { Stats } from 'node:fs';
 import path from 'node:path';
 import which from 'which';
 import {
@@ -91,7 +92,7 @@ function inspectOpenCodePlugin(homeDir: string, expectedVersion: string): OpenCo
     path.join(homeDir, '.config', 'opencode', 'opencode.json'),
   );
   try {
-    let metadata: fs.Stats;
+    let metadata: Stats;
     try {
       metadata = fs.lstatSync(pluginPath);
     } catch (error) {

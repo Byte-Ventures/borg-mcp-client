@@ -6,7 +6,8 @@
 
 import { execSync } from 'child_process';
 import { randomBytes } from 'node:crypto';
-import fs from 'fs';
+import { fs } from './guarded-fs.js';
+import type { Stats } from 'node:fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -222,7 +223,7 @@ function unsafeOpenCodeConfigPath(configPath: string, detail: string): Error {
 
 function assertOpenCodeProjectConfigDirectory(projectRoot: string, configPath: string): string {
   const root = path.resolve(projectRoot);
-  let rootStat: fs.Stats;
+  let rootStat: Stats;
   try {
     rootStat = fs.lstatSync(root);
   } catch {
@@ -238,7 +239,7 @@ function assertOpenCodeProjectConfigDirectory(projectRoot: string, configPath: s
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
-  let directoryStat: fs.Stats;
+  let directoryStat: Stats;
   try {
     directoryStat = fs.lstatSync(configDir);
   } catch {
@@ -254,8 +255,8 @@ function assertOpenCodeProjectConfigDirectory(projectRoot: string, configPath: s
   return configDir;
 }
 
-function inspectOpenCodeProjectConfigFile(configPath: string): fs.Stats | null {
-  let metadata: fs.Stats;
+function inspectOpenCodeProjectConfigFile(configPath: string): Stats | null {
+  let metadata: Stats;
   try {
     metadata = fs.lstatSync(configPath);
   } catch (error) {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { fsp as fs } from './guarded-fs.js';
 import path from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 import { assertSecureRoot, atomicWrite0600, readStoreFile } from './seat-store.js';

@@ -14,9 +14,8 @@
  * body. No database file is ever renamed or moved.
  */
 import { randomBytes } from 'node:crypto';
-import {
-  closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, renameSync, rmdirSync, unlinkSync, writeSync,
-} from 'node:fs';
+import { closeSync, constants, fsyncSync, lstatSync, readdirSync, readSync, writeSync } from 'node:fs';
+import { mkdirSync, openSqlite, openSync, renameSync, rmdirSync, unlinkSync } from './guarded-fs.js';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { borgConfigRoot } from './private-root.js';
@@ -276,7 +275,7 @@ export function createRepresentativeState(options: RepresentativeStateOptions = 
     if (!assertPrivateFile(path)) throw invalid(path, 'generation has no database');
     let db: DatabaseSync | undefined;
     try {
-      db = new DatabaseSync(path);
+      db = openSqlite(DatabaseSync, path);
       configure(db, busyTimeoutMs);
       const check = db.prepare('PRAGMA quick_check').all() as Array<{ quick_check: string }>;
       if (check.length !== 1 || check[0].quick_check !== 'ok') {
@@ -378,7 +377,7 @@ export function createRepresentativeState(options: RepresentativeStateOptions = 
       if (!assertPrivateFile(path)) throw invalid(path, 'generation has no database');
       let db: DatabaseSync | undefined;
       try {
-        db = new DatabaseSync(path, { readOnly: true });
+        db = openSqlite(DatabaseSync, path, { readOnly: true });
         db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
         verifyVersion(db, path);
         const result = body(db);
@@ -418,7 +417,7 @@ export async function withPublishMutex<T>(
     try { createPrivateFile(path); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     assertPrivateFile(path);
   }
-  const mutex = new DatabaseSync(path);
+  const mutex = openSqlite(DatabaseSync, path);
   try {
     mutex.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
     const journal = (mutex.prepare('PRAGMA journal_mode = MEMORY').get() as { journal_mode?: string } | undefined)?.journal_mode;
@@ -453,7 +452,7 @@ export function publishGeneration(
   hook('publish:dir');
   const path = join(directory, 'state.sqlite');
   createPrivateFile(path);
-  const db = new DatabaseSync(path);
+  const db = openSqlite(DatabaseSync, path);
   try {
     configure(db);
     db.exec('BEGIN IMMEDIATE');
@@ -577,7 +576,7 @@ export async function resetRepresentativeState(options: ResetOptions): Promise<R
     try {
       // Revalidate the target under the mutex; a healthy database is never reset.
       try {
-        const db = new DatabaseSync(path);
+        const db = openSqlite(DatabaseSync, path);
         exclusive = db;
         db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
         const check = db.prepare('PRAGMA quick_check').all() as Array<{ quick_check: string }>;
@@ -600,7 +599,7 @@ export async function resetRepresentativeState(options: ResetOptions): Promise<R
       const salvaged: Array<{ worktree: string; boundAt: string; raw: string }> = [];
       const dropped: ResetReport['dropped'] = [];
       try {
-        const reader = new DatabaseSync(path, { readOnly: true });
+        const reader = openSqlite(DatabaseSync, path, { readOnly: true });
         try {
           const rows = reader.prepare('SELECT worktree, binding FROM bindings ORDER BY worktree').all() as Array<{ worktree: unknown; binding: unknown }>;
           for (const row of rows) {

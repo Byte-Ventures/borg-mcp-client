@@ -1,7 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, lstat, mkdir, open, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { access, lstat } from 'node:fs/promises';
+import { mkdir, open, rename, rm, unlink, writeFile } from './guarded-fs.js';
 import { request as httpsRequest } from 'node:https';
 import { connect as tlsConnect } from 'node:tls';
 import { join, resolve } from 'node:path';

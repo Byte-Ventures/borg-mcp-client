@@ -1,17 +1,5 @@
-import {
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  fstatSync,
-  openSync,
-  readFileSync,
-  readSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-  writeSync,
-} from 'fs';
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, readFileSync, readSync, writeSync } from 'fs';
+import { openSync, renameSync, unlinkSync, writeFileSync } from './guarded-fs.js';
 import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'node:net';
 import { join, resolve } from 'path';

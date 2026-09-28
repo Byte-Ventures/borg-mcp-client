@@ -16,7 +16,8 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { mkdir, rename, unlink, writeFile } from './guarded-fs.js';
 import { dirname, join, resolve } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 import {

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { rename, unlink, writeFile } from './guarded-fs.js';
 import { join } from 'node:path';
 import { BORG_CLAUDE_LAUNCH_CORRELATION_ENV, resolveReportableSessionAgentKind } from './agent-runtime.js';
 import { findProjectRoot } from './cubes.js';
