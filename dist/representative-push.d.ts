@@ -27,6 +27,13 @@ export interface WakeDocument {
     /** The cohort closed and its one startup batch has not been emitted yet. */
     startup_pending: boolean;
     debounce_at: string | null;
+    /**
+     * Scan epoch: replaced with a fresh id whenever invalid wake state is
+     * discarded. A discovery page or cohort probe read under another epoch
+     * is dropped, never merged. null until the first recovery. A fresh id rather
+     * than a counter, because the discarded document may be unreadable.
+     */
+    scan_epoch: string | null;
 }
 export declare const rewakeBackoffMs: (attempts: number) => number;
 export declare const refusalBackoffMs: (count: number) => number;
@@ -110,6 +117,7 @@ export declare class PushEngine {
      */
     discover(): Promise<void>;
     private scanOnce;
+    /** Merges one discovery page; null (and no write) when the page was read under another scan epoch. */
     private merge;
     /**
      * One scheduler step: expire an outstanding batch whose deadline passed,

@@ -50,6 +50,7 @@ const REWAKE_BACKOFF_MS = [10 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 
 const REFUSAL_BACKOFF_BASE_MS = 30_000;
 const REFUSAL_BACKOFF_MAX_MS = 30 * 60_000;
 const MAX_FUTURE_MS = 24 * 60 * 60_000;
+const CAPTURE_ATTEMPTS = 3;
 
 export type WakeReason = 'startup' | 'new-reply' | 'rewake';
 
@@ -63,6 +64,13 @@ export interface WakeDocument {
   /** The cohort closed and its one startup batch has not been emitted yet. */
   startup_pending: boolean;
   debounce_at: string | null;
+  /**
+   * Scan epoch: replaced with a fresh id whenever invalid wake state is
+   * discarded. A discovery page or cohort probe read under another epoch
+   * is dropped, never merged. null until the first recovery. A fresh id rather
+   * than a counter, because the discarded document may be unreadable.
+   */
+  scan_epoch: string | null;
 }
 
 export const rewakeBackoffMs = (attempts: number) => REWAKE_BACKOFF_MS[Math.min(Math.max(attempts, 1), REWAKE_BACKOFF_MS.length) - 1];
@@ -70,7 +78,7 @@ export const refusalBackoffMs = (count: number) => Math.min(REFUSAL_BACKOFF_BASE
 
 const emptyDocument = (): WakeDocument => ({
   version: 1, frontier: null, outstanding: null, refusals: { count: 0, retry_at: null },
-  cohort: null, startup_pending: false, debounce_at: null,
+  cohort: null, startup_pending: false, debounce_at: null, scan_epoch: null,
 });
 
 const isInstant = (value: unknown): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value));
@@ -80,6 +88,7 @@ const isPoint = (value: unknown): value is LocalServerCursor =>
 
 function parseDocument(raw: string): WakeDocument {
   const value = JSON.parse(raw) as Partial<WakeDocument>;
+  value.scan_epoch ??= null;
   const outstanding = value.outstanding;
   const valid = value.version === 1 &&
     (value.frontier === null || isPoint(value.frontier)) &&
@@ -91,7 +100,8 @@ function parseDocument(raw: string): WakeDocument {
     (value.cohort === null || (value.cohort !== undefined && typeof value.cohort.open === 'boolean' &&
       Number.isInteger(value.cohort.remaining) && value.cohort.remaining >= 0)) &&
     typeof value.startup_pending === 'boolean' &&
-    (value.debounce_at === null || isInstant(value.debounce_at));
+    (value.debounce_at === null || isInstant(value.debounce_at)) &&
+    (value.scan_epoch === null || isRepresentativeUuid(value.scan_epoch));
   if (!valid) throw new Error('The representative state holds an invalid wake record');
   return value as WakeDocument;
 }
@@ -122,8 +132,15 @@ function discardInvalidWakeState(db: Transaction, generation: string): string | 
     .all(generation) as Array<Record<string, unknown>>).filter((row) => !isWakeRow(row)).length;
   if (invalidRows > 0) problems.push(`${invalidRows} invalid wake_replies row(s)`);
   if (problems.length === 0) return null;
-  db.prepare('DELETE FROM wake_state WHERE generation = ?').run(generation);
   db.prepare('DELETE FROM wake_replies WHERE generation = ?').run(generation);
+  // Rebuilt from the delivered boundary under a new scan epoch: a page or probe
+  // read before this point belongs to the old epoch and is dropped at merge.
+  const delivery = loadDelivery(db, generation);
+  saveDocument(db, generation, {
+    ...emptyDocument(),
+    frontier: delivery ? scanStart(delivery).cursor : null,
+    scan_epoch: randomUUID(),
+  });
   return problems.join(' and ');
 }
 
@@ -255,24 +272,30 @@ export class PushEngine {
    * forward. Must run before the first discovery.
    */
   async captureCohort(): Promise<WakeSummary> {
-    const cursor = await this.serial(() => this.transact((db, generation) => {
-      const doc = loadDocument(db, generation);
-      if (doc.cohort?.open) return undefined; // resume the stored target: no request
-      const delivery = loadDelivery(db, generation);
-      if (!delivery) throw new Error('Representative delivery state is missing for the current generation');
-      return later(doc.frontier, scanStart(delivery).cursor);
-    }));
-    if (cursor !== undefined) {
-      const probe = await this.network((signal) => this.deps.backend.readAfter(cursor, 1, signal));
+    // A recovery between the probe and its persist moves the scan position:
+    // the probe is then dropped and taken again from the rebuilt position.
+    for (let attempt = 0; attempt < CAPTURE_ATTEMPTS; attempt += 1) {
+      const start = await this.serial(() => this.transact((db, generation) => {
+        const doc = loadDocument(db, generation);
+        if (doc.cohort?.open) return undefined; // resume the stored target: no request
+        const delivery = loadDelivery(db, generation);
+        if (!delivery) throw new Error('Representative delivery state is missing for the current generation');
+        return { cursor: later(doc.frontier, scanStart(delivery).cursor), epoch: doc.scan_epoch };
+      }));
+      if (start === undefined) break;
+      const probe = await this.network((signal) => this.deps.backend.readAfter(start.cursor, 1, signal));
       // Without behind_by the size is unknown: no gate, normal fairness only.
       const count = probe.behind_by === undefined ? 0 : probe.entries.length + probe.behind_by;
-      await this.serial(() => this.transact((db, generation) => {
+      const persisted = await this.serial(() => this.transact((db, generation) => {
         const doc = loadDocument(db, generation);
-        if (doc.cohort?.open) return;
+        if (doc.scan_epoch !== start.epoch) return false; // read under an older epoch
+        if (doc.cohort?.open) return true;
         doc.cohort = { remaining: count, open: count > 0 };
         doc.startup_pending = false;
         saveDocument(db, generation, doc);
+        return true;
       }));
+      if (persisted) break;
     }
     return this.summary();
   }
@@ -298,18 +321,26 @@ export class PushEngine {
   }
 
   private async scanOnce(): Promise<void> {
-    let cursor = await this.serial(() => this.transact((db, generation) => {
+    const start = await this.serial(() => this.transact((db, generation) => {
       const delivery = loadDelivery(db, generation);
       if (!delivery) throw new Error('Representative delivery state is missing for the current generation');
+      const doc = loadDocument(db, generation);
       // From the frontier, or the delivered position if the host has read further.
-      return later(loadDocument(db, generation).frontier, scanStart(delivery).cursor);
+      return { cursor: later(doc.frontier, scanStart(delivery).cursor), epoch: doc.scan_epoch };
     }));
+    let cursor = start.cursor;
     for (let page = 1; ; page += 1) {
       const result = await this.network((signal) => this.deps.backend.readAfter(cursor, DISCOVERY_PAGE, signal));
       const tail = result.entries.at(-1);
       const tailPoint = tail ? { id: tail.id, created_at: tail.created_at } : null;
-      await this.serial(() => this.transact((db, generation, now) =>
-        this.merge(db, generation, now, result.entries, tailPoint, result.has_more === true)));
+      const merged = await this.serial(() => this.transact((db, generation, now) =>
+        this.merge(db, generation, now, start.epoch, result.entries, tailPoint, result.has_more === true)));
+      if (merged === null) {
+        // Wake state was rebuilt while this page was read: drop the page and
+        // scan again from the rebuilt (delivered) position.
+        this.rescan = true;
+        return;
+      }
       await this.deps.hooks?.betweenPages?.(page);
       await this.tick(); // fairness: a due wake fires between pages
       if (!result.has_more || !tailPoint) return;
@@ -317,10 +348,15 @@ export class PushEngine {
     }
   }
 
-  private merge(db: Transaction, generation: string, now: Date, entries: LogEntry[], tail: LocalServerCursor | null, more: boolean): number {
+  /** Merges one discovery page; null (and no write) when the page was read under another scan epoch. */
+  private merge(
+    db: Transaction, generation: string, now: Date, epoch: string | null,
+    entries: LogEntry[], tail: LocalServerCursor | null, more: boolean,
+  ): number | null {
     const delivery = loadDelivery(db, generation);
     if (!delivery) throw new Error('Representative delivery state is missing for the current generation');
     const doc = loadDocument(db, generation);
+    if (doc.scan_epoch !== epoch) return null;
     const floor = scanStart(delivery).floor;
     const insert = db.prepare(`INSERT OR IGNORE INTO wake_replies (generation, entry_id, created_at, attempts, next_at)
       VALUES (?, ?, ?, 0, ?)`);
