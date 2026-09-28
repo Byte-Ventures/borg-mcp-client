@@ -13,6 +13,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -42,6 +43,9 @@ import {
 } from '../src/hermes-plugin-install.js';
 import { parseRepresentativeArgs } from '../src/representative-cmd.js';
 import * as guarded from '../src/guarded-fs.js';
+import { validatePrivateDirectory } from '../src/representative-db.js';
+import { borgConfigRoot } from '../src/private-root.js';
+import { execFileSync } from 'node:child_process';
 
 const FAKE_SOURCE = fileURLToPath(new URL('./fixtures/fake-hermes.mjs', import.meta.url));
 const BORG = '/opt/borg/bin/borg';
@@ -79,7 +83,7 @@ function deps(overrides: Partial<HermesPluginDeps> & { hermesEnv?: NodeJS.Proces
     isTTY: () => false,
     prompt: async () => null,
     now: () => new Date(),
-    activation: fileActivationStore(join(root, 'borg-config', 'hermes-plugin')),
+    activation: fileActivationStore(),
     stdout: (text) => { out.push(text); },
     stderr: (text) => { err.push(text); },
     ...rest,
@@ -109,8 +113,14 @@ const resetLog = () => rmSync(log, { force: true });
 
 const ORIGINAL_CONFIG = `${JSON.stringify({ model: 'keep-me', plugins: { enabled: ['other-plugin'] } }, null, 2)}\n`;
 
+const originalStateRoot = process.env.BORG_STATE_ROOT;
+/** Borg's activation records: the real `<borg config>/hermes-plugin` under the test's own state root. */
+const stateDir = () => join(root, '.config', 'borgmcp', 'hermes-plugin');
+
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'borg-hermes-plugin-'));
+  // Canonical (the S1 walk refuses a symlinked ancestor such as macOS /var -> /private/var).
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-hermes-plugin-')));
+  process.env.BORG_STATE_ROOT = root;
   home = join(root, 'hermes-home');
   mkdirSync(home);
   writeFileSync(join(home, 'config.yaml'), ORIGINAL_CONFIG);
@@ -132,6 +142,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (originalStateRoot === undefined) delete process.env.BORG_STATE_ROOT; else process.env.BORG_STATE_ROOT = originalStateRoot;
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -362,8 +373,8 @@ describe('hermes-plugin install rollback', () => {
     // Every reversal goes through `hermes config`; the backup is never copied back.
     expect(writes().filter(({ argv }) => argv[1] === 'unset').length).toBeGreaterThan(0);
     expect(writes().some(({ argv }) => argv[0] === 'gateway')).toBe(false);
-    expect(existsSync(join(root, 'borg-config', 'hermes-plugin'))).toBe(true);
-    expect(readdirSync(join(root, 'borg-config', 'hermes-plugin'))).toEqual([]); // no pending activation
+    expect(existsSync(stateDir())).toBe(true);
+    expect(readdirSync(stateDir())).toEqual([]); // no pending activation
   });
 
   it('fails when the read-back differs from the intended value, then reverses that key too', async () => {
@@ -639,7 +650,7 @@ describe('hermes-plugin uninstall', () => {
     // --no-restart: the unload stays pending until a rerun confirms it.
     expect(activationPending(await deps().activation.read(home))).toBe(true);
     expect(await uninstall()).toBe(0);
-    expect(readdirSync(join(root, 'borg-config', 'hermes-plugin'))).toEqual([]);
+    expect(readdirSync(stateDir())).toEqual([]);
   });
 });
 
@@ -856,10 +867,10 @@ describe('backup directory mode (P3)', () => {
 
 // Review 40f9dcf8 (round 2) probes as regression controls. The record is now a
 // desired-generation model (dispatch 350da38d), so "gateway_pending" reads as
-// activationPending(record), and the PID field is desired_gateway_pid.
+// activationPending(record), and the PID sampled at a write is desired.gateway_pid.
 describe('CR round 2 boundary probes', () => {
   const recordPath = () => {
-    const dir = join(root, 'borg-config', 'hermes-plugin');
+    const dir = stateDir();
     return join(dir, readdirSync(dir).find((name) => name.endsWith('.json'))!);
   };
 
@@ -870,20 +881,21 @@ describe('CR round 2 boundary probes', () => {
     const other = join(root, 'second'); mkdirSync(other);
     expect(await install({ worktree: other }, deps({ worktrees: [worktree, other] }))).toBe(0);
     expect(activationPending(await deps().activation.read(home))).toBe(true);
-    expect((await deps().activation.read(home))?.desired_gateway_pid).toBe('201'); // sampled at this write
+    expect((await deps().activation.read(home))?.desired.gateway_pid).toBe('201'); // sampled at this write
   });
 
   it('refuses an unsafe symlink ancestor activation record', async () => {
     expect(await install({ noRestart: true })).toBe(0);
-    const dir = join(root, 'borg-config', 'hermes-plugin');
+    const dir = stateDir();
     const outside = join(root, 'untrusted-state');
     renameSync(dir, outside); chmodSync(outside, 0o777); symlinkSync(outside, dir);
     const path = join(outside, readdirSync(outside)[0]);
     const record = JSON.parse(readFileSync(path, 'utf8'));
-    writeFileSync(path, JSON.stringify({ ...record, activated: record.desired })); chmodSync(path, 0o666);
+    writeFileSync(path, JSON.stringify({ ...record, activated: record.desired.id })); chmodSync(path, 0o666);
     err = [];
     expect(await install()).toBe(1);
-    expect(err.join('')).toContain(`Unsafe Borg state directory ${dir}`);
+    expect(err.join('')).toContain('Unsafe Borg state path');
+    expect(err.join('')).toContain(dir);
   });
 
   it('refuses a record file with a loose mode or another shape, naming it', async () => {
@@ -906,7 +918,7 @@ describe('CR round 2 boundary probes', () => {
     expect(await install()).toBe(0);
     const path = recordPath();
     const record = JSON.parse(readFileSync(path, 'utf8'));
-    writeFileSync(path, JSON.stringify({ ...record, desired_gateway_pid: 'not-a-pid' }));
+    writeFileSync(path, JSON.stringify({ ...record, desired: { ...record.desired, gateway_pid: 'not-a-pid' } }));
     expect(await install()).toBe(0);
     expect(activationPending(await deps().activation.read(home))).toBe(true);
     expect(out.join('')).not.toContain('was restarted since');
@@ -988,6 +1000,65 @@ describe('no pathname chmod in the installer (P3a)', () => {
     const source = readFileSync(join(process.cwd(), 'src', 'hermes-plugin-install.ts'), 'utf8');
     expect(source).not.toMatch(/(?<![.\w])chmod\(/);
     expect(source).not.toMatch(/import \{[^}]*\bchmod\b[^}]*\} from '\.\/guarded-fs\.js'/);
+  });
+});
+
+// Review 08793b26 (round 3) probes as regression controls. The record path is
+// now validated by S1's validatePrivateDirectory (dispatch 0644303f), so an
+// unsafe default layout is refused on write as well as on read.
+describe('CR round 3 boundaries', () => {
+  it.each(['symlink-config', 'mode-0755'])('matches S1 default-path safety: %s', async (kind) => {
+    const oldRoot = process.env.BORG_STATE_ROOT;
+    const isolated = join(root, 'default-home'); mkdirSync(isolated, { mode: 0o700 });
+    process.env.BORG_STATE_ROOT = isolated;
+    try {
+      const cfg = join(isolated, '.config');
+      if (kind === 'symlink-config') {
+        const elsewhere = join(root, 'config-elsewhere'); mkdirSync(elsewhere, { mode: 0o700 }); symlinkSync(elsewhere, cfg);
+      } else mkdirSync(cfg, { mode: 0o700 });
+      const borg = borgConfigRoot(); mkdirSync(borg, { mode: kind === 'mode-0755' ? 0o755 : 0o700 });
+      if (kind === 'mode-0755') chmodSync(borg, 0o755);
+      const dir = join(borg, 'hermes-plugin'); mkdirSync(dir, { mode: 0o700 });
+      const store = fileActivationStore();
+      const id = '11111111-1111-4111-8111-111111111111';
+      const record = {
+        version: 3 as const, hermes_home: home, desired: { id, digest: 'a'.repeat(64), gateway_pid: '200' }, activated: id, desktop_reload: false,
+      };
+      await expect(store.write(record)).rejects.toThrow(/Unsafe Borg state path/);
+      await expect(validatePrivateDirectory(dir, false)).rejects.toThrow();
+      await expect(store.read(home)).rejects.toThrow(/Unsafe Borg state path/);
+    } finally {
+      if (oldRoot === undefined) delete process.env.BORG_STATE_ROOT; else process.env.BORG_STATE_ROOT = oldRoot;
+    }
+  });
+
+  it('keeps a rewritten earlier digest pending after --no-restart', async () => {
+    expect(await install()).toBe(0); // A is confirmed
+    const other = join(root, 'other'); mkdirSync(other);
+    const d = deps({ worktrees: [worktree, other] });
+    expect(await install({ worktree: other, noRestart: true }, d)).toBe(0); // desired B, activated A
+    setGateway({ mode: 'launchd', pid: 777 }); // user restarted into B
+    expect(await install({ worktree, noRestart: true }, d)).toBe(0); // write A again
+    expect(activationPending(await d.activation.read(home))).toBe(true);
+    // The next plain run finishes it instead of taking the active no-op branch.
+    resetLog();
+    expect(await install({ worktree }, d)).toBe(0);
+    expect(restartsIn(calls())).toHaveLength(1);
+  });
+
+  it('refuses a FIFO record promptly instead of blocking in open', async () => {
+    expect(await install({ noRestart: true })).toBe(0);
+    const dir = stateDir();
+    const path = join(dir, readdirSync(dir).find((name) => name.endsWith('.json'))!);
+    rmSync(path);
+    execFileSync('mkfifo', ['-m', '0600', path]);
+    const started = Date.now();
+    const outcome = await Promise.race([
+      deps().activation.read(home).then(() => 'read', (error: unknown) => (error instanceof Error ? error.message : String(error))),
+      new Promise<string>((done) => setTimeout(() => done('timed out'), 2_000)),
+    ]);
+    expect(outcome).toContain(`Unsafe Borg state file ${path}`);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
 

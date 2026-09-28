@@ -509,13 +509,15 @@ The command then does everything, printing each step before it runs:
    that gateway runs, and a later run counts it done once that gateway's PID
    has changed. A stopped gateway loads the plugin when it starts. Every Hermes
    call has a hard timeout that ends only Borg's own `hermes` process.
-   Borg records what it wrote (a digest of its files and keys) and what the
-   gateway is confirmed to have loaded, in its own state
-   (`<Borg config>/hermes-plugin/`, 0600 files in a 0700 directory; an unsafe
-   path there is refused). The gateway PID is sampled for each new write, so a
-   restart before a later change never confirms that change, and an unknown
-   PID never counts as a restart. Until the two match the activation is
-   pending, and a rerun finishes it.
+   Borg records each write as its own generation (a unique id, a digest of
+   its files and keys, and the gateway PID sampled at that write) and which
+   generation the gateway is confirmed to have loaded, in its own state
+   (`<Borg config>/hermes-plugin/`, checked like the rest of Borg's private
+   state: 0600 files, private directories, no symlinks; an unsafe path is
+   refused). A restart before a later write never confirms that write, even
+   when it writes content that was confirmed earlier, and an unknown PID never
+   counts as a restart. Until the confirmed generation is the one last written
+   the activation is pending, and a rerun finishes it.
    Borg stops and restarts nothing in Hermes Desktop. When the Borg MCP entry is
    new, it prints "Hermes Desktop: new chats get the Borg tools." When the entry
    changed, it prints that open Desktop chats need `/reload-mcp` (or a Desktop

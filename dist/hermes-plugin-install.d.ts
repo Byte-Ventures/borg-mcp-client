@@ -67,29 +67,36 @@ export declare function printableUntrusted(text: string, max?: number): string;
 export declare function resolveHermesHome(explicit: string | undefined, deps: Pick<HermesPluginDeps, 'env' | 'homedir'>): string;
 /** The value text for `hermes config set`: containers and booleans as JSON, strings raw. */
 export declare function configSetText(value: unknown): string;
-/** The generation of an uninstall: nothing of Borg's in Hermes. */
+/** The digest of an uninstall: nothing of Borg's in Hermes. */
 export declare const ABSENT_GENERATION = "absent";
 /** A gateway identity is a positive integer PID; anything else is unknown. */
 export declare function validPid(value: unknown): string | null;
 /**
+ * One write of Borg's managed state. `id` is unique per write, so a later
+ * write of the same content (A -> B -> A) is a new generation that needs its
+ * own evidence; `digest` is what was written (`absent` for an uninstall);
+ * `gateway_pid` is the gateway PID sampled at that write.
+ */
+export interface Generation {
+    id: string;
+    digest: string;
+    gateway_pid: string | null;
+}
+/**
  * `<borg config>/hermes-plugin/<sha256(home)>.json`, per Hermes home:
- * - desired: the generation Borg last wrote, a digest of Borg's managed files
- *   and keys, or `absent` for an uninstall;
- * - activated: the generation the gateway is confirmed to have loaded (null:
- *   none confirmed);
- * - desired_gateway_pid: the gateway PID sampled when `desired` was written,
- *   never inherited from an earlier generation;
+ * - desired: the generation Borg last wrote;
+ * - activated: the id of the generation the gateway is confirmed to have
+ *   loaded (null: none confirmed);
  * - desktop_reload: the Borg MCP entry changed, and a running Hermes Desktop
  *   keeps the previous one until /reload-mcp or a restart. Borg cannot confirm
  *   that step; the next run that finds the entry unchanged clears it.
- * The activation is pending while desired differs from activated.
+ * The activation is pending until `activated` names the desired generation.
  */
 export interface ActivationRecord {
-    version: 2;
+    version: 3;
     hermes_home: string;
-    desired: string;
+    desired: Generation;
     activated: string | null;
-    desired_gateway_pid: string | null;
     desktop_reload: boolean;
 }
 export declare const activationPending: (record: ActivationRecord | null) => boolean;
@@ -99,7 +106,14 @@ export interface ActivationStore {
     write(record: ActivationRecord): Promise<void>;
     clear(home: string): Promise<void>;
 }
-export declare function fileActivationStore(dir: string): ActivationStore;
+/**
+ * The activation records, under `<borg config>/hermes-plugin`. The directory
+ * and every ancestor from the Borg home root are checked with the reviewed S1
+ * walk (validatePrivateDirectory), on reads as well as writes; the record is
+ * opened O_NOFOLLOW|O_NONBLOCK (a FIFO or device never blocks) and must fstat
+ * as a regular file owned by this user, mode 0600, at most 4 KiB.
+ */
+export declare function fileActivationStore(): ActivationStore;
 export declare function hermesPluginDir(home: string): string;
 export interface SessionCandidate {
     sessionKey: string;
