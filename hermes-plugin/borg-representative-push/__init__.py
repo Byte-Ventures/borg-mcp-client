@@ -145,6 +145,7 @@ class Supervisor:
         except subprocess.TimeoutExpired:
             child.terminate()
         except (OSError, ValueError):
+            # Ignored: shutdown is best-effort; a closed pipe or failed wait leaves the exit to the run loop.
             pass
 
     def _run(self) -> None:
@@ -218,6 +219,7 @@ class Supervisor:
             try:
                 stream.close()
             except (OSError, ValueError):
+                # Ignored: closing is best-effort cleanup after the child was reaped.
                 pass
         with self._lock:
             self._child = None
@@ -255,6 +257,7 @@ class Supervisor:
                 try:
                     signal_child()
                 except OSError:
+                    # Ignored: signalling is best-effort; the wait and escalation below remain responsible for cleanup.
                     pass
             try:
                 child.wait(timeout=self._reject_grace_s)
@@ -268,6 +271,7 @@ class Supervisor:
         try:
             child.stdin.close()
         except (OSError, ValueError):
+            # Ignored: closing stdin is best-effort; the caller still waits for the child.
             pass
 
     @staticmethod
@@ -279,6 +283,7 @@ class Supervisor:
                 if text:
                     logger.info("%s: listener: %s", PLUGIN_NAME, text[:STDERR_LINE_MAX])
         except (OSError, ValueError):
+            # Ignored: draining is best-effort diagnostics; the run loop handles the listener's exit.
             pass
 
     @staticmethod
