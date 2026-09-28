@@ -466,8 +466,13 @@ class Supervisor:
             used = (self._wake_records().get(key) or {}).get("count", 0)
         return used if isinstance(used, int) and not isinstance(used, bool) and used > 0 else 0
 
-    def _record_wakes(self, keys: list[str], delta: int) -> None:
-        """Write-through wake counts. Records are removed only by an observed delivery."""
+    def _record_wakes(self, keys: list[str], delta: int) -> bool:
+        """Write-through wake counts; False (and nothing changed in memory) when the write fails.
+
+        Records are removed only by an observed delivery.
+        """
+        previous_state = dict(self._state)
+        previous_counts = {key: self._pending[key]["count"] for key in keys if key in self._pending}
         records = dict(self._wake_records())
         for key in keys:
             item = self._pending.get(key)
@@ -481,7 +486,13 @@ class Supervisor:
             else:
                 records.pop(key, None)
         self._state["wakes"] = records
-        self._save()
+        if self._save():
+            return True
+        self._state = previous_state
+        for key, count in previous_counts.items():
+            if key in self._pending:
+                self._pending[key]["count"] = count
+        return False
 
     def _schedule_flush(self, delay: float) -> None:
         if self._stopping.is_set() or (self._flush_timer is not None and self._flush_timer.is_alive()):
@@ -530,7 +541,12 @@ class Supervisor:
             # Count the wake on disk before Hermes can start the turn: a restart at any point after
             # this can never renew the budget. A crash between here and the call loses one wake at
             # most; it never adds one.
-            self._record_wakes(keys, +1)
+            if not self._record_wakes(keys, +1):
+                # Fail closed: a wake whose count cannot be persisted could be repeated after a
+                # restart, so there is no in-memory fallback wake.
+                logger.warning("%s: not waking the conversation: the wake count could not be written to plugin state",
+                               PLUGIN_NAME)
+                return
         try:
             accepted = bool(self._inject(WAKE_TEXT))
         except Exception:  # the host API must never take the supervisor down
@@ -601,13 +617,16 @@ class Supervisor:
         with self._lock:
             return {key: dict(item) for key, item in self._pending.items()}
 
-    def _save(self) -> None:
+    def _save(self) -> bool:
+        """Persist state; False when it could not be written."""
         if self._store is None:
-            return
+            return False
         try:
             self._store.save(self._state)
         except OSError:
             logger.warning("%s: cannot write plugin state", PLUGIN_NAME, exc_info=True)
+            return False
+        return True
 
     # ---- orphan reaping -------------------------------------------------------------
 

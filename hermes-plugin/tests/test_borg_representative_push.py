@@ -410,6 +410,28 @@ class InjectionTests(TempDirCase):
         saved = json.loads((self.data / "state.json").read_text())["wakes"]
         self.assertEqual(saved[ID2]["count"], 1)
 
+    def test_no_wake_when_the_count_cannot_be_written(self):
+        # Review F1c (2234fcd): a failed state write was logged and swallowed, and the wake still went out.
+        import errno
+        from unittest import mock
+
+        wakes: list[str] = []
+        counts: list[int] = []
+        failure = OSError(errno.ENOSPC, "No space left on device")
+        with mock.patch.object(push.os, "replace", side_effect=failure), \
+                self.assertLogs(push.logger, level="WARNING") as logs:
+            for _ in range(4):
+                supervisor = self.supervisor(inject=lambda text: wakes.append(text) or True, debounce_s=3600,
+                                             settings={"reinject_after_s": 600, "max_reinjects": 0})
+                supervisor.handle_event(entry(ID2, T2, replay=True))
+                supervisor.flush()
+                counts.append(supervisor.pending()[ID2]["count"])
+                supervisor.shutdown()
+        self.assertEqual(len(wakes), 0)
+        self.assertEqual(counts, [0, 0, 0, 0])
+        self.assertTrue(any("not waking" in line for line in logs.output))
+        self.assertFalse((self.data / "state.json").exists())
+
     def test_partial_budget_survives_restart(self):
         now = [1000.0]
         wakes: list[str] = []
