@@ -1,11 +1,13 @@
 /**
  * The only reads of borgmcp 5.x representative files (decision
- * clean-slate-no-backwards-compat). They run once, when 6.x creates the state
+ * clean-slate-no-backwards-compat). The import reads them once, when 6.x creates the state
  * database's FIRST generation (`legacySeed`): every valid 5.x binding becomes a
  * 'legacy' row, and its delivery start is decided from the 5.x delivered
- * checkpoint, the seat tombstone and sibling generations. Nothing here writes
- * 5.x files, and no other code path reads them — not status, not a lookup, not
- * after a reset.
+ * checkpoint, the seat tombstone and sibling generations. One other reader
+ * exists: `previewLegacyImport`, a read-only preview of the bindings that
+ * import would keep, used by `hermes-plugin install` while no state database
+ * exists yet; it creates nothing (no root, no state). Nothing here writes 5.x
+ * files, and no other code path reads them — not status, not after a reset.
  *
  * Every file read uses the private-file checks of the 5.x loaders: a secure
  * root, lstat, no-follow, owner, mode, a regular file and a size cap.
@@ -168,17 +170,6 @@ export async function readLegacyDelivery(binding) {
     return { checkpoint, history: unknown ? 'unknown' : 'empty' };
 }
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
-/**
- * The first generation's rows from 5.x state, gathered outside any transaction.
- * Each binding's delivery start:
- *   1. a valid non-null 5.x checkpoint for its generation: that checkpoint;
- *   2. a valid null checkpoint: the binding start;
- *   3. no 5.x history for the seat at all (enumerable and empty): the server
- *      head, resolved on first use ('head-pending', the network is never read
- *      here), or the binding start if the database has seat history by then;
- *   4. anything else, including unreadable history: the binding start.
- * A second worktree whose binding has the same generation is skipped.
- */
 /** The 5.x bindings an import keeps: the first of each binding generation. */
 export function importedLegacyBindings(bindings) {
     const seen = new Set();
@@ -197,6 +188,17 @@ export function importedLegacyBindings(bindings) {
 export async function previewLegacyImport() {
     return importedLegacyBindings(await readLegacyBindings());
 }
+/**
+ * The first generation's rows from 5.x state, gathered outside any transaction.
+ * Each binding's delivery start:
+ *   1. a valid non-null 5.x checkpoint for its generation: that checkpoint;
+ *   2. a valid null checkpoint: the binding start;
+ *   3. no 5.x history for the seat at all (enumerable and empty): the server
+ *      head, resolved on first use ('head-pending', the network is never read
+ *      here), or the binding start if the database has seat history by then;
+ *   4. anything else, including unreadable history: the binding start.
+ * A second worktree whose binding has the same generation is skipped.
+ */
 export async function legacySeed() {
     const imports = await Promise.all((await previewLegacyImport()).map(async (binding) => ({
         binding, delivery: await readLegacyDelivery(binding),
