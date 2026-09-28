@@ -33,7 +33,9 @@ export async function serveBackend(cube: MockCube): Promise<{ url: string; close
 
 export function proxyBackend(url: string): RepresentativeBackend {
   const call = async (method: string, args: unknown[]) => {
-    const response = await fetch(url, { method: 'POST', body: JSON.stringify({ method, args }) });
+    // A trailing AbortSignal is the caller's cancellation, as in the real seat backend.
+    const signal = args.at(-1) instanceof AbortSignal ? args.pop() as AbortSignal : undefined;
+    const response = await fetch(url, { method: 'POST', body: JSON.stringify({ method, args }), ...(signal ? { signal } : {}) });
     const body = await response.json() as { result?: unknown; error?: { message: string; status?: number; code?: string } };
     if (body.error) throw Object.assign(new Error(body.error.message), body.error);
     return body.result;

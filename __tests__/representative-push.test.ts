@@ -5,14 +5,17 @@
  * database, the controlled mock cube and a fake clock; every transition is
  * driven explicitly.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { BUILDER_ID, COORD_ID, MockCube, REP_ID, bindingFor } from './fixtures/representative-mock-backend.js';
 import { createRepresentativeStore, bindingFingerprint, RepresentativeGenerationError, type RepresentativeBinding } from '../src/representative-store.js';
-import { deliverRepresentativeReplies, ensureRepresentativeState, readRepresentativeReplies, type RepresentativeContext } from '../src/representative-core.js';
+import {
+  deliverRepresentativeReplies, ensureRepresentativeState, readRepresentativeReplies, serverHead,
+  type RepresentativeBackend, type RepresentativeContext,
+} from '../src/representative-core.js';
 import {
   DISCOVERY_PAGE, PushEngine, WAKE_ACK_DEADLINE_MS, WAKE_DEBOUNCE_MS, parseAck, readWakeSummary, refusalBackoffMs, rewakeBackoffMs,
   type PushEngineDeps, type WakeEmission,
@@ -601,3 +604,94 @@ describe('review controls (S2 round 1)', () => {
     expect(docOf().cohort).toEqual({ remaining: 5_000, open: true });
   });
 });
+
+describe('review controls (S2 round 3): stop cancels the transport', () => {
+  /** The real seat backend (readLog, its retries and backoff) over a fixture transport. */
+  async function realSeatBackend(fetchImpl: (url: string, init: RequestInit) => Promise<Response>) {
+    const trust = await import('../src/server-trust.js');
+    const cubes = await import('../src/cubes.js');
+    const { createSeatBackend } = await import('../src/representative-core.js');
+    const active = {
+      apiUrl: binding.origin, sessionToken: 'fixture-only', serverTrustIdentity: binding.trustIdentity,
+      cubeId: binding.cubeId, droneId: binding.representativeDroneId,
+    };
+    const spies = [
+      vi.spyOn(cubes, 'getActiveCube').mockResolvedValue(active as never),
+      vi.spyOn(trust, 'loadBorgServerTrust').mockResolvedValue({ identity: binding.trustIdentity, fetchImpl } as never),
+    ];
+    return { backend: await createSeatBackend(active as never), restore: () => spies.forEach((spy) => spy.mockRestore()) };
+  }
+  const emptyPage = () => new Response(JSON.stringify({ entries: [], has_more: false, behind_by: 0 }),
+    { status: 200, headers: { 'content-type': 'application/json' } });
+  const until = async (predicate: () => boolean) => {
+    for (let i = 0; i < 1000 && !predicate(); i++) await new Promise((done) => setTimeout(done, 1));
+  };
+
+  it('starts no transport retry after stop: attempt 1 fails with ECONNRESET after the stop', async () => {
+    const { engine, ctx } = await engineFor();
+    let calls = 0; let rejectFirst!: (error: unknown) => void; let firstSignal: AbortSignal | undefined;
+    const first = new Promise<Response>((_, reject) => { rejectFirst = reject; });
+    const real = await realSeatBackend(async (_url, init) => {
+      calls++;
+      if (calls === 1) { firstSignal = init.signal ?? undefined; return first; }
+      return emptyPage();
+    });
+    try {
+      (engine as unknown as { deps: PushEngineDeps }).deps.backend = { ...ctx.backend, readAfter: real.backend.readAfter };
+      const scan = engine.discover(); scan.catch(() => {});
+      await until(() => calls > 0);
+      expect(calls).toBe(1);
+      engine.stop();
+      await expect(scan).rejects.toThrow(/stopped/);
+      // The stop reached the request in flight, not only the engine's wait.
+      expect(firstSignal?.aborted).toBe(true);
+      rejectFirst(Object.assign(new Error('reset after stop'), { code: 'ECONNRESET' }));
+      await new Promise((done) => setTimeout(done, 40));
+      expect(calls).toBe(1);
+    } finally { real.restore(); }
+  });
+
+  it('abandons a 429 backoff at stop and starts no further request', async () => {
+    const { engine, ctx } = await engineFor();
+    let calls = 0;
+    const real = await realSeatBackend(async () => {
+      calls++;
+      return calls === 1
+        ? new Response('{}', { status: 429, headers: { 'retry-after': '1' } })
+        : emptyPage();
+    });
+    try {
+      (engine as unknown as { deps: PushEngineDeps }).deps.backend = { ...ctx.backend, readAfter: real.backend.readAfter };
+      const scan = engine.discover(); scan.catch(() => {});
+      await until(() => calls > 0);
+      await new Promise((done) => setTimeout(done, 20)); // inside the Retry-After sleep (1 s + up to 0.5 s jitter)
+      engine.stop();
+      await expect(scan).rejects.toThrow(/stopped/);
+      // Past the longest possible backoff: an unabandoned sleep would have sent attempt 2 by now.
+      await new Promise((done) => setTimeout(done, 1_800));
+      expect(calls).toBe(1);
+    } finally { real.restore(); }
+  });
+
+  it('serverHead: an abort rejects at once even when the backend ignores it, and no later page starts', async () => {
+    const pages: number[] = [];
+    let releasePage!: () => void;
+    const ignoring: RepresentativeBackend = {
+      ...cube.backend(),
+      readAfter: async () => {
+        pages.push(pages.length + 1);
+        await new Promise<void>((done) => { releasePage = done; });
+        return { entries: [cube.post(COORD_ID, 'page', [REP_ID], new Date(clock + pages.length).toISOString()) as never], has_more: true };
+      },
+    };
+    const controller = new AbortController();
+    const head = serverHead(ignoring, controller.signal); head.catch(() => {});
+    await until(() => pages.length === 1);
+    controller.abort(new Error('listener stopped'));
+    await expect(head).rejects.toThrow('listener stopped');
+    releasePage();
+    await new Promise((done) => setTimeout(done, 20));
+    expect(pages).toEqual([1]);
+  });
+});
+

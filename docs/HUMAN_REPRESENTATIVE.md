@@ -398,11 +398,16 @@ How wakes are decided (all of it in the state database, per binding generation):
 - Each wake is recorded before it is written to stdout. A listener killed in
   between loses that one wake attempt; the reply is woken again on schedule.
 - On every start, after `listening`, the engine asks the server once how many
-  log entries lie beyond where it stopped. It sends no other wake until
+  log entries lie beyond where it stopped. (The first start of a binding
+  imported from borgmcp 5.x without delivery history first finds the server's
+  log head, also after `listening`.) It sends no other wake until
   discovery has read that many, then one `startup` wake for every reply still
   undelivered. A log that keeps growing cannot delay it past that count.
-- EOF on stdin stops everything at once: discovery, pending log reads, the
-  scheduler and the stream. The listener releases its lease and exits.
+- EOF on stdin, or SIGTERM/SIGINT, stops everything at once, from the first
+  startup step on: the startup server check, the head search, discovery,
+  pending log reads with their retries and backoff, the scheduler and the
+  stream. Requests in flight are aborted and no new one starts. The listener
+  releases its lease and exits 0; before `listening` it prints nothing.
 - A reply delivered before its wake is not woken; a wake already sent cannot be
   recalled, and the woken `read` then returns nothing new.
 

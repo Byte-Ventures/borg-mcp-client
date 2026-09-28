@@ -126,6 +126,8 @@ export interface EnsureStateContext {
    * any transaction.
    */
   serverHead(): Promise<LocalServerCursor | null | 'unbounded'>;
+  /** Cancels the head step: no transaction runs after it fires. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -159,6 +161,7 @@ export async function ensureDeliveryState(ctx: EnsureStateContext): Promise<void
   });
   if (!pending) return;
   const head = await ctx.serverHead();
+  ctx.signal?.throwIfAborted();
   await ctx.store.state.transact((db) => {
     current(db);
     if (startKindOf(db, generation) !== 'head-pending') return;

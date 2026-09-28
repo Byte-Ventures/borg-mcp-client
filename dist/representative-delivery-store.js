@@ -113,6 +113,7 @@ export async function ensureDeliveryState(ctx) {
     if (!pending)
         return;
     const head = await ctx.serverHead();
+    ctx.signal?.throwIfAborted();
     await ctx.store.state.transact((db) => {
         current(db);
         if (startKindOf(db, generation) !== 'head-pending')
