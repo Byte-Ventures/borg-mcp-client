@@ -436,8 +436,10 @@ the human.
 ## Hermes push plugin
 
 For Hermes, Borg ships a Hermes user plugin, `borg-representative-push`, that
-supervises the listener for you. When the bound Coordinator replies, the plugin
-wakes one Hermes conversation right away. Hermes source is not changed; the
+runs the push engine (`listen --protocol 2`) for you. When the bound
+Coordinator replies, the plugin wakes one Hermes conversation right away. The
+plugin is a thin adapter: Borg decides every wake and keeps all wake state; the
+plugin only asks Hermes to start the turn and reports whether it did. Hermes source is not changed; the
 plugin is installed and enabled through Hermes's documented plugin mechanism.
 
 **Which conversations can be woken.** Only a Hermes *messaging-gateway*
@@ -474,8 +476,7 @@ plugins:
       settings:
         session_key: "agent:main:<platform>:<chat type>:<chat id>"
         worktree: "<absolute path of the prepared representative worktree>"
-        # optional: borg_command (default borg), mcp_server (default
-        # borg-representative), reinject_after_s (default 600), max_reinjects (default 3)
+        # optional: borg_command (default borg)
 mcp_servers:
   borg-representative:
     command: borg
@@ -484,62 +485,46 @@ mcp_servers:
 ```
 
 `allow_gateway_injection` is Hermes's per-plugin permission to start gateway
-turns; it is off by default. `mcp_server` must name the `mcp_servers` entry that
-runs `borg representative mcp`, because the plugin recognises the deliver tool
-by that name. Then restart the gateway (`hermes gateway restart`).
+turns; it is off by default. The plugin has exactly three settings:
+`session_key`, `worktree` and `borg_command`; settings left over from the 5.x
+plugin (`mcp_server`, `reinject_after_s`, `max_reinjects`) are ignored. Then
+restart the gateway (`hermes gateway restart`).
 
-**Which process delivers.** Hermes starts a separate MCP process in every
-Hermes process that uses the server; any number of them may use the tools. The
-plugin sees only this gateway's `borg_representative-deliver` results, so a
-reply delivered from another process (Desktop, CLI) is not observed as
-delivered here and is woken again after `reinject_after_s`. Let the gateway
-conversation in `session_key` do the reading and delivering.
+**Which process delivers.** Any Hermes process may read and deliver: Desktop,
+the CLI or the gateway conversation. Borg stops waking for a reply once it is
+delivered from any of them.
 
 ### Behaviour
 
 - The listener starts only inside the Hermes messaging gateway, when the platform
   named in `session_key` connects. The CLI, Desktop and worker processes load the
   plugin but start nothing. A platform reconnect does not start a second listener.
-- A burst of hints (about 2 seconds) becomes one injected message with fixed
-  text: `Borg: new Coordinator reply. Call borg_representative-read, persist and
-  relay, then borg_representative-deliver through the last persisted entry_id.`
-  No message body, sender or document ever passes through the plugin. A busy
-  conversation queues the message; it does not interrupt the running turn.
-- The plugin watches this gateway's `borg_representative-deliver` results. A
-  hinted reply that is still undelivered after `reinject_after_s` wakes the
-  conversation again. Each reply gets at most `1 + max_reinjects` wakes in total;
-  after that the plugin logs it and wakes no more for that reply until a delivery
-  covers it. Every wake is counted on disk before Hermes is asked to start the turn,
-  so neither a replayed hint nor a gateway restart renews the count. A refused
-  wake's reservation is rolled back when the state update succeeds; if that
-  rollback fails, the wake is conservatively counted as spent. A crash between
-  counting and asking can lose one wake,
-  never add one. Hermes reports only that it accepted a message, not that the
-  turn ran, so this is how a dropped wake is recovered.
-- One small record (id, timestamp, count) is kept for each reply the plugin has
-  woken the conversation for. It is removed only when an observed delivery covers
-  that reply; there is no count limit. The records therefore grow only while woken
-  replies stay undelivered.
+- Each `wake` becomes one injected message with fixed text: `Borg: new
+  Coordinator reply. Call borg_representative-read, persist and relay, then
+  borg_representative-deliver through the last persisted entry_id.` No message
+  body, sender or document ever passes through the plugin. A busy conversation
+  queues the message; it does not interrupt the running turn.
+- The plugin writes Hermes's answer back to the listener: accepted, or not (for
+  example `allow_gateway_injection` is off or the conversation is unavailable).
+  Borg then decides the rest: it wakes again for a reply still undelivered
+  after 10 minutes, 1 hour, 6 hours and then every 24 hours, and backs off
+  after a refusal (30 seconds, doubling to 30 minutes). See "Supervised
+  listener".
 - Listener exits: 0 stops; 1 restarts with capped backoff; 2 stops and logs
-  (fix the binding, then restart the gateway); 3 (another listener owns the
-  lease) retries with backoff; 4 restarts after `lease-lost` and otherwise stops
-  and logs (evicted, rebound, revoked, trust-changed). A stop ends every wake,
-  including queued and repeat wakes, until the gateway restarts.
-- On restart the listener replays retained hints after the last delivered
-  checkpoint the plugin observed (`--replay-after`). The delivered checkpoint
-  stays the source of truth: `read` returns every reply not yet delivered.
-- On a normal gateway exit the plugin stops the listener. If the gateway is killed,
-  the listener it started keeps its lease until its next hint fails to write.
-  The next gateway stops that orphan only if it is the recorded listener and its
-  parent is gone. Otherwise it retries with backoff until the lease is free. A
-  dead owner's lease expires after about 70 seconds; a live orphan releases it
-  when its next hint fails to write.
-- State (the recorded listener, the observed delivered checkpoint and the wake
-  records) and the
-  listener's stderr live under `<Hermes home>/plugin-data/borg-representative-push/`.
-  The plugin sets that directory to mode 0700, refuses it if it is a symbolic link,
-  creates its files with mode 0600, and never reads or writes through a symbolic
-  link planted there.
+  (fix the binding, update borgmcp, or check the listener protocol, then restart
+  the gateway); 3 (another listener holds the lease) retries with backoff; 4
+  restarts after `lease-lost` and otherwise stops and logs (evicted, rebound,
+  revoked, trust-changed).
+- The plugin acts on nothing until the listener announces `listening` with
+  protocol 2; only a startup `refused` may come first. Any other event first,
+  or another protocol (an older borgmcp), is a rejection: no wake is injected.
+  The plugin closes the pipe, then sends SIGTERM and finally SIGKILL, 2 seconds
+  apart, reaps the process, and logs that borgmcp must be updated.
+- The plugin owns the listener's stdin pipe. When the gateway exits, even when
+  it is killed, the pipe closes and the listener exits on its own: nothing is
+  left running, and the next gateway starts a new one.
+- The plugin keeps no state and writes no files. The listener's diagnostics go
+  to the Hermes log, one line at a time, capped at 500 characters.
 
 ## State database
 
