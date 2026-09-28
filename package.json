@@ -45,6 +45,8 @@
     "dist",
     "src",
     "docs/*.md",
+    "hermes-plugin/borg-representative-push/plugin.yaml",
+    "hermes-plugin/borg-representative-push/__init__.py",
     "README.md",
     "LICENSE",
     "NOTICE",

@@ -301,6 +301,10 @@ async function main() {
             process.stderr.write(`Run \`borg representative --help\` for usage.\n`);
             process.exit(1);
         }
+        if (parsed.command.action === 'hermes-plugin-install') {
+            const install = await import('./hermes-plugin-install.js');
+            process.exit(await install.runHermesPluginInstall(parsed.command, install.defaultHermesPluginInstallDeps()));
+        }
         const deps = await representative.buildDefaultRepresentativeDeps();
         if (parsed.command.action === 'prepare') {
             process.exit(await representative.runRepresentativePrepare(parsed.command, deps));

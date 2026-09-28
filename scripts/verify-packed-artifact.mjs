@@ -11,7 +11,14 @@ const MAX_PACKED_BYTES = 8 * 1024 * 1024;
 const MAX_UNPACKED_BYTES = 30 * 1024 * 1024;
 const MAX_FILES = 2048;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
-const REQUIRED_FILES = ['CONTRIBUTING.md', 'LICENSE', 'NOTICE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md', 'package.json'];
+const HERMES_PLUGIN_ARTIFACTS = new Set([
+  'hermes-plugin/borg-representative-push/plugin.yaml',
+  'hermes-plugin/borg-representative-push/__init__.py',
+]);
+const REQUIRED_FILES = [
+  'CONTRIBUTING.md', 'LICENSE', 'NOTICE', 'README.md', 'SECURITY.md', 'THIRD_PARTY_NOTICES.md', 'package.json',
+  ...HERMES_PLUGIN_ARTIFACTS,
+];
 const LOCAL_DASHBOARD_OCCURRENCES = JSON.parse(
   readFileSync(new URL('./local-dashboard-occurrences.json', import.meta.url), 'utf8'),
 );
@@ -30,6 +37,7 @@ const ALLOWED_ROOTS = new Set([
   'THIRD_PARTY_NOTICES.md',
   'dist',
   'docs',
+  'hermes-plugin',
   'package.json',
   'src',
 ]);
@@ -246,6 +254,9 @@ export async function verifyPackedArtifact(tarballPath, options = {}) {
       }
       if (rootEntry === 'src' && !path.endsWith('.ts')) throw new Error(`Unexpected source artifact: ${path}`);
       if (rootEntry === 'docs' && !path.endsWith('.md')) throw new Error(`Unexpected documentation artifact: ${path}`);
+      if (rootEntry === 'hermes-plugin' && !HERMES_PLUGIN_ARTIFACTS.has(path)) {
+        throw new Error(`Unexpected Hermes plugin artifact: ${path}`);
+      }
       if (/(^|\/)(\.env(?:\.|$)|\.npmrc$|node_modules|[^/]+\.(?:pem|key|p12|pfx))/.test(path)) {
         throw new Error(`Forbidden packed path: ${path}`);
       }

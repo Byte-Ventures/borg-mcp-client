@@ -130,6 +130,7 @@ export function representativeHelpText(version: string): string {
     `  borg representative status [--worktree <path>]\n` +
     `  borg representative mcp [--worktree <path>]\n` +
     `  borg representative listen --worktree <path> [--replay-after <entry_id>]\n` +
+    `  borg representative hermes-plugin install [--hermes-home <path>] [--force]\n` +
     `  borg representative --help\n\n` +
     `Commands:\n` +
     `  prepare   Create or resume the representative's own drone in this repository's cube and bind it to\n` +
@@ -138,7 +139,11 @@ export function representativeHelpText(version: string): string {
     `            another drone is never chosen instead.\n` +
     `  status    Show the saved binding, re-check it against the live cube, and list unresolved sends.\n` +
     `  mcp       Serve the restricted stdio MCP tools (status, send, read, deliver, ack) for a generic MCP host.\n` +
-    `  listen    Emit body-free JSON wake hints from the server stream; supervise this separate process.\n\n` +
+    `  listen    Emit body-free JSON wake hints from the server stream; supervise this separate process.\n` +
+    `  hermes-plugin install\n` +
+    `            Copy the Borg-owned Hermes push plugin into <Hermes home>/plugins and print the config to add.\n` +
+    `            It wakes one Hermes messaging-gateway conversation (not a Desktop chat). Never edits Hermes\n` +
+    `            config and never starts or restarts Hermes.\n\n` +
     `Options:\n` +
     `  --replay-after <entry_id>    listen: replay later retained hints after the last durably enqueued entry\n` +
     `  --coordinator <drone-label>  Exact label of the Coordinator drone (see \`borg drones\`). Required for prepare.\n` +
@@ -147,6 +152,8 @@ export function representativeHelpText(version: string): string {
     `  --worktree <path>            status/mcp/listen: absolute path of the prepared representative worktree\n` +
     `  --host <host>                prepare: explicit Borg server, as in \`borg assimilate --host\`\n` +
     `  --rebind                     prepare: explicitly replace the saved cube/Coordinator selection\n` +
+    `  --hermes-home <path>         hermes-plugin install: absolute Hermes home (default: $HERMES_HOME or ~/.hermes)\n` +
+    `  --force                      hermes-plugin install: replace the files of an existing install\n` +
     `  --help, -h                   Show this help\n\n` +
     `Limits: the MCP process has no background wake; a separate listen process emits wake hints, not content.\n` +
     `Reading changes nothing: persist replies durably, then deliver through the last one. On a listener gap, call read.\n` +
@@ -233,7 +240,7 @@ export function topLevelHelpText(version: string): string {
     `  borg drones              List this machine's registered drones and worktrees\n` +
     `  borg launch <drone-label-or-id-prefix>  Reopen one registered drone from its worktree\n` +
     `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
-    `  borg representative prepare|status|mcp|listen  Let an MCP host (e.g. Hermes) speak for you to one Coordinator drone\n` +
+    `  borg representative prepare|status|mcp|listen|hermes-plugin  Let an MCP host (e.g. Hermes) speak for you to one Coordinator drone\n` +
     `  borg server <command> [arguments]\n` +
     `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
     `  borg --version           Show installed version\n\n` +
