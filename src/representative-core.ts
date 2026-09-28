@@ -88,8 +88,9 @@ export type LogEntry = Pick<EnrichedStreamEntry, 'id' | 'drone_id' | 'message' |
 
 /** The only Borg operations the representative may perform, all seat-scoped. */
 export interface RepresentativeBackend {
-  whoami(): Promise<{ cube_id: string; cube_name: string; drone_id: string; drone_label: string; role_id: string; role_name: string }>;
-  roster(): Promise<{ drones: RosterDrone[]; roles: RosterRole[] }>;
+  /** `signal`, where accepted, cancels the call: the request in flight is aborted and no retry, backoff or later request starts. */
+  whoami(signal?: AbortSignal): Promise<{ cube_id: string; cube_name: string; drone_id: string; drone_label: string; role_id: string; role_name: string }>;
+  roster(signal?: AbortSignal): Promise<{ drones: RosterDrone[]; roles: RosterRole[] }>;
   /**
    * MUST make a single transport attempt and surface the client's typed errors
    * unchanged: a typed 4xx/401/410 refusal is reported as "not stored" only
@@ -104,7 +105,7 @@ export interface RepresentativeBackend {
    * One stateless page of the cube log strictly after an exact (created_at, id)
    * cursor, ascending. Reads and advances no unread cursor; never digest mode.
    */
-  readAfter(cursor: LocalServerCursor | null, limit: number): Promise<{ entries: LogEntry[]; has_more?: boolean; behind_by?: number }>;
+  readAfter(cursor: LocalServerCursor | null, limit: number, signal?: AbortSignal): Promise<{ entries: LogEntry[]; has_more?: boolean; behind_by?: number }>;
   readEntry(entryId: string): Promise<{ entry: LogEntry }>;
   ack(entryId: string): Promise<void>;
 }
@@ -121,14 +122,14 @@ export async function createSeatBackend(active: ActiveCube): Promise<Representat
   const client = await import('./remote-client.js');
   const trust = active.serverTrustIdentity;
   return {
-    whoami: () => client.whoami(active),
-    roster: () => client.getRoster(active),
+    whoami: (signal) => client.whoami(active, { signal }),
+    roster: (signal) => client.getRoster(active, undefined, { signal }),
     append: ({ postId, message, to }) =>
       client.appendLog(active.sessionToken, active.apiUrl, message, {
         to, postId, transportRetry: false, serverTrustIdentity: trust,
       }),
-    readAfter: (cursor, limit) =>
-      client.readLog(active.sessionToken, active.apiUrl, { cursor, limit, serverTrustIdentity: trust }),
+    readAfter: (cursor, limit, signal) =>
+      client.readLog(active.sessionToken, active.apiUrl, { cursor, limit, serverTrustIdentity: trust, signal }),
     readEntry: (entryId) =>
       client.readLogEntry(active.sessionToken, active.apiUrl, { entry_id: entryId }, trust),
     ack: (entryId) => client.ackLogEntry(active.sessionToken, active.apiUrl, entryId, 'ack', trust),
@@ -185,16 +186,37 @@ export function resolveCoordinator(
 }
 
 /** Re-prove, against the live cube, that this seat and the bound Coordinator are still the bound ones. */
-export async function verifyLiveBinding(ctx: RepresentativeContext): Promise<{ coordinator: RosterDrone; self: RosterDrone }> {
+/**
+ * Settles with `work`, or rejects with the abort reason as soon as `signal`
+ * fires: a caller that stops never waits on a backend that ignores the signal.
+ */
+export function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) {
+    work.catch(() => {});
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => { work.catch(() => {}); reject(signal.reason); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+export async function verifyLiveBinding(
+  ctx: RepresentativeContext,
+  signal?: AbortSignal,
+): Promise<{ coordinator: RosterDrone; self: RosterDrone }> {
   const { binding, backend } = ctx;
-  const me = await backend.whoami();
+  const me = await untilAborted(backend.whoami(signal), signal);
   if (me.cube_id !== binding.cubeId || me.drone_id !== binding.representativeDroneId) {
     throw new RepresentativeError(
       'BINDING_MISMATCH',
       `The live connection is not the bound cube/drone. Run \`${representativeRecoveryCommand(binding)}\` explicitly; nothing was sent.`,
     );
   }
-  const roster = await backend.roster();
+  signal?.throwIfAborted();
+  const roster = await untilAborted(backend.roster(signal), signal);
   const self = roster.drones.find((drone) => drone.id === binding.representativeDroneId);
   const selfRole = roster.roles.find((role) => role.id === self?.role_id);
   if (!self || !selfRole) {
@@ -622,20 +644,34 @@ export const SERVER_HEAD_MAX_PAGES = 40;
  * keeps growing faster than it is read, is 'unbounded': the caller must not
  * wait for a head it may never reach.
  */
-export async function serverHead(backend: RepresentativeBackend): Promise<LocalServerCursor | null | 'unbounded'> {
+export async function serverHead(
+  backend: RepresentativeBackend,
+  signal?: AbortSignal,
+): Promise<LocalServerCursor | null | 'unbounded'> {
   let cursor: LocalServerCursor | null = null;
   for (let page = 0; page < SERVER_HEAD_MAX_PAGES; page += 1) {
-    const result = await backend.readAfter(cursor, READ_SCAN_PAGE);
-    const tail = result.entries.at(-1);
+    signal?.throwIfAborted();
+    const request: ReturnType<RepresentativeBackend['readAfter']> = backend.readAfter(cursor, READ_SCAN_PAGE, signal);
+    const result = await untilAborted(request, signal);
+    const tail: LogEntry | undefined = result.entries.at(-1);
     if (tail) cursor = { id: tail.id, created_at: tail.created_at };
     if (!result.has_more || !tail) return cursor;
   }
   return 'unbounded';
 }
 
-/** First use of a binding generation creates its state (binding row and delivery start). */
-export async function ensureRepresentativeState(ctx: RepresentativeContext): Promise<void> {
-  await ensureDeliveryState({ binding: ctx.binding, store: ctx.store, serverHead: () => serverHead(ctx.backend) });
+/**
+ * First use of a binding generation creates its state (binding row and delivery
+ * start). `signal` cancels the head walk of an imported binding between and
+ * during pages; nothing is written after it fires.
+ */
+export async function ensureRepresentativeState(ctx: RepresentativeContext, signal?: AbortSignal): Promise<void> {
+  await ensureDeliveryState({
+    binding: ctx.binding,
+    store: ctx.store,
+    serverHead: () => serverHead(ctx.backend, signal),
+    ...(signal ? { signal } : {}),
+  });
 }
 
 const checkpointView = (point: LocalServerCursor | null) =>

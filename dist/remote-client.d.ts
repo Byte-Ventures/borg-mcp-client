@@ -125,7 +125,9 @@ export declare function getRoleInfo(sessionToken: string, apiUrl: string, server
 export declare function getRoleInfoByName(sessionToken: string, apiUrl: string, role: string, serverTrustIdentity?: string): Promise<{
     role: any;
 }>;
-export declare function whoami(active: ActiveCube): Promise<{
+export declare function whoami(active: ActiveCube, opts?: {
+    signal?: AbortSignal;
+}): Promise<{
     cube_id: string;
     cube_name: string;
     drone_id: string;
@@ -152,7 +154,9 @@ export declare function whoami(active: ActiveCube): Promise<{
  *     (echoed back so the renderer can label the column accurately
  *     even when the caller passed an entry-id)
  */
-export declare function getRoster(active: ActiveCube, since?: string): Promise<{
+export declare function getRoster(active: ActiveCube, since?: string, opts?: {
+    signal?: AbortSignal;
+}): Promise<{
     drones: any[];
     roles: any[];
     message_taxonomy?: MessageTaxonomy | null;
@@ -171,6 +175,11 @@ export declare function readLog(sessionToken: string, apiUrl: string, opts?: {
     serverTrustIdentity?: string;
     /** Refuse continuation before any cursor access/advance or HTTP attempt. */
     continuationGuard?: () => Promise<void>;
+    /**
+     * Cancellation: aborts the request in flight, and no HTTP attempt, retry,
+     * backoff or later page starts after it fires.
+     */
+    signal?: AbortSignal;
 }): Promise<{
     entries: any[];
     drones: any[];

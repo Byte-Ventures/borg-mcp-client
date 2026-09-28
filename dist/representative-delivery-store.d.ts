@@ -53,6 +53,8 @@ export interface EnsureStateContext {
      * any transaction.
      */
     serverHead(): Promise<LocalServerCursor | null | 'unbounded'>;
+    /** Cancels the head step: no transaction runs after it fires. */
+    signal?: AbortSignal;
 }
 /**
  * Make sure the binding's generation has a resolved delivery row. The binding
