@@ -74,6 +74,7 @@ export interface RepresentativeBackend {
     readAfter(cursor: LocalServerCursor | null, limit: number): Promise<{
         entries: LogEntry[];
         has_more?: boolean;
+        behind_by?: number;
     }>;
     readEntry(entryId: string): Promise<{
         entry: LogEntry;
@@ -175,8 +176,15 @@ export declare function serializeRepresentativeResult(body: unknown): string;
  * bytes by default), so the reduced entry fits.
  */
 export declare const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
-/** The newest log position on the bound server (null for an empty log), outside any transaction. */
-export declare function serverHead(backend: RepresentativeBackend): Promise<LocalServerCursor | null>;
+/** At most this many pages are read to find the server head (500 entries each). */
+export declare const SERVER_HEAD_MAX_PAGES = 40;
+/**
+ * The newest log position on the bound server (null for an empty log), outside
+ * any transaction. A log longer than SERVER_HEAD_MAX_PAGES pages, or one that
+ * keeps growing faster than it is read, is 'unbounded': the caller must not
+ * wait for a head it may never reach.
+ */
+export declare function serverHead(backend: RepresentativeBackend): Promise<LocalServerCursor | null | 'unbounded'>;
 /** First use of a binding generation creates its state (binding row and delivery start). */
 export declare function ensureRepresentativeState(ctx: RepresentativeContext): Promise<void>;
 export declare function readRepresentativeReplies(ctx: RepresentativeContext, raw: unknown): Promise<{

@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { BUILDER_ID, COORD_ID, MockCube, REP_ID, bindingFor } from './fixtures/representative-mock-backend.js';
 import { createRepresentativeStore, bindingFingerprint, RepresentativeGenerationError, type RepresentativeBinding } from '../src/representative-store.js';
-import { deliverRepresentativeReplies, ensureRepresentativeState, readRepresentativeReplies, serverHead, type RepresentativeContext } from '../src/representative-core.js';
+import { deliverRepresentativeReplies, ensureRepresentativeState, readRepresentativeReplies, type RepresentativeContext } from '../src/representative-core.js';
 import {
   DISCOVERY_PAGE, PushEngine, WAKE_ACK_DEADLINE_MS, WAKE_DEBOUNCE_MS, parseAck, readWakeSummary, refusalBackoffMs, rewakeBackoffMs,
   type PushEngineDeps, type WakeEmission,
@@ -58,7 +58,7 @@ async function engineFor(extra: Partial<PushEngineDeps> = {}, capture = true): P
   await ensureRepresentativeState(ctx);
   const wakes: WakeEmission[] = [];
   const engine = new PushEngine({ binding, store: ctx.store, backend: ctx.backend, now, emit: async (wake) => { wakes.push(wake); }, ...extra });
-  if (capture) await engine.start(await serverHead(ctx.backend));
+  if (capture) await engine.captureCohort();
   return { engine, wakes, ctx };
 }
 const rowsOf = () => withStateDb((db) => db.prepare('SELECT entry_id, attempts, next_at FROM wake_replies WHERE generation = ? ORDER BY created_at, entry_id')
@@ -430,7 +430,7 @@ describe('the startup cohort', () => {
   it('wakes once for 60 undelivered replies, then drains', async () => {
     const entries = Array.from({ length: 60 }, (_, i) => reply(`r${i}`));
     const { engine, wakes, ctx } = await engineFor();
-    expect(docOf().cohort).toMatchObject({ open: true, tail: { id: entries.at(-1)!.id } });
+    expect(docOf().cohort).toEqual({ open: true, remaining: entries.length });
     expect(await engine.nextDueAt()).toBeNull(); // no EMIT while the cohort is open
     await engine.discover();
     expect(wakes).toEqual([expect.objectContaining({ reason: 'startup', count: 60 })]);
@@ -443,7 +443,7 @@ describe('the startup cohort', () => {
     expect(rowsOf()).toEqual([]);
   });
 
-  it('closes the cohort at the captured tail even as the log grows; later replies wake under normal fairness', async () => {
+  it('closes the cohort once the captured count is scanned even as the log grows; later replies wake under normal fairness', async () => {
     const early = Array.from({ length: 3 }, (_, i) => reply(`early ${i}`));
     let grown = false;
     const { engine, wakes } = await engineFor({
@@ -463,15 +463,15 @@ describe('the startup cohort', () => {
     expect(docOf().outstanding.replies).toEqual([cube.entries.find((entry) => entry.message === 'after the head')!.id, later.id]);
   });
 
-  it('reuses the stored tail when restarted mid-cohort, and still emits one cohort batch', async () => {
+  it('reuses the stored count when restarted mid-cohort, and still emits one cohort batch', async () => {
     Array.from({ length: DISCOVERY_PAGE + 10 }, (_, i) => reply(`r${i}`));
     const first = await engineFor({ hooks: { betweenPages: (page) => { if (page === 1) throw new Error('killed mid-cohort'); } } });
-    const tail = docOf().cohort.tail;
+    expect(docOf().cohort).toEqual({ remaining: DISCOVERY_PAGE + 10, open: true });
     await expect(first.engine.discover()).rejects.toThrow(/killed/);
-    expect(docOf().cohort).toEqual({ tail, open: true });
+    expect(docOf().cohort).toEqual({ remaining: 10, open: true }); // the first page was merged
     reply('after the first capture'); // a newer head must not move the target
     const second = await engineFor();
-    expect(docOf().cohort.tail).toEqual(tail);
+    expect(docOf().cohort).toEqual({ remaining: 10, open: true });
     await second.engine.discover();
     expect(first.wakes).toEqual([]);
     expect(second.wakes).toHaveLength(1);
@@ -480,7 +480,7 @@ describe('the startup cohort', () => {
 
   it('has no cohort gate on an empty log', async () => {
     const { engine } = await engineFor();
-    expect(docOf().cohort).toEqual({ tail: null, open: false });
+    expect(docOf().cohort).toEqual({ remaining: 0, open: false });
     reply();
     await engine.discover();
     advance(WAKE_DEBOUNCE_MS);
@@ -512,7 +512,7 @@ describe('the active generation', () => {
     advance(WAKE_DEBOUNCE_MS);
     const wake = await engine.tick();
     await createRepresentativeStore().saveBinding(bindingFor(WORKTREE, { boundAt: '2026-06-01T00:00:00.000Z' }), { rebind: true });
-    const run = step === 'tick' ? engine.tick() : step === 'ack' ? ack(engine, wake!, true) : engine.start(null);
+    const run = step === 'tick' ? engine.tick() : step === 'ack' ? ack(engine, wake!, true) : engine.captureCohort();
     await expect(run).rejects.toBeInstanceOf(RepresentativeGenerationError);
   });
 });
@@ -528,5 +528,76 @@ describe('status summary', () => {
     expect(await readWakeSummary(store, binding)).toMatchObject({
       undelivered: 1, outstanding: { wake_id: wake.wake_id, count: 1 }, refusals: { count: 0 }, cohort_open: false,
     });
+  });
+});
+
+describe('review controls (S2 round 1)', () => {
+  it('ignores a matching refusal received after the deadline before the timer runs: the attempt stays counted', async () => {
+    const { engine } = await engineFor();
+    reply();
+    await engine.discover();
+    advance(WAKE_DEBOUNCE_MS);
+    const wake = (await engine.tick())!;
+    advance(WAKE_ACK_DEADLINE_MS + 1);
+    expect(await ack(engine, wake, false)).toBe('ignored');
+    expect(rowsOf()[0].attempts).toBe(1);
+    expect(docOf()).toMatchObject({ outstanding: null, refusals: { count: 0, retry_at: null } });
+    expect(await engine.nextDueAt()).toBe(Date.parse(rowsOf()[0].next_at)); // the 10-minute re-wake, not a 30 s retry
+  });
+
+  it('ignores a matching acceptance after the deadline: refusal backoff is not reset', async () => {
+    const { engine } = await engineFor();
+    reply();
+    await engine.discover();
+    advance(WAKE_DEBOUNCE_MS);
+    const first = (await engine.tick())!;
+    await ack(engine, first, false); // refusal 1: retry in 30 s
+    advance(refusalBackoffMs(1));
+    const second = (await engine.tick())!;
+    advance(WAKE_ACK_DEADLINE_MS);
+    expect(await ack(engine, second, true)).toBe('ignored');
+    expect(docOf().refusals.count).toBe(1);
+  });
+
+  it('stops everything on stop(): no later page request, merge or wake, and a page in flight is abandoned', async () => {
+    const { engine, ctx, wakes } = await engineFor();
+    for (let i = 0; i < DISCOVERY_PAGE * 3; i += 1) cube.post(BUILDER_ID, `noise ${i}`, [REP_ID], new Date(clock + (seq++)).toISOString());
+    reply();
+    let calls = 0;
+    let release!: () => void;
+    const stuck = new Promise<void>((resolve) => { release = resolve; });
+    const readAfter = ctx.backend.readAfter;
+    (engine as unknown as { deps: PushEngineDeps }).deps.backend = {
+      ...ctx.backend,
+      readAfter: async (...args) => { calls += 1; if (calls === 2) await stuck; return readAfter(...args); },
+    };
+    const scan = engine.discover();
+    while (calls < 2) await new Promise((resolve) => setTimeout(resolve, 1));
+    const frontier = docOf().frontier;
+    engine.stop();
+    await expect(scan).rejects.toThrow(/stopped/);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls).toBe(2);
+    expect(docOf().frontier).toEqual(frontier); // the abandoned page is never merged
+    advance(WAKE_DEBOUNCE_MS * 10);
+    expect(await engine.tick()).toBeNull();
+    expect(await engine.ack(JSON.stringify({ wake_id: randomUUID(), accepted: true }))).toBe('ignored');
+    await expect(engine.discover()).rejects.toThrow(/stopped/);
+    expect(wakes).toEqual([]);
+  });
+
+  it('captures the startup cohort with one bounded request, however long or fast-growing the log', async () => {
+    for (let i = 0; i < 5_000; i += 1) cube.post(BUILDER_ID, `noise ${i}`, [REP_ID], new Date(clock + (seq++)).toISOString());
+    const { engine, ctx } = await engineFor({}, false);
+    const pages: number[] = [];
+    const readAfter = ctx.backend.readAfter;
+    (engine as unknown as { deps: PushEngineDeps }).deps.backend = {
+      ...ctx.backend,
+      readAfter: async (cursor, limit) => { pages.push(limit); return readAfter(cursor, limit); },
+    };
+    await engine.captureCohort();
+    expect(pages).toEqual([1]);
+    expect(docOf().cohort).toEqual({ remaining: 5_000, open: true });
   });
 });

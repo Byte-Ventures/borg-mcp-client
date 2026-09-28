@@ -432,6 +432,15 @@ describe('the 6.0 start rule for a binding 5.x prepared', () => {
     expect(withStateDb((db) => db.prepare('SELECT origin FROM bindings WHERE worktree = ?').get(WORKTREE))).toEqual({ origin: 'legacy' });
   });
 
+  it('starts at the binding start when the head cannot be reached in a bounded read (a very long log)', async () => {
+    const { SERVER_HEAD_MAX_PAGES } = await import('../src/representative-core.js');
+    const early = toRep('before the upgrade');
+    for (let i = 0; i < SERVER_HEAD_MAX_PAGES * 500; i += 1) cube.post(BUILDER_ID, `noise ${i}`, [REP_ID]);
+    const ctx = context(legacy);
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([early.id]); // replayed, never skipped
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'binding' });
+  });
+
   it('starts at the binding start on an empty log', async () => {
     const ctx = context(legacy);
     expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([]);

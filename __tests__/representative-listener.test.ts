@@ -5,7 +5,7 @@
  * The log is a controlled mock cube served to the child over loopback; the
  * SSE stream only triggers discovery.
  */
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { once } from 'node:events';
@@ -156,6 +156,7 @@ it('exits 0 on EOF from its host and releases the lease', async () => {
 
 it('refuses a second listener (exit 3) without changing state', async () => {
   const first = start(); await ready(first);
+  for (let i = 0; i < 300 && wakeDoc()?.cohort == null; i++) await delay(10); // the startup capture completed
   const before = wakeDoc();
   const second = start();
   const [code] = await second.exited;
@@ -265,4 +266,66 @@ it('reports a killed listener as not running without reclaiming its lock', async
   const probe = start('status'); await probe.exited;
   expect(JSON.parse(probe.raw()).listener.running).toBe(false);
   expect(await ownerFiles()).toHaveLength(1);
+});
+
+describe('review controls (S2 round 1): EOF and startup under a growing log', () => {
+  it('EOF stops discovery even while every page reports more, and exits promptly', async () => {
+    const client = start(); await ready(client); await client.wait(() => responses.length > 0);
+    await delay(100);
+    const original = cube.backend.bind(cube); let grow = true; let calls = 0;
+    cube.backend = () => ({ ...original(), readAfter: async (cursor, limit) => {
+      if (!grow) return original().readAfter(cursor, limit);
+      calls++; await delay(25);
+      const entry = cube.post(COORD_ID, 'growth', [REP_ID], new Date(Date.now() + calls * 1000).toISOString());
+      return { entries: [entry], has_more: true, behind_by: 1 };
+    } });
+    trigger(); await client.wait(() => calls >= 3);
+    client.child.stdin!.end(); const atEof = calls;
+    await delay(300);
+    const afterEof = calls;
+    const exitedWhileGrowing = client.child.exitCode;
+    grow = false;
+    const [code] = await client.exited;
+    expect(afterEof).toBeLessThanOrEqual(atEof + 1);
+    expect(exitedWhileGrowing).toBe(0);
+    expect(code).toBe(0);
+    expect(await ownerFiles()).toEqual([]);
+  });
+
+  it('announces listening before any log walk: startup is not starved by a growing log', async () => {
+    const initial = start(); await ready(initial); initial.child.stdin!.end(); await initial.exited;
+    const original = cube.backend.bind(cube); let grow = true; let calls = 0; const limits: number[] = [];
+    cube.backend = () => ({ ...original(), readAfter: async (cursor, limit) => {
+      if (!grow) return original().readAfter(cursor, limit);
+      calls++; limits.push(limit); await delay(25);
+      const entries = Array.from({ length: limit }, (_, i) => cube.post(COORD_ID, 'startup growth', [REP_ID], new Date(1900000000000 + calls * 10000 + i).toISOString()));
+      return { entries, has_more: true, behind_by: 10_000 };
+    } });
+    const client = start();
+    // Listening arrives while the log is still growing without end: the startup cannot be starved.
+    await client.wait(() => client.events.some(e => e.event === 'listening'), 10_000);
+    await client.wait(() => calls >= 12);
+    const listenedWhileGrowing = client.events.some(e => e.event === 'listening');
+    grow = false;
+    client.child.stdin!.end();
+    const [code] = await client.exited;
+    expect(listenedWhileGrowing).toBe(true);
+    expect(limits[0]).toBe(1); // the cohort capture: one bounded request, not a walk
+    expect(limits.slice(1).every(limit => limit === 200)).toBe(true); // then ordinary discovery pages
+    expect(code).toBe(0);
+  });
+
+  it('exits on EOF while the startup capture request hangs', async () => {
+    const initial = start(); await ready(initial); initial.child.stdin!.end(); await initial.exited;
+    const original = cube.backend.bind(cube);
+    cube.backend = () => ({ ...original(), readAfter: () => new Promise(() => {}) }); // never answers
+    const client = start(); await ready(client);
+    await delay(200);
+    const stoppedAt = Date.now();
+    client.child.stdin!.end();
+    const [code] = await client.exited;
+    expect(code).toBe(0);
+    expect(Date.now() - stoppedAt).toBeLessThan(5_000);
+    expect(await ownerFiles()).toEqual([]);
+  });
 });

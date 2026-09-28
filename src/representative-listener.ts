@@ -30,9 +30,9 @@ import { DroneEvictedError, CubeDeletedError } from './drone-lifecycle.js';
 import { BorgServerTrustError, BorgServerUnreachableError } from './server-errors.js';
 import { isTransportFailure } from './seat-probe.js';
 import { readBorgServerTrustIdentity } from './server-trust.js';
-import { ensureRepresentativeState, RepresentativeError, serverHead, verifyLiveBinding } from './representative-core.js';
+import { ensureRepresentativeState, RepresentativeError, verifyLiveBinding } from './representative-core.js';
 import { bindingFingerprint, RepresentativeGenerationError, type RepresentativeBinding, type RepresentativeStore } from './representative-store.js';
-import { PushEngine, readWakeSummary, WAKE_ACK_LINE_MAX_BYTES, type PushEngineDeps } from './representative-push.js';
+import { EngineStoppedError, PushEngine, readWakeSummary, WAKE_ACK_LINE_MAX_BYTES, type PushEngineDeps } from './representative-push.js';
 import type { ActiveCube } from './cubes.js';
 
 export const LISTENER_PROTOCOL = 2;
@@ -126,7 +126,9 @@ export async function runListener(
   let scheduled: ReturnType<typeof setTimeout> | undefined;
   let started = false, reason: StopReason | undefined, active: ActiveCube;
   const abort = new AbortController();
-  const stop = (why: StopReason) => { reason ??= why; abort.abort(); };
+  let engine: PushEngine | undefined;
+  /** One cancellation for the whole listener: stream, engine (discovery, scheduler, network) and timers. */
+  const stop = (why: StopReason) => { reason ??= why; abort.abort(); engine?.stop(); };
   const signal = () => stop('signal');
   const outputError = () => { outputBroken = true; stop('fatal'); };
   process.stdout.on('error', outputError);
@@ -134,14 +136,13 @@ export async function runListener(
   let failure: unknown;
   /** Every engine failure ends the run: a rebound or terminal state with its reason, anything else as fatal. */
   const fail = (error: unknown) => {
-    if (reason) return;
+    if (reason || error instanceof EngineStoppedError) return;
     failure ??= error;
     const terminal = terminalReason(error);
     if (!terminal) deps.stderr(`Representative listener: ${error instanceof Error ? error.message : String(error)}\n`);
     stop(terminal ?? 'fatal');
   };
   const onLine = (line: string) => { if (engine && !reason) void track(engine.ack(line).then(() => reschedule(), fail)); };
-  let engine: PushEngine | undefined;
   let reschedule = () => {};
   let buffered = '';
   let overflow = false;
@@ -219,12 +220,12 @@ export async function runListener(
       ...(options.hooks ? { hooks: options.hooks } : {}),
     });
     engine = push;
-    // The startup cohort: the head is read before its transaction.
-    const summary = await push.start(await serverHead(ctx.backend));
+    // Every handler is live before any log read: signals, EOF, acks.
     process.once('SIGTERM', signal); process.once('SIGINT', signal);
     stdin.on('data', onData);
     stdin.once('end', onEnd);
     stdin.once('close', onEnd);
+    const summary = await push.summary();
     await emit({ event: 'listening', protocol: LISTENER_PROTOCOL, binding_fingerprint: bindingFingerprint(binding),
       undelivered: summary.undelivered });
     started = true;
@@ -243,7 +244,9 @@ export async function runListener(
         }, Math.min(Math.max(at - now().getTime(), 0), MAX_TIMER_MS));
       }, fail);
     };
-    const discover = () => { if (!reason) void track(push.discover().then(() => reschedule(), fail)); };
+    // Discovery waits for the startup cohort capture (one bounded request, after `listening`).
+    let captured = false;
+    const discover = () => { if (!reason && captured) void track(push.discover().then(() => reschedule(), fail)); };
     let beating: Promise<unknown> | null = null;
     heartbeat = setInterval(() => {
       // One heartbeat at a time: overlapping refreshes of one lease would race each other.
@@ -253,7 +256,7 @@ export async function runListener(
         .finally(() => { beating = null; }));
     }, options.heartbeatIntervalMs ?? 20_000);
     reconcile = setInterval(discover, options.reconcileMs ?? RECONCILE_MS);
-    discover();
+    void track(push.captureCohort().then(() => { captured = true; reschedule(); discover(); }, fail));
 
     let attempt = 0;
     let consumerFailure: unknown;
@@ -312,7 +315,13 @@ export async function runListener(
     if (!options.stdin) stdin.pause();
     process.removeListener('SIGTERM', signal); process.removeListener('SIGINT', signal);
     // A heartbeat refresh or a transition still running must not outlive the lease.
-    while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
+    // Stopping abandons network waits at once; the bound covers a stuck local step.
+    engine?.stop();
+    const settleBy = Date.now() + 5_000;
+    while (inFlight.size > 0 && Date.now() < settleBy) {
+      await Promise.race([Promise.allSettled([...inFlight]), new Promise((resolve) => setTimeout(resolve, Math.max(settleBy - Date.now(), 0)))]);
+    }
+    if (inFlight.size > 0) deps.stderr(`Representative listener: ${inFlight.size} step(s) still running at shutdown; releasing the lease\n`);
     let releaseFailed = false;
     try { await lease?.release(); } catch (error) { releaseFailed = true; reason = 'fatal'; deps.stderr(`Listener lease release failed: ${String(error)}\n`); }
     if (started && reason && !outputBroken) {

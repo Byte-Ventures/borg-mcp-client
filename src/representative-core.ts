@@ -104,7 +104,7 @@ export interface RepresentativeBackend {
    * One stateless page of the cube log strictly after an exact (created_at, id)
    * cursor, ascending. Reads and advances no unread cursor; never digest mode.
    */
-  readAfter(cursor: LocalServerCursor | null, limit: number): Promise<{ entries: LogEntry[]; has_more?: boolean }>;
+  readAfter(cursor: LocalServerCursor | null, limit: number): Promise<{ entries: LogEntry[]; has_more?: boolean; behind_by?: number }>;
   readEntry(entryId: string): Promise<{ entry: LogEntry }>;
   ack(entryId: string): Promise<void>;
 }
@@ -613,15 +613,24 @@ const READ_SCAN_PAGE = 500;
  */
 export const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
 
-/** The newest log position on the bound server (null for an empty log), outside any transaction. */
-export async function serverHead(backend: RepresentativeBackend): Promise<LocalServerCursor | null> {
+/** At most this many pages are read to find the server head (500 entries each). */
+export const SERVER_HEAD_MAX_PAGES = 40;
+
+/**
+ * The newest log position on the bound server (null for an empty log), outside
+ * any transaction. A log longer than SERVER_HEAD_MAX_PAGES pages, or one that
+ * keeps growing faster than it is read, is 'unbounded': the caller must not
+ * wait for a head it may never reach.
+ */
+export async function serverHead(backend: RepresentativeBackend): Promise<LocalServerCursor | null | 'unbounded'> {
   let cursor: LocalServerCursor | null = null;
-  for (;;) {
-    const page = await backend.readAfter(cursor, READ_SCAN_PAGE);
-    const tail = page.entries.at(-1);
+  for (let page = 0; page < SERVER_HEAD_MAX_PAGES; page += 1) {
+    const result = await backend.readAfter(cursor, READ_SCAN_PAGE);
+    const tail = result.entries.at(-1);
     if (tail) cursor = { id: tail.id, created_at: tail.created_at };
-    if (!page.has_more || !tail) return cursor;
+    if (!result.has_more || !tail) return cursor;
   }
+  return 'unbounded';
 }
 
 /** First use of a binding generation creates its state (binding row and delivery start). */

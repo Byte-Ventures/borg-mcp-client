@@ -120,8 +120,12 @@ export function advanceCheckpoint(db: Transaction, generation: string, to: Local
 export interface EnsureStateContext {
   binding: RepresentativeBinding;
   store: RepresentativeStore;
-  /** The newest log position on the bound server, or null for an empty log. Called outside any transaction. */
-  serverHead(): Promise<LocalServerCursor | null>;
+  /**
+   * The newest log position on the bound server, null for an empty log, or
+   * 'unbounded' when it could not be reached in a bounded read. Called outside
+   * any transaction.
+   */
+  serverHead(): Promise<LocalServerCursor | null | 'unbounded'>;
 }
 
 /**
@@ -131,8 +135,9 @@ export interface EnsureStateContext {
  * - A prepared generation without a row starts at its binding start.
  * - An imported 5.x generation left 'head-pending' (no 5.x history for its
  *   seat) starts at the server head, read outside any transaction; if another
- *   generation of the seat has delivery state by the time it is written, it
- *   starts at the binding start instead (replays, never skips).
+ *   generation of the seat has delivery state by the time it is written, or
+ *   the head cannot be reached in a bounded read (a very long or fast-growing
+ *   log), it starts at the binding start instead (replays, never skips).
  */
 export async function ensureDeliveryState(ctx: EnsureStateContext): Promise<void> {
   const generation = bindingFingerprint(ctx.binding);
@@ -159,7 +164,7 @@ export async function ensureDeliveryState(ctx: EnsureStateContext): Promise<void
     if (startKindOf(db, generation) !== 'head-pending') return;
     const seatHistory = db.prepare('SELECT 1 AS present FROM delivery WHERE seat = ? AND generation != ? LIMIT 1')
       .get(seat, generation) !== undefined;
-    const [kind, start] = head && !seatHistory ? ['head' as const, head] : ['binding' as const, bindingStart];
+    const [kind, start] = head && head !== 'unbounded' && !seatHistory ? ['head' as const, head] : ['binding' as const, bindingStart];
     db.prepare('UPDATE delivery SET start_kind = ?, start_id = ?, start_at = ? WHERE generation = ?')
       .run(kind, start.id, start.created_at, generation);
   });

@@ -162,6 +162,7 @@ export class MockCube {
         return {
           entries: page.map((e) => ({ ...e })),
           has_more: remaining.length > page.length,
+          behind_by: remaining.length - page.length,
           cursor: last ? { id: last.id, created_at: last.created_at } : cursor,
         };
       },

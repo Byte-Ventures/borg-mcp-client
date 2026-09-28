@@ -24,8 +24,13 @@
  * - Discovery: one scan at a time (a trigger during a scan runs one more
  *   scan), one transaction per 200-entry page, insert-if-absent, frontier only
  *   moves forward, the scheduler runs between pages.
- * - Cohort: each start captures the server head; EMIT waits until discovery
- *   reaches it, then one 'startup' batch carries every due reply.
+ * - Cohort: each start captures, with one bounded request, how many log
+ *   entries lie beyond the scan position (the server's behind_by); EMIT waits
+ *   until discovery has scanned that many, then one 'startup' batch carries
+ *   every due reply. A restart mid-cohort keeps the remaining count, so the
+ *   target never moves forward, and a growing log cannot extend it.
+ * - Stop: after stop() no transition, page merge or network request starts,
+ *   and a request in flight is abandoned.
  * - Clock: a persisted instant more than 24 h ahead is clamped to now + 24 h.
  */
 import { randomUUID } from 'node:crypto';
@@ -60,7 +65,7 @@ function parseDocument(raw) {
         value.refusals !== undefined && Number.isInteger(value.refusals.count) && value.refusals.count >= 0 &&
         (value.refusals.retry_at === null || isInstant(value.refusals.retry_at)) &&
         (value.cohort === null || (value.cohort !== undefined && typeof value.cohort.open === 'boolean' &&
-            (value.cohort.tail === null || isPoint(value.cohort.tail)))) &&
+            Number.isInteger(value.cohort.remaining) && value.cohort.remaining >= 0)) &&
         typeof value.startup_pending === 'boolean' &&
         (value.debounce_at === null || isInstant(value.debounce_at));
     if (!valid)
@@ -80,17 +85,40 @@ function rows(db, generation) {
         .all(generation);
 }
 const later = (a, b) => a === null ? b : b === null ? a : comparePoints(a, b) >= 0 ? a : b;
+export class EngineStoppedError extends Error {
+    constructor() { super('The push engine stopped'); this.name = 'EngineStoppedError'; }
+}
 export class PushEngine {
     deps;
     chain = Promise.resolve();
     scanning = null;
     rescan = false;
+    halt = new AbortController();
+    halted;
     constructor(deps) {
         this.deps = deps;
+        this.halted = new Promise((_, reject) => {
+            this.halt.signal.addEventListener('abort', () => reject(new EngineStoppedError()), { once: true });
+        });
+        this.halted.catch(() => { });
     }
-    /** Transitions and their emits run one at a time, in order. */
+    get stopped() { return this.halt.signal.aborted; }
+    /** One cancellation for everything: no later transition, merge or request, and a request in flight is abandoned. */
+    stop() { this.halt.abort(); }
+    /** A network read that stop() abandons at once. */
+    network(request) {
+        if (this.stopped)
+            return Promise.reject(new EngineStoppedError());
+        request.catch(() => { }); // an abandoned request may still fail later
+        return Promise.race([request, this.halted]);
+    }
+    /** Transitions and their emits run one at a time, in order; none starts after stop(). */
     serial(step) {
-        const result = this.chain.then(step);
+        const result = this.chain.then(() => {
+            if (this.stopped)
+                throw new EngineStoppedError();
+            return step();
+        });
         this.chain = result.catch(() => { });
         return result;
     }
@@ -112,23 +140,34 @@ export class PushEngine {
             doc.debounce_at = limit;
     }
     /**
-     * Start of a run: capture the startup cohort. The server head is read
-     * outside any transaction; an open cohort from an interrupted run keeps its
-     * tail, so the target never moves forward.
+     * Start of a run: capture the startup cohort with one bounded request (the
+     * number of entries beyond the scan position). An open cohort from an
+     * interrupted run keeps its remaining count, so the target never moves
+     * forward. Must run before the first discovery.
      */
-    async start(head) {
-        await this.serial(() => this.transact((db, generation) => {
+    async captureCohort() {
+        const cursor = await this.serial(() => this.transact((db, generation) => {
             const doc = loadDocument(db, generation);
-            if (!doc.cohort?.open) {
-                const delivery = loadDelivery(db, generation);
-                if (!delivery)
-                    throw new Error('Representative delivery state is missing for the current generation');
-                const reached = later(doc.frontier, scanStart(delivery).floor);
-                doc.cohort = head && comparePoints(head, reached) > 0 ? { tail: head, open: true } : { tail: null, open: false };
+            if (doc.cohort?.open)
+                return undefined; // resume the stored target: no request
+            const delivery = loadDelivery(db, generation);
+            if (!delivery)
+                throw new Error('Representative delivery state is missing for the current generation');
+            return later(doc.frontier, scanStart(delivery).cursor);
+        }));
+        if (cursor !== undefined) {
+            const probe = await this.network(this.deps.backend.readAfter(cursor, 1));
+            // Without behind_by the size is unknown: no gate, normal fairness only.
+            const count = probe.behind_by === undefined ? 0 : probe.entries.length + probe.behind_by;
+            await this.serial(() => this.transact((db, generation) => {
+                const doc = loadDocument(db, generation);
+                if (doc.cohort?.open)
+                    return;
+                doc.cohort = { remaining: count, open: count > 0 };
                 doc.startup_pending = false;
                 saveDocument(db, generation, doc);
-            }
-        }));
+            }));
+        }
         return this.summary();
     }
     async summary() {
@@ -165,10 +204,10 @@ export class PushEngine {
             return later(loadDocument(db, generation).frontier, scanStart(delivery).cursor);
         }));
         for (let page = 1;; page += 1) {
-            const result = await this.deps.backend.readAfter(cursor, DISCOVERY_PAGE);
+            const result = await this.network(this.deps.backend.readAfter(cursor, DISCOVERY_PAGE));
             const tail = result.entries.at(-1);
             const tailPoint = tail ? { id: tail.id, created_at: tail.created_at } : null;
-            await this.serial(() => this.transact((db, generation, now) => this.merge(db, generation, now, result.entries, tailPoint)));
+            await this.serial(() => this.transact((db, generation, now) => this.merge(db, generation, now, result.entries, tailPoint, result.has_more === true)));
             await this.deps.hooks?.betweenPages?.(page);
             await this.tick(); // fairness: a due wake fires between pages
             if (!result.has_more || !tailPoint)
@@ -176,7 +215,7 @@ export class PushEngine {
             cursor = tailPoint;
         }
     }
-    merge(db, generation, now, entries, tail) {
+    merge(db, generation, now, entries, tail, more) {
         const delivery = loadDelivery(db, generation);
         if (!delivery)
             throw new Error('Representative delivery state is missing for the current generation');
@@ -195,8 +234,10 @@ export class PushEngine {
         db.prepare(`DELETE FROM wake_replies WHERE generation = ? AND (created_at < ? OR (created_at = ? AND entry_id <= ?))`)
             .run(generation, floor.created_at, floor.created_at, floor.id);
         doc.frontier = later(doc.frontier, tail);
-        if (doc.cohort?.open && (!doc.cohort.tail || (doc.frontier && comparePoints(doc.frontier, doc.cohort.tail) >= 0))) {
-            // The startup scan reached the captured head: one startup batch, now.
+        if (doc.cohort?.open)
+            doc.cohort.remaining = Math.max(doc.cohort.remaining - entries.length, 0);
+        if (doc.cohort?.open && (doc.cohort.remaining === 0 || !more)) {
+            // The startup scan covered the log as it was at capture: one startup batch, now.
             doc.cohort.open = false;
             doc.startup_pending = rows(db, generation).length > 0;
             doc.debounce_at = null;
@@ -213,6 +254,8 @@ export class PushEngine {
      * written to the host.
      */
     tick() {
+        if (this.stopped)
+            return Promise.resolve(null);
         return this.serial(async () => {
             const wake = await this.transact((db, generation, now) => {
                 const doc = loadDocument(db, generation);
@@ -275,10 +318,17 @@ export class PushEngine {
      */
     ack(line) {
         const parsed = parseAck(line);
-        if (!parsed)
+        if (!parsed || this.stopped)
             return Promise.resolve('ignored');
         return this.serial(() => this.transact((db, generation, now) => {
             const doc = loadDocument(db, generation);
+            if (doc.outstanding && doc.outstanding.deadline <= now.toISOString()) {
+                // The deadline is absolute: an ack after it is late, whenever the
+                // timer runs. The batch times out and its attempt stays counted.
+                doc.outstanding = null;
+                saveDocument(db, generation, doc);
+                return 'ignored';
+            }
             if (!doc.outstanding || doc.outstanding.batch !== parsed.wake_id)
                 return 'ignored';
             if (parsed.accepted) {
