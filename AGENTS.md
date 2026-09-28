@@ -2,7 +2,7 @@
 
 ## Setup And Checks
 
-- Use Node.js 22.12+. `build`, `check`, `dev`, `test:unit` and `test:release` run `scripts/node-preflight.mjs` first and fail fast on an older runtime; `clean`, `start`, `onboarding:smoke` and the `verify:*` scripts invoke node directly and do not.
+- Use Node.js 22.13+ (the first release with unflagged `node:sqlite`, which the representative state uses). `build`, `check`, `dev`, `test:unit` and `test:release` run `scripts/node-preflight.mjs` first and fail fast on an older runtime; `clean`, `start`, `onboarding:smoke` and the `verify:*` scripts invoke node directly and do not.
 - Install with `npm ci`.
 - **`dist/` is generated output and it is TRACKED IN GIT** — 464 files, listed in `files`, with no `.gitignore` rule. Never hand-edit it: run `npm run build` and commit the result. `publish.yml` rebuilds it and then runs `git diff --exit-code -- dist`, so committed output that does not match a fresh build fails the release.
 - Run one test file with `npx vitest run test/<name>.test.ts`, or one named test with `-t '<test name>'`.

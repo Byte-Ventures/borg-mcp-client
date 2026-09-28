@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import { mkdir, open, rename, unlink, writeFile } from './guarded-fs.js';
 import { dirname, join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 import type { AgentSessionIdentity } from './agent-session-identity.js';

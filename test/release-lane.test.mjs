@@ -383,7 +383,7 @@ async function validPackage(directory) {
       url: 'git+https://github.com/Byte-Ventures/borg-mcp-client.git',
     },
     publishConfig: { access: 'public' },
-    engines: { node: '>=22.12.0' },
+    engines: { node: '>=22.13.0' },
     main: './dist/index.js',
     types: './dist/index.d.ts',
     exports: {

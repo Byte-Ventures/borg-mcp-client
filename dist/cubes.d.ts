@@ -14,7 +14,7 @@
  * SessionStart hook firing borg-regen) don't need BORG_API_URL in their env
  * to know which worker to talk to.
  */
-import { rename, unlink, writeFile } from 'node:fs/promises';
+import { rename, unlink, writeFile } from './guarded-fs.js';
 import { type SeatObservation, type SeatOperation } from './seats.js';
 /** Re-exported from seats.ts for call-site parity (the retired cross-store name). */
 export type { SeatExpectation as ExpectedBinding } from './seats.js';

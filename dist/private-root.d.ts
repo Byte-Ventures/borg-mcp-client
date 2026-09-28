@@ -7,6 +7,7 @@
 export declare const BORG_STATE_ROOT_ENV = "BORG_STATE_ROOT";
 /** Return whether a path and every existing ancestor are free of symlinks. */
 export declare function isCanonicalPath(root: string): boolean;
+export { TEST_ALLOWED_ROOTS_ENV, TEST_FORBIDDEN_HOME_ENV, TestIsolationError } from './guarded-fs.js';
 /** Resolve the effective home root used by all Borg-owned local state. */
 export declare function borgHomeRoot(env?: NodeJS.ProcessEnv): string;
 export declare const borgConfigRoot: () => string;

@@ -33,7 +33,7 @@ import {
   type LiveInboxMonitor,
 } from './seat-reattach-guard.js';
 import { resolveLaunchEnv } from './model-presets.js';
-import { unlinkSync } from 'node:fs';
+import { unlinkSync } from './guarded-fs.js';
 import {
   gcOrphanInboxesForCube,
   defaultListInboxLogs,

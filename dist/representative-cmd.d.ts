@@ -35,6 +35,8 @@ export type RepresentativeCommand = {
     worktree?: string;
     replayAfter?: string;
 } | {
+    action: 'reset-state';
+} | {
     action: 'hermes-plugin-install';
     hermesHome?: string;
     force: boolean;
@@ -68,8 +70,15 @@ export interface RepresentativeCmdDeps {
     stderr(text: string): void;
 }
 export declare function parseRepresentativeArgs(args: readonly string[]): ParsedRepresentativeArgs;
-/** Load the saved binding and prove the worktree's hydrated seat is still that exact seat. Fails closed. */
-export declare function resolveRepresentativeContext(worktree: string, deps: Pick<RepresentativeCmdDeps, 'hydrateSeat' | 'backendFor' | 'store'>): Promise<RepresentativeContext>;
+/**
+ * Load the saved binding and prove the worktree's hydrated seat is still that
+ * exact seat. Fails closed. `initialize` creates the state first when none
+ * exists (mcp and listen; the first generation imports 5.x bindings once);
+ * status never creates anything.
+ */
+export declare function resolveRepresentativeContext(worktree: string, deps: Pick<RepresentativeCmdDeps, 'hydrateSeat' | 'backendFor' | 'store'>, options?: {
+    initialize?: boolean;
+}): Promise<RepresentativeContext>;
 export declare function hermesConfigSnippet(worktree: string): string;
 export declare function runRepresentativePrepare(command: Extract<RepresentativeCommand, {
     action: 'prepare';
@@ -89,9 +98,14 @@ export declare function runRepresentativeMcp(command: Extract<RepresentativeComm
     pinSeat?: (active: ActiveCube) => void;
     stdin?: Readable;
     stdout?: Writable;
-    heartbeatIntervalMs?: number;
 }): Promise<number>;
 export declare function buildDefaultRepresentativeDeps(): Promise<RepresentativeCmdDeps>;
+/**
+ * Disaster recovery for a corrupt representative state database. Refuses on a
+ * healthy database; otherwise publishes a new generation with the salvageable
+ * bindings and reports exactly what was lost.
+ */
+export declare function runRepresentativeResetState(deps: Pick<RepresentativeCmdDeps, 'stdout' | 'stderr'>, reset?: () => Promise<import('./representative-db.js').ResetReport>): Promise<number>;
 export declare function runRepresentativeListen(command: Extract<RepresentativeCommand, {
     action: 'listen';
 }>, deps: RepresentativeCmdDeps, options?: import('./representative-listener.js').ListenerOptions): Promise<number>;

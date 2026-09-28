@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+import { fs } from './guarded-fs.js';
 import path from 'node:path';
 import { evaluateLogAudit } from './log-audit-core.js';
 import { borgHomeRoot, isCanonicalPath } from './private-root.js';

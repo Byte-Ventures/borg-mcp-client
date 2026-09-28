@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, readFile, stat } from 'node:fs/promises';
+import { mkdir, open, rename, unlink, writeFile } from './guarded-fs.js';
 import { dirname, join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 const CURSOR_FILE = join(borgConfigRoot(), 'local-server-cursors.json');

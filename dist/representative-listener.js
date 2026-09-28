@@ -1,10 +1,9 @@
-/** Supervised body-free wake channel; independent of the lazy MCP tools lease. */
+/** Supervised body-free wake channel with its own exclusive listener lease. */
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
-import { borgConfigRoot } from './private-root.js';
+import { borgConfigRoot, borgHomeRoot } from './private-root.js';
 import { acquireStreamLease, readOwnershipSnapshot, STREAM_OWNER_STALE_MS } from './stream-owner.js';
-import { representativeOwnerDeps } from './representative-owner.js';
 import { createListenerInbox } from './representative-listener-store.js';
 import { streamOnce, streamReconnectDelay } from './log-stream.js';
 import { resolveRepresentativeContext } from './representative-cmd.js';
@@ -16,7 +15,11 @@ import { RepresentativeError, verifyLiveBinding } from './representative-core.js
 import { bindingFingerprint } from './representative-store.js';
 function listenerOwnerDeps(binding) {
     const authority = createHash('sha256').update(JSON.stringify([binding.origin, binding.trustIdentity])).digest('hex');
-    return { ...representativeOwnerDeps(binding), locksDir: join(borgConfigRoot(), 'representative-listener-locks', authority) };
+    return {
+        locksDir: join(borgConfigRoot(), 'representative-listener-locks', authority),
+        privateRoot: { root: borgConfigRoot(), boundary: borgHomeRoot() },
+        worktree: binding.worktree, droneLabel: binding.representativeLabel, cubeName: binding.cubeName,
+    };
 }
 export async function representativeListenerStatus(binding) {
     const ownership = await readOwnershipSnapshot(binding.cubeId, binding.representativeDroneId, listenerOwnerDeps(binding));
@@ -83,7 +86,7 @@ export async function runListener(command, deps, options = {}) {
         }
         catch { /* resolve refuses missing bindings */ }
         worktree = deps.findProjectRoot(worktree);
-        const ctx = await resolveRepresentativeContext(worktree, deps);
+        const ctx = await resolveRepresentativeContext(worktree, deps, { initialize: true });
         // Only this server step maps transport failures to SERVER_UNREACHABLE; typed
         // rejections keep their binding codes and storage keeps STORAGE_REFUSED.
         await verifyLiveBinding(ctx).catch((error) => {

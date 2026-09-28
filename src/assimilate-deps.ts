@@ -10,7 +10,8 @@
 
 import { spawnSync, spawn as spawnChild } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { mkdirSync } from './guarded-fs.js';
 import { hostname as osHostname } from 'node:os';
 import { createInterface } from 'node:readline/promises';
 import prompts from 'prompts';

@@ -13,6 +13,7 @@
  */
 import type { Readable, Writable } from 'node:stream';
 import { type RepresentativeContext } from './representative-core.js';
+import { RepresentativeStateError } from './representative-db.js';
 export declare const REPRESENTATIVE_TOOL_NAMES: readonly ["borg_representative-status", "borg_representative-send", "borg_representative-read", "borg_representative-deliver", "borg_representative-ack"];
 export declare const REPRESENTATIVE_INSTRUCTIONS: string;
 export interface ServeRepresentativeOptions {
@@ -20,15 +21,17 @@ export interface ServeRepresentativeOptions {
     context: () => Promise<RepresentativeContext>;
     /**
      * The binding generation this process started with. Every call except status
-     * refuses with BINDING_MISMATCH, before any lease, ledger, checkpoint, cursor
-     * or network activity, once the saved binding's fingerprint differs.
+     * refuses with BINDING_MISMATCH, before any ledger, delivery or network
+     * activity, once the saved binding's fingerprint differs.
      */
     pinnedFingerprint?: string;
     version: string;
     stdin?: Readable;
     stdout?: Writable;
-    /** Internal timing seam for heartbeat controls; production uses 20 seconds. */
-    heartbeatIntervalMs?: number;
+    /** Called once on shutdown (closes the state database handle). */
+    onClose?: () => void;
+    /** Status body when the context cannot be resolved because the state database is unusable. */
+    stateProblemStatus?: (error: RepresentativeStateError) => unknown;
 }
 export declare function serveRepresentativeMcp(options: ServeRepresentativeOptions): Promise<{
     close: () => Promise<void>;

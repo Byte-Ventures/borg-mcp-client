@@ -1,13 +1,11 @@
 /**
- * Slice 2 delivery semantics: replayable bounded read, explicit deliver
- * checkpoint, migration from the client unread cursor, binding fingerprint.
+ * Delivery semantics: replayable bounded read, explicit deliver checkpoint,
+ * the 6.0 start rule over 5.x inputs, binding fingerprint.
  * Backend evidence is the controlled in-memory mock, not a real Borg server.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { chmodSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BUILDER_ID, COORD_ID, MockCube, REP_ID, bindingFor } from './fixtures/representative-mock-backend.js';
@@ -19,8 +17,12 @@ import {
   serializeRepresentativeResult,
   type RepresentativeContext,
 } from '../src/representative-core.js';
-import { bindingFingerprint, createRepresentativeStore } from '../src/representative-store.js';
-import { deliveryPaths } from '../src/representative-delivery-store.js';
+import { bindingFingerprint, createRepresentativeStore, type RepresentativeBinding } from '../src/representative-store.js';
+import { representativeStateRoot } from '../src/representative-db.js';
+import {
+  configRoot, deliveryRow, plantLegacyBindings, legacyDeliveryRoot, plantLegacyCheckpoint, plantLegacyTombstone, privateTree, returnedRows,
+  seatHash, withStateDb,
+} from './fixtures/representative-state.js';
 
 const originalHome = process.env.HOME;
 const originalStateRoot = process.env.BORG_STATE_ROOT;
@@ -29,24 +31,29 @@ let root: string;
 let cube: MockCube;
 
 function context(binding = bindingFor(WORKTREE)): RepresentativeContext {
-  return { binding, backend: cube.backend(), store: createRepresentativeStore(join(root, '.config', 'borgmcp', 'representative.json')) };
+  return { binding, backend: cube.backend(), store: createRepresentativeStore() };
+}
+/** `borg representative prepare` for this binding: a 6.x-prepared binding row. */
+async function prepare(binding = bindingFor(WORKTREE), rebind = false): Promise<RepresentativeContext> {
+  const store = createRepresentativeStore();
+  await store.saveBinding(binding, { rebind });
+  store.state.close();
+  return context(binding);
 }
 const toRep = (message = 'reply') => cube.post(COORD_ID, message, [REP_ID]);
 const ids = (result: { replies: Array<{ entry_id: string }> }) => result.replies.map((reply) => reply.entry_id);
+const statMode = (path: string) => lstatSync(path).mode & 0o777;
 async function codeOf(promise: Promise<unknown>): Promise<string> {
   try { await promise; return 'NO_ERROR'; } catch (error) { return (error as { code?: string }).code ?? 'UNTYPED'; }
 }
-function deliveryFiles(): string[] {
-  const base = join(root, '.config', 'borgmcp', 'representative-delivery');
-  try { return readdirSync(base).flatMap((dir) => readdirSync(join(base, dir)).map((file) => join(base, dir, file))); }
-  catch { return []; }
-}
+const point = (entry: { id: string; created_at: string }) => ({ id: entry.id, created_at: entry.created_at });
 
-beforeEach(() => {
+beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-representative-delivery-')));
   process.env.HOME = root;
   process.env.BORG_STATE_ROOT = root;
   cube = new MockCube();
+  await prepare();
 });
 afterEach(() => {
   if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome;
@@ -111,14 +118,11 @@ describe('replayable read and deliver', () => {
     const ctx = context();
     await readRepresentativeReplies(ctx, {}); // returned a, b; readThrough b
     const e = toRep('never returned');
-    const file = deliveryFiles().find((path) => path.endsWith('checkpoint.json'))!;
-    const data = JSON.parse(readFileSync(file, 'utf8'));
-    data.returned.push({ id: e.id, created_at: a.created_at }); // e's id inside the window, with a forged earlier time
-    writeFileSync(file, JSON.stringify(data));
+    // e's id inside the window, with a forged earlier time
+    withStateDb((db) => db.prepare('INSERT INTO returned (generation, entry_id, created_at) VALUES (?, ?, ?)')
+      .run(bindingFingerprint(ctx.binding), e.id, a.created_at));
     expect(await codeOf(deliverRepresentativeReplies(ctx, { through: e.id }))).toBe('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY');
-    const after = JSON.parse(readFileSync(file, 'utf8'));
-    expect(after.checkpoint).toBeNull();
-    expect(after.readThrough).toEqual({ id: b.id, created_at: b.created_at });
+    expect(deliveryRow(ctx.binding)).toMatchObject({ checkpoint_id: null, read_through_id: b.id, read_through_at: b.created_at });
   });
 
   it('treats the same or an older id as a no-op', async () => {
@@ -150,14 +154,14 @@ describe('replayable read and deliver', () => {
     expect(ids(await readRepresentativeReplies(context(), {}))).toEqual([entries[2].id]);
   });
 
-  it('never advances the client unread cursor, the server ack or any other state on read', async () => {
+  it('never advances the server ack, the checkpoint or any server state on read', async () => {
     toRep('a');
-    cube.unreadCursorValue = null;
     const ctx = context();
     await readRepresentativeReplies(ctx, {});
     await readRepresentativeReplies(ctx, {});
     expect(cube.acks).toEqual([]);
-    expect(cube.calls.filter((call) => !['whoami', 'roster', 'readAfter', 'unreadCursor'].includes(call))).toEqual([]);
+    expect(cube.calls.filter((call) => !['whoami', 'roster', 'readAfter'].includes(call))).toEqual([]);
+    expect(deliveryRow(ctx.binding)).toMatchObject({ checkpoint_id: null });
   });
 
   it('never moves the checkpoint backwards when a read overlaps a deliver in the same process', async () => {
@@ -198,30 +202,36 @@ describe('replayable read and deliver', () => {
     expect(await first).toMatchObject({ advanced: false, checkpoint: { entry_id: entry.id } });
   });
 
-  it('stores the checkpoint privately, without message text', async () => {
+  it('stores delivery state privately in the state database, without message text', async () => {
     const entry = toRep('PRIVATE_MESSAGE_SENTINEL');
     const ctx = context();
     await readRepresentativeReplies(ctx, {});
     await deliverRepresentativeReplies(ctx, { through: entry.id });
-    const files = deliveryFiles();
-    // The generation's checkpoint and the seat's migration marker.
-    expect(files.map((file) => file.split('/').at(-1)).sort()).toEqual(['checkpoint.json', 'migration.json']);
+    expect(deliveryRow(ctx.binding)).toMatchObject({ checkpoint_id: entry.id, start_kind: 'binding' });
+    const stateRoot = representativeStateRoot();
+    const generations = readdirSync(stateRoot).filter((name) => name.startsWith('g'));
+    expect(generations).toHaveLength(1);
+    for (const directory of [stateRoot, join(stateRoot, generations[0])]) expect(statMode(directory)).toBe(0o700);
+    const files = [join(stateRoot, 'CURRENT'), join(stateRoot, 'publish.sqlite'),
+      ...readdirSync(join(stateRoot, generations[0])).map((name) => join(stateRoot, generations[0], name))];
     for (const file of files) {
-      expect(statSync(file).mode & 0o777).toBe(0o600);
-      expect(statSync(join(file, '..')).mode & 0o777).toBe(0o700);
-      expect(readFileSync(file, 'utf8')).not.toContain('PRIVATE_MESSAGE_SENTINEL');
-      expect(readFileSync(file, 'utf8')).not.toContain(WORKTREE);
+      expect(statMode(file)).toBe(0o600);
+      expect(readFileSync(file).includes('PRIVATE_MESSAGE_SENTINEL')).toBe(false);
     }
+    // No 5.x delivery files are ever written.
+    expect(() => readdirSync(legacyDeliveryRoot(root))).toThrow();
   });
 
-  it('refuses before writing when the continuation guard fails', async () => {
+  it('refuses deliver for a generation the operator rebound, changing nothing', async () => {
     const entry = toRep('a');
     const ctx = context();
     await readRepresentativeReplies(ctx, {});
-    const before = deliveryFiles().map((file) => readFileSync(file, 'utf8'));
-    const guarded = { ...ctx, guard: async () => { throw Object.assign(new Error('owner lost'), { code: 'REPRESENTATIVE_OWNERSHIP_REQUIRED' }); } };
-    expect(await codeOf(deliverRepresentativeReplies(guarded, { through: entry.id }))).toBe('REPRESENTATIVE_OWNERSHIP_REQUIRED');
-    expect(deliveryFiles().map((file) => readFileSync(file, 'utf8'))).toEqual(before);
+    const rebound = bindingFor(WORKTREE, { boundAt: '2026-06-01T00:00:00.000Z' });
+    await prepare(rebound, true);
+    expect(await codeOf(deliverRepresentativeReplies(ctx, { through: entry.id }))).toBe('BINDING_MISMATCH');
+    expect(await codeOf(readRepresentativeReplies(ctx, {}))).toBe('BINDING_MISMATCH');
+    expect(deliveryRow(ctx.binding)).toMatchObject({ checkpoint_id: null });
+    expect(deliveryRow(rebound)).toBeUndefined();
   });
 });
 
@@ -311,23 +321,22 @@ describe('bounds', () => {
     expect(error?.code).toBe('REPRESENTATIVE_READ_OVERSIZE');
     expect(error.details).toMatchObject({ entry_id: huge.id, bound: 16384 });
     expect(error.details.measured_bytes).toBeGreaterThan(16384);
-    expect(deliveryFiles()).toEqual([]); // nothing advanced, nothing written
+    expect(deliveryRow(ctx.binding)).toMatchObject({ checkpoint_id: null, read_through_id: null }); // nothing advanced
+    expect(returnedRows(ctx.binding)).toEqual([]);
     expect(await codeOf(deliverRepresentativeReplies(ctx, { through: huge.id }))).toBe('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY');
     const result = await readRepresentativeReplies(ctx, { max_bytes: 60000 });
     expect(ids(result)).toEqual([huge.id]);
     expect(Buffer.byteLength(serializeRepresentativeResult(result))).toBeLessThanOrEqual(60000);
   });
 
-  it.each([false, true])('writes nothing before an oversize refusal on the first call (legacy cursor present: %s)', async (legacy) => {
-    if (legacy) {
-      const read = toRep('read before upgrade');
-      cube.unreadCursorValue = { id: read.id, created_at: read.created_at };
-    }
-    const huge = toRep('h'.repeat(20000)); // the first unread reply after the start
-    const error = await readRepresentativeReplies(context(), { max_bytes: 4096 }).then(() => null, (e) => e);
+  it('widens no read fence before an oversize refusal on the first call', async () => {
+    const huge = toRep('h'.repeat(20000)); // the first reply after the binding start
+    const ctx = context();
+    const error = await readRepresentativeReplies(ctx, { max_bytes: 4096 }).then(() => null, (e) => e);
     expect(error?.code).toBe('REPRESENTATIVE_READ_OVERSIZE');
     expect(error.details.entry_id).toBe(huge.id);
-    expect(deliveryFiles()).toEqual([]); // no tombstone, no checkpoint, no fence
+    expect(deliveryRow(ctx.binding)).toMatchObject({ start_kind: 'binding', checkpoint_id: null, read_through_id: null });
+    expect(returnedRows(ctx.binding)).toEqual([]);
   });
 
   it('reports the envelope floor in status', async () => {
@@ -355,152 +364,6 @@ describe('bounds', () => {
       await deliverRepresentativeReplies(ctx, { through: result.replies.at(-1)!.entry_id });
     }
     expect(seen).toEqual(entries.map((entry) => entry.id).sort());
-  });
-});
-
-describe('migration from the client unread cursor', () => {
-  it('replays exactly the replies unread at upgrade time', async () => {
-    const read = [toRep('read before upgrade 1'), toRep('read before upgrade 2')];
-    cube.unreadCursorValue = { id: read[1].id, created_at: read[1].created_at };
-    const unread = [toRep('unread 1'), toRep('unread 2')];
-    const result = await readRepresentativeReplies(context(), {});
-    expect(ids(result)).toEqual(unread.map((entry) => entry.id));
-    expect(result.checkpoint).toEqual({ entry_id: read[1].id, created_at: read[1].created_at });
-  });
-
-  it('survives a crash between reading the cursor and persisting the checkpoint', async () => {
-    const read = toRep('already read');
-    cube.unreadCursorValue = { id: read.id, created_at: read.created_at };
-    const unread = [toRep('u1'), toRep('u2')];
-    // The guard runs immediately before the bootstrap write: failing it models a crash there.
-    const crashed = { ...context(), guard: async () => { throw new Error('killed before persisting'); } };
-    expect(await codeOf(readRepresentativeReplies(crashed, {}))).not.toBe('NO_ERROR');
-    expect(cube.calls).toContain('unreadCursor');
-    expect(deliveryFiles()).toEqual([]);
-    expect(ids(await readRepresentativeReplies(context(), {}))).toEqual(unread.map((entry) => entry.id));
-    // Once persisted, a later change of the old cursor no longer matters.
-    cube.unreadCursorValue = null;
-    expect(ids(await readRepresentativeReplies(context(), {}))).toEqual(unread.map((entry) => entry.id));
-  });
-
-  it('reads the production migration input from the seat\'s own client unread cursor, read-only', async () => {
-    // local-server-cursor resolves its file at import time: import only after isolating the root.
-    vi.resetModules();
-    const cursors = await import('../src/local-server-cursor.js');
-    const { createSeatBackend } = await import('../src/representative-core.js');
-    const binding = bindingFor(WORKTREE);
-    const seat = { origin: binding.origin, trustIdentity: binding.trustIdentity, cubeId: binding.cubeId, droneId: REP_ID };
-    const point = { id: '12345678-1234-4123-8123-123456789abc', created_at: '2026-03-01T00:00:00.000Z' };
-    await cursors.advanceLocalServerCursor(seat, point);
-    await cursors.advanceLocalServerCursor({ ...seat, droneId: BUILDER_ID }, { ...point, id: '87654321-4321-4321-8321-cba987654321' });
-    chmodSync(join(root, '.config', 'borgmcp'), 0o700); // a prepared install's private root
-    const file = join(root, '.config', 'borgmcp', 'local-server-cursors.json');
-    const before = readFileSync(file, 'utf8');
-    const backend = await createSeatBackend({ cubeId: binding.cubeId, droneId: REP_ID, apiUrl: binding.origin,
-      serverTrustIdentity: binding.trustIdentity, sessionToken: 'fixture-only' } as never);
-    expect(await backend.unreadCursor()).toEqual(point);
-    expect(readFileSync(file, 'utf8')).toBe(before);
-  });
-
-  it('does not import the unread cursor into a new generation after any generation has a checkpoint', async () => {
-    const old = toRep('old generation read this');
-    cube.unreadCursorValue = { id: old.id, created_at: old.created_at };
-    const later = toRep('later');
-    await readRepresentativeReplies(context(), {}); // the one-time upgrade bootstrap for this seat
-    const rebound = context(bindingFor(WORKTREE, { boundAt: '2026-06-01T00:00:00.000Z' }));
-    expect(ids(await readRepresentativeReplies(rebound, {}))).toEqual([old.id, later.id]);
-    expect((await readRepresentativeReplies(rebound, {})).checkpoint).toEqual({ entry_id: null, created_at: null });
-  });
-
-  it('replays a changed Coordinator\'s addressed history from before the old unread cursor after a rebind', async () => {
-    const otherId = '77777777-7777-4777-8777-777777777777';
-    cube.drones.push({ id: otherId, label: 'coordinator-2', role_id: cube.drones.find((d) => d.id === COORD_ID)!.role_id });
-    const hidden = cube.post(otherId, 'new Coordinator historical reply', [REP_ID]);
-    const old = toRep('old Coordinator read watermark');
-    cube.unreadCursorValue = { id: old.id, created_at: old.created_at };
-    await readRepresentativeReplies(context(), {}); // the old binding generation upgraded first
-    const ctx = context(bindingFor(WORKTREE, {
-      coordinatorDroneId: otherId, coordinatorLabel: 'coordinator-2', boundAt: '2026-06-01T00:00:00.000Z',
-    }));
-    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([hidden.id]);
-  });
-
-  it('bootstraps from the unread cursor only for its own seat: another seat\'s checkpoint does not count', async () => {
-    const read = toRep('read before upgrade');
-    cube.unreadCursorValue = { id: read.id, created_at: read.created_at };
-    const unread = toRep('unread');
-    const otherSeat = context(bindingFor(WORKTREE, { trustIdentity: 'sha256:another-authority' }));
-    await readRepresentativeReplies(otherSeat, {});
-    expect(ids(await readRepresentativeReplies(context(), {}))).toEqual([unread.id]);
-  });
-
-  it('replays after an upgrade interrupted between the marker and the checkpoint, never re-reading the legacy cursor', async () => {
-    const read = toRep('read before upgrade');
-    cube.unreadCursorValue = { id: read.id, created_at: read.created_at };
-    const unread = toRep('unread at upgrade');
-    let writes = 0;
-    // The first guarded write (the marker) succeeds; the checkpoint write "crashes".
-    const crashed = { ...context(), guard: async () => { if (++writes === 2) throw new Error('killed after the marker'); } };
-    expect(await codeOf(readRepresentativeReplies(crashed, {}))).not.toBe('NO_ERROR');
-    expect(deliveryFiles().map((file) => file.split('/').at(-1))).toEqual(['migration.json']);
-    const calls = cube.calls.filter((call) => call === 'unreadCursor').length;
-    // A replay of the already-read reply (a duplicate the host dedupes), never a skip.
-    expect(ids(await readRepresentativeReplies(context(), {}))).toEqual([read.id, unread.id]);
-    expect(cube.calls.filter((call) => call === 'unreadCursor')).toHaveLength(calls);
-  });
-
-  it.each([true, false])('treats a planted migration marker (complete %s) as a tombstone: its cursor is never used', async (complete) => {
-    const entry = toRep('never read or delivered');
-    const binding = bindingFor(WORKTREE);
-    const seat = createHash('sha256').update(JSON.stringify([binding.origin, binding.trustIdentity, binding.cubeId, binding.representativeDroneId])).digest('hex');
-    const directory = join(root, '.config', 'borgmcp', 'representative-delivery', `seat-${seat}`);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    for (let current = directory; current.startsWith(join(root, '.config')); current = join(current, '..')) chmodSync(current, 0o700);
-    writeFileSync(join(directory, 'migration.json'),
-      JSON.stringify({ version: 1, seat, cursor: { id: entry.id, created_at: entry.created_at }, complete }), { mode: 0o600 });
-    cube.unreadCursorValue = { id: entry.id, created_at: entry.created_at };
-    const result = await readRepresentativeReplies(context(), {});
-    expect(ids(result)).toEqual([entry.id]);
-    expect(result.checkpoint).toEqual({ entry_id: null, created_at: null });
-    expect(cube.calls).not.toContain('unreadCursor');
-  });
-
-  it('initializes once when two first reads overlap: one import, no checkpoint past an undelivered reply', async () => {
-    const entry = toRep('undelivered');
-    const ctx = context();
-    let entered!: () => void, release!: () => void;
-    const started = new Promise<void>((resolve) => { entered = resolve; });
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    let calls = 0;
-    ctx.backend.unreadCursor = async () => { calls += 1; if (calls === 1) { entered(); await held; } return null; };
-    const first = readRepresentativeReplies(ctx, {});
-    await started;
-    let secondDone = false;
-    const second = readRepresentativeReplies(ctx, {}).finally(() => { secondDone = true; });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(secondDone).toBe(false); // the second first-read waits for the initializer
-    // The old destructive cursor moves past the entry meanwhile; it must not be read again.
-    cube.unreadCursorValue = { id: entry.id, created_at: entry.created_at };
-    release();
-    expect(ids(await first)).toEqual([entry.id]);
-    expect(ids(await second)).toEqual([entry.id]);
-    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([entry.id]);
-    expect(calls).toBe(1);
-  });
-
-  it('starts a later generation empty after an upgrade interrupted between the marker and the checkpoint', async () => {
-    const entry = toRep('unread for the new generation');
-    const ctx = context();
-    cube.unreadCursorValue = { id: entry.id, created_at: entry.created_at };
-    let writes = 0;
-    await codeOf(readRepresentativeReplies({ ...ctx, guard: async () => { if (++writes === 2) throw new Error('crash'); } }, {}));
-    const next = context({ ...ctx.binding, boundAt: '2099-01-01T00:00:00.000Z' });
-    expect(ids(await readRepresentativeReplies(next, {}))).toEqual([entry.id]);
-  });
-
-  it('starts from the beginning when the binding never read', async () => {
-    const entries = [toRep('first'), toRep('second')];
-    expect(ids(await readRepresentativeReplies(context(), {}))).toEqual(entries.map((entry) => entry.id));
   });
 });
 
@@ -535,134 +398,200 @@ describe('binding fingerprint', () => {
     const ctx = context();
     await readRepresentativeReplies(ctx, {});
     await deliverRepresentativeReplies(ctx, { through: entry.id });
-    const rebound = context(bindingFor(WORKTREE, { boundAt: '2026-06-01T00:00:00.000Z' }));
-    expect(ids(await readRepresentativeReplies(rebound, {}))).toEqual([entry.id]);
+    // A rebind starts a new generation at its binding start: replies before it
+    // belong to the old generation, whose checkpoint is kept apart.
+    const rebound = await prepare(bindingFor(WORKTREE, { boundAt: '2026-06-01T00:00:00.000Z' }), true);
+    const later = cube.post(COORD_ID, 'after the rebind', [REP_ID], '2026-07-01T00:00:00.000Z');
+    expect(ids(await readRepresentativeReplies(rebound, {}))).toEqual([later.id]);
+    expect(deliveryRow(ctx.binding)).toMatchObject({ checkpoint_id: entry.id });
+    expect(deliveryRow(rebound.binding)).toMatchObject({ start_kind: 'binding', checkpoint_id: null });
   });
 });
 
-describe('hostile migration input and checkpoint files', () => {
-  const config = () => join(root, '.config', 'borgmcp');
-  const seatHash = (binding = bindingFor(WORKTREE)) => createHash('sha256').update(JSON.stringify([
-    binding.origin, binding.trustIdentity, binding.cubeId, binding.representativeDroneId,
-  ])).digest('hex');
-  const cursorKey = (binding = bindingFor(WORKTREE)) => createHash('sha256').update(binding.origin).update('\0')
-    .update(binding.trustIdentity).update('\0').update(binding.cubeId).update('\0').update(binding.representativeDroneId).digest('hex');
-  function privateTree(directory: string) {
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    for (let current = directory; current.startsWith(join(root, '.config')); current = join(current, '..')) chmodSync(current, 0o700);
-  }
-  // The production migration reader, over the mock log for everything else.
-  async function productionContext() {
-    vi.resetModules();
-    const core = await import('../src/representative-core.js');
-    const binding = bindingFor(WORKTREE);
-    const seat = await core.createSeatBackend({ cubeId: binding.cubeId, droneId: REP_ID, apiUrl: binding.origin,
-      serverTrustIdentity: binding.trustIdentity, sessionToken: 'fixture-only' } as never);
-    return { core, ctx: { ...context(binding), backend: { ...cube.backend(), unreadCursor: seat.unreadCursor } } };
-  }
-  const cursorFile = (entry: { id: string; created_at: string }) =>
-    JSON.stringify({ version: 1, cursors: { [cursorKey()]: { id: entry.id, created_at: entry.created_at } } });
+describe('the 6.0 start rule for a binding 5.x prepared', () => {
+  // No 6.x state at all: the worktree's binding comes from 5.x. The state's
+  // creation imports it with its start decided from the 5.x delivery files
+  // (a head start is resolved at first use, against this database).
+  let legacy: RepresentativeBinding;
+  beforeEach(() => {
+    // No 6.x state yet: the 5.x binding file is imported when the state is created.
+    rmSync(representativeStateRoot(), { recursive: true, force: true });
+    legacy = bindingFor(WORKTREE);
+    plantLegacyBindings(root, [legacy]);
+  });
+  const valid = (checkpoint: { id: string; created_at: string } | null, readThrough = checkpoint) =>
+    ({ version: 1, seat: seatHash(legacy), checkpoint, readThrough, returned: [] });
 
-  it.each(['symlink to an outside 0666 file', 'world-writable file', 'group-writable file'])(
-    'never imports a legacy unread cursor from a %s: the undelivered reply replays', async (kind) => {
-      const entry = toRep('never read or delivered');
-      privateTree(config());
-      const target = join(config(), 'local-server-cursors.json');
-      if (kind.startsWith('symlink')) {
-        const outside = join(root, 'outside-cursor.json');
-        writeFileSync(outside, cursorFile(entry)); chmodSync(outside, 0o666);
-        symlinkSync(outside, target);
-      } else {
-        writeFileSync(target, cursorFile(entry)); chmodSync(target, kind.startsWith('world') ? 0o666 : 0o620);
-      }
-      const { core, ctx } = await productionContext();
-      const result = await core.readRepresentativeReplies(ctx, {});
-      expect(ids(result)).toEqual([entry.id]);
-      expect(result.checkpoint).toEqual({ entry_id: null, created_at: null });
-    });
-
-  it.each([0o600, 0o644])('still imports a genuine private cursor file of mode %o', async (mode) => {
-    const read = toRep('read before upgrade');
-    const unread = toRep('unread at upgrade');
-    privateTree(config());
-    const target = join(config(), 'local-server-cursors.json');
-    writeFileSync(target, cursorFile(read)); chmodSync(target, mode);
-    const { core, ctx } = await productionContext();
-    expect(ids(await core.readRepresentativeReplies(ctx, {}))).toEqual([unread.id]);
+  it('starts at the server head when 5.x left no delivery history and the database has none for the seat', async () => {
+    toRep('before the upgrade 1'); toRep('before the upgrade 2');
+    const ctx = context(legacy);
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([]);
+    const after = toRep('after the upgrade');
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([after.id]);
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'head' });
+    expect(withStateDb((db) => db.prepare('SELECT origin FROM bindings WHERE worktree = ?').get(WORKTREE))).toEqual({ origin: 'legacy' });
   });
 
-  it('never blocks on a planted FIFO in place of the legacy cursor file', () => {
-    privateTree(config());
-    execFileSync('mkfifo', ['-m', '600', join(config(), 'local-server-cursors.json')]);
-    const payload = `
-      const { createSeatBackend } = await import(${JSON.stringify(join(process.cwd(), 'src', 'representative-core.ts'))});
-      const backend = await createSeatBackend({ apiUrl: 'https://127.0.0.1:65530', serverTrustIdentity: 'sha256:mock-server',
-        cubeId: '${bindingFor(WORKTREE).cubeId}', droneId: '${REP_ID}', sessionToken: 'fixture-only' });
-      console.log('RESULT', JSON.stringify(await backend.unreadCursor()));`;
-    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_')));
-    // Bounded: a blocking open would hang the child, which this timeout turns into a failure.
-    const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', payload],
-      { env: { ...env, HOME: root, BORG_STATE_ROOT: root }, timeout: 15_000, encoding: 'utf8' });
-    expect(child.error).toBeUndefined();
-    expect(child.stdout).toContain('RESULT null');
-    expect(child.status).toBe(0);
+  it('starts at the binding start on an empty log', async () => {
+    const ctx = context(legacy);
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([]);
+    const first = toRep('first ever');
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([first.id]);
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'binding' });
   });
 
-  it.each(['another seat', 'a checkpoint beyond its read fence'])(
-    'replays from the start after the operator removes an invalid checkpoint of %s', async (kind) => {
-      const before = toRep('read before upgrade');
-      const after = toRep('unread at upgrade');
-      cube.unreadCursorValue = { id: before.id, created_at: before.created_at };
-      const ctx = context();
-      expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([after.id]); // the one-time upgrade
-      const file = deliveryFiles().find((path) => path.endsWith('checkpoint.json'))!;
-      const data = JSON.parse(readFileSync(file, 'utf8'));
-      if (kind === 'another seat') data.seat = 'f'.repeat(64);
-      else { data.checkpoint = { id: after.id, created_at: after.created_at }; data.readThrough = null; }
-      writeFileSync(file, JSON.stringify(data));
-      expect((await representativeStatus(ctx)).checkpoint_problem?.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
-      unlinkSync(file);
-      expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([before.id, after.id]);
-    });
-
-  it('never loses a read-but-undelivered reply when recovery follows a later move of the old unread cursor', async () => {
-    const entry = toRep('read, not yet delivered');
-    const ctx = context();
-    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([entry.id]); // bootstrap with no legacy cursor
-    // An older version's destructive read later moves the legacy cursor past the entry.
-    cube.unreadCursorValue = { id: entry.id, created_at: entry.created_at };
-    const file = deliveryFiles().find((path) => path.endsWith('checkpoint.json'))!;
-    const data = JSON.parse(readFileSync(file, 'utf8')); data.seat = 'f'.repeat(64);
-    writeFileSync(file, JSON.stringify(data));
-    unlinkSync(file); // the documented recovery
-    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([entry.id]);
+  it('imports a valid non-null 5.x checkpoint and replays exactly the replies after it', async () => {
+    const delivered = [toRep('d1'), toRep('d2')];
+    const undelivered = [toRep('u1'), toRep('u2')];
+    plantLegacyCheckpoint(root, legacy, valid(point(delivered[1]), point(undelivered[0])));
+    const result = await readRepresentativeReplies(context(legacy), {});
+    expect(ids(result)).toEqual(undelivered.map((entry) => entry.id));
+    expect(result.checkpoint).toEqual({ entry_id: delivered[1].id, created_at: delivered[1].created_at });
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'checkpoint', checkpoint_id: delivered[1].id });
   });
 
-  const plant = (content: object) => {
-    const { directory, file } = deliveryPaths(bindingFor(WORKTREE));
-    privateTree(directory);
-    writeFileSync(file, JSON.stringify(content), { mode: 0o600 });
-    return file;
-  };
-  const point = (entry: { id: string; created_at: string }) => ({ id: entry.id, created_at: entry.created_at });
+  it('starts at the binding start for a valid null 5.x checkpoint', async () => {
+    const entries = [toRep('a'), toRep('b')];
+    plantLegacyCheckpoint(root, legacy, valid(null));
+    expect(ids(await readRepresentativeReplies(context(legacy), {}))).toEqual(entries.map((entry) => entry.id));
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'binding' });
+  });
+
+  it('starts at the binding start when the 5.x seat tombstone exists', async () => {
+    const entries = [toRep('a'), toRep('b')];
+    plantLegacyTombstone(root, legacy);
+    expect(ids(await readRepresentativeReplies(context(legacy), {}))).toEqual(entries.map((entry) => entry.id));
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'binding' });
+  });
+
+  it('starts at the binding start when a sibling 5.x generation names this seat', async () => {
+    const entries = [toRep('a'), toRep('b')];
+    const sibling = bindingFor(WORKTREE, { boundAt: '2025-12-01T00:00:00.000Z' });
+    plantLegacyCheckpoint(root, legacy, valid(null), bindingFingerprint(sibling));
+    expect(ids(await readRepresentativeReplies(context(legacy), {}))).toEqual(entries.map((entry) => entry.id));
+  });
+
+  it('still starts at the head when the only sibling 5.x generation belongs to another seat', async () => {
+    toRep('old');
+    const other = bindingFor(WORKTREE, { trustIdentity: 'sha256:another-authority' });
+    plantLegacyCheckpoint(root, other, { ...valid(null), seat: seatHash(other) }, bindingFingerprint(other));
+    expect(ids(await readRepresentativeReplies(context(legacy), {}))).toEqual([]);
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'head' });
+  });
 
   it.each([
-    ['another seat', (e: any) => ({ version: 1, seat: 'f'.repeat(64), checkpoint: point(e), readThrough: point(e) })],
-    ['a checkpoint beyond its read fence', (e: any) => ({ version: 1, seat: seatHash(), checkpoint: point(e), readThrough: null })],
-    ['a missing seat key', (e: any) => ({ version: 1, checkpoint: point(e), readThrough: point(e) })],
-  ])('refuses read and deliver on a checkpoint file of %s, and status reports it', async (_label, content) => {
-    const entry = toRep('never delivered');
-    const file = plant(content(entry));
+    ['an unreadable sibling checkpoint', () => plantLegacyCheckpoint(root, legacy, '{not json', 'f'.repeat(64))],
+    ['a delivery root that is not private', () => { privateTree(root, legacyDeliveryRoot(root)); chmodSync(legacyDeliveryRoot(root), 0o755); }],
+    ['a delivery root that is a file', () => { privateTree(root, configRoot(root)); writeFileSync(legacyDeliveryRoot(root), 'x', { mode: 0o600 }); }],
+  ])('treats history it cannot enumerate (%s) as present: the binding start, never the head', async (_label, plant) => {
+    const entries = [toRep('a'), toRep('b')];
+    plant();
+    expect(ids(await readRepresentativeReplies(context(legacy), {}))).toEqual(entries.map((entry) => entry.id));
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'binding' });
+  });
+
+  it('starts at the binding start when the database already holds history for the seat', async () => {
+    const entries = [toRep('a'), toRep('b')];
+    const other = await prepare(bindingFor('/work/other-worktree', { boundAt: '2025-12-01T00:00:00.000Z' }));
+    await readRepresentativeReplies(other, {}); // the seat's history now exists in this database
+    expect(ids(await readRepresentativeReplies(context(legacy), {}))).toEqual(entries.map((entry) => entry.id));
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'binding' });
+  });
+
+  it('falls back from the head to the binding start when seat history appears while the head is read', async () => {
+    const entries = [toRep('a'), toRep('b')];
+    const ctx = context(legacy);
+    let entered!: () => void, release!: () => void;
+    const reached = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const inner = ctx.backend.readAfter;
+    let held = false;
+    ctx.backend = { ...ctx.backend, readAfter: async (...args) => {
+      if (!held) { held = true; entered(); await gate; } // the head scan, outside any transaction
+      return inner(...args);
+    } };
+    const pending = readRepresentativeReplies(ctx, {});
+    await reached;
+    const other = await prepare(bindingFor('/work/other-worktree', { boundAt: '2025-12-01T00:00:00.000Z' }));
+    await readRepresentativeReplies(other, {});
+    release();
+    expect(ids(await pending)).toEqual(entries.map((entry) => entry.id));
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'binding' });
+  });
+
+  it('decides the start once: 5.x files that appear later change nothing', async () => {
+    toRep('old');
+    const ctx = context(legacy);
+    await readRepresentativeReplies(ctx, {});
+    plantLegacyTombstone(root, legacy);
+    const after = toRep('new');
+    expect(ids(await readRepresentativeReplies(ctx, {}))).toEqual([after.id]);
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'head' });
+  });
+
+  it('creates one delivery row when two first uses overlap', async () => {
+    const entry = toRep('a');
+    plantLegacyCheckpoint(root, legacy, valid(null));
+    const [first, second] = await Promise.all([readRepresentativeReplies(context(legacy), {}), readRepresentativeReplies(context(legacy), {})]);
+    expect(ids(first)).toEqual([entry.id]);
+    expect(ids(second)).toEqual([entry.id]);
+    expect(withStateDb((db) => db.prepare('SELECT COUNT(*) AS n FROM delivery').get())).toEqual({ n: 1 });
+  });
+
+  it('never writes a 5.x file', async () => {
+    const file = plantLegacyCheckpoint(root, legacy, valid(null));
     const before = readFileSync(file, 'utf8');
-    const ctx = context();
-    // Start each call only when it is awaited, so no rejection is ever unobserved.
-    for (const call of [() => readRepresentativeReplies(ctx, {}), () => deliverRepresentativeReplies(ctx, { through: entry.id })]) {
-      const error = await call().then(() => null, (e) => e);
-      expect(error?.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
-      expect(error.message).toContain(file);
-    }
-    const status = await representativeStatus(ctx);
-    expect(status.checkpoint_problem).toMatchObject({ code: 'REPRESENTATIVE_CHECKPOINT_INVALID' });
-    expect(readFileSync(file, 'utf8')).toBe(before); // never silently reset
+    const entry = toRep('a');
+    const ctx = context(legacy);
+    await readRepresentativeReplies(ctx, {});
+    await deliverRepresentativeReplies(ctx, { through: entry.id });
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    expect(readdirSync(legacyDeliveryRoot(root))).toEqual([bindingFingerprint(legacy)]);
+  });
+});
+
+describe('hostile 5.x checkpoint input (C4)', () => {
+  let legacy: RepresentativeBinding;
+  beforeEach(() => {
+    // No 6.x state yet: the 5.x binding file is imported when the state is created.
+    rmSync(representativeStateRoot(), { recursive: true, force: true });
+    legacy = bindingFor(WORKTREE);
+    plantLegacyBindings(root, [legacy]);
+  });
+  // A forged checkpoint past every reply would skip them all if it were imported.
+  const forged = (entry: { id: string; created_at: string }) =>
+    ({ version: 1, seat: seatHash(legacy), checkpoint: point(entry), readThrough: point(entry), returned: [] });
+
+  it.each([
+    ['a symlink to an outside 0600 file', (entry: any) => {
+      const outside = join(root, 'outside-checkpoint.json');
+      writeFileSync(outside, JSON.stringify(forged(entry)), { mode: 0o600 });
+      const file = plantLegacyCheckpoint(root, legacy, '{}');
+      rmSync(file); symlinkSync(outside, file);
+    }],
+    ['a world-writable file', (entry: any) => chmodSync(plantLegacyCheckpoint(root, legacy, forged(entry)), 0o666)],
+    ['a group-writable file', (entry: any) => chmodSync(plantLegacyCheckpoint(root, legacy, forged(entry)), 0o620)],
+    ['another seat', (entry: any) => plantLegacyCheckpoint(root, legacy, { ...forged(entry), seat: 'f'.repeat(64) })],
+    ['a checkpoint beyond its read fence', (entry: any) => plantLegacyCheckpoint(root, legacy, { ...forged(entry), readThrough: null })],
+    ['a missing seat key', (entry: any) => { const { seat: _seat, ...rest } = forged(entry); plantLegacyCheckpoint(root, legacy, rest); }],
+    ['malformed JSON', () => plantLegacyCheckpoint(root, legacy, '{"version":1,')],
+    ['an oversized file', (entry: any) => plantLegacyCheckpoint(root, legacy, JSON.stringify(forged(entry)).padEnd(1024 * 1024 + 1, ' '))],
+  ])('never imports a checkpoint from %s: every reply replays from the binding start', async (_label, plant) => {
+    const entries = [toRep('a'), toRep('b'), toRep('c')];
+    plant(entries[2]);
+    expect(ids(await readRepresentativeReplies(context(legacy), {}))).toEqual(entries.map((entry) => entry.id));
+    expect(deliveryRow(legacy)).toMatchObject({ start_kind: 'binding', checkpoint_id: null });
+  });
+
+  it('imports a genuine 0600 checkpoint file', async () => {
+    const [a, b] = [toRep('a'), toRep('b')];
+    plantLegacyCheckpoint(root, legacy, forged(a));
+    expect(ids(await readRepresentativeReplies(context(legacy), {}))).toEqual([b.id]);
+  });
+
+  it('never imports a 0644 checkpoint file (5.x wrote 0600): every reply replays', async () => {
+    const [a, b] = [toRep('a'), toRep('b')];
+    chmodSync(plantLegacyCheckpoint(root, legacy, forged(a)), 0o644);
+    expect(ids(await readRepresentativeReplies(context(legacy), {}))).toEqual([a.id, b.id]);
   });
 });

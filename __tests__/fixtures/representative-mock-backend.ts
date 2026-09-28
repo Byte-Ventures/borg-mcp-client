@@ -78,9 +78,6 @@ export class MockCube {
     return new Date(Date.UTC(2026, 0, 1, 0, 0, this.tick)).toISOString();
   }
 
-  /** Client-owned unread cursor as an earlier (5.5.0) read left it; migration input. */
-  unreadCursorValue: { id: string; created_at: string } | null = null;
-
   post(from: string, message: string, to: string[] | 'broadcast', createdAt?: string): MockEntry {
     const drone = this.drones.find((candidate) => candidate.id === from);
     const role = this.roles.find((candidate) => candidate.id === drone?.role_id);
@@ -167,10 +164,6 @@ export class MockCube {
           has_more: remaining.length > page.length,
           cursor: last ? { id: last.id, created_at: last.created_at } : cursor,
         };
-      },
-      unreadCursor: async () => {
-        this.calls.push('unreadCursor');
-        return this.unreadCursorValue ? { ...this.unreadCursorValue } : null;
       },
       readEntry: async (entryId) => {
         this.calls.push('readEntry');

@@ -10,7 +10,8 @@ import { bindingFingerprint, createRepresentativeStore } from '../src/representa
 import { bindingFor, CUBE_ID, REP_ID, COORD_ID } from './fixtures/representative-mock-backend.js';
 import { formatInboxLine } from '../src/log-stream.js';
 import { parseRepresentativeArgs } from '../src/representative-cmd.js';
-let root: string, worktree: string, file: string, origin: string, server: Server;
+import { withStateDb } from './fixtures/representative-state.js';
+let root: string, worktree: string, origin: string, server: Server;
 let responses: ServerResponse[], requests: URL[], entries: any[], status: number, errorCode: string, expireOnce: boolean;
 const children: ChildProcess[] = [];
 const delay = (ms: number) => new Promise(done => setTimeout(done, ms));
@@ -24,8 +25,10 @@ function frame(value: any) {
 }
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'rep-listener-')));
+  // In-process store writes and the child listener share this private root.
+  process.env.HOME = root; process.env.BORG_STATE_ROOT = root;
   worktree = join(root, 'work'); await mkdir(worktree, { mode: 0o700 });
-  file = join(root, 'representative.json'); responses = []; requests = []; entries = []; status = 200; errorCode = 'DRONE_EVICTED'; expireOnce = false;
+  responses = []; requests = []; entries = []; status = 200; errorCode = 'DRONE_EVICTED'; expireOnce = false;
   server = createServer((req, res) => {
     const url = new URL(req.url!, origin); requests.push(url);
     if (status !== 200) { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { code: errorCode, message: 'fixture error' } })); if (expireOnce) { status = 200; expireOnce = false; } return; }
@@ -36,7 +39,7 @@ beforeEach(async () => {
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   origin = `http://127.0.0.1:${(server.address() as any).port}`;
-  await createRepresentativeStore(file).saveBinding(bindingFor(worktree, { origin }), { rebind: false });
+  await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin }), { rebind: false });
 });
 afterEach(async () => {
   await Promise.all(children.splice(0).map(async child => {
@@ -48,7 +51,7 @@ afterEach(async () => {
 });
 function start(action = 'listen', replayAfter?: string) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_')));
-  const child = spawn(process.execPath, ['--import', 'tsx', resolve('__tests__/fixtures/representative-listener-process.ts'), worktree, file, origin, action, ...(replayAfter ? [replayAfter] : [])],
+  const child = spawn(process.execPath, ['--import', 'tsx', resolve('__tests__/fixtures/representative-listener-process.ts'), worktree, origin, action, ...(replayAfter ? [replayAfter] : [])],
     { env: { ...env, HOME: root, XDG_CONFIG_HOME: join(root, '.config') }, stdio: ['pipe', 'pipe', 'pipe'] });
   children.push(child);
   const events: any[] = []; let raw = '', stderr = '', buffer = '';
@@ -73,6 +76,13 @@ function start(action = 'listen', replayAfter?: string) {
 async function stop(client: ReturnType<typeof start>, signal: NodeJS.Signals = 'SIGTERM') { client.child.kill(signal); return client.exited; }
 async function ready(client: ReturnType<typeof start>) { await client.wait(() => client.events.some(e => e.event === 'listening')); return client.events.find(e => e.event === 'listening'); }
 async function send(values: any[]) { entries.push(...values); for (const res of responses) if (!res.destroyed) for (const value of values) res.write(frame(value)); }
+// The representative state database is checked by its rows (stateRows), not
+// its bytes: SQLite may touch WAL sidecars on a read.
+const stateRows = () => withStateDb(db => ['bindings', 'delivery', 'returned', 'requests', 'wake_state', 'wake_replies']
+  .map(table => db.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all()));
+async function configFiles(): Promise<string[]> {
+  return (await files(join(root, '.config'))).filter(path => !path.includes(join('representative', 'state') + '/'));
+}
 async function files(dir: string): Promise<string[]> {
   const result: string[] = [];
   for (const item of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
@@ -88,7 +98,7 @@ it('names the binding generation in the listening event', async () => {
 });
 it('stops a running listener with rebound after a same-selection rebind starts a new generation', async () => {
   const client = start(); await ready(client);
-  await createRepresentativeStore(file).saveBinding(bindingFor(worktree, { origin, boundAt: '2026-06-01T00:00:00.000Z' }), { rebind: true });
+  await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin, boundAt: '2026-06-01T00:00:00.000Z' }), { rebind: true });
   await send([entry(1)]);
   const [code] = await client.exited;
   expect(code).toBe(4);
@@ -134,23 +144,24 @@ it('deduplicates five reconnect bursts including already-written hint events', a
 it('refuses a second listener without changing inbox or lock and takes over after kill', async () => {
   const first = start(), hello = await ready(first); await send([entry(1)]); await first.wait(() => first.events.some(e => e.event === 'entry'));
   first.child.kill('SIGSTOP'); // freeze its own heartbeat while checking contender writes
-  const paths = await files(join(root, '.config')); const before = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+  const paths = await configFiles(); const before = await Promise.all(paths.map(path => readFile(path, 'utf8'))); const rows = stateRows();
   const raw = await readFile(hello.inbox, 'utf8'); const second = start(); const [code] = await second.exited;
   expect(code).toBe(3); expect(second.events).toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_OWNED', exit_code: 3, owner_pid: first.child.pid, owner_started_at: expect.any(String) }]);
   expect(await readFile(hello.inbox, 'utf8')).toBe(raw);
-  expect(await files(join(root, '.config'))).toEqual(paths);
+  expect(await configFiles()).toEqual(paths);
   expect(await Promise.all(paths.map(path => readFile(path, 'utf8')))).toEqual(before);
+  expect(stateRows()).toEqual(rows);
   await stop(first, 'SIGKILL'); await ready(start());
 });
 it.each(['evicted', 'rebound'])('stops on %s, releases lease and never reconnects', async reason => {
   const client = start(); await ready(client);
   if (reason === 'evicted') { status = 410; responses.at(-1)!.end(); }
-  else await createRepresentativeStore(file).saveBinding(bindingFor(worktree, { origin, coordinatorDroneId: randomUUID() }), { rebind: true });
+  else await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin, coordinatorDroneId: randomUUID() }), { rebind: true });
   const [code] = await client.exited; expect(code).toBe(4);
   expect(client.events.at(-1)).toEqual({ event: 'stopped', reason, exit_code: 4 });
   expect((await files(join(root, '.config'))).filter(p => p.endsWith('owner.json'))).toEqual([]);
 });
-it('status reports independent tools and listener owners without mutation', async () => {
+it('status reports the listener owner and no tools owner while a tools process runs, without mutation', async () => {
   const listener = start(); await ready(listener);
   const tool = start('mcp');
   tool.child.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } } }) + '\n');
@@ -158,9 +169,9 @@ it('status reports independent tools and listener owners without mutation', asyn
   tool.child.stdin!.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   tool.child.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'borg_representative-read', arguments: {} } }) + '\n');
   await tool.wait(() => tool.raw().includes('"id":2'));
-  const ledger = await readFile(file, 'utf8'); const probe = start('status'); await probe.exited;
-  const snapshot = JSON.parse(probe.raw()); expect(snapshot.ownership.pid).toBe(tool.child.pid); expect(snapshot.listener.pid).toBe(listener.child.pid);
-  expect(await readFile(file, 'utf8')).toBe(ledger);
+  const rows = stateRows(); const probe = start('status'); await probe.exited;
+  const snapshot = JSON.parse(probe.raw()); expect(snapshot.ownership).toBeUndefined(); expect(snapshot.listener.pid).toBe(listener.child.pid);
+  expect(stateRows()).toEqual(rows);
 });
 it.each(['symlink', 'mode'])('refuses an unsafe inbox %s without modifying outside content', async kind => {
   const first = start(), hello = await ready(first); await send([entry(1)]); await first.wait(() => first.events.some(e => e.event === 'entry')); await stop(first);
@@ -174,7 +185,7 @@ it.each(['in-tail', 'missing', 'none'])('replays hints for %s checkpoint before 
   const first = start(), hello = await ready(first); await send([entry(1), entry(2), entry(3)]);
   await first.wait(() => first.events.filter(e => e.event === 'entry').length === 3); await stop(first);
   const raw = await readFile(hello.inbox, 'utf8');
-  const ledger = await readFile(file, 'utf8');
+  const rows = stateRows();
   const unread = join(root, '.config', 'borgmcp', 'local-server-cursors.json');
   await writeFile(unread, 'UNREAD_SENTINEL', { mode: 0o600 });
   const requestCount = requests.length;
@@ -189,7 +200,7 @@ it.each(['in-tail', 'missing', 'none'])('replays hints for %s checkpoint before 
   expect(await readFile(hello.inbox, 'utf8')).toContain(raw);
   expect(requests).toHaveLength(requestCount + 1); // stream connection only; replay fetches nothing
   expect(await readFile(unread, 'utf8')).toBe('UNREAD_SENTINEL');
-  expect(await readFile(file, 'utf8')).toBe(ledger);
+  expect(stateRows()).toEqual(rows);
 });
 it('trims above 1024 to 512 and never re-appends a trimmed id', async () => {
   const first = start(), hello = await ready(first);
@@ -207,9 +218,10 @@ it('trims above 1024 to 512 and never re-appends a trimmed id', async () => {
   expect((await readFile(hello.inbox, 'utf8')).trim().split('\n')).toHaveLength(513);
 });
 it('refuses a missing binding at startup as the only stdout line without creating state', async () => {
-  await rm(file); const client = start(); const [code] = await client.exited;
+  withStateDb(db => db.prepare('DELETE FROM bindings').run()); const rows = stateRows();
+  const client = start(); const [code] = await client.exited;
   expect(code).toBe(2); expect(client.events).toEqual([{ event: 'refused', code: 'NOT_PREPARED', exit_code: 2 }]);
-  expect(await files(join(root, '.config'))).toEqual([]); expect(requests).toHaveLength(0);
+  expect(await configFiles()).toEqual([]); expect(stateRows()).toEqual(rows); expect(requests).toHaveLength(0);
 });
 it('preserves distinct live entries with equal timestamps in reverse UUID order', async () => {
   const client = start(); await ready(client);
@@ -231,14 +243,14 @@ it('preserves a previously unseen older live entry', async () => {
 it.each([['evicted', 'BACKEND_ERROR'], ['rebound', 'BINDING_MISMATCH']])('refuses startup %s with the MCP code before lease creation', async (mode, code) => {
   const client = start(mode); const [exit] = await client.exited;
   expect(exit).toBe(2); expect(JSON.parse(client.raw())).toEqual({ event: 'refused', code, exit_code: 2 });
-  expect(await files(join(root, '.config'))).toEqual([]); expect(requests).toHaveLength(0);
+  expect(await configFiles()).toEqual([]); expect(requests).toHaveLength(0);
 });
 // The guide documents this startup boundary: stream retries begin only after it.
 it.each(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNRESET', 'typed'])('refuses startup with SERVER_UNREACHABLE when verification fails with %s', async code => {
   const client = start(`unreachable:${code}`); const [exit] = await client.exited;
   expect(exit).toBe(1); expect(client.raw().trim().split('\n').map(line => JSON.parse(line)))
     .toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_SERVER_UNREACHABLE', exit_code: 1 }]);
-  expect(await files(join(root, '.config'))).toEqual([]); expect(requests).toHaveLength(0);
+  expect(await configFiles()).toEqual([]); expect(requests).toHaveLength(0);
 });
 it('keeps a permanent untyped verification failure off SERVER_UNREACHABLE', async () => {
   const client = start('unreachable:'); const [exit] = await client.exited;
@@ -281,11 +293,11 @@ it('emits one typed fatal startup storage refusal without a lease or inbox', asy
   const config = join(root, '.config', 'borgmcp'); await mkdir(config, { recursive: true, mode: 0o700 }); await chmod(config, 0o777);
   const client = start(); const [code] = await client.exited; expect(code).toBe(1);
   expect(client.events).toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 }]);
-  expect(await files(config)).toEqual([]);
+  expect(await configFiles()).toEqual([]);
 });
 it('reports a killed listener as not running without reclaiming its lock', async () => {
   const client = start(); await ready(client); await stop(client, 'SIGKILL');
-  const paths = await files(join(root, '.config')); const before = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+  const paths = await configFiles(); const before = await Promise.all(paths.map(path => readFile(path, 'utf8')));
   const probe = start('status'); await probe.exited;
   expect(JSON.parse(probe.raw()).listener.running).toBe(false);
   expect(await Promise.all(paths.map(path => readFile(path, 'utf8')))).toEqual(before);

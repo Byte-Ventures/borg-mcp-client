@@ -1,5 +1,6 @@
-import fs, { lstatSync, realpathSync } from 'node:fs';
-import { chmod, lstat, mkdir } from 'node:fs/promises';
+import { lstatSync, realpathSync, type Stats } from 'node:fs';
+import { lstat } from 'node:fs/promises';
+import { TestIsolationError, chmod, chmodSync, isTestForbiddenPath, mkdir, mkdirSync } from './guarded-fs.js';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -41,9 +42,22 @@ function configuredStateRoot(env: NodeJS.ProcessEnv = process.env): string | nul
   return configured;
 }
 
+export { TEST_ALLOWED_ROOTS_ENV, TEST_FORBIDDEN_HOME_ENV, TestIsolationError } from './guarded-fs.js';
+
+/**
+ * Defence in depth for the test runner's isolation rule (see guarded-fs): a
+ * Borg home root in the operator's real home (itself or a descendant outside
+ * the run's own roots) is refused before any path is built. Every write is
+ * also checked at the I/O layer, which covers explicit path overrides.
+ */
+function refuseForbiddenHome(root: string, env: NodeJS.ProcessEnv): string {
+  if (isTestForbiddenPath(root, env)) throw new TestIsolationError(root);
+  return root;
+}
+
 /** Resolve the effective home root used by all Borg-owned local state. */
 export function borgHomeRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return configuredStateRoot(env) ?? realpathSync(homedir());
+  return refuseForbiddenHome(configuredStateRoot(env) ?? realpathSync(homedir()), env);
 }
 
 export const borgConfigRoot = (): string => join(borgHomeRoot(), '.config', 'borgmcp');
@@ -107,13 +121,13 @@ export function ensurePrivateBorgConfigRootSync(root = borgConfigRoot()): void {
     throw new Error('Borg private-state directory path is not canonical');
   }
 
-  let metadata: fs.Stats;
+  let metadata: Stats;
   try {
-    metadata = fs.lstatSync(root);
+    metadata = lstatSync(root);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    metadata = fs.lstatSync(root);
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    metadata = lstatSync(root);
   }
 
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
@@ -129,10 +143,10 @@ export function ensurePrivateBorgConfigRootSync(root = borgConfigRoot()): void {
     throw new Error('Borg private-state directory is writable by other users');
   }
   if (mode !== 0o700) {
-    fs.chmodSync(root, 0o700);
+    chmodSync(root, 0o700);
   }
 
-  const final = fs.lstatSync(root);
+  const final = lstatSync(root);
   if (!final.isDirectory() || (final.mode & 0o777) !== 0o700) {
     throw new Error('Borg private-state directory is not private');
   }

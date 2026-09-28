@@ -13,7 +13,7 @@ import { bindingFor, CUBE_ID, REP_ID, COORD_ID } from './fixtures/representative
 
 // Production pinned-HTTPS transport (createPinnedServerFetch) against a disposable
 // local TLS server; abrupt resets surface Node errno/string-code errors.
-let root: string, worktree: string, file: string, origin: string, cert: string, server: Server;
+let root: string, worktree: string, origin: string, cert: string, server: Server;
 let handle: (req: IncomingMessage, res: ServerResponse) => void;
 let responses: ServerResponse[], entries: any[], requests: number;
 const children: ChildProcess[] = [];
@@ -33,15 +33,17 @@ function stream(res: ServerResponse) {
 }
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'rep-listener-tls-')));
+  // In-process store writes and the child listener share this private root.
+  process.env.HOME = root; process.env.BORG_STATE_ROOT = root;
   worktree = join(root, 'work'); await mkdir(worktree, { mode: 0o700 });
-  file = join(root, 'representative.json'); responses = []; entries = []; requests = 0; handle = (_req, res) => stream(res);
+  responses = []; entries = []; requests = 0; handle = (_req, res) => stream(res);
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'), '-out', join(root, 'cert.pem'),
     '-days', '1', '-subj', '/CN=localhost', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' });
   cert = join(root, 'cert.pem');
   server = createServer({ key: await readFile(join(root, 'key.pem')), cert: await readFile(cert) }, (req, res) => { requests++; handle(req, res); });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   origin = `https://127.0.0.1:${(server.address() as any).port}`;
-  await createRepresentativeStore(file).saveBinding(bindingFor(worktree, { origin }), { rebind: false });
+  await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin }), { rebind: false });
 });
 afterEach(async () => {
   await Promise.all(children.splice(0).map(async child => {
@@ -52,7 +54,7 @@ afterEach(async () => {
 });
 function start(extraEnv: Record<string, string> = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_')));
-  const child = spawn(process.execPath, ['--import', 'tsx', resolve('__tests__/fixtures/representative-listener-process.ts'), worktree, file, origin, 'listen'],
+  const child = spawn(process.execPath, ['--import', 'tsx', resolve('__tests__/fixtures/representative-listener-process.ts'), worktree, origin, 'listen'],
     { env: { ...env, HOME: root, XDG_CONFIG_HOME: join(root, '.config'), REPRESENTATIVE_TEST_PIN_CERT: cert, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
   children.push(child);
   const events: any[] = []; let stderr = '', buffer = '';
@@ -119,7 +121,7 @@ it('stops on local authority trust replaced during an open connection with the p
   };
   await writeTrust(certA);
   const identityA = `spki-sha256:${spki(certA)}`;
-  await createRepresentativeStore(file).saveBinding(bindingFor(worktree, { origin, trustIdentity: identityA }), { rebind: true });
+  await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin, trustIdentity: identityA }), { rebind: true });
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'b-key.pem'), '-out', join(root, 'b-cert.pem'),
     '-days', '1', '-subj', '/CN=localhost', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' });
   const client = start({ BORG_SERVER_DATA_DIR: authority, REPRESENTATIVE_TEST_TRUST_IDENTITY: identityA });

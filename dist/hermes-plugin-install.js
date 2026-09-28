@@ -6,7 +6,8 @@
  * enables the plugin and never starts or restarts Hermes: the operator does
  * those steps from the printed snippet.
  */
-import { lstat, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, readFile, stat } from 'node:fs/promises';
+import { mkdir, rename, unlink, writeFile } from './guarded-fs.js';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -115,9 +116,8 @@ export async function runHermesPluginInstall(command, deps) {
             `\nThen:\n` +
             `- session_key must name a messaging-gateway conversation (for example your Telegram DM). A Hermes\n` +
             `  Desktop chat cannot be woken: Hermes injects plugin messages only into gateway conversations.\n` +
-            `- Only one process may use the representative tools. With lazy: true, run \`hermes tools\` and disable\n` +
-            `  the mcp-borg-representative toolset on every platform except the one in session_key (Desktop and CLI\n` +
-            `  included). If Desktop already holds the tools lease, restart the Desktop backend once.\n` +
+            `- Let the session_key conversation read and deliver: the plugin observes only this gateway's\n` +
+            `  borg_representative-deliver results, so a reply delivered from Desktop or the CLI is woken again.\n` +
             `- Restart the gateway (\`hermes gateway restart\`) so it loads the plugin.\n` +
             `Details: docs/HUMAN_REPRESENTATIVE.md, section "Hermes push plugin".\n`);
         return 0;

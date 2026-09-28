@@ -25,7 +25,7 @@
  */
 
 import { Buffer } from 'node:buffer';
-import { promises as fs } from 'node:fs';
+import { fsp as fs } from './guarded-fs.js';
 import path from 'node:path';
 import { compareBroadcastHwm, type BroadcastHwm } from 'borgmcp-shared/log-stream-hwm';
 import {

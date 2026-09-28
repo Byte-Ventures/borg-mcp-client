@@ -1,79 +1,64 @@
-import type { LocalServerCursor } from './local-server-cursor.js';
-import { type RepresentativeBinding } from './representative-store.js';
 /**
- * `checkpoint`: the host's durable delivery point; only `deliver` moves it.
- * `readThrough`: the highest entry any `read` returned; `deliver` may not pass it.
+ * The representative's DELIVERED checkpoint and read window, per binding
+ * generation, in the representative state database.
+ *
+ * - `start`: where this generation's history begins (the imported 5.x
+ *   checkpoint, the server head, or the binding start; 'head-pending' until an
+ *   imported generation's first use resolves it). Scans never consider entries
+ *   at or before it.
+ * - `checkpoint`: the host's durable delivery point; only `deliver` moves it.
+ * - `readThrough`: the highest entry any `read` returned; `deliver` may not pass it.
+ * - `returned`: entries a read returned since the checkpoint last moved;
+ *   `deliver` checks membership of the full (id, created_at) tuple here.
+ *
+ * Every function taking a `Transaction` runs inside one representative state
+ * transaction; callers check the binding generation in that same transaction.
  */
+import type { Transaction } from './representative-db.js';
+import type { LocalServerCursor } from './local-server-cursor.js';
+import { type RepresentativeBinding, type RepresentativeStore } from './representative-store.js';
+export type StartKind = 'checkpoint' | 'head' | 'binding';
 export interface DeliveryState {
+    start: LocalServerCursor;
+    startKind: StartKind;
     checkpoint: LocalServerCursor | null;
     readThrough: LocalServerCursor | null;
-    /**
-     * Entries a read returned since the checkpoint last moved: `deliver` checks
-     * membership here, not just the range. Every window starts at the
-     * checkpoint, so this stays within the largest window (two, with and without
-     * broadcasts), and deliver prunes it.
-     */
     returned: LocalServerCursor[];
 }
-/**
- * This binding's own checkpoint file exists but cannot be trusted. It is never
- * used and never silently reset: every tool except status refuses until the
- * operator inspects and removes it.
- */
-export declare class DeliveryCheckpointError extends Error {
-    readonly code = "REPRESENTATIVE_CHECKPOINT_INVALID";
-    constructor(file: string, reason: string);
-}
-export declare function deliveryPaths(binding: RepresentativeBinding): {
-    directory: string;
-    file: string;
-};
 /** (created_at, id) order, the server log order. */
 export declare function comparePoints(a: LocalServerCursor, b: LocalServerCursor | null): number;
+export declare function loadDelivery(db: Transaction, generation: string): DeliveryState | null;
 /**
- * The one-time upgrade tombstone for a seat. Its existence alone means the
- * legacy import was attempted; nothing in it is ever read back as a position.
- * Its directory name is not 64 hex characters, so the generation scan never
- * mistakes it for a checkpoint.
+ * Where a scan starts: the server cursor (null = the log start) and the floor
+ * every entry must exceed. A binding start is a synthetic lower bound that is
+ * never sent to the server as a cursor.
  */
-export declare function createDeliveryStore(binding: RepresentativeBinding): {
-    /** Null when this binding generation has no checkpoint yet. A corrupt file fails closed. */
-    load: () => Promise<DeliveryState | null>;
-    /**
-     * Whether the seat's upgrade tombstone exists. Any object at that path,
-     * readable or not, counts, so a planted or damaged marker can only cause a
-     * replay (duplicates), never an import or a skip.
-     */
-    migrated(): Promise<boolean>;
-    /**
-     * Create the tombstone exclusively (O_EXCL, no-follow, 0600, fsynced).
-     * False when it already exists: another initializer got there first.
-     * `guard` runs just before the create.
-     */
-    markMigrated(guard?: () => Promise<void>): Promise<boolean>;
-    /**
-     * Run a first-call initialization alone for this seat within the process:
-     * overlapping first reads see each other's result instead of both
-     * importing. Other processes are excluded by the tools lease, and the
-     * exclusive tombstone create backs that up.
-     */
-    initialize<T>(operation: () => Promise<T>): Promise<T>;
-    /**
-     * Whether any other generation of this seat already has a checkpoint, which
-     * means the one-time upgrade from the unread cursor already happened. An
-     * unreadable or unsafe sibling counts as one: the new generation then
-     * replays its history (duplicates, never loss) instead of trusting it.
-     */
-    otherGenerationExists(): Promise<boolean>;
-    /**
-     * Move either field forward only, from the state on disk at write time, in
-     * one atomic durable 0600 write. Always writes when no file exists yet, so a
-     * completed migration is never repeated. `guard` runs just before the write.
-     * Returns the states before and after, so callers report the real transition.
-     */
-    advance(update: Partial<DeliveryState>, guard?: () => Promise<void>): Promise<{
-        before: DeliveryState | null;
-        after: DeliveryState;
-    }>;
+export declare function scanStart(state: DeliveryState): {
+    cursor: LocalServerCursor | null;
+    floor: LocalServerCursor;
 };
+/** Widen the read fence and the returned set (monotonic; pruned to entries after the checkpoint). */
+export declare function widenReadWindow(db: Transaction, generation: string, window: LocalServerCursor[]): void;
+/** Move the delivered checkpoint forward (never back); prunes the returned set and wake records. */
+export declare function advanceCheckpoint(db: Transaction, generation: string, to: LocalServerCursor): {
+    before: DeliveryState;
+    after: DeliveryState;
+};
+export interface EnsureStateContext {
+    binding: RepresentativeBinding;
+    store: RepresentativeStore;
+    /** The newest log position on the bound server, or null for an empty log. Called outside any transaction. */
+    serverHead(): Promise<LocalServerCursor | null>;
+}
+/**
+ * Make sure the binding's generation has a resolved delivery row. The binding
+ * row must already exist (prepare, or the one-time 5.x import when the state was
+ * created); this never reads 5.x files.
+ * - A prepared generation without a row starts at its binding start.
+ * - An imported 5.x generation left 'head-pending' (no 5.x history for its
+ *   seat) starts at the server head, read outside any transaction; if another
+ *   generation of the seat has delivery state by the time it is written, it
+ *   starts at the binding start instead (replays, never skips).
+ */
+export declare function ensureDeliveryState(ctx: EnsureStateContext): Promise<void>;
 //# sourceMappingURL=representative-delivery-store.d.ts.map

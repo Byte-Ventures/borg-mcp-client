@@ -8,5 +8,7 @@ export default defineConfig({
     include: ['__tests__/**/*.test.ts'],
     exclude: ['node_modules/**', 'dist/**'],
     testTimeout: 60_000,
+    globalSetup: ['__tests__/global/real-home-guard.ts'],
+    setupFiles: ['__tests__/setup-isolated-home.ts'],
   },
 });

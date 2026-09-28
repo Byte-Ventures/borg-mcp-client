@@ -4,7 +4,7 @@
  * a real Borg server.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -27,6 +27,8 @@ import {
   type RepresentativeContext,
 } from '../src/representative-core.js';
 import { createRepresentativeStore } from '../src/representative-store.js';
+import { representativeStateRoot } from '../src/representative-db.js';
+import { plantLegacyBindings, stateInitialized, withStateDb } from './fixtures/representative-state.js';
 
 const originalHome = process.env.HOME;
 const originalStateRoot = process.env.BORG_STATE_ROOT;
@@ -43,7 +45,7 @@ beforeEach(() => {
   ctx = {
     binding: bindingFor(WORKTREE),
     backend: cube.backend(),
-    store: createRepresentativeStore(join(root, '.config', 'borgmcp', 'representative.json')),
+    store: createRepresentativeStore(),
   };
 });
 
@@ -71,6 +73,7 @@ it('preserves document citations on a direct Coordinator reply', async () => {
   const entry = cube.post(COORD_ID, 'The requested design is attached.', [REP_ID]);
   const documents = [{ id: REQUEST_ID, title: 'Design', state: 'active' as const }];
   Object.assign(entry, { documents });
+  await ctx.store.saveBinding(ctx.binding, { rebind: false });
   const result = await readRepresentativeReplies(ctx, {});
   expect(result.replies[0]).toMatchObject({ entry_id: entry.id, message: entry.message, documents });
 });
@@ -112,6 +115,8 @@ describe('Coordinator selection', () => {
 });
 
 describe('send', () => {
+  beforeEach(async () => { await ctx.store.saveBinding(ctx.binding, { rebind: false }); });
+
   it('delivers only to the bound Coordinator with automated-representation attribution', async () => {
     const result = await sendRepresentativeMessage(ctx, {
       request_id: REQUEST_ID,
@@ -197,7 +202,7 @@ describe('send', () => {
     expect((await sendRepresentativeMessage(ctx, input)).outcome).toBe('ambiguous');
     const reconnected: RepresentativeContext = {
       ...ctx,
-      store: createRepresentativeStore(join(root, '.config', 'borgmcp', 'representative.json')),
+      store: createRepresentativeStore(),
     };
     const status = await representativeStatus(reconnected);
     expect(status.unresolved_requests.map((r) => r.request_id)).toEqual([REQUEST_ID]);
@@ -249,13 +254,20 @@ describe('send', () => {
     await sendRepresentativeMessage(ctx, {
       request_id: REQUEST_ID, kind: 'request', authorization: 'user_authorized', message: 'secret plan text',
     });
-    const file = join(root, '.config', 'borgmcp', 'representative.json');
-    expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(readFileSync(file, 'utf8')).not.toContain('secret plan text');
+    const stateRoot = representativeStateRoot();
+    const generation = readdirSync(stateRoot).find((name) => name.startsWith('g'))!;
+    const files = readdirSync(join(stateRoot, generation)).map((name) => join(stateRoot, generation, name));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(readFileSync(file).includes('secret plan text')).toBe(false);
+    }
   });
 });
 
 describe('read and acknowledge', () => {
+  beforeEach(async () => { await ctx.store.saveBinding(ctx.binding, { rebind: false }); });
+
   it('returns only the bound Coordinator\'s entries and correlates quoted request ids', async () => {
     await sendRepresentativeMessage(ctx, {
       request_id: REQUEST_ID, kind: 'question', authorization: 'user_authorized', message: 'A or B?',
@@ -276,6 +288,7 @@ describe('read and acknowledge', () => {
 
   it('includes Coordinator broadcasts only on request and marks them', async () => {
     const notice = cube.post(COORD_ID, 'cube-wide notice', 'broadcast');
+    await ctx.store.saveBinding(ctx.binding, { rebind: false });
     const result = await readRepresentativeReplies(ctx, { include_broadcast: true });
     expect(result.replies).toEqual([expect.objectContaining({ entry_id: notice.id, addressed: 'broadcast' })]);
   });
@@ -309,10 +322,24 @@ describe('binding store', () => {
     )).toBe('rebound');
   });
 
-  it('refuses a malformed store instead of treating it as unbound', async () => {
+  it('refuses a state database of another version instead of treating it as unbound', async () => {
     await ctx.store.saveBinding(bindingFor(WORKTREE), { rebind: false });
-    const { writeFileSync } = await import('node:fs');
-    writeFileSync(join(root, '.config', 'borgmcp', 'representative.json'), '{"version":7}', { mode: 0o600 });
-    await expect(ctx.store.getBinding(WORKTREE)).rejects.toThrow(/malformed|unsupported/);
+    ctx.store.state.close();
+    withStateDb((db) => db.exec('PRAGMA user_version = 7'));
+    await expect(createRepresentativeStore().getBinding(WORKTREE)).rejects.toMatchObject({ code: 'REPRESENTATIVE_STATE_VERSION' });
+    await expect(createRepresentativeStore().saveBinding(bindingFor(WORKTREE), { rebind: false }))
+      .rejects.toMatchObject({ code: 'REPRESENTATIVE_STATE_VERSION' });
+  });
+
+  it('reads no 5.x file on a lookup: 5.x bindings are imported only when the state is created', async () => {
+    plantLegacyBindings(root, [bindingFor(WORKTREE)]);
+    expect(await ctx.store.getBinding(WORKTREE)).toBeNull(); // no state yet, and status-style lookups create none
+    expect(stateInitialized()).toBe(false);
+    await ctx.store.initialize();
+    expect((await ctx.store.getBinding(WORKTREE))?.coordinatorDroneId).toBe(COORD_ID);
+    // A 5.x file that appears or changes afterwards is never read again.
+    plantLegacyBindings(root, [bindingFor('/work/later')]);
+    expect(await ctx.store.getBinding('/work/later')).toBeNull();
+    expect((await ctx.store.listBindings()).map((binding) => binding.worktree)).toEqual([WORKTREE]);
   });
 });

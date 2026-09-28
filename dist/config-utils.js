@@ -5,7 +5,7 @@
  */
 import { execSync } from 'child_process';
 import { randomBytes } from 'node:crypto';
-import fs from 'fs';
+import { fs } from './guarded-fs.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';

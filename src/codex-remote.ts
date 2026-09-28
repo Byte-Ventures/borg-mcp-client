@@ -1,4 +1,5 @@
-import { mkdirSync, chmodSync, readdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, chmodSync, rmSync, writeFileSync } from './guarded-fs.js';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';

@@ -6,15 +6,8 @@
 // wiring / Phase 4) wires the real-IO production modules.
 
 import { spawnSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  unlinkSync,
-  statSync,
-  readdirSync,
-} from 'node:fs';
+import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync, unlinkSync } from './guarded-fs.js';
 import { createInterface } from 'node:readline/promises';
 import type { ActiveCube } from './cubes.js';
 import {

@@ -12,7 +12,7 @@ import { inboxPathForDrone, } from './cubes.js';
 import { monitorStateRootForWorktree } from './inbox-monitor.js';
 import { formatSeatReattachRefusal, inspectLiveInboxMonitor, } from './seat-reattach-guard.js';
 import { resolveLaunchEnv } from './model-presets.js';
-import { unlinkSync } from 'node:fs';
+import { unlinkSync } from './guarded-fs.js';
 import { gcOrphanInboxesForCube, defaultListInboxLogs, defaultInboxLivenessDeps, isInboxLive, ORPHAN_INBOX_STALE_MS, } from './gc-orphan-inboxes.js';
 import { installBorgPlugin } from './opencode-plugin.js';
 import { allocateOpenCodePort, connectOpenCodeDrone, createOpenCodeLaunchKickoff, injectInitialKickoff } from './opencode-drone.js';
