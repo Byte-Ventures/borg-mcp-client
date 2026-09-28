@@ -1,7 +1,7 @@
 /** Controls for the real-HOME guard (__tests__/global/real-home-guard.ts). */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, closeSync, constants, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -160,6 +160,70 @@ describe('prevention at the I/O layer: every src mutation refuses the forbidden 
       process.env.HOME = savedHome;
     }
     untouched();
+  });
+
+  it('refuses a dangling safe-path symlink to a missing forbidden leaf, and any symlink hop through the forbidden home', async () => {
+    const guarded = await import('../src/guarded-fs.js');
+    const leaf = join(forbidden, '.config', 'borgmcp', 'new.json');
+    symlinkSync(leaf, join(safe, 'dangling')); // the target does not exist
+    expect(() => guarded.writeFileSync(join(safe, 'dangling'), 'BYPASS')).toThrow(guarded.TestIsolationError);
+    await expect(guarded.writeFile(join(safe, 'dangling'), 'BYPASS')).rejects.toBeInstanceOf(guarded.TestIsolationError);
+    // A chain: safe/relay -> forbidden/hop -> safe/final. The final place is safe; a hop is not.
+    mkdirSync(join(safe, 'final'));
+    symlinkSync(join(safe, 'final'), join(forbidden, 'hop'));
+    symlinkSync(join(forbidden, 'hop'), join(safe, 'relay'));
+    expect(() => guarded.writeFileSync(join(safe, 'relay', 'x'), 'x')).toThrow(guarded.TestIsolationError);
+    // A relative dangling link and a loop fail closed.
+    symlinkSync(join('..', 'forbidden-home', 'rel.json'), join(safe, 'relative'));
+    expect(() => guarded.writeFileSync(join(safe, 'relative'), 'x')).toThrow(guarded.TestIsolationError);
+    symlinkSync(join(safe, 'loop-b'), join(safe, 'loop-a'));
+    symlinkSync(join(safe, 'loop-a'), join(safe, 'loop-b'));
+    expect(() => guarded.writeFileSync(join(safe, 'loop-a'), 'x')).toThrow(guarded.TestIsolationError);
+    expect(existsSync(leaf)).toBe(false);
+    expect(existsSync(join(safe, 'final', 'x'))).toBe(false);
+    // A dangling link that stays in the safe root is still writable.
+    symlinkSync(join(safe, 'later.json'), join(safe, 'safe-dangling'));
+    guarded.writeFileSync(join(safe, 'safe-dangling'), 'ok');
+    expect(readFileSync(join(safe, 'later.json'), 'utf8')).toBe('ok');
+  });
+
+  it('guards lutimes and every other mutation, and closes the fs namespaces to unlisted names', async () => {
+    const guarded = await import('../src/guarded-fs.js');
+    const file = join(forbidden, '.config', 'borgmcp', 'existing');
+    writeFileSync(file, 'x');
+    const before = lstatSync(file).mtimeMs;
+    for (const [label, attempt] of [
+      ['fs.lutimesSync', () => guarded.fs.lutimesSync(file, 1, 1)],
+      ['lutimesSync', () => guarded.lutimesSync(file, 1, 1)],
+      ['fs.lchownSync', () => guarded.fs.lchownSync(file, process.getuid!(), process.getgid!())],
+      ['fs.chownSync', () => guarded.fs.chownSync(file, process.getuid!(), process.getgid!())],
+    ] as Array<[string, () => unknown]>) expect(attempt, label).toThrow(guarded.TestIsolationError);
+    await expect(guarded.fsp.lutimes(file, 1, 1)).rejects.toBeInstanceOf(guarded.TestIsolationError);
+    await expect(guarded.lutimes(file, 1, 1)).rejects.toBeInstanceOf(guarded.TestIsolationError);
+    // Names that are neither a guarded mutation nor a listed read are closed.
+    for (const name of ['futimesSync', 'createWriteStream', 'writeFile', 'fchownSync', 'lchmod']) {
+      expect(() => (guarded.fs as unknown as Record<string, unknown>)[name], name).toThrow(/not available through guarded-fs/);
+    }
+    expect(() => (guarded.fsp as unknown as Record<string, unknown>).lchmodUnknown).toThrow(/not available through guarded-fs/);
+    expect(lstatSync(file).mtimeMs).toBe(before);
+    // Listed reads still pass through.
+    expect(guarded.fs.readFileSync(file, 'utf8')).toBe('x');
+    expect(await guarded.fsp.readFile(file, 'utf8')).toBe('x');
+  });
+
+  it('exempts only the allowed root itself under <home>/.borg/scratch: its sibling and the scratch root stay refused', async () => {
+    const guarded = await import('../src/guarded-fs.js');
+    const scratch = join(forbidden, '.borg', 'scratch');
+    const run = join(scratch, 'run');
+    mkdirSync(run, { recursive: true });
+    mkdirSync(join(scratch, 'run-sibling'));
+    process.env[TEST_ALLOWED_ROOTS_ENV] = run; // this run's root, inside the forbidden home's scratch area
+    guarded.writeFileSync(join(run, 'inside'), 'ok');
+    guarded.mkdirSync(join(run, 'deeper', 'still'), { recursive: true });
+    for (const target of [join(scratch, 'run-sibling', 'x'), join(scratch, 'runner', 'x'), join(scratch, 'x'), join(forbidden, '.borg', 'x')]) {
+      expect(() => guarded.writeFileSync(target, 'x'), target).toThrow(guarded.TestIsolationError);
+    }
+    expect(readdirSync(join(scratch, 'run-sibling'))).toEqual([]);
   });
 
   it('refuses the reviewer\'s explicit locksDir override in a spawned child before any lock is created', () => {
