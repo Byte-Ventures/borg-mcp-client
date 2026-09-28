@@ -18,7 +18,7 @@ import { normalizeServerEndpoint } from './server-endpoint.js';
 import { validateName } from './name-validator.js';
 import { RepresentativeError, assertRepresentativeRole, representativeStateProblemStatus, representativeStatus, resolveCoordinator, } from './representative-core.js';
 import { RepresentativeStoreError, bindingFingerprint, representativeRecoveryCommand, } from './representative-store.js';
-import { RepresentativeStateError } from './representative-db.js';
+import { RepresentativeStateError, printable } from './representative-db.js';
 import { shellEscape } from './shell-escape.js';
 export const DEFAULT_REPRESENTATIVE_ROLE = 'hermes-representative';
 export function parseRepresentativeArgs(args) {
@@ -364,15 +364,19 @@ export async function runRepresentativeResetState(deps, reset = defaultReset) {
             deps.stdout('No representative state exists yet; nothing to reset.\n');
             return 0;
         }
+        // Every value printed here may come from a damaged database or the
+        // filesystem: control characters are escaped, never sent to the terminal.
+        const show = (values) => values.map(printable).join(', ');
         if (report.outcome === 'healthy') {
-            deps.stderr(`◼ borg representative reset-state: the state database (generation ${report.previous}) is healthy; nothing to reset.\n`);
+            deps.stderr(`◼ borg representative reset-state: the state database (generation ${printable(report.previous ?? '')}) is healthy; nothing to reset.\n`);
             return 1;
         }
         const lines = [
-            `Representative state reset: generation ${report.previous} replaced by ${report.current}.`,
-            `The damaged generation is kept (not deleted) under the state directory: ${report.retainedAside.join(', ') || 'none'}.`,
-            `Bindings kept: ${report.salvaged.length ? report.salvaged.join(', ') : 'none'}.`,
-            ...report.dropped.map((drop) => `Binding lost${drop.worktree ? ` for ${drop.worktree}` : ''}: ${drop.reason}. Run \`borg representative prepare\` in that worktree to bind it again.`),
+            `Representative state reset: generation ${printable(report.previous ?? '')} replaced by ${printable(report.current ?? '')}.`,
+            `The damaged generation is kept (not deleted) under the state directory: ${show(report.retainedAside) || 'none'}.`,
+            `Bindings kept: ${report.salvaged.length ? show(report.salvaged) : 'none'}.`,
+            ...report.dropped.map((drop) => `Binding lost${drop.worktree ? ` for ${printable(drop.worktree)}` : ''}: ${printable(drop.reason)}. ` +
+                'Run `borg representative prepare` in that worktree to bind it again.'),
             'Lost: every delivery checkpoint (kept bindings replay their replies from the binding start: duplicates are possible, nothing is skipped),',
             'the request ledger (pending and ambiguous sends are no longer guarded: a send whose outcome was unknown may already be stored,',
             'and identical content is no longer blocked), and wake state (rebuilt by the listener).',
@@ -381,7 +385,7 @@ export async function runRepresentativeResetState(deps, reset = defaultReset) {
         return 0;
     }
     catch (error) {
-        deps.stderr(`◼ borg representative reset-state: ${describeError(error)}\n`);
+        deps.stderr(`◼ borg representative reset-state: ${printable(describeError(error))}\n`);
         return 1;
     }
 }

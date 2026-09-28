@@ -28,6 +28,8 @@ export declare function installSqliteWarningFilter(proc?: NodeJS.Process): void;
 export type SqliteModule = typeof import('node:sqlite');
 /** The only way node:sqlite is loaded: after the warning filter, by dynamic import (static imports are hoisted). */
 export declare function loadSqlite(): Promise<SqliteModule>;
+/** A value for terminal output: C0/C1 control characters and DEL escaped as \\uXXXX. */
+export declare function printable(value: string): string;
 export declare function representativeStateRoot(): string;
 /** CURRENT's generation, or null when unpublished. Never follows a link. */
 export declare function readCurrent(root: string): string | null;
@@ -43,6 +45,11 @@ export interface RepresentativeStateOptions {
      * a reset.
      */
     seed?: () => Promise<(db: DatabaseSync) => void>;
+    /**
+     * Receives the generation-named entries the first creation's retention left
+     * in place (not removable as a plain generation). Default: one line on stderr.
+     */
+    onKept?: (root: string, kept: string[]) => void;
     /** Test seams: run between the named steps (kill/pause controls). */
     hooks?: Partial<Record<'beforeOpen' | 'beforeBegin' | 'afterBegin' | 'publish:dir' | 'publish:schema' | 'publish:rows' | 'publish:fsync' | 'publish:tmp' | 'publish:rename' | 'publish:done', () => void>>;
 }
@@ -73,9 +80,13 @@ export declare function withPublishMutex<T>(root: string, body: (sqlite: SqliteM
 /**
  * Build a complete generation, then publish it with one rename of CURRENT.
  * Nothing is visible until the rename; durability is claimed only after the
- * final directory fsync. Runs inside the publish mutex.
+ * final directory fsync. Runs inside the publish mutex. Returns the new
+ * generation and the generation-named entries retention left in place.
  */
-export declare function publishGeneration(sqlite: SqliteModule, root: string, fill: (db: DatabaseSync) => void, now?: () => Date, hook?: (name: 'publish:dir' | 'publish:schema' | 'publish:rows' | 'publish:fsync' | 'publish:tmp' | 'publish:rename' | 'publish:done') => void): string;
+export declare function publishGeneration(sqlite: SqliteModule, root: string, fill: (db: DatabaseSync) => void, now?: () => Date, hook?: (name: 'publish:dir' | 'publish:schema' | 'publish:rows' | 'publish:fsync' | 'publish:tmp' | 'publish:rename' | 'publish:done') => void): {
+    generation: string;
+    kept: string[];
+};
 /**
  * Remove orphan and old non-current generations, keeping the newest
  * RETAINED_GENERATIONS. Never recursive: only the three exact database names

@@ -6,7 +6,7 @@
  * multi-process stress run, version refusal and reset-state.
  * Cross-process controls run real separate Node processes over one private root.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -581,6 +581,49 @@ describe('publication is atomic at every crash point; durability follows the fin
   }, 60_000);
 });
 
+describe('first creation reports the entries retention leaves in place', () => {
+  function plantOrphans(): string {
+    // Orphans of crashed first creations, older than anything published now.
+    mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+    for (let current = stateRoot; current.startsWith(join(root, '.config')); current = join(current, '..')) chmodSync(current, 0o700);
+    const names = Array.from({ length: 4 }, (_, i) => `g0000000000000000${i}-${'0'.repeat(15)}${i}`);
+    for (const name of names) mkdirSync(join(stateRoot, name), { mode: 0o700 });
+    writeFileSync(join(stateRoot, names[0], 'keep.txt'), 'KEEP', { mode: 0o600 }); // beyond retention, not removable
+    return names[0];
+  }
+
+  it('passes the kept entries to the reporter, and leaves them untouched', async () => {
+    const kept = plantOrphans();
+    const reported: Array<[string, string[]]> = [];
+    await createRepresentativeState({ onKept: (at, names) => { reported.push([at, names]); } }).transact(() => {});
+    expect(reported).toEqual([[stateRoot, [kept]]]);
+    expect(readFileSync(join(stateRoot, kept, 'keep.txt'), 'utf8')).toBe('KEEP');
+  });
+
+  it('reports them on stderr by default, and reports nothing when retention removed everything', async () => {
+    const kept = plantOrphans();
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => { writes.push(String(chunk)); return true; });
+    try {
+      await createRepresentativeState().transact(() => {});
+    } finally {
+      spy.mockRestore();
+    }
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain('left in place');
+    expect(writes[0]).toContain(kept);
+    rmSync(stateRoot, { recursive: true });
+    const quiet: string[] = [];
+    const spy2 = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => { quiet.push(String(chunk)); return true; });
+    try {
+      await createRepresentativeState().transact(() => {});
+    } finally {
+      spy2.mockRestore();
+    }
+    expect(quiet).toEqual([]);
+  });
+});
+
 describe('reset-state', () => {
   it('refuses a healthy database and changes nothing', async () => {
     await prepareBinding('/work/a');
@@ -659,6 +702,37 @@ describe('reset-state', () => {
     expect(out).toContain('Bindings kept: none');
     expect(out).toMatch(/Binding lost: bindings unreadable/);
     expect(rowsOf(readCurrent(stateRoot)!, 'bindings')).toEqual([]);
+  });
+
+  it('escapes terminal control characters in every value it prints', async () => {
+    const hostile = '/work/\u001b[2J\u001b]0;owned\u0007x\u009b31m';
+    const report = {
+      outcome: 'reset' as const, previous: `g1\u001b[2J`, current: `g2\u0007`, salvaged: [hostile],
+      dropped: [{ worktree: `${hostile}-dropped`, reason: `bad\u001b[31m reason` }], retainedAside: [`g0\u001b[1m`],
+    };
+    let out = '', err = '';
+    expect(await runRepresentativeResetState({ stdout: (t) => { out += t; }, stderr: (t) => { err += t; } }, async () => report)).toBe(0);
+    expect(await runRepresentativeResetState({ stdout: () => {}, stderr: (t) => { err += t; } },
+      async () => ({ ...report, outcome: 'healthy' as const }))).toBe(1);
+    expect(await runRepresentativeResetState({ stdout: () => {}, stderr: (t) => { err += t; } },
+      async () => { throw new Error(`failed at ${hostile}`); })).toBe(1);
+    for (const text of [out, err]) {
+      expect(text.replace(/\n/g, '')).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    }
+    expect(out).toContain('/work/\\u001b[2J\\u001b]0;owned\\u0007x\\u009b31m');
+    expect(err).toContain('failed at /work/\\u001b[2J');
+  });
+
+  it('escapes a hostile worktree salvaged from a real corrupt database', async () => {
+    const hostile = '/work/\u001b]0;owned\u0007';
+    const store = createRepresentativeStore();
+    await store.saveBinding(bind(hostile), { rebind: true });
+    store.state.close();
+    corruptTable(readCurrent(stateRoot)!);
+    let out = '';
+    expect(await runRepresentativeResetState({ stdout: (t) => { out += t; }, stderr: (t) => { throw new Error(t); } })).toBe(0);
+    expect(out).toContain('Bindings kept: /work/\\u001b]0;owned\\u0007.');
+    expect(out.replace(/\n/g, '')).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
   });
 
   it('lets exactly one of two concurrent resets replace the generation', async () => {

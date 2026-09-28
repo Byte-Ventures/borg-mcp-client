@@ -21,7 +21,7 @@ import { bindingFingerprint, createRepresentativeStore, type RepresentativeBindi
 import { representativeStateRoot } from '../src/representative-db.js';
 import {
   configRoot, deliveryRow, plantLegacyBindings, legacyDeliveryRoot, plantLegacyCheckpoint, plantLegacyTombstone, privateTree, returnedRows,
-  seatHash, stateInitialized, withStateDb,
+  seatHash, withStateDb,
 } from './fixtures/representative-state.js';
 
 const originalHome = process.env.HOME;

@@ -81,6 +81,10 @@ export async function loadSqlite() {
     });
     return sqliteModule;
 }
+/** A value for terminal output: C0/C1 control characters and DEL escaped as \\uXXXX. */
+export function printable(value) {
+    return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
 export function representativeStateRoot() {
     return join(borgConfigRoot(), 'representative', 'state');
 }
@@ -218,6 +222,10 @@ export function createRepresentativeState(options = {}) {
     const now = options.now ?? (() => new Date());
     const hook = (name) => options.hooks?.[name]?.();
     const busyTimeoutMs = options.busyTimeoutMs ?? BUSY_TIMEOUT_MS;
+    const reportKept = options.onKept ?? ((stateRoot, kept) => {
+        process.stderr.write(`borg representative: left in place in ${printable(stateRoot)} (not removable as a plain generation): ` +
+            `${kept.map(printable).join(', ')}. Nothing else in them was touched; remove them by hand if they are not needed.\n`);
+    });
     let handle = null;
     const discard = () => {
         if (!handle)
@@ -271,10 +279,10 @@ export function createRepresentativeState(options = {}) {
         let current = readCurrent(root);
         if (current === null) {
             const fill = options.seed ? await options.seed() : () => { };
-            await withPublishMutex(root, (sqlite, lockedRoot) => {
-                if (readCurrent(lockedRoot) === null)
-                    publishGeneration(sqlite, lockedRoot, fill, now, hook);
-            }, { create: true, ensureTree });
+            const kept = await withPublishMutex(root, (sqlite, lockedRoot) => readCurrent(lockedRoot) === null ? publishGeneration(sqlite, lockedRoot, fill, now, hook).kept : [], { create: true, ensureTree });
+            // Retention never removes anything but exact database files: report what it left.
+            if (kept.length > 0)
+                reportKept(root, kept);
             current = readCurrent(root);
             if (current === null)
                 throw invalid(join(root, 'CURRENT'), 'CURRENT was not published');
@@ -435,7 +443,8 @@ export async function withPublishMutex(root, body, options) {
 /**
  * Build a complete generation, then publish it with one rename of CURRENT.
  * Nothing is visible until the rename; durability is claimed only after the
- * final directory fsync. Runs inside the publish mutex.
+ * final directory fsync. Runs inside the publish mutex. Returns the new
+ * generation and the generation-named entries retention left in place.
  */
 export function publishGeneration(sqlite, root, fill, now = () => new Date(), hook = () => { }) {
     const { DatabaseSync } = sqlite;
@@ -479,8 +488,7 @@ export function publishGeneration(sqlite, root, fill, now = () => new Date(), ho
     renameSync(tmp, join(root, 'CURRENT'));
     fsyncPath(root);
     hook('publish:done');
-    cleanupGenerations(root, gen);
-    return gen;
+    return { generation: gen, kept: cleanupGenerations(root, gen) };
 }
 function mkdirPrivate(directory) {
     // An explicit mode, then verify: the umask can only remove bits.
@@ -623,7 +631,7 @@ export async function resetRepresentativeState(options) {
             catch (error) {
                 dropped.push({ worktree: null, reason: `bindings unreadable (${error instanceof Error ? error.message : String(error)})` });
             }
-            const current = publishGeneration(sqlite, lockedRoot, (db) => {
+            const { generation: current } = publishGeneration(sqlite, lockedRoot, (db) => {
                 const binding = db.prepare(`INSERT INTO bindings (worktree, generation, seat, origin, binding) VALUES (?, ?, ?, 'prepared', ?)`);
                 const delivery = db.prepare(`INSERT INTO delivery (generation, seat, start_id, start_at, start_kind, checkpoint_id,
           checkpoint_at, read_through_id, read_through_at) VALUES (?, ?, ?, ?, 'binding', NULL, NULL, NULL, NULL)`);

@@ -4,7 +4,7 @@
  * typed client errors. Backend evidence is the controlled mock fixture.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ErrorCode, ProtocolContractError } from 'borgmcp-shared/protocol';

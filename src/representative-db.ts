@@ -100,6 +100,11 @@ export async function loadSqlite(): Promise<SqliteModule> {
   return sqliteModule;
 }
 
+/** A value for terminal output: C0/C1 control characters and DEL escaped as \\uXXXX. */
+export function printable(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 export function representativeStateRoot(): string {
   return join(borgConfigRoot(), 'representative', 'state');
 }
@@ -232,6 +237,11 @@ export interface RepresentativeStateOptions {
    * a reset.
    */
   seed?: () => Promise<(db: DatabaseSync) => void>;
+  /**
+   * Receives the generation-named entries the first creation's retention left
+   * in place (not removable as a plain generation). Default: one line on stderr.
+   */
+  onKept?: (root: string, kept: string[]) => void;
   /** Test seams: run between the named steps (kill/pause controls). */
   hooks?: Partial<Record<
     'beforeOpen' | 'beforeBegin' | 'afterBegin' | 'publish:dir' | 'publish:schema' | 'publish:rows' | 'publish:fsync' | 'publish:tmp' | 'publish:rename' | 'publish:done',
@@ -259,6 +269,10 @@ export function createRepresentativeState(options: RepresentativeStateOptions = 
   const now = options.now ?? (() => new Date());
   const hook = (name: keyof NonNullable<RepresentativeStateOptions['hooks']>) => options.hooks?.[name]?.();
   const busyTimeoutMs = options.busyTimeoutMs ?? BUSY_TIMEOUT_MS;
+  const reportKept = options.onKept ?? ((stateRoot: string, kept: string[]) => {
+    process.stderr.write(`borg representative: left in place in ${printable(stateRoot)} (not removable as a plain generation): ` +
+      `${kept.map(printable).join(', ')}. Nothing else in them was touched; remove them by hand if they are not needed.\n`);
+  });
   let handle: { gen: string; db: DatabaseSync } | null = null;
 
   const discard = () => {
@@ -303,9 +317,11 @@ export function createRepresentativeState(options: RepresentativeStateOptions = 
     let current = readCurrent(root);
     if (current === null) {
       const fill = options.seed ? await options.seed() : () => {};
-      await withPublishMutex(root, (sqlite, lockedRoot) => {
-        if (readCurrent(lockedRoot) === null) publishGeneration(sqlite, lockedRoot, fill, now, hook);
-      }, { create: true, ensureTree });
+      const kept = await withPublishMutex(root, (sqlite, lockedRoot) =>
+        readCurrent(lockedRoot) === null ? publishGeneration(sqlite, lockedRoot, fill, now, hook).kept : [],
+      { create: true, ensureTree });
+      // Retention never removes anything but exact database files: report what it left.
+      if (kept.length > 0) reportKept(root, kept);
       current = readCurrent(root);
       if (current === null) throw invalid(join(root, 'CURRENT'), 'CURRENT was not published');
     }
@@ -436,7 +452,8 @@ export async function withPublishMutex<T>(
 /**
  * Build a complete generation, then publish it with one rename of CURRENT.
  * Nothing is visible until the rename; durability is claimed only after the
- * final directory fsync. Runs inside the publish mutex.
+ * final directory fsync. Runs inside the publish mutex. Returns the new
+ * generation and the generation-named entries retention left in place.
  */
 export function publishGeneration(
   sqlite: SqliteModule,
@@ -444,7 +461,7 @@ export function publishGeneration(
   fill: (db: DatabaseSync) => void,
   now: () => Date = () => new Date(),
   hook: (name: 'publish:dir' | 'publish:schema' | 'publish:rows' | 'publish:fsync' | 'publish:tmp' | 'publish:rename' | 'publish:done') => void = () => {},
-): string {
+): { generation: string; kept: string[] } {
   const { DatabaseSync } = sqlite;
   const gen = newGenerationName(root, now());
   const directory = join(root, gen);
@@ -480,8 +497,7 @@ export function publishGeneration(
   renameSync(tmp, join(root, 'CURRENT'));
   fsyncPath(root);
   hook('publish:done');
-  cleanupGenerations(root, gen);
-  return gen;
+  return { generation: gen, kept: cleanupGenerations(root, gen) };
 }
 
 function mkdirPrivate(directory: string): void {
@@ -622,7 +638,7 @@ export async function resetRepresentativeState(options: ResetOptions): Promise<R
         dropped.push({ worktree: null, reason: `bindings unreadable (${error instanceof Error ? error.message : String(error)})` });
       }
 
-      const current = publishGeneration(sqlite, lockedRoot, (db) => {
+      const { generation: current } = publishGeneration(sqlite, lockedRoot, (db) => {
         const binding = db.prepare(`INSERT INTO bindings (worktree, generation, seat, origin, binding) VALUES (?, ?, ?, 'prepared', ?)`);
         const delivery = db.prepare(`INSERT INTO delivery (generation, seat, start_id, start_at, start_kind, checkpoint_id,
           checkpoint_at, read_through_id, read_through_at) VALUES (?, ?, ?, ?, 'binding', NULL, NULL, NULL, NULL)`);
