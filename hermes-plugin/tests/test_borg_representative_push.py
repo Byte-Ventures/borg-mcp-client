@@ -602,6 +602,77 @@ class ListenerLifecycleTests(TempDirCase):
         self.assertEqual(len(fake.invocations()), 1)
 
 
+class PluginDataSymlinkTests(TempDirCase):
+    """Security P3 (806a001): plugin-data paths must never be followed through a planted symlink."""
+
+    def victim(self, content: str = "ORIGINAL") -> Path:
+        path = self.tmp / "victim"
+        path.write_text(content)
+        return path
+
+    def test_state_temp_file_never_writes_through_a_planted_link(self):
+        victim = self.victim()
+        store = push.StateStore(self.data)
+        planted = self.data / f".state.{os.getpid()}.{threading.get_ident()}.tmp"
+        planted.symlink_to(victim)
+        store.save({"delivered": {"entry_id": ID1, "created_at": T1}})
+        self.assertEqual(victim.read_text(), "ORIGINAL")
+        state = self.data / "state.json"
+        self.assertFalse(state.is_symlink())
+        self.assertEqual(json.loads(state.read_text())["delivered"]["entry_id"], ID1)
+        self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o600)
+
+    def test_state_is_never_read_through_a_planted_link(self):
+        victim = self.victim(json.dumps({"version": push.STATE_VERSION,
+                                         "delivered": {"entry_id": ID1, "created_at": T1}}))
+        (self.data / "state.json").symlink_to(victim)
+        self.assertEqual(push.StateStore(self.data).load(), {})
+
+    def test_state_save_replaces_a_planted_state_link_without_writing_through(self):
+        victim = self.victim()
+        (self.data / "state.json").symlink_to(victim)
+        push.StateStore(self.data).save({"gap_wakes": 1})
+        self.assertEqual(victim.read_text(), "ORIGINAL")
+        self.assertFalse((self.data / "state.json").is_symlink())
+
+    def test_listener_stderr_log_never_writes_through_a_planted_link(self):
+        victim = self.victim()
+        (self.data / "listener.stderr.log").symlink_to(victim)
+        supervisor = self.supervisor()
+        with supervisor._lock:
+            supervisor._ensure_state()
+        handle = supervisor._stderr_log()
+        if hasattr(handle, "write"):
+            handle.write("APPENDED")
+            handle.close()
+        self.assertEqual(victim.read_text(), "ORIGINAL")
+
+    def test_data_directory_is_made_private(self):
+        home = self.tmp / "hermes-home"
+        directory = home / "plugin-data" / push.PLUGIN_NAME
+        directory.mkdir(parents=True, mode=0o755)
+        directory.chmod(0o755)
+        os.environ["HERMES_HOME"] = str(home)
+        try:
+            self.assertEqual(push.default_data_dir(), directory)
+        finally:
+            del os.environ["HERMES_HOME"]
+        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+
+    def test_a_symlinked_data_directory_is_refused(self):
+        home = self.tmp / "hermes-home"
+        (home / "plugin-data").mkdir(parents=True)
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        (home / "plugin-data" / push.PLUGIN_NAME).symlink_to(elsewhere, target_is_directory=True)
+        os.environ["HERMES_HOME"] = str(home)
+        try:
+            with self.assertRaises(OSError):
+                push.default_data_dir()
+        finally:
+            del os.environ["HERMES_HOME"]
+
+
 class ReapTests(TempDirCase):
     RECORD = {"pid": 4321, "parent": 1111, "started": "Mon Sep 28 08:00:00 2026"}
 

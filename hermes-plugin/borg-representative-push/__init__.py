@@ -208,7 +208,13 @@ def default_data_dir() -> Path:
         home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
         directory = Path(home) / "plugin-data" / PLUGIN_NAME
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if directory.is_symlink() or not directory.is_dir():
+        raise OSError(f"{directory} must be a real directory, not a symbolic link")
+    os.chmod(directory, 0o700)  # Hermes creates it with the umask mode
     return directory
+
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 class StateStore:
@@ -219,7 +225,13 @@ class StateStore:
 
     def load(self) -> dict:
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            # O_NOFOLLOW: a symbolic link planted at state.json is refused, never read through.
+            descriptor = os.open(self.path, os.O_RDONLY | _NOFOLLOW)
+        except OSError:
+            return {}
+        try:
+            with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+                data = json.loads(handle.read())
         except (OSError, ValueError):
             return {}
         return data if isinstance(data, dict) and data.get("version") == STATE_VERSION else {}
@@ -227,13 +239,26 @@ class StateStore:
     def save(self, data: dict) -> None:
         payload = json.dumps({**data, "version": STATE_VERSION}, sort_keys=True).encode("utf-8")
         temporary = self.path.with_name(f".state.{os.getpid()}.{threading.get_ident()}.tmp")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
-            os.write(descriptor, payload)
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        os.replace(temporary, self.path)
+            os.unlink(temporary)  # removes a leftover or planted entry itself, never its target
+        except FileNotFoundError:
+            pass
+        # O_EXCL|O_NOFOLLOW: only a fresh regular file is written; os.replace then swaps the
+        # name, replacing (not following) anything planted at state.json.
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o600)
+        try:
+            try:
+                os.write(descriptor, payload)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, self.path)
+        except OSError:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
 
 
 class Supervisor:
@@ -397,10 +422,16 @@ class Supervisor:
             return subprocess.DEVNULL
         path = store.path.with_name("listener.stderr.log")
         try:
-            mode = "w" if path.exists() and path.stat().st_size > 1_000_000 else "a"
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if mode == "w" else os.O_APPEND), 0o600)
-            return os.fdopen(descriptor, mode, encoding="utf-8")
+            # O_NOFOLLOW: a symbolic link planted at the log is refused (diagnostics are dropped).
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | _NOFOLLOW, 0o600)
         except OSError:
+            return subprocess.DEVNULL
+        try:
+            if os.fstat(descriptor).st_size > 1_000_000:
+                os.ftruncate(descriptor, 0)
+            return os.fdopen(descriptor, "a", encoding="utf-8")
+        except OSError:
+            os.close(descriptor)
             return subprocess.DEVNULL
 
     @staticmethod

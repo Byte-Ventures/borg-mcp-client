@@ -519,8 +519,10 @@ restart that process once so it releases the lease.
   when its next hint fails to write.
 - State (the recorded listener, the observed delivered checkpoint and the wake
   records) and the
-  listener's stderr live under `<Hermes home>/plugin-data/borg-representative-push/`,
-  in files created with mode 0600.
+  listener's stderr live under `<Hermes home>/plugin-data/borg-representative-push/`.
+  The plugin sets that directory to mode 0700, refuses it if it is a symbolic link,
+  creates its files with mode 0600, and never reads or writes through a symbolic
+  link planted there.
 
 ## Recovery
 
