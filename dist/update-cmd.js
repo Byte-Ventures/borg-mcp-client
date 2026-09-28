@@ -616,7 +616,8 @@ export async function runUpdate(options, deps) {
         }
         deps.stdout(`Updated ${CLIENT_PACKAGE}@${pair.client.version}. Local server: skipped (not installed).\n` +
             `Restart active agent sessions to load the updated client.\n`);
-        return deps.activateHermesPlugin();
+        await activateHermesPluginAfterUpdate(deps);
+        return 0;
     }
     let server;
     try {
@@ -736,7 +737,8 @@ export async function runUpdate(options, deps) {
                 renderStoppedServiceRecovery(status))
             : `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; running identities and protocol verified.\n`);
         deps.stdout('Restart active agent sessions to load the updated client.\n');
-        return await deps.activateHermesPlugin();
+        await activateHermesPluginAfterUpdate(deps);
+        return 0;
     }
     catch (error) {
         const interrupted = signalExitCode(error);
@@ -1040,6 +1042,25 @@ async function defaultConfirm(message, defaultYes = false) {
     }
     finally {
         rl.close();
+    }
+}
+/**
+ * Hermes plugin activation never changes the result of an update that
+ * succeeded: an incomplete activation is a warning with the command that
+ * finishes it.
+ */
+async function activateHermesPluginAfterUpdate(deps) {
+    let code;
+    try {
+        code = await deps.activateHermesPlugin();
+    }
+    catch (error) {
+        deps.stderr(`Hermes plugin activation failed: ${errorMessage(error, 'unknown failure')}.\n`);
+        code = 1;
+    }
+    if (code !== 0) {
+        deps.stderr('Warning: the update succeeded, but the Hermes plugin activation is incomplete (see above). ' +
+            'Finish it with: borg representative hermes-plugin install\n');
     }
 }
 export function buildDefaultUpdateDeps(acknowledgedRegistry) {

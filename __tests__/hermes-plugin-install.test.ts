@@ -28,6 +28,7 @@ import {
   activateHermesPlugin,
   configSetText,
   execFileHermesCli,
+  fileActivationStore,
   hermesPluginStatus,
   packagedHermesPluginDir,
   parseGatewayStatus,
@@ -75,6 +76,7 @@ function deps(overrides: Partial<HermesPluginDeps> & { hermesEnv?: NodeJS.Proces
     isTTY: () => false,
     prompt: async () => null,
     now: () => new Date(),
+    activation: fileActivationStore(join(root, 'borg-config', 'hermes-plugin')),
     stdout: (text) => { out.push(text); },
     stderr: (text) => { err.push(text); },
     ...rest,
@@ -193,7 +195,9 @@ describe('hermes-plugin install', () => {
       const index = calls().findIndex(({ argv }) => argv[1] === 'set' && argv[2] === key);
       expect(calls()[index + 1].argv).toEqual(['config', 'get', key, '--json', '--raw']);
     }
-    expect(writes().slice(-2).map(({ argv }) => argv)).toEqual([['serve', '--stop'], ['gateway', 'restart']]);
+    expect(writes().at(-1)?.argv).toEqual(['gateway', 'restart']);
+    // Nothing is stopped or restarted in Hermes Desktop (F5).
+    expect(calls().some(({ argv }) => argv[0] === 'serve' || argv[0] === 'dashboard')).toBe(false);
 
     const [backup] = backups();
     const backupPath = join(home, 'backups', 'borg-representative', backup);
@@ -202,8 +206,10 @@ describe('hermes-plugin install', () => {
     expect(statSync(join(home, 'backups', 'borg-representative')).mode & 0o777).toBe(0o700);
     const text = out.join('');
     expect(text).toContain(`Conversation: ${DM} (the only gateway DM conversation)`);
-    expect(text).toContain(`Backup of config.yaml: ${backupPath}`);
-    expect(text.indexOf('hermes serve --stop')).toBeLessThan(text.indexOf('Running `hermes serve --stop`'));
+    expect(text).toContain(`Backup of config.yaml (for manual recovery): ${backupPath}`);
+    expect(text).toContain('Hermes Desktop: new chats get the Borg tools.');
+    expect(text).not.toContain('/reload-mcp');
+    expect(text.indexOf('hermes gateway restart, only when')).toBeLessThan(text.indexOf('Running `hermes gateway restart`'));
   });
 
   it('is idempotent: a second run makes no write, no backup and no restart', async () => {
@@ -217,7 +223,8 @@ describe('hermes-plugin install', () => {
     expect(writes()).toEqual([]);
     expect(backups()).toHaveLength(backupCount);
     expect(readFileSync(join(home, 'config.yaml'))).toEqual(before);
-    expect(out.join('')).toContain('already installed and configured; nothing was changed');
+    expect(out.join('')).toContain('installed, configured and active; nothing was changed');
+    expect(out.join('')).not.toContain('Hermes Desktop');
   });
 
   it('round-trips a worktree path with YAML and flow syntax exactly, with no extra keys', async () => {
@@ -257,10 +264,18 @@ describe('hermes-plugin install', () => {
     expect(await install({ dryRun: true, worktree }, d)).toBe(0);
   });
 
-  it('--no-restart skips both restarts and prints the commands', async () => {
+  it('--no-restart skips the restart and leaves the activation pending; a normal rerun finishes it', async () => {
     expect(await install({ noRestart: true })).toBe(0);
-    expect(writes().some(({ argv }) => argv[0] === 'gateway' || argv[0] === 'serve')).toBe(false);
-    expect(out.join('')).toContain('run `hermes serve --stop` and restart the gateway (`hermes gateway restart`)');
+    expect(writes().some(({ argv }) => argv[0] === 'gateway' && argv[1] === 'restart')).toBe(false);
+    expect(out.join('')).toContain('Restart skipped (--no-restart); the activation stays pending');
+    resetLog(); out = [];
+    expect(await install()).toBe(0);
+    expect(writes().map(({ argv }) => argv)).toEqual([['gateway', 'restart']]);
+    expect(out.join('')).toContain('finishing the pending activation');
+    resetLog(); out = [];
+    expect(await install()).toBe(0);
+    expect(writes()).toEqual([]);
+    expect(out.join('')).toContain('installed, configured and active');
   });
 
   it('migrates a 5.x install: refreshes the files, unsets the old settings, keeps the configured conversation', async () => {
@@ -329,21 +344,41 @@ describe('hermes-plugin install', () => {
 });
 
 describe('hermes-plugin install rollback', () => {
-  it('restores the backup and removes a new plugin directory when a write fails', async () => {
+  it('reverses its own keys through the Hermes CLI and removes a new plugin directory when a write fails', async () => {
     setRules([{ match: 'config set mcp_servers.borg-representative', code: 1, stderr: 'boom' }]);
     expect(await install()).toBe(1);
-    expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toBe(ORIGINAL_CONFIG);
+    // Every Borg key is gone; at most the now-empty `plugins.entries` mapping Hermes created for it remains.
+    const { entries, ...plugins } = config().plugins;
+    expect(entries ?? {}).toEqual({});
+    expect({ ...config(), plugins }).toEqual(JSON.parse(ORIGINAL_CONFIG));
     expect(existsSync(pluginDir())).toBe(false);
-    expect(err.join('')).toContain('boom');
-    expect(err.join('')).toMatch(/config\.yaml was restored from .*borg-representative\/config\.yaml\./);
+    const message = err.join('');
+    expect(message).toContain('boom');
+    expect(message).toContain(`Reversed: plugins.entries.${HERMES_PLUGIN_NAME}.allow_gateway_injection`);
+    expect(message).toMatch(/config\.yaml as it was before this run: .*borg-representative\/config\.yaml\./);
+    // Every reversal goes through `hermes config`; the backup is never copied back.
+    expect(writes().filter(({ argv }) => argv[1] === 'unset').length).toBeGreaterThan(0);
     expect(writes().some(({ argv }) => argv[0] === 'gateway')).toBe(false);
+    expect(existsSync(join(root, 'borg-config', 'hermes-plugin'))).toBe(true);
+    expect(readdirSync(join(root, 'borg-config', 'hermes-plugin'))).toEqual([]); // no pending activation
   });
 
-  it('fails when the read-back differs from the intended value, then restores', async () => {
+  it('fails when the read-back differs from the intended value, then reverses that key too', async () => {
     setRules([{ match: `config set plugins.entries.${HERMES_PLUGIN_NAME}.settings.worktree`, store: '/somewhere/else' }]);
     expect(await install()).toBe(1);
     expect(err.join('')).toContain('Hermes stored');
-    expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toBe(ORIGINAL_CONFIG);
+    // The stored value is not what Borg wrote, so it counts as someone else's and is left.
+    expect(err.join('')).toContain(`plugins.entries.${HERMES_PLUGIN_NAME}.settings.worktree (changed outside this run)`);
+    expect(config().plugins.entries[HERMES_PLUGIN_NAME].settings).toEqual({ worktree: '/somewhere/else' });
+  });
+
+  it('restores a previous value rather than deleting it', async () => {
+    writeFileSync(join(home, 'config.yaml'), JSON.stringify({
+      plugins: { entries: { [HERMES_PLUGIN_NAME]: { settings: { session_key: 'agent:main:slack:dm:OLD' } } } },
+    }));
+    setRules([{ match: 'config set mcp_servers.borg-representative', code: 1 }]);
+    expect(await install({ sessionKey: DM })).toBe(1);
+    expect(config().plugins.entries[HERMES_PLUGIN_NAME]).toEqual({ settings: { session_key: 'agent:main:slack:dm:OLD' } });
   });
 
   it('restores the previous plugin files of an existing install on failure', async () => {
@@ -356,22 +391,47 @@ describe('hermes-plugin install rollback', () => {
     expect(readFileSync(join(pluginDir(), '__init__.py'), 'utf8')).toBe('# old\n');
   });
 
-  it('never overwrites a config.yaml changed by someone else during the run', async () => {
+  it('keeps an edit someone else made during the run', async () => {
     setRules([{ match: 'config set mcp_servers.borg-representative', code: 1, touch: true }]);
     expect(await install()).toBe(1);
     const after = config();
     expect(after.touched_by_someone_else).toBe(true);
-    const message = err.join('');
-    expect(message).toContain('config.yaml changed outside this run, so it was not restored');
-    expect(message).toContain(`set plugins.entries.${HERMES_PLUGIN_NAME}.settings.session_key`);
-    expect(message).toMatch(/Backup: .*config\.yaml\./);
+    expect(after.plugins.entries?.[HERMES_PLUGIN_NAME]).toBeUndefined();
+    expect(err.join('')).toMatch(/config\.yaml as it was before this run: .*config\.yaml\./);
+  });
+
+  it('leaves a key someone else changed after Borg wrote it', async () => {
+    const d = deps();
+    const original = d.hermes;
+    d.hermes = (h) => {
+      const cli = original(h);
+      return async (argv) => {
+        if (argv[0] === 'config' && argv[1] === 'set' && argv[2] === 'mcp_servers.borg-representative') {
+          const current = config();
+          current.plugins.entries[HERMES_PLUGIN_NAME].settings.session_key = 'agent:main:slack:dm:THEIRS';
+          writeFileSync(join(home, 'config.yaml'), JSON.stringify(current));
+          return { code: 1, stdout: '', stderr: 'injected failure' };
+        }
+        return cli(argv);
+      };
+    };
+    expect(await install({}, d)).toBe(1);
+    expect(config().plugins.entries[HERMES_PLUGIN_NAME].settings.session_key).toBe('agent:main:slack:dm:THEIRS');
+    expect(err.join('')).toContain(`plugins.entries.${HERMES_PLUGIN_NAME}.settings.session_key (changed outside this run)`);
+    // A key left in place keeps Borg's plugin files too: the install stays whole for a rerun.
+    expect(existsSync(join(pluginDir(), 'plugin.yaml'))).toBe(true);
   });
 
   it('reports a failed restart after a completed configuration', async () => {
     setRules([{ match: 'gateway restart', code: 1, stderr: 'Gateway service restart failed.' }]);
     expect(await install()).toBe(1);
     expect(config().plugins.enabled).toContain(HERMES_PLUGIN_NAME);
-    expect(err.join('')).toContain('Run `hermes gateway restart` yourself where the gateway runs');
+    expect(err.join('')).toContain('Run `hermes gateway restart` where the gateway runs to load the plugin');
+    // The activation stays pending: a rerun restarts again.
+    setRules([]);
+    resetLog();
+    expect(await install()).toBe(0);
+    expect(writes().map(({ argv }) => argv)).toEqual([['gateway', 'restart']]);
   });
 
   it('reports a hermes executable that cannot be run', async () => {
@@ -394,14 +454,14 @@ describe('gateway restart only under a service (D2)', () => {
       expect(await install(), mode).toBe(0);
       expect(restarts()).toHaveLength(1);
       const statusCalls = calls().filter(({ argv }) => argv[0] === 'gateway' && argv[1] === 'status');
-      expect(statusCalls).toHaveLength(2); // before and after the restart
-      expect(out.join('')).toContain('The Hermes gateway restarted (PID 101)');
+      expect(statusCalls).toHaveLength(3); // when the config is written, before and after the restart
+      expect(out.join('')).toContain('The Hermes gateway restarted (PID 100 -> 101)');
     }
   });
 
   it.each([
     ['manual', 'was started by hand'],
-    ['multiplexed', "runs inside the default profile's gateway"],
+    ['multiplexed', "gateway runs inside the default profile's gateway"],
     ['stopped', 'is not running; it will load the plugin when it starts'],
     ['odd', 'did not show a service-managed gateway'],
   ])('never runs gateway restart for a %s gateway, and says what to do', async (mode, message) => {
@@ -409,14 +469,14 @@ describe('gateway restart only under a service (D2)', () => {
     expect(await install()).toBe(0);
     expect(restarts()).toEqual([]);
     expect(existsSync(join(home, 'fake-foreground-gateway'))).toBe(false);
-    expect(writes().map(({ argv }) => argv)).toContainEqual(['serve', '--stop']);
+    expect(calls().some(({ argv }) => argv[0] === 'serve')).toBe(false);
     expect(out.join('')).toContain(message);
   });
 
   it('fails when the restart cannot be confirmed', async () => {
     setGateway({ mode: 'launchd', pid: 100, restartKeepsPid: true });
     expect(await install()).toBe(1);
-    expect(err.join('')).toContain('could not be confirmed');
+    expect(err.join('')).toContain('The gateway restart is unconfirmed');
   });
 
   it('kills only its own hermes child when a restart exceeds the hard timeout', async () => {
@@ -522,8 +582,10 @@ describe('hermes-plugin uninstall', () => {
     expect(after.mcp_servers?.['borg-representative']).toBeUndefined();
     expect(after.model).toBe('keep-me');
     expect(existsSync(pluginDir())).toBe(false);
-    expect(writes().slice(-2).map(({ argv }) => argv)).toEqual([['serve', '--stop'], ['gateway', 'restart']]);
+    expect(writes().at(-1)?.argv).toEqual(['gateway', 'restart']);
+    expect(calls().some(({ argv }) => argv[0] === 'serve')).toBe(false);
     expect(backups().length).toBeGreaterThanOrEqual(2);
+    expect(out.join('')).toContain('Hermes Desktop: run /reload-mcp in each open chat, or restart Hermes Desktop');
 
     resetLog();
     out = [];
@@ -555,13 +617,23 @@ describe('hermes-plugin uninstall', () => {
     expect(existsSync(pluginDir())).toBe(true);
   });
 
-  it('restores the backup when an uninstall write fails', async () => {
+  it('reverses its own keys when an uninstall write fails, and keeps the install', async () => {
     expect(await install()).toBe(0);
-    const before = readFileSync(join(home, 'config.yaml'), 'utf8');
+    const before = config();
     setRules([{ match: `config unset plugins.entries.${HERMES_PLUGIN_NAME}`, code: 1 }]);
     expect(await uninstall()).toBe(1);
-    expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toBe(before);
-    expect(existsSync(pluginDir())).toBe(true);
+    expect(config()).toEqual(before);
+    expect(err.join('')).toContain('Reversed: plugins.enabled');
+    expect(existsSync(join(pluginDir(), 'plugin.yaml'))).toBe(true);
+  });
+
+  it('removes the Python bytecode cache with the plugin files, so the directory goes too', async () => {
+    expect(await install({ noRestart: true })).toBe(0);
+    mkdirSync(join(pluginDir(), '__pycache__'));
+    writeFileSync(join(pluginDir(), '__pycache__', '__init__.cpython-313.pyc'), 'cache');
+    expect(await uninstall({ noRestart: true })).toBe(0);
+    expect(existsSync(pluginDir())).toBe(false);
+    expect(readdirSync(join(root, 'borg-config', 'hermes-plugin'))).toEqual([]); // no pending record left
   });
 });
 
@@ -581,15 +653,24 @@ describe('activateHermesPlugin (borg update)', () => {
     const d = deps({ prompt: async () => { throw new Error('activation must not prompt'); } });
     expect(await activation(d)).toBe(0);
     expect(readFileSync(join(pluginDir(), '__init__.py'))).toEqual(readFileSync(join(packagedHermesPluginDir(), '__init__.py')));
-    expect(writes().slice(-2).map(({ argv }) => argv)).toEqual([['serve', '--stop'], ['gateway', 'restart']]);
+    expect(writes().at(-1)?.argv).toEqual(['gateway', 'restart']);
   });
 
-  it('fails with the install command when it cannot choose a conversation', async () => {
+  it('reports, without prompting, when it cannot choose a conversation', async () => {
     mkdirSync(pluginDir(), { recursive: true });
+    writeFileSync(join(pluginDir(), 'plugin.yaml'), 'name: borg-representative-push\n');
     writeSessions({ [DM]: {}, 'agent:main:discord:dm:42': {} });
     expect(await activation()).toBe(1);
-    expect(err.join('')).toContain('borg representative hermes-plugin install');
+    expect(err.join('')).toContain('pass one with --session-key');
     expect(writes()).toEqual([]);
+  });
+
+  it("treats a plugin directory without Borg's plugin.yaml as no install", async () => {
+    mkdirSync(pluginDir(), { recursive: true });
+    writeFileSync(join(pluginDir(), 'notes.txt'), 'mine');
+    expect(await activation()).toBe(0);
+    expect(calls()).toEqual([]);
+    expect(readdirSync(pluginDir())).toEqual(['notes.txt']);
   });
 
   it('never creates the plugin directory', async () => {
@@ -626,7 +707,8 @@ describe('status report', () => {
     writeFileSync(join(home, '.env'), 'TELEGRAM_ALLOW_ALL_USERS=1\n');
     resetLog();
     expect(await hermesPluginStatus(statusDeps())).toEqual({
-      installed: true, hermes_home: home, session_key: DM, open_gateway: ['TELEGRAM_ALLOW_ALL_USERS'],
+      installed: true, hermes_home: home, activation_pending: true, desktop_reload_pending: false,
+      session_key: DM, open_gateway: ['TELEGRAM_ALLOW_ALL_USERS'],
     });
     expect(writes()).toEqual([]);
   });
@@ -637,10 +719,132 @@ describe('gateway status parsing', () => {
     expect(parseGatewayStatus('✓ Gateway is supervised by launchd (PID 42)\n')).toEqual({ kind: 'service', pid: '42' });
     expect(parseGatewayStatus('✓ User gateway service is running\n Main PID: 7 (python)\n')).toEqual({ kind: 'service', pid: '7' });
     expect(parseGatewayStatus('✓ System gateway service is running\n')).toEqual({ kind: 'service', pid: null });
-    expect(parseGatewayStatus('✓ Gateway is running (PID: 9)\n  (Running manually, not as a system service)\n')).toEqual({ kind: 'manual' });
+    expect(parseGatewayStatus('✓ Gateway is running (PID: 9)\n  (Running manually, not as a system service)\n')).toEqual({ kind: 'manual', pid: '9' });
     expect(parseGatewayStatus('⚠ Gateway service is registered but launchd is not supervising it\n')).toEqual({ kind: 'unknown' });
     expect(parseGatewayStatus('✗ Gateway service is not loaded\n')).toEqual({ kind: 'stopped' });
     expect(parseGatewayStatus('')).toEqual({ kind: 'unknown' });
+  });
+});
+
+describe('CR S4 lifecycle probes (review 846e63fe)', () => {
+  it('CR uninstall with Python cache stays uninstalled on update', async () => {
+    expect(await install({ noRestart: true })).toBe(0);
+    mkdirSync(join(pluginDir(), '__pycache__'));
+    writeFileSync(join(pluginDir(), '__pycache__', '__init__.cpython-313.pyc'), 'cache');
+    expect(await runHermesPluginUninstall({ hermesHome: home, dryRun: false, noRestart: true }, deps())).toBe(0);
+    resetLog();
+    expect(await activateHermesPlugin(deps({ env: { HERMES_HOME: home } }))).toBe(0);
+    expect(existsSync(join(pluginDir(), 'plugin.yaml'))).toBe(false);
+    expect(writes()).toEqual([]);
+  });
+
+  it('CR rerun completes activation after restart failure', async () => {
+    setGateway({ mode: 'launchd', pid: 100, restartKeepsPid: true });
+    expect(await install()).toBe(1);
+    setGateway({ mode: 'launchd', pid: 100 });
+    resetLog();
+    expect(await install()).toBe(0);
+    expect(calls().some(({ argv }) => argv.join(' ') === 'gateway restart')).toBe(true);
+  });
+
+  it('CR service without PID cannot confirm restart', async () => {
+    const d = deps();
+    const original = d.hermes;
+    d.hermes = (h) => {
+      const cli = original(h);
+      return async (argv) => argv.join(' ') === 'gateway status'
+        ? { code: 0, stdout: 'User gateway service is running\n', stderr: '' }
+        : cli(argv);
+    };
+    expect(await install({}, d)).toBe(1);
+  });
+
+  it('CR preserves concurrent config edit after a successful write', async () => {
+    const d = deps();
+    const original = d.hermes;
+    d.hermes = (h) => {
+      const cli = original(h);
+      return async (argv) => {
+        if (argv[0] === 'config' && argv[1] === 'set' && argv[2].endsWith('.worktree')) {
+          return { code: 1, stdout: '', stderr: 'injected failure' };
+        }
+        const result = await cli(argv);
+        if (argv[0] === 'config' && argv[1] === 'set' && argv[2].endsWith('.session_key')) {
+          writeFileSync(join(home, 'config.yaml'), JSON.stringify({ ...config(), unrelated_operator_edit: 'keep' }));
+        }
+        return result;
+      };
+    };
+    expect(await install({}, d)).toBe(1);
+    expect(config().unrelated_operator_edit).toBe('keep');
+  });
+});
+
+describe('activation state (F2, F6)', () => {
+  it('counts a hand-started gateway as reloaded once its PID differs from the one at write time', async () => {
+    setGateway({ mode: 'manual', pid: 200 });
+    expect(await install()).toBe(0);
+    expect(out.join('')).toContain('Action needed: the Hermes gateway was started by hand');
+    resetLog(); out = [];
+    expect(await install()).toBe(0);
+    expect(out.join('')).toContain('Action needed'); // same PID: still pending
+    setGateway({ mode: 'manual', pid: 201 });
+    resetLog(); out = [];
+    expect(await install()).toBe(0);
+    expect(out.join('')).toContain('was restarted since the config was written (PID 201)');
+    expect(restartsIn(calls())).toEqual([]);
+    resetLog(); out = [];
+    expect(await install()).toBe(0);
+    expect(out.join('')).toContain('installed, configured and active');
+    expect(calls().some(({ argv }) => argv[0] === 'gateway')).toBe(false);
+  });
+
+  it('never confirms a restart when the PID after it is missing', async () => {
+    const d = deps();
+    const original = d.hermes;
+    let restarted = false;
+    d.hermes = (h) => {
+      const cli = original(h);
+      return async (argv) => {
+        if (argv.join(' ') === 'gateway restart') restarted = true;
+        if (argv.join(' ') === 'gateway status' && restarted) return { code: 0, stdout: 'User gateway service is running\n', stderr: '' };
+        return cli(argv);
+      };
+    };
+    expect(await install({}, d)).toBe(1);
+    expect(err.join('')).toContain('The gateway restart is unconfirmed');
+    expect(err.join('')).toContain('before 100, after unknown');
+  });
+});
+
+function restartsIn(list: Array<{ argv: string[] }>) {
+  return list.filter(({ argv }) => argv[0] === 'gateway' && argv[1] === 'restart');
+}
+
+describe('Hermes Desktop (F5)', () => {
+  it('prints the reload line for a changed entry, reports it pending in status, and clears it when the entry is unchanged', async () => {
+    expect(await install()).toBe(0);
+    const other = join(root, 'worktrees', 'second');
+    mkdirSync(other, { recursive: true });
+    out = [];
+    expect(await install({ worktree: other }, deps({ worktrees: [worktree, other] }))).toBe(0);
+    expect(out.join('')).toContain('Hermes Desktop: run /reload-mcp in each open chat, or restart Hermes Desktop');
+    expect(out.join('')).toContain('cannot confirm this step');
+    const statusDeps = { ...deps(), env: { ...deps().env, HERMES_HOME: home } };
+    expect(await hermesPluginStatus(statusDeps)).toMatchObject({ activation_pending: false, desktop_reload_pending: true });
+    out = [];
+    expect(await install({ worktree: other }, deps({ worktrees: [worktree, other] }))).toBe(0);
+    expect(out.join('')).not.toContain('Hermes Desktop');
+    expect(await hermesPluginStatus(statusDeps)).toMatchObject({ desktop_reload_pending: false });
+  });
+});
+
+describe('backup directory mode (P3)', () => {
+  it('brings an existing borg-representative backup directory to 0700', async () => {
+    mkdirSync(join(home, 'backups', 'borg-representative'), { recursive: true, mode: 0o755 });
+    chmodSync(join(home, 'backups', 'borg-representative'), 0o755);
+    expect(await install()).toBe(0);
+    expect(statSync(join(home, 'backups', 'borg-representative')).mode & 0o777).toBe(0o700);
   });
 });
 

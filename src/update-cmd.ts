@@ -68,8 +68,8 @@ export interface UpdateDeps {
   verifyRunningProtocol(origin: string): Promise<void>;
   refreshAgentIntegrations(): Promise<void>;
   /**
-   * Activates the Borg Hermes plugin when its directory exists (the install
-   * marker); otherwise does nothing. Returns an exit code; it reports its own errors.
+   * Activates the Borg Hermes plugin when it is installed; otherwise does
+   * nothing. Returns non-zero when the activation is incomplete (it reports why).
    */
   activateHermesPlugin(): Promise<number>;
   confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
@@ -839,7 +839,8 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       `Updated ${CLIENT_PACKAGE}@${pair.client.version}. Local server: skipped (not installed).\n` +
       `Restart active agent sessions to load the updated client.\n`,
     );
-    return deps.activateHermesPlugin();
+    await activateHermesPluginAfterUpdate(deps);
+    return 0;
   }
 
   let server: InstalledPackage;
@@ -970,7 +971,8 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
         : `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; running identities and protocol verified.\n`,
     );
     deps.stdout('Restart active agent sessions to load the updated client.\n');
-    return await deps.activateHermesPlugin();
+    await activateHermesPluginAfterUpdate(deps);
+    return 0;
   } catch (error) {
     const interrupted = signalExitCode(error);
     if (updateAttempted && !recoveryStatusAttempted && observedStatus === null) {
@@ -1307,6 +1309,27 @@ async function defaultConfirm(message: string, defaultYes = false): Promise<'yes
     throw error;
   } finally {
     rl.close();
+  }
+}
+
+/**
+ * Hermes plugin activation never changes the result of an update that
+ * succeeded: an incomplete activation is a warning with the command that
+ * finishes it.
+ */
+async function activateHermesPluginAfterUpdate(deps: UpdateDeps): Promise<void> {
+  let code: number;
+  try {
+    code = await deps.activateHermesPlugin();
+  } catch (error) {
+    deps.stderr(`Hermes plugin activation failed: ${errorMessage(error, 'unknown failure')}.\n`);
+    code = 1;
+  }
+  if (code !== 0) {
+    deps.stderr(
+      'Warning: the update succeeded, but the Hermes plugin activation is incomplete (see above). ' +
+        'Finish it with: borg representative hermes-plugin install\n',
+    );
   }
 }
 

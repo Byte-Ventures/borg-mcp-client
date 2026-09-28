@@ -6,13 +6,15 @@
  * (`hermes config set|get|unset`, `hermes plugins enable`), run with execFile and
  * never a shell, with one explicit HERMES_HOME. After each write the value is read
  * back with `hermes config get <key> --json --raw` and must deep-equal the intended
- * value. Before the first write, config.yaml is backed up (O_EXCL|O_NOFOLLOW,
- * 0600). On failure the backup is restored only when config.yaml still has the
- * digest this run last recorded; otherwise nothing is restored and the applied
- * steps are printed.
+ * value. Before the first write, config.yaml is copied to a backup
+ * (O_EXCL|O_NOFOLLOW, 0600) kept for manual recovery. A failed run reverses only
+ * Borg's own keys, one by one through the Hermes CLI, and only where they still
+ * hold what Borg wrote.
  *
- * The plugin directory `<home>/plugins/borg-representative-push/` is the install
- * marker: `borg update` activates whenever it exists and never creates it.
+ * Borg's manifest `<home>/plugins/borg-representative-push/plugin.yaml` is the
+ * install marker: `borg update` activates only an install and never creates one.
+ * An activation record in Borg's config marks config that the gateway has not
+ * yet been seen to load, so a rerun finishes the job.
  */
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -22,7 +24,8 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { mkdir, open, rename, rmdir, unlink, writeFile } from './guarded-fs.js';
+import { chmod, mkdir, open, rename, rmdir, unlink, writeFile } from './guarded-fs.js';
+import { borgConfigRoot } from './private-root.js';
 
 export const HERMES_PLUGIN_NAME = 'borg-representative-push';
 /** Exactly the shipped files; nothing else in the source directory is copied. */
@@ -37,6 +40,7 @@ const HERMES_OUTPUT_MAX = 4 * 1024 * 1024;
 const ENTRY_KEY = `plugins.entries.${HERMES_PLUGIN_NAME}`;
 const KEYS = {
   enabled: 'plugins.enabled',
+  disabled: 'plugins.disabled',
   injection: `${ENTRY_KEY}.allow_gateway_injection`,
   sessionKey: `${ENTRY_KEY}.settings.session_key`,
   worktree: `${ENTRY_KEY}.settings.worktree`,
@@ -74,6 +78,8 @@ export interface HermesPluginDeps {
   /** Reads one answer line from the terminal; null on EOF. */
   prompt(question: string): Promise<string | null>;
   now(): Date;
+  /** Pending-activation records (Borg's own state, never Hermes config). */
+  activation: ActivationStore;
   stdout(text: string): void;
   stderr(text: string): void;
 }
@@ -167,6 +173,7 @@ export function defaultHermesPluginDeps(): HermesPluginDeps {
       });
     },
     now: () => new Date(),
+    activation: fileActivationStore(join(borgConfigRoot(), 'hermes-plugin')),
     stdout: (text) => { process.stdout.write(text); },
     stderr: (text) => { process.stderr.write(text); },
   };
@@ -288,25 +295,42 @@ class HermesConfig {
 }
 
 // ---------------------------------------------------------------------------
-// config.yaml backup and digest-conditional rollback
+// config.yaml backup and per-key rollback
 
-async function readConfigBytes(path: string): Promise<{ bytes: Buffer; mode: number } | null> {
+async function readConfigBytes(path: string): Promise<Buffer | null> {
   const st = await lstatOrNull(path);
   if (!st) return null;
   if (!st.isFile()) throw new HermesPluginError(`${path} is not a regular file; nothing was changed.`);
   const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
-    return { bytes: await handle.readFile(), mode: st.mode & 0o777 };
+    return await handle.readFile();
   } finally {
     await handle.close();
   }
 }
 
-function digestOf(content: { bytes: Buffer } | null): string {
-  return content ? createHash('sha256').update(content.bytes).digest('hex') : 'absent';
+/**
+ * A directory Borg owns: created 0700; an existing one must be a real
+ * directory owned by this user, and is brought to 0700.
+ */
+async function ensurePrivateDir(path: string): Promise<void> {
+  const st = await lstatOrNull(path);
+  if (!st) {
+    await mkdir(path, { mode: 0o700 });
+    await chmod(path, 0o700); // mkdir's mode is filtered by the umask
+    return;
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw new HermesPluginError(`${path} is not a directory; nothing was changed.`);
+  }
+  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+    throw new HermesPluginError(`${path} is not owned by this user; nothing was changed.`);
+  }
+  if ((st.mode & 0o777) !== 0o700) await chmod(path, 0o700);
 }
 
-async function ensurePrivateDir(path: string): Promise<void> {
+/** A directory Borg shares with Hermes: created 0700 when missing, otherwise only checked. */
+async function ensureRealDir(path: string): Promise<void> {
   const st = await lstatOrNull(path);
   if (!st) {
     await mkdir(path, { mode: 0o700 });
@@ -321,11 +345,23 @@ function stamp(now: Date): string {
   return now.toISOString().replace(/[-:]/g, '').replace(/\.(\d{3})Z$/, '$1Z');
 }
 
+/** How to reverse one write: the value before it and the value it wrote. */
+type Undo =
+  | { kind: 'key'; key: string; before: ConfigValue; wrote: ConfigValue }
+  | { kind: 'enable'; addedToEnabled: boolean; removedFromDisabled: boolean };
+
+/**
+ * Borg's writes to Hermes config. Before the first write config.yaml is copied
+ * to a backup, kept only as a manual recovery copy: it is never restored
+ * automatically. A failed run reverses Borg's own keys one by one through the
+ * Hermes CLI, and only a key that still holds what Borg wrote; a key someone
+ * else changed meanwhile, and every other key, is left as it is.
+ */
 class ConfigTransaction {
-  private backup: { path: string; original: { bytes: Buffer; mode: number } | null } | null = null;
-  private lastDigest: string | null = null;
-  private attempted = false;
-  readonly applied: string[] = [];
+  private backup: string | null = null;
+  private readonly undo: Undo[] = [];
+  /** The plugin's entry before this run; when it was absent, a rollback leaves no empty entry behind. */
+  private entryBefore: ConfigValue = ABSENT;
 
   constructor(
     private readonly home: string,
@@ -333,24 +369,24 @@ class ConfigTransaction {
     private readonly now: () => Date,
   ) {}
 
-  get configPath(): string {
-    return join(this.home, 'config.yaml');
+  get backupPath(): string | null {
+    return this.backup;
   }
 
-  get backupPath(): string | null {
-    return this.backup?.path ?? null;
+  get wrote(): boolean {
+    return this.undo.length > 0;
   }
 
   private async begin(): Promise<void> {
     if (this.backup) return;
-    const original = await readConfigBytes(this.configPath);
+    this.entryBefore = await this.config.get(ENTRY_KEY);
+    const original = await readConfigBytes(join(this.home, 'config.yaml'));
     const backupsRoot = join(this.home, 'backups');
     const dir = join(backupsRoot, 'borg-representative');
-    await ensurePrivateDir(backupsRoot);
+    await ensureRealDir(backupsRoot);
     await ensurePrivateDir(dir);
-    let path = '';
     for (let attempt = 0; ; attempt += 1) {
-      path = join(dir, `config.yaml.${stamp(this.now())}${attempt ? `-${attempt}` : ''}`);
+      const path = join(dir, `config.yaml.${stamp(this.now())}${attempt ? `-${attempt}` : ''}`);
       try {
         const handle = await open(
           path,
@@ -358,80 +394,127 @@ class ConfigTransaction {
           0o600,
         );
         try {
-          await handle.writeFile(original?.bytes ?? Buffer.alloc(0));
+          await handle.writeFile(original ?? Buffer.alloc(0));
           await handle.sync();
         } finally {
           await handle.close();
         }
+        this.backup = path;
         break;
       } catch (error) {
         if (errnoCode(error) !== 'EEXIST' || attempt >= 20) throw error;
       }
     }
-    this.backup = { path, original };
-    this.lastDigest = digestOf(original);
     await pruneBackups(dir);
   }
 
-  /**
-   * One Hermes write. Its digest is recorded only when the command succeeded:
-   * after a failed command the file's state is unknown, so a later rollback
-   * compares against the last write known to be ours and keeps anything else.
-   */
-  private async write(step: string, command: () => Promise<void>): Promise<void> {
-    await this.begin();
-    this.attempted = true;
-    try {
-      await command();
-    } catch (error) {
-      this.applied.push(`${step} (failed)`);
-      throw error;
-    }
-    this.applied.push(step);
-    this.lastDigest = digestOf(await readConfigBytes(this.configPath));
-  }
-
   async set(key: string, value: unknown): Promise<void> {
-    await this.write(`set ${key}`, () => this.config.run(['config', 'set', key, configSetText(value)]));
+    await this.begin();
+    const before = await this.config.get(key);
+    // Recorded before the command: a failed command may still have written.
+    this.undo.push({ kind: 'key', key, before, wrote: value });
+    await this.config.run(['config', 'set', key, configSetText(value)]);
     await this.config.verifySet(key, value);
   }
 
   async unset(key: string): Promise<void> {
-    await this.write(`unset ${key}`, () => this.config.unset(key));
+    await this.begin();
+    const before = await this.config.get(key);
+    this.undo.push({ kind: 'key', key, before, wrote: ABSENT });
+    await this.config.unset(key);
     await this.config.verifyUnset(key);
   }
 
   async enablePlugin(): Promise<void> {
-    await this.write(`hermes plugins enable ${HERMES_PLUGIN_NAME}`, () => this.config.run(['plugins', 'enable', HERMES_PLUGIN_NAME]));
+    await this.begin();
     const enabled = await this.config.get(KEYS.enabled);
-    if (!Array.isArray(enabled) || !enabled.includes(HERMES_PLUGIN_NAME)) {
+    const disabled = await this.config.get(KEYS.disabled);
+    this.undo.push({
+      kind: 'enable',
+      addedToEnabled: !(Array.isArray(enabled) && enabled.includes(HERMES_PLUGIN_NAME)),
+      removedFromDisabled: Array.isArray(disabled) && disabled.includes(HERMES_PLUGIN_NAME),
+    });
+    await this.config.run(['plugins', 'enable', HERMES_PLUGIN_NAME]);
+    const after = await this.config.get(KEYS.enabled);
+    if (!Array.isArray(after) || !after.includes(HERMES_PLUGIN_NAME)) {
       throw new HermesPluginError(`${KEYS.enabled} does not list ${HERMES_PLUGIN_NAME} after \`hermes plugins enable\`.`);
     }
   }
 
-  /**
-   * Restore the backup only when config.yaml is exactly what this run last
-   * wrote; a concurrent change is never overwritten.
-   */
-  async rollback(): Promise<'nothing' | 'restored' | 'kept'> {
-    if (!this.backup || !this.attempted) return 'nothing';
-    const current = await readConfigBytes(this.configPath).catch(() => undefined);
-    if (current === undefined || digestOf(current) !== this.lastDigest) return 'kept';
-    const original = this.backup.original;
-    if (!original) {
-      await unlink(this.configPath);
-      return 'restored';
+  /** Reverse Borg's writes, newest first. Returns what was reversed and what was left. */
+  async rollback(): Promise<{ reversed: string[]; left: string[] }> {
+    const reversed: string[] = [];
+    const left: string[] = [];
+    for (const step of [...this.undo].reverse()) {
+      try {
+        if (step.kind === 'enable') {
+          await this.reverseEnable(step, reversed, left);
+          continue;
+        }
+        const current = await this.config.get(step.key);
+        const stillOurs = step.wrote === ABSENT ? current === ABSENT : current !== ABSENT && isDeepStrictEqual(current, step.wrote);
+        if (!stillOurs) {
+          // Unchanged by the failed command, or changed by someone else: never overwritten.
+          if (!(step.before === ABSENT ? current === ABSENT : current !== ABSENT && isDeepStrictEqual(current, step.before))) {
+            left.push(`${step.key} (changed outside this run)`);
+          }
+          continue;
+        }
+        if (step.before === ABSENT) {
+          await this.config.unset(step.key);
+          await this.config.verifyUnset(step.key);
+        } else {
+          await this.config.run(['config', 'set', step.key, configSetText(step.before)]);
+          await this.config.verifySet(step.key, step.before);
+        }
+        reversed.push(step.key);
+      } catch (error) {
+        left.push(`${step.kind === 'key' ? step.key : KEYS.enabled} (${error instanceof Error ? error.message : String(error)})`);
+      }
     }
-    const temporary = join(this.home, `.config.yaml.borg-restore.${process.pid}`);
-    await writeFile(temporary, original.bytes, { mode: original.mode, flag: 'wx' });
-    try {
-      await rename(temporary, this.configPath);
-    } catch (error) {
-      await unlink(temporary).catch(() => {});
-      throw error;
+    if (this.undo.length > 0 && this.entryBefore === ABSENT && left.length === 0) {
+      try {
+        const entry = await this.config.get(ENTRY_KEY);
+        if (entry !== ABSENT && onlyEmptyMappings(entry)) {
+          await this.config.unset(ENTRY_KEY);
+          await this.config.verifyUnset(ENTRY_KEY);
+        }
+      } catch (error) {
+        left.push(`${ENTRY_KEY} (${error instanceof Error ? error.message : String(error)})`);
+      }
     }
-    return 'restored';
+    return { reversed, left };
   }
+
+  private async reverseEnable(step: Extract<Undo, { kind: 'enable' }>, reversed: string[], left: string[]): Promise<void> {
+    if (step.addedToEnabled) {
+      const enabled = await this.config.get(KEYS.enabled);
+      if (Array.isArray(enabled) && enabled.includes(HERMES_PLUGIN_NAME)) {
+        const remaining = enabled.filter((name) => name !== HERMES_PLUGIN_NAME);
+        await this.config.run(['config', 'set', KEYS.enabled, configSetText(remaining)]);
+        await this.config.verifySet(KEYS.enabled, remaining);
+        reversed.push(KEYS.enabled);
+      }
+    }
+    if (step.removedFromDisabled) {
+      const disabled = await this.config.get(KEYS.disabled);
+      const list = Array.isArray(disabled) ? disabled : [];
+      if (!list.includes(HERMES_PLUGIN_NAME)) {
+        const restored = [...list, HERMES_PLUGIN_NAME];
+        await this.config.run(['config', 'set', KEYS.disabled, configSetText(restored)]);
+        await this.config.verifySet(KEYS.disabled, restored);
+        reversed.push(KEYS.disabled);
+      } else {
+        left.push(`${KEYS.disabled} (already lists the plugin)`);
+      }
+    }
+  }
+}
+
+/** A mapping that holds nothing but (nested) empty mappings: what unsetting its leaves leaves behind. */
+function onlyEmptyMappings(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+    Object.values(value as Record<string, unknown>).every(onlyEmptyMappings);
 }
 
 async function pruneBackups(dir: string): Promise<void> {
@@ -441,6 +524,79 @@ async function pruneBackups(dir: string): Promise<void> {
     const st = await lstatOrNull(path);
     if (st?.isFile()) await unlink(path);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Activation state: installed and configured, but not yet loaded by the gateway
+
+/**
+ * `<borg config>/hermes-plugin/<sha256(home)>.json` exists while an activation
+ * step is pending:
+ * - gateway_pending: config was written (or --no-restart was used) and the
+ *   gateway has not been seen to load it. gateway_pid is the gateway PID at
+ *   write time, so a later run can tell that a hand-started gateway was
+ *   restarted since.
+ * - desktop_reload: the Borg MCP entry changed, and a running Hermes Desktop
+ *   keeps the previous one until /reload-mcp or a restart. Borg cannot confirm
+ *   that step; the next run that finds the entry unchanged clears it.
+ */
+export interface ActivationRecord {
+  version: 1;
+  hermes_home: string;
+  gateway_pending: boolean;
+  gateway_pid: string | null;
+  desktop_reload: boolean;
+}
+
+async function saveActivation(store: ActivationStore, record: ActivationRecord): Promise<void> {
+  if (record.gateway_pending || record.desktop_reload) await store.write(record);
+  else await store.clear(record.hermes_home);
+}
+
+export interface ActivationStore {
+  read(home: string): Promise<ActivationRecord | null>;
+  write(record: ActivationRecord): Promise<void>;
+  clear(home: string): Promise<void>;
+}
+
+export function fileActivationStore(dir: string): ActivationStore {
+  const pathFor = (home: string) => join(dir, `${createHash('sha256').update(home).digest('hex')}.json`);
+  return {
+    read: async (home) => {
+      const path = pathFor(home);
+      const st = await lstatOrNull(path);
+      if (!st) return null;
+      if (!st.isFile()) throw new HermesPluginError(`${path} is not a regular file.`);
+      try {
+        const value = JSON.parse((await readFile(path)).toString('utf8')) as Partial<ActivationRecord>;
+        if (value.version === 1 && value.hermes_home === home && typeof value.gateway_pending === 'boolean' &&
+          (value.gateway_pid === null || typeof value.gateway_pid === 'string') && typeof value.desktop_reload === 'boolean') {
+          return value as ActivationRecord;
+        }
+      } catch {
+        // An unreadable record still means pending: the run below rewrites it.
+      }
+      return { version: 1, hermes_home: home, gateway_pending: true, gateway_pid: null, desktop_reload: false };
+    },
+    write: async (record) => {
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await ensurePrivateDir(dir);
+      const path = pathFor(record.hermes_home);
+      const temporary = `${path}.${process.pid}.tmp`;
+      await writeFile(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: 'wx' });
+      try {
+        await rename(temporary, path);
+      } catch (error) {
+        await unlink(temporary).catch(() => {});
+        throw error;
+      }
+    },
+    clear: async (home) => {
+      const path = pathFor(home);
+      const st = await lstatOrNull(path);
+      if (st?.isFile()) await unlink(path);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -460,14 +616,20 @@ export function hermesPluginDir(home: string): string {
   return join(home, 'plugins', HERMES_PLUGIN_NAME);
 }
 
-/** The marker: a real directory, never a link. null when absent. */
-async function pluginDirState(home: string): Promise<'absent' | 'directory'> {
+/**
+ * The install marker is Borg's own manifest, `<plugin dir>/plugin.yaml`, as a
+ * regular file. A directory without it (for example one uninstall left because
+ * it holds other files) is not an install, and `borg update` never touches it.
+ */
+async function installState(home: string): Promise<'absent' | 'installed' | 'directory-only'> {
   const target = hermesPluginDir(home);
   const st = await lstatOrNull(target);
   if (!st) return 'absent';
   if (st.isSymbolicLink()) throw new HermesPluginError(`${target} is a symbolic link; remove it yourself, then rerun.`);
   if (!st.isDirectory()) throw new HermesPluginError(`${target} exists and is not a directory.`);
-  return 'directory';
+  const manifest = await lstatOrNull(join(target, 'plugin.yaml'));
+  if (manifest && !manifest.isFile()) throw new HermesPluginError(`${join(target, 'plugin.yaml')} is not a regular file.`);
+  return manifest ? 'installed' : 'directory-only';
 }
 
 type FileSnapshot = Map<string, Buffer | null>;
@@ -496,12 +658,29 @@ async function writePluginFile(target: string, name: string, content: Buffer): P
   }
 }
 
+/** Python's bytecode cache for the plugin module: `__pycache__/__init__.<tag>.pyc`. */
+const PLUGIN_BYTECODE = /^__init__\.[A-Za-z0-9_.-]+\.pyc$/;
+
+/**
+ * Remove Borg's files: `__init__.py`, its bytecode cache, then `plugin.yaml`
+ * (the marker) last, then the directory when nothing else is left in it.
+ * Anything else is kept, and a directory without `plugin.yaml` is no install.
+ */
 async function removePluginFiles(target: string): Promise<'removed' | 'kept-other-files'> {
-  for (const name of HERMES_PLUGIN_FILES) {
-    const path = join(target, name);
-    const st = await lstatOrNull(path);
-    if (st?.isFile()) await unlink(path);
+  const init = join(target, '__init__.py');
+  if ((await lstatOrNull(init))?.isFile()) await unlink(init);
+  const cache = join(target, '__pycache__');
+  const cacheStat = await lstatOrNull(cache);
+  if (cacheStat?.isDirectory() && !cacheStat.isSymbolicLink()) {
+    for (const name of await readdir(cache)) {
+      if (PLUGIN_BYTECODE.test(name) && (await lstatOrNull(join(cache, name)))?.isFile()) await unlink(join(cache, name));
+    }
+    await rmdir(cache).catch((error: unknown) => {
+      if (errnoCode(error) !== 'ENOTEMPTY' && errnoCode(error) !== 'EEXIST') throw error;
+    });
   }
+  const manifest = join(target, 'plugin.yaml');
+  if ((await lstatOrNull(manifest))?.isFile()) await unlink(manifest);
   try {
     await rmdir(target);
     return 'removed';
@@ -672,7 +851,15 @@ interface Step {
   apply(tx: ConfigTransaction): Promise<void>;
 }
 
-async function configSteps(config: HermesConfig, target: Target): Promise<Step[]> {
+/** What the run does to the Borg MCP entry, for the Hermes Desktop line. */
+type McpChange = 'added' | 'changed' | null;
+
+const DESKTOP_ADDED = 'Hermes Desktop: new chats get the Borg tools.\n';
+const DESKTOP_RELOAD =
+  'Hermes Desktop: run /reload-mcp in each open chat, or restart Hermes Desktop, to use the updated Borg tools. ' +
+  'Borg does not restart Desktop and cannot confirm this step.\n';
+
+async function configSteps(config: HermesConfig, target: Target): Promise<{ steps: Step[]; mcp: McpChange }> {
   const steps: Step[] = [];
   const setIfDifferent = async (key: string, value: unknown) => {
     const current = await config.get(key);
@@ -686,20 +873,22 @@ async function configSteps(config: HermesConfig, target: Target): Promise<Step[]
     if ((await config.get(key)) !== ABSENT) steps.push({ describe: `unset ${key}`, apply: (tx) => tx.unset(key) });
   }
   await setIfDifferent(KEYS.injection, true);
+  const currentMcp = await config.get(KEYS.mcp);
+  const mcp: McpChange = currentMcp === ABSENT ? 'added' : isDeepStrictEqual(currentMcp, mcpEntry(target)) ? null : 'changed';
   await setIfDifferent(KEYS.mcp, mcpEntry(target));
   const enabled = await config.get(KEYS.enabled);
-  const disabled = await config.get('plugins.disabled');
+  const disabled = await config.get(KEYS.disabled);
   const listed = Array.isArray(enabled) && enabled.includes(HERMES_PLUGIN_NAME);
   const blocked = Array.isArray(disabled) && disabled.includes(HERMES_PLUGIN_NAME);
   if (!listed || blocked) {
     steps.push({ describe: `hermes plugins enable ${HERMES_PLUGIN_NAME}`, apply: (tx) => tx.enablePlugin() });
   }
-  return steps;
+  return { steps, mcp };
 }
 
 export type GatewaySupervision =
   | { kind: 'service'; pid: string | null }
-  | { kind: 'manual' }
+  | { kind: 'manual'; pid: string | null }
   | { kind: 'multiplexed' }
   | { kind: 'stopped' }
   | { kind: 'unknown' };
@@ -716,7 +905,9 @@ export function parseGatewayStatus(stdout: string): GatewaySupervision {
   if (/gateway service is running/i.test(stdout)) {
     return { kind: 'service', pid: stdout.match(/Main PID:\s*(\d+)/)?.[1] ?? null };
   }
-  if (/Running manually, not as a system service/.test(stdout)) return { kind: 'manual' };
+  if (/Running manually, not as a system service/.test(stdout)) {
+    return { kind: 'manual', pid: stdout.match(/Gateway is running \(PID: (\d+)\)/)?.[1] ?? null };
+  }
   if (/Gateway is running via the default-profile multiplexer/.test(stdout)) return { kind: 'multiplexed' };
   if (/Gateway is not running|gateway service is stopped|Gateway service is not loaded/i.test(stdout)) return { kind: 'stopped' };
   return { kind: 'unknown' };
@@ -727,58 +918,86 @@ async function gatewaySupervision(cli: HermesCli): Promise<GatewaySupervision> {
   return result.code === 0 ? parseGatewayStatus(result.stdout) : { kind: 'unknown' };
 }
 
-function restartPlan(): string[] {
-  return ['hermes serve --stop', 'hermes gateway restart, only when the gateway runs as a launchd/systemd service'];
-}
+const gatewayPid = (state: GatewaySupervision): string | null =>
+  state.kind === 'service' || state.kind === 'manual' ? state.pid : null;
+
+const RESTART_PLAN = 'hermes gateway restart, only when the gateway runs as a launchd/systemd service';
+
+type HostOutcome = 'complete' | 'action-needed' | 'failed';
 
 /**
- * Activate the running hosts. `hermes serve --stop` is always safe (Desktop
- * respawns its backend). The gateway is restarted only when `gateway status`
- * shows it service-managed: without a service, `hermes gateway restart` would
- * run a gateway in the foreground under this process, so Borg prints the
- * command instead. Every call has a hard timeout that kills only its own child.
+ * Make the running gateway load (or unload) the plugin. It is restarted only
+ * when `gateway status` shows it service-managed, and the restart counts only
+ * when both the old and the new PID are known and differ. Without a service,
+ * `hermes gateway restart` would run a gateway in the foreground under this
+ * process, so Borg prints the command instead; a hand-started gateway counts
+ * as reloaded once its PID differs from the one recorded when config was written.
  */
-async function restartHosts(cli: HermesCli, deps: HermesPluginDeps, verb: 'load' | 'unload'): Promise<boolean> {
-  deps.stdout('Running `hermes serve --stop` (Hermes Desktop restarts its backend on its own).\n');
-  const serve = await cli(['serve', '--stop']);
-  let ok = serve.code === 0;
-  if (!ok) deps.stderr(`${describeFailure(['serve', '--stop'], serve)}. Run it yourself.\n`);
-
+async function activateHosts(
+  cli: HermesCli,
+  deps: HermesPluginDeps,
+  verb: 'load' | 'unload',
+  writtenWithPid: string | null,
+): Promise<HostOutcome> {
   const before = await gatewaySupervision(cli);
-  const manualHint = `Run \`hermes gateway restart\` yourself where the gateway runs to ${verb} the plugin.\n`;
+  const command = `\`hermes gateway restart\` where the gateway runs`;
   switch (before.kind) {
     case 'stopped':
       deps.stdout(`The Hermes gateway is not running; it will ${verb} the plugin when it starts.\n`);
-      return ok;
+      return 'complete';
     case 'manual':
-      deps.stdout(`The Hermes gateway was started by hand (not as a service), so Borg does not restart it. ${manualHint}`);
-      return ok;
+      if (writtenWithPid !== null && before.pid !== null && before.pid !== writtenWithPid) {
+        deps.stdout(`The hand-started Hermes gateway was restarted since the config was written (PID ${before.pid}).\n`);
+        return 'complete';
+      }
+      deps.stdout(`Action needed: the Hermes gateway was started by hand (not as a service), so Borg does not restart it. Run ${command} to ${verb} the plugin.\n`);
+      return 'action-needed';
     case 'multiplexed':
-      deps.stdout(`The Hermes gateway for this profile runs inside the default profile's gateway, so Borg does not restart it. ${manualHint}`);
-      return ok;
+      deps.stdout(`Action needed: this profile's gateway runs inside the default profile's gateway, so Borg does not restart it. Run ${command} to ${verb} the plugin.\n`);
+      return 'action-needed';
     case 'unknown':
-      deps.stdout(`\`hermes gateway status\` did not show a service-managed gateway, so Borg does not restart it. ${manualHint}`);
-      return ok;
+      deps.stdout(`Action needed: \`hermes gateway status\` did not show a service-managed gateway, so Borg does not restart it. Run ${command} to ${verb} the plugin.\n`);
+      return 'action-needed';
     case 'service':
       break;
   }
   deps.stdout('Running `hermes gateway restart` (service-managed gateway).\n');
   const restart = await cli(['gateway', 'restart']);
   if (restart.code !== 0) {
-    deps.stderr(`${describeFailure(['gateway', 'restart'], restart)}. ${manualHint}`);
-    return false;
+    deps.stderr(`${describeFailure(['gateway', 'restart'], restart)}. Run ${command} to ${verb} the plugin.\n`);
+    return 'failed';
   }
   const after = await gatewaySupervision(cli);
-  if (after.kind !== 'service' || (before.pid !== null && after.pid === before.pid)) {
-    deps.stderr(`The gateway restart could not be confirmed by \`hermes gateway status\`. ${manualHint}`);
-    return false;
+  const newPid = gatewayPid(after);
+  if (after.kind !== 'service' || before.pid === null || newPid === null || newPid === before.pid) {
+    deps.stderr(
+      `The gateway restart is unconfirmed: \`hermes gateway status\` did not show a new PID ` +
+        `(before ${before.pid ?? 'unknown'}, after ${newPid ?? 'unknown'}). Check it, or run ${command}.\n`,
+    );
+    return 'failed';
   }
-  deps.stdout(`The Hermes gateway restarted${after.pid ? ` (PID ${after.pid})` : ''}.\n`);
-  return ok;
+  deps.stdout(`The Hermes gateway restarted (PID ${before.pid} -> ${newPid}).\n`);
+  return 'complete';
 }
 
-function restartHint(verb: 'load' | 'unload'): string {
-  return `Restart skipped. To ${verb} the plugin run \`hermes serve --stop\` and restart the gateway (\`hermes gateway restart\`).\n`;
+/** After a run: the activation record is cleared only when the hosts are known to have loaded the plugin. */
+async function finishActivation(
+  cli: HermesCli,
+  deps: HermesPluginDeps,
+  record: ActivationRecord,
+  noRestart: boolean,
+): Promise<number> {
+  if (noRestart) {
+    deps.stdout('Restart skipped (--no-restart); the activation stays pending. Run the same command without --no-restart to finish it.\n');
+    return 0;
+  }
+  const outcome = await activateHosts(cli, deps, 'load', record.gateway_pid);
+  if (outcome === 'complete') {
+    await saveActivation(deps.activation, { ...record, gateway_pending: false, gateway_pid: null });
+    return 0;
+  }
+  deps.stdout('The activation stays pending; rerun `borg representative hermes-plugin install` after that to finish it.\n');
+  return outcome === 'failed' ? 1 : 0;
 }
 
 interface ActivationOptions {
@@ -786,7 +1005,7 @@ interface ActivationOptions {
   explicitSessionKey?: string;
   dryRun: boolean;
   noRestart: boolean;
-  /** install may create the plugin directory; `borg update` never does. */
+  /** install may create the plugin; `borg update` never does. */
   mayCreate: boolean;
 }
 
@@ -794,10 +1013,10 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
   const cli = deps.hermes(home);
   const config = new HermesConfig(cli);
   const target = hermesPluginDir(home);
-  const dirState = await pluginDirState(home);
-  if (dirState === 'absent' && !options.mayCreate) return 0;
+  const state = await installState(home);
+  if (state !== 'installed' && !options.mayCreate) return 0;
   const sources = await readSources(deps.sourceDir);
-  const before = dirState === 'directory' ? await snapshotPluginFiles(target) : new Map<string, Buffer | null>();
+  const before = state === 'absent' ? new Map<string, Buffer | null>() : await snapshotPluginFiles(target);
   const staleFiles = sources.filter(({ name, content }) => !before.get(name)?.equals(content)).map(({ name }) => name);
 
   const configuredSessionKey = await config.get(KEYS.sessionKey);
@@ -807,8 +1026,9 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
   const borgCommand = deps.borgCommand();
   if (!isAbsolute(borgCommand)) throw new HermesPluginError(`The borg executable path is not absolute: ${borgCommand}`);
   const wanted: Target = { sessionKey, worktree, borgCommand };
-  const steps = await configSteps(config, wanted);
+  const { steps, mcp } = await configSteps(config, wanted);
   const gateway = await openGatewaySwitches(config, platformOf(sessionKey), deps.env);
+  const pending = await deps.activation.read(home);
 
   const summary =
     `Hermes home:  ${home}\n` +
@@ -816,16 +1036,28 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
     `Worktree:     ${worktree}\n` +
     `borg:         ${borgCommand}\n`;
 
-  if (dirState === 'directory' && staleFiles.length === 0 && steps.length === 0) {
-    deps.stdout(`${summary}The Hermes plugin ${HERMES_PLUGIN_NAME} is already installed and configured; nothing was changed.\n${openGatewayReport(gateway)}`);
-    return 0;
+  if (state === 'installed' && staleFiles.length === 0 && steps.length === 0) {
+    // The entry is unchanged: a Desktop reload step from an earlier run is no longer reported.
+    if (pending?.desktop_reload && !options.dryRun) {
+      await saveActivation(deps.activation, { ...pending, desktop_reload: false });
+    }
+    if (!pending?.gateway_pending) {
+      deps.stdout(`${summary}The Hermes plugin ${HERMES_PLUGIN_NAME} is installed, configured and active; nothing was changed.\n${openGatewayReport(gateway)}`);
+      return 0;
+    }
+    if (options.dryRun) {
+      deps.stdout(`${summary}Dry run; nothing was changed. The configuration is in place; the activation is pending: ${RESTART_PLAN}.\n${openGatewayReport(gateway)}`);
+      return 0;
+    }
+    deps.stdout(`${summary}The configuration is already in place; finishing the pending activation.\n${openGatewayReport(gateway)}`);
+    return finishActivation(cli, deps, { ...pending, desktop_reload: false }, options.noRestart);
   }
 
   const plan = [
-    ...(dirState === 'absent' ? [`create ${target}`] : []),
+    ...(state === 'absent' ? [`create ${target}`] : []),
     ...staleFiles.map((name) => `write ${join(target, name)}`),
     ...steps.map((step) => step.describe),
-    ...(options.noRestart ? [] : restartPlan()),
+    ...(options.noRestart ? [] : [RESTART_PLAN]),
   ];
   if (options.dryRun) {
     deps.stdout(`${summary}Dry run; nothing was changed. Planned steps:\n${plan.map((step) => `  - ${step}\n`).join('')}${openGatewayReport(gateway)}`);
@@ -833,11 +1065,21 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
   }
   deps.stdout(`${summary}Steps:\n${plan.map((step) => `  - ${step}\n`).join('')}`);
 
+  // Pending from before the first write: a crash from here on leaves a rerun that finishes the job.
+  const record: ActivationRecord = {
+    version: 1,
+    hermes_home: home,
+    gateway_pending: true,
+    gateway_pid: pending?.gateway_pending ? pending.gateway_pid : gatewayPid(await gatewaySupervision(cli)),
+    desktop_reload: mcp === 'changed',
+  };
+  await deps.activation.write(record);
+
   const tx = new ConfigTransaction(home, config, deps.now);
   let createdDir = false;
   const written: string[] = [];
   try {
-    if (dirState === 'absent') {
+    if (state === 'absent') {
       const plugins = join(home, 'plugins');
       const pluginsStat = await lstatOrNull(plugins);
       if (pluginsStat && (pluginsStat.isSymbolicLink() || !pluginsStat.isDirectory())) {
@@ -847,9 +1089,11 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
       await mkdir(target, { mode: 0o755 });
       createdDir = true;
     }
-    for (const { name, content } of sources) {
+    // __init__.py first and plugin.yaml (the marker) last: an interrupted copy is never an install.
+    for (const name of ['__init__.py', 'plugin.yaml'] as const) {
+      const source = sources.find((file) => file.name === name)!;
       if (!staleFiles.includes(name)) continue;
-      await writePluginFile(target, name, content);
+      await writePluginFile(target, name, source.content);
       written.push(name);
     }
     for (const step of steps) await step.apply(tx);
@@ -857,29 +1101,33 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
     await reportFailure(error, tx, deps, async () => {
       if (createdDir) {
         await removePluginFiles(target);
-        return;
+      } else {
+        for (const name of [...written].reverse()) {
+          const previous = before.get(name);
+          if (previous) await writePluginFile(target, name, previous);
+          else await unlink(join(target, name)).catch(() => {});
+        }
       }
-      for (const name of written) {
-        const previous = before.get(name);
-        if (previous) await writePluginFile(target, name, previous);
-        else await unlink(join(target, name)).catch(() => {});
-      }
+      if (pending) await deps.activation.write(pending);
+      else await deps.activation.clear(home);
     });
     return 1;
   }
 
   deps.stdout(
     `${createdDir ? 'Installed' : 'Updated'} the Hermes plugin ${HERMES_PLUGIN_NAME}.` +
-      `${tx.backupPath ? ` Backup of config.yaml: ${tx.backupPath}` : ''}\n`,
+      `${tx.backupPath ? ` Backup of config.yaml (for manual recovery): ${tx.backupPath}` : ''}\n`,
   );
   deps.stdout(openGatewayReport(gateway));
-  if (options.noRestart) {
-    deps.stdout(restartHint('load'));
-    return 0;
-  }
-  return (await restartHosts(cli, deps, 'load')) ? 0 : 1;
+  if (mcp === 'added') deps.stdout(DESKTOP_ADDED);
+  if (mcp === 'changed') deps.stdout(DESKTOP_RELOAD);
+  return finishActivation(cli, deps, record, options.noRestart);
 }
 
+/**
+ * A failed run reverses Borg's own keys (never a whole-file restore) and then
+ * its plugin files, but only when every key could be reversed.
+ */
 async function reportFailure(
   error: unknown,
   tx: ConfigTransaction,
@@ -887,26 +1135,20 @@ async function reportFailure(
   restoreFiles: () => Promise<void>,
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
-  let outcome: string;
+  let outcome = '';
   try {
-    const rollback = await tx.rollback();
-    if (rollback === 'kept') {
-      outcome =
-        `config.yaml changed outside this run, so it was not restored. Applied steps:\n` +
-        `${tx.applied.map((step) => `  - ${step}\n`).join('')}` +
-        `Backup: ${tx.backupPath}\n`;
+    const { reversed, left } = await tx.rollback();
+    if (reversed.length > 0) outcome += `Reversed: ${reversed.join(', ')}.\n`;
+    if (left.length > 0) {
+      outcome += `Left as they are: ${left.join('; ')}.\n`;
     } else {
       await restoreFiles();
-      outcome = rollback === 'restored'
-        ? `config.yaml was restored from ${tx.backupPath}.\n`
-        : 'No Hermes config was changed.\n';
     }
+    if (!tx.wrote) outcome += 'No Hermes config was changed.\n';
   } catch (rollbackError) {
-    outcome =
-      `Rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}. Applied steps:\n` +
-      `${tx.applied.map((step) => `  - ${step}\n`).join('')}` +
-      `${tx.backupPath ? `Backup: ${tx.backupPath}\n` : ''}`;
+    outcome += `Rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}.\n`;
   }
+  if (tx.backupPath) outcome += `config.yaml as it was before this run: ${tx.backupPath}\n`;
   deps.stderr(`${message}\n${outcome}`);
 }
 
@@ -933,26 +1175,31 @@ export async function runHermesPluginInstall(command: HermesPluginInstallCommand
 }
 
 /**
- * `borg update`: activate the installed plugin (the plugin directory is the
- * marker). Without the directory this does nothing and runs no hermes command.
+ * `borg update`: activate the installed plugin (Borg's plugin.yaml is the
+ * marker). Without it this does nothing and runs no hermes command. The caller
+ * reports a non-zero result as an incomplete activation, never as a failed update.
  */
 export async function activateHermesPlugin(deps: HermesPluginDeps): Promise<number> {
   try {
     const home = resolveHermesHome(undefined, deps);
-    const dir = await lstatOrNull(hermesPluginDir(home));
-    if (!dir) return 0;
+    if ((await installState(home)) !== 'installed') return 0;
     deps.stdout(`Activating the Hermes plugin ${HERMES_PLUGIN_NAME}.\n`);
     return await activate(home, { dryRun: false, noRestart: false, mayCreate: false }, deps);
   } catch (error) {
-    const code = failure(error, deps, 'Hermes plugin activation');
-    deps.stderr('Rerun `borg representative hermes-plugin install` to finish the activation.\n');
-    return code;
+    return failure(error, deps, 'Hermes plugin activation');
   }
 }
 
 export interface HermesPluginStatus {
   installed: boolean;
   hermes_home: string;
+  /** Configured, but the gateway has not been seen to load it yet. */
+  activation_pending?: boolean;
+  /**
+   * The Borg MCP entry changed; a running Hermes Desktop keeps the previous one
+   * until /reload-mcp or a Desktop restart. Borg cannot confirm this step.
+   */
+  desktop_reload_pending?: boolean;
   session_key?: string | null;
   /** Allow-all switches that open the gateway to anyone; empty when none. */
   open_gateway?: string[];
@@ -960,22 +1207,30 @@ export interface HermesPluginStatus {
 }
 
 /**
- * For `borg representative status`: whether the plugin is installed (its
- * directory is the marker) and, when it is, the open-gateway report read
- * through `hermes config get`. Without the directory no hermes command runs.
+ * For `borg representative status`: whether the plugin is installed and, when
+ * it is, its activation state and the open-gateway report read through
+ * `hermes config get`. Without an install no hermes command runs.
  */
-export async function hermesPluginStatus(deps: Pick<HermesPluginDeps, 'env' | 'homedir' | 'hermes'>): Promise<HermesPluginStatus> {
+export async function hermesPluginStatus(deps: Pick<HermesPluginDeps, 'env' | 'homedir' | 'hermes' | 'activation'>): Promise<HermesPluginStatus> {
   const home = resolveHermesHome(undefined, deps);
   try {
-    if ((await pluginDirState(home)) === 'absent') return { installed: false, hermes_home: home };
+    if ((await installState(home)) !== 'installed') return { installed: false, hermes_home: home };
+    const record = await deps.activation.read(home);
+    const activation_pending = record?.gateway_pending === true;
+    const desktop_reload_pending = record?.desktop_reload === true;
     const config = new HermesConfig(deps.hermes(home));
     const sessionKey = await config.get(KEYS.sessionKey);
     if (typeof sessionKey !== 'string' || !SESSION_KEY_PATTERN.test(sessionKey)) {
-      return { installed: true, hermes_home: home, session_key: null, error: 'settings.session_key is not a gateway DM key; rerun `borg representative hermes-plugin install`' };
+      return {
+        installed: true, hermes_home: home, activation_pending, desktop_reload_pending, session_key: null,
+        error: 'settings.session_key is not a gateway DM key; rerun `borg representative hermes-plugin install`',
+      };
     }
     return {
       installed: true,
       hermes_home: home,
+      activation_pending,
+      desktop_reload_pending,
       session_key: sessionKey,
       open_gateway: await openGatewaySwitches(config, platformOf(sessionKey), deps.env),
     };
@@ -991,7 +1246,8 @@ export async function runHermesPluginUninstall(command: HermesPluginUninstallCom
     const cli = deps.hermes(home);
     const config = new HermesConfig(cli);
     const target = hermesPluginDir(home);
-    const dirState = await pluginDirState(home);
+    const state = await installState(home);
+    const pending = await deps.activation.read(home);
 
     const steps: Step[] = [];
     const enabled = await config.get(KEYS.enabled);
@@ -1004,20 +1260,26 @@ export async function runHermesPluginUninstall(command: HermesPluginUninstallCom
     }
     const mcp = await config.get(KEYS.mcp);
     let foreignMcp = false;
+    let removesMcp = false;
     if (mcp !== ABSENT) {
-      if (isBorgMcpEntry(mcp)) steps.push({ describe: `unset ${KEYS.mcp}`, apply: (tx) => tx.unset(KEYS.mcp) });
-      else foreignMcp = true;
+      if (isBorgMcpEntry(mcp)) {
+        steps.push({ describe: `unset ${KEYS.mcp}`, apply: (tx) => tx.unset(KEYS.mcp) });
+        removesMcp = true;
+      } else {
+        foreignMcp = true;
+      }
     }
     const foreignNote = foreignMcp ? `${KEYS.mcp} is not a Borg representative entry; it was left in place.\n` : '';
 
-    if (dirState === 'absent' && steps.length === 0) {
+    if (state !== 'installed' && steps.length === 0) {
+      if (pending && !command.dryRun) await deps.activation.clear(home);
       deps.stdout(`The Hermes plugin ${HERMES_PLUGIN_NAME} is not installed in ${home}; nothing was changed.\n${foreignNote}`);
       return 0;
     }
     const plan = [
       ...steps.map((step) => step.describe),
-      ...(dirState === 'directory' ? [`remove ${HERMES_PLUGIN_FILES.map((name) => join(target, name)).join(' and ')}, then the directory if empty`] : []),
-      ...(command.noRestart ? [] : restartPlan()),
+      ...(state === 'absent' ? [] : [`remove the plugin's files from ${target} (plugin.yaml last), then the directory if nothing else is in it`]),
+      ...(command.noRestart ? [] : [RESTART_PLAN]),
     ];
     if (command.dryRun) {
       deps.stdout(`Hermes home: ${home}\nDry run; nothing was changed. Planned steps:\n${plan.map((step) => `  - ${step}\n`).join('')}${foreignNote}`);
@@ -1033,17 +1295,22 @@ export async function runHermesPluginUninstall(command: HermesPluginUninstallCom
       return 1;
     }
     let dirOutcome = '';
-    if (dirState === 'directory') {
+    if (state !== 'absent') {
       dirOutcome = (await removePluginFiles(target)) === 'removed'
         ? `Removed ${target}.\n`
-        : `Removed the plugin's files; ${target} holds other files and was left in place.\n`;
+        : `Removed the plugin's files; ${target} holds other files and was left in place (it is no longer an install).\n`;
     }
-    deps.stdout(`Uninstalled the Hermes plugin ${HERMES_PLUGIN_NAME}.${tx.backupPath ? ` Backup of config.yaml: ${tx.backupPath}` : ''}\n${dirOutcome}${foreignNote}`);
+    await deps.activation.clear(home);
+    deps.stdout(
+      `Uninstalled the Hermes plugin ${HERMES_PLUGIN_NAME}.` +
+        `${tx.backupPath ? ` Backup of config.yaml (for manual recovery): ${tx.backupPath}` : ''}\n${dirOutcome}${foreignNote}` +
+        `${removesMcp ? DESKTOP_RELOAD : ''}`,
+    );
     if (command.noRestart) {
-      deps.stdout(restartHint('unload'));
+      deps.stdout('Restart skipped (--no-restart). Restart the Hermes gateway (`hermes gateway restart`) to unload the plugin.\n');
       return 0;
     }
-    return (await restartHosts(cli, deps, 'unload')) ? 0 : 1;
+    return (await activateHosts(cli, deps, 'unload', null)) === 'failed' ? 1 : 0;
   } catch (error) {
     return failure(error, deps, 'Uninstall');
   }

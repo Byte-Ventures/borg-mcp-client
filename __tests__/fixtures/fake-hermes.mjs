@@ -5,7 +5,7 @@
 // It models the documented commands the installer uses, with Hermes's value
 // coercion for `config set` (hermes_cli/config.py _coerce_config_set_value):
 //   config set <key> <value> | config get <key> [--json] [--raw] | config unset <key>
-//   plugins enable <name> | gateway status | gateway restart | serve --stop
+//   plugins enable <name> | gateway status | gateway restart
 // config.yaml is stored as JSON (valid YAML). Every call is appended to
 // $FAKE_HERMES_LOG. $FAKE_HERMES_RULES names a JSON file of per-call overrides:
 //   [{ "match": "<argv prefix>", "code": 1, "stderr": "...", "store": <value>, "touch": true }]
@@ -169,9 +169,5 @@ if (group === 'gateway' && action === 'restart') {
     process.stdout.write(`fake ${joined}\n`);
     process.exit(0);
   }
-}
-if (group === 'serve' && action === '--stop') {
-  process.stdout.write('No hermes dashboard processes running for this profile.\n');
-  process.exit(0);
 }
 fail(`fake hermes: unsupported command: ${joined}`, 2);

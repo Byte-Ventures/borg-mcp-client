@@ -43,8 +43,8 @@ export interface UpdateDeps {
     verifyRunningProtocol(origin: string): Promise<void>;
     refreshAgentIntegrations(): Promise<void>;
     /**
-     * Activates the Borg Hermes plugin when its directory exists (the install
-     * marker); otherwise does nothing. Returns an exit code; it reports its own errors.
+     * Activates the Borg Hermes plugin when it is installed; otherwise does
+     * nothing. Returns non-zero when the activation is incomplete (it reports why).
      */
     activateHermesPlugin(): Promise<number>;
     confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;

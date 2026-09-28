@@ -519,13 +519,25 @@ describe('runUpdate', () => {
     }
   });
 
-  it('returns the Hermes plugin activation failure and skips activation after a failed refresh', async () => {
-    const failing = targetDeps({ activateHermesPlugin: vi.fn(async () => 1) });
-    await expect(runUpdate({
-      yes: true,
-      target: { clientVersion: CLIENT_TARGET.version, serverVersion: SERVER_TARGET.version, serverPresent: true },
-    }, failing)).resolves.toBe(1);
+  it('keeps a successful update successful when the Hermes plugin activation is incomplete, and warns', async () => {
+    for (const serverPresent of [true, false]) {
+      for (const activateHermesPlugin of [vi.fn(async () => 1), vi.fn(async () => { throw new Error('hermes missing'); })]) {
+        const d = targetDeps({
+          activateHermesPlugin,
+          ...(serverPresent ? {} : { currentServer: vi.fn(async () => null) }),
+        });
+        await expect(runUpdate({
+          yes: true,
+          target: { clientVersion: CLIENT_TARGET.version, serverVersion: SERVER_TARGET.version, serverPresent },
+        }, d)).resolves.toBe(0);
+        const warnings = vi.mocked(d.stderr).mock.calls.map(([text]) => text).join('');
+        expect(warnings).toContain('the update succeeded, but the Hermes plugin activation is incomplete');
+        expect(warnings).toContain('borg representative hermes-plugin install');
+      }
+    }
+  });
 
+  it('skips the Hermes plugin activation after a failed integration refresh', async () => {
     const refreshFails = targetDeps({
       refreshAgentIntegrations: vi.fn(async () => { throw new Error('borg-clear-rewake: missing'); }),
     });

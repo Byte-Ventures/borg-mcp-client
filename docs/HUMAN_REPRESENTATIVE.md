@@ -470,11 +470,13 @@ The command then does everything, printing each step before it runs:
    conversation.
 2. Installs the plugin's two files into
    `<Hermes home>/plugins/borg-representative-push/` (the Hermes home is
-   `--hermes-home`, else `$HERMES_HOME`, else `~/.hermes`). It refuses a
-   symbolic-link or non-directory target.
+   `--hermes-home`, else `$HERMES_HOME`, else `~/.hermes`), `plugin.yaml` last:
+   that file is what marks the install. It refuses a symbolic-link or
+   non-directory target.
 3. Backs up `config.yaml` to
-   `<Hermes home>/backups/borg-representative/config.yaml.<timestamp>` (0600,
-   in a 0700 directory; the newest five are kept) and prints the path.
+   `<Hermes home>/backups/borg-representative/config.yaml.<timestamp>` (0600;
+   Borg keeps that directory at 0700; the newest five are kept) and prints the
+   path. The backup is a manual recovery copy; Borg never copies it back.
 4. Writes through Hermes's own CLI (`hermes config set`, `hermes plugins
    enable`), never by editing the file, and reads every value back with
    `hermes config get --json --raw`:
@@ -498,26 +500,36 @@ The command then does everything, printing each step before it runs:
 
    Settings left over from the 5.x plugin (`mcp_server`, `reinject_after_s`,
    `max_reinjects`) are removed.
-5. Runs `hermes serve --stop`; Hermes Desktop restarts its backend with the new
-   MCP entry. It restarts the gateway (`hermes gateway restart`) only when
-   `hermes gateway status` shows it running as a launchd or systemd service,
-   and confirms the restart afterwards. A gateway started by hand is never
-   restarted by Borg: without a service Hermes would run the new gateway in the
-   foreground of Borg's process. The command prints the one line to run where
-   that gateway runs instead. Every Hermes call has a hard timeout that ends
-   only Borg's own `hermes` process.
+5. Makes the gateway load the plugin. It restarts the gateway (`hermes gateway
+   restart`) only when `hermes gateway status` shows it running as a launchd
+   or systemd service, and counts the restart only when the status shows a new
+   PID; a missing PID leaves it unconfirmed. A gateway started by hand is never
+   restarted by Borg (without a service Hermes would run the new gateway in the
+   foreground of Borg's process): the command prints the one line to run where
+   that gateway runs, and a later run counts it done once that gateway's PID
+   has changed. A stopped gateway loads the plugin when it starts. Every Hermes
+   call has a hard timeout that ends only Borg's own `hermes` process.
+   Until this step is done the activation stays pending, in Borg's own state
+   (`<Borg config>/hermes-plugin/`), and a rerun finishes it.
+   Borg stops and restarts nothing in Hermes Desktop. When the Borg MCP entry is
+   new, it prints "Hermes Desktop: new chats get the Borg tools." When the entry
+   changed, it prints that open Desktop chats need `/reload-mcp` (or a Desktop
+   restart) to use the updated Borg tools; Borg cannot confirm that step. With no
+   change to the entry it prints nothing about Desktop.
 6. Reports whether the gateway is open to everyone (`gateway.allow_all_users`,
    `GATEWAY_ALLOW_ALL_USERS` or `<PLATFORM>_ALLOW_ALL_USERS`). An open gateway is
    reported, not refused: anyone who can message the bot can then read
    Coordinator replies and send as the representative.
 
-If a step fails, `config.yaml` is restored from the backup, but only when it is
-still exactly what the command last wrote. If anything else changed it
-meanwhile, nothing is restored, and the command prints the steps it applied and
-the backup path.
-When every value and file already matches, the command prints that the plugin is
-already installed and changes nothing. `--dry-run` only reads Hermes config and
-prints the plan; `--no-restart` skips step 5.
+If a step fails, Borg reverses its own keys one by one through the Hermes CLI,
+newest first, and only where a key still holds what Borg wrote; a key someone
+else changed meanwhile, and every other key, is left as it is and named. Borg's
+plugin files are put back as they were only when every key was reversed. The
+output ends with the backup path.
+When every value and file already matches and the activation is done, the
+command says so and changes nothing; when the activation is still pending, it
+finishes step 5 only. `--dry-run` only reads Hermes config and prints the plan;
+`--no-restart` skips step 5 and leaves the activation pending.
 
 The command runs `hermes` with your normal environment, so Hermes's own startup
 maintenance runs exactly as it does for any `hermes` command you type.
@@ -526,16 +538,21 @@ maintenance runs exactly as it does for any `hermes` command you type.
 turns; it is off by default. `lazy: true` lets Hermes register the Borg tools
 from its schema cache and start `borg representative mcp` on first use.
 
-**Updates.** `borg update` activates an installed plugin (its directory is the
-marker): it refreshes the files, rewrites the settings and MCP entry with the
-same rules, and restarts as in step 5. Without the directory it runs no `hermes`
-command. A running Hermes CLI session reloads the MCP entry itself when it goes
+**Updates.** `borg update` activates an installed plugin (`plugin.yaml` present):
+it refreshes the files, rewrites the settings and MCP entry with the same rules,
+and finishes step 5. Without an install it runs no `hermes` command. It never
+asks a question, and an incomplete activation never fails the update: it ends
+with a warning that names `borg representative hermes-plugin install`. A running Hermes CLI session reloads the MCP entry itself when it goes
 idle. A session with `mcp.auto_reload_on_config_change: false`, or one that
 never goes idle, keeps its old Borg adapter until it reloads MCP or ends; Borg
 does not work around that Hermes setting.
 
 **Status.** `borg representative status` adds `hermes_plugin`: whether the plugin
-is installed, its conversation and the open-gateway report.
+is installed, `activation_pending` (the gateway has not been seen to load it),
+`desktop_reload_pending` (the Borg MCP entry changed and Desktop may still use
+the previous one until `/reload-mcp` or a restart; Borg cannot confirm this, and
+the next install or update that finds the entry unchanged clears it), its
+conversation and the open-gateway report.
 
 **Uninstall.**
 
@@ -545,9 +562,13 @@ borg representative hermes-plugin uninstall [--hermes-home <path>] [--dry-run] [
 
 It removes the plugin from `plugins.enabled`, unsets
 `plugins.entries.borg-representative-push` and the `borg-representative` MCP
-entry (only when that entry runs `representative mcp`), deletes the plugin's two
-files and its directory when nothing else is in it, and restarts as in step 5.
-The backup and rollback rules are the same.
+entry (only when that entry runs `representative mcp`), deletes the plugin's
+files and Python's bytecode cache for them (`plugin.yaml` last), then the
+directory when nothing else is in it, and handles the gateway as in step 5.
+Files that are not Borg's stay, and a directory without `plugin.yaml` is no
+install: `borg update` leaves it alone. When the MCP entry was removed, it
+prints the Desktop `/reload-mcp` line. The backup and rollback rules are the
+same.
 
 **Which process delivers.** Any Hermes process may read and deliver: Desktop,
 the CLI or the gateway conversation. Borg stops waking for a reply once it is

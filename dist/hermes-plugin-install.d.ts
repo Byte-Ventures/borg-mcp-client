@@ -33,6 +33,8 @@ export interface HermesPluginDeps {
     /** Reads one answer line from the terminal; null on EOF. */
     prompt(question: string): Promise<string | null>;
     now(): Date;
+    /** Pending-activation records (Borg's own state, never Hermes config). */
+    activation: ActivationStore;
     stdout(text: string): void;
     stderr(text: string): void;
 }
@@ -65,6 +67,30 @@ export declare function printableUntrusted(text: string, max?: number): string;
 export declare function resolveHermesHome(explicit: string | undefined, deps: Pick<HermesPluginDeps, 'env' | 'homedir'>): string;
 /** The value text for `hermes config set`: containers and booleans as JSON, strings raw. */
 export declare function configSetText(value: unknown): string;
+/**
+ * `<borg config>/hermes-plugin/<sha256(home)>.json` exists while an activation
+ * step is pending:
+ * - gateway_pending: config was written (or --no-restart was used) and the
+ *   gateway has not been seen to load it. gateway_pid is the gateway PID at
+ *   write time, so a later run can tell that a hand-started gateway was
+ *   restarted since.
+ * - desktop_reload: the Borg MCP entry changed, and a running Hermes Desktop
+ *   keeps the previous one until /reload-mcp or a restart. Borg cannot confirm
+ *   that step; the next run that finds the entry unchanged clears it.
+ */
+export interface ActivationRecord {
+    version: 1;
+    hermes_home: string;
+    gateway_pending: boolean;
+    gateway_pid: string | null;
+    desktop_reload: boolean;
+}
+export interface ActivationStore {
+    read(home: string): Promise<ActivationRecord | null>;
+    write(record: ActivationRecord): Promise<void>;
+    clear(home: string): Promise<void>;
+}
+export declare function fileActivationStore(dir: string): ActivationStore;
 export declare function hermesPluginDir(home: string): string;
 export interface SessionCandidate {
     sessionKey: string;
@@ -77,6 +103,7 @@ export type GatewaySupervision = {
     pid: string | null;
 } | {
     kind: 'manual';
+    pid: string | null;
 } | {
     kind: 'multiplexed';
 } | {
@@ -93,23 +120,31 @@ export type GatewaySupervision = {
 export declare function parseGatewayStatus(stdout: string): GatewaySupervision;
 export declare function runHermesPluginInstall(command: HermesPluginInstallCommand, deps: HermesPluginDeps): Promise<number>;
 /**
- * `borg update`: activate the installed plugin (the plugin directory is the
- * marker). Without the directory this does nothing and runs no hermes command.
+ * `borg update`: activate the installed plugin (Borg's plugin.yaml is the
+ * marker). Without it this does nothing and runs no hermes command. The caller
+ * reports a non-zero result as an incomplete activation, never as a failed update.
  */
 export declare function activateHermesPlugin(deps: HermesPluginDeps): Promise<number>;
 export interface HermesPluginStatus {
     installed: boolean;
     hermes_home: string;
+    /** Configured, but the gateway has not been seen to load it yet. */
+    activation_pending?: boolean;
+    /**
+     * The Borg MCP entry changed; a running Hermes Desktop keeps the previous one
+     * until /reload-mcp or a Desktop restart. Borg cannot confirm this step.
+     */
+    desktop_reload_pending?: boolean;
     session_key?: string | null;
     /** Allow-all switches that open the gateway to anyone; empty when none. */
     open_gateway?: string[];
     error?: string;
 }
 /**
- * For `borg representative status`: whether the plugin is installed (its
- * directory is the marker) and, when it is, the open-gateway report read
- * through `hermes config get`. Without the directory no hermes command runs.
+ * For `borg representative status`: whether the plugin is installed and, when
+ * it is, its activation state and the open-gateway report read through
+ * `hermes config get`. Without an install no hermes command runs.
  */
-export declare function hermesPluginStatus(deps: Pick<HermesPluginDeps, 'env' | 'homedir' | 'hermes'>): Promise<HermesPluginStatus>;
+export declare function hermesPluginStatus(deps: Pick<HermesPluginDeps, 'env' | 'homedir' | 'hermes' | 'activation'>): Promise<HermesPluginStatus>;
 export declare function runHermesPluginUninstall(command: HermesPluginUninstallCommand, deps: HermesPluginDeps): Promise<number>;
 //# sourceMappingURL=hermes-plugin-install.d.ts.map
