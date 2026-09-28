@@ -86,7 +86,9 @@ const pluginDir = () => join(home, 'plugins', HERMES_PLUGIN_NAME);
 const config = () => JSON.parse(readFileSync(join(home, 'config.yaml'), 'utf8'));
 const calls = (): Array<{ argv: string[]; home: string; allowAllEnv: string[] }> =>
   existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : [];
-const writes = () => calls().filter(({ argv }) => !(argv[0] === 'config' && argv[1] === 'get'));
+const isRead = (argv: string[]) => (argv[0] === 'config' && argv[1] === 'get') || (argv[0] === 'gateway' && argv[1] === 'status');
+const writes = () => calls().filter(({ argv }) => !isRead(argv));
+const setGateway = (value: Record<string, unknown>) => writeFileSync(join(home, 'fake-gateway.json'), JSON.stringify(value));
 const backups = () => {
   const dir = join(home, 'backups', 'borg-representative');
   return existsSync(dir) ? readdirSync(dir).sort() : [];
@@ -256,7 +258,7 @@ describe('hermes-plugin install', () => {
   it('--no-restart skips both restarts and prints the commands', async () => {
     expect(await install({ noRestart: true })).toBe(0);
     expect(writes().some(({ argv }) => argv[0] === 'gateway' || argv[0] === 'serve')).toBe(false);
-    expect(out.join('')).toContain('`hermes serve --stop` and `hermes gateway restart`');
+    expect(out.join('')).toContain('run `hermes serve --stop` and restart the gateway (`hermes gateway restart`)');
   });
 
   it('migrates a 5.x install: refreshes the files, unsets the old settings, keeps the configured conversation', async () => {
@@ -367,7 +369,7 @@ describe('hermes-plugin install rollback', () => {
     setRules([{ match: 'gateway restart', code: 1, stderr: 'Gateway service restart failed.' }]);
     expect(await install()).toBe(1);
     expect(config().plugins.enabled).toContain(HERMES_PLUGIN_NAME);
-    expect(err.join('')).toContain('Run it yourself to finish the activation');
+    expect(err.join('')).toContain('Run `hermes gateway restart` yourself where the gateway runs');
   });
 
   it('reports a hermes executable that cannot be run', async () => {
@@ -376,6 +378,55 @@ describe('hermes-plugin install rollback', () => {
     expect(await install({}, { ...d, hermes: () => missing })).toBe(1);
     expect(err.join('')).toMatch(/exit 127/);
   });
+});
+
+describe('gateway restart only under a service (D2)', () => {
+  const restarts = () => writes().filter(({ argv }) => argv[0] === 'gateway' && argv[1] === 'restart');
+
+  it('restarts a launchd- or systemd-managed gateway and confirms the new PID with gateway status', async () => {
+    for (const mode of ['launchd', 'systemd']) {
+      resetLog(); out = [];
+      rmSync(pluginDir(), { recursive: true, force: true });
+      writeFileSync(join(home, 'config.yaml'), ORIGINAL_CONFIG);
+      setGateway({ mode, pid: 100 });
+      expect(await install(), mode).toBe(0);
+      expect(restarts()).toHaveLength(1);
+      const statusCalls = calls().filter(({ argv }) => argv[0] === 'gateway' && argv[1] === 'status');
+      expect(statusCalls).toHaveLength(2); // before and after the restart
+      expect(out.join('')).toContain('The Hermes gateway restarted (PID 101)');
+    }
+  });
+
+  it.each([
+    ['manual', 'was started by hand'],
+    ['multiplexed', "runs inside the default profile's gateway"],
+    ['stopped', 'is not running; it will load the plugin when it starts'],
+    ['odd', 'did not show a service-managed gateway'],
+  ])('never runs gateway restart for a %s gateway, and says what to do', async (mode, message) => {
+    setGateway({ mode, pid: 100 });
+    expect(await install()).toBe(0);
+    expect(restarts()).toEqual([]);
+    expect(existsSync(join(home, 'fake-foreground-gateway'))).toBe(false);
+    expect(writes().map(({ argv }) => argv)).toContainEqual(['serve', '--stop']);
+    expect(out.join('')).toContain(message);
+  });
+
+  it('fails when the restart cannot be confirmed', async () => {
+    setGateway({ mode: 'launchd', pid: 100, restartKeepsPid: true });
+    expect(await install()).toBe(1);
+    expect(err.join('')).toContain('could not be confirmed');
+  });
+
+  it('kills only its own hermes child when a restart exceeds the hard timeout', async () => {
+    setGateway({ mode: 'launchd', pid: 100, hang: true });
+    const d = deps();
+    const started = Date.now();
+    expect(await install({}, { ...d, hermes: (h) => execFileHermesCli(fake, h, d.env, { timeoutMs: 1_500 }) })).toBe(1);
+    expect(Date.now() - started).toBeLessThan(30_000);
+    expect(err.join('')).toMatch(/gateway restart` failed \(exit 124\): timed out after 2 s/);
+    const hung = readFileSync(join(home, 'fake-foreground-gateway'), 'utf8').trim().split('\n').map(Number);
+    for (const pid of hung) expect(() => process.kill(pid, 0)).toThrow();
+  }, 60_000);
 });
 
 describe('session_key discovery (untrusted sessions.json)', () => {

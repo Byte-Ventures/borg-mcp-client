@@ -5,7 +5,7 @@
 // It models the documented commands the installer uses, with Hermes's value
 // coercion for `config set` (hermes_cli/config.py _coerce_config_set_value):
 //   config set <key> <value> | config get <key> [--json] [--raw] | config unset <key>
-//   plugins enable <name> | gateway restart | serve --stop
+//   plugins enable <name> | gateway status | gateway restart | serve --stop
 // config.yaml is stored as JSON (valid YAML). Every call is appended to
 // $FAKE_HERMES_LOG. $FAKE_HERMES_RULES names a JSON file of per-call overrides:
 //   [{ "match": "<argv prefix>", "code": 1, "stderr": "...", "store": <value>, "touch": true }]
@@ -140,8 +140,38 @@ if (group === 'plugins' && action === 'enable') {
   process.stdout.write(`✓ Enabled ${name}\n`);
   process.exit(0);
 }
-if ((group === 'gateway' && action === 'restart') || (group === 'serve' && action === '--stop')) {
-  process.stdout.write(`fake ${joined}\n`);
+// The gateway as `hermes gateway status` shows it, from $HERMES_HOME/fake-gateway.json:
+// { "mode": "launchd" | "systemd" | "manual" | "multiplexed" | "stopped" | "odd", "pid": 100,
+//   "restartKeepsPid": false, "hang": false }
+const gatewayPath = join(home, 'fake-gateway.json');
+const gateway = existsSync(gatewayPath) ? JSON.parse(readFileSync(gatewayPath, 'utf8')) : { mode: 'launchd', pid: 100 };
+if (group === 'gateway' && action === 'status') {
+  const text = {
+    launchd: `Launchd plist: /fake/ai.hermes.gateway.plist\n✓ Gateway is supervised by launchd (PID ${gateway.pid})\n`,
+    systemd: `✓ User gateway service is running\n   Main PID: ${gateway.pid} (python)\n`,
+    manual: `✓ Gateway is running (PID: ${gateway.pid})\n  (Running manually, not as a system service)\n`,
+    multiplexed: '✓ Gateway is running via the default-profile multiplexer\n',
+    stopped: '✗ Gateway is not running\n\nTo start:\n  hermes gateway run      # Run in foreground\n',
+    odd: 'something this fake does not describe\n',
+  }[gateway.mode];
+  process.stdout.write(text);
+  process.exit(0);
+}
+if (group === 'gateway' && action === 'restart') {
+  if (gateway.hang || (gateway.mode !== 'launchd' && gateway.mode !== 'systemd')) {
+    // Hermes runs the gateway in the foreground without a service: never returns.
+    appendFileSync(join(home, 'fake-foreground-gateway'), `${process.pid}\n`);
+    setInterval(() => {}, 1 << 30);
+    await new Promise(() => {});
+  } else {
+    if (!gateway.restartKeepsPid) gateway.pid += 1;
+    writeFileSync(gatewayPath, JSON.stringify(gateway));
+    process.stdout.write(`fake ${joined}\n`);
+    process.exit(0);
+  }
+}
+if (group === 'serve' && action === '--stop') {
+  process.stdout.write('No hermes dashboard processes running for this profile.\n');
   process.exit(0);
 }
 fail(`fake hermes: unsupported command: ${joined}`, 2);

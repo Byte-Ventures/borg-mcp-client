@@ -105,7 +105,12 @@ function allowAllEnvName(name: string): boolean {
  * execFile, never a shell. The allow-all switches are removed from the child
  * environment so `config get` reports Hermes's own `.env`, not this shell.
  */
-export function execFileHermesCli(command: string, home: string, env: NodeJS.ProcessEnv): HermesCli {
+export function execFileHermesCli(
+  command: string,
+  home: string,
+  env: NodeJS.ProcessEnv,
+  options: { timeoutMs?: number } = {},
+): HermesCli {
   const childEnv: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(env)) {
     if (!allowAllEnvName(name)) childEnv[name] = value;
@@ -114,13 +119,18 @@ export function execFileHermesCli(command: string, home: string, env: NodeJS.Pro
   return (argv) => new Promise((resolve) => {
     execFile(command, [...argv], {
       env: childEnv,
-      timeout: HERMES_TIMEOUT_MS,
+      // A hard timeout kills only this child `hermes` process, never a gateway.
+      timeout: options.timeoutMs ?? HERMES_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
       maxBuffer: HERMES_OUTPUT_MAX,
       windowsHide: true,
       encoding: 'utf8',
     }, (error, stdout, stderr) => {
-      const code = error ? (typeof error.code === 'number' ? error.code : 127) : 0;
-      const detail = error && typeof error.code !== 'number' ? `${stderr}${error.message}\n` : stderr;
+      const timedOut = error?.killed === true;
+      const code = error ? (typeof error.code === 'number' ? error.code : timedOut ? 124 : 127) : 0;
+      const detail = timedOut
+        ? `${stderr}timed out after ${Math.round((options.timeoutMs ?? HERMES_TIMEOUT_MS) / 1000)} s\n`
+        : error && typeof error.code !== 'number' ? `${stderr}${error.message}\n` : stderr;
       resolve({ code, stdout, stderr: detail });
     });
   });
@@ -253,8 +263,8 @@ class HermesConfig {
     if (result.code !== 0) throw new HermesPluginError(describeFailure(argv, result));
   }
 
-  async set(key: string, value: unknown): Promise<void> {
-    await this.run(['config', 'set', key, configSetText(value)]);
+  /** The value Hermes holds after a set must be exactly the intended one. */
+  async verifySet(key: string, value: unknown): Promise<void> {
     const actual = await this.get(key);
     if (actual === ABSENT || !isDeepStrictEqual(actual, value)) {
       throw new HermesPluginError(
@@ -263,12 +273,16 @@ class HermesConfig {
     }
   }
 
+  /** `config unset` on a key that is already absent is success. */
   async unset(key: string): Promise<void> {
     const argv = ['config', 'unset', key];
     const result = await this.cli(argv);
     if (result.code !== 0 && !result.stderr.includes('Config key not set')) {
       throw new HermesPluginError(describeFailure(argv, result));
     }
+  }
+
+  async verifyUnset(key: string): Promise<void> {
     if ((await this.get(key)) !== ABSENT) throw new HermesPluginError(`Hermes still holds ${key} after unset.`);
   }
 }
@@ -310,6 +324,7 @@ function stamp(now: Date): string {
 class ConfigTransaction {
   private backup: { path: string; original: { bytes: Buffer; mode: number } | null } | null = null;
   private lastDigest: string | null = null;
+  private attempted = false;
   readonly applied: string[] = [];
 
   constructor(
@@ -358,36 +373,36 @@ class ConfigTransaction {
     await pruneBackups(dir);
   }
 
-  private async record(step: string): Promise<void> {
+  /**
+   * One Hermes write. Its digest is recorded only when the command succeeded:
+   * after a failed command the file's state is unknown, so a later rollback
+   * compares against the last write known to be ours and keeps anything else.
+   */
+  private async write(step: string, command: () => Promise<void>): Promise<void> {
+    await this.begin();
+    this.attempted = true;
+    try {
+      await command();
+    } catch (error) {
+      this.applied.push(`${step} (failed)`);
+      throw error;
+    }
     this.applied.push(step);
     this.lastDigest = digestOf(await readConfigBytes(this.configPath));
   }
 
   async set(key: string, value: unknown): Promise<void> {
-    await this.begin();
-    try {
-      await this.config.set(key, value);
-    } finally {
-      await this.record(`set ${key}`);
-    }
+    await this.write(`set ${key}`, () => this.config.run(['config', 'set', key, configSetText(value)]));
+    await this.config.verifySet(key, value);
   }
 
   async unset(key: string): Promise<void> {
-    await this.begin();
-    try {
-      await this.config.unset(key);
-    } finally {
-      await this.record(`unset ${key}`);
-    }
+    await this.write(`unset ${key}`, () => this.config.unset(key));
+    await this.config.verifyUnset(key);
   }
 
   async enablePlugin(): Promise<void> {
-    await this.begin();
-    try {
-      await this.config.run(['plugins', 'enable', HERMES_PLUGIN_NAME]);
-    } finally {
-      await this.record(`hermes plugins enable ${HERMES_PLUGIN_NAME}`);
-    }
+    await this.write(`hermes plugins enable ${HERMES_PLUGIN_NAME}`, () => this.config.run(['plugins', 'enable', HERMES_PLUGIN_NAME]));
     const enabled = await this.config.get(KEYS.enabled);
     if (!Array.isArray(enabled) || !enabled.includes(HERMES_PLUGIN_NAME)) {
       throw new HermesPluginError(`${KEYS.enabled} does not list ${HERMES_PLUGIN_NAME} after \`hermes plugins enable\`.`);
@@ -399,7 +414,7 @@ class ConfigTransaction {
    * wrote; a concurrent change is never overwritten.
    */
   async rollback(): Promise<'nothing' | 'restored' | 'kept'> {
-    if (!this.backup || this.applied.length === 0) return 'nothing';
+    if (!this.backup || !this.attempted) return 'nothing';
     const current = await readConfigBytes(this.configPath).catch(() => undefined);
     if (current === undefined || digestOf(current) !== this.lastDigest) return 'kept';
     const original = this.backup.original;
@@ -682,25 +697,88 @@ async function configSteps(config: HermesConfig, target: Target): Promise<Step[]
   return steps;
 }
 
-function restartCommands(): string[][] {
-  return [['serve', '--stop'], ['gateway', 'restart']];
+export type GatewaySupervision =
+  | { kind: 'service'; pid: string | null }
+  | { kind: 'manual' }
+  | { kind: 'multiplexed' }
+  | { kind: 'stopped' }
+  | { kind: 'unknown' };
+
+/**
+ * The gateway's supervision state from the documented `hermes gateway status`
+ * ("Show service status"). Its text is not a machine contract, so only the
+ * positive service-managed lines count as supervised; anything unrecognised is
+ * `unknown`, and Borg never restarts an unknown gateway.
+ */
+export function parseGatewayStatus(stdout: string): GatewaySupervision {
+  const launchd = stdout.match(/Gateway is supervised by launchd \(PID (\d+)\)/);
+  if (launchd) return { kind: 'service', pid: launchd[1] };
+  if (/gateway service is running/i.test(stdout)) {
+    return { kind: 'service', pid: stdout.match(/Main PID:\s*(\d+)/)?.[1] ?? null };
+  }
+  if (/Running manually, not as a system service/.test(stdout)) return { kind: 'manual' };
+  if (/Gateway is running via the default-profile multiplexer/.test(stdout)) return { kind: 'multiplexed' };
+  if (/Gateway is not running|gateway service is stopped|Gateway service is not loaded/i.test(stdout)) return { kind: 'stopped' };
+  return { kind: 'unknown' };
 }
 
-async function restartHosts(cli: HermesCli, deps: HermesPluginDeps): Promise<boolean> {
-  let ok = true;
-  for (const argv of restartCommands()) {
-    deps.stdout(`Running \`hermes ${argv.join(' ')}\`.\n`);
-    const result = await cli(argv);
-    if (result.code !== 0) {
-      ok = false;
-      deps.stderr(`${describeFailure(argv, result)}. Run it yourself to finish the activation.\n`);
-    }
+async function gatewaySupervision(cli: HermesCli): Promise<GatewaySupervision> {
+  const result = await cli(['gateway', 'status']);
+  return result.code === 0 ? parseGatewayStatus(result.stdout) : { kind: 'unknown' };
+}
+
+function restartPlan(): string[] {
+  return ['hermes serve --stop', 'hermes gateway restart, only when the gateway runs as a launchd/systemd service'];
+}
+
+/**
+ * Activate the running hosts. `hermes serve --stop` is always safe (Desktop
+ * respawns its backend). The gateway is restarted only when `gateway status`
+ * shows it service-managed: without a service, `hermes gateway restart` would
+ * run a gateway in the foreground under this process, so Borg prints the
+ * command instead. Every call has a hard timeout that kills only its own child.
+ */
+async function restartHosts(cli: HermesCli, deps: HermesPluginDeps, verb: 'load' | 'unload'): Promise<boolean> {
+  deps.stdout('Running `hermes serve --stop` (Hermes Desktop restarts its backend on its own).\n');
+  const serve = await cli(['serve', '--stop']);
+  let ok = serve.code === 0;
+  if (!ok) deps.stderr(`${describeFailure(['serve', '--stop'], serve)}. Run it yourself.\n`);
+
+  const before = await gatewaySupervision(cli);
+  const manualHint = `Run \`hermes gateway restart\` yourself where the gateway runs to ${verb} the plugin.\n`;
+  switch (before.kind) {
+    case 'stopped':
+      deps.stdout(`The Hermes gateway is not running; it will ${verb} the plugin when it starts.\n`);
+      return ok;
+    case 'manual':
+      deps.stdout(`The Hermes gateway was started by hand (not as a service), so Borg does not restart it. ${manualHint}`);
+      return ok;
+    case 'multiplexed':
+      deps.stdout(`The Hermes gateway for this profile runs inside the default profile's gateway, so Borg does not restart it. ${manualHint}`);
+      return ok;
+    case 'unknown':
+      deps.stdout(`\`hermes gateway status\` did not show a service-managed gateway, so Borg does not restart it. ${manualHint}`);
+      return ok;
+    case 'service':
+      break;
   }
+  deps.stdout('Running `hermes gateway restart` (service-managed gateway).\n');
+  const restart = await cli(['gateway', 'restart']);
+  if (restart.code !== 0) {
+    deps.stderr(`${describeFailure(['gateway', 'restart'], restart)}. ${manualHint}`);
+    return false;
+  }
+  const after = await gatewaySupervision(cli);
+  if (after.kind !== 'service' || (before.pid !== null && after.pid === before.pid)) {
+    deps.stderr(`The gateway restart could not be confirmed by \`hermes gateway status\`. ${manualHint}`);
+    return false;
+  }
+  deps.stdout(`The Hermes gateway restarted${after.pid ? ` (PID ${after.pid})` : ''}.\n`);
   return ok;
 }
 
-function restartHint(): string {
-  return `Restart skipped. To load the plugin run: ${restartCommands().map((argv) => `\`hermes ${argv.join(' ')}\``).join(' and ')}.\n`;
+function restartHint(verb: 'load' | 'unload'): string {
+  return `Restart skipped. To ${verb} the plugin run \`hermes serve --stop\` and restart the gateway (\`hermes gateway restart\`).\n`;
 }
 
 interface ActivationOptions {
@@ -747,7 +825,7 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
     ...(dirState === 'absent' ? [`create ${target}`] : []),
     ...staleFiles.map((name) => `write ${join(target, name)}`),
     ...steps.map((step) => step.describe),
-    ...(options.noRestart ? [] : restartCommands().map((argv) => `hermes ${argv.join(' ')}`)),
+    ...(options.noRestart ? [] : restartPlan()),
   ];
   if (options.dryRun) {
     deps.stdout(`${summary}Dry run; nothing was changed. Planned steps:\n${plan.map((step) => `  - ${step}\n`).join('')}${openGatewayReport(gateway)}`);
@@ -796,10 +874,10 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
   );
   deps.stdout(openGatewayReport(gateway));
   if (options.noRestart) {
-    deps.stdout(restartHint());
+    deps.stdout(restartHint('load'));
     return 0;
   }
-  return (await restartHosts(cli, deps)) ? 0 : 1;
+  return (await restartHosts(cli, deps, 'load')) ? 0 : 1;
 }
 
 async function reportFailure(
@@ -905,7 +983,7 @@ export async function runHermesPluginUninstall(command: HermesPluginUninstallCom
     const plan = [
       ...steps.map((step) => step.describe),
       ...(dirState === 'directory' ? [`remove ${HERMES_PLUGIN_FILES.map((name) => join(target, name)).join(' and ')}, then the directory if empty`] : []),
-      ...(command.noRestart ? [] : restartCommands().map((argv) => `hermes ${argv.join(' ')}`)),
+      ...(command.noRestart ? [] : restartPlan()),
     ];
     if (command.dryRun) {
       deps.stdout(`Hermes home: ${home}\nDry run; nothing was changed. Planned steps:\n${plan.map((step) => `  - ${step}\n`).join('')}${foreignNote}`);
@@ -928,10 +1006,10 @@ export async function runHermesPluginUninstall(command: HermesPluginUninstallCom
     }
     deps.stdout(`Uninstalled the Hermes plugin ${HERMES_PLUGIN_NAME}.${tx.backupPath ? ` Backup of config.yaml: ${tx.backupPath}` : ''}\n${dirOutcome}${foreignNote}`);
     if (command.noRestart) {
-      deps.stdout(restartHint().replace('To load the plugin', 'To unload the plugin'));
+      deps.stdout(restartHint('unload'));
       return 0;
     }
-    return (await restartHosts(cli, deps)) ? 0 : 1;
+    return (await restartHosts(cli, deps, 'unload')) ? 0 : 1;
   } catch (error) {
     return failure(error, deps, 'Uninstall');
   }
