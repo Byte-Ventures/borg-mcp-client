@@ -44,6 +44,8 @@ export interface PushEngineDeps {
     /** Writes one wake event to the host. Called only after the wake is persisted. */
     emit(wake: WakeEmission): Promise<void>;
     /** Test seams (crash and pause controls). */
+    /** One diagnostic line (stderr in the listener); the text is already escaped. */
+    log?(line: string): void;
     hooks?: {
         /** After an EMIT transaction committed, before its event is written. */
         afterWakePersisted?(wake: WakeEmission): void | Promise<void>;
@@ -87,6 +89,10 @@ export declare class PushEngine {
     private network;
     /** Transitions and their emits run one at a time, in order; none starts after stop(). */
     private serial;
+    /**
+     * One engine transaction. Invalid wake state is discarded first, in the same
+     * transaction, so no transition ever reads it; the line is logged after commit.
+     */
     private transact;
     /** Clamp instants a clock jump left more than 24 h ahead. */
     private clamp;

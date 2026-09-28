@@ -20,7 +20,7 @@ import {
   DISCOVERY_PAGE, PushEngine, WAKE_ACK_DEADLINE_MS, WAKE_DEBOUNCE_MS, parseAck, readWakeSummary, refusalBackoffMs, rewakeBackoffMs,
   type PushEngineDeps, type WakeEmission,
 } from '../src/representative-push.js';
-import { withStateDb } from './fixtures/representative-state.js';
+import { deliveryRow, withStateDb } from './fixtures/representative-state.js';
 
 const originalHome = process.env.HOME;
 const originalStateRoot = process.env.BORG_STATE_ROOT;
@@ -717,6 +717,45 @@ describe('review controls (S2 round 3): stop cancels the transport', () => {
     releasePage();
     await new Promise((done) => setTimeout(done, 20));
     expect(pages).toEqual([1]);
+  });
+});
+
+describe('review controls (S2 security notes): invalid wake state is rebuilt, never a dead end', () => {
+  const gen = () => bindingFingerprint(binding);
+  const setDoc = (text: string) => withStateDb((db) => db.prepare('UPDATE wake_state SET state = ? WHERE generation = ?').run(text, gen()));
+  const tamper: Array<[string, () => void]> = [
+    ['not JSON', () => setDoc('{not json')],
+    ['version 2', () => setDoc(JSON.stringify({ ...docOf(), version: 2 }))],
+    ['reply "../x"', () => setDoc(JSON.stringify({ ...docOf(), outstanding: { batch: randomUUID(), replies: ['../x'], deadline: iso(clock + 60_000), reason: 'new-reply' } }))],
+    ['negative refusals', () => setDoc(JSON.stringify({ ...docOf(), refusals: { count: -1, retry_at: null } }))],
+    ['an invalid wake row', () => withStateDb((db) => db.prepare('UPDATE wake_replies SET attempts = -1, next_at = ? WHERE generation = ?').run('../x', gen()))],
+  ];
+
+  it.each(tamper)('%s: discards the wake state in one transaction, logs one line, and wakes only for the undelivered reply', async (_name, corrupt) => {
+    const lines: string[] = [];
+    const { engine, wakes, ctx } = await engineFor({ log: (line) => { lines.push(line); } });
+    const [delivered, pending] = [reply('delivered'), reply('pending')];
+    await engine.discover();
+    advance(WAKE_DEBOUNCE_MS);
+    const first = (await engine.tick())!;
+    expect(first).toMatchObject({ count: 2 });
+    await readRepresentativeReplies(ctx, {});
+    await deliverRepresentativeReplies(ctx, { through: delivered.id });
+    const checkpoint = deliveryRow(binding);
+    corrupt();
+
+    // Every transition runs again; the first one discards and rebuilds.
+    await engine.discover();
+    advance(WAKE_ACK_DEADLINE_MS + WAKE_DEBOUNCE_MS);
+    const rebuilt = await engine.tick();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^Representative listener: discarded (an invalid wake_state document|1 invalid wake_replies row\(s\)); rebuilding wake state from the delivered checkpoint \(delivery state unchanged\)$/);
+    expect(rebuilt).toMatchObject({ count: 1 });
+    expect(wakes.slice(1)).toEqual([rebuilt]);
+    expect(rowsOf().map((row) => row.entry_id)).toEqual([pending.id]);
+    expect(docOf().version).toBe(1);
+    expect(deliveryRow(binding)).toEqual(checkpoint);
+    expect(await ack(engine, first, true)).toBe('ignored'); // the discarded batch is gone
   });
 });
 

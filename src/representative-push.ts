@@ -34,7 +34,7 @@
  * - Clock: a persisted instant more than 24 h ahead is clamped to now + 24 h.
  */
 import { randomUUID } from 'node:crypto';
-import type { Transaction } from './representative-db.js';
+import { printable, type Transaction } from './representative-db.js';
 import { comparePoints, loadDelivery, scanStart } from './representative-delivery-store.js';
 import {
   isRepresentativeUuid, requireCurrentGeneration, type RepresentativeBinding, type RepresentativeStore,
@@ -96,6 +96,37 @@ function parseDocument(raw: string): WakeDocument {
   return value as WakeDocument;
 }
 
+const isWakeRow = (row: Record<string, unknown>): boolean =>
+  isRepresentativeUuid(row.entry_id) && isInstant(row.created_at) && isInstant(row.next_at) &&
+  typeof row.attempts === 'number' && Number.isInteger(row.attempts) && row.attempts >= 0;
+
+/**
+ * Wake state is derived data: the delivered checkpoint and the log rebuild it.
+ * An invalid wake_state document or wake_replies row is therefore discarded
+ * for the generation (both tables, never the delivery state), so discovery
+ * rebuilds it from the delivered checkpoint. Returns what was discarded, or
+ * null when the state is valid.
+ */
+function discardInvalidWakeState(db: Transaction, generation: string): string | null {
+  const problems: string[] = [];
+  const doc = db.prepare('SELECT state FROM wake_state WHERE generation = ?').get(generation) as { state: unknown } | undefined;
+  if (doc) {
+    try {
+      if (typeof doc.state !== 'string') throw new Error('not text');
+      parseDocument(doc.state);
+    } catch {
+      problems.push('an invalid wake_state document');
+    }
+  }
+  const invalidRows = (db.prepare('SELECT entry_id, created_at, attempts, next_at FROM wake_replies WHERE generation = ?')
+    .all(generation) as Array<Record<string, unknown>>).filter((row) => !isWakeRow(row)).length;
+  if (invalidRows > 0) problems.push(`${invalidRows} invalid wake_replies row(s)`);
+  if (problems.length === 0) return null;
+  db.prepare('DELETE FROM wake_state WHERE generation = ?').run(generation);
+  db.prepare('DELETE FROM wake_replies WHERE generation = ?').run(generation);
+  return problems.join(' and ');
+}
+
 function loadDocument(db: Transaction, generation: string): WakeDocument {
   const row = db.prepare('SELECT state FROM wake_state WHERE generation = ?').get(generation) as { state: string } | undefined;
   return row ? parseDocument(row.state) : emptyDocument();
@@ -127,6 +158,8 @@ export interface PushEngineDeps {
   /** Writes one wake event to the host. Called only after the wake is persisted. */
   emit(wake: WakeEmission): Promise<void>;
   /** Test seams (crash and pause controls). */
+  /** One diagnostic line (stderr in the listener); the text is already escaped. */
+  log?(line: string): void;
   hooks?: {
     /** After an EMIT transaction committed, before its event is written. */
     afterWakePersisted?(wake: WakeEmission): void | Promise<void>;
@@ -188,11 +221,22 @@ export class PushEngine {
     return result;
   }
 
-  private transact<T>(body: (db: Transaction, generation: string, now: Date) => T): Promise<T> {
-    return this.deps.store.state.transact((db) => {
+  /**
+   * One engine transaction. Invalid wake state is discarded first, in the same
+   * transaction, so no transition ever reads it; the line is logged after commit.
+   */
+  private async transact<T>(body: (db: Transaction, generation: string, now: Date) => T): Promise<T> {
+    let discarded: string | null = null;
+    const result = await this.deps.store.state.transact((db) => {
       const generation = requireCurrentGeneration(db, this.deps.binding);
+      discarded = discardInvalidWakeState(db, generation);
       return body(db, generation, this.deps.now());
     });
+    if (discarded) {
+      this.deps.log?.(`Representative listener: discarded ${printable(discarded)}; ` +
+        'rebuilding wake state from the delivered checkpoint (delivery state unchanged)');
+    }
+    return result;
   }
 
   /** Clamp instants a clock jump left more than 24 h ahead. */
