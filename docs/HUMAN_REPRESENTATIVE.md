@@ -495,8 +495,10 @@ restart that process once so it releases the lease.
   conversation again. Each reply gets at most `1 + max_reinjects` wakes in total;
   after that the plugin logs it and wakes no more for that reply until a delivery
   covers it. Every wake is counted on disk before Hermes is asked to start the turn,
-  so neither a replayed hint nor a gateway restart renews the count. A wake Hermes
-  refuses is not counted. A crash between counting and asking can lose one wake,
+  so neither a replayed hint nor a gateway restart renews the count. A refused
+  wake's reservation is rolled back when the state update succeeds; if that
+  rollback fails, the wake is conservatively counted as spent. A crash between
+  counting and asking can lose one wake,
   never add one. Hermes reports only that it accepted a message, not that the
   turn ran, so this is how a dropped wake is recovered.
 - One small record (id, timestamp, count) is kept for each reply the plugin has
