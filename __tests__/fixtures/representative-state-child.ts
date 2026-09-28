@@ -13,7 +13,8 @@
  *   pause <hook> <ready-file> <go-file> <worktree>
  *                                  stall at the first <hook> (beforeOpen, beforeBegin,
  *                                  afterBegin) until <go-file> exists, then save a binding
- * Output is one JSON line on stdout.
+ * Output is one JSON line on stdout. Every wait on a go-file gives up after
+ * STATE_CHILD_DEADLINE_MS (default 60 s) with exit code 5 and a message.
  */
 import { existsSync, writeFileSync } from 'node:fs';
 import { createRepresentativeState, readCurrent, representativeStateRoot } from '../../src/representative-db.js';
@@ -23,7 +24,20 @@ import { bindingFor } from './representative-mock-backend.js';
 
 const [mode, a, b, c] = process.argv.slice(2);
 const print = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
-const waitFor = async (file: string) => { while (!existsSync(file)) await new Promise((resolve) => setTimeout(resolve, 2)); };
+// A go-file that never comes (the parent test failed or was interrupted) must
+// end this process, not keep it waiting.
+const DEADLINE_MS = Number(process.env.STATE_CHILD_DEADLINE_MS ?? 60_000);
+const started = Date.now();
+const expire = (file: string): never => {
+  process.stderr.write(`representative-state-child: no ${file} within ${DEADLINE_MS} ms; the parent test did not signal. Exiting.\n`);
+  process.exit(5);
+};
+const waitFor = async (file: string) => {
+  while (!existsSync(file)) {
+    if (Date.now() - started > DEADLINE_MS) expire(file);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+};
 const kill = () => process.kill(process.pid, 'SIGKILL');
 
 if (mode === 'bind') {
@@ -74,7 +88,10 @@ if (mode === 'bind') {
     if (!armed || name !== hook || paused) return;
     paused = true;
     writeFileSync(ready, 'ready');
-    while (!existsSync(go)) Atomics.wait(sleeper, 0, 0, 2);
+    while (!existsSync(go)) {
+      if (Date.now() - started > DEADLINE_MS) expire(go);
+      Atomics.wait(sleeper, 0, 0, 2);
+    }
   }]));
   const state = createRepresentativeState({ busyTimeoutMs: 60_000, hooks });
   if (hook !== 'beforeOpen') await state.transact(() => {}); // an open handle on the generation current now

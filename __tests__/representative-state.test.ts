@@ -7,14 +7,14 @@
  * Cross-process controls run real separate Node processes over one private root.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync,
   symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   RepresentativeStateError, createRepresentativeState, isSqliteCorruption, readCurrent, representativeStateRoot,
@@ -26,10 +26,10 @@ import { runRepresentativeResetState } from '../src/representative-cmd.js';
 import { deliverRepresentativeReplies, readRepresentativeReplies, sendRepresentativeMessage } from '../src/representative-core.js';
 import { COORD_ID, MockCube, REP_ID, bindingFor } from './fixtures/representative-mock-backend.js';
 import { corruptTable, notADatabase } from './fixtures/representative-state.js';
+import { spawnStateChild, type ChildResult } from './fixtures/state-children.js';
 
 const originalHome = process.env.HOME;
 const originalStateRoot = process.env.BORG_STATE_ROOT;
-const CHILD = resolve('__tests__/fixtures/representative-state-child.ts');
 let root: string;
 let stateRoot: string;
 
@@ -65,20 +65,8 @@ function childEnv(): NodeJS.ProcessEnv {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_')));
   return { ...env, HOME: root, BORG_STATE_ROOT: root };
 }
-function child(args: string[]): { done: Promise<{ code: number | null; signal: string | null; out: any; stderr: string }> } {
-  const proc = spawn(process.execPath, ['--import', 'tsx', CHILD, ...args], { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
-  let stdout = '', stderr = '';
-  proc.stdout.on('data', (chunk) => { stdout += chunk; });
-  proc.stderr.on('data', (chunk) => { stderr += chunk; });
-  const done = new Promise<{ code: number | null; signal: string | null; out: any; stderr: string }>((resolveDone) => {
-    proc.on('exit', (code, signal) => {
-      const line = stdout.trim().split('\n').filter(Boolean).at(-1);
-      let out: unknown = null;
-      try { out = line ? JSON.parse(line) : null; } catch { out = line; }
-      resolveDone({ code, signal, out, stderr });
-    });
-  });
-  return { done };
+function child(args: string[]): { pid: number; done: Promise<ChildResult> } {
+  return spawnStateChild(args, childEnv());
 }
 const run = async (args: string[]) => child(args).done;
 async function waitFile(path: string, timeoutMs = 30_000): Promise<void> {
@@ -743,6 +731,34 @@ describe('reset-state', () => {
     expect(outcomes).toEqual([0, 1]);
     expect(results.find((result) => result.out.code === 1)!.out.err).toContain('is healthy; nothing to reset');
     expect(generations()).toHaveLength(2);
+  }, 60_000);
+});
+
+describe('a failing cross-process control never stalls the run', () => {
+  it('a child whose go-file never comes exits non-zero with a clear message within its deadline', async () => {
+    const started = Date.now();
+    const waiting = spawnStateChild(['stress', '1', join(root, 'go-never-written')], { ...childEnv(), STATE_CHILD_DEADLINE_MS: '1500' });
+    const result = await waiting.done;
+    expect(result.code).toBe(5);
+    expect(result.stderr).toContain('the parent test did not signal');
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 30_000);
+
+  it('a control that fails before its go-file ends a real vitest run promptly, killing its child', () => {
+    const pidFile = join(root, 'child.pid');
+    const started = Date.now();
+    const result = spawnSync(process.execPath, [join('node_modules', 'vitest', 'vitest.mjs'), 'run',
+      '--config', '__tests__/fixtures/stall-run/vitest.config.ts'], {
+      encoding: 'utf8', timeout: 45_000, env: { ...process.env, STALL_FIXTURE_PID_FILE: pidFile },
+    });
+    const elapsed = Date.now() - started;
+    expect(result.error).toBeUndefined(); // not killed by the 45 s timeout
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain('forced failure before the go-file');
+    // Well inside the child's own 60 s deadline: the suite's afterEach killed it.
+    expect(elapsed).toBeLessThan(30_000);
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
   }, 60_000);
 });
 
