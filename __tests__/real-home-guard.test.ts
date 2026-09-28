@@ -147,9 +147,18 @@ describe('prevention at the I/O layer: every src mutation refuses the forbidden 
     } finally {
       if (savedRoot === undefined) delete process.env.BORG_STATE_ROOT; else process.env.BORG_STATE_ROOT = savedRoot;
     }
+    // An explicit state root in the forbidden home: every directory check before
+    // it passes (HOME is the private test base, so the walk is under HOME), and
+    // the first mutation is refused. This does not depend on the runner's TMPDIR.
     const { createRepresentativeState } = await import('../src/representative-db.js');
-    await expect(createRepresentativeState({ root: join(forbidden, 'nested', 'state') }).transact(() => 'wrote'))
-      .rejects.toBeInstanceOf(guarded.TestIsolationError);
+    const savedHome = process.env.HOME;
+    try {
+      process.env.HOME = base;
+      await expect(createRepresentativeState({ root: join(forbidden, 'nested', 'state') }).transact(() => 'wrote'))
+        .rejects.toBeInstanceOf(guarded.TestIsolationError);
+    } finally {
+      process.env.HOME = savedHome;
+    }
     untouched();
   });
 
