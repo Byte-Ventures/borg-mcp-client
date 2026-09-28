@@ -19,8 +19,9 @@ export interface WakeDocument {
         count: number;
         retry_at: string | null;
     };
+    /** Entries still to scan before the startup batch; null until the first capture. */
     cohort: {
-        tail: LocalServerCursor | null;
+        remaining: number;
         open: boolean;
     } | null;
     /** The cohort closed and its one startup batch has not been emitted yet. */
@@ -64,23 +65,34 @@ export interface WakeSummary {
     cohort_open: boolean;
     frontier: LocalServerCursor | null;
 }
+export declare class EngineStoppedError extends Error {
+    constructor();
+}
 export declare class PushEngine {
     private readonly deps;
     private chain;
     private scanning;
     private rescan;
+    private readonly halt;
+    private readonly halted;
     constructor(deps: PushEngineDeps);
-    /** Transitions and their emits run one at a time, in order. */
+    get stopped(): boolean;
+    /** One cancellation for everything: no later transition, merge or request, and a request in flight is abandoned. */
+    stop(): void;
+    /** A network read that stop() abandons at once. */
+    private network;
+    /** Transitions and their emits run one at a time, in order; none starts after stop(). */
     private serial;
     private transact;
     /** Clamp instants a clock jump left more than 24 h ahead. */
     private clamp;
     /**
-     * Start of a run: capture the startup cohort. The server head is read
-     * outside any transaction; an open cohort from an interrupted run keeps its
-     * tail, so the target never moves forward.
+     * Start of a run: capture the startup cohort with one bounded request (the
+     * number of entries beyond the scan position). An open cohort from an
+     * interrupted run keeps its remaining count, so the target never moves
+     * forward. Must run before the first discovery.
      */
-    start(head: LocalServerCursor | null): Promise<WakeSummary>;
+    captureCohort(): Promise<WakeSummary>;
     summary(): Promise<WakeSummary>;
     /**
      * Discovery: single-flight. A trigger while a scan runs makes that scan run

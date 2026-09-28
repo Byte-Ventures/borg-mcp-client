@@ -47,7 +47,8 @@ else {
   // Crash control: die after a wake is persisted and before it is written.
   const hooks = process.env.LISTEN_KILL_AFTER_PERSIST ? { afterWakePersisted: () => { process.kill(process.pid, 'SIGKILL'); } } : undefined;
   const command = { action: 'listen', worktree, ...(protocol === 'none' ? {} : { protocol: Number(protocol) }) };
-  process.exitCode = await run(command, deps, productionTrust
+  // Like the CLI: exit as soon as the listener returns (an abandoned request must not hold the process).
+  process.exit(await run(command, deps, productionTrust
     // No transport or trust overrides: the real loader, cache and pinned fetch.
     ? { heartbeatIntervalMs: 50, reconnectDelay: () => 10, ...(hooks ? { hooks } : {}) }
     : {
@@ -56,5 +57,5 @@ else {
     }) }, heartbeatIntervalMs: 500,
     reconnectDelay: () => 10,
     ...(hooks ? { hooks } : {}),
-  });
+  }));
 }

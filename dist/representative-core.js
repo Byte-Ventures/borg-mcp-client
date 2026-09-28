@@ -414,17 +414,25 @@ const READ_SCAN_PAGE = 500;
  * bytes by default), so the reduced entry fits.
  */
 export const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
-/** The newest log position on the bound server (null for an empty log), outside any transaction. */
+/** At most this many pages are read to find the server head (500 entries each). */
+export const SERVER_HEAD_MAX_PAGES = 40;
+/**
+ * The newest log position on the bound server (null for an empty log), outside
+ * any transaction. A log longer than SERVER_HEAD_MAX_PAGES pages, or one that
+ * keeps growing faster than it is read, is 'unbounded': the caller must not
+ * wait for a head it may never reach.
+ */
 export async function serverHead(backend) {
     let cursor = null;
-    for (;;) {
-        const page = await backend.readAfter(cursor, READ_SCAN_PAGE);
-        const tail = page.entries.at(-1);
+    for (let page = 0; page < SERVER_HEAD_MAX_PAGES; page += 1) {
+        const result = await backend.readAfter(cursor, READ_SCAN_PAGE);
+        const tail = result.entries.at(-1);
         if (tail)
             cursor = { id: tail.id, created_at: tail.created_at };
-        if (!page.has_more || !tail)
+        if (!result.has_more || !tail)
             return cursor;
     }
+    return 'unbounded';
 }
 /** First use of a binding generation creates its state (binding row and delivery start). */
 export async function ensureRepresentativeState(ctx) {

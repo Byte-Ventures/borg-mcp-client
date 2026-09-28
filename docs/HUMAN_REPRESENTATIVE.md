@@ -295,7 +295,8 @@ Where a binding's replies start:
   - no 5.x delivery history at all for the representative drone (no checkpoint
     for any generation, no upgrade marker): the newest entry of the cube log at
     its first use, so only new replies are returned (the binding start instead
-    if another generation of the drone already has delivery state by then);
+    if another generation of the drone already has delivery state by then, or
+    if the log is too long to reach its end in a bounded read);
   - anything else, including a 5.x file that cannot be read or fails the
     private-file checks (a regular file you own, no group or other access, not a
     symlink): the
@@ -390,13 +391,18 @@ How wakes are decided (all of it in the state database, per binding generation):
 - A new reply wakes within about 2 seconds; replies that arrive meanwhile join
   that one wake. Broadcasts never wake.
 - One wake is outstanding at a time. It stays outstanding until its ack, or 60
-  seconds without one; replies found meanwhile wait for the next wake.
+  seconds without one; replies found meanwhile wait for the next wake. An ack
+  that arrives after those 60 seconds is ignored.
 - `accepted: false` backs off 30 seconds, doubling up to 30 minutes, then
   wakes again for the same replies. A missing ack counts the wake as made.
 - Each wake is recorded before it is written to stdout. A listener killed in
   between loses that one wake attempt; the reply is woken again on schedule.
-- On every start, the engine first catches up to the log's current end, then
-  sends one `startup` wake for every reply still undelivered.
+- On every start, after `listening`, the engine asks the server once how many
+  log entries lie beyond where it stopped. It sends no other wake until
+  discovery has read that many, then one `startup` wake for every reply still
+  undelivered. A log that keeps growing cannot delay it past that count.
+- EOF on stdin stops everything at once: discovery, pending log reads, the
+  scheduler and the stream. The listener releases its lease and exits.
 - A reply delivered before its wake is not woken; a wake already sent cannot be
   recalled, and the woken `read` then returns nothing new.
 
