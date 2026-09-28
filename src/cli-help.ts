@@ -129,7 +129,7 @@ export function representativeHelpText(version: string): string {
     `  borg representative prepare --coordinator <drone-label> [--role <name>] [--worktree <name>] [--host <host>] [--rebind]\n` +
     `  borg representative status [--worktree <path>]\n` +
     `  borg representative mcp [--worktree <path>]\n` +
-    `  borg representative listen --worktree <path> [--replay-after <entry_id>]\n` +
+    `  borg representative listen --worktree <path> --protocol 2\n` +
     `  borg representative hermes-plugin install [--hermes-home <path>] [--force]\n` +
     `  borg representative reset-state\n` +
     `  borg representative --help\n\n` +
@@ -140,7 +140,8 @@ export function representativeHelpText(version: string): string {
     `            another drone is never chosen instead.\n` +
     `  status    Show the saved binding, re-check it against the live cube, and list unresolved sends.\n` +
     `  mcp       Serve the restricted stdio MCP tools (status, send, read, deliver, ack) for a generic MCP host.\n` +
-    `  listen    Emit body-free JSON wake hints from the server stream; supervise this separate process.\n` +
+    `  listen    The push engine: emit body-free JSON wakes for undelivered Coordinator replies and read\n` +
+    `            the host's acks on stdin. Run by the host with a stdin pipe; EOF on stdin stops it.\n` +
     `  hermes-plugin install\n` +
     `            Copy the Borg-owned Hermes push plugin into <Hermes home>/plugins and print the config to add.\n` +
     `            It wakes one Hermes messaging-gateway conversation (not a Desktop chat). Never edits Hermes\n` +
@@ -150,7 +151,7 @@ export function representativeHelpText(version: string): string {
     `            refuses when the state is healthy. Keeps readable bindings; loses delivery checkpoints (replies\n` +
     `            replay), the request ledger (pending and ambiguous sends lose their guard) and wake state.\n\n` +
     `Options:\n` +
-    `  --replay-after <entry_id>    listen: replay later retained hints after the last durably enqueued entry\n` +
+    `  --protocol 2                 listen: the listener protocol (required; this version speaks 2)\n` +
     `  --coordinator <drone-label>  Exact label of the Coordinator drone (see \`borg drones\`). Required for prepare.\n` +
     `  --role <name>                Existing non-human-seat role for the representative (default: hermes-representative)\n` +
     `  --worktree <name>            prepare: create the drone in a new linked worktree of that name\n` +
@@ -160,8 +161,8 @@ export function representativeHelpText(version: string): string {
     `  --hermes-home <path>         hermes-plugin install: absolute Hermes home (default: $HERMES_HOME or ~/.hermes)\n` +
     `  --force                      hermes-plugin install: replace the files of an existing install\n` +
     `  --help, -h                   Show this help\n\n` +
-    `Limits: the MCP process has no background wake; a separate listen process emits wake hints, not content.\n` +
-    `Reading changes nothing: persist replies durably, then deliver through the last one. On a listener gap, call read.\n` +
+    `Limits: the MCP process has no background wake; the listen process emits wakes, not content.\n` +
+    `Reading changes nothing: persist replies durably, then deliver through the last one.\n` +
     `Any number of processes may use the tools at once; listen owns a separate exclusive listener lease.\n` +
     `A retried send reuses its request id so the server stores it once; an unknown outcome is reported as\n` +
     `ambiguous, with its cause, and never re-sent automatically. "User-authorized" is the representative's own label:\n` +

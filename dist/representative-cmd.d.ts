@@ -33,7 +33,7 @@ export type RepresentativeCommand = {
 } | {
     action: 'listen';
     worktree?: string;
-    replayAfter?: string;
+    protocol?: number;
 } | {
     action: 'reset-state';
 } | {

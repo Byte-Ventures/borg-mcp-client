@@ -84,8 +84,9 @@ export function advanceCheckpoint(db, generation, to) {
  * - A prepared generation without a row starts at its binding start.
  * - An imported 5.x generation left 'head-pending' (no 5.x history for its
  *   seat) starts at the server head, read outside any transaction; if another
- *   generation of the seat has delivery state by the time it is written, it
- *   starts at the binding start instead (replays, never skips).
+ *   generation of the seat has delivery state by the time it is written, or
+ *   the head cannot be reached in a bounded read (a very long or fast-growing
+ *   log), it starts at the binding start instead (replays, never skips).
  */
 export async function ensureDeliveryState(ctx) {
     const generation = bindingFingerprint(ctx.binding);
@@ -112,13 +113,14 @@ export async function ensureDeliveryState(ctx) {
     if (!pending)
         return;
     const head = await ctx.serverHead();
+    ctx.signal?.throwIfAborted();
     await ctx.store.state.transact((db) => {
         current(db);
         if (startKindOf(db, generation) !== 'head-pending')
             return;
         const seatHistory = db.prepare('SELECT 1 AS present FROM delivery WHERE seat = ? AND generation != ? LIMIT 1')
             .get(seat, generation) !== undefined;
-        const [kind, start] = head && !seatHistory ? ['head', head] : ['binding', bindingStart];
+        const [kind, start] = head && head !== 'unbounded' && !seatHistory ? ['head', head] : ['binding', bindingStart];
         db.prepare('UPDATE delivery SET start_kind = ?, start_id = ?, start_at = ? WHERE generation = ?')
             .run(kind, start.id, start.created_at, generation);
     });

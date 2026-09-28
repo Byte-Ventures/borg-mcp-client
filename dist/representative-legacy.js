@@ -15,7 +15,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { borgConfigRoot } from './private-root.js';
 import { readStoreFile } from './seat-store.js';
-import { validatePrivateDirectory } from './representative-listener-store.js';
+import { validatePrivateDirectory } from './representative-db.js';
 import { bindingFingerprint, isRepresentativeUuid, parseBinding } from './representative-store.js';
 import { insertBindingRow } from './representative-store.js';
 const LEGACY_FILE_CAP_BYTES = 1024 * 1024;

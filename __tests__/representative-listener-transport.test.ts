@@ -9,13 +9,15 @@ import { mkdtemp, realpath, mkdir, readFile, rm, writeFile, rename, readdir } fr
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRepresentativeStore } from '../src/representative-store.js';
-import { bindingFor, CUBE_ID, REP_ID, COORD_ID } from './fixtures/representative-mock-backend.js';
+import { bindingFor, CUBE_ID, REP_ID, COORD_ID, MockCube } from './fixtures/representative-mock-backend.js';
+import { serveBackend } from './fixtures/backend-proxy.js';
 
 // Production pinned-HTTPS transport (createPinnedServerFetch) against a disposable
 // local TLS server; abrupt resets surface Node errno/string-code errors.
 let root: string, worktree: string, origin: string, cert: string, server: Server;
 let handle: (req: IncomingMessage, res: ServerResponse) => void;
 let responses: ServerResponse[], entries: any[], requests: number;
+let cube: MockCube, backend: { url: string; close(): Promise<void> };
 const children: ChildProcess[] = [];
 const delay = (ms: number) => new Promise(done => setTimeout(done, ms));
 function entry(index: number) {
@@ -37,25 +39,27 @@ beforeEach(async () => {
   process.env.HOME = root; process.env.BORG_STATE_ROOT = root;
   worktree = join(root, 'work'); await mkdir(worktree, { mode: 0o700 });
   responses = []; entries = []; requests = 0; handle = (_req, res) => stream(res);
+  cube = new MockCube(); backend = await serveBackend(cube);
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'key.pem'), '-out', join(root, 'cert.pem'),
     '-days', '1', '-subj', '/CN=localhost', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' });
   cert = join(root, 'cert.pem');
   server = createServer({ key: await readFile(join(root, 'key.pem')), cert: await readFile(cert) }, (req, res) => { requests++; handle(req, res); });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   origin = `https://127.0.0.1:${(server.address() as any).port}`;
-  await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin }), { rebind: false });
+  await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin, boundAt: '2020-01-01T00:00:00.000Z' }), { rebind: false });
 });
 afterEach(async () => {
   await Promise.all(children.splice(0).map(async child => {
     if (child.exitCode === null && child.signalCode === null) { const done = once(child, 'exit'); child.kill('SIGKILL'); await done; }
   }));
   server.closeAllConnections(); await new Promise<void>(done => server.close(() => done()));
+  await backend.close();
   await rm(root, { recursive: true, force: true });
 });
 function start(extraEnv: Record<string, string> = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_')));
   const child = spawn(process.execPath, ['--import', 'tsx', resolve('__tests__/fixtures/representative-listener-process.ts'), worktree, origin, 'listen'],
-    { env: { ...env, HOME: root, XDG_CONFIG_HOME: join(root, '.config'), REPRESENTATIVE_TEST_PIN_CERT: cert, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
+    { env: { ...env, HOME: root, XDG_CONFIG_HOME: join(root, '.config'), REPRESENTATIVE_TEST_PIN_CERT: cert, BACKEND_URL: backend.url, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
   children.push(child);
   const events: any[] = []; let stderr = '', buffer = '';
   child.stderr!.on('data', chunk => { stderr += chunk; });
@@ -72,39 +76,42 @@ function start(extraEnv: Record<string, string> = {}) {
     }
     throw new Error(`listener timeout: ${stderr}; ${JSON.stringify(events)}`);
   };
-  return { child, events, exited, wait };
+  return { child, events, exited, wait, stderr: () => stderr };
 }
 const count = (events: any[], name: string) => events.filter(e => e.event === name).length;
 
-it('reconnects after abrupt pinned-TLS resets, including mid-frame, without duplicate appends', async () => {
-  const client = start(); await client.wait(() => count(client.events, 'listening') === 1);
-  const hello = client.events.find(e => e.event === 'listening');
+it('reconnects after abrupt pinned-TLS resets, including mid-frame, and wakes each reply exactly once', async () => {
+  const client = start(); await client.wait(() => count(client.events, 'listening') === 1 && responses.length === 1);
+  const posted: string[] = [];
   for (let i = 0; i < 3; i++) {
-    const value = entry(i); entries.push(value); responses.at(-1)!.write(frame(value));
-    await client.wait(() => count(client.events, 'entry') === i + 1);
+    const value = entry(i);
+    posted.push(cube.post(COORD_ID, value.message, [REP_ID], new Date().toISOString()).id);
+    responses.at(-1)!.write(frame(value)); // a trigger: discovery reads the log itself
+    await client.wait(() => count(client.events, 'wake') === i + 1);
+    const wake = client.events.filter(e => e.event === 'wake').at(-1);
+    client.child.stdin!.write(`${JSON.stringify({ wake_id: wake.wake_id, accepted: true })}\n`);
     const before = requests;
     // Alternate a clean-boundary reset with a reset inside a partially written frame.
     if (i % 2) responses.at(-1)!.write(frame(entry(99)).slice(0, 40));
     responses.at(-1)!.destroy();
-    await client.wait(() => requests > before && count(client.events, 'connected') === i + 1);
+    await client.wait(() => requests > before && responses.length === before + 1);
+    await delay(300); // the reconnect's own discovery finds nothing new
   }
-  expect(client.events.filter(e => e.event === 'reconnecting')).toEqual([1, 2, 3].map(attempt => ({ event: 'reconnecting', attempt, delay_ms: 10 })));
-  expect(client.events.filter(e => e.event === 'entry').map(e => e.entry_id)).toEqual(entries.map(e => e.id));
-  const raw = await readFile(hello.inbox, 'utf8');
-  entries.forEach(e => expect(raw.split(`[entry_id: ${e.id}]`).length - 1).toBe(1));
-  expect(raw.trim().split('\n')).toHaveLength(entries.length);
+  expect(client.events.filter(e => e.event === 'wake').map(e => [e.reason, e.count])).toEqual([['new-reply', 1], ['new-reply', 1], ['new-reply', 1]]);
   client.child.kill('SIGTERM'); const [code] = await client.exited;
   expect(code).toBe(0); expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'signal', exit_code: 0 });
   expect(client.events.some(e => e.event === 'refused')).toBe(false);
-});
+  expect(posted).toHaveLength(3);
+}, 60_000);
 
 it('retries a pinned-TLS reset before listening instead of refusing startup', async () => {
   handle = (req, res) => { if (requests === 1) req.socket.destroy(); else stream(res); };
-  const client = start(); await client.wait(() => count(client.events, 'listening') === 1);
+  // Listening is announced before the stream connects; the reset only delays the stream.
+  const client = start(); await client.wait(() => count(client.events, 'listening') === 1 && responses.length === 1);
   expect(requests).toBe(2);
   expect(client.events.map(e => e.event)).toEqual(['listening']);
   client.child.kill('SIGTERM'); const [code] = await client.exited;
-  expect(code).toBe(0); expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'signal', exit_code: 0 });
+  expect(code, client.stderr() + JSON.stringify(client.events)).toBe(0); expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'signal', exit_code: 0 });
 });
 
 // Production trust: no injected loader or fetch, so the process-lifetime cache
@@ -125,20 +132,19 @@ it('stops on local authority trust replaced during an open connection with the p
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(root, 'b-key.pem'), '-out', join(root, 'b-cert.pem'),
     '-days', '1', '-subj', '/CN=localhost', '-addext', 'basicConstraints=critical,CA:TRUE'], { stdio: 'ignore' });
   const client = start({ BORG_SERVER_DATA_DIR: authority, REPRESENTATIVE_TEST_TRUST_IDENTITY: identityA });
-  await client.wait(() => count(client.events, 'listening') === 1);
-  const inbox = client.events.find(e => e.event === 'listening').inbox;
-  // Positive control: before the change a frame is delivered over the same connection.
-  const before = entry(1); entries.push(before); responses.at(-1)!.write(frame(before));
-  await client.wait(() => count(client.events, 'entry') === 1);
+  await client.wait(() => count(client.events, 'listening') === 1 && responses.length === 1);
+  // Positive control: before the change a reply wakes over the same connection.
+  const before = entry(1); cube.post(COORD_ID, before.message, [REP_ID], new Date().toISOString()); responses.at(-1)!.write(frame(before));
+  await client.wait(() => count(client.events, 'wake') === 1);
   await writeTrust(await readFile(join(root, 'b-cert.pem'), 'utf8'));
-  const after = { ...entry(2), message: 'POST_TRUST_CHANGE_SENTINEL' }; responses.at(-1)!.write(frame(after));
-  // Either outcome ends the wait: the listener exits, or it delivers the post-change hint.
-  for (let i = 0; i < 1000 && client.child.exitCode === null && !client.events.some(e => e.entry_id === after.id); i++) await delay(10);
-  expect(client.events.filter(e => e.event === 'entry').map(e => e.entry_id)).toEqual([before.id]);
+  const after = { ...entry(2), message: 'POST_TRUST_CHANGE_SENTINEL' };
+  cube.post(COORD_ID, after.message, [REP_ID], new Date().toISOString()); responses.at(-1)!.write(frame(after));
+  // Either outcome ends the wait: the listener exits, or it wakes for the post-change reply.
+  for (let i = 0; i < 1000 && client.child.exitCode === null && count(client.events, 'wake') < 2; i++) await delay(10);
+  expect(count(client.events, 'wake')).toBe(1);
   const [code] = await client.exited;
   expect(code).toBe(4);
   expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'trust-changed', exit_code: 4 });
-  expect(await readFile(inbox, 'utf8')).not.toContain(after.id);
-  expect(count(client.events, 'reconnecting')).toBe(0); expect(requests).toBe(1);
+  expect(requests).toBe(1);
   expect((await readdir(join(root, '.config'), { recursive: true })).filter(p => String(p).endsWith('owner.json'))).toEqual([]);
 });

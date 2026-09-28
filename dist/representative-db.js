@@ -16,9 +16,9 @@
 import { randomBytes } from 'node:crypto';
 import { closeSync, constants, fsyncSync, lstatSync, readdirSync, readSync, writeSync } from 'node:fs';
 import { mkdirSync, openSqlite, openSync, renameSync, rmdirSync, unlinkSync } from './guarded-fs.js';
-import { join } from 'node:path';
-import { borgConfigRoot } from './private-root.js';
-import { validatePrivateDirectory } from './representative-listener-store.js';
+import { join, relative, sep } from 'node:path';
+import { borgConfigRoot, borgHomeRoot } from './private-root.js';
+import { assertSecureRoot } from './seat-store.js';
 export const REPRESENTATIVE_STATE_SCHEMA = 'borg-representative/1';
 export const REPRESENTATIVE_STATE_USER_VERSION = 1;
 /** g<17-digit UTC millisecond stamp>-<random>: strictly increasing, so name order is publication order. */
@@ -84,6 +84,19 @@ export async function loadSqlite() {
 /** A value for terminal output: C0/C1 control characters and DEL escaped as \\uXXXX. */
 export function printable(value) {
     return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+/**
+ * Validate a private directory under the Borg config root and every ancestor
+ * with the private-store policy; never repairs unsafe state. False when absent.
+ */
+export async function validatePrivateDirectory(directory, create) {
+    let current = borgHomeRoot();
+    for (const component of relative(current, directory).split(sep)) {
+        if (!await assertSecureRoot(current, current === borgConfigRoot() || current.startsWith(borgConfigRoot() + sep) ? 'private' : 'owner-controlled', create))
+            return false;
+        current = join(current, component);
+    }
+    return assertSecureRoot(current, 'private', create);
 }
 export function representativeStateRoot() {
     return join(borgConfigRoot(), 'representative', 'state');

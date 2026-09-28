@@ -40,12 +40,12 @@ export async function createSeatBackend(active) {
     const client = await import('./remote-client.js');
     const trust = active.serverTrustIdentity;
     return {
-        whoami: () => client.whoami(active),
-        roster: () => client.getRoster(active),
+        whoami: (signal) => client.whoami(active, { signal }),
+        roster: (signal) => client.getRoster(active, undefined, { signal }),
         append: ({ postId, message, to }) => client.appendLog(active.sessionToken, active.apiUrl, message, {
             to, postId, transportRetry: false, serverTrustIdentity: trust,
         }),
-        readAfter: (cursor, limit) => client.readLog(active.sessionToken, active.apiUrl, { cursor, limit, serverTrustIdentity: trust }),
+        readAfter: (cursor, limit, signal) => client.readLog(active.sessionToken, active.apiUrl, { cursor, limit, serverTrustIdentity: trust, signal }),
         readEntry: (entryId) => client.readLogEntry(active.sessionToken, active.apiUrl, { entry_id: entryId }, trust),
         ack: (entryId) => client.ackLogEntry(active.sessionToken, active.apiUrl, entryId, 'ack', trust),
     };
@@ -80,13 +80,31 @@ export function resolveCoordinator(roster, selector) {
     return { drone, role };
 }
 /** Re-prove, against the live cube, that this seat and the bound Coordinator are still the bound ones. */
-export async function verifyLiveBinding(ctx) {
+/**
+ * Settles with `work`, or rejects with the abort reason as soon as `signal`
+ * fires: a caller that stops never waits on a backend that ignores the signal.
+ */
+export function untilAborted(work, signal) {
+    if (!signal)
+        return work;
+    if (signal.aborted) {
+        work.catch(() => { });
+        return Promise.reject(signal.reason);
+    }
+    return new Promise((resolve, reject) => {
+        const onAbort = () => { work.catch(() => { }); reject(signal.reason); };
+        signal.addEventListener('abort', onAbort, { once: true });
+        work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+}
+export async function verifyLiveBinding(ctx, signal) {
     const { binding, backend } = ctx;
-    const me = await backend.whoami();
+    const me = await untilAborted(backend.whoami(signal), signal);
     if (me.cube_id !== binding.cubeId || me.drone_id !== binding.representativeDroneId) {
         throw new RepresentativeError('BINDING_MISMATCH', `The live connection is not the bound cube/drone. Run \`${representativeRecoveryCommand(binding)}\` explicitly; nothing was sent.`);
     }
-    const roster = await backend.roster();
+    signal?.throwIfAborted();
+    const roster = await untilAborted(backend.roster(signal), signal);
     const self = roster.drones.find((drone) => drone.id === binding.representativeDroneId);
     const selfRole = roster.roles.find((role) => role.id === self?.role_id);
     if (!self || !selfRole) {
@@ -394,7 +412,7 @@ async function sendOnce(ctx, raw) {
         ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
     };
 }
-function isAddressedCoordinatorEntry(binding, entry) {
+export function isAddressedCoordinatorEntry(binding, entry) {
     if (entry.drone_id !== binding.coordinatorDroneId)
         return null;
     if (entry.visibility === 'direct') {
@@ -414,21 +432,40 @@ const READ_SCAN_PAGE = 500;
  * bytes by default), so the reduced entry fits.
  */
 export const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
-/** The newest log position on the bound server (null for an empty log), outside any transaction. */
-export async function serverHead(backend) {
+/** At most this many pages are read to find the server head (500 entries each). */
+export const SERVER_HEAD_MAX_PAGES = 40;
+/**
+ * The newest log position on the bound server (null for an empty log), outside
+ * any transaction. A log longer than SERVER_HEAD_MAX_PAGES pages, or one that
+ * keeps growing faster than it is read, is 'unbounded': the caller must not
+ * wait for a head it may never reach.
+ */
+export async function serverHead(backend, signal) {
     let cursor = null;
-    for (;;) {
-        const page = await backend.readAfter(cursor, READ_SCAN_PAGE);
-        const tail = page.entries.at(-1);
+    for (let page = 0; page < SERVER_HEAD_MAX_PAGES; page += 1) {
+        signal?.throwIfAborted();
+        const request = backend.readAfter(cursor, READ_SCAN_PAGE, signal);
+        const result = await untilAborted(request, signal);
+        const tail = result.entries.at(-1);
         if (tail)
             cursor = { id: tail.id, created_at: tail.created_at };
-        if (!page.has_more || !tail)
+        if (!result.has_more || !tail)
             return cursor;
     }
+    return 'unbounded';
 }
-/** First use of a binding generation creates its state (binding row and delivery start). */
-export async function ensureRepresentativeState(ctx) {
-    await ensureDeliveryState({ binding: ctx.binding, store: ctx.store, serverHead: () => serverHead(ctx.backend) });
+/**
+ * First use of a binding generation creates its state (binding row and delivery
+ * start). `signal` cancels the head walk of an imported binding between and
+ * during pages; nothing is written after it fires.
+ */
+export async function ensureRepresentativeState(ctx, signal) {
+    await ensureDeliveryState({
+        binding: ctx.binding,
+        store: ctx.store,
+        serverHead: () => serverHead(ctx.backend, signal),
+        ...(signal ? { signal } : {}),
+    });
 }
 const checkpointView = (point) => ({ entry_id: point?.id ?? null, created_at: point?.created_at ?? null });
 export async function readRepresentativeReplies(ctx, raw) {
