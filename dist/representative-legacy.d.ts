@@ -27,6 +27,13 @@ export declare function readLegacyDelivery(binding: RepresentativeBinding): Prom
     checkpoint: CheckpointRead;
     history: 'empty' | 'present' | 'unknown';
 }>;
+/** The 5.x bindings an import keeps: the first of each binding generation. */
+export declare function importedLegacyBindings(bindings: RepresentativeBinding[]): RepresentativeBinding[];
+/**
+ * Read-only preview of what the first-generation import would bind: the same
+ * files, parsing and deduplication as legacySeed, and nothing is created.
+ */
+export declare function previewLegacyImport(): Promise<RepresentativeBinding[]>;
 /**
  * The first generation's rows from 5.x state, gathered outside any transaction.
  * Each binding's delivery start:

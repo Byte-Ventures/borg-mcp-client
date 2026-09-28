@@ -42,6 +42,11 @@ export interface UpdateDeps {
     serverJson(binPath: string, command: 'update' | 'status'): Promise<ServerJsonExecution>;
     verifyRunningProtocol(origin: string): Promise<void>;
     refreshAgentIntegrations(): Promise<void>;
+    /**
+     * Activates the Borg Hermes plugin when it is installed; otherwise does
+     * nothing. Returns non-zero when the activation is incomplete (it reports why).
+     */
+    activateHermesPlugin(): Promise<number>;
     confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
     isTTY(): boolean;
     stdout(text: string): void;

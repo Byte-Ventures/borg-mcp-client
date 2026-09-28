@@ -616,6 +616,7 @@ export async function runUpdate(options, deps) {
         }
         deps.stdout(`Updated ${CLIENT_PACKAGE}@${pair.client.version}. Local server: skipped (not installed).\n` +
             `Restart active agent sessions to load the updated client.\n`);
+        await activateHermesPluginAfterUpdate(deps);
         return 0;
     }
     let server;
@@ -736,6 +737,7 @@ export async function runUpdate(options, deps) {
                 renderStoppedServiceRecovery(status))
             : `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; running identities and protocol verified.\n`);
         deps.stdout('Restart active agent sessions to load the updated client.\n');
+        await activateHermesPluginAfterUpdate(deps);
         return 0;
     }
     catch (error) {
@@ -1042,6 +1044,25 @@ async function defaultConfirm(message, defaultYes = false) {
         rl.close();
     }
 }
+/**
+ * Hermes plugin activation never changes the result of an update that
+ * succeeded: an incomplete activation is a warning with the command that
+ * finishes it.
+ */
+async function activateHermesPluginAfterUpdate(deps) {
+    let code;
+    try {
+        code = await deps.activateHermesPlugin();
+    }
+    catch (error) {
+        deps.stderr(`Hermes plugin activation failed: ${errorMessage(error, 'unknown failure')}.\n`);
+        code = 1;
+    }
+    if (code !== 0) {
+        deps.stderr('Warning: the update succeeded, but the Hermes plugin activation is incomplete (see above). ' +
+            'Finish it with: borg representative hermes-plugin install\n');
+    }
+}
 export function buildDefaultUpdateDeps(acknowledgedRegistry) {
     let contextPromise;
     const context = async () => {
@@ -1094,6 +1115,10 @@ export function buildDefaultUpdateDeps(acknowledgedRegistry) {
             await preflightBorgServerTag(origin, trust.fetchImpl);
         },
         refreshAgentIntegrations: async () => refreshAndVerifyManagedAgentIntegrations(),
+        activateHermesPlugin: async () => {
+            const plugin = await import('./hermes-plugin-install.js');
+            return plugin.activateHermesPlugin(plugin.defaultHermesPluginDeps());
+        },
         confirm: defaultConfirm,
         isTTY: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
         stdout: (text) => process.stdout.write(text),

@@ -67,6 +67,11 @@ export interface UpdateDeps {
   serverJson(binPath: string, command: 'update' | 'status'): Promise<ServerJsonExecution>;
   verifyRunningProtocol(origin: string): Promise<void>;
   refreshAgentIntegrations(): Promise<void>;
+  /**
+   * Activates the Borg Hermes plugin when it is installed; otherwise does
+   * nothing. Returns non-zero when the activation is incomplete (it reports why).
+   */
+  activateHermesPlugin(): Promise<number>;
   confirm(message: string): Promise<'yes' | 'no' | 'eof' | 'interrupted'>;
   isTTY(): boolean;
   stdout(text: string): void;
@@ -834,6 +839,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
       `Updated ${CLIENT_PACKAGE}@${pair.client.version}. Local server: skipped (not installed).\n` +
       `Restart active agent sessions to load the updated client.\n`,
     );
+    await activateHermesPluginAfterUpdate(deps);
     return 0;
   }
 
@@ -965,6 +971,7 @@ export async function runUpdate(options: UpdateOptions, deps: UpdateDeps): Promi
         : `Updated ${CLIENT_PACKAGE}@${pair.client.version} and ${SERVER_PACKAGE}@${pair.server.version}; running identities and protocol verified.\n`,
     );
     deps.stdout('Restart active agent sessions to load the updated client.\n');
+    await activateHermesPluginAfterUpdate(deps);
     return 0;
   } catch (error) {
     const interrupted = signalExitCode(error);
@@ -1305,6 +1312,27 @@ async function defaultConfirm(message: string, defaultYes = false): Promise<'yes
   }
 }
 
+/**
+ * Hermes plugin activation never changes the result of an update that
+ * succeeded: an incomplete activation is a warning with the command that
+ * finishes it.
+ */
+async function activateHermesPluginAfterUpdate(deps: UpdateDeps): Promise<void> {
+  let code: number;
+  try {
+    code = await deps.activateHermesPlugin();
+  } catch (error) {
+    deps.stderr(`Hermes plugin activation failed: ${errorMessage(error, 'unknown failure')}.\n`);
+    code = 1;
+  }
+  if (code !== 0) {
+    deps.stderr(
+      'Warning: the update succeeded, but the Hermes plugin activation is incomplete (see above). ' +
+        'Finish it with: borg representative hermes-plugin install\n',
+    );
+  }
+}
+
 export function buildDefaultUpdateDeps(acknowledgedRegistry?: string): UpdateDeps {
   let contextPromise: Promise<NpmContext> | undefined;
   const context = async (): Promise<NpmContext> => {
@@ -1359,6 +1387,10 @@ export function buildDefaultUpdateDeps(acknowledgedRegistry?: string): UpdateDep
       await preflightBorgServerTag(origin, trust.fetchImpl);
     },
     refreshAgentIntegrations: async () => refreshAndVerifyManagedAgentIntegrations(),
+    activateHermesPlugin: async () => {
+      const plugin = await import('./hermes-plugin-install.js');
+      return plugin.activateHermesPlugin(plugin.defaultHermesPluginDeps());
+    },
     confirm: defaultConfirm,
     isTTY: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
     stdout: (text) => process.stdout.write(text),

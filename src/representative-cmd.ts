@@ -37,6 +37,11 @@ import {
 } from './representative-store.js';
 import { RepresentativeStateError, printable } from './representative-db.js';
 import { shellEscape } from './shell-escape.js';
+import {
+  SESSION_KEY_PATTERN,
+  type HermesPluginInstallCommand,
+  type HermesPluginUninstallCommand,
+} from './hermes-plugin-install.js';
 
 export const DEFAULT_REPRESENTATIVE_ROLE = 'hermes-representative';
 
@@ -46,7 +51,8 @@ export type RepresentativeCommand =
   | { action: 'mcp'; worktree?: string }
   | { action: 'listen'; worktree?: string; protocol?: number }
   | { action: 'reset-state' }
-  | { action: 'hermes-plugin-install'; hermesHome?: string; force: boolean };
+  | ({ action: 'hermes-plugin-install' } & HermesPluginInstallCommand)
+  | ({ action: 'hermes-plugin-uninstall' } & HermesPluginUninstallCommand);
 
 export type ParsedRepresentativeArgs =
   | { ok: true; command: RepresentativeCommand }
@@ -61,6 +67,8 @@ export interface RepresentativeCmdDeps {
   prepareSeat(input: { role: string; coordinator?: string; worktreeName?: string; host?: string; resume?: boolean }): Promise<{ code: number; worktree?: string }>;
   backendFor(active: ActiveCube): RepresentativeBackend | Promise<RepresentativeBackend>;
   store: RepresentativeStore;
+  /** status: the Hermes plugin install and open-gateway report; omitted when absent. */
+  hermesPluginStatus?(): Promise<unknown>;
   stdout(text: string): void;
   stderr(text: string): void;
 }
@@ -133,28 +141,57 @@ export function parseRepresentativeArgs(args: readonly string[]): ParsedRepresen
   };
 }
 
+const HERMES_PLUGIN_USAGE =
+  'expected: hermes-plugin install [--hermes-home <path>] [--worktree <path>] [--session-key <key>] [--dry-run] [--no-restart]' +
+  ' | hermes-plugin uninstall [--hermes-home <path>] [--dry-run] [--no-restart]';
+
 function parseHermesPluginArgs(args: readonly string[]): ParsedRepresentativeArgs {
   const [subcommand, ...rest] = args;
-  if (subcommand !== 'install') return { ok: false, error: 'expected: hermes-plugin install [--hermes-home <path>] [--force]' };
-  let hermesHome: string | undefined;
-  let force = false;
+  if (subcommand !== 'install' && subcommand !== 'uninstall') return { ok: false, error: HERMES_PLUGIN_USAGE };
+  const valueFlags = subcommand === 'install' ? ['--hermes-home', '--worktree', '--session-key'] : ['--hermes-home'];
+  const switches = ['--dry-run', '--no-restart'];
+  const values: Record<string, string> = {};
+  const set = new Set<string>();
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
-    if (arg === '--force') {
-      force = true;
-    } else if (arg === '--hermes-home') {
+    if (switches.includes(arg)) {
+      set.add(arg);
+    } else if (valueFlags.includes(arg)) {
       const next = rest[i + 1];
       if (typeof next !== 'string' || next.length === 0 || next.startsWith('-')) {
-        return { ok: false, error: '--hermes-home requires a value' };
+        return { ok: false, error: `${arg} requires a value` };
       }
-      if (!isAbsolute(next)) return { ok: false, error: '--hermes-home must be an absolute path' };
-      hermesHome = next;
+      values[arg] = next;
       i += 1;
     } else {
-      return { ok: false, error: `unknown argument: ${arg}. Supported: --hermes-home, --force` };
+      return { ok: false, error: `unknown argument: ${arg}. Supported: ${[...valueFlags, ...switches].join(', ')}` };
     }
   }
-  return { ok: true, command: { action: 'hermes-plugin-install', force, ...(hermesHome ? { hermesHome } : {}) } };
+  const hermesHome = values['--hermes-home'];
+  if (hermesHome !== undefined && !isAbsolute(hermesHome)) return { ok: false, error: '--hermes-home must be an absolute path' };
+  const common = {
+    dryRun: set.has('--dry-run'),
+    noRestart: set.has('--no-restart'),
+    ...(hermesHome ? { hermesHome } : {}),
+  };
+  if (subcommand === 'uninstall') return { ok: true, command: { action: 'hermes-plugin-uninstall', ...common } };
+  const worktree = values['--worktree'];
+  if (worktree !== undefined && !isAbsolute(worktree)) {
+    return { ok: false, error: '--worktree must be the absolute path of the prepared representative worktree' };
+  }
+  const sessionKey = values['--session-key'];
+  if (sessionKey !== undefined && !SESSION_KEY_PATTERN.test(sessionKey)) {
+    return { ok: false, error: '--session-key must be a gateway DM key: agent:main:<platform>:dm:<chat id>' };
+  }
+  return {
+    ok: true,
+    command: {
+      action: 'hermes-plugin-install',
+      ...common,
+      ...(worktree ? { worktree } : {}),
+      ...(sessionKey ? { sessionKey } : {}),
+    },
+  };
 }
 
 function canonicalWorktree(path: string, deps: Pick<RepresentativeCmdDeps, 'findProjectRoot'>): string {
@@ -297,7 +334,9 @@ export async function runRepresentativePrepare(
       `  worktree:        ${worktree}\n\n` +
       `No agent CLI was launched. Serve it to a generic MCP host with:\n` +
       `  borg representative mcp --worktree ${worktree}\n\n` +
-      `Example host configuration (no secrets belong here):\n${hermesConfigSnippet(worktree)}`,
+      `Example host configuration (no secrets belong here):\n${hermesConfigSnippet(worktree)}\n` +
+      `For Hermes, one command sets up the MCP entry and the push plugin:\n` +
+      `  borg representative hermes-plugin install\n`,
     );
     return 0;
   } catch (error) {
@@ -325,7 +364,8 @@ export async function runRepresentativeStatus(
     const status = await representativeStatus(ctx);
     const { representativeListenerStatus } = await import('./representative-listener.js');
     const listener = await representativeListenerStatus(ctx.binding, deps.store);
-    deps.stdout(`${JSON.stringify({ ...status, listener }, null, 2)}\n`);
+    const hermes = deps.hermesPluginStatus ? { hermes_plugin: await deps.hermesPluginStatus() } : {};
+    deps.stdout(`${JSON.stringify({ ...status, listener, ...hermes }, null, 2)}\n`);
     return status.connected ? 0 : 1;
   } catch (error) {
     deps.stderr(`◼ borg representative status: ${describeError(error)}\n`);
@@ -416,6 +456,10 @@ export async function buildDefaultRepresentativeDeps(): Promise<RepresentativeCm
     },
     backendFor: createSeatBackend,
     store: createRepresentativeStore(),
+    hermesPluginStatus: async () => {
+      const plugin = await import('./hermes-plugin-install.js');
+      return plugin.hermesPluginStatus(plugin.defaultHermesPluginDeps());
+    },
     stdout: (text) => { process.stdout.write(text); },
     stderr: (text) => { process.stderr.write(text); },
   };

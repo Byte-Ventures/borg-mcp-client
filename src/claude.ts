@@ -404,9 +404,12 @@ async function main() {
       process.stderr.write(`Run \`borg representative --help\` for usage.\n`);
       process.exit(1);
     }
-    if (parsed.command.action === 'hermes-plugin-install') {
-      const install = await import('./hermes-plugin-install.js');
-      process.exit(await install.runHermesPluginInstall(parsed.command, install.defaultHermesPluginInstallDeps()));
+    if (parsed.command.action === 'hermes-plugin-install' || parsed.command.action === 'hermes-plugin-uninstall') {
+      const plugin = await import('./hermes-plugin-install.js');
+      const pluginDeps = plugin.defaultHermesPluginDeps();
+      process.exit(parsed.command.action === 'hermes-plugin-install'
+        ? await plugin.runHermesPluginInstall(parsed.command, pluginDeps)
+        : await plugin.runHermesPluginUninstall(parsed.command, pluginDeps));
     }
     if (parsed.command.action === 'reset-state') {
       process.exit(await representative.runRepresentativeResetState({

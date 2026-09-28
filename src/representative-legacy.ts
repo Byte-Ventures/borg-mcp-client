@@ -1,11 +1,13 @@
 /**
  * The only reads of borgmcp 5.x representative files (decision
- * clean-slate-no-backwards-compat). They run once, when 6.x creates the state
+ * clean-slate-no-backwards-compat). The import reads them once, when 6.x creates the state
  * database's FIRST generation (`legacySeed`): every valid 5.x binding becomes a
  * 'legacy' row, and its delivery start is decided from the 5.x delivered
- * checkpoint, the seat tombstone and sibling generations. Nothing here writes
- * 5.x files, and no other code path reads them — not status, not a lookup, not
- * after a reset.
+ * checkpoint, the seat tombstone and sibling generations. One other reader
+ * exists: `previewLegacyImport`, a read-only preview of the bindings that
+ * import would keep, used by `hermes-plugin install` while no state database
+ * exists yet; it creates nothing (no root, no state). Nothing here writes 5.x
+ * files, and no other code path reads them — not status, not after a reset.
  *
  * Every file read uses the private-file checks of the 5.x loaders: a secure
  * root, lstat, no-follow, owner, mode, a regular file and a size cap.
@@ -165,6 +167,25 @@ export async function readLegacyDelivery(binding: RepresentativeBinding): Promis
 
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 
+/** The 5.x bindings an import keeps: the first of each binding generation. */
+export function importedLegacyBindings(bindings: RepresentativeBinding[]): RepresentativeBinding[] {
+  const seen = new Set<string>();
+  return bindings.filter((binding) => {
+    const generation = bindingFingerprint(binding);
+    if (seen.has(generation)) return false;
+    seen.add(generation);
+    return true;
+  });
+}
+
+/**
+ * Read-only preview of what the first-generation import would bind: the same
+ * files, parsing and deduplication as legacySeed, and nothing is created.
+ */
+export async function previewLegacyImport(): Promise<RepresentativeBinding[]> {
+  return importedLegacyBindings(await readLegacyBindings());
+}
+
 /**
  * The first generation's rows from 5.x state, gathered outside any transaction.
  * Each binding's delivery start:
@@ -177,17 +198,14 @@ const NIL_UUID = '00000000-0000-0000-0000-000000000000';
  * A second worktree whose binding has the same generation is skipped.
  */
 export async function legacySeed(): Promise<(db: Transaction) => void> {
-  const imports = await Promise.all((await readLegacyBindings()).map(async (binding) => ({
+  const imports = await Promise.all((await previewLegacyImport()).map(async (binding) => ({
     binding, delivery: await readLegacyDelivery(binding),
   })));
   return (db) => {
-    const seen = new Set<string>();
     const insert = db.prepare(`INSERT INTO delivery (generation, seat, start_id, start_at, start_kind, checkpoint_id, checkpoint_at,
       read_through_id, read_through_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const { binding, delivery } of imports) {
       const generation = bindingFingerprint(binding);
-      if (seen.has(generation)) continue;
-      seen.add(generation);
       const seat = seatKey(binding);
       insertBindingRow(db, binding, seat, 'legacy');
       const checkpoint = delivery.checkpoint.kind === 'valid' ? delivery.checkpoint.checkpoint : null;

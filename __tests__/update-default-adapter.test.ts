@@ -90,6 +90,7 @@ function updateDeps(
     })),
     verifyRunningProtocol: vi.fn(async () => undefined),
     refreshAgentIntegrations: vi.fn(async () => undefined),
+    activateHermesPlugin: vi.fn(async () => 0),
     stdout: vi.fn(),
     stderr: vi.fn(),
     ...overrides,
