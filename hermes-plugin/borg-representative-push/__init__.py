@@ -48,7 +48,6 @@ BACKOFF_START_S = 1.0
 BACKOFF_CAP_S = 60.0
 INJECT_RETRY_CAP_S = 30.0
 STATE_VERSION = 1
-MAX_EXHAUSTED = 256
 
 logger = logging.getLogger(__name__)
 
@@ -442,35 +441,46 @@ class Supervisor:
                 delivered = self._delivered_point()
                 if delivered is not None and point <= delivered:
                     return  # already delivered; a replayed hint needs no wake
-                if key in self._exhausted():
-                    return  # its wake budget is spent until it is delivered, even when replayed
             else:
                 point = None
-                if self._state.get("exhausted_gap"):
-                    return  # spent until the conversation delivers something
-            if key not in self._pending:
-                self._pending[key] = {"point": point, "created_at": created_at, "count": 0, "last": None}
-            self._schedule_flush(self._debounce_s)
+            if key in self._pending:
+                return
+            used = self._wakes_used(key)
+            if used > self.settings.max_reinjects:
+                return  # budget spent (possibly before a restart): no wake until a delivery covers it
+            # A reply already woken before a restart waits reinject_after_s for its next wake.
+            self._pending[key] = {"point": point, "created_at": created_at, "count": used,
+                                  "last": self._clock() if used else None}
+            if not used:
+                self._schedule_flush(self._debounce_s)
 
-    def _exhausted(self) -> dict:
-        exhausted = self._state.get("exhausted")
-        return exhausted if isinstance(exhausted, dict) else {}
+    def _wake_records(self) -> dict:
+        records = self._state.get("wakes")
+        return records if isinstance(records, dict) else {}
 
-    def _mark_exhausted(self, key: str, item: dict) -> None:
-        """Persist a spent wake budget so replay or a gateway restart cannot renew it."""
+    def _wakes_used(self, key: str) -> int:
+        """Persisted wakes already spent on this reply (or on the gap) since its last delivery."""
         if key == "gap":
-            self._state["exhausted_gap"] = True
+            used = self._state.get("gap_wakes", 0)
         else:
-            exhausted = dict(self._exhausted())
-            exhausted[key] = item.get("created_at")
-            if len(exhausted) > MAX_EXHAUSTED:
-                def age(k: str) -> tuple:
-                    point = _point(k, exhausted[k])
-                    return (0,) if point is None else (1, point)
+            used = (self._wake_records().get(key) or {}).get("count", 0)
+        return used if isinstance(used, int) and not isinstance(used, bool) and used > 0 else 0
 
-                for oldest in sorted(exhausted, key=age)[: len(exhausted) - MAX_EXHAUSTED]:
-                    del exhausted[oldest]
-            self._state["exhausted"] = exhausted
+    def _record_wakes(self, keys: list[str], delta: int) -> None:
+        """Write-through wake counts. Records are removed only by an observed delivery."""
+        records = dict(self._wake_records())
+        for key in keys:
+            item = self._pending.get(key)
+            if item is None:
+                continue
+            item["count"] = max(0, item["count"] + delta)
+            if key == "gap":
+                self._state["gap_wakes"] = item["count"]
+            elif item["count"]:
+                records[key] = {"created_at": item["created_at"], "count": item["count"]}
+            else:
+                records.pop(key, None)
+        self._state["wakes"] = records
         self._save()
 
     def _schedule_flush(self, delay: float) -> None:
@@ -502,18 +512,25 @@ class Supervisor:
                 if item["count"] == 0 or now - item["last"] < self.settings.reinject_after_s:
                     continue
                 if item["count"] > self.settings.max_reinjects:
-                    logger.warning("%s: a Coordinator reply is still undelivered after %d wakes; giving up on it",
-                                   PLUGIN_NAME, item["count"])
-                    del self._pending[key]
-                    self._mark_exhausted(key, item)
+                    logger.warning("%s: a Coordinator reply is still undelivered after %d wakes; giving up on it "
+                                   "until it is delivered", PLUGIN_NAME, item["count"])
+                    del self._pending[key]  # its persisted record keeps the budget spent
                     continue
                 due.append(key)
         if due:
             self._wake(due)
 
     def _wake(self, keys: list[str]) -> None:
-        if self._stopping.is_set():
-            return
+        with self._lock:
+            if self._stopping.is_set():
+                return
+            keys = [key for key in keys if key in self._pending]
+            if not keys:
+                return
+            # Count the wake on disk before Hermes can start the turn: a restart at any point after
+            # this can never renew the budget. A crash between here and the call loses one wake at
+            # most; it never adds one.
+            self._record_wakes(keys, +1)
         try:
             accepted = bool(self._inject(WAKE_TEXT))
         except Exception:  # the host API must never take the supervisor down
@@ -522,6 +539,7 @@ class Supervisor:
         now = self._clock()
         with self._lock:
             if not accepted:
+                self._record_wakes(keys, -1)  # Hermes refused it: nothing was spent
                 self._inject_failures += 1
                 if self._inject_failures == 1 or self._inject_failures % 10 == 0:
                     logger.warning("%s: Hermes did not accept the wake (%d failures); check allow_gateway_injection "
@@ -533,7 +551,6 @@ class Supervisor:
             for key in keys:
                 item = self._pending.get(key)
                 if item is not None:
-                    item["count"] += 1
                     item["last"] = now
 
     def _ticker(self) -> None:
@@ -561,17 +578,17 @@ class Supervisor:
             if current is None or point > current:
                 self._state["delivered"] = {"entry_id": checkpoint["entry_id"], "created_at": checkpoint["created_at"]}
                 changed = True
-            exhausted = self._exhausted()
+            records = self._wake_records()
             remaining = {}
-            for k, v in exhausted.items():
-                spent = _point(k, v)
-                if spent is None or spent > point:
+            for k, v in records.items():
+                woken = _point(k, (v or {}).get("created_at") if isinstance(v, dict) else None)
+                if woken is None or woken > point:
                     remaining[k] = v  # not covered by this delivery
-            if remaining != exhausted:
-                self._state["exhausted"] = remaining
+            if remaining != records:
+                self._state["wakes"] = remaining
                 changed = True
-            if self._state.get("exhausted_gap"):
-                self._state["exhausted_gap"] = False
+            if self._state.get("gap_wakes"):
+                self._state["gap_wakes"] = 0  # the conversation has read since the gap
                 changed = True
             if changed:
                 self._save()

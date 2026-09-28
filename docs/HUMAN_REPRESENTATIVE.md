@@ -492,11 +492,17 @@ restart that process once so it releases the lease.
   conversation queues the message; it does not interrupt the running turn.
 - The plugin watches this gateway's `borg_representative-deliver` results. A
   hinted reply that is still undelivered after `reinject_after_s` wakes the
-  conversation again, at most `max_reinjects` times. The plugin then logs it and
-  wakes no more for that reply until a delivery covers it. That record is saved,
-  so a replayed hint or a gateway restart does not renew the budget. Hermes
-  reports only that it accepted a message, not that the turn ran, so this is how
-  a dropped wake is recovered.
+  conversation again. Each reply gets at most `1 + max_reinjects` wakes in total;
+  after that the plugin logs it and wakes no more for that reply until a delivery
+  covers it. Every wake is counted on disk before Hermes is asked to start the turn,
+  so neither a replayed hint nor a gateway restart renews the count. A wake Hermes
+  refuses is not counted. A crash between counting and asking can lose one wake,
+  never add one. Hermes reports only that it accepted a message, not that the
+  turn ran, so this is how a dropped wake is recovered.
+- One small record (id, timestamp, count) is kept for each reply the plugin has
+  woken the conversation for. It is removed only when an observed delivery covers
+  that reply; there is no count limit. The records therefore grow only while woken
+  replies stay undelivered.
 - Listener exits: 0 stops; 1 restarts with capped backoff; 2 stops and logs
   (fix the binding, then restart the gateway); 3 (another listener owns the
   lease) retries with backoff; 4 restarts after `lease-lost` and otherwise stops
@@ -511,8 +517,8 @@ restart that process once so it releases the lease.
   parent is gone. Otherwise it retries with backoff until the lease is free. A
   dead owner's lease expires after about 70 seconds; a live orphan releases it
   when its next hint fails to write.
-- State (the recorded listener, the observed delivered checkpoint and replies whose
-  wake budget is spent) and the
+- State (the recorded listener, the observed delivered checkpoint and the wake
+  records) and the
   listener's stderr live under `<Hermes home>/plugin-data/borg-representative-push/`,
   in files created with mode 0600.
 

@@ -351,9 +351,10 @@ class InjectionTests(TempDirCase):
         restarted.handle_event(entry(ID3, T3))
         restarted.flush()
         self.assertEqual(len(self.injected), 1)
+        self.assertEqual(set(json.loads((self.data / "state.json").read_text())["wakes"]), {ID2, ID3})
         restarted.observe_delivered({"entry_id": ID3, "created_at": T3})
         saved = json.loads((self.data / "state.json").read_text())
-        self.assertEqual(saved.get("exhausted", {}), {})
+        self.assertEqual(saved["wakes"], {})
 
     def test_exhausted_gap_is_not_rewoken_until_a_deliver(self):
         now = [1000.0]
@@ -370,17 +371,79 @@ class InjectionTests(TempDirCase):
         supervisor.flush()
         self.assertEqual(len(self.injected), 2)
 
-    def test_exhausted_ids_are_capped_oldest_first(self):
-        supervisor = self.supervisor()
-        with supervisor._lock:
-            supervisor._ensure_state()
-            for i in range(push.MAX_EXHAUSTED + 2):
-                entry_id = f"{i:08x}-0000-4000-8000-000000000000"
-                supervisor._mark_exhausted(entry_id, {"created_at": f"2026-09-28T08:{i // 60:02d}:{i % 60:02d}.000Z"})
-        saved = json.loads((self.data / "state.json").read_text())["exhausted"]
-        self.assertEqual(len(saved), push.MAX_EXHAUSTED)
-        self.assertNotIn("00000000-0000-4000-8000-000000000000", saved)
-        self.assertIn(f"{push.MAX_EXHAUSTED + 1:08x}-0000-4000-8000-000000000000", saved)
+    def test_spent_records_are_never_dropped_before_delivery(self):
+        # Review F1a (122d199): a 256-record cap evicted undelivered spent ids, renewing their budget.
+        now = [1000.0]
+        supervisor = self.supervisor(clock=lambda: now[0], debounce_s=3600,
+                                     settings={"reinject_after_s": 1, "max_reinjects": 0})
+        ids = [(f"{i:08x}-0000-4000-8000-000000000000", f"2026-09-28T08:{i // 60:02d}:{i % 60:02d}.000Z")
+               for i in range(257)]
+        for entry_id, created_at in ids:
+            supervisor.handle_event(entry(entry_id, created_at))
+            supervisor.flush()
+            now[0] += 2
+            supervisor.tick()
+        self.assertEqual(len(self.injected), 257)
+        for _ in range(3):
+            supervisor.handle_event(entry(*ids[0], replay=True))
+            supervisor.flush()
+            now[0] += 2
+            supervisor.tick()
+        self.assertEqual(len(self.injected), 257)
+        # Only a delivery covering a record removes it.
+        supervisor.observe_delivered({"entry_id": ids[99][0], "created_at": ids[99][1]})
+        saved = json.loads((self.data / "state.json").read_text())["wakes"]
+        self.assertEqual(len(saved), 157)
+        self.assertNotIn(ids[99][0], saved)
+        self.assertIn(ids[100][0], saved)
+
+    def test_accepted_wake_is_persisted_before_a_restart(self):
+        # Review F1b (122d199): counts lived in memory until a later tick; four restarts gave four wakes.
+        wakes: list[str] = []
+        for _ in range(4):
+            supervisor = self.supervisor(inject=lambda text: wakes.append(text) or True, debounce_s=3600,
+                                         settings={"reinject_after_s": 600, "max_reinjects": 0})
+            supervisor.handle_event(entry(ID2, T2, replay=True))
+            supervisor.flush()
+            supervisor.shutdown()
+        self.assertEqual(len(wakes), 1)
+        saved = json.loads((self.data / "state.json").read_text())["wakes"]
+        self.assertEqual(saved[ID2]["count"], 1)
+
+    def test_partial_budget_survives_restart(self):
+        now = [1000.0]
+        wakes: list[str] = []
+        sink = lambda text: wakes.append(text) or True
+        options = {"inject": sink, "clock": lambda: now[0], "debounce_s": 3600,
+                   "settings": {"reinject_after_s": 60, "max_reinjects": 1}}
+        first = self.supervisor(**options)
+        first.handle_event(entry(ID2, T2))
+        first.flush()
+        first.shutdown()
+        self.assertEqual(len(wakes), 1)
+        second = self.supervisor(**options)
+        second.handle_event(entry(ID2, T2, replay=True))
+        second.flush()
+        self.assertEqual(len(wakes), 1)  # already woken once: no immediate wake after restart
+        now[0] += 61
+        second.tick()
+        self.assertEqual(len(wakes), 2)  # the one allowed repeat
+        second.shutdown()
+        third = self.supervisor(**options)
+        third.handle_event(entry(ID2, T2, replay=True))
+        third.flush()
+        now[0] += 61
+        third.tick()
+        self.assertEqual(len(wakes), 2)  # spent: no more wakes until delivered
+
+    def test_refused_wake_does_not_consume_the_persisted_budget(self):
+        supervisor = self.supervisor(inject=lambda text: False, debounce_s=3600)
+        supervisor.handle_event(entry(ID1, T1))
+        supervisor.flush()
+        supervisor.shutdown()
+        state_file = self.data / "state.json"
+        saved = json.loads(state_file.read_text()).get("wakes", {}) if state_file.exists() else {}
+        self.assertEqual(saved.get(ID1, {}).get("count", 0), 0)
 
     def test_delivered_hint_is_not_pending_and_a_later_deliver_clears_all_earlier(self):
         supervisor = self.supervisor()
