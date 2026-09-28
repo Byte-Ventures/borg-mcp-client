@@ -492,13 +492,16 @@ restart that process once so it releases the lease.
   conversation queues the message; it does not interrupt the running turn.
 - The plugin watches this gateway's `borg_representative-deliver` results. A
   hinted reply that is still undelivered after `reinject_after_s` wakes the
-  conversation again, at most `max_reinjects` times, then the plugin logs it and
-  stops. Hermes reports only that it accepted a message, not that the turn ran,
-  so this is how a dropped wake is recovered.
+  conversation again, at most `max_reinjects` times. The plugin then logs it and
+  wakes no more for that reply until a delivery covers it. That record is saved,
+  so a replayed hint or a gateway restart does not renew the budget. Hermes
+  reports only that it accepted a message, not that the turn ran, so this is how
+  a dropped wake is recovered.
 - Listener exits: 0 stops; 1 restarts with capped backoff; 2 stops and logs
   (fix the binding, then restart the gateway); 3 (another listener owns the
   lease) retries with backoff; 4 restarts after `lease-lost` and otherwise stops
-  and logs (evicted, rebound, revoked, trust-changed).
+  and logs (evicted, rebound, revoked, trust-changed). A stop ends every wake,
+  including queued and repeat wakes, until the gateway restarts.
 - On restart the listener replays retained hints after the last delivered
   checkpoint the plugin observed (`--replay-after`). The delivered checkpoint
   stays the source of truth: `read` returns every reply not yet delivered.
@@ -508,7 +511,8 @@ restart that process once so it releases the lease.
   parent is gone. Otherwise it retries with backoff until the lease is free. A
   dead owner's lease expires after about 70 seconds; a live orphan releases it
   when its next hint fails to write.
-- State (the recorded listener and the observed delivered checkpoint) and the
+- State (the recorded listener, the observed delivered checkpoint and replies whose
+  wake budget is spent) and the
   listener's stderr live under `<Hermes home>/plugin-data/borg-representative-push/`,
   in files created with mode 0600.
 

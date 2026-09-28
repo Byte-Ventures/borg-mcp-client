@@ -329,6 +329,59 @@ class InjectionTests(TempDirCase):
         self.assertEqual(len(self.injected), 3)
         self.assertEqual(supervisor.pending(), {})
 
+    def test_exhausted_wake_budget_survives_replay_until_delivered(self):
+        # Review F1 (89a4f23): replaying an exhausted id reset its budget, four wakes with max_reinjects=0.
+        now = [1000.0]
+        clock = lambda: now[0]
+        options = {"clock": clock, "debounce_s": 3600, "settings": {"reinject_after_s": 1, "max_reinjects": 0}}
+        supervisor = self.supervisor(**options)
+        for _ in range(4):
+            supervisor.handle_event(entry(ID2, T2, replay=True))
+            supervisor.flush()
+            now[0] += 2
+            supervisor.tick()
+        self.assertEqual(len(self.injected), 1)
+        self.assertEqual(supervisor.pending(), {})
+        # A new gateway process (same plugin data) replaying the id must not wake either.
+        restarted = self.supervisor(**options)
+        restarted.handle_event(entry(ID2, T2, replay=True))
+        restarted.flush()
+        self.assertEqual(len(self.injected), 0)
+        # A later reply is still woken, and delivery through it forgets the exhausted id.
+        restarted.handle_event(entry(ID3, T3))
+        restarted.flush()
+        self.assertEqual(len(self.injected), 1)
+        restarted.observe_delivered({"entry_id": ID3, "created_at": T3})
+        saved = json.loads((self.data / "state.json").read_text())
+        self.assertEqual(saved.get("exhausted", {}), {})
+
+    def test_exhausted_gap_is_not_rewoken_until_a_deliver(self):
+        now = [1000.0]
+        supervisor = self.supervisor(clock=lambda: now[0], debounce_s=3600,
+                                     settings={"reinject_after_s": 1, "max_reinjects": 0})
+        for _ in range(3):
+            supervisor.handle_event({"event": "gap", "after": None, "reason": "replay-checkpoint-missing"})
+            supervisor.flush()
+            now[0] += 2
+            supervisor.tick()
+        self.assertEqual(len(self.injected), 1)
+        supervisor.observe_delivered({"entry_id": ID1, "created_at": T1})
+        supervisor.handle_event({"event": "gap", "after": None, "reason": "cursor-expired"})
+        supervisor.flush()
+        self.assertEqual(len(self.injected), 2)
+
+    def test_exhausted_ids_are_capped_oldest_first(self):
+        supervisor = self.supervisor()
+        with supervisor._lock:
+            supervisor._ensure_state()
+            for i in range(push.MAX_EXHAUSTED + 2):
+                entry_id = f"{i:08x}-0000-4000-8000-000000000000"
+                supervisor._mark_exhausted(entry_id, {"created_at": f"2026-09-28T08:{i // 60:02d}:{i % 60:02d}.000Z"})
+        saved = json.loads((self.data / "state.json").read_text())["exhausted"]
+        self.assertEqual(len(saved), push.MAX_EXHAUSTED)
+        self.assertNotIn("00000000-0000-4000-8000-000000000000", saved)
+        self.assertIn(f"{push.MAX_EXHAUSTED + 1:08x}-0000-4000-8000-000000000000", saved)
+
     def test_delivered_hint_is_not_pending_and_a_later_deliver_clears_all_earlier(self):
         supervisor = self.supervisor()
         supervisor.handle_event(entry(ID1, T1))
@@ -392,6 +445,40 @@ class ListenerLifecycleTests(TempDirCase):
         supervisor = self.supervisor(evicted)
         self.assertEqual(self.run_until_done(supervisor, evicted, 1), 1)
         self.assertEqual(supervisor.final_action, "stop")
+
+    def assert_terminal_stop_retires_wakes(self, lines, code):
+        # Review F2 (89a4f23): after a terminal stop a queued debounce and a pending repeat still woke.
+        fake = FakeListener(self.tmp, [{"lines": lines, "exit": code}])
+        now = [1000.0]
+        supervisor = self.supervisor(fake, clock=lambda: now[0], debounce_s=3600,
+                                     settings={"reinject_after_s": 1, "max_reinjects": 1})
+        supervisor.ensure_started()
+        self.assertTrue(wait_until(lambda: supervisor.final_action == "stop"))
+        supervisor.flush()
+        now[0] += 2
+        supervisor.tick()
+        self.assertEqual(self.injected, [])
+        self.assertTrue(supervisor._stopping.is_set())
+        self.assertEqual(supervisor.pending(), {})
+
+    def test_terminal_exit_4_retires_queued_and_repeat_wakes(self):
+        self.assert_terminal_stop_retires_wakes(
+            [{"event": "listening"}, entry(ID1, T1), {"event": "stopped", "reason": "evicted", "exit_code": 4}], 4)
+
+    def test_exit_2_retires_queued_and_repeat_wakes(self):
+        self.assert_terminal_stop_retires_wakes(
+            [{"event": "listening"}, entry(ID1, T1), {"event": "refused", "code": "BINDING_MISMATCH", "exit_code": 2}], 2)
+
+    def test_terminal_stop_after_a_wake_stops_repeats(self):
+        fake = FakeListener(self.tmp, [{"lines": [{"event": "listening"}, entry(ID1, T1)], "hold": 0.5, "exit": 4}])
+        now = [1000.0]
+        supervisor = self.supervisor(fake, clock=lambda: now[0], settings={"reinject_after_s": 1, "max_reinjects": 3})
+        supervisor.ensure_started()
+        self.assertTrue(wait_until(lambda: len(self.injected) == 1))
+        self.assertTrue(wait_until(lambda: supervisor.final_action == "stop"))
+        now[0] += 2
+        supervisor.tick()
+        self.assertEqual(len(self.injected), 1)
 
     def test_replay_after_uses_the_observed_delivered_checkpoint(self):
         push.StateStore(self.data).save({"delivered": {"entry_id": ID2, "created_at": T2}})

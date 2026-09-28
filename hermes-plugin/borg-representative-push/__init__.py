@@ -48,6 +48,7 @@ BACKOFF_START_S = 1.0
 BACKOFF_CAP_S = 60.0
 INJECT_RETRY_CAP_S = 30.0
 STATE_VERSION = 1
+MAX_EXHAUSTED = 256
 
 logger = logging.getLogger(__name__)
 
@@ -287,19 +288,31 @@ class Supervisor:
         with self._lock:
             if self._started:
                 return False
-            self._store = StateStore(self._data_dir())
-            self._state = self._store.load()
+            self._ensure_state()
             self._started = True
         threading.Thread(target=self._run, name=f"{PLUGIN_NAME}:listener", daemon=True).start()
         threading.Thread(target=self._ticker, name=f"{PLUGIN_NAME}:reinject", daemon=True).start()
         return True
 
-    def shutdown(self, timeout: float = 5.0) -> None:
+    def _ensure_state(self) -> None:
+        """Load persisted state once (callers hold the lock)."""
+        if self._store is None:
+            self._store = StateStore(self._data_dir())
+            self._state = self._store.load()
+
+    def _retire(self) -> None:
+        """Stop all wake activity: no queued, pending or repeat wake may follow."""
         self._stopping.set()
         with self._lock:
-            child = self._child
             if self._flush_timer is not None:
                 self._flush_timer.cancel()
+                self._flush_timer = None
+            self._pending.clear()
+
+    def shutdown(self, timeout: float = 5.0) -> None:
+        self._retire()
+        with self._lock:
+            child = self._child
         if child is not None and child.poll() is None:
             try:
                 child.terminate()
@@ -319,6 +332,9 @@ class Supervisor:
             if self._listening:
                 delay = self._backoff_start_s  # a listener that got going resets the backoff
             if action == "stop":
+                # A terminal stop (evicted, rebound, revoked, trust changed, binding refused) ends every
+                # wake for this binding, not only the listener: retire timers and pending repeats first.
+                self._retire()
                 self.final_action = "stop"
                 if code != 0:
                     logger.warning("%s: listener stopped (exit %s, %s); not restarting until the gateway restarts",
@@ -415,6 +431,9 @@ class Supervisor:
 
     def _hint(self, key: Any, created_at: Any) -> None:
         with self._lock:
+            if self._stopping.is_set():
+                return
+            self._ensure_state()
             if key != "gap":
                 point = _point(key, created_at)
                 if point is None:
@@ -423,11 +442,36 @@ class Supervisor:
                 delivered = self._delivered_point()
                 if delivered is not None and point <= delivered:
                     return  # already delivered; a replayed hint needs no wake
+                if key in self._exhausted():
+                    return  # its wake budget is spent until it is delivered, even when replayed
             else:
                 point = None
+                if self._state.get("exhausted_gap"):
+                    return  # spent until the conversation delivers something
             if key not in self._pending:
-                self._pending[key] = {"point": point, "count": 0, "last": None}
+                self._pending[key] = {"point": point, "created_at": created_at, "count": 0, "last": None}
             self._schedule_flush(self._debounce_s)
+
+    def _exhausted(self) -> dict:
+        exhausted = self._state.get("exhausted")
+        return exhausted if isinstance(exhausted, dict) else {}
+
+    def _mark_exhausted(self, key: str, item: dict) -> None:
+        """Persist a spent wake budget so replay or a gateway restart cannot renew it."""
+        if key == "gap":
+            self._state["exhausted_gap"] = True
+        else:
+            exhausted = dict(self._exhausted())
+            exhausted[key] = item.get("created_at")
+            if len(exhausted) > MAX_EXHAUSTED:
+                def age(k: str) -> tuple:
+                    point = _point(k, exhausted[k])
+                    return (0,) if point is None else (1, point)
+
+                for oldest in sorted(exhausted, key=age)[: len(exhausted) - MAX_EXHAUSTED]:
+                    del exhausted[oldest]
+            self._state["exhausted"] = exhausted
+        self._save()
 
     def _schedule_flush(self, delay: float) -> None:
         if self._stopping.is_set() or (self._flush_timer is not None and self._flush_timer.is_alive()):
@@ -441,6 +485,8 @@ class Supervisor:
         """Wake once for every hint not yet injected (debounced burst coalescing)."""
         with self._lock:
             self._flush_timer = None
+            if self._stopping.is_set():
+                return
             fresh = [key for key, item in self._pending.items() if item["count"] == 0]
         if fresh:
             self._wake(fresh)
@@ -449,6 +495,8 @@ class Supervisor:
         """Re-inject net: wake again for hints still undelivered after reinject_after_s."""
         now = self._clock()
         with self._lock:
+            if self._stopping.is_set():
+                return
             due: list[str] = []
             for key, item in list(self._pending.items()):
                 if item["count"] == 0 or now - item["last"] < self.settings.reinject_after_s:
@@ -457,12 +505,15 @@ class Supervisor:
                     logger.warning("%s: a Coordinator reply is still undelivered after %d wakes; giving up on it",
                                    PLUGIN_NAME, item["count"])
                     del self._pending[key]
+                    self._mark_exhausted(key, item)
                     continue
                 due.append(key)
         if due:
             self._wake(due)
 
     def _wake(self, keys: list[str]) -> None:
+        if self._stopping.is_set():
+            return
         try:
             accepted = bool(self._inject(WAKE_TEXT))
         except Exception:  # the host API must never take the supervisor down
@@ -504,9 +555,25 @@ class Supervisor:
         if point is None:
             return
         with self._lock:
+            self._ensure_state()
+            changed = False
             current = self._delivered_point()
             if current is None or point > current:
                 self._state["delivered"] = {"entry_id": checkpoint["entry_id"], "created_at": checkpoint["created_at"]}
+                changed = True
+            exhausted = self._exhausted()
+            remaining = {}
+            for k, v in exhausted.items():
+                spent = _point(k, v)
+                if spent is None or spent > point:
+                    remaining[k] = v  # not covered by this delivery
+            if remaining != exhausted:
+                self._state["exhausted"] = remaining
+                changed = True
+            if self._state.get("exhausted_gap"):
+                self._state["exhausted_gap"] = False
+                changed = True
+            if changed:
                 self._save()
             self._pending.pop("gap", None)  # the conversation has read since the gap
             for key, item in list(self._pending.items()):
