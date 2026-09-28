@@ -1,45 +1,52 @@
+/**
+ * `borg representative listen --protocol 2` as a real process: protocol
+ * refusals, the host pipe, wakes and acks over stdio, EOF, the listener lease,
+ * startup and live stops, and a crash between persisting and emitting a wake.
+ * The log is a controlled mock cube served to the child over loopback; the
+ * SSE stream only triggers discovery.
+ */
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, realpath, mkdir, readFile, writeFile, rm, readdir, chmod, symlink } from 'node:fs/promises';
+import { mkdtemp, realpath, mkdir, readdir, rm, chmod, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bindingFingerprint, createRepresentativeStore } from '../src/representative-store.js';
-import { bindingFor, CUBE_ID, REP_ID, COORD_ID } from './fixtures/representative-mock-backend.js';
-import { formatInboxLine } from '../src/log-stream.js';
+import { bindingFor, COORD_ID, MockCube, REP_ID } from './fixtures/representative-mock-backend.js';
 import { parseRepresentativeArgs } from '../src/representative-cmd.js';
+import { serveBackend } from './fixtures/backend-proxy.js';
 import { withStateDb } from './fixtures/representative-state.js';
-let root: string, worktree: string, origin: string, server: Server;
-let responses: ServerResponse[], requests: URL[], entries: any[], status: number, errorCode: string, expireOnce: boolean;
+
+let root: string, worktree: string, origin: string, server: Server, backend: { url: string; close(): Promise<void> };
+let responses: ServerResponse[], requests: URL[], status: number, errorCode: string;
+let cube: MockCube;
 const children: ChildProcess[] = [];
 const delay = (ms: number) => new Promise(done => setTimeout(done, ms));
-function entry(index: number, message = 'BODY_SENTINEL', visibility = 'direct') {
-  return { id: randomUUID(), cube_id: CUBE_ID, drone_id: COORD_ID,
-    drone_label: 'coordinator', role_name: 'Coordinator', message, visibility,
-    recipient_drone_ids: [REP_ID], created_at: new Date(1700000000000 + index * 1000).toISOString() };
-}
-function frame(value: any) {
-  return `event: log\nid: ${value.id}\ndata: ${JSON.stringify({ ...value, cursor: { id: value.id, created_at: value.created_at } })}\n\n`;
-}
+const trigger = () => {
+  const id = randomUUID();
+  for (const res of responses) if (!res.destroyed && !res.writableEnded) res.write(`event: log\nid: ${id}\ndata: ${JSON.stringify({ id, created_at: new Date().toISOString(), cursor: { id, created_at: new Date().toISOString() } })}\n\n`);
+};
+const reply = (text = 'BODY_SENTINEL') => cube.post(COORD_ID, text, [REP_ID], new Date().toISOString());
+
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'rep-listener-')));
   // In-process store writes and the child listener share this private root.
   process.env.HOME = root; process.env.BORG_STATE_ROOT = root;
   worktree = join(root, 'work'); await mkdir(worktree, { mode: 0o700 });
-  responses = []; requests = []; entries = []; status = 200; errorCode = 'DRONE_EVICTED'; expireOnce = false;
+  responses = []; requests = []; status = 200; errorCode = 'DRONE_EVICTED';
+  cube = new MockCube();
+  backend = await serveBackend(cube);
   server = createServer((req, res) => {
     const url = new URL(req.url!, origin); requests.push(url);
-    if (status !== 200) { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { code: errorCode, message: 'fixture error' } })); if (expireOnce) { status = 200; expireOnce = false; } return; }
+    if (status !== 200) { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { code: errorCode, message: 'fixture error' } })); return; }
     responses.push(res); res.writeHead(200, { 'content-type': 'text/event-stream' }); res.flushHeaders();
-    // Replay deliberately includes old entries to exercise client dedupe.
-    for (const value of entries) res.write(frame(value));
     res.write('event: bookmark\ndata: {}\n\n');
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   origin = `http://127.0.0.1:${(server.address() as any).port}`;
-  await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin }), { rebind: false });
+  await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin, boundAt: '2020-01-01T00:00:00.000Z' }), { rebind: false });
 });
 afterEach(async () => {
   await Promise.all(children.splice(0).map(async child => {
@@ -47,279 +54,215 @@ afterEach(async () => {
   }));
   for (const res of responses) res.destroy();
   server.closeAllConnections(); await new Promise<void>(done => server.close(() => done()));
+  await backend.close();
   await rm(root, { recursive: true, force: true });
 });
-function start(action = 'listen', replayAfter?: string) {
+
+function start(action = 'listen', options: { protocol?: string; stdin?: 'pipe' | 'ignore'; env?: Record<string, string> } = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BORG_')));
-  const child = spawn(process.execPath, ['--import', 'tsx', resolve('__tests__/fixtures/representative-listener-process.ts'), worktree, origin, action, ...(replayAfter ? [replayAfter] : [])],
-    { env: { ...env, HOME: root, XDG_CONFIG_HOME: join(root, '.config') }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--import', 'tsx', resolve('__tests__/fixtures/representative-listener-process.ts'), worktree, origin, action, options.protocol ?? '2'],
+    { env: { ...env, HOME: root, XDG_CONFIG_HOME: join(root, '.config'), BACKEND_URL: backend.url, ...options.env },
+      stdio: [options.stdin ?? 'pipe', 'pipe', 'pipe'] });
   children.push(child);
   const events: any[] = []; let raw = '', stderr = '', buffer = '';
   child.stderr!.on('data', chunk => { stderr += chunk; });
   child.stdout!.on('data', chunk => {
     raw += chunk; buffer += chunk;
-    if (action !== 'listen') return;
+    if (action === 'status') return; // pretty-printed JSON, read whole from raw()
     let end: number;
     while ((end = buffer.indexOf('\n')) >= 0) { const line = buffer.slice(0, end); buffer = buffer.slice(end + 1); if (line) events.push(JSON.parse(line)); }
   });
-  const exited = once(child, 'exit');
-  const wait = async (predicate: () => boolean) => {
-    for (let i = 0; i < 3000; i++) {
+  const exited = once(child, 'exit') as Promise<[number | null, string | null]>;
+  const wait = async (predicate: () => boolean, ms = 30_000) => {
+    for (let i = 0; i < ms / 10; i++) {
       if (predicate()) return;
       if (child.exitCode !== null || child.signalCode !== null) throw new Error(`listener exited before control: ${stderr}; ${raw}`);
       await delay(10);
     }
     throw new Error(`listener timeout: ${stderr}; ${raw}`);
   };
-  return { child, events, exited, wait, raw: () => raw };
+  const send = (value: unknown) => child.stdin!.write(`${typeof value === 'string' ? value : JSON.stringify(value)}\n`);
+  return { child, events, exited, wait, send, raw: () => raw, stderr: () => stderr };
 }
-async function stop(client: ReturnType<typeof start>, signal: NodeJS.Signals = 'SIGTERM') { client.child.kill(signal); return client.exited; }
-async function ready(client: ReturnType<typeof start>) { await client.wait(() => client.events.some(e => e.event === 'listening')); return client.events.find(e => e.event === 'listening'); }
-async function send(values: any[]) { entries.push(...values); for (const res of responses) if (!res.destroyed) for (const value of values) res.write(frame(value)); }
-// The representative state database is checked by its rows (stateRows), not
-// its bytes: SQLite may touch WAL sidecars on a read.
-const stateRows = () => withStateDb(db => ['bindings', 'delivery', 'returned', 'requests', 'wake_state', 'wake_replies']
-  .map(table => db.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all()));
-async function configFiles(): Promise<string[]> {
-  return (await files(join(root, '.config'))).filter(path => !path.includes(join('representative', 'state') + '/'));
-}
-async function files(dir: string): Promise<string[]> {
-  const result: string[] = [];
-  for (const item of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-    const path = join(dir, item.name); if (item.isDirectory()) result.push(...await files(path)); else result.push(path);
-  }
-  return result;
-}
-it('names the binding generation in the listening event', async () => {
-  const client = start(), hello = await ready(client);
-  expect(hello.binding_fingerprint).toBe(bindingFingerprint(bindingFor(worktree, { origin })));
-  expect(hello.binding_fingerprint).toMatch(/^[0-9a-f]{64}$/);
-  await stop(client);
+const ready = async (client: ReturnType<typeof start>) => { await client.wait(() => client.events.some(e => e.event === 'listening')); return client.events.find(e => e.event === 'listening'); };
+const wakes = (client: ReturnType<typeof start>) => client.events.filter(e => e.event === 'wake');
+const wakeDoc = () => withStateDb((db) => {
+  const row = db.prepare('SELECT state FROM wake_state').get() as { state: string } | undefined;
+  return row ? JSON.parse(row.state) : null;
 });
-it('stops a running listener with rebound after a same-selection rebind starts a new generation', async () => {
+const ownerFiles = async () => (await readdir(join(root, '.config'), { recursive: true }).catch(() => [])).filter(p => String(p).endsWith('owner.json'));
+
+it('routes the documented listen command with --protocol', () => {
+  expect(parseRepresentativeArgs(['listen', '--worktree', '/fixture', '--protocol', '2'])).toEqual({ ok: true, command: { action: 'listen', worktree: '/fixture', protocol: 2 } });
+  expect(parseRepresentativeArgs(['listen', '--replay-after', randomUUID()])).toMatchObject({ ok: false });
+  expect(parseRepresentativeArgs(['listen', '--protocol', 'two'])).toMatchObject({ ok: false });
+});
+
+it.each([['none'], ['1']])('refuses protocol %s as its only stdout line, before any state or lease', async (protocol) => {
+  const client = start('listen', { protocol });
+  const [code] = await client.exited;
+  expect(code).toBe(2);
+  expect(client.events).toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_PROTOCOL_REQUIRED', exit_code: 2 }]);
+  expect(requests).toHaveLength(0); expect(await ownerFiles()).toEqual([]);
+});
+
+it('refuses without a host pipe on stdin (/dev/null)', async () => {
+  const client = start('listen', { stdin: 'ignore' });
+  const [code] = await client.exited;
+  expect(code).toBe(2);
+  expect(client.events).toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_HOST_REQUIRED', exit_code: 2 }]);
+  expect(requests).toHaveLength(0); expect(await ownerFiles()).toEqual([]);
+});
+
+it('announces protocol 2, wakes body-free for a new reply, and applies the host ack', async () => {
+  const client = start();
+  const hello = await ready(client);
+  expect(hello).toEqual({ event: 'listening', protocol: 2, binding_fingerprint: bindingFingerprint(bindingFor(worktree, { origin, boundAt: '2020-01-01T00:00:00.000Z' })), undelivered: 0 });
+  await client.wait(() => responses.length > 0);
+  reply(); trigger();
+  await client.wait(() => wakes(client).length === 1);
+  const [wake] = wakes(client);
+  expect(wake).toEqual({ event: 'wake', wake_id: expect.stringMatching(/^[0-9a-f-]{36}$/), reason: 'new-reply', count: 1 });
+  expect(client.raw()).not.toContain('BODY_SENTINEL');
+  expect(wakeDoc().outstanding.batch).toBe(wake.wake_id);
+  client.send('x'.repeat(5000)); // oversized: ignored
+  client.send({ wake_id: wake.wake_id, accepted: true });
+  for (let i = 0; i < 300 && wakeDoc().outstanding !== null; i++) await delay(10);
+  expect(wakeDoc()).toMatchObject({ outstanding: null, refusals: { count: 0 } });
+  client.child.kill('SIGTERM');
+  const [code] = await client.exited;
+  expect(code).toBe(0);
+  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'signal', exit_code: 0 });
+});
+
+it('sends one startup wake for replies undelivered before it started', async () => {
+  reply('a'); reply('b'); reply('c');
+  const client = start();
+  await ready(client);
+  await client.wait(() => wakes(client).length === 1);
+  expect(wakes(client)[0]).toMatchObject({ reason: 'startup', count: 3 });
+});
+
+it('exits 0 on EOF from its host and releases the lease', async () => {
+  const client = start();
+  await ready(client);
+  expect(await ownerFiles()).toHaveLength(1);
+  client.child.stdin!.end();
+  const [code] = await client.exited;
+  expect(code).toBe(0);
+  expect(await ownerFiles()).toEqual([]);
+  const next = start(); await ready(next); // the lease is free
+});
+
+it('refuses a second listener (exit 3) without changing state', async () => {
+  const first = start(); await ready(first);
+  const before = wakeDoc();
+  const second = start();
+  const [code] = await second.exited;
+  expect(code).toBe(3);
+  expect(second.events).toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_OWNED', exit_code: 3, owner_pid: first.child.pid, owner_started_at: expect.any(String) }]);
+  expect(wakeDoc()).toEqual(before);
+});
+
+it('persists a wake before writing it: killed in between, the restart does not re-emit it early', async () => {
+  const crashed = start('listen', { env: { LISTEN_KILL_AFTER_PERSIST: '1' } });
+  await ready(crashed);
+  await crashed.wait(() => responses.length > 0);
+  reply(); trigger();
+  const [, signal] = await crashed.exited;
+  expect(signal).toBe('SIGKILL');
+  expect(wakes(crashed)).toEqual([]);
+  const persisted = wakeDoc().outstanding;
+  expect(persisted).toMatchObject({ reason: 'new-reply', replies: [expect.any(String)] });
+  // The killed process still holds the listener lease until it is reclaimable;
+  // like the host, retry a refused (exit 3) start.
+  let restarted = start();
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const outcome = await Promise.race([restarted.exited.then(() => 'exited'), restarted.wait(() => restarted.events.some(e => e.event === 'listening')).then(() => 'ready', () => 'exited')]);
+    if (outcome === 'ready') break;
+    expect(restarted.events).toEqual([expect.objectContaining({ event: 'refused', code: 'REPRESENTATIVE_LISTENER_OWNED' })]);
+    await delay(500);
+    restarted = start();
+  }
+  await ready(restarted);
+  await delay(3_000); // well past the debounce: the outstanding batch holds the wake until its deadline
+  expect(wakes(restarted)).toEqual([]);
+  expect(wakeDoc().outstanding).toEqual(persisted);
+});
+
+it.each(['rebound', 'evicted'])('stops on %s during a live connection (exit 4), releasing its lease', async (kind) => {
   const client = start(); await ready(client);
-  await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin, boundAt: '2026-06-01T00:00:00.000Z' }), { rebind: true });
-  await send([entry(1)]);
+  await client.wait(() => responses.length > 0);
+  if (kind === 'evicted') { status = 410; for (const res of responses) res.end(); }
+  else await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin, coordinatorDroneId: randomUUID() }), { rebind: true });
+  trigger();
   const [code] = await client.exited;
   expect(code).toBe(4);
-  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'rebound', exit_code: 4 });
-  expect(client.events.filter(e => e.event === 'entry')).toEqual([]);
-});
-it('routes the documented listen command', () => {
-  expect(parseRepresentativeArgs(['listen', '--worktree', '/fixture'])).toEqual({ ok: true, command: { action: 'listen', worktree: '/fixture' } });
-});
-it('persists a burst once in order and emits body-free hints with positive and negative correlation', async () => {
-  const client = start(), hello = await ready(client), request = randomUUID();
-  const values = [entry(1, `BODY_SENTINEL request_id: ${request}`), entry(2, 'BODY_SENTINEL request_id: invalid'), ...Array.from({ length: 18 }, (_, i) => entry(i + 3))];
-  await send(values); await client.wait(() => client.events.filter(e => e.event === 'entry').length === 20);
-  expect(client.events.filter(e => e.event === 'entry').map(e => e.entry_id)).toEqual(values.map(e => e.id));
-  expect(client.events.filter(e => e.event === 'entry').map(e => e.request_id)).toEqual([request, ...Array(19).fill(null)]);
-  expect(client.raw()).not.toContain('BODY_SENTINEL');
-  const lines = (await readFile(hello.inbox, 'utf8')).trim().split('\n'); expect(lines).toHaveLength(20);
-  values.forEach((value, i) => expect(lines[i]).toContain(`[entry_id: ${value.id}]`));
-  await stop(client); expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'signal', exit_code: 0 });
-});
-it('resumes after SIGKILL mid-burst from the persisted cursor without duplicate appends', async () => {
-  const first = start(), hello = await ready(first);
-  await send(Array.from({ length: 20 }, (_, i) => entry(i)));
-  await first.wait(() => first.events.some(e => e.event === 'entry')); await stop(first, 'SIGKILL');
-  const persisted = (await readFile(hello.inbox, 'utf8')).trim().split('\n');
-  expect(persisted.length).toBeLessThan(entries.length);
-  const lastId = /\[entry_id: ([^\]]+)\]/.exec(persisted.at(-1)!)![1];
-  const second = start(); await ready(second);
-  await second.wait(() => second.events.filter(e => e.event === 'entry').length === entries.length - persisted.length);
-  const cursor = JSON.parse(Buffer.from(requests.at(-1)!.searchParams.get('cursor')!, 'base64url').toString());
-  expect(cursor.id).toBe(lastId);
-  const raw = await readFile(hello.inbox, 'utf8'); entries.forEach(e => expect(raw.split(`[entry_id: ${e.id}]`).length - 1).toBe(1));
-});
-it('deduplicates five reconnect bursts including already-written hint events', async () => {
-  const client = start(); await ready(client);
-  for (let i = 0; i < 5; i++) {
-    await send([entry(i)]); await client.wait(() => client.events.filter(e => e.event === 'entry').length === i + 1);
-    const count = requests.length; responses.at(-1)!.end(); await client.wait(() => requests.length > count);
-  }
-  expect(client.events.filter(e => e.event === 'entry')).toHaveLength(5);
-  expect(client.events.filter(e => e.event === 'reconnecting')).toHaveLength(5);
-});
-it('refuses a second listener without changing inbox or lock and takes over after kill', async () => {
-  const first = start(), hello = await ready(first); await send([entry(1)]); await first.wait(() => first.events.some(e => e.event === 'entry'));
-  first.child.kill('SIGSTOP'); // freeze its own heartbeat while checking contender writes
-  const paths = await configFiles(); const before = await Promise.all(paths.map(path => readFile(path, 'utf8'))); const rows = stateRows();
-  const raw = await readFile(hello.inbox, 'utf8'); const second = start(); const [code] = await second.exited;
-  expect(code).toBe(3); expect(second.events).toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_OWNED', exit_code: 3, owner_pid: first.child.pid, owner_started_at: expect.any(String) }]);
-  expect(await readFile(hello.inbox, 'utf8')).toBe(raw);
-  expect(await configFiles()).toEqual(paths);
-  expect(await Promise.all(paths.map(path => readFile(path, 'utf8')))).toEqual(before);
-  expect(stateRows()).toEqual(rows);
-  await stop(first, 'SIGKILL'); await ready(start());
-});
-it.each(['evicted', 'rebound'])('stops on %s, releases lease and never reconnects', async reason => {
-  const client = start(); await ready(client);
-  if (reason === 'evicted') { status = 410; responses.at(-1)!.end(); }
-  else await createRepresentativeStore().saveBinding(bindingFor(worktree, { origin, coordinatorDroneId: randomUUID() }), { rebind: true });
-  const [code] = await client.exited; expect(code).toBe(4);
-  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason, exit_code: 4 });
-  expect((await files(join(root, '.config'))).filter(p => p.endsWith('owner.json'))).toEqual([]);
-});
-it('status reports the listener owner and no tools owner while a tools process runs, without mutation', async () => {
-  const listener = start(); await ready(listener);
-  const tool = start('mcp');
-  tool.child.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } } }) + '\n');
-  await tool.wait(() => tool.raw().includes('"id":1'));
-  tool.child.stdin!.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-  tool.child.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'borg_representative-read', arguments: {} } }) + '\n');
-  await tool.wait(() => tool.raw().includes('"id":2'));
-  const rows = stateRows(); const probe = start('status'); await probe.exited;
-  const snapshot = JSON.parse(probe.raw()); expect(snapshot.ownership).toBeUndefined(); expect(snapshot.listener.pid).toBe(listener.child.pid);
-  expect(stateRows()).toEqual(rows);
-});
-it.each(['symlink', 'mode'])('refuses an unsafe inbox %s without modifying outside content', async kind => {
-  const first = start(), hello = await ready(first); await send([entry(1)]); await first.wait(() => first.events.some(e => e.event === 'entry')); await stop(first);
-  const sentinel = join(root, 'sentinel'); await writeFile(sentinel, 'OUTSIDE');
-  if (kind === 'symlink') { await rm(hello.inbox); await symlink(sentinel, hello.inbox); }
-  else await chmod(join(hello.inbox, '..'), 0o777);
-  const second = start(); const [code] = await second.exited; expect(code).not.toBe(0); expect(await readFile(sentinel, 'utf8')).toBe('OUTSIDE'); expect(second.events.some(e => e.event === 'listening')).toBe(false);
+  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: kind, exit_code: 4 });
+  expect(await ownerFiles()).toEqual([]);
 });
 
-it.each(['in-tail', 'missing', 'none'])('replays hints for %s checkpoint before live events without body text', async mode => {
-  const first = start(), hello = await ready(first); await send([entry(1), entry(2), entry(3)]);
-  await first.wait(() => first.events.filter(e => e.event === 'entry').length === 3); await stop(first);
-  const raw = await readFile(hello.inbox, 'utf8');
-  const rows = stateRows();
-  const unread = join(root, '.config', 'borgmcp', 'local-server-cursors.json');
-  await writeFile(unread, 'UNREAD_SENTINEL', { mode: 0o600 });
-  const requestCount = requests.length;
-  const checkpoint = mode === 'in-tail' ? entries[0].id : mode === 'missing' ? randomUUID() : undefined;
-  const second = start('listen', checkpoint); await ready(second); await send([entry(4)]);
-  await second.wait(() => second.events.some(e => e.event === 'entry' && e.entry_id === entries[3].id));
-  expect(second.events.filter(e => e.event === 'entry' && e.replay).map(e => e.entry_id))
-    .toEqual(mode === 'in-tail' ? entries.slice(1, 3).map(e => e.id) : mode === 'missing' ? entries.slice(0, 3).map(e => e.id) : []);
-  expect(second.events.filter(e => e.event === 'gap')).toEqual(mode === 'missing' ? [{ event: 'gap', after: checkpoint, reason: 'replay-checkpoint-missing' }] : []);
-  expect(second.events.at(-1)).toMatchObject({ event: 'entry', entry_id: entries[3].id, replay: false });
-  expect(second.raw()).not.toContain('BODY_SENTINEL');
-  expect(await readFile(hello.inbox, 'utf8')).toContain(raw);
-  expect(requests).toHaveLength(requestCount + 1); // stream connection only; replay fetches nothing
-  expect(await readFile(unread, 'utf8')).toBe('UNREAD_SENTINEL');
-  expect(stateRows()).toEqual(rows);
+it('reports the listener and its wake state in status without mutation', async () => {
+  const client = start(); await ready(client);
+  await client.wait(() => responses.length > 0);
+  reply(); trigger();
+  await client.wait(() => wakes(client).length === 1);
+  const before = wakeDoc();
+  const probe = start('status'); await probe.exited;
+  const snapshot = JSON.parse(probe.raw());
+  expect(snapshot.listener).toMatchObject({ protocol: 2, running: true, pid: client.child.pid,
+    wakes: { undelivered: 1, outstanding: { wake_id: wakes(client)[0].wake_id, count: 1 }, cohort_open: false } });
+  expect(wakeDoc()).toEqual(before);
 });
-it('trims above 1024 to 512 and never re-appends a trimmed id', async () => {
-  const first = start(), hello = await ready(first);
-  await stop(first);
-  entries.push(...Array.from({ length: 1024 }, (_, i) => entry(i)));
-  await mkdir(join(hello.inbox, '..'), { recursive: true, mode: 0o700 });
-  await writeFile(hello.inbox, entries.map(formatInboxLine).join('\n') + '\n', { mode: 0o600 });
-  const trimming = start(); await ready(trimming); await send([entry(1024)]);
-  await trimming.wait(() => trimming.events.filter(e => e.event === 'entry').length === 1); await stop(trimming);
-  const lines = (await readFile(hello.inbox, 'utf8')).trim().split('\n'); expect(lines).toHaveLength(512);
-  expect(lines[0]).toContain(entries[513].id);
-  const second = start(); await ready(second); await send([entry(1026)]);
-  await second.wait(() => second.events.some(e => e.event === 'entry'));
-  expect(second.events.filter(e => e.event === 'entry')).toHaveLength(1);
-  expect((await readFile(hello.inbox, 'utf8')).trim().split('\n')).toHaveLength(513);
-});
-it('refuses a missing binding at startup as the only stdout line without creating state', async () => {
-  withStateDb(db => db.prepare('DELETE FROM bindings').run()); const rows = stateRows();
+
+it('refuses a missing binding at startup as the only stdout line', async () => {
+  withStateDb(db => db.prepare('DELETE FROM bindings').run());
   const client = start(); const [code] = await client.exited;
   expect(code).toBe(2); expect(client.events).toEqual([{ event: 'refused', code: 'NOT_PREPARED', exit_code: 2 }]);
-  expect(await configFiles()).toEqual([]); expect(stateRows()).toEqual(rows); expect(requests).toHaveLength(0);
-});
-it('preserves distinct live entries with equal timestamps in reverse UUID order', async () => {
-  const client = start(); await ready(client);
-  const a = { ...entry(1), id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' };
-  const b = { ...entry(1), id: '00000000-0000-4000-8000-000000000000' };
-  await send([a, b]);
-  await client.wait(() => client.events.filter(e => e.event === 'entry').length === 2);
-  expect(client.events.filter(e => e.event === 'entry').map(e => e.entry_id)).toEqual([a.id, b.id]);
-});
-
-it('preserves a previously unseen older live entry', async () => {
-  const client = start(), hello = await ready(client);
-  await send([entry(10)]); await client.wait(() => client.events.filter(e => e.event === 'entry').length === 1);
-  await send([entry(1)]); await client.wait(() => client.events.filter(e => e.event === 'entry').length === 2);
-  expect(client.events.filter(e => e.event === 'entry').map(e => e.entry_id)).toEqual(entries.map(e => e.id));
-  expect((await readFile(hello.inbox, 'utf8')).trim().split('\n')).toHaveLength(2);
+  expect(requests).toHaveLength(0);
 });
 
 it.each([['evicted', 'BACKEND_ERROR'], ['rebound', 'BINDING_MISMATCH']])('refuses startup %s with the MCP code before lease creation', async (mode, code) => {
   const client = start(mode); const [exit] = await client.exited;
   expect(exit).toBe(2); expect(JSON.parse(client.raw())).toEqual({ event: 'refused', code, exit_code: 2 });
-  expect(await configFiles()).toEqual([]); expect(requests).toHaveLength(0);
+  expect(await ownerFiles()).toEqual([]); expect(requests).toHaveLength(0);
 });
-// The guide documents this startup boundary: stream retries begin only after it.
+
 it.each(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNRESET', 'typed'])('refuses startup with SERVER_UNREACHABLE when verification fails with %s', async code => {
   const client = start(`unreachable:${code}`); const [exit] = await client.exited;
   expect(exit).toBe(1); expect(client.raw().trim().split('\n').map(line => JSON.parse(line)))
     .toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_SERVER_UNREACHABLE', exit_code: 1 }]);
-  expect(await configFiles()).toEqual([]); expect(requests).toHaveLength(0);
+  expect(await ownerFiles()).toEqual([]); expect(requests).toHaveLength(0);
 });
+
 it('keeps a permanent untyped verification failure off SERVER_UNREACHABLE', async () => {
   const client = start('unreachable:'); const [exit] = await client.exited;
   expect(exit).toBe(1); expect(JSON.parse(client.raw())).toEqual({ event: 'refused', code: 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 });
 });
 
-it('latches lost ownership before another inbox write and leaves the successor lock intact', async () => {
-  const client = start(), hello = await ready(client);
-  await send([entry(1)]); await client.wait(() => client.events.some(e => e.event === 'entry'));
-  const ownerPath = (await files(join(root, '.config'))).find(p => p.endsWith('owner.json'))!;
-  const successor = JSON.parse(await readFile(ownerPath, 'utf8')); successor.processNonce = randomUUID();
-  await writeFile(ownerPath, JSON.stringify(successor), { mode: 0o600 });
-  const before = await readFile(hello.inbox, 'utf8'); await send([entry(2)]);
-  const [code] = await client.exited; expect(code).toBe(4);
-  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'lease-lost', exit_code: 4 });
-  expect(await readFile(hello.inbox, 'utf8')).toBe(before);
-  expect(JSON.parse(await readFile(ownerPath, 'utf8')).processNonce).toBe(successor.processNonce);
-});
-
-it('reports an expired resume cursor after listening and preserves the durable tail', async () => {
-  const first = start(), hello = await ready(first); await send([entry(1)]);
-  await first.wait(() => first.events.some(e => e.event === 'entry')); await stop(first);
-  status = 410; errorCode = 'CURSOR_EXPIRED'; expireOnce = true;
-  const second = start(); await ready(second); await send([entry(2)]);
-  await second.wait(() => second.events.some(e => e.event === 'entry'));
-  expect(second.events.slice(0, 2).map(e => e.event)).toEqual(['listening', 'gap']);
-  expect(second.events[1]).toEqual({ event: 'gap', after: entries[0].id, reason: 'cursor-expired' });
-  expect(requests.at(-1)!.searchParams.has('cursor')).toBe(false);
-  expect((await readFile(hello.inbox, 'utf8')).trim().split('\n')).toHaveLength(2);
-});
-it('reports fatal write failure after listening and releases its lease', async () => {
-  const client = start(), hello = await ready(client); await send([entry(1)]);
-  await client.wait(() => client.events.some(e => e.event === 'entry'));
-  await chmod(join(hello.inbox, '..'), 0o777); await send([entry(2)]);
-  const [code] = await client.exited; expect(code).toBe(1);
-  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'fatal', exit_code: 1 });
-  expect((await files(join(root, '.config'))).filter(p => p.endsWith('owner.json'))).toEqual([]);
-});
-it('emits one typed fatal startup storage refusal without a lease or inbox', async () => {
-  const config = join(root, '.config', 'borgmcp'); await mkdir(config, { recursive: true, mode: 0o700 }); await chmod(config, 0o777);
+it('emits one typed fatal startup storage refusal without a lease', async () => {
+  const config = join(root, '.config', 'borgmcp'); await chmod(config, 0o777);
   const client = start(); const [code] = await client.exited; expect(code).toBe(1);
   expect(client.events).toEqual([{ event: 'refused', code: 'REPRESENTATIVE_LISTENER_STORAGE_REFUSED', exit_code: 1 }]);
-  expect(await configFiles()).toEqual([]);
+  await chmod(config, 0o700);
+  expect(await ownerFiles()).toEqual([]);
 });
+
+it('stops on changed authority trust during an open connection before another wake', async () => {
+  const client = start(); await ready(client);
+  await client.wait(() => responses.length > 0);
+  await writeFile(join(worktree, 'fixture-trust'), 'changed-trust');
+  reply(); trigger();
+  const [code] = await client.exited;
+  expect(code).toBe(4);
+  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'trust-changed', exit_code: 4 });
+  expect(wakes(client)).toEqual([]);
+  expect(await ownerFiles()).toEqual([]);
+});
+
 it('reports a killed listener as not running without reclaiming its lock', async () => {
-  const client = start(); await ready(client); await stop(client, 'SIGKILL');
-  const paths = await configFiles(); const before = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+  const client = start(); await ready(client); client.child.kill('SIGKILL'); await client.exited;
   const probe = start('status'); await probe.exited;
   expect(JSON.parse(probe.raw()).listener.running).toBe(false);
-  expect(await Promise.all(paths.map(path => readFile(path, 'utf8')))).toEqual(before);
-});
-
-it('stops on changed authority trust during an open connection before another append', async () => {
-  const client = start(), hello = await ready(client);
-  await writeFile(join(worktree, 'fixture-trust'), 'changed-trust');
-  await send([entry(1)]);
-  await client.wait(() => client.events.some(e => e.event === 'stopped'));
-  expect((await client.exited)[0]).toBe(4);
-  expect(client.events.at(-1)).toEqual({ event: 'stopped', reason: 'trust-changed', exit_code: 4 });
-  expect(client.events.filter(e => e.event === 'entry')).toEqual([]);
-  expect(await readFile(hello.inbox, 'utf8').catch(() => '')).toBe('');
-  expect(requests).toHaveLength(1);
-  expect((await files(join(root, '.config'))).filter(p => p.endsWith('owner.json'))).toEqual([]);
-});
-
-it('refuses trust drift before listening with one startup binding refusal', async () => {
-  const client = start('trust-changed');
-  expect((await client.exited)[0]).toBe(2);
-  expect(JSON.parse(client.raw())).toEqual({ event: 'refused', code: 'BACKEND_ERROR', exit_code: 2 });
-  expect(requests).toHaveLength(0);
-  expect((await files(join(root, '.config'))).filter(p => p.endsWith('owner.json'))).toEqual([]);
+  expect(await ownerFiles()).toHaveLength(1);
 });

@@ -22,19 +22,19 @@ afterAll(async () => { if (root) await rm(root, { recursive: true, force: true }
 it('ships the printed listener commands and routes their flags through the packed CLI', async () => {
   const guide = await readFile(join(root, 'package', 'docs', 'HUMAN_REPRESENTATIVE.md'), 'utf8');
   const printed = guide.match(/^borg representative listen .*$/gm) ?? [];
-  expect(printed).toHaveLength(2);
+  expect(printed).toEqual(['borg representative listen --worktree <path> --protocol 2']);
   for (const command of printed) {
-    const args = command.replace('<path>', root).replace('<entry_id>', '55555555-5555-4555-8555-555555555555').split(' ').slice(1);
+    const args = command.replace('<path>', root).split(' ').slice(1);
     const result = await exec(process.execPath, [cli, ...args], { env, cwd: root }).catch(error => error);
     expect(result.code).toBe(2);
     expect(JSON.parse(result.stdout)).toEqual({ event: 'refused', code: 'NOT_PREPARED', exit_code: 2 });
   }
   const help = await exec(process.execPath, [cli, 'representative', 'listen', '--help'], { env, cwd: root });
-  expect(help.stdout).toContain('listen --worktree <path> [--replay-after <entry_id>]');
-  expect(help.stdout).toContain('body-free JSON wake hints');
+  expect(help.stdout).toContain('listen --worktree <path> --protocol 2');
+  expect(help.stdout).toContain('body-free JSON wakes');
 });
 it('reserves stdout for a typed usage refusal', async () => {
-  const result = await exec(process.execPath, [cli, 'representative', 'listen', '--replay-after', 'bad'], { env, cwd: root }).catch(error => error);
+  const result = await exec(process.execPath, [cli, 'representative', 'listen', '--protocol', 'bad'], { env, cwd: root }).catch(error => error);
   expect(result.code).toBe(2);
   expect(JSON.parse(result.stdout)).toEqual({ event: 'refused', code: 'INVALID_INPUT', exit_code: 2 });
 });

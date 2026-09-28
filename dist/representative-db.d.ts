@@ -30,6 +30,11 @@ export type SqliteModule = typeof import('node:sqlite');
 export declare function loadSqlite(): Promise<SqliteModule>;
 /** A value for terminal output: C0/C1 control characters and DEL escaped as \\uXXXX. */
 export declare function printable(value: string): string;
+/**
+ * Validate a private directory under the Borg config root and every ancestor
+ * with the private-store policy; never repairs unsafe state. False when absent.
+ */
+export declare function validatePrivateDirectory(directory: string, create: boolean): Promise<boolean>;
 export declare function representativeStateRoot(): string;
 /** CURRENT's generation, or null when unpublished. Never follows a link. */
 export declare function readCurrent(root: string): string | null;

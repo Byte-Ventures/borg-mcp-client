@@ -35,7 +35,7 @@ export declare class RepresentativeError extends Error {
 }
 type RosterRole = Pick<Role, 'id' | 'name' | 'is_human_seat' | 'role_class'>;
 type RosterDrone = Pick<ProtocolDrone, 'id' | 'label' | 'role_id' | 'is_queen_class'>;
-type LogEntry = Pick<EnrichedStreamEntry, 'id' | 'drone_id' | 'message' | 'visibility' | 'created_at' | 'recipient_drone_ids' | 'documents'>;
+export type LogEntry = Pick<EnrichedStreamEntry, 'id' | 'drone_id' | 'message' | 'visibility' | 'created_at' | 'recipient_drone_ids' | 'documents'>;
 /** The only Borg operations the representative may perform, all seat-scoped. */
 export interface RepresentativeBackend {
     whoami(): Promise<{
@@ -165,6 +165,7 @@ export interface RepresentativeReply {
     /** Oversize and still above the envelope bound: citations were reduced to ids. */
     documents_reduced?: true;
 }
+export declare function isAddressedCoordinatorEntry(binding: RepresentativeBinding, entry: LogEntry): 'direct' | 'broadcast' | null;
 /** The exact text an MCP tool result carries; `max_bytes` measures this. */
 export declare function serializeRepresentativeResult(body: unknown): string;
 /**

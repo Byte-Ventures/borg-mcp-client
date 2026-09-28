@@ -394,7 +394,7 @@ async function sendOnce(ctx, raw) {
         ...(warnings.length > 0 ? { warning: warnings.join(' ') } : {}),
     };
 }
-function isAddressedCoordinatorEntry(binding, entry) {
+export function isAddressedCoordinatorEntry(binding, entry) {
     if (entry.drone_id !== binding.coordinatorDroneId)
         return null;
     if (entry.visibility === 'direct') {

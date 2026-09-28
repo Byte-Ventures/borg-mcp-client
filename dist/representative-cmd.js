@@ -35,7 +35,7 @@ export function parseRepresentativeArgs(args) {
     }
     const values = {};
     let rebind = false;
-    const valueFlags = action === 'prepare' ? ['--coordinator', '--role', '--worktree', '--host'] : action === 'listen' ? ['--worktree', '--replay-after'] : ['--worktree'];
+    const valueFlags = action === 'prepare' ? ['--coordinator', '--role', '--worktree', '--host'] : action === 'listen' ? ['--worktree', '--protocol'] : ['--worktree'];
     for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i];
         if (action === 'prepare' && arg === '--rebind') {
@@ -61,11 +61,11 @@ export function parseRepresentativeArgs(args) {
         if (worktree !== undefined && !isAbsolute(worktree)) {
             return { ok: false, error: '--worktree must be an absolute path to the representative worktree' };
         }
-        const replayAfter = values['--replay-after'];
-        if (replayAfter && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(replayAfter)) {
-            return { ok: false, error: '--replay-after must be an entry UUID' };
+        const protocol = values['--protocol'];
+        if (protocol !== undefined && !/^[1-9]\d{0,2}$/.test(protocol)) {
+            return { ok: false, error: '--protocol must be a protocol number (this version speaks 2)' };
         }
-        return { ok: true, command: { action, ...(worktree ? { worktree } : {}), ...(replayAfter ? { replayAfter } : {}) } };
+        return { ok: true, command: { action, ...(worktree ? { worktree } : {}), ...(protocol ? { protocol: Number(protocol) } : {}) } };
     }
     const coordinator = values['--coordinator'];
     if (!coordinator) {
@@ -261,7 +261,7 @@ export async function runRepresentativeStatus(command, deps) {
         }
         const status = await representativeStatus(ctx);
         const { representativeListenerStatus } = await import('./representative-listener.js');
-        const listener = await representativeListenerStatus(ctx.binding);
+        const listener = await representativeListenerStatus(ctx.binding, deps.store);
         deps.stdout(`${JSON.stringify({ ...status, listener }, null, 2)}\n`);
         return status.connected ? 0 : 1;
     }

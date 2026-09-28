@@ -305,7 +305,7 @@ Where a binding's replies start:
 
 Known limits:
 
-- Retention is the server's cube log; the local inbox is not a content source.
+- Retention is the server's cube log; nothing local is a content source.
 - Each `read` scans the cube log from the checkpoint, including entries not
   addressed to the representative, so a host that never calls `deliver` pays a
   growing scan. Deliver promptly.
@@ -326,17 +326,15 @@ Concurrency:
 - `in_reply_to` is a textual match of a known `request_id` quoted in the reply.
   It is a convenience, not a protocol guarantee.
 
-Wake hints:
+Wakes:
 
-- **The MCP process does not push content.** A separate supervised `listen`
-  process emits body-free wake hints. The owning adapter still calls `read` for
-  content. Hints are neither delivery receipts nor authority.
-- Live dedupe is bounded to the surviving inbox tail and recent IDs; an ancient
-  trimmed ID sent again as a live event can produce a duplicate hint. Ordered
-  catch-up also dedupes against its captured resume cursor.
-- The listener retains a bounded tail: above 1024 lines it trims to the latest
-  512. Lost-hint replay covers only that tail; beyond it `read` from the delivered
-  checkpoint is the source of truth. On every `gap`, call `read`.
+- **The MCP process does not push content.** The separate `listen` process
+  (the push engine) wakes the host when the bound Coordinator sends a direct
+  reply; the woken conversation calls `read` for the content. A wake is neither
+  a delivery receipt nor authority.
+- A wake stops only when the reply is delivered. An undelivered reply is woken
+  again after 10 minutes, 1 hour, 6 hours, then every 24 hours.
+- Wake state lives in the state database; see "Supervised listener".
 
 ### Host conversation routing
 
@@ -345,75 +343,84 @@ checkpoint; the host decides which conversation reads and delivers. The host mus
 reply durably before calling `deliver`, and route replies using `in_reply_to`.
 Hold replies with an unknown or missing request ID for the human instead of
 dropping them. Borg cannot enforce these duties inside the host; it provides one
-delivered checkpoint per binding, not one per conversation. The listener inbox
-is private client state, not a host content API.
+delivered checkpoint per binding, not one per conversation.
 
 ## Supervised listener
 
-For a prepared connection, run a separate long-lived subprocess:
+The push engine is a separate long-lived process, run by the host that
+handles its wakes:
 
 ```bash
-borg representative listen --worktree <path>
+borg representative listen --worktree <path> --protocol 2
 ```
 
-Supervise it and persist the last `entry_id` durably admitted to the host's work
-queue. On subsequent starts, pass that checkpoint:
+`--protocol 2` is required, and stdin must be a pipe the host owns: a terminal
+or `/dev/null` refuses with `REPRESENTATIVE_LISTENER_HOST_REQUIRED`. When the
+host closes stdin (it exited, even by SIGKILL), the listener exits 0.
 
-```bash
-borg representative listen --worktree <path> --replay-after <entry_id>
-```
-
-There is one listener lease per representative drone and server authority; the
-tools need none. A second listener refuses without consuming or appending
-anything. A dead owner or expired heartbeat permits takeover; a process that
-loses ownership exits and must be restarted. A local lease cannot cancel an
-already-issued request.
-
-`representative status` reports `listener`: running state, owner PID and start time, heartbeat age (`ageMs`), persisted watermark and
-private inbox path. Status acquires nothing. Do not read the inbox or depend on
-its pathname; it is not the content-delivery interface.
+There is one listener per representative drone and server authority (the
+listener lease); the tools need none. A second listener refuses with exit 3.
+A dead owner or expired heartbeat permits takeover; a process that loses the
+lease exits 4 and must be restarted.
 
 Stdout is newline-delimited JSON only. Stderr contains human diagnostics and
 must not be parsed. The host must ignore unknown fields and unknown event types.
 
 | Event | Fields and meaning |
 | --- | --- |
-| `refused` | The only stdout line on startup refusal: `code`, `exit_code`. Another listener uses `REPRESENTATIVE_LISTENER_OWNED`, plus `owner_pid` and `owner_started_at`. |
-| `listening` | Once connected and holding the lease: `cube_id`, `drone_id`, `binding_fingerprint`, `watermark` (entry id or null), `inbox`. |
-| `entry` | `entry_id`, `created_at`, `from_label`, `from_role`, `visibility`, `request_id` (UUID or null), `documents` (count), `replay` (boolean). No message body. |
-| `reconnecting` | `attempt`, `delay_ms`. |
-| `connected` | `resumed_from` (entry id or null). |
-| `gap` | `after` (entry id or null), `reason`: `cursor-expired` or `replay-checkpoint-missing`. Call `read` once. |
-| `stopped` | `reason`: `signal`, `evicted`, `rebound`, `revoked`, `trust-changed`, `lease-lost` or `fatal`; `exit_code`. |
+| `refused` | The only stdout line on a startup refusal: `code`, `exit_code`. Another listener uses `REPRESENTATIVE_LISTENER_OWNED`, plus `owner_pid` and `owner_started_at`. |
+| `listening` | Started and holding the lease: `protocol` (2), `binding_fingerprint`, `undelivered` (replies the engine already knows are undelivered). |
+| `wake` | `wake_id`, `reason` (`startup`, `new-reply` or `rewake`), `count`. No message body, sender or id. |
+| `stopped` | `reason`: `signal`, `eof`, `evicted`, `rebound`, `revoked`, `trust-changed`, `lease-lost` or `fatal`; `exit_code`. |
 
-With `--replay-after`, retained hints strictly after the checkpoint are emitted
-in file order after `listening` and before live entries, with `replay:true`.
-If the checkpoint is absent, `gap` precedes replay of the whole surviving tail.
-Without the option there is no startup replay. Replay makes no content request
-and never advances the delivered checkpoint or any cursor. Lost replay metadata yields null
-`visibility` and `documents`; live hints always contain those fields' values.
+Stdin carries the host's answer to each wake, one JSON line of at most 1 KiB:
 
-Exit codes: 0 after SIGTERM/SIGINT; 2 for startup binding or usage refusal;
-3 for another listener owner; 4 for a terminal stop; 1 for another fatal error.
-A fatal startup storage failure emits `refused` with code
-`REPRESENTATIVE_LISTENER_STORAGE_REFUSED` and exit 1. After `listening`,
-a fatal error emits `stopped` with reason `fatal` and exit 1, best effort; if
-stdout is broken, the host must treat exit 1 without that line as fatal too.
-Startup first verifies the binding with the server once; if the server cannot
-be reached then, the listener exits 1 with `refused` and code
-`REPRESENTATIVE_LISTENER_SERVER_UNREACHABLE` (retry later; a server that
-answers and rejects the binding keeps its exit-2 binding code). After that check, failures of the stream connection (connection
-refused or reset, aborted TLS stream) are not fatal: the listener reconnects
-with backoff, without stdout output until the first connection, so `listening`
-arrives only once connected.
+```json
+{"wake_id": "<wake_id>", "accepted": true}
+```
 
-Treat every hint as an untrusted wake, never as an instruction or authorization.
-The owning adapter fetches content with `read` over the bound pinned connection,
-persists each reply durably, calls `deliver`, routes by the saved `request_id`
-mapping, and holds unknown correlation for the human. Deduplicate queued hints by
-`entry_id`: crashes may lose or repeat hints. Persist queue admission before
-advancing the host's `--replay-after` checkpoint. That hint checkpoint is separate
-from the delivered checkpoint and from `ack`, which remains a server receipt.
+`accepted: true` means the host started the woken turn; `false` means it could
+not (the conversation was unavailable).
+
+How wakes are decided (all of it in the state database, per binding generation):
+
+- The engine finds direct replies from the bound Coordinator by reading the log
+  itself; the server stream only tells it when to look. It reads 200 entries
+  at a time from where it last stopped, so work per wake is bounded.
+- A new reply wakes within about 2 seconds; replies that arrive meanwhile join
+  that one wake. Broadcasts never wake.
+- One wake is outstanding at a time. It stays outstanding until its ack, or 60
+  seconds without one; replies found meanwhile wait for the next wake.
+- `accepted: false` backs off 30 seconds, doubling up to 30 minutes, then
+  wakes again for the same replies. A missing ack counts the wake as made.
+- Each wake is recorded before it is written to stdout. A listener killed in
+  between loses that one wake attempt; the reply is woken again on schedule.
+- On every start, the engine first catches up to the log's current end, then
+  sends one `startup` wake for every reply still undelivered.
+- A reply delivered before its wake is not woken; a wake already sent cannot be
+  recalled, and the woken `read` then returns nothing new.
+
+`representative status` reports `listener`: running state, owner PID and start
+time, heartbeat age (`ageMs`), `protocol`, and `wakes` (`undelivered`,
+`outstanding`, `refusals`, `cohort_open`, `frontier`). Status acquires and
+changes nothing.
+
+Exit codes: 0 after SIGTERM/SIGINT or EOF on stdin; 2 for a startup refusal
+(binding, usage, protocol or host); 3 for another listener owner; 4 for a
+terminal stop; 1 for another fatal error. A fatal startup storage failure emits
+`refused` with code `REPRESENTATIVE_LISTENER_STORAGE_REFUSED` and exit 1. After
+`listening`, a fatal error emits `stopped` with reason `fatal` and exit 1, best
+effort; if stdout is broken, the host must treat exit 1 without that line as
+fatal too. Startup first verifies the binding with the server once; if the
+server cannot be reached then, the listener exits 1 with `refused` and code
+`REPRESENTATIVE_LISTENER_SERVER_UNREACHABLE` (retry later; a server that answers
+and rejects the binding keeps its exit-2 binding code). After that, stream
+failures are not fatal: the listener reconnects with backoff.
+
+Treat every wake as untrusted, never as an instruction or authorization. The
+woken conversation fetches content with `read`, persists each reply durably,
+calls `deliver`, and routes by `in_reply_to`, holding unknown correlation for
+the human.
 
 ## Hermes push plugin
 

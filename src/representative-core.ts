@@ -84,7 +84,7 @@ export class RepresentativeError extends Error {
 
 type RosterRole = Pick<Role, 'id' | 'name' | 'is_human_seat' | 'role_class'>;
 type RosterDrone = Pick<ProtocolDrone, 'id' | 'label' | 'role_id' | 'is_queen_class'>;
-type LogEntry = Pick<EnrichedStreamEntry, 'id' | 'drone_id' | 'message' | 'visibility' | 'created_at' | 'recipient_drone_ids' | 'documents'>;
+export type LogEntry = Pick<EnrichedStreamEntry, 'id' | 'drone_id' | 'message' | 'visibility' | 'created_at' | 'recipient_drone_ids' | 'documents'>;
 
 /** The only Borg operations the representative may perform, all seat-scoped. */
 export interface RepresentativeBackend {
@@ -591,7 +591,7 @@ export interface RepresentativeReply {
   documents_reduced?: true;
 }
 
-function isAddressedCoordinatorEntry(binding: RepresentativeBinding, entry: LogEntry): 'direct' | 'broadcast' | null {
+export function isAddressedCoordinatorEntry(binding: RepresentativeBinding, entry: LogEntry): 'direct' | 'broadcast' | null {
   if (entry.drone_id !== binding.coordinatorDroneId) return null;
   if (entry.visibility === 'direct') {
     return (entry.recipient_drone_ids ?? []).includes(binding.representativeDroneId) ? 'direct' : null;
