@@ -271,7 +271,7 @@ class Supervisor:
         try:
             child.stdin.close()
         except (OSError, ValueError):
-            # Ignored: closing stdin is best-effort; the caller's wait and escalation handle the child.
+            # Ignored: closing stdin is best-effort; the caller still waits for the child.
             pass
 
     @staticmethod
