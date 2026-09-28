@@ -35,6 +35,8 @@ export type RepresentativeCommand = {
     worktree?: string;
     replayAfter?: string;
 } | {
+    action: 'reset-state';
+} | {
     action: 'hermes-plugin-install';
     hermesHome?: string;
     force: boolean;
@@ -89,9 +91,14 @@ export declare function runRepresentativeMcp(command: Extract<RepresentativeComm
     pinSeat?: (active: ActiveCube) => void;
     stdin?: Readable;
     stdout?: Writable;
-    heartbeatIntervalMs?: number;
 }): Promise<number>;
 export declare function buildDefaultRepresentativeDeps(): Promise<RepresentativeCmdDeps>;
+/**
+ * Disaster recovery for a corrupt representative state database. Refuses on a
+ * healthy database; otherwise publishes a new generation with the salvageable
+ * bindings and reports exactly what was lost.
+ */
+export declare function runRepresentativeResetState(deps: Pick<RepresentativeCmdDeps, 'stdout' | 'stderr'>, reset?: () => Promise<import('./representative-db.js').ResetReport>): Promise<number>;
 export declare function runRepresentativeListen(command: Extract<RepresentativeCommand, {
     action: 'listen';
 }>, deps: RepresentativeCmdDeps, options?: import('./representative-listener.js').ListenerOptions): Promise<number>;

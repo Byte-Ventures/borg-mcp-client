@@ -77,7 +77,7 @@ beforeEach(() => {
       return { code: 0, worktree };
     },
     backendFor: () => cube.backend(),
-    store: createRepresentativeStore(join(root, '.config', 'borgmcp', 'representative.json')),
+    store: createRepresentativeStore(),
     stdout: (text) => { out += text; },
     stderr: (text) => { out += text; },
   };
@@ -203,7 +203,8 @@ describe('prepare', () => {
     const fingerprint = bindingFingerprint(rebound);
     expect(fingerprint).not.toBe(bindingFingerprint(initial));
     const ctx = await resolveRepresentativeContext(worktree, deps);
-    const entry = cube.post(COORD_ID, 'reply', [REP_ID]);
+    // A new generation starts at its binding start: the reply must follow the rebind.
+    const entry = cube.post(COORD_ID, 'reply', [REP_ID], new Date(Date.parse(rebound.boundAt) + 1000).toISOString());
     expect((await representativeStatus(ctx)).binding_fingerprint).toBe(fingerprint);
     expect((await readRepresentativeReplies(ctx, {})).binding_fingerprint).toBe(fingerprint);
     expect((await deliverRepresentativeReplies(ctx, { through: entry.id })).binding_fingerprint).toBe(fingerprint);

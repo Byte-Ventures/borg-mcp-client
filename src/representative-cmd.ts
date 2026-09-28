@@ -44,6 +44,7 @@ export type RepresentativeCommand =
   | { action: 'status'; worktree?: string }
   | { action: 'mcp'; worktree?: string }
   | { action: 'listen'; worktree?: string; replayAfter?: string }
+  | { action: 'reset-state' }
   | { action: 'hermes-plugin-install'; hermesHome?: string; force: boolean };
 
 export type ParsedRepresentativeArgs =
@@ -66,8 +67,13 @@ export interface RepresentativeCmdDeps {
 export function parseRepresentativeArgs(args: readonly string[]): ParsedRepresentativeArgs {
   const [action, ...rest] = args;
   if (action === 'hermes-plugin') return parseHermesPluginArgs(rest);
+  if (action === 'reset-state') {
+    return rest.length === 0
+      ? { ok: true, command: { action: 'reset-state' } }
+      : { ok: false, error: `unknown argument: ${rest[0]}. reset-state takes no arguments` };
+  }
   if (action !== 'prepare' && action !== 'status' && action !== 'mcp' && action !== 'listen') {
-    return { ok: false, error: 'expected one of: prepare, status, mcp, listen, hermes-plugin' };
+    return { ok: false, error: 'expected one of: prepare, status, mcp, listen, reset-state, hermes-plugin' };
   }
   const values: Record<string, string> = {};
   let rebind = false;
@@ -297,11 +303,9 @@ export async function runRepresentativeStatus(
     const worktree = canonicalWorktree(command.worktree ?? deps.cwd(), deps);
     const ctx = await resolveRepresentativeContext(worktree, deps);
     const status = await representativeStatus(ctx);
-    const { representativeOwnership } = await import('./representative-owner.js');
-    const ownership = await representativeOwnership(ctx.binding);
     const { representativeListenerStatus } = await import('./representative-listener.js');
     const listener = await representativeListenerStatus(ctx.binding);
-    deps.stdout(`${JSON.stringify({ ...status, ownership, listener }, null, 2)}\n`);
+    deps.stdout(`${JSON.stringify({ ...status, listener }, null, 2)}\n`);
     return status.connected ? 0 : 1;
   } catch (error) {
     deps.stderr(`◼ borg representative status: ${describeError(error)}\n`);
@@ -317,7 +321,7 @@ export async function runRepresentativeStatus(
 export async function runRepresentativeMcp(
   command: Extract<RepresentativeCommand, { action: 'mcp' }>,
   deps: RepresentativeCmdDeps,
-  io: { version: string; pinSeat?: (active: ActiveCube) => void; stdin?: Readable; stdout?: Writable; heartbeatIntervalMs?: number },
+  io: { version: string; pinSeat?: (active: ActiveCube) => void; stdin?: Readable; stdout?: Writable },
 ): Promise<number> {
   let worktree: string;
   let pinned: RepresentativeBinding;
@@ -334,7 +338,7 @@ export async function runRepresentativeMcp(
   const { serveRepresentativeMcp } = await import('./representative-mcp.js');
   const served = await serveRepresentativeMcp({
     version: io.version,
-    heartbeatIntervalMs: io.heartbeatIntervalMs,
+    onClose: () => deps.store.state.close(),
     ...(io.stdin ? { stdin: io.stdin } : {}),
     ...(io.stdout ? { stdout: io.stdout } : {}),
     // The full generation, so any rebind (same selection included) is refused.
@@ -383,6 +387,53 @@ export async function buildDefaultRepresentativeDeps(): Promise<RepresentativeCm
     stdout: (text) => { process.stdout.write(text); },
     stderr: (text) => { process.stderr.write(text); },
   };
+}
+
+/**
+ * Disaster recovery for a corrupt representative state database. Refuses on a
+ * healthy database; otherwise publishes a new generation with the salvageable
+ * bindings and reports exactly what was lost.
+ */
+export async function runRepresentativeResetState(
+  deps: Pick<RepresentativeCmdDeps, 'stdout' | 'stderr'>,
+  reset: () => Promise<import('./representative-db.js').ResetReport> = defaultReset,
+): Promise<number> {
+  try {
+    const report = await reset();
+    if (report.outcome === 'not-initialized') {
+      deps.stdout('No representative state exists yet; nothing to reset.\n');
+      return 0;
+    }
+    if (report.outcome === 'healthy') {
+      deps.stderr(`◼ borg representative reset-state: the state database (generation ${report.previous}) is healthy; nothing to reset.\n`);
+      return 1;
+    }
+    const lines = [
+      `Representative state reset: generation ${report.previous} replaced by ${report.current}.`,
+      `The damaged generation is kept (not deleted) under the state directory: ${report.retainedAside.join(', ') || 'none'}.`,
+      `Bindings kept: ${report.salvaged.length ? report.salvaged.join(', ') : 'none'}.`,
+      ...report.dropped.map((drop) => `Binding lost${drop.worktree ? ` for ${drop.worktree}` : ''}: ${drop.reason}. Run \`borg representative prepare\` in that worktree to bind it again.`),
+      'Lost: every delivery checkpoint (kept bindings replay their replies from the binding start: duplicates are possible, nothing is skipped),',
+      'the request ledger (pending and ambiguous sends are no longer guarded: a send whose outcome was unknown may already be stored,',
+      'and identical content is no longer blocked), and wake state (rebuilt by the listener).',
+    ];
+    deps.stdout(`${lines.join('\n')}\n`);
+    return 0;
+  } catch (error) {
+    deps.stderr(`◼ borg representative reset-state: ${describeError(error)}\n`);
+    return 1;
+  }
+}
+
+async function defaultReset(): Promise<import('./representative-db.js').ResetReport> {
+  const [{ resetRepresentativeState }, { parseBinding, bindingFingerprint: fingerprint }, { seatKey }] = await Promise.all([
+    import('./representative-db.js'), import('./representative-store.js'), import('./representative-legacy.js'),
+  ]);
+  return resetRepresentativeState({
+    validateBinding: (value, worktree) => parseBinding(value, worktree),
+    generationOf: (binding) => fingerprint(binding as RepresentativeBinding),
+    seatOf: (binding) => seatKey(binding as RepresentativeBinding),
+  });
 }
 
 export async function runRepresentativeListen(

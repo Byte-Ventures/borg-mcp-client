@@ -30,8 +30,7 @@ import {
   type RepresentativeContext,
 } from './representative-core.js';
 import { RepresentativeStoreError, bindingFingerprint } from './representative-store.js';
-import { createDeliveryStore } from './representative-delivery-store.js';
-import { createRepresentativeOwner } from './representative-owner.js';
+import { RepresentativeStateError } from './representative-db.js';
 
 export const REPRESENTATIVE_TOOL_NAMES = [
   'borg_representative-status',
@@ -54,7 +53,7 @@ const TOOLS = [
     name: 'borg_representative-status',
     description:
       'Show which cube, representative drone and Coordinator this connection is bound to, whether the live cube still matches, ' +
-      'any unresolved (ambiguous) sends, process ownership and the delivery limits. Read-only; never takes ownership.',
+      'any unresolved (ambiguous) sends and the delivery limits. Read-only.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -139,8 +138,8 @@ const TOOLS = [
 ] as const;
 
 function errorBody(error: unknown): { error: { code: string; message: string; details?: unknown } } {
-  if (error instanceof RepresentativeError || error instanceof RepresentativeStoreError) {
-    const details = error instanceof RepresentativeError ? error.details : undefined;
+  if (error instanceof RepresentativeError || error instanceof RepresentativeStoreError || error instanceof RepresentativeStateError) {
+    const details = error instanceof RepresentativeError || error instanceof RepresentativeStateError ? error.details : undefined;
     return { error: { code: error.code, message: error.message, ...(details ? { details } : {}) } };
   }
   const code = (error as { code?: unknown } | null)?.code;
@@ -162,21 +161,20 @@ export interface ServeRepresentativeOptions {
   context: () => Promise<RepresentativeContext>;
   /**
    * The binding generation this process started with. Every call except status
-   * refuses with BINDING_MISMATCH, before any lease, ledger, checkpoint, cursor
-   * or network activity, once the saved binding's fingerprint differs.
+   * refuses with BINDING_MISMATCH, before any ledger, delivery or network
+   * activity, once the saved binding's fingerprint differs.
    */
   pinnedFingerprint?: string;
   version: string;
   stdin?: Readable;
   stdout?: Writable;
-  /** Internal timing seam for heartbeat controls; production uses 20 seconds. */
-  heartbeatIntervalMs?: number;
+  /** Called once on shutdown (closes the state database handle). */
+  onClose?: () => void;
 }
 
 export async function serveRepresentativeMcp(
   options: ServeRepresentativeOptions,
 ): Promise<{ close: () => Promise<void>; closed: Promise<void> }> {
-  const owner = createRepresentativeOwner(options.heartbeatIntervalMs);
   const server = new Server(
     { name: 'borg-human-representative', version: options.version },
     { capabilities: { tools: {} }, instructions: REPRESENTATIVE_INSTRUCTIONS },
@@ -194,7 +192,7 @@ export async function serveRepresentativeMcp(
       const ctx = await options.context();
       const pinned = options.pinnedFingerprint ? { pinned_binding_fingerprint: options.pinnedFingerprint } : {};
       if (name === 'borg_representative-status') {
-        return toolResult({ ...await representativeStatus(ctx), ...pinned, ownership: await owner.snapshot(ctx.binding) });
+        return toolResult({ ...await representativeStatus(ctx), ...pinned });
       }
       if (options.pinnedFingerprint && bindingFingerprint(ctx.binding) !== options.pinnedFingerprint) {
         throw new RepresentativeError(
@@ -202,31 +200,20 @@ export async function serveRepresentativeMcp(
           'The operator rebound this connection (a new binding generation) while it was running. Restart the MCP server to use the new binding.',
         );
       }
-      // An untrustworthy delivery checkpoint stops every effect, not only read
-      // and deliver, so the refusal reaches the human. Read-only; status stays.
-      await createDeliveryStore(ctx.binding).load();
-      await owner.ensure(ctx.binding);
-      // Recheck at each network boundary, not just at tool dispatch: a process
-      // may have paused or lost its lease while awaiting live verification.
-      const backend = ctx.backend;
-      const guarded = { ...ctx, guard: () => owner.ensure(ctx.binding), backend: Object.fromEntries(['whoami', 'roster', 'append', 'readAfter', 'unreadCursor', 'readEntry', 'ack'].map((key) => [key, async (...args: unknown[]) => {
-        await owner.ensure(ctx.binding);
-        if (key === 'readAfter') args[2] = () => owner.ensure(ctx.binding);
-        const result = await (backend[key as keyof typeof backend] as (...args: unknown[]) => Promise<unknown>).apply(backend, args);
-        await owner.ensure(ctx.binding);
-        return result;
-      }])) as unknown as typeof backend };
+      // Every effect runs as per-operation state transactions, so any number of
+      // host processes may use these tools at once. A damaged or unsafe state
+      // database refuses every effect; status stays available.
       switch (name) {
         case 'borg_representative-send': {
-          const sent = await sendRepresentativeMessage(guarded, args);
+          const sent = await sendRepresentativeMessage(ctx, args);
           return toolResult(sent, sent.outcome === 'ambiguous');
         }
         case 'borg_representative-read':
-          return toolResult(await readRepresentativeReplies(guarded, args));
+          return toolResult(await readRepresentativeReplies(ctx, args));
         case 'borg_representative-deliver':
-          return toolResult(await deliverRepresentativeReplies(guarded, args));
+          return toolResult(await deliverRepresentativeReplies(ctx, args));
         default:
-          return toolResult(await ackRepresentativeReply(guarded, args));
+          return toolResult(await ackRepresentativeReply(ctx, args));
       }
     } catch (error) {
       return toolResult(errorBody(error), true);
@@ -239,7 +226,7 @@ export async function serveRepresentativeMcp(
   const shutdown = async () => {
     process.removeListener('SIGTERM', signalClose);
     process.removeListener('SIGINT', signalClose);
-    try { await owner.close(); } finally { finish(); }
+    try { options.onClose?.(); } finally { finish(); }
   };
   const signalClose = () => { void server.close(); };
   server.onclose = () => { void shutdown().catch(() => {}); };

@@ -15,12 +15,11 @@
 import { ErrorCode, type Role, type RosterDrone as ProtocolDrone, type EnrichedStreamEntry, type DocumentCitation } from 'borgmcp-shared/protocol';
 import type { ActiveCube } from './cubes.js';
 import { type RepresentativeBinding, type RepresentativeStore } from './representative-store.js';
-import { type LocalServerCursor } from './local-server-cursor.js';
+import type { LocalServerCursor } from './local-server-cursor.js';
 export declare const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
 export declare const REPRESENTATIVE_DELIVERY_NOTE: string;
-export type RepresentativeErrorCode = typeof ErrorCode.INVALID_INPUT | 'DECISION_REQUIRES_USER_AUTHORIZATION' | 'REQUEST_ID_CONFLICT' | 'AMBIGUOUS_SEND_UNRESOLVED' | 'SEND_REJECTED' | 'REPRESENTATIVE_OWNERSHIP_REQUIRED' | 'NOT_PREPARED' | 'SEAT_UNAVAILABLE' | 'BINDING_MISMATCH' | 'BINDING_CONFLICT' | 'COORDINATOR_NOT_FOUND' | 'COORDINATOR_AMBIGUOUS' | 'COORDINATOR_NOT_HUMAN_SEAT' | 'COORDINATOR_IS_SELF' | 'COORDINATOR_UNAVAILABLE' | 'REPRESENTATIVE_ROLE_NOT_PERMITTED' | 'REPRESENTATIVE_ROLE_MISMATCH' | 'NOT_A_COORDINATOR_REPLY' | 'REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY' | 'REPRESENTATIVE_READ_OVERSIZE';
+export type RepresentativeErrorCode = typeof ErrorCode.INVALID_INPUT | 'DECISION_REQUIRES_USER_AUTHORIZATION' | 'REQUEST_ID_CONFLICT' | 'AMBIGUOUS_SEND_UNRESOLVED' | 'SEND_REJECTED' | 'NOT_PREPARED' | 'SEAT_UNAVAILABLE' | 'BINDING_MISMATCH' | 'BINDING_CONFLICT' | 'COORDINATOR_NOT_FOUND' | 'COORDINATOR_AMBIGUOUS' | 'COORDINATOR_NOT_HUMAN_SEAT' | 'COORDINATOR_IS_SELF' | 'COORDINATOR_UNAVAILABLE' | 'REPRESENTATIVE_ROLE_NOT_PERMITTED' | 'REPRESENTATIVE_ROLE_MISMATCH' | 'NOT_A_COORDINATOR_REPLY' | 'REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY' | 'REPRESENTATIVE_READ_OVERSIZE';
 export interface RepresentativeErrorDetails {
-    owner?: import('./stream-owner.js').StreamOwnershipSnapshot;
     request_id?: string;
     cause_code?: string;
     cause_message?: string;
@@ -72,12 +71,10 @@ export interface RepresentativeBackend {
      * One stateless page of the cube log strictly after an exact (created_at, id)
      * cursor, ascending. Reads and advances no unread cursor; never digest mode.
      */
-    readAfter(cursor: LocalServerCursor | null, limit: number, continuationGuard?: () => Promise<void>): Promise<{
+    readAfter(cursor: LocalServerCursor | null, limit: number): Promise<{
         entries: LogEntry[];
         has_more?: boolean;
     }>;
-    /** This seat's client-owned unread cursor, read only; the slice 2 migration input. */
-    unreadCursor(): Promise<LocalServerCursor | null>;
     readEntry(entryId: string): Promise<{
         entry: LogEntry;
     }>;
@@ -88,8 +85,6 @@ export interface RepresentativeContext {
     backend: RepresentativeBackend;
     store: RepresentativeStore;
     now?: () => Date;
-    /** Checked immediately before each private delivery-state write (the tools lease in MCP). */
-    guard?: () => Promise<void>;
 }
 /** Real backend: the existing seat-scoped client calls for one hydrated seat. */
 export declare function createSeatBackend(active: ActiveCube): Promise<RepresentativeBackend>;
@@ -179,6 +174,10 @@ export declare function serializeRepresentativeResult(body: unknown): string;
  * bytes by default), so the reduced entry fits.
  */
 export declare const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
+/** The newest log position on the bound server (null for an empty log), outside any transaction. */
+export declare function serverHead(backend: RepresentativeBackend): Promise<LocalServerCursor | null>;
+/** First use of a binding generation creates its state (binding row and delivery start). */
+export declare function ensureRepresentativeState(ctx: RepresentativeContext): Promise<void>;
 export declare function readRepresentativeReplies(ctx: RepresentativeContext, raw: unknown): Promise<{
     replies: RepresentativeReply[];
     checkpoint: {
@@ -233,7 +232,7 @@ export declare function representativeStatus(ctx: RepresentativeContext): Promis
     delivery: string;
     authority: string;
     binding_fingerprint: string;
-    checkpoint_problem?: {
+    state_problem?: {
         code: string;
         message: string;
     };

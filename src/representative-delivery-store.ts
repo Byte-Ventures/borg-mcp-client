@@ -1,73 +1,39 @@
-/** Private per-binding DELIVERED checkpoint and read fence for the representative. */
-import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { lstat, open, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import { borgConfigRoot } from './private-root.js';
-import { atomicWrite0600, readStoreFile } from './seat-store.js';
-import type { LocalServerCursor } from './local-server-cursor.js';
-import { bindingFingerprint, isRepresentativeUuid, type RepresentativeBinding } from './representative-store.js';
-import { validatePrivateDirectory } from './representative-listener-store.js';
-
 /**
- * `checkpoint`: the host's durable delivery point; only `deliver` moves it.
- * `readThrough`: the highest entry any `read` returned; `deliver` may not pass it.
+ * The representative's DELIVERED checkpoint and read window, per binding
+ * generation, in the representative state database.
+ *
+ * - `start`: where this generation's history begins (the imported 5.x
+ *   checkpoint, the server head, or the binding start). Scans never consider
+ *   entries at or before it.
+ * - `checkpoint`: the host's durable delivery point; only `deliver` moves it.
+ * - `readThrough`: the highest entry any `read` returned; `deliver` may not pass it.
+ * - `returned`: entries a read returned since the checkpoint last moved;
+ *   `deliver` checks membership of the full (id, created_at) tuple here.
+ *
+ * Every function taking a `Transaction` runs inside one representative state
+ * transaction; callers check the binding generation in that same transaction.
  */
+import type { Transaction } from './representative-db.js';
+import type { LocalServerCursor } from './local-server-cursor.js';
+import {
+  bindingFingerprint, currentBindingRow, insertBindingRow, RepresentativeGenerationError,
+  type RepresentativeBinding, type RepresentativeStore,
+} from './representative-store.js';
+import { readLegacyDelivery, seatKey } from './representative-legacy.js';
+
+export type StartKind = 'checkpoint' | 'head' | 'binding';
+
 export interface DeliveryState {
+  start: LocalServerCursor;
+  startKind: StartKind;
   checkpoint: LocalServerCursor | null;
   readThrough: LocalServerCursor | null;
-  /**
-   * Entries a read returned since the checkpoint last moved: `deliver` checks
-   * membership here, not just the range. Every window starts at the
-   * checkpoint, so this stays within the largest window (two, with and without
-   * broadcasts), and deliver prunes it.
-   */
   returned: LocalServerCursor[];
 }
 
 /** Two windows of at most 50 replies (with and without broadcasts). */
 const RETURNED_CAP = 100;
-
-const deliveryRoot = () => join(borgConfigRoot(), 'representative-delivery');
-
-/**
- * This binding's own checkpoint file exists but cannot be trusted. It is never
- * used and never silently reset: every tool except status refuses until the
- * operator inspects and removes it.
- */
-export class DeliveryCheckpointError extends Error {
-  readonly code = 'REPRESENTATIVE_CHECKPOINT_INVALID';
-  constructor(file: string, reason: string) {
-    super(`The representative delivery checkpoint ${file} is invalid (${reason}). Nothing was read or delivered. ` +
-      'Inspect the file and remove it; the next read then replays every addressed reply from the start.');
-    this.name = 'DeliveryCheckpointError';
-  }
-}
-
-export function deliveryPaths(binding: RepresentativeBinding) {
-  const directory = join(deliveryRoot(), bindingFingerprint(binding));
-  return { directory, file: join(directory, 'checkpoint.json') };
-}
-
-/**
- * The seat every generation of a binding shares: the same fields as the
- * client unread-cursor key, without Coordinator or boundAt.
- */
-function seatKey(binding: RepresentativeBinding): string {
-  return createHash('sha256').update(JSON.stringify([
-    binding.origin, binding.trustIdentity, binding.cubeId, binding.representativeDroneId,
-  ])).digest('hex');
-}
-
-function point(value: unknown): LocalServerCursor | null {
-  if (value === null) return null;
-  const candidate = value as { id?: unknown; created_at?: unknown } | undefined;
-  if (!isRepresentativeUuid(candidate?.id) || typeof candidate?.created_at !== 'string' ||
-      !Number.isFinite(Date.parse(candidate.created_at))) {
-    throw new Error('Representative delivery checkpoint is invalid');
-  }
-  return { id: candidate.id, created_at: candidate.created_at };
-}
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 
 /** (created_at, id) order, the server log order. */
 export function comparePoints(a: LocalServerCursor, b: LocalServerCursor | null): number {
@@ -76,160 +42,141 @@ export function comparePoints(a: LocalServerCursor, b: LocalServerCursor | null)
   return a.id === b.id ? 0 : a.id < b.id ? -1 : 1;
 }
 
-async function readFile(directory: string, file: string): Promise<{ seat: string; state: DeliveryState } | null> {
-  if (!await validatePrivateDirectory(directory, false)) return null;
-  const raw = await readStoreFile(file, { secureRoot: directory, verifyLeafIdentity: true, createRoot: false });
-  if (raw === null) return null;
-  let parsed: { version?: unknown; seat?: unknown; checkpoint?: unknown; readThrough?: unknown; returned?: unknown };
-  try { parsed = JSON.parse(raw); } catch { throw new Error('Representative delivery checkpoint is invalid'); }
-  if (parsed?.version !== 1 || typeof parsed.seat !== 'string') throw new Error('Representative delivery checkpoint is invalid');
-  const returned = parsed.returned ?? [];
-  if (!Array.isArray(returned) || returned.length > RETURNED_CAP) throw new Error('Representative delivery checkpoint is invalid');
-  return { seat: parsed.seat, state: {
-    checkpoint: point(parsed.checkpoint), readThrough: point(parsed.readThrough),
-    returned: returned.map((value) => point(value)!).map((value) => { if (!value) throw new Error('Representative delivery checkpoint is invalid'); return value; }),
-  } };
-}
-
-// One queue per state file: overlapping tool calls in one process never write
-// from a stale load. Other processes are excluded by the tools lease.
-const queues = new Map<string, Promise<unknown>>();
-
 const later = (a: LocalServerCursor | null, b: LocalServerCursor | null) =>
   a === null ? b : b === null ? a : comparePoints(a, b) >= 0 ? a : b;
 
-/**
- * The one-time upgrade tombstone for a seat. Its existence alone means the
- * legacy import was attempted; nothing in it is ever read back as a position.
- * Its directory name is not 64 hex characters, so the generation scan never
- * mistakes it for a checkpoint.
- */
-export function createDeliveryStore(binding: RepresentativeBinding) {
-  const paths = deliveryPaths(binding);
-  const seat = seatKey(binding);
-  const marker = { directory: join(deliveryRoot(), `seat-${seat}`), file: join(deliveryRoot(), `seat-${seat}`, 'migration.json') };
-  const options = { secureRoot: paths.directory, verifyLeafIdentity: true, createRoot: false };
-  const load = async (): Promise<DeliveryState | null> => {
-    let saved;
-    try {
-      saved = await readFile(paths.directory, paths.file);
-    } catch (error) {
-      throw new DeliveryCheckpointError(paths.file, error instanceof Error ? error.message : 'unreadable');
-    }
-    if (!saved) return null;
-    if (saved.seat !== seat) throw new DeliveryCheckpointError(paths.file, 'it belongs to another representative seat');
-    const { checkpoint, readThrough } = saved.state;
-    if (checkpoint && (readThrough === null || comparePoints(checkpoint, readThrough) > 0)) {
-      throw new DeliveryCheckpointError(paths.file, 'its checkpoint is beyond its read fence');
-    }
-    if (saved.state.returned.some((entry) => comparePoints(entry, checkpoint) <= 0 || comparePoints(entry, readThrough) > 0)) {
-      throw new DeliveryCheckpointError(paths.file, 'a returned entry lies outside its window');
-    }
-    return saved.state;
-  };
+const point = (id: string | null, at: string | null): LocalServerCursor | null =>
+  id === null || at === null ? null : { id, created_at: at };
+
+export function loadDelivery(db: Transaction, generation: string): DeliveryState | null {
+  const row = db.prepare(`SELECT start_id, start_at, start_kind, checkpoint_id, checkpoint_at, read_through_id, read_through_at
+    FROM delivery WHERE generation = ?`).get(generation) as Record<string, string | null> | undefined;
+  if (!row) return null;
+  const returned = (db.prepare('SELECT entry_id, created_at FROM returned WHERE generation = ?').all(generation) as
+    Array<{ entry_id: string; created_at: string }>)
+    .map((entry) => ({ id: entry.entry_id, created_at: entry.created_at }))
+    .sort((a, b) => comparePoints(a, b));
   return {
-    /** Null when this binding generation has no checkpoint yet. A corrupt file fails closed. */
-    load,
-    /**
-     * Whether the seat's upgrade tombstone exists. Any object at that path,
-     * readable or not, counts, so a planted or damaged marker can only cause a
-     * replay (duplicates), never an import or a skip.
-     */
-    async migrated(): Promise<boolean> {
-      try {
-        if (!await validatePrivateDirectory(marker.directory, false)) return false;
-        await lstat(marker.file);
-        return true;
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code !== 'ENOENT';
-      }
-    },
-    /**
-     * Create the tombstone exclusively (O_EXCL, no-follow, 0600, fsynced).
-     * False when it already exists: another initializer got there first.
-     * `guard` runs just before the create.
-     */
-    async markMigrated(guard?: () => Promise<void>): Promise<boolean> {
-      await guard?.();
-      await validatePrivateDirectory(marker.directory, true);
-      let handle;
-      try {
-        handle = await open(marker.file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
-        throw error;
-      }
-      try {
-        await handle.writeFile(JSON.stringify({ version: 1, seat }) + '\n');
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      return true;
-    },
-    /**
-     * Run a first-call initialization alone for this seat within the process:
-     * overlapping first reads see each other's result instead of both
-     * importing. Other processes are excluded by the tools lease, and the
-     * exclusive tombstone create backs that up.
-     */
-    initialize<T>(operation: () => Promise<T>): Promise<T> {
-      const key = `seat:${seat}`;
-      const result = (queues.get(key) ?? Promise.resolve()).then(operation, operation);
-      queues.set(key, result.catch(() => {}));
-      return result;
-    },
-    /**
-     * Whether any other generation of this seat already has a checkpoint, which
-     * means the one-time upgrade from the unread cursor already happened. An
-     * unreadable or unsafe sibling counts as one: the new generation then
-     * replays its history (duplicates, never loss) instead of trusting it.
-     */
-    async otherGenerationExists(): Promise<boolean> {
-      if (!await validatePrivateDirectory(deliveryRoot(), false)) return false;
-      const own = bindingFingerprint(binding);
-      for (const name of await readdir(deliveryRoot())) {
-        if (name === own || !/^[0-9a-f]{64}$/.test(name)) continue;
-        const directory = join(deliveryRoot(), name);
-        try {
-          if ((await readFile(directory, join(directory, 'checkpoint.json')))?.seat === seat) return true;
-        } catch {
-          return true;
-        }
-      }
-      return false;
-    },
-    /**
-     * Move either field forward only, from the state on disk at write time, in
-     * one atomic durable 0600 write. Always writes when no file exists yet, so a
-     * completed migration is never repeated. `guard` runs just before the write.
-     * Returns the states before and after, so callers report the real transition.
-     */
-    advance(update: Partial<DeliveryState>, guard?: () => Promise<void>): Promise<{ before: DeliveryState | null; after: DeliveryState }> {
-      const run = async () => {
-        const before = await load();
-        const checkpoint = later(before?.checkpoint ?? null, update.checkpoint ?? null);
-        const readThrough = later(before?.readThrough ?? null, update.readThrough ?? null);
-        // Union of returned windows, pruned to entries still after the checkpoint.
-        const returned = [...(before?.returned ?? []), ...(update.returned ?? [])]
-          .filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index)
-          .filter((entry) => comparePoints(entry, checkpoint) > 0)
-          .sort((a, b) => comparePoints(a, b))
-          .slice(-RETURNED_CAP);
-        const after = { checkpoint, readThrough, returned };
-        // Invariant on every write: the delivered checkpoint never passes the read fence.
-        if (checkpoint && (readThrough === null || comparePoints(checkpoint, readThrough) > 0)) {
-          throw new DeliveryCheckpointError(paths.file, 'a write would move the checkpoint beyond the read fence');
-        }
-        if (before && JSON.stringify(before) === JSON.stringify(after)) return { before, after: before };
-        await guard?.();
-        await validatePrivateDirectory(paths.directory, true);
-        await atomicWrite0600(paths.file, JSON.stringify({ version: 1, seat, ...after }) + '\n', options);
-        return { before, after };
-      };
-      const result = (queues.get(paths.file) ?? Promise.resolve()).then(run, run);
-      queues.set(paths.file, result.catch(() => {}));
-      return result;
-    },
+    start: { id: row.start_id!, created_at: row.start_at! },
+    startKind: row.start_kind as StartKind,
+    checkpoint: point(row.checkpoint_id, row.checkpoint_at),
+    readThrough: point(row.read_through_id, row.read_through_at),
+    returned,
   };
+}
+
+/**
+ * Where a scan starts: the server cursor (null = the log start) and the floor
+ * every entry must exceed. A binding start is a synthetic lower bound that is
+ * never sent to the server as a cursor.
+ */
+export function scanStart(state: DeliveryState): { cursor: LocalServerCursor | null; floor: LocalServerCursor } {
+  const floor = later(state.start, state.checkpoint)!;
+  if (state.checkpoint) return { cursor: state.checkpoint, floor };
+  return { cursor: state.startKind === 'binding' ? null : state.start, floor };
+}
+
+function write(db: Transaction, generation: string, next: DeliveryState): void {
+  if (next.checkpoint && (next.readThrough === null || comparePoints(next.checkpoint, next.readThrough) > 0)) {
+    throw new Error('A representative state write would move the checkpoint beyond the read fence');
+  }
+  db.prepare(`UPDATE delivery SET checkpoint_id = ?, checkpoint_at = ?, read_through_id = ?, read_through_at = ?
+    WHERE generation = ?`).run(
+    next.checkpoint?.id ?? null, next.checkpoint?.created_at ?? null,
+    next.readThrough?.id ?? null, next.readThrough?.created_at ?? null, generation);
+  db.prepare('DELETE FROM returned WHERE generation = ?').run(generation);
+  const insert = db.prepare('INSERT INTO returned (generation, entry_id, created_at) VALUES (?, ?, ?)');
+  for (const entry of next.returned) insert.run(generation, entry.id, entry.created_at);
+  db.prepare('DELETE FROM wake_replies WHERE generation = ? AND (created_at < ? OR (created_at = ? AND entry_id <= ?))')
+    .run(generation, next.checkpoint?.created_at ?? '', next.checkpoint?.created_at ?? '', next.checkpoint?.id ?? '');
+}
+
+/** Widen the read fence and the returned set (monotonic; pruned to entries after the checkpoint). */
+export function widenReadWindow(db: Transaction, generation: string, window: LocalServerCursor[]): void {
+  const before = loadDelivery(db, generation);
+  if (!before || window.length === 0) return;
+  const returned = [...before.returned, ...window]
+    .filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index)
+    .filter((entry) => comparePoints(entry, before.checkpoint) > 0)
+    .sort((a, b) => comparePoints(a, b))
+    .slice(-RETURNED_CAP);
+  write(db, generation, { ...before, readThrough: later(before.readThrough, window.at(-1)!), returned });
+}
+
+/** Move the delivered checkpoint forward (never back); prunes the returned set and wake records. */
+export function advanceCheckpoint(db: Transaction, generation: string, to: LocalServerCursor): {
+  before: DeliveryState; after: DeliveryState;
+} {
+  const before = loadDelivery(db, generation);
+  if (!before) throw new Error('No representative delivery state for this generation');
+  const checkpoint = later(before.checkpoint, to);
+  const after = { ...before, checkpoint, returned: before.returned.filter((entry) => comparePoints(entry, checkpoint) > 0) };
+  write(db, generation, after);
+  return { before, after };
+}
+
+export interface EnsureStateContext {
+  binding: RepresentativeBinding;
+  store: RepresentativeStore;
+  /** The newest log position on the bound server, or null for an empty log. Called outside any transaction. */
+  serverHead(): Promise<LocalServerCursor | null>;
+}
+
+/**
+ * Make sure the binding's generation has its binding row and delivery row,
+ * creating them on first use with the start rule:
+ *   1. a valid 5.x checkpoint for this generation, non-null → that checkpoint;
+ *   2. a valid 5.x checkpoint that is null → the binding start;
+ *   3. history enumerable and empty (no tombstone, no checkpoint for any
+ *      generation of the seat in 5.x files or in this database) → the server
+ *      head (the binding start for an empty log);
+ *   4. anything else → the binding start (replays; never skips).
+ * Network and file reads run before the creating transaction, which re-checks
+ * only local facts.
+ */
+export async function ensureDeliveryState(ctx: EnsureStateContext): Promise<void> {
+  const generation = bindingFingerprint(ctx.binding);
+  const seat = seatKey(ctx.binding);
+  const probe = await ctx.store.state.transact((db) => {
+    const row = currentBindingRow(db, ctx.binding.worktree);
+    if (row && row.generation !== generation) throw new RepresentativeGenerationError();
+    if (row && loadDelivery(db, generation)) return 'ready' as const;
+    // A binding this version prepared always starts at its binding start: every
+    // reply after it was bound is delivered, and nothing older was ever tracked.
+    if (row?.origin === 'prepared') return 'prepared' as const;
+    const seatHistory = db.prepare('SELECT 1 AS present FROM delivery WHERE seat = ? LIMIT 1').get(seat) !== undefined;
+    return seatHistory ? 'history' as const : 'none' as const;
+  });
+  if (probe === 'ready') return;
+
+  const bindingStart = { id: NIL_UUID, created_at: ctx.binding.boundAt };
+  let kind: StartKind = 'binding';
+  let start: LocalServerCursor = bindingStart;
+  let checkpoint: LocalServerCursor | null = null;
+  const legacy = probe === 'prepared'
+    ? { checkpoint: { kind: 'absent' as const }, history: 'present' as const }
+    : await readLegacyDelivery(ctx.binding);
+  if (legacy.checkpoint.kind === 'valid' && legacy.checkpoint.checkpoint) {
+    kind = 'checkpoint';
+    start = legacy.checkpoint.checkpoint;
+    checkpoint = legacy.checkpoint.checkpoint;
+  } else if (legacy.checkpoint.kind !== 'valid' && legacy.history === 'empty' && probe === 'none') {
+    const head = await ctx.serverHead();
+    if (head) { kind = 'head'; start = head; }
+  }
+
+  await ctx.store.state.transact((db) => {
+    const row = currentBindingRow(db, ctx.binding.worktree);
+    if (row && row.generation !== generation) throw new RepresentativeGenerationError();
+    if (!row) insertBindingRow(db, ctx.binding, seat, 'legacy');
+    if (loadDelivery(db, generation)) return;
+    // A concurrent first use of another generation of this seat made history
+    // appear: never start at the head then.
+    const historyNow = db.prepare('SELECT 1 AS present FROM delivery WHERE seat = ? LIMIT 1').get(seat) !== undefined;
+    if (kind === 'head' && historyNow) { kind = 'binding'; start = bindingStart; }
+    db.prepare(`INSERT INTO delivery (generation, seat, start_id, start_at, start_kind, checkpoint_id, checkpoint_at,
+      read_through_id, read_through_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      generation, seat, start.id, start.created_at, kind,
+      checkpoint?.id ?? null, checkpoint?.created_at ?? null, checkpoint?.id ?? null, checkpoint?.created_at ?? null);
+  });
 }

@@ -5,7 +5,7 @@
  * is evidence of acceptance by a real Borg server.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -19,6 +19,7 @@ import {
 } from './fixtures/representative-mock-backend.js';
 import { RepresentativeError, type RepresentativeContext } from '../src/representative-core.js';
 import { createRepresentativeStore } from '../src/representative-store.js';
+import { readCurrent, representativeStateRoot } from '../src/representative-db.js';
 import { REPRESENTATIVE_TOOL_NAMES, serveRepresentativeMcp } from '../src/representative-mcp.js';
 
 const originalHome = process.env.HOME;
@@ -27,7 +28,6 @@ const WORKTREE = '/work/hermes-representative';
 const REQUEST_ID = '0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b';
 let root: string;
 let cube: MockCube;
-let storePath: string;
 
 class StdioClient {
   readonly stdin = new PassThrough();
@@ -82,12 +82,19 @@ class StdioClient {
   }
 }
 
+/** `prepare` for the default binding: its 6.x binding row. */
+async function prepared(): Promise<void> {
+  const store = createRepresentativeStore();
+  await store.saveBinding(bindingFor(WORKTREE), { rebind: false });
+  store.state.close();
+}
+
 async function connect(context?: () => Promise<RepresentativeContext>) {
   const client = new StdioClient();
   const provider = context ?? (async () => ({
     binding: bindingFor(WORKTREE),
     backend: cube.backend(),
-    store: createRepresentativeStore(storePath),
+    store: createRepresentativeStore(),
   }));
   const server = await serveRepresentativeMcp({
     context: provider,
@@ -102,7 +109,6 @@ beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-representative-mcp-')));
   process.env.HOME = root;
   process.env.BORG_STATE_ROOT = root;
-  storePath = join(root, '.config', 'borgmcp', 'representative.json');
   cube = new MockCube();
 });
 
@@ -284,6 +290,7 @@ describe('representative stdio MCP (mock backend)', () => {
 
   it('replays an undelivered reply until deliver, with no by-id read path', async () => {
     const entry = cube.post(COORD_ID, 'A reply to relay now', [REP_ID]);
+    await prepared();
     const { client, server } = await connect();
     const init = await client.initialize();
     const read = await client.call('borg_representative-read', {});
@@ -298,12 +305,11 @@ describe('representative stdio MCP (mock backend)', () => {
     await server.close();
   });
 
-  it('refuses every tool except status while the delivery checkpoint file is invalid', async () => {
-    const { deliveryPaths } = await import('../src/representative-delivery-store.js');
-    const { directory, file } = deliveryPaths(bindingFor(WORKTREE));
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    for (let current = directory; current.startsWith(join(root, '.config')); current = join(current, '..')) chmodSync(current, 0o700);
-    writeFileSync(file, JSON.stringify({ version: 1, seat: 'f'.repeat(64), checkpoint: null, readThrough: null }), { mode: 0o600 });
+  it('refuses every tool except status while the state database is corrupt, and names reset-state', async () => {
+    await prepared();
+    const stateRoot = representativeStateRoot();
+    const database = join(stateRoot, readCurrent(stateRoot)!, 'state.sqlite');
+    writeFileSync(database, Buffer.alloc(8192, 0x5a)); // not a database any more; mode stays 0600
     const reply = cube.post(COORD_ID, 'reply', [REP_ID]);
     const { client, server } = await connect();
     await client.initialize();
@@ -315,13 +321,14 @@ describe('representative stdio MCP (mock backend)', () => {
     ] as const) {
       const refused = await client.call(name, args);
       expect(refused.isError).toBe(true);
-      expect(refused.body.error.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
+      expect(refused.body.error.code).toBe('REPRESENTATIVE_STATE_CORRUPT');
+      expect(refused.body.error.message).toContain('borg representative reset-state');
     }
     expect(cube.appendCalls).toHaveLength(0);
     expect(cube.acks).toEqual([]);
     const status = await client.call('borg_representative-status');
     expect(status.isError).toBe(false);
-    expect(status.body.checkpoint_problem.code).toBe('REPRESENTATIVE_CHECKPOINT_INVALID');
+    expect(status.body.state_problem.code).toBe('REPRESENTATIVE_STATE_CORRUPT');
     await server.close();
   });
 

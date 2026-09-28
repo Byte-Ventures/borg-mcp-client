@@ -20,15 +20,15 @@ export interface ServeRepresentativeOptions {
     context: () => Promise<RepresentativeContext>;
     /**
      * The binding generation this process started with. Every call except status
-     * refuses with BINDING_MISMATCH, before any lease, ledger, checkpoint, cursor
-     * or network activity, once the saved binding's fingerprint differs.
+     * refuses with BINDING_MISMATCH, before any ledger, delivery or network
+     * activity, once the saved binding's fingerprint differs.
      */
     pinnedFingerprint?: string;
     version: string;
     stdin?: Readable;
     stdout?: Writable;
-    /** Internal timing seam for heartbeat controls; production uses 20 seconds. */
-    heartbeatIntervalMs?: number;
+    /** Called once on shutdown (closes the state database handle). */
+    onClose?: () => void;
 }
 export declare function serveRepresentativeMcp(options: ServeRepresentativeOptions): Promise<{
     close: () => Promise<void>;

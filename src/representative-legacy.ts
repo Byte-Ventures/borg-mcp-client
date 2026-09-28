@@ -1,0 +1,178 @@
+/**
+ * The only reads of borgmcp 5.x representative files (decision
+ * clean-slate-no-backwards-compat): when 6.x first creates a worktree's state
+ * it reads that worktree's binding and decides the delivery start from the 5.x
+ * delivered checkpoint, the seat tombstone and sibling generations. Nothing
+ * here writes, and nothing else ever reads these files.
+ *
+ * Every file read uses the private-file checks of the 5.x loaders: a secure
+ * root, lstat, no-follow, owner, mode, a regular file and a size cap.
+ */
+import { createHash } from 'node:crypto';
+import { lstat, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { borgConfigRoot } from './private-root.js';
+import { readStoreFile } from './seat-store.js';
+import { validatePrivateDirectory } from './representative-listener-store.js';
+import { bindingFingerprint, isRepresentativeUuid, parseBinding, type RepresentativeBinding } from './representative-store.js';
+import type { LocalServerCursor } from './local-server-cursor.js';
+
+const LEGACY_FILE_CAP_BYTES = 1024 * 1024;
+
+export function legacyStorePath(): string {
+  return join(borgConfigRoot(), 'representative.json');
+}
+
+function legacyDeliveryRoot(): string {
+  return join(borgConfigRoot(), 'representative-delivery');
+}
+
+/** The 5.x per-seat key: the same fields as the client unread-cursor key. */
+export function seatKey(binding: Pick<RepresentativeBinding, 'origin' | 'trustIdentity' | 'cubeId' | 'representativeDroneId'>): string {
+  return createHash('sha256').update(JSON.stringify([
+    binding.origin, binding.trustIdentity, binding.cubeId, binding.representativeDroneId,
+  ])).digest('hex');
+}
+
+async function readCapped(path: string, secureRoot: string): Promise<string | null> {
+  try {
+    const metadata = await lstat(path);
+    if (metadata.isFile() && metadata.size > LEGACY_FILE_CAP_BYTES) throw new Error(`${path} exceeds ${LEGACY_FILE_CAP_BYTES} bytes`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  return readStoreFile(path, { secureRoot, verifyLeafIdentity: true, createRoot: false });
+}
+
+/** The worktree's 5.x binding, or null. An unreadable or invalid file yields null (not prepared). */
+export async function readLegacyBinding(worktree: string): Promise<RepresentativeBinding | null> {
+  let raw: string | null;
+  try {
+    raw = await readCapped(legacyStorePath(), borgConfigRoot());
+  } catch {
+    return null;
+  }
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as { version?: unknown; bindings?: Record<string, unknown> };
+    if (parsed?.version !== 1 || parsed.bindings === null || typeof parsed.bindings !== 'object') return null;
+    return parseBinding(parsed.bindings[worktree], worktree);
+  } catch {
+    return null;
+  }
+}
+
+/** Every 5.x binding (for listings). Unreadable input yields none. */
+export async function readLegacyBindings(): Promise<RepresentativeBinding[]> {
+  let raw: string | null;
+  try {
+    raw = await readCapped(legacyStorePath(), borgConfigRoot());
+  } catch {
+    return [];
+  }
+  if (raw === null) return [];
+  try {
+    const parsed = JSON.parse(raw) as { version?: unknown; bindings?: Record<string, unknown> };
+    if (parsed?.version !== 1 || parsed.bindings === null || typeof parsed.bindings !== 'object') return [];
+    return Object.entries(parsed.bindings)
+      .map(([key, value]) => parseBinding(value, key))
+      .filter((binding): binding is RepresentativeBinding => binding !== null);
+  } catch {
+    return [];
+  }
+}
+
+function parsePoint(value: unknown): LocalServerCursor | null {
+  if (value === null) return null;
+  const candidate = value as { id?: unknown; created_at?: unknown } | undefined;
+  if (!isRepresentativeUuid(candidate?.id) || typeof candidate?.created_at !== 'string' ||
+      !Number.isFinite(Date.parse(candidate.created_at))) {
+    throw new Error('invalid point');
+  }
+  return { id: candidate.id, created_at: candidate.created_at };
+}
+
+type CheckpointRead =
+  | { kind: 'absent' }
+  | { kind: 'valid'; seat: string; checkpoint: LocalServerCursor | null }
+  | { kind: 'invalid' };
+
+async function readCheckpointFile(directory: string, seat: string | null): Promise<CheckpointRead> {
+  try {
+    if (!await validatePrivateDirectory(directory, false)) return { kind: 'absent' };
+  } catch {
+    return { kind: 'invalid' };
+  }
+  let raw: string | null;
+  try {
+    raw = await readCapped(join(directory, 'checkpoint.json'), directory);
+  } catch {
+    return { kind: 'invalid' };
+  }
+  if (raw === null) return { kind: 'absent' };
+  try {
+    const parsed = JSON.parse(raw) as { version?: unknown; seat?: unknown; checkpoint?: unknown; readThrough?: unknown };
+    if (parsed?.version !== 1 || typeof parsed.seat !== 'string') return { kind: 'invalid' };
+    if (seat !== null && parsed.seat !== seat) return { kind: 'invalid' };
+    const checkpoint = parsePoint(parsed.checkpoint ?? null);
+    const readThrough = parsePoint(parsed.readThrough ?? null);
+    if (checkpoint && (readThrough === null || checkpoint.created_at > readThrough.created_at ||
+        (checkpoint.created_at === readThrough.created_at && checkpoint.id > readThrough.id))) {
+      return { kind: 'invalid' };
+    }
+    return { kind: 'valid', seat: parsed.seat, checkpoint };
+  } catch {
+    return { kind: 'invalid' };
+  }
+}
+
+/**
+ * What 5.x delivery left for this binding's generation and seat.
+ * - `checkpoint`: the current generation's checkpoint file (absent, valid, invalid).
+ * - `history`: 'empty' only when the delivery root is absent or listable, no
+ *   seat tombstone exists and no sibling generation names this seat;
+ *   'present' when one exists; 'unknown' when anything cannot be read. Unknown
+ *   is never treated as absent.
+ */
+export async function readLegacyDelivery(binding: RepresentativeBinding): Promise<{
+  checkpoint: CheckpointRead;
+  history: 'empty' | 'present' | 'unknown';
+}> {
+  const root = legacyDeliveryRoot();
+  const seat = seatKey(binding);
+  const own = bindingFingerprint(binding);
+  const checkpoint = await readCheckpointFile(join(root, own), seat);
+  let rootPresent: boolean;
+  try {
+    rootPresent = await validatePrivateDirectory(root, false);
+  } catch {
+    return { checkpoint, history: 'unknown' };
+  }
+  if (!rootPresent) {
+    try {
+      await lstat(root);
+      return { checkpoint, history: 'unknown' }; // present but not a safe directory
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { checkpoint, history: 'unknown' };
+      return { checkpoint, history: 'empty' };
+    }
+  }
+  let names: string[];
+  try {
+    names = await readdir(root);
+  } catch {
+    return { checkpoint, history: 'unknown' };
+  }
+  let unknown = false;
+  const tombstone = `seat-${seat}`;
+  if (names.includes(tombstone)) return { checkpoint, history: 'present' };
+  for (const name of names) {
+    if (!/^[0-9a-f]{64}$/.test(name) || name === own) continue;
+    const sibling = await readCheckpointFile(join(root, name), null);
+    if (sibling.kind === 'valid' && sibling.seat === seat) return { checkpoint, history: 'present' };
+    if (sibling.kind === 'invalid') unknown = true;
+  }
+  if (checkpoint.kind !== 'absent') return { checkpoint, history: 'present' };
+  return { checkpoint, history: unknown ? 'unknown' : 'empty' };
+}

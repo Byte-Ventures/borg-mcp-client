@@ -15,7 +15,8 @@ import {
   sendRepresentativeMessage,
   type RepresentativeContext,
 } from '../src/representative-core.js';
-import { createRepresentativeStore } from '../src/representative-store.js';
+import { bindingFingerprint, createRepresentativeStore } from '../src/representative-store.js';
+import { stateInitialized, withStateDb } from './fixtures/representative-state.js';
 import { DroneEvictedError } from '../src/drone-lifecycle.js';
 import {
   BorgProtocolMismatchError,
@@ -29,16 +30,15 @@ const originalHome = process.env.HOME;
 const WORKTREE = '/work/hermes-representative';
 const REQUEST_ID = '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c';
 let root: string;
-let storePath: string;
 let cube: MockCube;
 let ctx: RepresentativeContext;
 
-beforeEach(() => {
+beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'borg-representative-safety-')));
   process.env.HOME = root;
-  storePath = join(root, '.config', 'borgmcp', 'representative.json');
   cube = new MockCube();
-  ctx = { binding: bindingFor(WORKTREE), backend: cube.backend(), store: createRepresentativeStore(storePath) };
+  ctx = { binding: bindingFor(WORKTREE), backend: cube.backend(), store: createRepresentativeStore() };
+  await ctx.store.saveBinding(ctx.binding, { rebind: false });
 });
 
 afterEach(() => {
@@ -62,13 +62,10 @@ it('returns an omitted request id on 429 so the caller can retry that id', async
   expect(cube.appendCalls.map((call) => call.postId)).toEqual([requestId, requestId]);
   expect(cube.entries).toHaveLength(1);
 });
-const ledger = () => {
-  try {
-    return (JSON.parse(readFileSync(storePath, 'utf8')).requests[WORKTREE] ?? []) as Array<{ requestId: string; state: string }>;
-  } catch {
-    return [];
-  }
-};
+const ledger = () => stateInitialized()
+  ? withStateDb((db) => (db.prepare('SELECT record FROM requests WHERE generation = ? ORDER BY seq').all(bindingFingerprint(ctx.binding)) as
+    Array<{ record: string }>).map((row) => JSON.parse(row.record) as { requestId: string; state: string }))
+  : [];
 
 async function failure(promise: Promise<unknown>): Promise<RepresentativeError> {
   try {

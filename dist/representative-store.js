@@ -1,21 +1,23 @@
 /**
- * Private on-disk state for the human representative connection.
+ * The human representative's bindings and request ledger, stored in the
+ * representative state database (representative-db.ts).
  *
- * One 0600 file under the Borg config root holds, per representative worktree:
- * - the BINDING: the one explicit cube + Coordinator drone this worktree's
- *   dedicated seat may talk to. Changing it requires an explicit operator rebind.
- * - the REQUEST LEDGER: one record per sent request id, so a retry never becomes
- *   a second message and an ambiguous send survives a reconnect.
+ * - The BINDING: the one explicit cube + Coordinator drone a worktree's
+ *   dedicated seat may talk to. Changing it requires an explicit operator
+ *   rebind, which starts a new generation (binding_fingerprint).
+ * - The REQUEST LEDGER, per generation: one record per sent request id, so a
+ *   retry never becomes a second message and an ambiguous send survives a
+ *   reconnect.
  *
- * The file never holds a bearer (the seat store owns credentials) and never
- * holds message text (only a payload digest).
+ * Nothing here holds a bearer or message text (only a payload digest). The
+ * only 5.x input is a worktree's binding, read once by representative-legacy.ts
+ * while no 6.x row exists (decision clean-slate-no-backwards-compat).
  */
 import { decodeUuid } from 'borgmcp-shared/protocol';
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
-import { borgConfigRoot } from './private-root.js';
 import { shellEscape } from './shell-escape.js';
-import { readStoreFile, withStore } from './seat-store.js';
+import { createRepresentativeState } from './representative-db.js';
+import { readLegacyBinding, readLegacyBindings, seatKey } from './representative-legacy.js';
 export function isRepresentativeUuid(value) {
     try {
         decodeUuid(value);
@@ -49,6 +51,13 @@ export class RepresentativeStoreError extends Error {
         this.name = 'RepresentativeStoreError';
     }
 }
+export class RepresentativeGenerationError extends Error {
+    code = 'BINDING_MISMATCH';
+    constructor(message = 'The operator rebound this representative connection while this operation ran. Nothing was changed; restart the host connection to use the new binding.') {
+        super(message);
+        this.name = 'RepresentativeGenerationError';
+    }
+}
 const BINDING_STRING_FIELDS = [
     'worktree', 'origin', 'trustIdentity', 'cubeId', 'cubeName',
     'representativeDroneId', 'representativeLabel', 'representativeRoleName',
@@ -66,6 +75,22 @@ function validBinding(value, key) {
         binding.representativeDroneId !== binding.coordinatorDroneId &&
         (binding.repositoryOrigin === undefined || typeof binding.repositoryOrigin === 'string');
 }
+/** A binding read from any untrusted source: validated exactly as `prepare` saves one, or null. */
+export function parseBinding(value, worktree) {
+    if (!validBinding(value, worktree))
+        return null;
+    const binding = value;
+    return {
+        worktree: binding.worktree, origin: binding.origin, trustIdentity: binding.trustIdentity,
+        cubeId: binding.cubeId, cubeName: binding.cubeName,
+        representativeDroneId: binding.representativeDroneId, representativeLabel: binding.representativeLabel,
+        representativeRoleName: binding.representativeRoleName,
+        coordinatorDroneId: binding.coordinatorDroneId, coordinatorLabel: binding.coordinatorLabel,
+        coordinatorRoleName: binding.coordinatorRoleName,
+        ...(binding.repositoryOrigin !== undefined ? { repositoryOrigin: binding.repositoryOrigin } : {}),
+        boundAt: binding.boundAt,
+    };
+}
 function validRequest(value) {
     if (value === null || typeof value !== 'object' || Array.isArray(value))
         return false;
@@ -80,23 +105,6 @@ function validRequest(value) {
         typeof record.createdAt === 'string' &&
         typeof record.updatedAt === 'string';
 }
-function parseFile(raw) {
-    const parsed = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== 'object' || parsed.version !== 1 ||
-        parsed.bindings === null || typeof parsed.bindings !== 'object' || Array.isArray(parsed.bindings) ||
-        parsed.requests === null || typeof parsed.requests !== 'object' || Array.isArray(parsed.requests))
-        return null;
-    for (const [key, binding] of Object.entries(parsed.bindings)) {
-        if (!validBinding(binding, key))
-            return null;
-    }
-    for (const records of Object.values(parsed.requests)) {
-        if (!Array.isArray(records) || !records.every(validRequest))
-            return null;
-    }
-    return parsed;
-}
-const emptyFile = () => ({ version: 1, bindings: {}, requests: {} });
 function sameSelection(a, b) {
     return a.origin === b.origin &&
         a.trustIdentity === b.trustIdentity &&
@@ -112,60 +120,126 @@ function pruneSettled(records) {
     const drop = new Set(settled.slice(0, settled.length - SETTLED_REQUEST_LIMIT).map((record) => record.requestId));
     return records.filter((record) => !drop.has(record.requestId));
 }
-export function representativeStorePath() {
-    return join(borgConfigRoot(), 'representative.json');
+/** The worktree's CURRENT binding row inside a transaction, or null. */
+export function currentBindingRow(db, worktree) {
+    const row = db.prepare('SELECT binding, generation, origin FROM bindings WHERE worktree = ?').get(worktree);
+    if (!row)
+        return null;
+    const binding = parseBinding(JSON.parse(row.binding), worktree);
+    if (!binding || bindingFingerprint(binding) !== row.generation) {
+        throw new Error(`The representative state holds an invalid binding row for ${worktree}`);
+    }
+    return { binding, generation: row.generation, origin: row.origin };
 }
-export function createRepresentativeStore(storePath = representativeStorePath()) {
-    // Atomic writer renames make a single read a complete snapshot, without a
-    // store-lock write or pruning settled history during read-only status.
-    const read = async () => {
-        const raw = await readStoreFile(storePath);
-        if (raw === null)
-            return emptyFile();
-        let data;
-        try {
-            data = parseFile(raw);
-        }
-        catch {
-            data = null;
-        }
-        if (!data)
-            throw new Error('Borg representative store is malformed or unsupported; refusing to read it');
-        return data;
+/** Refuse unless `binding`'s generation is the worktree's CURRENT one (inside the same transaction). */
+export function requireCurrentGeneration(db, binding) {
+    const generation = bindingFingerprint(binding);
+    const current = currentBindingRow(db, binding.worktree);
+    if (!current || current.generation !== generation)
+        throw new RepresentativeGenerationError();
+    return generation;
+}
+/**
+ * `origin`: 'prepared' for a binding created by this version's `prepare`
+ * (its delivery starts at the binding start), 'legacy' for a 5.x binding
+ * imported on first use (its start follows the 5.x delivery evidence).
+ */
+/**
+ * A binding generation belongs to exactly one worktree: its fingerprint names
+ * no worktree, so two rows with one generation would share delivery and ledger
+ * state. A second worktree claiming it refuses (the schema enforces it too).
+ */
+export function insertBindingRow(db, binding, seat, origin) {
+    const generation = bindingFingerprint(binding);
+    const holder = db.prepare('SELECT worktree FROM bindings WHERE generation = ?').get(generation);
+    if (holder && holder.worktree !== binding.worktree) {
+        throw new RepresentativeStoreError('BINDING_CONFLICT', `Representative drone ${binding.representativeLabel} is already bound to Coordinator ${binding.coordinatorLabel} in worktree ` +
+            `${holder.worktree} with the same binding generation. Prepare this worktree with its own representative seat.`);
+    }
+    db.prepare('INSERT INTO bindings (worktree, generation, seat, origin, binding) VALUES (?, ?, ?, ?, ?)')
+        .run(binding.worktree, generation, seat, origin, JSON.stringify(binding));
+}
+function loadRequests(db, generation) {
+    const rows = db.prepare('SELECT record FROM requests WHERE generation = ? ORDER BY seq').all(generation);
+    return rows.map((row) => {
+        const record = JSON.parse(row.record);
+        if (!validRequest(record))
+            throw new Error('The representative state holds an invalid request record');
+        return record;
+    });
+}
+function storeRequests(db, generation, records) {
+    db.prepare('DELETE FROM requests WHERE generation = ?').run(generation);
+    const insert = db.prepare('INSERT INTO requests (generation, seq, request_id, record) VALUES (?, ?, ?, ?)');
+    records.forEach((record, index) => insert.run(generation, index, record.requestId, JSON.stringify(record)));
+}
+export function createRepresentativeStore(overrides = {}) {
+    const deps = {
+        state: overrides.state ?? createRepresentativeState(),
+        readLegacyBinding: overrides.readLegacyBinding ?? readLegacyBinding,
+        readLegacyBindings: overrides.readLegacyBindings ?? readLegacyBindings,
+        seatKey: overrides.seatKey ?? seatKey,
     };
+    const readRow = async (worktree) => deps.state.readOnly((db) => currentBindingRow(db, worktree)?.binding ?? null);
     return {
-        getBinding: async (worktree) => (await read()).bindings[worktree] ?? null,
-        readRequests: async (worktree) => (await read()).requests[worktree] ?? [],
-        saveBinding: (binding, options) => withStore(storePath, emptyFile, parseFile, async (txn) => {
+        state: deps.state,
+        getBinding: async (worktree) => (await readRow(worktree)) ?? deps.readLegacyBinding(worktree),
+        listBindings: async () => {
+            const rows = await deps.state.readOnly((db) => db.prepare('SELECT worktree FROM bindings').all()
+                .map((row) => currentBindingRow(db, row.worktree).binding)) ?? [];
+            const known = new Set(rows.map((binding) => binding.worktree));
+            return [...rows, ...(await deps.readLegacyBindings()).filter((binding) => !known.has(binding.worktree))];
+        },
+        readRequests: async (worktree) => (await deps.state.readOnly((db) => {
+            const current = currentBindingRow(db, worktree);
+            return current ? loadRequests(db, current.generation) : [];
+        })) ?? [],
+        saveBinding: async (binding, options) => {
             if (!validBinding(binding, binding.worktree)) {
                 throw new Error('Refusing to save an invalid representative binding');
             }
-            const existing = txn.data.bindings[binding.worktree];
-            // An explicit rebind always starts a new generation (new boundAt, so a new
-            // binding_fingerprint), even for the same selection.
-            if (existing && sameSelection(existing, binding) && !options.rebind)
-                return 'unchanged';
-            if (existing && !options.rebind) {
-                throw new RepresentativeStoreError('BINDING_CONFLICT', `This worktree is already bound to Coordinator ${existing.coordinatorLabel} in cube ${existing.cubeName}. ` +
-                    `To confirm the new selection, run \`${representativeRecoveryCommand(binding)}\`.`);
+            // The 5.x binding is the existing selection only while no 6.x row exists.
+            const legacy = await deps.readLegacyBinding(binding.worktree);
+            return deps.state.transact((db) => {
+                const row = currentBindingRow(db, binding.worktree);
+                const existing = row?.binding ?? legacy;
+                // An explicit rebind always starts a new generation (new boundAt, so a new
+                // binding_fingerprint), even for the same selection.
+                if (existing && sameSelection(existing, binding) && !options.rebind) {
+                    if (!row)
+                        insertBindingRow(db, existing, deps.seatKey(existing), legacy === existing ? 'legacy' : 'prepared');
+                    return 'unchanged';
+                }
+                if (existing && !options.rebind) {
+                    throw new RepresentativeStoreError('BINDING_CONFLICT', `This worktree is already bound to Coordinator ${existing.coordinatorLabel} in cube ${existing.cubeName}. ` +
+                        `To confirm the new selection, run \`${representativeRecoveryCommand(binding)}\`.`);
+                }
+                const carried = row && sameSelection(row.binding, binding) ? loadRequests(db, row.generation) : [];
+                db.prepare('DELETE FROM bindings WHERE worktree = ?').run(binding.worktree);
+                insertBindingRow(db, binding, deps.seatKey(binding), 'prepared');
+                // The same selection keeps its ledger (so unresolved sends keep blocking
+                // identical content); a different selection starts with none.
+                if (carried.length > 0)
+                    storeRequests(db, bindingFingerprint(binding), carried);
+                return existing ? 'rebound' : 'created';
+            });
+        },
+        transactRequests: (binding, op, options = {}) => deps.state.transact((db) => {
+            let generation;
+            try {
+                generation = requireCurrentGeneration(db, binding);
             }
-            txn.data.bindings[binding.worktree] = binding;
-            // A different selection invalidates the old ledger: its post ids belong to
-            // another cube/Coordinator conversation.
-            if (existing && !sameSelection(existing, binding))
-                delete txn.data.requests[binding.worktree];
-            await txn.commit();
-            return existing ? 'rebound' : 'created';
-        }),
-        transactRequests: (worktree, op) => withStore(storePath, emptyFile, parseFile, async (txn) => {
-            const records = txn.data.requests[worktree] ?? [];
+            catch (error) {
+                if (options.onStale === 'skip' && error instanceof RepresentativeGenerationError)
+                    return undefined;
+                throw error;
+            }
+            const records = loadRequests(db, generation);
             const before = JSON.stringify(records);
             const result = op(records);
             const next = pruneSettled(records);
-            if (JSON.stringify(next) !== before) {
-                txn.data.requests[worktree] = next;
-                await txn.commit();
-            }
+            if (JSON.stringify(next) !== before)
+                storeRequests(db, generation, next);
             return result;
         }),
     };

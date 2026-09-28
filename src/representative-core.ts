@@ -25,11 +25,11 @@ import {
   BorgServerTrustError,
   BorgServerUnreachableError,
 } from './server-errors.js';
-import { bindingFingerprint, representativeRecoveryCommand, isRepresentativeUuid, type RepresentativeBinding, type RepresentativeStore } from './representative-store.js';
-import { comparePoints, createDeliveryStore, type DeliveryState } from './representative-delivery-store.js';
-import { readPrivateLocalServerCursor, type LocalServerCursor } from './local-server-cursor.js';
-import { validatePrivateDirectory } from './representative-listener-store.js';
-import { borgConfigRoot } from './private-root.js';
+import { bindingFingerprint, representativeRecoveryCommand, isRepresentativeUuid, requireCurrentGeneration, type RepresentativeBinding, type RepresentativeRequestState, type RepresentativeStore } from './representative-store.js';
+import {
+  advanceCheckpoint, comparePoints, ensureDeliveryState, loadDelivery, scanStart, widenReadWindow,
+} from './representative-delivery-store.js';
+import type { LocalServerCursor } from './local-server-cursor.js';
 
 const UUID_SCAN_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 export const REPRESENTATIVE_MESSAGE_LIMIT_BYTES = 3000;
@@ -38,7 +38,7 @@ export const REPRESENTATIVE_DELIVERY_NOTE =
   'read returns undelivered replies without consuming them; persist, route by in_reply_to (unknown: hold for the ' +
   'human), then deliver through the last persisted entry_id. ack only notifies the Coordinator. A separate ' +
   'borg representative listen process emits body-free wake hints. One process at a time owns send/read/deliver/ack; ' +
-  'status is read-only. Stop routing if binding_fingerprint changes.';
+  'status is read-only. Any number of host processes may use these tools at once. Stop routing if binding_fingerprint changes.';
 
 export type RepresentativeErrorCode =
   | typeof ErrorCode.INVALID_INPUT
@@ -46,7 +46,6 @@ export type RepresentativeErrorCode =
   | 'REQUEST_ID_CONFLICT'
   | 'AMBIGUOUS_SEND_UNRESOLVED'
   | 'SEND_REJECTED'
-  | 'REPRESENTATIVE_OWNERSHIP_REQUIRED'
   | 'NOT_PREPARED'
   | 'SEAT_UNAVAILABLE'
   | 'BINDING_MISMATCH'
@@ -63,7 +62,6 @@ export type RepresentativeErrorCode =
   | 'REPRESENTATIVE_READ_OVERSIZE';
 
 export interface RepresentativeErrorDetails {
-  owner?: import('./stream-owner.js').StreamOwnershipSnapshot;
   request_id?: string;
   cause_code?: string;
   cause_message?: string;
@@ -106,9 +104,7 @@ export interface RepresentativeBackend {
    * One stateless page of the cube log strictly after an exact (created_at, id)
    * cursor, ascending. Reads and advances no unread cursor; never digest mode.
    */
-  readAfter(cursor: LocalServerCursor | null, limit: number, continuationGuard?: () => Promise<void>): Promise<{ entries: LogEntry[]; has_more?: boolean }>;
-  /** This seat's client-owned unread cursor, read only; the slice 2 migration input. */
-  unreadCursor(): Promise<LocalServerCursor | null>;
+  readAfter(cursor: LocalServerCursor | null, limit: number): Promise<{ entries: LogEntry[]; has_more?: boolean }>;
   readEntry(entryId: string): Promise<{ entry: LogEntry }>;
   ack(entryId: string): Promise<void>;
 }
@@ -118,8 +114,6 @@ export interface RepresentativeContext {
   backend: RepresentativeBackend;
   store: RepresentativeStore;
   now?: () => Date;
-  /** Checked immediately before each private delivery-state write (the tools lease in MCP). */
-  guard?: () => Promise<void>;
 }
 
 /** Real backend: the existing seat-scoped client calls for one hydrated seat. */
@@ -133,20 +127,8 @@ export async function createSeatBackend(active: ActiveCube): Promise<Representat
       client.appendLog(active.sessionToken, active.apiUrl, message, {
         to, postId, transportRetry: false, serverTrustIdentity: trust,
       }),
-    readAfter: (cursor, limit, continuationGuard) =>
-      client.readLog(active.sessionToken, active.apiUrl, { cursor, limit, serverTrustIdentity: trust, continuationGuard }),
-    // Migration input only: an unsafe private root or cursor file is no cursor,
-    // so the checkpoint starts empty and replays instead of trusting it.
-    unreadCursor: async () => {
-      try {
-        if (!await validatePrivateDirectory(borgConfigRoot(), false)) return null;
-      } catch {
-        return null;
-      }
-      return readPrivateLocalServerCursor({
-        origin: active.apiUrl, trustIdentity: trust!, cubeId: active.cubeId, droneId: active.droneId,
-      });
-    },
+    readAfter: (cursor, limit) =>
+      client.readLog(active.sessionToken, active.apiUrl, { cursor, limit, serverTrustIdentity: trust }),
     readEntry: (entryId) =>
       client.readLogEntry(active.sessionToken, active.apiUrl, { entry_id: entryId }, trust),
     ack: (entryId) => client.ackLogEntry(active.sessionToken, active.apiUrl, entryId, 'ack', trust),
@@ -448,7 +430,9 @@ async function sendOnce(
   // ONE locked transaction: look up, decide conflicts, allocate the id and
   // reserve it as 'pending'. No await separates the check from the reservation,
   // so overlapping calls cannot both conclude "nothing is in flight".
-  const reservation = await store.transactRequests(binding.worktree, (records) => {
+  // First use of this generation creates its state (binding row, delivery start).
+  await ensureRepresentativeState(ctx);
+  const reservation = await store.transactRequests(binding, (records) => {
     const record = input.request_id
       ? records.find((candidate) => candidate.requestId === input.request_id)
       : undefined;
@@ -487,7 +471,7 @@ async function sendOnce(
       state: 'pending', createdAt: stamp, updatedAt: stamp,
     });
     return { kind: 'reserved' as const, prior: null };
-  });
+  }) as { kind: 'already-sent'; entryId?: string } | { kind: 'reserved'; prior: RepresentativeRequestState | null };
   const requestId = candidateId;
   if (reservation.kind === 'already-sent') {
     return {
@@ -499,7 +483,8 @@ async function sendOnce(
   // Settling is monotonic so overlapping same-id calls converge: 'sent' is
   // terminal, and a definite refusal never hides an attempt that may be stored.
   const settle = (state: 'sent' | 'ambiguous' | 'rejected', entryId?: string) =>
-    store.transactRequests(binding.worktree, (records) => {
+    // A settlement after a rebind records nothing: the append outcome is still returned.
+    store.transactRequests(binding, (records) => {
       const stamp = now();
       let record = records.find((candidate) => candidate.requestId === requestId);
       if (!record) {
@@ -518,7 +503,7 @@ async function sendOnce(
         delete record.maybeStored;
       }
       return record.state;
-    });
+    }, { onStale: 'skip' });
 
   // Live verification happens before any posting. Nothing was sent if it fails,
   // so this call's reservation is released (an older unresolved state is kept).
@@ -529,7 +514,7 @@ async function sendOnce(
   try {
     await verifyLiveBinding(ctx);
   } catch (error) {
-    await store.transactRequests(binding.worktree, (records) => {
+    await store.transactRequests(binding, (records) => {
       const index = records.findIndex((candidate) => candidate.requestId === requestId);
       if (index < 0 || records[index].state !== 'pending') return;
       if (records[index].maybeStored) {
@@ -539,7 +524,7 @@ async function sendOnce(
       }
       if (reservation.prior === null) records.splice(index, 1);
       else records[index].state = reservation.prior;
-    });
+    }, { onStale: 'skip' });
     throw error;
   }
 
@@ -628,44 +613,20 @@ const READ_SCAN_PAGE = 500;
  */
 export const REPRESENTATIVE_ENVELOPE_FLOOR = 16384;
 
-/**
- * Run `use` with this generation's delivery state. On the first call for a
- * generation, `use` runs alone in the per-seat queue with the proposed start,
- * and nothing is written until it calls `commit`: a read refused as oversize
- * leaves no tombstone and no checkpoint behind.
- */
-async function withDeliveryState<T>(
-  ctx: RepresentativeContext,
-  use: (state: DeliveryState, commit: () => Promise<void>) => Promise<T>,
-): Promise<T> {
-  const store = createDeliveryStore(ctx.binding);
-  const saved = await store.load();
-  if (saved) {
-    // A checkpoint always implies an upgraded seat; restore a lost tombstone.
-    if (!await store.migrated()) await store.markMigrated(ctx.guard);
-    return use(saved, async () => {});
+/** The newest log position on the bound server (null for an empty log), outside any transaction. */
+export async function serverHead(backend: RepresentativeBackend): Promise<LocalServerCursor | null> {
+  let cursor: LocalServerCursor | null = null;
+  for (;;) {
+    const page = await backend.readAfter(cursor, READ_SCAN_PAGE);
+    const tail = page.entries.at(-1);
+    if (tail) cursor = { id: tail.id, created_at: tail.created_at };
+    if (!page.has_more || !tail) return cursor;
   }
-  return store.initialize(async () => {
-    const again = await store.load();
-    if (again) return use(again, async () => {});
-    // The seat already upgraded (a tombstone or a sibling generation exists):
-    // this generation (rebind, new Coordinator, or a removed invalid checkpoint)
-    // starts empty and replays its addressed history. Nothing on disk is ever
-    // read back as a position, and the legacy cursor is never imported again.
-    const upgraded = await store.migrated() || await store.otherGenerationExists();
-    // One-time upgrade: start where the pre-checkpoint destructive read left
-    // the unread view. The cursor is used only in memory.
-    const cursor = upgraded ? null : await ctx.backend.unreadCursor();
-    return use({ checkpoint: cursor, readThrough: cursor, returned: [] }, async () => {
-      // The tombstone is created exclusively first, so an interruption before
-      // the checkpoint replays (duplicates the host dedupes). An initializer in
-      // another process that won the create (excluded by the tools lease in
-      // practice) makes this one start empty.
-      const start = !upgraded && await store.markMigrated(ctx.guard) ? cursor : null;
-      if (upgraded) await store.markMigrated(ctx.guard);
-      await store.advance({ checkpoint: start, readThrough: start }, ctx.guard);
-    });
-  });
+}
+
+/** First use of a binding generation creates its state (binding row and delivery start). */
+export async function ensureRepresentativeState(ctx: RepresentativeContext): Promise<void> {
+  await ensureDeliveryState({ binding: ctx.binding, store: ctx.store, serverHead: () => serverHead(ctx.backend) });
 }
 
 const checkpointView = (point: LocalServerCursor | null) =>
@@ -696,23 +657,31 @@ export async function readRepresentativeReplies(
   const limit = bounded('limit', 1, 50, 10);
   const maxBytes = bounded('max_bytes', 4096, 60000, 32768);
   await verifyLiveBinding(ctx);
-  return withDeliveryState(ctx, async (state, commit) => {
-  const requestIds = await ctx.store.transactRequests(ctx.binding.worktree, (records) =>
-    new Set(records.map((record) => record.requestId)));
+  await ensureRepresentativeState(ctx);
+
+  // T1: snapshot the window start and the ledger's request ids for this generation.
+  const snapshot = (await ctx.store.state.transact((db) => {
+    const generation = requireCurrentGeneration(db, ctx.binding);
+    const state = loadDelivery(db, generation);
+    if (!state) throw new Error('Representative delivery state is missing for the current generation');
+    const requests = db.prepare('SELECT request_id FROM requests WHERE generation = ?').all(generation) as Array<{ request_id: string }>;
+    return { state, requestIds: new Set(requests.map((row) => row.request_id)) };
+  }));
+  const { state, requestIds } = snapshot;
 
   // Deliberate ceiling: every read scans the cube log from the checkpoint,
   // including entries not addressed here, so an undelivered backlog costs a
-  // growing scan. Upgrade path: a separate scan hint that deliver advances.
-  // One addressed entry beyond `limit` is collected only to answer has_more.
+  // growing scan. One addressed entry beyond `limit` is collected only to answer has_more.
   const candidates: Array<{ reply: RepresentativeReply; point: LocalServerCursor; ignoredBefore: number }> = [];
   let ignored = 0;
-  let cursor = state.checkpoint;
-  let last = state.checkpoint;
+  const start = scanStart(state);
+  let cursor = start.cursor;
+  let last: LocalServerCursor = start.floor;
   scan: for (;;) {
     const page = await ctx.backend.readAfter(cursor, READ_SCAN_PAGE);
     for (const entry of page.entries) {
       const point = { id: entry.id, created_at: entry.created_at };
-      // Client-side (created_at, id) filter: never repeat or regress.
+      // Client-side (created_at, id) filter: never repeat, regress, or precede the start.
       if (comparePoints(point, last) <= 0) continue;
       last = point;
       const addressed = isAddressedCoordinatorEntry(ctx.binding, entry);
@@ -773,14 +742,15 @@ export async function readRepresentativeReplies(
       'advanced. Raise max_bytes (up to 60000); beyond that the operator must reduce the server post limit.',
       { entry_id: final.replies[0].entry_id, measured_bytes: measured, bound });
   }
-  await commit();
   const window = candidates.slice(0, final.replies.length).map(({ point }) => point);
-  if (window.length > 0) {
-    // The deliver fence and membership widen before the caller sees the entries.
-    await createDeliveryStore(ctx.binding).advance({ readThrough: window.at(-1)!, returned: window }, ctx.guard);
-  }
-  return final;
+  // T2: the deliver fence and membership widen before the caller sees the
+  // entries, and only for the generation that is still current. A rebind in
+  // between refuses (BINDING_MISMATCH) and returns no content.
+  await ctx.store.state.transact((db) => {
+    const generation = requireCurrentGeneration(db, ctx.binding);
+    widenReadWindow(db, generation, window);
   });
+  return final;
 }
 
 export async function deliverRepresentativeReplies(
@@ -794,8 +764,7 @@ export async function deliverRepresentativeReplies(
   }
   const through = input.through;
   await verifyLiveBinding(ctx);
-  return withDeliveryState(ctx, async (state, commit) => {
-  await commit();
+  await ensureRepresentativeState(ctx);
   const outside = () => new RepresentativeError('REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY',
     'That entry is not in the current read window: deliver only a reply that borg_representative-read returned. Nothing changed.');
   let entry: LogEntry;
@@ -808,20 +777,23 @@ export async function deliverRepresentativeReplies(
   if (entry.id !== through || isAddressedCoordinatorEntry(ctx.binding, entry) === null) throw outside();
   const point = { id: entry.id, created_at: entry.created_at };
   const fingerprint = bindingFingerprint(ctx.binding);
-  if (state.checkpoint && comparePoints(point, state.checkpoint) <= 0) {
-    return { checkpoint: checkpointView(state.checkpoint), advanced: false, binding_fingerprint: fingerprint };
-  }
-  // Membership of the full tuple, not the range or the id alone: only an entry
-  // a read actually returned, as the server reports it now, inside the window.
-  if (!state.returned.some((returned) => returned.id === point.id && returned.created_at === point.created_at) ||
-      state.readThrough === null || comparePoints(point, state.readThrough) > 0) throw outside();
-  const { before, after } = await createDeliveryStore(ctx.binding).advance({ checkpoint: point }, ctx.guard);
-  return {
-    checkpoint: checkpointView(after.checkpoint),
-    // The serialized transition, not this call's earlier snapshot.
-    advanced: comparePoints(after.checkpoint!, before?.checkpoint ?? null) > 0,
-    binding_fingerprint: fingerprint,
-  };
+  // One transaction: membership of the full tuple (as the server reports it
+  // now) against the CURRENT rows, then the forward-only advance.
+  return ctx.store.state.transact((db) => {
+    const generation = requireCurrentGeneration(db, ctx.binding);
+    const state = loadDelivery(db, generation);
+    if (!state) throw new Error('Representative delivery state is missing for the current generation');
+    if (state.checkpoint && comparePoints(point, state.checkpoint) <= 0) {
+      return { checkpoint: checkpointView(state.checkpoint), advanced: false, binding_fingerprint: fingerprint };
+    }
+    if (!state.returned.some((returned) => returned.id === point.id && returned.created_at === point.created_at) ||
+        state.readThrough === null || comparePoints(point, state.readThrough) > 0) throw outside();
+    const { before, after } = advanceCheckpoint(db, generation, point);
+    return {
+      checkpoint: checkpointView(after.checkpoint),
+      advanced: comparePoints(after.checkpoint!, before.checkpoint) > 0,
+      binding_fingerprint: fingerprint,
+    };
   });
 }
 
@@ -835,6 +807,9 @@ export async function ackRepresentativeReply(
     throw new RepresentativeError(ErrorCode.INVALID_INPUT, 'entry_id must be the full UUID of a reply returned by borg_representative-read.');
   }
   await verifyLiveBinding(ctx);
+  // Ack changes no local state, but it is an effect: a damaged, unsafe or
+  // rebound state refuses it like every other tool except status.
+  await ensureRepresentativeState(ctx);
   const { entry } = await ctx.backend.readEntry(input.entry_id);
   if (entry.id !== input.entry_id || isAddressedCoordinatorEntry(ctx.binding, entry) !== 'direct') {
     throw new RepresentativeError(
@@ -859,7 +834,7 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
   delivery: string;
   authority: string;
   binding_fingerprint: string;
-  checkpoint_problem?: { code: string; message: string };
+  state_problem?: { code: string; message: string };
   envelope_floor: number;
 }> {
   const { binding } = ctx;
@@ -872,13 +847,14 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
       message: error instanceof Error ? error.message : 'Unknown error',
     };
   }
-  let checkpointProblem: { code: string; message: string } | undefined;
+  let stateProblem: { code: string; message: string } | undefined;
+  let unresolvedRecords: Awaited<ReturnType<RepresentativeStore['readRequests']>> = [];
   try {
-    await createDeliveryStore(binding).load();
+    unresolvedRecords = await ctx.store.readRequests(binding.worktree);
   } catch (error) {
-    checkpointProblem = { code: (error as { code?: string }).code ?? 'BACKEND_ERROR', message: error instanceof Error ? error.message : 'Unknown error' };
+    stateProblem = { code: (error as { code?: string }).code ?? 'BACKEND_ERROR', message: error instanceof Error ? error.message : 'Unknown error' };
   }
-  const unresolved = (await ctx.store.readRequests(binding.worktree))
+  const unresolved = unresolvedRecords
       .filter((record) => record.state === 'pending' || record.state === 'ambiguous')
       .map((record) => ({
         request_id: record.requestId, state: record.state, kind: record.kind, updated_at: record.updatedAt,
@@ -902,7 +878,7 @@ export async function representativeStatus(ctx: RepresentativeContext): Promise<
       'Borg records these messages as posts from the representative drone. The user-authorized / model-advice label is this ' +
       'connection\'s own attribution and is not verified or enforced by the Borg server.',
     binding_fingerprint: bindingFingerprint(binding),
-    ...(checkpointProblem ? { checkpoint_problem: checkpointProblem } : {}),
+    ...(stateProblem ? { state_problem: stateProblem } : {}),
     envelope_floor: REPRESENTATIVE_ENVELOPE_FLOOR,
   };
 }

@@ -1,10 +1,9 @@
-/** Supervised body-free wake channel; independent of the lazy MCP tools lease. */
+/** Supervised body-free wake channel with its own exclusive listener lease. */
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
-import { borgConfigRoot } from './private-root.js';
+import { borgConfigRoot, borgHomeRoot } from './private-root.js';
 import { acquireStreamLease, readOwnershipSnapshot, STREAM_OWNER_STALE_MS, type StreamLease } from './stream-owner.js';
-import { representativeOwnerDeps } from './representative-owner.js';
 import { createListenerInbox } from './representative-listener-store.js';
 import { streamOnce, streamReconnectDelay, type StreamDeps } from './log-stream.js';
 import { resolveRepresentativeContext, type RepresentativeCmdDeps } from './representative-cmd.js';
@@ -25,7 +24,11 @@ export interface ListenerOptions {
 }
 function listenerOwnerDeps(binding: RepresentativeBinding) {
   const authority = createHash('sha256').update(JSON.stringify([binding.origin, binding.trustIdentity])).digest('hex');
-  return { ...representativeOwnerDeps(binding), locksDir: join(borgConfigRoot(), 'representative-listener-locks', authority) };
+  return {
+    locksDir: join(borgConfigRoot(), 'representative-listener-locks', authority),
+    privateRoot: { root: borgConfigRoot(), boundary: borgHomeRoot() },
+    worktree: binding.worktree, droneLabel: binding.representativeLabel, cubeName: binding.cubeName,
+  };
 }
 export async function representativeListenerStatus(binding: RepresentativeBinding) {
   const ownership = await readOwnershipSnapshot(binding.cubeId, binding.representativeDroneId, listenerOwnerDeps(binding));

@@ -61,10 +61,12 @@ does not touch any other drone. It then verifies against the live cube that:
 
 A missing, evicted, duplicated or non-human-seat Coordinator fails with a named
 error. Another drone is never chosen instead. On success the binding is saved
-in Borg's private configuration directory (`representative.json`, mode 0600).
-That file holds identifiers and a request ledger only — no credential and no
-message text. The drone's credential stays in Borg's existing private
-connection store.
+in the representative state database (see "State database" below). It holds
+identifiers, the request ledger and delivery positions only — no credential and
+no message text. The drone's credential stays in Borg's existing private
+connection store. A representative drone serves one worktree: a second worktree
+whose binding would share another worktree's binding generation is refused with
+`BINDING_CONFLICT`.
 
 To resume later, run `borg representative prepare --coordinator <coordinator-drone-label> --role <your-representative-role>` from inside the representative worktree (without `--worktree`), substituting
 your saved labels. Recovery errors for a bound connection print that complete
@@ -226,9 +228,8 @@ Reading:
   come strictly after the delivered checkpoint, in `(created_at, entry_id)` order.
   Other drones' entries are counted in `ignored_entries` and never returned; the
   Coordinator's broadcasts are returned only with `include_broadcast`.
-- `read` never advances anything: not the checkpoint, not the representative's
-  unread cursor, not a server cursor. After a crash at any point, the next `read`
-  returns every reply not yet delivered.
+- `read` never advances the checkpoint or any server cursor. After a crash at
+  any point, the next `read` returns every reply not yet delivered.
 - Bounds: `limit` (1 to 50, default 10) is a hard cap on returned replies.
   `max_bytes` (4096 to 60000, default 32768) caps the serialized tool result.
   Replies are whole or omitted, never truncated; a reply that alone exceeds
@@ -248,8 +249,8 @@ Reading:
   `has_more` is true only when another reply follows the returned window.
   Page by delivering and reading again.
 - The result includes `checkpoint` (`entry_id` and `created_at`; null until the
-  first delivery, unless the upgrade below started it at the old read position)
-  and `binding_fingerprint`.
+  first delivery, unless the upgrade below imported a 5.x checkpoint) and
+  `binding_fingerprint`.
 
 Delivering:
 
@@ -262,9 +263,8 @@ Delivering:
   id is a no-op that returns `advanced: false`, so a retry after a lost result is safe.
 - Implementation note: the checkpoint, an internal read fence (the latest reply
   any `read` returned) and the replies returned since the checkpoint last moved
-  are stored together in one private file per binding, written atomically.
-  `deliver` accepts only one of those returned replies. None of this is part of
-  the interface.
+  are rows of the state database, changed in one transaction. `deliver` accepts
+  only one of those returned replies. None of this is part of the interface.
 
 Binding fence:
 
@@ -276,24 +276,25 @@ Binding fence:
   `listening` event. Persist it at binding time; if any result shows a different
   value, stop routing and hold for the human.
 
-Upgrading from a version without `deliver`:
+Where a binding's replies start:
 
-- The first `read` or `deliver` for a binding starts the checkpoint where the old
-  destructive read left the representative's unread cursor: replies that were
-  unread at upgrade time are returned, replies already read are not. When the
-  binding never read, every addressed reply in the cube log is returned. If the
-  upgrade is interrupted before its checkpoint is written, the next read returns
-  every addressed reply instead; deduplicate by `entry_id`.
-  The old position is taken only from a genuine private file (a regular file you
-  own, not a symlink, not writable by group or others, in the private config
-  directory); otherwise the checkpoint starts empty and every addressed reply is
-  returned.
-- That upgrade happens once per representative drone and server authority, and is
-  recorded in a private marker, so it never runs again, even after a checkpoint
-  file is removed. A later
-  binding generation (any `prepare --rebind`, or a trust change) starts with an
-  empty checkpoint, so its first read returns its addressed history. Deduplicate by
-  `entry_id` (the host persists everything it delivers) and page with `limit`.
+- A binding prepared by this version starts at its binding time: `read` returns
+  every addressed reply created after `prepare` (or `prepare --rebind`) and none
+  from before it. A rebind of any kind starts a new generation this way.
+- A binding prepared by borgmcp 5.x is taken over on its first use, once, from
+  the 5.x files (they are only read, never changed):
+  - its valid 5.x delivered checkpoint: replies after that checkpoint are
+    returned, and the checkpoint is kept;
+  - a valid 5.x checkpoint that never delivered anything: the binding start;
+  - no 5.x delivery history at all for the representative drone (no checkpoint
+    for any generation, no upgrade marker) and none in the state database: the
+    newest entry of the cube log, so only new replies are returned;
+  - anything else, including a 5.x file that cannot be read or fails the
+    private-file checks (a regular file you own, no group or other access, not a
+    symlink): the
+    binding start. Unreadable history is never treated as absent, so this
+    returns replies again rather than skip any; deduplicate by `entry_id`.
+- The start is decided once per binding generation and never changes.
 
 Known limits:
 
@@ -305,22 +306,16 @@ Known limits:
   not included and cannot be fetched through this connection. Ask the Coordinator
   to provide the content through a supported channel.
 
-Ownership:
+Concurrency:
 
-- Exclusive process ownership is enforced for each representative drone. Processes
-  may start idle; the first `send`, `read`, `deliver` or `ack` takes the lease. Other
-  processes receive `REPRESENTATIVE_OWNERSHIP_REQUIRED` before any ledger
-  reservation, delivery-state write, cursor access or network call. The refusal
-  names the owner's PID and start time. Use that host, or wait for it to exit before
-  using another.
-- `status` is allowed in every process, is read-only, and takes no lease. Its
-  `ownership` field reports the state, PID, start time, and heartbeat age in
-  milliseconds (`ageMs`). A clean exit releases ownership; a dead PID or a
-  heartbeat older than 70 seconds permits takeover without manual cleanup.
-  A process that loses its lease refuses further activity until restarted.
-  An already in-flight network operation cannot be cancelled by a local lease;
-  same-request retries across takeover still use the existing ledger and server
-  deduplication. Retry an ambiguous send with its original `request_id`.
+- Any number of processes may use the tools at once. Every `send` reservation,
+  `read` window and `deliver` is one transaction on the state database, so
+  overlapping calls from different processes never lose or double an update.
+  `status` is read-only in every process.
+- A rebind while a call is running refuses that call with `BINDING_MISMATCH`
+  and changes nothing in the new binding's state. An already issued network
+  request cannot be cancelled; retry an ambiguous send with its original
+  `request_id`.
 - `in_reply_to` is a textual match of a known `request_id` quoted in the reply.
   It is a convenience, not a protocol guarantee.
 
@@ -338,8 +333,8 @@ Wake hints:
 
 ### Host conversation routing
 
-The lease selects one consuming process, not a conversation within that host.
-The host must record which conversation owns each `request_id`, persist every
+Several processes may use the tools, but each binding has one delivered
+checkpoint; the host decides which conversation reads and delivers. The host must record which conversation owns each `request_id`, persist every
 reply durably before calling `deliver`, and route replies using `in_reply_to`.
 Hold replies with an unknown or missing request ID for the human instead of
 dropping them. Borg cannot enforce these duties inside the host; it provides one
@@ -361,15 +356,13 @@ queue. On subsequent starts, pass that checkpoint:
 borg representative listen --worktree <path> --replay-after <entry_id>
 ```
 
-There is one listener lease per representative drone and server authority,
-independent of the lazy tools lease. A second listener refuses without consuming
-or appending anything. A dead owner or expired heartbeat permits takeover; a
-process that loses ownership exits and must be restarted. A local lease cannot
-cancel an already-issued request. No eager tools-lease option is needed when one
-adapter exclusively calls `send`, `read`, `deliver` and `ack`.
+There is one listener lease per representative drone and server authority; the
+tools need none. A second listener refuses without consuming or appending
+anything. A dead owner or expired heartbeat permits takeover; a process that
+loses ownership exits and must be restarted. A local lease cannot cancel an
+already-issued request.
 
-`representative status` reports `listener` beside tool `ownership`: running
-state, owner PID and start time, heartbeat age (`ageMs`), persisted watermark and
+`representative status` reports `listener`: running state, owner PID and start time, heartbeat age (`ageMs`), persisted watermark and
 private inbox path. Status acquires nothing. Do not read the inbox or depend on
 its pathname; it is not the content-delivery interface.
 
@@ -470,15 +463,12 @@ turns; it is off by default. `mcp_server` must name the `mcp_servers` entry that
 runs `borg representative mcp`, because the plugin recognises the deliver tool
 by that name. Then restart the gateway (`hermes gateway restart`).
 
-**One tool owner.** Hermes starts a separate MCP process in every Hermes
-process that uses the server, and only one process may hold the representative
-tools lease. The woken conversation runs in the gateway, so the gateway must be
-the process that uses the tools. With `lazy: true`, a process starts the Borg
-MCP server only when one of its conversations calls a Borg tool. Run `hermes
-tools` and disable the `mcp-borg-representative` toolset on every platform except
-the one in `session_key`, Desktop and CLI included. If another process already
-holds the lease (`borg representative status` shows `owned-by-other-process`),
-restart that process once so it releases the lease.
+**Which process delivers.** Hermes starts a separate MCP process in every
+Hermes process that uses the server; any number of them may use the tools. The
+plugin sees only this gateway's `borg_representative-deliver` results, so a
+reply delivered from another process (Desktop, CLI) is not observed as
+delivered here and is woken again after `reinject_after_s`. Let the gateway
+conversation in `session_key` do the reading and delivering.
 
 ### Behaviour
 
@@ -526,6 +516,49 @@ restart that process once so it releases the lease.
   creates its files with mode 0600, and never reads or writes through a symbolic
   link planted there.
 
+## State database
+
+Bindings, the request ledger, delivery positions and wake state live in one
+SQLite database (Node's built-in `node:sqlite`, which is why borgmcp requires
+Node.js 22.13 or later):
+
+```text
+<Borg config>/representative/state/
+  CURRENT            names the current generation; replaced only by an atomic rename
+  publish.sqlite     an empty lock file that serializes creation and reset
+  <generation>/      mode 0700
+    state.sqlite     mode 0600, with SQLite's -wal and -shm files (also 0600)
+```
+
+Every path is checked on every open (a real file or directory you own, the
+modes above, never a symlink); a failing check refuses with
+`REPRESENTATIVE_STATE_INVALID` and nothing is repaired automatically. Nothing
+from borgmcp 5.x is changed: its `representative.json` and delivery files are
+read once, when a 5.x binding is first used (see "Where a binding's replies
+start"), and never written.
+
+The lock is local: exclusivity holds between processes on this host and this
+filesystem, not across hosts sharing a network filesystem.
+
+`borg representative reset-state` is disaster recovery for a corrupt database
+only; it refuses a healthy one and a database of another version. It builds a
+new generation holding every binding that still reads back and passes the same
+checks as `prepare`, publishes it over `CURRENT`, and prints what was kept and
+lost. The damaged generation is left in place; the three most recent earlier
+generations are kept, older ones removed (only the database files, never
+anything else in the directory). Lost in a reset:
+
+- every delivery checkpoint: kept bindings return their replies again from the
+  binding start (duplicates are possible, nothing is skipped; deduplicate by
+  `entry_id`);
+- the request ledger: pending and ambiguous sends are no longer guarded, so a
+  send whose outcome was unknown may already be stored and identical content is
+  no longer blocked;
+- wake state, which the listener rebuilds.
+
+A binding that could not be kept is listed; run `borg representative prepare`
+in that worktree again.
+
 ## Recovery
 
 Run `borg` with the Node installation that owns the global `borgmcp` install;
@@ -538,8 +571,11 @@ the server is installed under the original prefix.
 | `SEAT_UNAVAILABLE` | The representative drone's saved connection is gone or rejected. Run the complete recovery command printed in the error; it includes the worktree, Coordinator and role. |
 | `BINDING_MISMATCH` | The worktree's connection is not the bound server/cube/drone, or the binding changed under a running process. Run the printed command to confirm the rebind, then restart the MCP process. |
 | `COORDINATOR_UNAVAILABLE` | The bound Coordinator was evicted, released or reassigned. Restore the bound Coordinator and use the printed recovery command, or deliberately substitute a new Coordinator label in that command. |
-| `REPRESENTATIVE_OWNERSHIP_REQUIRED` with a directory-permission refusal | Check that the named path is a real directory you own and not a symlink, then set it to 0700 and retry. Restart a process that had already lost ownership. Do not change permissions through a symlink. |
+| `BINDING_CONFLICT` | `prepare` would change the saved cube or Coordinator (confirm with the printed `--rebind` command), or another worktree already holds this binding generation (give each worktree its own representative seat). |
+| `REPRESENTATIVE_STATE_INVALID` | A state path (named in the message) is not safe: a symlink, a wrong owner or mode, a missing generation, or damaged `CURRENT`. Nothing was read or written and nothing is repaired automatically. Fix the named path (a real directory 0700 or file 0600 that you own); do not change permissions through a symlink. |
+| `REPRESENTATIVE_STATE_CORRUPT` | The state database is corrupt (SQLite reported corruption). Every tool except `status` refuses; `status` reports it as `state_problem`. Run `borg representative reset-state`; read its report of what was kept and lost. |
+| `REPRESENTATIVE_STATE_VERSION` | The state database was written by a different borgmcp version. Nothing was read or written. Use the borgmcp version that wrote it. This is not corruption, and `reset-state` refuses it. |
+| `REPRESENTATIVE_STATE_BUSY` | The state moved to a new generation twice during one call (concurrent resets). Nothing was changed; retry. |
 | `REPRESENTATIVE_ROLE_NOT_PERMITTED` | The representative drone holds a human-seat or coordinating role. Give it its own worker role. |
-| `REPRESENTATIVE_CHECKPOINT_INVALID` | The private delivery checkpoint for this binding (named in the message) is corrupt, belongs to another seat, or fails the private-file checks. Every tool except `status` refuses and `status` reports it as `checkpoint_problem`; nothing is used or reset automatically. Inspect the file, then remove it; the next `read` returns every addressed reply again, so deduplicate by `entry_id`. |
 | `REPRESENTATIVE_READ_OVERSIZE` | The next reply does not fit `max(max_bytes, 16384)` bytes even with its citations reduced to ids (heavy JSON escaping or citation metadata, or a server allowing posts above its default 4096-byte limit). Nothing was read or advanced. Retry with a larger `max_bytes` (up to 60000); beyond that the operator must lower the server's post limit. |
 | `REPRESENTATIVE_DELIVER_UNKNOWN_ENTRY` | `deliver` named an entry that `read` has not returned (or no Coordinator reply). Nothing changed. Call `read`, persist what it returns, then deliver through its last `entry_id`. |

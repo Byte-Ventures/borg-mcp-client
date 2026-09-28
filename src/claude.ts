@@ -408,6 +408,12 @@ async function main() {
       const install = await import('./hermes-plugin-install.js');
       process.exit(await install.runHermesPluginInstall(parsed.command, install.defaultHermesPluginInstallDeps()));
     }
+    if (parsed.command.action === 'reset-state') {
+      process.exit(await representative.runRepresentativeResetState({
+        stdout: (text) => { process.stdout.write(text); },
+        stderr: (text) => { process.stderr.write(text); },
+      }));
+    }
     const deps = await representative.buildDefaultRepresentativeDeps();
     if (parsed.command.action === 'prepare') {
       process.exit(await representative.runRepresentativePrepare(parsed.command, deps));

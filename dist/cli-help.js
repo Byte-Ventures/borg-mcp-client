@@ -108,6 +108,7 @@ export function representativeHelpText(version) {
         `  borg representative mcp [--worktree <path>]\n` +
         `  borg representative listen --worktree <path> [--replay-after <entry_id>]\n` +
         `  borg representative hermes-plugin install [--hermes-home <path>] [--force]\n` +
+        `  borg representative reset-state\n` +
         `  borg representative --help\n\n` +
         `Commands:\n` +
         `  prepare   Create or resume the representative's own drone in this repository's cube and bind it to\n` +
@@ -120,7 +121,11 @@ export function representativeHelpText(version) {
         `  hermes-plugin install\n` +
         `            Copy the Borg-owned Hermes push plugin into <Hermes home>/plugins and print the config to add.\n` +
         `            It wakes one Hermes messaging-gateway conversation (not a Desktop chat). Never edits Hermes\n` +
-        `            config and never starts or restarts Hermes.\n\n` +
+        `            config and never starts or restarts Hermes.\n` +
+        `  reset-state\n` +
+        `            Recover from a corrupt representative state database (REPRESENTATIVE_STATE_CORRUPT) only;\n` +
+        `            refuses when the state is healthy. Keeps readable bindings; loses delivery checkpoints (replies\n` +
+        `            replay), the request ledger (pending and ambiguous sends lose their guard) and wake state.\n\n` +
         `Options:\n` +
         `  --replay-after <entry_id>    listen: replay later retained hints after the last durably enqueued entry\n` +
         `  --coordinator <drone-label>  Exact label of the Coordinator drone (see \`borg drones\`). Required for prepare.\n` +
@@ -134,7 +139,7 @@ export function representativeHelpText(version) {
         `  --help, -h                   Show this help\n\n` +
         `Limits: the MCP process has no background wake; a separate listen process emits wake hints, not content.\n` +
         `Reading changes nothing: persist replies durably, then deliver through the last one. On a listener gap, call read.\n` +
-        `The first send/read/deliver/ack takes an exclusive tools lease; listen owns a separate exclusive listener lease.\n` +
+        `Any number of processes may use the tools at once; listen owns a separate exclusive listener lease.\n` +
         `A retried send reuses its request id so the server stores it once; an unknown outcome is reported as\n` +
         `ambiguous, with its cause, and never re-sent automatically. "User-authorized" is the representative's own label:\n` +
         `the Borg server does not verify it, and one relayed decision is not broader human approval.\n` +
@@ -204,7 +209,7 @@ export function topLevelHelpText(version) {
         `  borg drones              List this machine's registered drones and worktrees\n` +
         `  borg launch <drone-label-or-id-prefix>  Reopen one registered drone from its worktree\n` +
         `  borg launch-all [cube]   Launch all drone worktrees of a cube (default: active cube)\n` +
-        `  borg representative prepare|status|mcp|listen|hermes-plugin  Let an MCP host (e.g. Hermes) speak for you to one Coordinator drone\n` +
+        `  borg representative prepare|status|mcp|listen|reset-state|hermes-plugin  Let an MCP host (e.g. Hermes) speak for you to one Coordinator drone\n` +
         `  borg server <command> [arguments]\n` +
         `  borg --cli claude|codex|opencode  Launch that agent CLI directly\n` +
         `  borg --version           Show installed version\n\n` +

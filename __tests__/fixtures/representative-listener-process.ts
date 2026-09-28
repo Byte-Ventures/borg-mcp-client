@@ -7,11 +7,11 @@ const { DroneEvictedError } = await import(process.env.REPRESENTATIVE_TEST_DIST 
 const { BorgServerUnreachableError } = await import(process.env.REPRESENTATIVE_TEST_DIST ? join(dirname(process.env.REPRESENTATIVE_TEST_DIST), 'server-errors.js') : '../../src/server-errors.js');
 const { createPinnedServerFetch } = await import(process.env.REPRESENTATIVE_TEST_DIST ? join(dirname(process.env.REPRESENTATIVE_TEST_DIST), 'server-trust.js') : '../../src/server-trust.js');
 import { bindingFor, MockCube, ROLE_REP } from './representative-mock-backend.js';
-const [worktree, file, origin, action = 'listen', replayAfter] = process.argv.slice(2);
+const [worktree, origin, action = 'listen', replayAfter] = process.argv.slice(2);
 // Production trust mode: the bound identity comes from the real authority files.
 const productionTrust = process.env.REPRESENTATIVE_TEST_TRUST_IDENTITY;
 const binding = bindingFor(worktree, { origin, ...(productionTrust ? { trustIdentity: productionTrust } : {}) });
-const store = createRepresentativeStore(file);
+const store = createRepresentativeStore();
 const cube = new MockCube();
 const deps = {
   cwd: () => worktree, findProjectRoot: (value: string) => value,
