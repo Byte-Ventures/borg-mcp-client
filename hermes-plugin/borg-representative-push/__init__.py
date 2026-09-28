@@ -145,7 +145,7 @@ class Supervisor:
         except subprocess.TimeoutExpired:
             child.terminate()
         except (OSError, ValueError):
-            # Ignored: the pipe or process is already gone: nothing is left to shut down.
+            # Ignored: shutdown is best-effort; a closed pipe or failed wait leaves the exit to the run loop.
             pass
 
     def _run(self) -> None:
@@ -219,7 +219,7 @@ class Supervisor:
             try:
                 stream.close()
             except (OSError, ValueError):
-                # Ignored: the stream is already closed or broken; closing is best-effort cleanup.
+                # Ignored: closing is best-effort cleanup after the child was reaped.
                 pass
         with self._lock:
             self._child = None
@@ -257,7 +257,7 @@ class Supervisor:
                 try:
                     signal_child()
                 except OSError:
-                    # Ignored: the child already exited (ESRCH); the wait below reaps it.
+                    # Ignored: signalling is best-effort; the wait and escalation below remain responsible for cleanup.
                     pass
             try:
                 child.wait(timeout=self._reject_grace_s)
@@ -271,7 +271,7 @@ class Supervisor:
         try:
             child.stdin.close()
         except (OSError, ValueError):
-            # Ignored: the pipe is already closed or broken; the listener sees EOF either way.
+            # Ignored: closing stdin is best-effort; the caller's wait and escalation handle the child.
             pass
 
     @staticmethod
@@ -283,7 +283,7 @@ class Supervisor:
                 if text:
                     logger.info("%s: listener: %s", PLUGIN_NAME, text[:STDERR_LINE_MAX])
         except (OSError, ValueError):
-            # Ignored: the pipe closed while draining: the listener exited, and its exit is handled by the run loop.
+            # Ignored: draining is best-effort diagnostics; the run loop handles the listener's exit.
             pass
 
     @staticmethod
