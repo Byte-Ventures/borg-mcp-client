@@ -70,7 +70,7 @@ class FakeListener:
 
     A run is a list of steps: {"emit": event}, {"ack": true} (read one stdin line
     and record it), {"eof": true} (read stdin until EOF), {"stderr": text},
-    {"sleep": seconds}, and a final {"exit": code}.
+    {"sleep": seconds}, {"ignore_term": true} (ignore SIGTERM), and a final {"exit": code}.
     """
 
     def __init__(self, root: Path, runs: list[list[dict]]):
@@ -84,7 +84,7 @@ class FakeListener:
         self.path = root / "fake-borg"
         self.path.write_text(textwrap.dedent(f"""\
             #!{sys.executable}
-            import json, os, stat, sys, time
+            import json, os, signal, stat, sys, time
             spec = json.load(open({str(self.spec)!r}))
             try:
                 count = sum(1 for _ in open(spec["calls"]))
@@ -110,6 +110,8 @@ class FakeListener:
                     print(step["stderr"], file=sys.stderr, flush=True)
                 elif "sleep" in step:
                     time.sleep(step["sleep"])
+                elif "ignore_term" in step:
+                    signal.signal(signal.SIGTERM, signal.SIG_IGN)
                 elif "exit" in step:
                     sys.exit(step["exit"])
             sys.exit(0)
@@ -270,6 +272,57 @@ class ProtocolTests(Case):
         self.assertEqual(supervisor.final_reason, "protocol-mismatch")
         self.assertEqual(self.injected, [])
         self.assertEqual(len(fake.invocations()), 1)  # never restarted
+
+    def test_never_injects_a_wake_that_arrives_before_the_protocol_2_announcement(self):
+        # Review probe (S3 F1): wake first, then a protocol-1 announcement.
+        fake = FakeListener(self.tmp, [[{"emit": wake(WAKE1)}, {"sleep": 0.1}, {"emit": {"event": "listening", "protocol": 1}},
+                                         {"eof": True}, {"exit": 0}]])
+        supervisor = self.supervisor(fake)
+        supervisor.ensure_started()
+        self.assertTrue(wait_until(lambda: supervisor.final_action == "stop"))
+        self.assertEqual(supervisor.final_reason, "protocol-mismatch")
+        self.assertEqual(self.injected, [])
+        self.assertEqual(fake.acks(), [])
+
+    def test_a_wake_before_listening_is_a_rejection_even_from_a_protocol_2_listener(self):
+        fake = FakeListener(self.tmp, [[{"emit": wake(WAKE1)}, {"emit": LISTENING}, {"eof": True}, {"exit": 0}]])
+        supervisor = self.supervisor(fake)
+        supervisor.ensure_started()
+        self.assertTrue(wait_until(lambda: supervisor.final_action == "stop"))
+        self.assertEqual(supervisor.final_reason, "protocol-mismatch")
+        self.assertEqual(self.injected, [])
+
+    def test_a_rejected_listener_that_ignores_eof_is_stopped_within_the_deadline(self):
+        # Review probe (S3 F2), with the default grace periods: EOF, SIGTERM, SIGKILL.
+        fake = FakeListener(self.tmp, [[{"emit": {"event": "listening", "protocol": 1}}, {"sleep": 30}, {"exit": 0}]])
+        supervisor = self.supervisor(fake)
+        supervisor.ensure_started()
+        self.assertTrue(wait_until(lambda: supervisor._child is not None))
+        child = supervisor._child
+        finished = wait_until(lambda: supervisor.final_action == "stop", timeout=5.5)
+        still_running = child.poll() is None
+        if still_running:  # reap only this fixture, even on the failure path
+            child.kill()
+            child.wait(timeout=3)
+        self.assertTrue(finished)
+        self.assertFalse(still_running)
+        self.assertEqual(supervisor.final_reason, "protocol-mismatch")
+
+    def test_a_rejected_listener_that_ignores_sigterm_is_killed(self):
+        fake = FakeListener(self.tmp, [[{"ignore_term": True}, {"emit": {"event": "listening", "protocol": 1}}, {"sleep": 30}, {"exit": 0}]])
+        supervisor = self.supervisor(fake, reject_grace_s=0.3)
+        supervisor.ensure_started()
+        self.assertTrue(wait_until(lambda: supervisor._child is not None))
+        child = supervisor._child
+        started = time.monotonic()
+        finished = wait_until(lambda: supervisor.final_action == "stop", timeout=5)
+        elapsed = time.monotonic() - started
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=3)
+        self.assertTrue(finished)
+        self.assertLess(elapsed, 3)
+        self.assertEqual(child.returncode, -9)  # SIGKILL after EOF and SIGTERM were ignored
 
     def test_stops_on_an_older_borg_that_refuses_the_protocol_flag(self):
         fake = FakeListener(self.tmp, [[{"emit": {"event": "refused", "code": "INVALID_INPUT", "exit_code": 2}}, {"exit": 2}]])

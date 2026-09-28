@@ -515,8 +515,11 @@ delivered from any of them.
   the gateway); 3 (another listener holds the lease) retries with backoff; 4
   restarts after `lease-lost` and otherwise stops and logs (evicted, rebound,
   revoked, trust-changed).
-- A listener that does not announce protocol 2 (an older borgmcp) is never
-  driven: the plugin stops it and logs that borgmcp must be updated.
+- The plugin acts on nothing until the listener announces `listening` with
+  protocol 2; only a startup `refused` may come first. Any other event first,
+  or another protocol (an older borgmcp), is a rejection: no wake is injected.
+  The plugin closes the pipe, then sends SIGTERM and finally SIGKILL, 2 seconds
+  apart, reaps the process, and logs that borgmcp must be updated.
 - The plugin owns the listener's stdin pipe. When the gateway exits, even when
   it is killed, the pipe closes and the listener exits on its own: nothing is
   left running, and the next gateway starts a new one.

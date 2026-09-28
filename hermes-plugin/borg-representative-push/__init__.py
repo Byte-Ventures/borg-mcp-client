@@ -45,6 +45,8 @@ WAKE_TEXT = (
 
 BACKOFF_START_S = 1.0
 BACKOFF_CAP_S = 60.0
+# A rejected listener gets this long after EOF, then after SIGTERM, before SIGKILL.
+REJECT_GRACE_S = 2.0
 STDERR_LINE_MAX = 500
 
 logger = logging.getLogger(__name__)
@@ -104,12 +106,14 @@ class Supervisor:
         popen: Callable[..., Any] = subprocess.Popen,
         backoff_start_s: float = BACKOFF_START_S,
         backoff_cap_s: float = BACKOFF_CAP_S,
+        reject_grace_s: float = REJECT_GRACE_S,
     ):
         self.settings = settings
         self._inject = inject
         self._popen = popen
         self._backoff_start_s = backoff_start_s
         self._backoff_cap_s = backoff_cap_s
+        self._reject_grace_s = reject_grace_s
         self._lock = threading.Lock()
         self._stopping = threading.Event()
         self._started = False
@@ -187,21 +191,26 @@ class Supervisor:
             if event is None:
                 continue
             kind = event.get("event")
-            if kind == "listening":
-                if event.get("protocol") != PROTOCOL:
-                    # An older listener: never drive it; the operator must update borgmcp.
-                    logger.warning("%s: the listener does not speak protocol %d; update borgmcp", PLUGIN_NAME, PROTOCOL)
-                    rejected = True
-                    self._close(child)
-                    break
-                listening = True
-                logger.info("%s: listening (binding %s)", PLUGIN_NAME, event.get("binding_fingerprint"))
-            elif kind == "wake":
+            if not listening:
+                # A gate: nothing is acted on before a protocol-2 announcement. Only
+                # `refused` (a protocol-2 startup refusal, before `listening`) is expected.
+                if kind == "refused":
+                    stop_reason = event.get("code") if isinstance(event.get("code"), str) else None
+                    continue
+                if kind == "listening" and event.get("protocol") == PROTOCOL:
+                    listening = True
+                    logger.info("%s: listening (binding %s)", PLUGIN_NAME, event.get("binding_fingerprint"))
+                    continue
+                # An older listener, or an event before the announcement: never drive it.
+                logger.warning("%s: the listener did not announce protocol %d before %r; update borgmcp",
+                               PLUGIN_NAME, PROTOCOL, kind)
+                rejected = True
+                self._reject(child)
+                break
+            if kind == "wake":
                 self._wake(child, event)
             elif kind == "stopped":
                 stop_reason = event.get("reason") if isinstance(event.get("reason"), str) else None
-            elif kind == "refused":
-                stop_reason = event.get("code") if isinstance(event.get("code"), str) else None
             # Unknown events and fields are ignored by contract.
         code = child.wait()
         drain.join(timeout=5)
@@ -237,6 +246,22 @@ class Supervisor:
             child.stdin.flush()
         except (OSError, ValueError):
             pass  # the listener is gone; its exit is handled by the run loop
+
+    def _reject(self, child: Any) -> None:
+        """End a rejected child without trusting it: EOF, then SIGTERM, then SIGKILL, each after a grace period."""
+        self._close(child)
+        for signal_child in (None, child.terminate, child.kill):
+            if signal_child is not None:
+                try:
+                    signal_child()
+                except OSError:
+                    pass
+            try:
+                child.wait(timeout=self._reject_grace_s)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+        child.wait()  # SIGKILL cannot be ignored: reap it
 
     @staticmethod
     def _close(child: Any) -> None:
