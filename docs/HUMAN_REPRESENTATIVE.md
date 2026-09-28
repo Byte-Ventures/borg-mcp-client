@@ -471,7 +471,9 @@ The command then does everything, printing each step before it runs:
    confirm (the default is no); with several you choose one first. Without a
    terminal it refuses, lists the candidates and prints the exact command with
    `--session-key` for the same Hermes home and worktree you gave. Nothing is
-   written, and no representative state is created, before these checks pass. `--session-key` names one directly, and a rerun (or
+   written before these checks pass. The prepared worktrees are read read only
+   (before the representative state exists, the borgmcp 5.x bindings it will
+   import); the installer never creates representative state. `--session-key` names one directly, and a rerun (or
    `borg update`) keeps the configured conversation; `borg update` never picks
    one.
 2. Installs the plugin's two files into

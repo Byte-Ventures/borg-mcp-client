@@ -98,15 +98,13 @@ export function defaultHermesPluginDeps() {
         sourceDir: packagedHermesPluginDir(),
         hermes: (home) => execFileHermesCli('hermes', home, process.env),
         borgCommand: defaultBorgCommand,
-        bindings: async ({ initialize }) => {
+        bindings: async () => {
             const { createRepresentativeStore } = await import('./representative-store.js');
             const store = createRepresentativeStore();
-            if (!(await store.initialized())) {
-                if (!initialize)
-                    return null;
-                await store.initialize();
-            }
-            return (await store.listBindings()).map((binding) => binding.worktree);
+            if (await store.initialized())
+                return (await store.listBindings()).map((binding) => binding.worktree);
+            const { previewLegacyImport } = await import('./representative-legacy.js');
+            return (await previewLegacyImport()).map((binding) => binding.worktree);
         },
         isTTY: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
         prompt: async (question) => {
@@ -771,17 +769,9 @@ async function chooseSessionKey(home, configured, explicit, deps, dryRun, retry)
 }
 // ---------------------------------------------------------------------------
 // Worktree from the representative binding state
-async function chooseWorktree(explicit, configured, deps, options) {
-    // Read first without creating anything; the representative state is created
-    // (5.x state imported) only when it does not exist yet and a real run needs it.
-    let worktrees = await deps.bindings({ initialize: false });
-    if (worktrees === null && options.initialize)
-        worktrees = await deps.bindings({ initialize: true });
-    if (worktrees === null) {
-        if (explicit)
-            return explicit;
-        throw new HermesPluginError('No representative state exists yet, and a dry run does not import it. Pass --worktree <path>, or run without --dry-run.');
-    }
+/** Read only: the installer never creates representative state, on any path. */
+async function chooseWorktree(explicit, configured, deps) {
+    const worktrees = await deps.bindings();
     if (explicit !== undefined) {
         if (!worktrees.includes(explicit)) {
             throw new HermesPluginError(`${explicit} is not a prepared representative worktree. Prepared: ${worktrees.join(', ') || 'none'}.`);
@@ -1019,13 +1009,13 @@ async function activate(home, options, deps) {
     const staleFiles = sources.filter(({ name, content }) => !before.get(name)?.equals(content)).map(({ name }) => name);
     const configuredSessionKey = await config.get(KEYS.sessionKey);
     const configuredWorktree = await config.get(KEYS.worktree);
-    // Every refusal that needs no representative state comes first: the state is
-    // created (on a first run) only by the worktree lookup, after these passed.
+    // Every check comes before the first write. The lookups are read only: the
+    // installer never creates representative state (mcp/listen import it on first use).
     const { sessionKey, source } = await chooseSessionKey(home, configuredSessionKey, options.explicitSessionKey, deps, options.dryRun, (key) => installCommand({ ...options.invocation, sessionKey: key }));
     const borgCommand = deps.borgCommand();
     if (!isAbsolute(borgCommand))
         throw new HermesPluginError(`The borg executable path is not absolute: ${borgCommand}`);
-    const worktree = await chooseWorktree(options.explicitWorktree, configuredWorktree, deps, { initialize: !options.dryRun });
+    const worktree = await chooseWorktree(options.explicitWorktree, configuredWorktree, deps);
     const wanted = { sessionKey, worktree, borgCommand };
     const { steps, mcp } = await configSteps(config, wanted);
     const gateway = await openGatewaySwitches(config, platformOf(sessionKey), deps.env);

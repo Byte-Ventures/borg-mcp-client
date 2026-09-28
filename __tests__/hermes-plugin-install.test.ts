@@ -46,6 +46,8 @@ import {
 import { parseRepresentativeArgs } from '../src/representative-cmd.js';
 import * as guarded from '../src/guarded-fs.js';
 import { representativeStateRoot, validatePrivateDirectory } from '../src/representative-db.js';
+import { plantLegacyBindings } from './fixtures/representative-state.js';
+import { bindingFor } from './fixtures/representative-mock-backend.js';
 import { borgConfigRoot } from '../src/private-root.js';
 import { execFileSync } from 'node:child_process';
 
@@ -72,7 +74,7 @@ function hermesEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
-function deps(overrides: Partial<HermesPluginDeps> & { hermesEnv?: NodeJS.ProcessEnv; worktrees?: string[] | null } = {}): HermesPluginDeps {
+function deps(overrides: Partial<HermesPluginDeps> & { hermesEnv?: NodeJS.ProcessEnv; worktrees?: string[] } = {}): HermesPluginDeps {
   const { hermesEnv: extraEnv, worktrees, ...rest } = overrides;
   const env = hermesEnv(extraEnv);
   return {
@@ -272,13 +274,13 @@ describe('hermes-plugin install', () => {
     expect(text).toContain('hermes plugins enable');
   });
 
-  it('--dry-run does not import representative state: it needs --worktree when none exists', async () => {
-    const initializeFlags: boolean[] = [];
-    const d = deps({ bindings: async ({ initialize }) => { initializeFlags.push(initialize); return null; } });
-    expect(await install({ dryRun: true }, d)).toBe(1);
-    expect(err.join('')).toContain('Pass --worktree <path>');
-    expect(initializeFlags).toEqual([false]);
-    expect(await install({ dryRun: true, worktree }, d)).toBe(0);
+  it('reads 5.x bindings read only and never creates representative state, on success too', async () => {
+    plantLegacyBindings(root, [bindingFor(worktree)]);
+    const d = deps({ bindings: defaultHermesPluginDeps().bindings });
+    expect(await install({ dryRun: true }, d)).toBe(0);
+    expect(await install({}, d)).toBe(0);
+    expect(config().plugins.entries[HERMES_PLUGIN_NAME].settings.worktree).toBe(worktree);
+    expect(existsSync(representativeStateRoot())).toBe(false);
   });
 
   it('--no-restart skips the restart and leaves the activation pending; a normal rerun finishes it', async () => {
@@ -1181,6 +1183,35 @@ describe('CR round 5 probes (review bc13269c)', () => {
     out = [];
     expect(await runHermesPluginUninstall({ hermesHome: home, dryRun: false, noRestart: true }, deps())).toBe(0);
     expect(out.join('')).toContain(`Run \`borg representative hermes-plugin uninstall --hermes-home '${home}'\` without --no-restart`);
+  });
+});
+
+describe('CR round 6 probes (review 55e7f87e): binding refusals before any state', () => {
+  const realBindings = () => deps({ bindings: defaultHermesPluginDeps().bindings });
+
+  it('zero 5.x bindings: refuses "no representative connection" and creates no state', async () => {
+    expect(existsSync(representativeStateRoot())).toBe(false);
+    expect(await install({ sessionKey: DM }, realBindings())).toBe(1);
+    expect(err.join('')).toContain('No representative connection is prepared');
+    expect(writes()).toEqual([]);
+    expect(existsSync(representativeStateRoot())).toBe(false);
+  });
+
+  it('two 5.x bindings: refuses "several representative worktrees" and creates no state', async () => {
+    const second = join(root, 'worktrees', 'second');
+    mkdirSync(second, { recursive: true });
+    plantLegacyBindings(root, [bindingFor(worktree), bindingFor(second, { boundAt: '2026-02-01T00:00:00.000Z' })]);
+    expect(await install({ sessionKey: DM }, realBindings())).toBe(1);
+    expect(err.join('')).toContain('Several representative worktrees are prepared');
+    expect(writes()).toEqual([]);
+    expect(existsSync(representativeStateRoot())).toBe(false);
+  });
+
+  it('an explicit worktree that is not a 5.x binding: refused, no state', async () => {
+    plantLegacyBindings(root, [bindingFor(worktree)]);
+    expect(await install({ sessionKey: DM, worktree: join(root, 'not-prepared') }, realBindings())).toBe(1);
+    expect(err.join('')).toContain('is not a prepared representative worktree');
+    expect(existsSync(representativeStateRoot())).toBe(false);
   });
 });
 

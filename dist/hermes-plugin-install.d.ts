@@ -23,12 +23,12 @@ export interface HermesPluginDeps {
     /** Absolute path of the borg executable written into the MCP entry and the plugin. */
     borgCommand(): string;
     /**
-     * Worktrees of the saved representative bindings. `initialize` imports 5.x
-     * state first when no state exists; without it an uninitialized state is null.
+     * Worktrees of the prepared representative bindings, read only. Without
+     * representative state yet, these are the 5.x bindings its first-generation
+     * import would bind (the same read-only preview). Nothing is created: the
+     * state is imported by `borg representative mcp` or `listen` on first use.
      */
-    bindings(options: {
-        initialize: boolean;
-    }): Promise<string[] | null>;
+    bindings(): Promise<string[]>;
     isTTY(): boolean;
     /** Reads one answer line from the terminal; null on EOF. */
     prompt(question: string): Promise<string | null>;

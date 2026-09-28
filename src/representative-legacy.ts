@@ -176,18 +176,34 @@ const NIL_UUID = '00000000-0000-0000-0000-000000000000';
  *   4. anything else, including unreadable history: the binding start.
  * A second worktree whose binding has the same generation is skipped.
  */
+/** The 5.x bindings an import keeps: the first of each binding generation. */
+export function importedLegacyBindings(bindings: RepresentativeBinding[]): RepresentativeBinding[] {
+  const seen = new Set<string>();
+  return bindings.filter((binding) => {
+    const generation = bindingFingerprint(binding);
+    if (seen.has(generation)) return false;
+    seen.add(generation);
+    return true;
+  });
+}
+
+/**
+ * Read-only preview of what the first-generation import would bind: the same
+ * files, parsing and deduplication as legacySeed, and nothing is created.
+ */
+export async function previewLegacyImport(): Promise<RepresentativeBinding[]> {
+  return importedLegacyBindings(await readLegacyBindings());
+}
+
 export async function legacySeed(): Promise<(db: Transaction) => void> {
-  const imports = await Promise.all((await readLegacyBindings()).map(async (binding) => ({
+  const imports = await Promise.all((await previewLegacyImport()).map(async (binding) => ({
     binding, delivery: await readLegacyDelivery(binding),
   })));
   return (db) => {
-    const seen = new Set<string>();
     const insert = db.prepare(`INSERT INTO delivery (generation, seat, start_id, start_at, start_kind, checkpoint_id, checkpoint_at,
       read_through_id, read_through_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const { binding, delivery } of imports) {
       const generation = bindingFingerprint(binding);
-      if (seen.has(generation)) continue;
-      seen.add(generation);
       const seat = seatKey(binding);
       insertBindingRow(db, binding, seat, 'legacy');
       const checkpoint = delivery.checkpoint.kind === 'valid' ? delivery.checkpoint.checkpoint : null;

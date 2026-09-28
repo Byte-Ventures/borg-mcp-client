@@ -73,10 +73,12 @@ export interface HermesPluginDeps {
   /** Absolute path of the borg executable written into the MCP entry and the plugin. */
   borgCommand(): string;
   /**
-   * Worktrees of the saved representative bindings. `initialize` imports 5.x
-   * state first when no state exists; without it an uninitialized state is null.
+   * Worktrees of the prepared representative bindings, read only. Without
+   * representative state yet, these are the 5.x bindings its first-generation
+   * import would bind (the same read-only preview). Nothing is created: the
+   * state is imported by `borg representative mcp` or `listen` on first use.
    */
-  bindings(options: { initialize: boolean }): Promise<string[] | null>;
+  bindings(): Promise<string[]>;
   isTTY(): boolean;
   /** Reads one answer line from the terminal; null on EOF. */
   prompt(question: string): Promise<string | null>;
@@ -156,14 +158,12 @@ export function defaultHermesPluginDeps(): HermesPluginDeps {
     sourceDir: packagedHermesPluginDir(),
     hermes: (home) => execFileHermesCli('hermes', home, process.env),
     borgCommand: defaultBorgCommand,
-    bindings: async ({ initialize }) => {
+    bindings: async () => {
       const { createRepresentativeStore } = await import('./representative-store.js');
       const store = createRepresentativeStore();
-      if (!(await store.initialized())) {
-        if (!initialize) return null;
-        await store.initialize();
-      }
-      return (await store.listBindings()).map((binding) => binding.worktree);
+      if (await store.initialized()) return (await store.listBindings()).map((binding) => binding.worktree);
+      const { previewLegacyImport } = await import('./representative-legacy.js');
+      return (await previewLegacyImport()).map((binding) => binding.worktree);
     },
     isTTY: () => process.stdin.isTTY === true && process.stdout.isTTY === true,
     prompt: async (question) => {
@@ -895,22 +895,13 @@ async function chooseSessionKey(
 // ---------------------------------------------------------------------------
 // Worktree from the representative binding state
 
+/** Read only: the installer never creates representative state, on any path. */
 async function chooseWorktree(
   explicit: string | undefined,
   configured: ConfigValue,
   deps: HermesPluginDeps,
-  options: { initialize: boolean },
 ): Promise<string> {
-  // Read first without creating anything; the representative state is created
-  // (5.x state imported) only when it does not exist yet and a real run needs it.
-  let worktrees = await deps.bindings({ initialize: false });
-  if (worktrees === null && options.initialize) worktrees = await deps.bindings({ initialize: true });
-  if (worktrees === null) {
-    if (explicit) return explicit;
-    throw new HermesPluginError(
-      'No representative state exists yet, and a dry run does not import it. Pass --worktree <path>, or run without --dry-run.',
-    );
-  }
+  const worktrees = await deps.bindings();
   if (explicit !== undefined) {
     if (!worktrees.includes(explicit)) {
       throw new HermesPluginError(`${explicit} is not a prepared representative worktree. Prepared: ${worktrees.join(', ') || 'none'}.`);
@@ -1222,15 +1213,15 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
 
   const configuredSessionKey = await config.get(KEYS.sessionKey);
   const configuredWorktree = await config.get(KEYS.worktree);
-  // Every refusal that needs no representative state comes first: the state is
-  // created (on a first run) only by the worktree lookup, after these passed.
+  // Every check comes before the first write. The lookups are read only: the
+  // installer never creates representative state (mcp/listen import it on first use).
   const { sessionKey, source } = await chooseSessionKey(
     home, configuredSessionKey, options.explicitSessionKey, deps, options.dryRun,
     (key) => installCommand({ ...options.invocation, sessionKey: key }),
   );
   const borgCommand = deps.borgCommand();
   if (!isAbsolute(borgCommand)) throw new HermesPluginError(`The borg executable path is not absolute: ${borgCommand}`);
-  const worktree = await chooseWorktree(options.explicitWorktree, configuredWorktree, deps, { initialize: !options.dryRun });
+  const worktree = await chooseWorktree(options.explicitWorktree, configuredWorktree, deps);
   const wanted: Target = { sessionKey, worktree, borgCommand };
   const { steps, mcp } = await configSteps(config, wanted);
   const gateway = await openGatewaySwitches(config, platformOf(sessionKey), deps.env);
