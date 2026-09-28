@@ -586,7 +586,7 @@ class Supervisor:
         now = self._clock()
         with self._lock:
             if not accepted:
-                self._record_wakes(keys, -1)  # Hermes refused it: nothing was spent
+                self._record_wakes(keys, -1)  # refused: roll back the reservation (kept as spent if this write fails)
                 self._inject_failures += 1
                 if self._inject_failures == 1 or self._inject_failures % 10 == 0:
                     logger.warning("%s: Hermes did not accept the wake (%d failures); check allow_gateway_injection "
