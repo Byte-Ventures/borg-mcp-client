@@ -106,14 +106,16 @@ export class PushEngine {
     /** One cancellation for everything: no later transition, merge or request, and a request in flight is abandoned. */
     stop() { this.halt.abort(new EngineStoppedError()); }
     /**
-     * A network read that stop() abandons at once. The request itself carries the
-     * engine's signal, so the transport aborts it and starts no retry or backoff.
+     * A network read that stop() abandons at once. The request is started only
+     * while the engine runs and carries the engine's signal, so the transport
+     * aborts it and starts no retry or backoff.
      */
     network(request) {
         if (this.stopped)
             return Promise.reject(new EngineStoppedError());
-        request.catch(() => { }); // an abandoned request may still fail later
-        return Promise.race([request, this.halted]);
+        const pending = request(this.halt.signal);
+        pending.catch(() => { }); // an abandoned request still settles, usually with the stop reason
+        return Promise.race([pending, this.halted]);
     }
     /** Transitions and their emits run one at a time, in order; none starts after stop(). */
     serial(step) {
@@ -159,7 +161,7 @@ export class PushEngine {
             return later(doc.frontier, scanStart(delivery).cursor);
         }));
         if (cursor !== undefined) {
-            const probe = await this.network(this.deps.backend.readAfter(cursor, 1, this.halt.signal));
+            const probe = await this.network((signal) => this.deps.backend.readAfter(cursor, 1, signal));
             // Without behind_by the size is unknown: no gate, normal fairness only.
             const count = probe.behind_by === undefined ? 0 : probe.entries.length + probe.behind_by;
             await this.serial(() => this.transact((db, generation) => {
@@ -207,7 +209,7 @@ export class PushEngine {
             return later(loadDocument(db, generation).frontier, scanStart(delivery).cursor);
         }));
         for (let page = 1;; page += 1) {
-            const result = await this.network(this.deps.backend.readAfter(cursor, DISCOVERY_PAGE, this.halt.signal));
+            const result = await this.network((signal) => this.deps.backend.readAfter(cursor, DISCOVERY_PAGE, signal));
             const tail = result.entries.at(-1);
             const tailPoint = tail ? { id: tail.id, created_at: tail.created_at } : null;
             await this.serial(() => this.transact((db, generation, now) => this.merge(db, generation, now, result.entries, tailPoint, result.has_more === true)));

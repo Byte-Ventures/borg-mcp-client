@@ -673,6 +673,31 @@ describe('review controls (S2 round 3): stop cancels the transport', () => {
     } finally { real.restore(); }
   });
 
+  it('starts no request once stopped between its state step and the read, and leaves no unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => { unhandled.push(error); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      let reads = 0; let stopInsideStep = false;
+      const holder: { engine?: PushEngine } = {};
+      const { engine } = await engineFor({
+        // `now` runs inside the step's transaction: stopping there lands between the step and the read.
+        now: () => { if (stopInsideStep) holder.engine?.stop(); return new Date(clock); },
+        backend: {
+          ...cube.backend(),
+          // Like a real transport: a request started with an aborted signal rejects with its reason.
+          readAfter: async (_cursor, _limit, signal) => { reads++; signal?.throwIfAborted(); return { entries: [], has_more: false }; },
+        },
+      }, false);
+      holder.engine = engine;
+      stopInsideStep = true;
+      await expect(engine.captureCohort()).rejects.toThrow(/stopped/);
+      await new Promise((done) => setTimeout(done, 20));
+      expect(reads).toBe(0);
+      expect(unhandled).toEqual([]);
+    } finally { process.off('unhandledRejection', onUnhandled); }
+  });
+
   it('serverHead: an abort rejects at once even when the backend ignores it, and no later page starts', async () => {
     const pages: number[] = [];
     let releasePage!: () => void;

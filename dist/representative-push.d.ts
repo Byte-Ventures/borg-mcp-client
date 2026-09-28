@@ -80,8 +80,9 @@ export declare class PushEngine {
     /** One cancellation for everything: no later transition, merge or request, and a request in flight is abandoned. */
     stop(): void;
     /**
-     * A network read that stop() abandons at once. The request itself carries the
-     * engine's signal, so the transport aborts it and starts no retry or backoff.
+     * A network read that stop() abandons at once. The request is started only
+     * while the engine runs and carries the engine's signal, so the transport
+     * aborts it and starts no retry or backoff.
      */
     private network;
     /** Transitions and their emits run one at a time, in order; none starts after stop(). */
