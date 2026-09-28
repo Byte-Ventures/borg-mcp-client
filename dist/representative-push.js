@@ -34,6 +34,7 @@
  * - Clock: a persisted instant more than 24 h ahead is clamped to now + 24 h.
  */
 import { randomUUID } from 'node:crypto';
+import { printable } from './representative-db.js';
 import { comparePoints, loadDelivery, scanStart } from './representative-delivery-store.js';
 import { isRepresentativeUuid, requireCurrentGeneration, } from './representative-store.js';
 import { isAddressedCoordinatorEntry } from './representative-core.js';
@@ -71,6 +72,38 @@ function parseDocument(raw) {
     if (!valid)
         throw new Error('The representative state holds an invalid wake record');
     return value;
+}
+const isWakeRow = (row) => isRepresentativeUuid(row.entry_id) && isInstant(row.created_at) && isInstant(row.next_at) &&
+    typeof row.attempts === 'number' && Number.isInteger(row.attempts) && row.attempts >= 0;
+/**
+ * Wake state is derived data: the delivered checkpoint and the log rebuild it.
+ * An invalid wake_state document or wake_replies row is therefore discarded
+ * for the generation (both tables, never the delivery state), so discovery
+ * rebuilds it from the delivered checkpoint. Returns what was discarded, or
+ * null when the state is valid.
+ */
+function discardInvalidWakeState(db, generation) {
+    const problems = [];
+    const doc = db.prepare('SELECT state FROM wake_state WHERE generation = ?').get(generation);
+    if (doc) {
+        try {
+            if (typeof doc.state !== 'string')
+                throw new Error('not text');
+            parseDocument(doc.state);
+        }
+        catch {
+            problems.push('an invalid wake_state document');
+        }
+    }
+    const invalidRows = db.prepare('SELECT entry_id, created_at, attempts, next_at FROM wake_replies WHERE generation = ?')
+        .all(generation).filter((row) => !isWakeRow(row)).length;
+    if (invalidRows > 0)
+        problems.push(`${invalidRows} invalid wake_replies row(s)`);
+    if (problems.length === 0)
+        return null;
+    db.prepare('DELETE FROM wake_state WHERE generation = ?').run(generation);
+    db.prepare('DELETE FROM wake_replies WHERE generation = ?').run(generation);
+    return problems.join(' and ');
 }
 function loadDocument(db, generation) {
     const row = db.prepare('SELECT state FROM wake_state WHERE generation = ?').get(generation);
@@ -127,11 +160,22 @@ export class PushEngine {
         this.chain = result.catch(() => { });
         return result;
     }
-    transact(body) {
-        return this.deps.store.state.transact((db) => {
+    /**
+     * One engine transaction. Invalid wake state is discarded first, in the same
+     * transaction, so no transition ever reads it; the line is logged after commit.
+     */
+    async transact(body) {
+        let discarded = null;
+        const result = await this.deps.store.state.transact((db) => {
             const generation = requireCurrentGeneration(db, this.deps.binding);
+            discarded = discardInvalidWakeState(db, generation);
             return body(db, generation, this.deps.now());
         });
+        if (discarded) {
+            this.deps.log?.(`Representative listener: discarded ${printable(discarded)}; ` +
+                'rebuilding wake state from the delivered checkpoint (delivery state unchanged)');
+        }
+        return result;
     }
     /** Clamp instants a clock jump left more than 24 h ahead. */
     clamp(db, generation, doc, now) {

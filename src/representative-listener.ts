@@ -225,6 +225,7 @@ export async function runListener(
     const push = new PushEngine({
       binding, store: deps.store, backend: ctx.backend, now,
       emit: async (wake) => { if (!reason) await emit({ event: 'wake', ...wake }); },
+      log: (line) => { deps.stderr(`${line}\n`); },
       ...(options.hooks ? { hooks: options.hooks } : {}),
     });
     engine = push;
