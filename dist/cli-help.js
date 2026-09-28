@@ -126,7 +126,8 @@ export function representativeHelpText(version) {
         `            Hermes CLI (each value read back), enables it and restarts a service-managed gateway\n` +
         `            (a hand-started one: prints the command). Stops nothing in Hermes Desktop: new chats get the\n` +
         `            Borg tools; after a changed entry, run /reload-mcp in open Desktop chats. The conversation it\n` +
-        `            wakes is your gateway DM, found in Hermes's sessions.json; the worktree comes from the\n` +
+        `            wakes is your gateway DM from Hermes's sessions.json, confirmed by you at a terminal (never\n` +
+        `            picked for you; without a terminal pass --session-key); the worktree comes from the\n` +
         `            prepared binding. config.yaml is backed up first; on failure Borg reverses only its own keys.\n` +
         `            Reports an open gateway. A rerun changes nothing, or finishes a pending activation;\n` +
         `            \`borg update\` refreshes an installed plugin.\n` +

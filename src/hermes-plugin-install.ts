@@ -805,7 +805,8 @@ export async function discoverSessionKeys(home: string): Promise<SessionCandidat
   if (!st || !st.isFile() || st.size > SESSIONS_MAX_BYTES) return 'unavailable';
   let parsed: unknown;
   try {
-    const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    // O_NONBLOCK: a FIFO swapped in after the lstat never blocks; fstat then refuses it.
+    const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
     try {
       const opened = await handle.stat();
       if (!opened.isFile() || opened.size > SESSIONS_MAX_BYTES) return 'unavailable';
@@ -832,11 +833,23 @@ function describeCandidate(candidate: SessionCandidate): string {
   return `${candidate.sessionKey}${candidate.label ? `  (${candidate.label})` : ''}`;
 }
 
+/**
+ * The conversation to wake. Borg never picks one without the operator's
+ * confirmation (design rev 2 §6): on a gateway that allows several users, the
+ * only DM in sessions.json can be someone else's.
+ * - `--session-key`, or the key already configured, is used as given.
+ * - Otherwise, in a terminal: every candidate is shown with its label, even a
+ *   single one, and must be confirmed; the default is no.
+ * - Otherwise (no terminal, including `borg update`): refused, naming the
+ *   candidates and the exact command with --session-key.
+ * - A dry run shows a single candidate as the one install would ask about.
+ */
 async function chooseSessionKey(
   home: string,
   configured: ConfigValue,
   explicit: string | undefined,
   deps: HermesPluginDeps,
+  dryRun = false,
 ): Promise<{ sessionKey: string; source: string }> {
   if (explicit !== undefined) return { sessionKey: explicit, source: '--session-key' };
   if (typeof configured === 'string' && SESSION_KEY_PATTERN.test(configured)) {
@@ -849,20 +862,32 @@ async function chooseSessionKey(
         'Message your Hermes bot once from your own DM, then rerun, or pass --session-key agent:main:<platform>:dm:<chat id>.',
     );
   }
-  if (candidates.length === 1) return { sessionKey: candidates[0].sessionKey, source: 'the only gateway DM conversation' };
   const listing = candidates.map((candidate, index) => `  ${index + 1}. ${describeCandidate(candidate)}\n`).join('');
+  if (dryRun && candidates.length === 1) {
+    return { sessionKey: candidates[0].sessionKey, source: 'the only gateway DM conversation; install asks you to confirm it' };
+  }
   if (!deps.isTTY()) {
     throw new HermesPluginError(
-      `Several gateway DM conversations were found; pass one with --session-key:\n${listing.trimEnd()}`,
+      `Borg does not choose the conversation to wake without your confirmation. Gateway DM conversations found:\n${listing}` +
+        `Run install with the one that is yours, for example:\n` +
+        candidates.map((candidate) => `  ${INSTALL_COMMAND} --session-key ${candidate.sessionKey}\n`).join('').trimEnd(),
     );
   }
-  deps.stdout(`Gateway DM conversations:\n${listing}`);
-  const answer = await deps.prompt(`Wake which conversation? [1-${candidates.length}] `);
-  const index = answer === null ? Number.NaN : Number(answer.trim()) - 1;
-  if (!Number.isInteger(index) || index < 0 || index >= candidates.length) {
-    throw new HermesPluginError('No conversation was chosen; nothing was changed.');
+  deps.stdout(`Gateway DM conversations found in Hermes (confirm that it is your own DM):\n${listing}`);
+  let chosen = candidates[0];
+  if (candidates.length > 1) {
+    const answer = await deps.prompt(`Wake which conversation? [1-${candidates.length}] `);
+    const index = answer === null ? Number.NaN : Number(answer.trim()) - 1;
+    if (!Number.isInteger(index) || index < 0 || index >= candidates.length) {
+      throw new HermesPluginError('No conversation was chosen; nothing was changed.');
+    }
+    chosen = candidates[index];
   }
-  return { sessionKey: candidates[index].sessionKey, source: 'your choice' };
+  const confirm = await deps.prompt(`Wake ${describeCandidate(chosen)} for Borg Coordinator replies? [y/N] `);
+  if (confirm === null || !/^(?:y|yes)$/i.test(confirm.trim())) {
+    throw new HermesPluginError('The conversation was not confirmed; nothing was changed.');
+  }
+  return { sessionKey: chosen.sessionKey, source: 'confirmed by you' };
 }
 
 // ---------------------------------------------------------------------------
@@ -1174,7 +1199,7 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
   const configuredSessionKey = await config.get(KEYS.sessionKey);
   const configuredWorktree = await config.get(KEYS.worktree);
   const worktree = await chooseWorktree(options.explicitWorktree, configuredWorktree, deps, { initialize: !options.dryRun });
-  const { sessionKey, source } = await chooseSessionKey(home, configuredSessionKey, options.explicitSessionKey, deps);
+  const { sessionKey, source } = await chooseSessionKey(home, configuredSessionKey, options.explicitSessionKey, deps, options.dryRun);
   const borgCommand = deps.borgCommand();
   if (!isAbsolute(borgCommand)) throw new HermesPluginError(`The borg executable path is not absolute: ${borgCommand}`);
   const wanted: Target = { sessionKey, worktree, borgCommand };

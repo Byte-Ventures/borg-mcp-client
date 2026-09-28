@@ -29,6 +29,7 @@ import {
   HERMES_PLUGIN_NAME,
   activateHermesPlugin,
   configSetText,
+  discoverSessionKeys,
   activationPending,
   execFileHermesCli,
   fileActivationStore,
@@ -80,8 +81,9 @@ function deps(overrides: Partial<HermesPluginDeps> & { hermesEnv?: NodeJS.Proces
     hermes: (h) => execFileHermesCli(fake, h, env),
     borgCommand: () => BORG,
     bindings: async () => (worktrees === undefined ? [worktree] : worktrees),
-    isTTY: () => false,
-    prompt: async () => null,
+    // An operator at a terminal who confirms the one DM shown (see the discovery tests for the rest).
+    isTTY: () => true,
+    prompt: async () => 'y',
     now: () => new Date(),
     activation: fileActivationStore(),
     stdout: (text) => { out.push(text); },
@@ -219,7 +221,7 @@ describe('hermes-plugin install', () => {
     expect(statSync(backupPath).mode & 0o777).toBe(0o600);
     expect(statSync(join(home, 'backups', 'borg-representative')).mode & 0o777).toBe(0o700);
     const text = out.join('');
-    expect(text).toContain(`Conversation: ${DM} (the only gateway DM conversation)`);
+    expect(text).toContain(`Conversation: ${DM} (confirmed by you)`);
     expect(text).toContain(`Backup of config.yaml (for manual recovery): ${backupPath}`);
     expect(text).toContain('Hermes Desktop: new chats get the Borg tools.');
     expect(text).not.toContain('/reload-mcp');
@@ -512,7 +514,7 @@ describe('session_key discovery (untrusted sessions.json)', () => {
       'agent:main:discord:dm:42': { origin: { chat_name: 'Other\u0007' } },
       'agent:main:telegram:dm:bad key': {},
     });
-    expect(await install()).toBe(1);
+    expect(await install({}, deps({ isTTY: () => false }))).toBe(1);
     const message = err.join('');
     expect(message).toContain(`${DM}  (Theo[31m DM)`);
     expect(message).toContain('agent:main:discord:dm:42  (Other)');
@@ -523,8 +525,62 @@ describe('session_key discovery (untrusted sessions.json)', () => {
 
   it('lets a terminal user pick one candidate', async () => {
     writeSessions({ [DM]: {}, 'agent:main:discord:dm:42': {} });
-    expect(await install({}, deps({ isTTY: () => true, prompt: async () => '1' }))).toBe(0);
+    const answers = ['1', 'y'];
+    const questions: string[] = [];
+    expect(await install({}, deps({ isTTY: () => true, prompt: async (question) => { questions.push(question); return answers.shift() ?? null; } }))).toBe(0);
     expect(config().plugins.entries[HERMES_PLUGIN_NAME].settings.session_key).toBe('agent:main:discord:dm:42');
+    expect(questions[1]).toContain('Wake agent:main:discord:dm:42');
+    expect(questions[1]).toContain('[y/N]');
+  });
+
+  it('never picks a single candidate without confirmation (design rev 2 §6)', async () => {
+    // No terminal: refused, naming the candidate and the exact command.
+    expect(await install({}, deps({ isTTY: () => false }))).toBe(1);
+    const message = err.join('');
+    expect(message).toContain('does not choose the conversation to wake without your confirmation');
+    expect(message).toContain(`1. ${DM}  (Theo DM)`);
+    expect(message).toContain(`borg representative hermes-plugin install --session-key ${DM}`);
+    expect(writes()).toEqual([]);
+
+    // A terminal: the single candidate is shown and asked about; the default is no.
+    for (const answer of ['', 'n', null]) {
+      err = []; out = [];
+      const questions: string[] = [];
+      expect(await install({}, deps({ prompt: async (question) => { questions.push(question); return answer; } }))).toBe(1);
+      expect(out.join('')).toContain(`1. ${DM}  (Theo DM)`);
+      expect(questions).toEqual([`Wake ${DM}  (Theo DM) for Borg Coordinator replies? [y/N] `]);
+      expect(err.join('')).toContain('The conversation was not confirmed; nothing was changed.');
+      expect(writes()).toEqual([]);
+    }
+  });
+
+  it('a dry run shows the single candidate as the one install would ask about, without asking', async () => {
+    let asked = false;
+    expect(await install({ dryRun: true }, deps({ isTTY: () => false, prompt: async () => { asked = true; return 'y'; } }))).toBe(0);
+    expect(asked).toBe(false);
+    expect(out.join('')).toContain(`Conversation: ${DM} (the only gateway DM conversation; install asks you to confirm it)`);
+  });
+
+  it('opens sessions.json non-blocking: a FIFO swapped in after the lstat is refused promptly', async () => {
+    const path = join(home, 'sessions', 'sessions.json');
+    const originalOpen = guarded.open;
+    let swapped = false;
+    const spy = vi.spyOn(guarded, 'open').mockImplementation((async (target: unknown, ...rest: unknown[]) => {
+      if (target === path && !swapped) {
+        swapped = true; rmSync(path); execFileSync('mkfifo', ['-m', '0600', path]);
+      }
+      return (originalOpen as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as typeof guarded.open);
+    const started = Date.now();
+    try {
+      const outcome = await Promise.race([
+        discoverSessionKeys(home),
+        new Promise<string>((done) => setTimeout(() => done('timed out'), 2_000)),
+      ]);
+      expect(outcome).toBe('unavailable');
+    } finally { spy.mockRestore(); }
+    expect(swapped).toBe(true);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it('treats a linked, oversized or non-object sessions.json as unavailable', async () => {
@@ -678,7 +734,7 @@ describe('activateHermesPlugin (borg update)', () => {
     writeFileSync(join(pluginDir(), 'plugin.yaml'), 'name: borg-representative-push\n');
     writeSessions({ [DM]: {}, 'agent:main:discord:dm:42': {} });
     expect(await activation()).toBe(1);
-    expect(err.join('')).toContain('pass one with --session-key');
+    expect(err.join('')).toContain('does not choose the conversation to wake without your confirmation');
     expect(writes()).toEqual([]);
   });
 
@@ -991,7 +1047,7 @@ describe('CR round 2 rollback and prompt probes', () => {
     const d = deps({ env: { HERMES_HOME: home }, isTTY: () => true, prompt: async () => { prompted = true; return null; } });
     expect(await activateHermesPlugin(d)).toBe(1);
     expect(prompted).toBe(false);
-    expect(err.join('')).toContain('pass one with --session-key');
+    expect(err.join('')).toContain('does not choose the conversation to wake without your confirmation');
   });
 });
 
@@ -1059,6 +1115,21 @@ describe('CR round 3 boundaries', () => {
     ]);
     expect(outcome).toContain(`Unsafe Borg state file ${path}`);
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe('borg update never picks a conversation (design rev 2 §6)', () => {
+  it('reuses only the configured key; without one it refuses without asking and stays pending', async () => {
+    expect(await install()).toBe(0);
+    const current = config(); delete current.plugins.entries[HERMES_PLUGIN_NAME].settings.session_key;
+    writeFileSync(join(home, 'config.yaml'), JSON.stringify(current));
+    resetLog(); err = [];
+    let asked = false;
+    const d = deps({ env: { HERMES_HOME: home }, prompt: async () => { asked = true; return 'y'; } });
+    expect(await activateHermesPlugin(d)).toBe(1); // one DM candidate, a terminal and a 'y' ready: still no pick
+    expect(asked).toBe(false);
+    expect(err.join('')).toContain(`--session-key ${DM}`);
+    expect(writes()).toEqual([]);
   });
 });
 

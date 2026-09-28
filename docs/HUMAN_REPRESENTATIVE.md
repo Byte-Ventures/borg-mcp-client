@@ -464,10 +464,15 @@ The command then does everything, printing each step before it runs:
 
 1. Finds the worktree from the prepared binding (`--worktree` when several are
    prepared) and the conversation from Hermes's `sessions/sessions.json`: only
-   gateway DM keys (`agent:main:<platform>:dm:<chat id>`) count. One DM is used
-   and printed; with several it asks in a terminal and otherwise refuses and
-   lists them. `--session-key` names one directly. A rerun keeps the configured
-   conversation.
+   gateway DM keys (`agent:main:<platform>:dm:<chat id>`) count. Borg never
+   picks the conversation without your confirmation: on a gateway that allows
+   several users, the only DM there can be someone else's. In a terminal it
+   shows every candidate with its name, even a single one, and asks you to
+   confirm (the default is no); with several you choose one first. Without a
+   terminal it refuses, lists the candidates and prints the exact command with
+   `--session-key`. `--session-key` names one directly, and a rerun (or
+   `borg update`) keeps the configured conversation; `borg update` never picks
+   one.
 2. Installs the plugin's two files into
    `<Hermes home>/plugins/borg-representative-push/` (the Hermes home is
    `--hermes-home`, else `$HERMES_HOME`, else `~/.hermes`), `plugin.yaml` last:
