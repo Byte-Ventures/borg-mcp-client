@@ -27,6 +27,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { mkdir, open, rename, rmdir, unlink, writeFile } from './guarded-fs.js';
 import { borgConfigRoot } from './private-root.js';
 import { validatePrivateDirectory } from './representative-db.js';
+import { shellEscape } from './shell-escape.js';
 import { isRepresentativeUuid } from './representative-store.js';
 export const HERMES_PLUGIN_NAME = 'borg-representative-push';
 /** Exactly the shipped files; nothing else in the source directory is copied. */
@@ -732,7 +733,7 @@ function describeCandidate(candidate) {
  *   candidates and the exact command with --session-key.
  * - A dry run shows a single candidate as the one install would ask about.
  */
-async function chooseSessionKey(home, configured, explicit, deps, dryRun = false) {
+async function chooseSessionKey(home, configured, explicit, deps, dryRun, retry) {
     if (explicit !== undefined)
         return { sessionKey: explicit, source: '--session-key' };
     if (typeof configured === 'string' && SESSION_KEY_PATTERN.test(configured)) {
@@ -750,7 +751,7 @@ async function chooseSessionKey(home, configured, explicit, deps, dryRun = false
     if (!deps.isTTY()) {
         throw new HermesPluginError(`Borg does not choose the conversation to wake without your confirmation. Gateway DM conversations found:\n${listing}` +
             `Run install with the one that is yours, for example:\n` +
-            candidates.map((candidate) => `  ${INSTALL_COMMAND} --session-key ${candidate.sessionKey}\n`).join('').trimEnd());
+            candidates.map((candidate) => `  ${retry(candidate.sessionKey)}\n`).join('').trimEnd());
     }
     deps.stdout(`Gateway DM conversations found in Hermes (confirm that it is your own DM):\n${listing}`);
     let chosen = candidates[0];
@@ -771,7 +772,11 @@ async function chooseSessionKey(home, configured, explicit, deps, dryRun = false
 // ---------------------------------------------------------------------------
 // Worktree from the representative binding state
 async function chooseWorktree(explicit, configured, deps, options) {
-    const worktrees = await deps.bindings(options);
+    // Read first without creating anything; the representative state is created
+    // (5.x state imported) only when it does not exist yet and a real run needs it.
+    let worktrees = await deps.bindings({ initialize: false });
+    if (worktrees === null && options.initialize)
+        worktrees = await deps.bindings({ initialize: true });
     if (worktrees === null) {
         if (explicit)
             return explicit;
@@ -984,7 +989,23 @@ async function finishGeneration(cli, deps, record, noRestart, verb, rerun) {
     return outcome === 'failed' ? 1 : 0;
 }
 const INSTALL_COMMAND = 'borg representative hermes-plugin install';
-const UNINSTALL_COMMAND = 'borg representative hermes-plugin uninstall';
+/**
+ * An install command for the operator to run: built from the selectors of the
+ * current invocation (--hermes-home when one was given, --worktree when one
+ * was given) plus the given session key, every value shell-quoted.
+ */
+export function installCommand(selectors) {
+    return [
+        INSTALL_COMMAND,
+        ...(selectors.hermesHome !== undefined ? ['--hermes-home', shellEscape(selectors.hermesHome)] : []),
+        ...(selectors.worktree !== undefined ? ['--worktree', shellEscape(selectors.worktree)] : []),
+        ...(selectors.sessionKey !== undefined ? ['--session-key', shellEscape(selectors.sessionKey)] : []),
+    ].join(' ');
+}
+/** The uninstall command for the same Hermes home, shell-quoted. */
+export function uninstallCommand(hermesHome) {
+    return ['borg representative hermes-plugin uninstall', ...(hermesHome !== undefined ? ['--hermes-home', shellEscape(hermesHome)] : [])].join(' ');
+}
 async function activate(home, options, deps) {
     const cli = deps.hermes(home);
     const config = new HermesConfig(cli);
@@ -998,11 +1019,13 @@ async function activate(home, options, deps) {
     const staleFiles = sources.filter(({ name, content }) => !before.get(name)?.equals(content)).map(({ name }) => name);
     const configuredSessionKey = await config.get(KEYS.sessionKey);
     const configuredWorktree = await config.get(KEYS.worktree);
-    const worktree = await chooseWorktree(options.explicitWorktree, configuredWorktree, deps, { initialize: !options.dryRun });
-    const { sessionKey, source } = await chooseSessionKey(home, configuredSessionKey, options.explicitSessionKey, deps, options.dryRun);
+    // Every refusal that needs no representative state comes first: the state is
+    // created (on a first run) only by the worktree lookup, after these passed.
+    const { sessionKey, source } = await chooseSessionKey(home, configuredSessionKey, options.explicitSessionKey, deps, options.dryRun, (key) => installCommand({ ...options.invocation, sessionKey: key }));
     const borgCommand = deps.borgCommand();
     if (!isAbsolute(borgCommand))
         throw new HermesPluginError(`The borg executable path is not absolute: ${borgCommand}`);
+    const worktree = await chooseWorktree(options.explicitWorktree, configuredWorktree, deps, { initialize: !options.dryRun });
     const wanted = { sessionKey, worktree, borgCommand };
     const { steps, mcp } = await configSteps(config, wanted);
     const gateway = await openGatewaySwitches(config, platformOf(sessionKey), deps.env);
@@ -1036,7 +1059,7 @@ async function activate(home, options, deps) {
             : await beginGeneration(cli, home, desired, previous, false);
         await deps.activation.write(record);
         deps.stdout(`${summary}The configuration is already in place; finishing the pending activation.\n${openGatewayReport(gateway)}`);
-        return finishGeneration(cli, deps, record, options.noRestart, 'load', INSTALL_COMMAND);
+        return finishGeneration(cli, deps, record, options.noRestart, 'load', installCommand(options.invocation));
     }
     const plan = [
         ...(state === 'absent' ? [`create ${target}`] : []),
@@ -1107,7 +1130,7 @@ async function activate(home, options, deps) {
         deps.stdout(DESKTOP_ADDED);
     if (mcp === 'changed')
         deps.stdout(DESKTOP_RELOAD);
-    return finishGeneration(cli, deps, record, options.noRestart, 'load', INSTALL_COMMAND);
+    return finishGeneration(cli, deps, record, options.noRestart, 'load', installCommand(options.invocation));
 }
 /**
  * A failed run reverses Borg's own keys (never a whole-file restore) and then
@@ -1148,6 +1171,10 @@ export async function runHermesPluginInstall(command, deps) {
         return await activate(home, {
             ...(command.worktree ? { explicitWorktree: command.worktree } : {}),
             ...(command.sessionKey ? { explicitSessionKey: command.sessionKey } : {}),
+            invocation: {
+                ...(command.hermesHome !== undefined ? { hermesHome: command.hermesHome } : {}),
+                ...(command.worktree !== undefined ? { worktree: command.worktree } : {}),
+            },
             dryRun: command.dryRun,
             noRestart: command.noRestart,
             mayCreate: true,
@@ -1176,7 +1203,7 @@ export async function activateHermesPlugin(deps) {
         if ((await installState(home)) !== 'installed')
             return 0;
         unattended.stdout(`Activating the Hermes plugin ${HERMES_PLUGIN_NAME}.\n`);
-        return await activate(home, { dryRun: false, noRestart: false, mayCreate: false }, unattended);
+        return await activate(home, { invocation: {}, dryRun: false, noRestart: false, mayCreate: false }, unattended);
     }
     catch (error) {
         return failure(error, unattended, 'Hermes plugin activation');
@@ -1274,7 +1301,7 @@ export async function runHermesPluginUninstall(command, deps) {
                 : await beginGeneration(cli, home, ABSENT_GENERATION, previous, false);
             await deps.activation.write(record);
             deps.stdout(`The Hermes plugin ${HERMES_PLUGIN_NAME} is removed from ${home}; finishing the pending unload.\n${foreignNote}`);
-            return finishGeneration(cli, deps, record, command.noRestart, 'unload', UNINSTALL_COMMAND);
+            return finishGeneration(cli, deps, record, command.noRestart, 'unload', uninstallCommand(command.hermesHome));
         }
         const plan = [
             ...steps.map((step) => step.describe),
@@ -1312,7 +1339,7 @@ export async function runHermesPluginUninstall(command, deps) {
         deps.stdout(`Uninstalled the Hermes plugin ${HERMES_PLUGIN_NAME}.` +
             `${tx.backupPath ? ` Backup of config.yaml (for manual recovery): ${tx.backupPath}` : ''}\n${dirOutcome}${foreignNote}` +
             `${removesMcp ? DESKTOP_RELOAD : ''}`);
-        return finishGeneration(cli, deps, record, command.noRestart, 'unload', UNINSTALL_COMMAND);
+        return finishGeneration(cli, deps, record, command.noRestart, 'unload', uninstallCommand(command.hermesHome));
     }
     catch (error) {
         return failure(error, deps, 'Uninstall');

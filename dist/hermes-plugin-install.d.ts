@@ -141,6 +141,18 @@ export type GatewaySupervision = {
  * `unknown`, and Borg never restarts an unknown gateway.
  */
 export declare function parseGatewayStatus(stdout: string): GatewaySupervision;
+/**
+ * An install command for the operator to run: built from the selectors of the
+ * current invocation (--hermes-home when one was given, --worktree when one
+ * was given) plus the given session key, every value shell-quoted.
+ */
+export declare function installCommand(selectors: {
+    hermesHome?: string;
+    worktree?: string;
+    sessionKey?: string;
+}): string;
+/** The uninstall command for the same Hermes home, shell-quoted. */
+export declare function uninstallCommand(hermesHome: string | undefined): string;
 export declare function runHermesPluginInstall(command: HermesPluginInstallCommand, deps: HermesPluginDeps): Promise<number>;
 /**
  * `borg update`: activate the installed plugin (Borg's plugin.yaml is the

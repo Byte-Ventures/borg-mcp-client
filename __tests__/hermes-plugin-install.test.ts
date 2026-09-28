@@ -29,6 +29,7 @@ import {
   HERMES_PLUGIN_NAME,
   activateHermesPlugin,
   configSetText,
+  defaultHermesPluginDeps,
   discoverSessionKeys,
   activationPending,
   execFileHermesCli,
@@ -44,7 +45,7 @@ import {
 } from '../src/hermes-plugin-install.js';
 import { parseRepresentativeArgs } from '../src/representative-cmd.js';
 import * as guarded from '../src/guarded-fs.js';
-import { validatePrivateDirectory } from '../src/representative-db.js';
+import { representativeStateRoot, validatePrivateDirectory } from '../src/representative-db.js';
 import { borgConfigRoot } from '../src/private-root.js';
 import { execFileSync } from 'node:child_process';
 
@@ -539,7 +540,7 @@ describe('session_key discovery (untrusted sessions.json)', () => {
     const message = err.join('');
     expect(message).toContain('does not choose the conversation to wake without your confirmation');
     expect(message).toContain(`1. ${DM}  (Theo DM)`);
-    expect(message).toContain(`borg representative hermes-plugin install --session-key ${DM}`);
+    expect(message).toContain(`borg representative hermes-plugin install --hermes-home '${home}' --session-key '${DM}'`);
     expect(writes()).toEqual([]);
 
     // A terminal: the single candidate is shown and asked about; the default is no.
@@ -1128,8 +1129,58 @@ describe('borg update never picks a conversation (design rev 2 §6)', () => {
     const d = deps({ env: { HERMES_HOME: home }, prompt: async () => { asked = true; return 'y'; } });
     expect(await activateHermesPlugin(d)).toBe(1); // one DM candidate, a terminal and a 'y' ready: still no pick
     expect(asked).toBe(false);
-    expect(err.join('')).toContain(`--session-key ${DM}`);
+    // `borg update` uses the default Hermes home, so the retry names none.
+    expect(err.join('')).toContain(`borg representative hermes-plugin install --session-key '${DM}'`);
     expect(writes()).toEqual([]);
+  });
+});
+
+/** Split a printed POSIX command the way a shell would for single-quoted words. */
+function shellWords(line: string): string[] {
+  const words: string[] = [];
+  const pattern = /'((?:[^']|'\\'')*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(line)) !== null) {
+    words.push(match[1] !== undefined ? match[1].replace(/'\\''/g, "'") : match[2]);
+  }
+  return words;
+}
+
+describe('CR round 5 probes (review bc13269c)', () => {
+  it('F7: update refuses a missing session key before creating any representative state (real bindings seam)', async () => {
+    mkdirSync(pluginDir(), { recursive: true });
+    writeFileSync(join(pluginDir(), 'plugin.yaml'), 'name: borg-representative-push\n');
+    writeFileSync(join(pluginDir(), '__init__.py'), '# plugin\n');
+    expect(existsSync(representativeStateRoot())).toBe(false);
+    const d = deps({ env: { HERMES_HOME: home }, bindings: defaultHermesPluginDeps().bindings });
+    expect(await activateHermesPlugin(d)).toBe(1);
+    expect(err.join('')).toContain('does not choose the conversation to wake without your confirmation');
+    expect(writes()).toEqual([]);
+    expect(existsSync(representativeStateRoot())).toBe(false);
+    expect(existsSync(join(root, '.config', 'borgmcp', 'representative'))).toBe(false);
+  });
+
+  it('F8: the printed retry parses to the same Hermes home and worktree, shell-quoted', async () => {
+    const odd = join(root, "worktree with 'quote' and $HOME");
+    mkdirSync(odd, { recursive: true });
+    const d = deps({ isTTY: () => false, worktrees: [worktree, odd] });
+    expect(await install({ worktree: odd }, d)).toBe(1);
+    const line = err.join('').split('\n').map((text) => text.trim()).find((text) => text.startsWith('borg representative hermes-plugin install'))!;
+    const words = shellWords(line);
+    expect(words.slice(0, 2)).toEqual(['borg', 'representative']);
+    const parsed = parseRepresentativeArgs(words.slice(2));
+    expect(parsed).toEqual({
+      ok: true,
+      command: { action: 'hermes-plugin-install', hermesHome: home, worktree: odd, sessionKey: DM, dryRun: false, noRestart: false },
+    });
+  });
+
+  it('F8: a --no-restart hint and an uninstall rerun keep the selected home', async () => {
+    expect(await install({ noRestart: true })).toBe(0);
+    expect(out.join('')).toContain(`Run \`borg representative hermes-plugin install --hermes-home '${home}'\` without --no-restart`);
+    out = [];
+    expect(await runHermesPluginUninstall({ hermesHome: home, dryRun: false, noRestart: true }, deps())).toBe(0);
+    expect(out.join('')).toContain(`Run \`borg representative hermes-plugin uninstall --hermes-home '${home}'\` without --no-restart`);
   });
 });
 

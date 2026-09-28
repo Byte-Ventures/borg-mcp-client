@@ -470,7 +470,8 @@ The command then does everything, printing each step before it runs:
    shows every candidate with its name, even a single one, and asks you to
    confirm (the default is no); with several you choose one first. Without a
    terminal it refuses, lists the candidates and prints the exact command with
-   `--session-key`. `--session-key` names one directly, and a rerun (or
+   `--session-key` for the same Hermes home and worktree you gave. Nothing is
+   written, and no representative state is created, before these checks pass. `--session-key` names one directly, and a rerun (or
    `borg update`) keeps the configured conversation; `borg update` never picks
    one.
 2. Installs the plugin's two files into
