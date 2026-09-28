@@ -759,3 +759,56 @@ describe('review controls (S2 security notes): invalid wake state is rebuilt, ne
   });
 });
 
+describe('review controls (S2 F4): recovery during an in-flight read restarts the scan', () => {
+  const corruptDoc = () => withStateDb((db) => db.prepare('UPDATE wake_state SET state = ? WHERE generation = ?')
+    .run('{bad', bindingFingerprint(binding)));
+
+  it('drops a page read before the recovery and rebuilds every pending reply (reviewer probe)', async () => {
+    const lines: string[] = [];
+    const { engine, ctx } = await engineFor({ log: (line) => { lines.push(line); } });
+    const early = reply('early'); await engine.discover();
+    const later = reply('later');
+    const readAfter = ctx.backend.readAfter; let corrupt = true;
+    (engine as unknown as { deps: PushEngineDeps }).deps.backend = {
+      ...ctx.backend,
+      readAfter: async (...args) => {
+        const page = await readAfter(...args);
+        if (corrupt) { corrupt = false; corruptDoc(); }
+        return page;
+      },
+    };
+    await engine.discover(); await engine.discover();
+    expect(lines).toHaveLength(1);
+    expect(rowsOf().map((row) => row.entry_id)).toEqual([early.id, later.id]);
+  });
+
+  it('drops a startup cohort probe read before the recovery and captures again from the rebuilt position', async () => {
+    const lines: string[] = [];
+    const { engine, ctx, wakes } = await engineFor({ log: (line) => { lines.push(line); } }, false);
+    const [a, b] = [reply('a'), reply('b')];
+    await engine.discover(); // wake state exists (frontier past a and b) before the capture
+    const readAfter = ctx.backend.readAfter; const probes: Array<string | null> = []; let corrupt = true;
+    (engine as unknown as { deps: PushEngineDeps }).deps.backend = {
+      ...ctx.backend,
+      readAfter: async (cursor, limit, signal) => {
+        const page = await readAfter(cursor, limit, signal);
+        if (limit === 1) {
+          probes.push(cursor?.id ?? null);
+          if (corrupt) { corrupt = false; corruptDoc(); }
+        }
+        return page;
+      },
+    };
+    await engine.captureCohort();
+    expect(lines).toHaveLength(1);
+    // The first probe started after b; the second from the rebuilt (delivered) position.
+    expect(probes).toHaveLength(2);
+    expect(probes[0]).toBe(b.id);
+    expect(probes[1]).not.toBe(b.id);
+    expect(docOf().cohort).toEqual({ remaining: 2, open: true });
+    await engine.discover();
+    expect(rowsOf().map((row) => row.entry_id)).toEqual([a.id, b.id]);
+    expect(wakes).toEqual([expect.objectContaining({ reason: 'startup', count: 2 })]);
+  });
+});
+
