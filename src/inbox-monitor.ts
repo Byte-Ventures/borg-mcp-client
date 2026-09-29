@@ -1263,7 +1263,7 @@ function main(): void {
         cursorWriteFailed = true;
         const message = err instanceof Error ? err.message : String(err);
         console.error(
-          `borg-inbox-monitor: cannot write replay cursor (${message}); delivery continues, and the next arm skips history or, if a stored cursor remains, repeats entries`
+          `borg-inbox-monitor: cannot write replay cursor (${message}); delivery continues; on the next arm, an absent or unusable cursor skips history, while a valid cursor resumes from its saved position and may repeat entries`
         );
       }
     }
