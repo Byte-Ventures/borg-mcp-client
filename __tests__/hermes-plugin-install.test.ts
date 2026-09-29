@@ -1417,3 +1417,46 @@ describe('6.0.1 round 3: plan -> validate -> ask -> apply (dispatch 33154527)', 
   });
 });
 
+describe('6.0.1 Security P3: displayed worktree paths are cleaned (entry 62ca9813)', () => {
+  const hostile = () => {
+    const esc = join(root, 'wt\u001b[31mX\u202eY');
+    const newline = join(root, 'nl\nZ');
+    for (const path of [esc, newline]) mkdirSync(path, { recursive: true });
+    return { esc, newline, shownEsc: join(root, 'wt[31mXY'), shownNewline: join(root, 'nlZ') };
+  };
+  const raw = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+  const shownLines = (text: string) => text.split('\n');
+
+  it('the numbered list, the not-selectable list and the summary show cleaned paths', async () => {
+    const { esc, newline, shownEsc, shownNewline } = hostile();
+    const answers = ['1', 'y'];
+    expect(await install({}, deps({ worktrees: [esc, newline, worktree], prompt: async () => answers.shift() ?? null }))).toBe(0);
+    const text = out.join('');
+    expect(text).toContain(`  1. ${shownEsc}\n`);
+    expect(text).toContain(`  - ${shownNewline} (not selectable:`);
+    expect(text).toContain(`Worktree:     ${shownEsc}\n`);
+    for (const line of shownLines(text)) expect(raw.test(line), JSON.stringify(line)).toBe(false);
+    expect(config().plugins.entries[HERMES_PLUGIN_NAME].settings.worktree).toBe(esc); // the exact path is still written
+  });
+
+  it('"Using the only selectable worktree" shows the cleaned path', async () => {
+    const { esc, newline, shownEsc } = hostile();
+    expect(await install({}, deps({ worktrees: [esc, newline] }))).toBe(0);
+    expect(out.join('')).toContain(`Using the only selectable worktree, ${shownEsc}. Not selectable:`);
+    for (const line of shownLines(out.join(''))) expect(raw.test(line), JSON.stringify(line)).toBe(false);
+  });
+
+  it('the retry command still carries the exact path, which the real parser reads back', async () => {
+    const { esc } = hostile();
+    expect(await install({ sessionKey: DM }, deps({ worktrees: [esc, worktree], isTTY: () => false }))).toBe(1);
+    const message = err.join('');
+    const start = message.indexOf('borg representative hermes-plugin install');
+    const commands = message.slice(start).split(/\n(?=  borg representative|Not selectable)/).map((part) => part.trim())
+      .filter((part) => part.startsWith('borg representative hermes-plugin install'));
+    const parsed = commands.map((command) => parseRepresentativeArgs(shellWords(command).slice(2)));
+    expect(parsed).toContainEqual({
+      ok: true, command: { action: 'hermes-plugin-install', hermesHome: home, worktree: esc, sessionKey: DM, dryRun: false, noRestart: false },
+    });
+  });
+});
+

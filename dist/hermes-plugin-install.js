@@ -138,6 +138,13 @@ async function lstatOrNull(path) {
         throw error;
     }
 }
+/**
+ * A worktree path as display text: control, C1 and bidi characters removed.
+ * Retry commands still carry the exact path, shell-quoted.
+ */
+function shownPath(path) {
+    return printableUntrusted(path, 4096);
+}
 /** Control, C1 and bidirectional-override characters are removed before anything untrusted is printed. */
 export function printableUntrusted(text, max = 80) {
     // eslint-disable-next-line no-control-regex
@@ -798,7 +805,7 @@ function validateCandidates(worktrees, sessions, borgCommand) {
  */
 async function selectPlan(deps, interactive, worktrees, sessions, borgCommand, retry) {
     const validated = validateCandidates(worktrees, sessions, borgCommand);
-    const notSelectable = validated.excluded.map(({ worktree, reason }) => `  - ${worktree} (not selectable: ${printableUntrusted(reason, 300)})\n`).join('');
+    const notSelectable = validated.excluded.map(({ worktree, reason }) => `  - ${shownPath(worktree)} (not selectable: ${printableUntrusted(reason, 300)})\n`).join('');
     if (validated.worktrees.length === 0) {
         throw new HermesPluginError(`No prepared worktree can be installed; nothing was changed:\n${notSelectable.trimEnd()}`);
     }
@@ -809,14 +816,14 @@ async function selectPlan(deps, interactive, worktrees, sessions, borgCommand, r
     }
     let worktree;
     if (validated.worktrees.length > 1) {
-        deps.stdout(`Prepared representative worktrees:\n${validated.worktrees.map((path, index) => `  ${index + 1}. ${path}\n`).join('')}` +
+        deps.stdout(`Prepared representative worktrees:\n${validated.worktrees.map((path, index) => `  ${index + 1}. ${shownPath(path)}\n`).join('')}` +
             (notSelectable ? `Not selectable:\n${notSelectable}` : ''));
         worktree = await promptChoice(deps, 'Use which worktree?', validated.worktrees, 'No worktree was chosen; nothing was changed.');
     }
     else {
         worktree = validated.worktrees[0];
         if (notSelectable)
-            deps.stdout(`Using the only selectable worktree, ${worktree}. Not selectable:\n${notSelectable}`);
+            deps.stdout(`Using the only selectable worktree, ${shownPath(worktree)}. Not selectable:\n${notSelectable}`);
     }
     const offered = validated.valid(worktree);
     const fixed = offered.find((session) => session.source !== undefined);
@@ -894,7 +901,7 @@ async function planWorktrees(explicit, configured, deps) {
     const worktrees = await deps.bindings();
     if (explicit !== undefined) {
         if (!worktrees.includes(explicit)) {
-            throw new HermesPluginError(`${explicit} is not a prepared representative worktree. Prepared: ${worktrees.join(', ') || 'none'}.`);
+            throw new HermesPluginError(`${shownPath(explicit)} is not a prepared representative worktree. Prepared: ${worktrees.map(shownPath).join(', ') || 'none'}.`);
         }
         return [explicit];
     }
@@ -981,7 +988,8 @@ async function configSteps(config, target) {
         const current = await config.get(key);
         if (current !== ABSENT && isDeepStrictEqual(current, value))
             return;
-        steps.push({ describe: `set ${key} = ${JSON.stringify(value)}`, apply: (tx) => tx.set(key, value) });
+        // Display text: the value's JSON with control and bidi characters removed (the write keeps the exact value).
+        steps.push({ describe: `set ${key} = ${printableUntrusted(JSON.stringify(value), 8192)}`, apply: (tx) => tx.set(key, value) });
     };
     let mcp = null;
     for (const [key, value] of managedWrites(target)) {
@@ -1189,8 +1197,8 @@ async function activate(home, options, deps) {
     const desired = desiredGeneration(sources, wanted);
     const summary = `Hermes home:  ${home}\n` +
         `Conversation: ${sessionKey} (${source})\n` +
-        `Worktree:     ${worktree}\n` +
-        `borg:         ${borgCommand}\n`;
+        `Worktree:     ${shownPath(worktree)}\n` +
+        `borg:         ${shownPath(borgCommand)}\n`;
     if (state === 'installed' && staleFiles.length === 0 && steps.length === 0) {
         // Active only when the confirmed generation is the one that wrote this exact content.
         const active = previous !== null && previous.desired.digest === desired && previous.activated === previous.desired.id;
