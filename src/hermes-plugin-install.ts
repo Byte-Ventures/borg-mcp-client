@@ -835,24 +835,24 @@ function describeCandidate(candidate: SessionCandidate): string {
 }
 
 /**
- * The conversation to wake. Borg never picks one without the operator's
- * confirmation (design rev 2 §6): on a gateway that allows several users, the
- * only DM in sessions.json can be someone else's.
+ * The conversation to wake, without asking yet. Borg never picks one without
+ * the operator's confirmation (design rev 2 §6): on a gateway that allows
+ * several users, the only DM in sessions.json can be someone else's.
  * - `--session-key`, or the key already configured, is used as given.
- * - Otherwise, in a terminal: every candidate is shown with its label, even a
- *   single one, and must be confirmed; the default is no.
+ * - Otherwise, when the run can ask (a terminal, not a dry run): the
+ *   candidates, to be shown and confirmed once every other check has passed.
  * - Otherwise (no terminal, including `borg update`): refused, naming the
  *   candidates and the exact command with --session-key.
  * - A dry run shows a single candidate as the one install would ask about.
  */
-async function chooseSessionKey(
+async function planSessionKey(
   home: string,
   configured: ConfigValue,
   explicit: string | undefined,
   deps: HermesPluginDeps,
   dryRun: boolean,
   retry: (sessionKey: string) => string,
-): Promise<{ sessionKey: string; source: string }> {
+): Promise<{ sessionKey: string; source: string } | { candidates: SessionCandidate[] }> {
   if (explicit !== undefined) return { sessionKey: explicit, source: '--session-key' };
   if (typeof configured === 'string' && SESSION_KEY_PATTERN.test(configured)) {
     return { sessionKey: configured, source: 'kept from the current plugin settings' };
@@ -864,59 +864,95 @@ async function chooseSessionKey(
         'Message your Hermes bot once from your own DM, then rerun, or pass --session-key agent:main:<platform>:dm:<chat id>.',
     );
   }
-  const listing = candidates.map((candidate, index) => `  ${index + 1}. ${describeCandidate(candidate)}\n`).join('');
   if (dryRun && candidates.length === 1) {
     return { sessionKey: candidates[0].sessionKey, source: 'the only gateway DM conversation; install asks you to confirm it' };
   }
-  if (!deps.isTTY()) {
+  if (!deps.isTTY() || dryRun) {
     throw new HermesPluginError(
-      `Borg does not choose the conversation to wake without your confirmation. Gateway DM conversations found:\n${listing}` +
-        `Run install with the one that is yours, for example:\n` +
+      `Borg does not choose the conversation to wake without your confirmation. Gateway DM conversations found:\n` +
+        `${listCandidates(candidates)}Run install with the one that is yours, for example:\n` +
         candidates.map((candidate) => `  ${retry(candidate.sessionKey)}\n`).join('').trimEnd(),
     );
   }
-  deps.stdout(`Gateway DM conversations found in Hermes (confirm that it is your own DM):\n${listing}`);
-  let chosen = candidates[0];
-  if (candidates.length > 1) {
-    const answer = await deps.prompt(`Wake which conversation? [1-${candidates.length}] `);
-    const index = answer === null ? Number.NaN : Number(answer.trim()) - 1;
-    if (!Number.isInteger(index) || index < 0 || index >= candidates.length) {
-      throw new HermesPluginError('No conversation was chosen; nothing was changed.');
-    }
-    chosen = candidates[index];
+  return { candidates };
+}
+
+function listCandidates(candidates: SessionCandidate[]): string {
+  return candidates.map((candidate, index) => `  ${index + 1}. ${describeCandidate(candidate)}\n`).join('');
+}
+
+/** A numbered choice at the terminal; anything else refuses with nothing changed. */
+async function promptChoice<T>(deps: HermesPluginDeps, question: string, choices: T[], none: string): Promise<T> {
+  const answer = await deps.prompt(`${question} [1-${choices.length}] `);
+  const index = answer === null ? Number.NaN : Number(answer.trim()) - 1;
+  if (!Number.isInteger(index) || index < 0 || index >= choices.length) throw new HermesPluginError(none);
+  return choices[index];
+}
+
+/**
+ * The questions, asked only after every check that can refuse has passed: the
+ * worktree when several are prepared, then the conversation, confirmed with
+ * [y/N] (the default is no). Nothing has been written when a question is asked.
+ */
+async function askSelections(
+  deps: HermesPluginDeps,
+  worktreePlan: { worktree: string } | { choices: string[] },
+  sessionPlan: { sessionKey: string; source: string } | { candidates: SessionCandidate[] },
+): Promise<{ worktree: string; sessionKey: string; source: string }> {
+  let worktree: string;
+  if ('choices' in worktreePlan) {
+    deps.stdout(`Prepared representative worktrees:\n${worktreePlan.choices.map((path, index) => `  ${index + 1}. ${path}\n`).join('')}`);
+    worktree = await promptChoice(deps, 'Use which worktree?', worktreePlan.choices, 'No worktree was chosen; nothing was changed.');
+  } else {
+    worktree = worktreePlan.worktree;
   }
+  if (!('candidates' in sessionPlan)) return { worktree, ...sessionPlan };
+  const candidates = sessionPlan.candidates;
+  deps.stdout(`Gateway DM conversations found in Hermes (confirm that it is your own DM):\n${listCandidates(candidates)}`);
+  const chosen = candidates.length > 1
+    ? await promptChoice(deps, 'Wake which conversation?', candidates, 'No conversation was chosen; nothing was changed.')
+    : candidates[0];
   const confirm = await deps.prompt(`Wake ${describeCandidate(chosen)} for Borg Coordinator replies? [y/N] `);
   if (confirm === null || !/^(?:y|yes)$/i.test(confirm.trim())) {
     throw new HermesPluginError('The conversation was not confirmed; nothing was changed.');
   }
-  return { sessionKey: chosen.sessionKey, source: 'confirmed by you' };
+  return { worktree, sessionKey: chosen.sessionKey, source: 'confirmed by you' };
 }
 
 // ---------------------------------------------------------------------------
 // Worktree from the representative binding state
 
-/** Read only: the installer never creates representative state, on any path. */
-async function chooseWorktree(
+/**
+ * The worktree, without asking yet. Read only: the installer never creates
+ * representative state, on any path. With several prepared and no
+ * --worktree or still-bound configured one: the choices when the run can ask,
+ * otherwise a refusal with one exact command per worktree.
+ */
+async function planWorktree(
   explicit: string | undefined,
   configured: ConfigValue,
   deps: HermesPluginDeps,
-): Promise<string> {
+  interactive: boolean,
+  retry: (worktree: string) => string,
+): Promise<{ worktree: string } | { choices: string[] }> {
   const worktrees = await deps.bindings();
   if (explicit !== undefined) {
     if (!worktrees.includes(explicit)) {
       throw new HermesPluginError(`${explicit} is not a prepared representative worktree. Prepared: ${worktrees.join(', ') || 'none'}.`);
     }
-    return explicit;
+    return { worktree: explicit };
   }
-  if (typeof configured === 'string' && worktrees.includes(configured)) return configured;
-  if (worktrees.length === 1) return worktrees[0];
+  if (typeof configured === 'string' && worktrees.includes(configured)) return { worktree: configured };
+  if (worktrees.length === 1) return { worktree: worktrees[0] };
   if (worktrees.length === 0) {
     throw new HermesPluginError(
       'No representative connection is prepared. Run `borg representative prepare --coordinator <drone-label>` first.',
     );
   }
+  if (interactive) return { choices: worktrees };
   throw new HermesPluginError(
-    `Several representative worktrees are prepared; pass one with --worktree:\n${worktrees.map((path) => `  ${path}\n`).join('').trimEnd()}`,
+    `Several representative worktrees are prepared. Run install with the one to use:\n` +
+      worktrees.map((path) => `  ${retry(path)}\n`).join('').trimEnd(),
   );
 }
 
@@ -1213,15 +1249,24 @@ async function activate(home: string, options: ActivationOptions, deps: HermesPl
 
   const configuredSessionKey = await config.get(KEYS.sessionKey);
   const configuredWorktree = await config.get(KEYS.worktree);
-  // Every check comes before the first write. The lookups are read only: the
-  // installer never creates representative state (mcp/listen import it on first use).
-  const { sessionKey, source } = await chooseSessionKey(
+  // Every check that can refuse runs before any question, and every question
+  // before the first write. The lookups are read only: the installer never
+  // creates representative state (mcp/listen import it on first use).
+  const interactive = deps.isTTY() && !options.dryRun;
+  const worktreePlan = await planWorktree(
+    options.explicitWorktree, configuredWorktree, deps, interactive,
+    (path) => installCommand({
+      ...options.invocation, worktree: path,
+      ...(options.explicitSessionKey !== undefined ? { sessionKey: options.explicitSessionKey } : {}),
+    }),
+  );
+  const sessionPlan = await planSessionKey(
     home, configuredSessionKey, options.explicitSessionKey, deps, options.dryRun,
     (key) => installCommand({ ...options.invocation, sessionKey: key }),
   );
   const borgCommand = deps.borgCommand();
   if (!isAbsolute(borgCommand)) throw new HermesPluginError(`The borg executable path is not absolute: ${borgCommand}`);
-  const worktree = await chooseWorktree(options.explicitWorktree, configuredWorktree, deps);
+  const { worktree, sessionKey, source } = await askSelections(deps, worktreePlan, sessionPlan);
   const wanted: Target = { sessionKey, worktree, borgCommand };
   const { steps, mcp } = await configSteps(config, wanted);
   const gateway = await openGatewaySwitches(config, platformOf(sessionKey), deps.env);

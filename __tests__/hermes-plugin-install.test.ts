@@ -616,8 +616,8 @@ describe('worktree from the representative binding state', () => {
     expect(await install({}, deps({ worktrees: [] }))).toBe(1);
     expect(err.join('')).toContain('borg representative prepare');
     err = [];
-    expect(await install({}, deps({ worktrees: ['/a', '/b'] }))).toBe(1);
-    expect(err.join('')).toContain('pass one with --worktree');
+    expect(await install({}, deps({ worktrees: ['/a', '/b'], isTTY: () => false }))).toBe(1);
+    expect(err.join('')).toContain('Several representative worktrees are prepared. Run install with the one to use:');
     err = [];
     expect(await install({ worktree: '/c' }, deps({ worktrees: ['/a', '/b'] }))).toBe(1);
     expect(err.join('')).toContain('/c is not a prepared representative worktree');
@@ -1153,6 +1153,8 @@ describe('CR round 5 probes (review bc13269c)', () => {
     mkdirSync(pluginDir(), { recursive: true });
     writeFileSync(join(pluginDir(), 'plugin.yaml'), 'name: borg-representative-push\n');
     writeFileSync(join(pluginDir(), '__init__.py'), '# plugin\n');
+    // One prepared 5.x binding, so the run gets past the worktree check to the session key.
+    plantLegacyBindings(root, [bindingFor(worktree)]);
     expect(existsSync(representativeStateRoot())).toBe(false);
     const d = deps({ env: { HERMES_HOME: home }, bindings: defaultHermesPluginDeps().bindings });
     expect(await activateHermesPlugin(d)).toBe(1);
@@ -1201,7 +1203,7 @@ describe('CR round 6 probes (review 55e7f87e): binding refusals before any state
     const second = join(root, 'worktrees', 'second');
     mkdirSync(second, { recursive: true });
     plantLegacyBindings(root, [bindingFor(worktree), bindingFor(second, { boundAt: '2026-02-01T00:00:00.000Z' })]);
-    expect(await install({ sessionKey: DM }, realBindings())).toBe(1);
+    expect(await install({ sessionKey: DM }, { ...realBindings(), isTTY: () => false })).toBe(1);
     expect(err.join('')).toContain('Several representative worktrees are prepared');
     expect(writes()).toEqual([]);
     expect(existsSync(representativeStateRoot())).toBe(false);
@@ -1212,6 +1214,76 @@ describe('CR round 6 probes (review 55e7f87e): binding refusals before any state
     expect(await install({ sessionKey: DM, worktree: join(root, 'not-prepared') }, realBindings())).toBe(1);
     expect(err.join('')).toContain('is not a prepared representative worktree');
     expect(existsSync(representativeStateRoot())).toBe(false);
+  });
+});
+
+describe('6.0.1: every refusal before any question (dispatch dc4f374f)', () => {
+  const threeWorktrees = () => {
+    const paths = ['one', 'two', "three 'q' $HOME"].map((name) => join(root, 'worktrees', name));
+    for (const path of paths) mkdirSync(path, { recursive: true });
+    return paths;
+  };
+  const twoDms = { [DM]: { display_name: 'Theo DM' }, 'agent:main:discord:dm:42': { display_name: 'Other' } };
+
+  it('two DMs and three worktrees at a terminal: asks for the worktree first, then the DM, then [y/N], and installs', async () => {
+    const paths = threeWorktrees();
+    writeSessions(twoDms);
+    const questions: string[] = [];
+    const answers = ['2', '1', 'y'];
+    const d = deps({ worktrees: paths, prompt: async (question) => { questions.push(question); return answers.shift() ?? null; } });
+    expect(await install({}, d)).toBe(0);
+    expect(questions).toEqual([
+      'Use which worktree? [1-3] ',
+      'Wake which conversation? [1-2] ',
+      `Wake agent:main:discord:dm:42  (Other) for Borg Coordinator replies? [y/N] `,
+    ]);
+    expect(config().plugins.entries[HERMES_PLUGIN_NAME].settings).toMatchObject({ worktree: paths[1], session_key: 'agent:main:discord:dm:42' });
+  });
+
+  it('asks nothing when a later check would refuse: no DM found, or a relative borg path', async () => {
+    const paths = threeWorktrees();
+    rmSync(join(home, 'sessions'), { recursive: true });
+    let asked = 0;
+    const d = deps({ worktrees: paths, prompt: async () => { asked++; return '1'; } });
+    expect(await install({}, d)).toBe(1);
+    expect(err.join('')).toContain('No gateway DM conversation was found');
+    expect(asked).toBe(0);
+
+    writeSessions(twoDms); err = [];
+    expect(await install({}, { ...d, borgCommand: () => 'borg' })).toBe(1);
+    expect(err.join('')).toContain('borg executable path is not absolute');
+    expect(asked).toBe(0);
+    expect(writes()).toEqual([]);
+  });
+
+  it('without a terminal, the several-worktrees refusal prints one exact command per worktree (real parser)', async () => {
+    const paths = threeWorktrees();
+    writeSessions(twoDms);
+    for (const sessionKey of [DM, undefined]) {
+      err = [];
+      expect(await install(sessionKey ? { sessionKey } : {}, deps({ worktrees: paths, isTTY: () => false }))).toBe(1);
+      const lines = err.join('').split('\n').map((line) => line.trim()).filter((line) => line.startsWith('borg representative hermes-plugin install'));
+      expect(lines).toHaveLength(3);
+      lines.forEach((line, index) => {
+        const words = shellWords(line);
+        expect(parseRepresentativeArgs(words.slice(2))).toEqual({
+          ok: true,
+          command: {
+            action: 'hermes-plugin-install', hermesHome: home, worktree: paths[index],
+            ...(sessionKey ? { sessionKey } : {}), dryRun: false, noRestart: false,
+          },
+        });
+      });
+    }
+    expect(writes()).toEqual([]);
+  });
+
+  it('a worktree choice at the terminal that is not a number refuses with nothing changed', async () => {
+    const paths = threeWorktrees();
+    const d = deps({ worktrees: paths, prompt: async () => 'x' });
+    expect(await install({ sessionKey: DM }, d)).toBe(1);
+    expect(err.join('')).toContain('No worktree was chosen; nothing was changed.');
+    expect(writes()).toEqual([]);
   });
 });
 
