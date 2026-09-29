@@ -462,20 +462,35 @@ Prepare the representative first (`borg representative prepare`), then message
 your Hermes bot once from your own DM so the gateway knows the conversation.
 The command then does everything, printing each step before it runs:
 
-1. Finds the worktree from the prepared binding (`--worktree` when several are
-   prepared) and the conversation from Hermes's `sessions/sessions.json`: only
-   gateway DM keys (`agent:main:<platform>:dm:<chat id>`) count. Borg never
-   picks the conversation without your confirmation: on a gateway that allows
-   several users, the only DM there can be someone else's. In a terminal it
-   shows every candidate with its name, even a single one, and asks you to
-   confirm (the default is no); with several you choose one first. Without a
-   terminal it refuses, lists the candidates and prints the exact command with
-   `--session-key` for the same Hermes home and worktree you gave. Nothing is
-   written before these checks pass. The prepared worktrees are read read only
-   (before the representative state exists, the borgmcp 5.x bindings it will
-   import); the installer never creates representative state. `--session-key` names one directly, and a rerun (or
-   `borg update`) keeps the configured conversation; `borg update` never picks
-   one.
+1. Plans, validates, asks, then writes. It first plans every candidate (each
+   prepared worktree with each conversation) as the exact values it would
+   write, and checks each plan with the same checks the writes apply. A
+   candidate that would fail is shown as not selectable, with the reason, and
+   is never offered. Every check that can be decided before writing runs
+   before any question: the worktree, the conversation, the `borg` path, every
+   value to be written, Borg's state path, and whether `plugins`, `config.yaml`
+   and the backup directories are what the install needs. Nothing is written
+   before these checks pass. After a question, the install can still stop only
+   on an invalid or declined answer, a Hermes command's answer, or a failing
+   write.
+   - The worktree comes from the prepared bindings, read only (before the
+     representative state exists, the borgmcp 5.x bindings it will import);
+     the installer never creates representative state. `--worktree` names one,
+     and a rerun keeps the configured one. With several prepared, a terminal
+     asks which one; without a terminal it refuses and prints the exact
+     command for each, keeping `--hermes-home` and any `--session-key` you gave.
+   - The conversation comes from Hermes's `sessions/sessions.json`: only
+     gateway DM keys (`agent:main:<platform>:dm:<chat id>`) count. Borg never
+     picks it without your confirmation: on a gateway that allows several
+     users, the only DM there can be someone else's. In a terminal it shows
+     every candidate with its name, even a single one, and asks you to confirm
+     (the default is no); with several you choose one first. Without a terminal
+     it refuses, lists the candidates and prints the exact command with
+     `--session-key` for the same Hermes home and worktree you gave.
+     `--session-key` names one directly, and a rerun (or `borg update`) keeps
+     the configured conversation; `borg update` never picks one.
+   - The questions come after every check: the worktree first, then the
+     conversation and its `[y/N]`.
 2. Installs the plugin's two files into
    `<Hermes home>/plugins/borg-representative-push/` (the Hermes home is
    `--hermes-home`, else `$HERMES_HOME`, else `~/.hermes`), `plugin.yaml` last:
