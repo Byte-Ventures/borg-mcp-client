@@ -212,6 +212,11 @@ export interface ArmReplayPlan {
   omitted: number;
   /** Cursor to persist at arm when none was usable; null keeps the stored one. */
   cursorAtArm: ReplayCursor | null;
+  /**
+   * The boundary the replay was selected with: the stored cursor's, or this
+   * arm's when there was none. It stays on the cursor until the replay is done.
+   */
+  replaySinceMs: number;
 }
 
 export function replayCursorPathFor(inboxPath: string, stateRoot: string): string {
@@ -365,6 +370,7 @@ export function planArmReplay(
       replay: [],
       omitted: 0,
       cursorAtArm: (last ? cursorForLine(last, armSinceMs) : null) ?? { lineSha256: null, lineTs: null, sinceMs: armSinceMs },
+      replaySinceMs: armSinceMs,
     };
   }
 
@@ -405,7 +411,44 @@ export function planArmReplay(
     replay,
     omitted,
     cursorAtArm: null,
+    replaySinceMs: cursor.sinceMs,
   };
+}
+
+/**
+ * Tracks one arm's replay as a single ordered sequence and says which cursor
+ * to store after each handled entry line.
+ *
+ * The boundary belongs to the cursor position, not to the arm. While any
+ * replay entry is still unhandled, a stored cursor keeps the boundary the
+ * replay was selected with, so an arm interrupted after the first of N replay
+ * entries still finds the other N-1 at the next arm. Only once every replay
+ * entry has been handled does the cursor take this arm's boundary, which
+ * every later line is already filtered against.
+ */
+export class ArmReplayProgress {
+  private readonly pending: Set<string>;
+
+  constructor(
+    private readonly plan: ArmReplayPlan,
+    private readonly armSinceMs: number,
+  ) {
+    this.pending = new Set(plan.replay);
+  }
+
+  isReplay(line: string): boolean {
+    return this.pending.has(line);
+  }
+
+  isHistory(line: string): boolean {
+    return this.plan.history.has(line);
+  }
+
+  /** Mark an entry line handled; returns the cursor to store after it. */
+  handled(line: string): ReplayCursor | null {
+    this.pending.delete(line);
+    return cursorForLine(line, this.pending.size > 0 ? this.plan.replaySinceMs : this.armSinceMs);
+  }
 }
 
 export function formatReplayOmittedLine(omitted: number): string {
@@ -1195,8 +1238,35 @@ function main(): void {
   let shuttingDown = false;
   let currentTail: ReturnType<typeof spawn> | null = null;
 
-  let plan: ArmReplayPlan | null = null;
+  // Cursor writes are advisory: a failure is reported once and never stops
+  // the wake path. After a failed write the stored cursor is removed (best
+  // effort), so the next arm falls back to skip-history instead of replaying
+  // from a stale position; a later successful write restores it. Only the lock
+  // holder writes, and it stops at shutdown so a successor's cursor is not
+  // overwritten by a late line.
   const cursorPath = stateRoot ? replayCursorPathFor(inboxPath, stateRoot) : null;
+  let cursorWriteFailed = false;
+  const persistCursor = (cursor: ReplayCursor | null): void => {
+    if (!cursorPath || !cursor || shuttingDown) return;
+    try {
+      writeReplayCursor(cursorPath, cursor);
+    } catch (err) {
+      try {
+        unlinkSync(cursorPath);
+      } catch {
+        /* absent, or not removable: the next arm refuses it and skips history */
+      }
+      if (!cursorWriteFailed) {
+        cursorWriteFailed = true;
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(
+          `borg-inbox-monitor: cannot write replay cursor (${message}); delivery continues, and the next arm skips history`
+        );
+      }
+    }
+  };
+
+  let progress: ArmReplayProgress | null = null;
   if (cursorPath) {
     let raw = '';
     try {
@@ -1210,47 +1280,29 @@ function main(): void {
     if (stored.problem) {
       console.error(`borg-inbox-monitor: ignoring replay cursor (${stored.problem}); nothing is replayed at this arm`);
     }
-    plan = planArmReplay(raw, stored.cursor, armSinceMs);
-    if (plan.cursorAtArm) persistCursor(plan.cursorAtArm);
+    const plan = planArmReplay(raw, stored.cursor, armSinceMs);
+    persistCursor(plan.cursorAtArm);
     if (plan.omitted > 0) console.log(formatReplayOmittedLine(plan.omitted));
+    progress = new ArmReplayProgress(plan, armSinceMs);
   } else {
     seedDeduperFromInboxTail(inboxPath, deduper);
-  }
-  const replayPending = new Set(plan?.replay ?? []);
-
-  // Cursor writes are advisory: a failure is reported once and never stops
-  // the wake path. Only the lock holder writes, and it stops at shutdown so a
-  // successor's cursor is not overwritten by a late line.
-  let cursorWriteFailed = false;
-  function persistCursor(cursor: ReplayCursor): void {
-    if (!cursorPath || shuttingDown) return;
-    try {
-      writeReplayCursor(cursorPath, cursor);
-    } catch (err) {
-      if (!cursorWriteFailed) {
-        cursorWriteFailed = true;
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`borg-inbox-monitor: cannot write replay cursor: ${message}`);
-      }
-    }
   }
 
   // State-root mode: one decision per inbox line, in file order. Every entry
   // line tail delivers proves the tail is following, so each one re-anchors
   // the stall detector, including history the plan skips.
-  const handleStateRootLine = (line: string): void => {
+  const handleStateRootLine = (replay: ArmReplayProgress, line: string): void => {
     if (formatEventLine(line) === null) return;
     markDelivered();
-    if (replayPending.has(line)) {
-      replayPending.delete(line);
+    if (replay.isReplay(line)) {
       if (deduper.remember(line)) emit(line);
-      persistCursor(cursorForLine(line, armSinceMs)!);
+      persistCursor(replay.handled(line));
       return;
     }
-    if (plan!.history.has(line) || deduper.has(line)) return;
+    if (replay.isHistory(line) || deduper.has(line)) return;
     deduper.remember(line);
     if (isInboxLineAtOrAfterArm(line, monitorArmTimeMs)) emit(line);
-    persistCursor(cursorForLine(line, armSinceMs)!);
+    persistCursor(replay.handled(line));
   };
 
   const emit = (line: string): void => {
@@ -1284,8 +1336,8 @@ function main(): void {
 
     const rl = createInterface({ input: tail.stdout, crlfDelay: Infinity });
     rl.on('line', (line) => {
-      if (plan) {
-        handleStateRootLine(line);
+      if (progress) {
+        handleStateRootLine(progress, line);
         return;
       }
       const pretty = formatFreshEventLine(line, deduper, true, monitorArmTimeMs);
@@ -1315,7 +1367,7 @@ function main(): void {
     });
   };
 
-  spawnTail(plan ? 'start' : null);
+  spawnTail(progress ? 'start' : null);
 
   // gh#822: holder tick — (1) touch the heartbeat sidecar (proves node liveness
   // even in a quiet cube; the SLI + the deferred node-wedge reaper read its

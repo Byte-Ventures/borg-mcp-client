@@ -89,6 +89,11 @@ export interface ArmReplayPlan {
     omitted: number;
     /** Cursor to persist at arm when none was usable; null keeps the stored one. */
     cursorAtArm: ReplayCursor | null;
+    /**
+     * The boundary the replay was selected with: the stored cursor's, or this
+     * arm's when there was none. It stays on the cursor until the replay is done.
+     */
+    replaySinceMs: number;
 }
 export declare function replayCursorPathFor(inboxPath: string, stateRoot: string): string;
 export declare function cursorForLine(line: string, sinceMs: number): ReplayCursor | null;
@@ -128,6 +133,27 @@ export declare function writeReplayCursor(cursorPath: string, cursor: ReplayCurs
  * ARM_REPLAY_CAP are replayed; the rest are counted in `omitted`.
  */
 export declare function planArmReplay(inboxRaw: string, cursor: ReplayCursor | null, armSinceMs: number, cap?: number): ArmReplayPlan;
+/**
+ * Tracks one arm's replay as a single ordered sequence and says which cursor
+ * to store after each handled entry line.
+ *
+ * The boundary belongs to the cursor position, not to the arm. While any
+ * replay entry is still unhandled, a stored cursor keeps the boundary the
+ * replay was selected with, so an arm interrupted after the first of N replay
+ * entries still finds the other N-1 at the next arm. Only once every replay
+ * entry has been handled does the cursor take this arm's boundary, which
+ * every later line is already filtered against.
+ */
+export declare class ArmReplayProgress {
+    private readonly plan;
+    private readonly armSinceMs;
+    private readonly pending;
+    constructor(plan: ArmReplayPlan, armSinceMs: number);
+    isReplay(line: string): boolean;
+    isHistory(line: string): boolean;
+    /** Mark an entry line handled; returns the cursor to store after it. */
+    handled(line: string): ReplayCursor | null;
+}
 export declare function formatReplayOmittedLine(omitted: number): string;
 /** Holder-tracked stall state. `lastEmittedOffset` is stat-anchored. */
 export interface TailStallState {
