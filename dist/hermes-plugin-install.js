@@ -18,7 +18,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, lstatSync } from 'node:fs';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -790,6 +790,55 @@ async function askSelections(deps, worktreePlan, sessionPlan) {
     }
     return { worktree, sessionKey: chosen.sessionKey, source: 'confirmed by you' };
 }
+/**
+ * The write-side refusals that existing state decides, checked read only
+ * before any question (the same tests the writes apply again when they run):
+ * - `<home>/plugins` is a symlink or not a directory (when the plugin is created);
+ * - `<home>/config.yaml` exists and is not a regular file (the backup reads it);
+ * - `<home>/backups` is a symlink or not a directory;
+ * - `<home>/backups/borg-representative` is a symlink, not a directory, or not
+ *   owned by this user (a wrong mode is repaired, not refused).
+ * The plugin directory and its files, the Hermes home, the packaged plugin, the
+ * worktree, the conversation, the borg path and the activation record path
+ * (S1's validator, through the record read) are checked earlier. What can still
+ * refuse after a question depends on the run itself: a Hermes CLI reply or
+ * read-back, and a file-system write that fails.
+ */
+function preflightWrites(home, createsPluginDir) {
+    const stat = (path) => {
+        try {
+            return lstatSync(path);
+        }
+        catch (error) {
+            if (errnoCode(error) === 'ENOENT')
+                return null;
+            throw error;
+        }
+    };
+    if (createsPluginDir) {
+        const plugins = stat(join(home, 'plugins'));
+        if (plugins && (plugins.isSymbolicLink() || !plugins.isDirectory())) {
+            throw new HermesPluginError(`${join(home, 'plugins')} is not a directory.`);
+        }
+    }
+    const config = stat(join(home, 'config.yaml'));
+    if (config && !config.isFile()) {
+        throw new HermesPluginError(`${join(home, 'config.yaml')} is not a regular file; nothing was changed.`);
+    }
+    const backups = join(home, 'backups');
+    const backupsStat = stat(backups);
+    if (backupsStat && (backupsStat.isSymbolicLink() || !backupsStat.isDirectory())) {
+        throw new HermesPluginError(`${backups} is not a directory; nothing was changed.`);
+    }
+    const ours = join(backups, 'borg-representative');
+    const oursStat = backupsStat ? stat(ours) : null;
+    if (oursStat && (oursStat.isSymbolicLink() || !oursStat.isDirectory())) {
+        throw new HermesPluginError(`${ours} is not a directory; nothing was changed.`);
+    }
+    if (oursStat && !ownedByMe(oursStat.uid)) {
+        throw new HermesPluginError(`${ours} is not owned by this user; nothing was changed.`);
+    }
+}
 // ---------------------------------------------------------------------------
 // Worktree from the representative binding state
 /**
@@ -1034,6 +1083,8 @@ async function activate(home, options, deps) {
     const state = await installState(home);
     if (state !== 'installed' && !options.mayCreate)
         return 0;
+    // Read-only preflight first, so a static refusal never follows a Hermes call or a question.
+    preflightWrites(home, state === 'absent');
     const previous = await deps.activation.read(home);
     const sources = await readSources(deps.sourceDir);
     const before = state === 'absent' ? new Map() : await snapshotPluginFiles(target);

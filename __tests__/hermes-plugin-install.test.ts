@@ -1287,3 +1287,71 @@ describe('6.0.1: every refusal before any question (dispatch dc4f374f)', () => {
   });
 });
 
+describe('6.0.1 round 2: static write-side refusals come before any question (review 27dca190)', () => {
+  const twoDms = { [DM]: { display_name: 'Theo DM' }, 'agent:main:discord:dm:42': { display_name: 'Other' } };
+  const run = async () => {
+    writeSessions(twoDms);
+    const questions: string[] = [];
+    const code = await install({}, deps({ prompt: async (question) => { questions.push(question); return 'y'; } }));
+    return { code, questions };
+  };
+  const elsewhere = () => { const path = join(root, 'elsewhere'); mkdirSync(path, { recursive: true }); return path; };
+
+  it('CR F1: a symlink at <home>/backups refuses with zero questions', async () => {
+    symlinkSync(elsewhere(), join(home, 'backups'));
+    const { code, questions } = await run();
+    expect(code).toBe(1);
+    expect(questions).toEqual([]);
+    expect(err.join('')).toContain(`${join(home, 'backups')} is not a directory`);
+    expect(existsSync(pluginDir())).toBe(false);
+    expect(existsSync(stateDir())).toBe(false);
+  });
+
+  it('a file at <home>/backups refuses with zero questions', async () => {
+    writeFileSync(join(home, 'backups'), 'not a directory');
+    const { code, questions } = await run();
+    expect(code).toBe(1);
+    expect(questions).toEqual([]);
+  });
+
+  it('a symlink at <home>/backups/borg-representative refuses with zero questions', async () => {
+    mkdirSync(join(home, 'backups'));
+    symlinkSync(elsewhere(), join(home, 'backups', 'borg-representative'));
+    const { code, questions } = await run();
+    expect(code).toBe(1);
+    expect(questions).toEqual([]);
+    expect(err.join('')).toContain('borg-representative is not a directory');
+  });
+
+  it('a config.yaml that is not a regular file refuses with zero questions', async () => {
+    rmSync(join(home, 'config.yaml'));
+    mkdirSync(join(home, 'config.yaml'));
+    const { code, questions } = await run();
+    expect(code).toBe(1);
+    expect(questions).toEqual([]);
+    expect(err.join('')).toContain('config.yaml is not a regular file');
+  });
+
+  it('a symlink at <home>/plugins refuses a fresh install with zero questions', async () => {
+    symlinkSync(elsewhere(), join(home, 'plugins'));
+    const { code, questions } = await run();
+    expect(code).toBe(1);
+    expect(questions).toEqual([]);
+    expect(err.join('')).toContain(`${join(home, 'plugins')} is not a directory`);
+  });
+
+  it('an unsafe activation record path (a symlinked .config under the Borg home) refuses with zero questions', async () => {
+    symlinkSync(elsewhere(), join(root, '.config'));
+    const { code, questions } = await run();
+    expect(code).toBe(1);
+    expect(questions).toEqual([]);
+    expect(err.join('')).toContain('Unsafe Borg state path');
+  });
+
+  it('a dry run reports a static refusal too', async () => {
+    symlinkSync(elsewhere(), join(home, 'backups'));
+    expect(await install({ dryRun: true })).toBe(1);
+    expect(err.join('')).toContain(`${join(home, 'backups')} is not a directory`);
+  });
+});
+

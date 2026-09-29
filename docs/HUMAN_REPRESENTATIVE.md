@@ -462,9 +462,12 @@ Prepare the representative first (`borg representative prepare`), then message
 your Hermes bot once from your own DM so the gateway knows the conversation.
 The command then does everything, printing each step before it runs:
 
-1. Finds the worktree and the conversation, and checks everything that can
-   refuse before it asks you anything; nothing is written before these checks
-   pass.
+1. Finds the worktree and the conversation. Every check that can be decided
+   before writing runs before any question: the worktree, the conversation, the
+   `borg` path, Borg's state path, and whether `plugins`, `config.yaml` and the
+   backup directories are what the install needs. Nothing is written before
+   these checks pass. Only a Hermes command's answer or a failing write can
+   still refuse after a question.
    - The worktree comes from the prepared bindings, read only (before the
      representative state exists, the borgmcp 5.x bindings it will import);
      the installer never creates representative state. `--worktree` names one,
