@@ -6,6 +6,7 @@ import {
   buildCodexLaunchArgs,
 } from '../src/codex-launch';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from '../src/opencode-wake-copy';
+import { wakePathArming } from '../src/regen-format';
 
 describe('codex launch helpers', () => {
   it('keeps the Claude launcher source aligned with adaptive recovery guidance', () => {
@@ -75,9 +76,10 @@ describe('codex launch helpers', () => {
     expect(clause).toContain(inboxPath);
     expect(clause).toContain('borg_read-log unread_only=true');
     expect(clause).toContain(
-      're-arm the Monitor when its exit notification wakes you, and whenever you notice no Monitor is armed.',
+      'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
     );
-    expect(clause).not.toContain('/loop');
+    expect(clause).toContain(wakePathArming('claude', inboxPath, stateRoot));
+    expect(clause).toContain('Invoke `/loop` with no arguments;');
     expect(clause).not.toContain('ScheduleWakeup');
     // NEVER-TaskStop safety reminder preserved (not dropped in the compaction)
     expect(clause).toMatch(/never\s+TaskStop/i);

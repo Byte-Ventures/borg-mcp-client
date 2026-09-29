@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rename as fsRename, rm, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rename as fsRename, rm, utimes, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -21,7 +21,9 @@ afterEach(async () => {
 });
 
 async function tempLocksDir(): Promise<string> {
-  const directory = await mkdtemp(path.join(tmpdir(), 'borg-stream-owner-'));
+  // The private credential store refuses a non-canonical path, and macOS's
+  // default TMPDIR (/var/folders/...) runs through the /var symlink.
+  const directory = await mkdtemp(path.join(await realpath(tmpdir()), 'borg-stream-owner-'));
   tempDirectories.push(directory);
   return directory;
 }

@@ -21,7 +21,7 @@
 import { spawnSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { heartbeatPathFor, legacyHeartbeatPathFor, HEARTBEAT_STALE_MS, } from './inbox-monitor.js';
-import { shellEscape } from './shell-escape.js';
+import { CLAUDE_MONITOR_DENIED_FALLBACK, CLAUDE_MONITOR_LOOP_FALLBACK, CLAUDE_MONITOR_REARM_THEN_DRAIN, claudeMonitorCommand, } from './claude-wake-copy.js';
 /**
  * Best-effort check: is a process tailing this inbox file?
  *
@@ -210,6 +210,11 @@ export function renderStreamStatus(inputs) {
         lines.push('');
         lines.push('Continue as the owning drone, or close its duplicate agent session before relaunching from the intended worktree. The live owner releases this lock on exit; a stale lock is reclaimed automatically.');
     }
+    // The lean SessionStart orientation points here when the command is too
+    // long for its preview, so a Claude seat always gets the exact command.
+    if (wakePath.agentKind === 'claude' && inboxPath) {
+        lines.push(`- **inbox Monitor command**: \`${claudeMonitorCommand(inboxPath, monitorStateRoot)}\``);
+    }
     if (wakePath.agentKind === 'opencode' && wakePath.openCode) {
         const openCode = wakePath.openCode;
         const delivery = openCode.deliveryStates;
@@ -258,7 +263,11 @@ export function renderStreamStatus(inputs) {
             lines.push('## Real-time wake-up (do this now)');
             lines.push('No process is tailing this drone\'s inbox file — this session won\'t wake on real-time cube activity, only on its fallback timer, and will miss live coordination from other drones. Arm an inbox Monitor:');
             lines.push('');
-            lines.push(`> Monitor command: \`${monitorCommand(inboxPath, monitorStateRoot)}\` — persistent, 1h timeout, description "borg inbox for ${droneLabel} on cube ${cubeName}".`);
+            lines.push(`> Monitor command: \`${claudeMonitorCommand(inboxPath, monitorStateRoot)}\` — persistent, 1h timeout, description "borg inbox for ${droneLabel} on cube ${cubeName}".`);
+            lines.push('');
+            lines.push(CLAUDE_MONITOR_REARM_THEN_DRAIN);
+            lines.push(CLAUDE_MONITOR_LOOP_FALLBACK);
+            lines.push(CLAUDE_MONITOR_DENIED_FALLBACK);
         }
     }
     return lines.join('\n');
@@ -328,15 +337,14 @@ export function formatWakePathPrefix(inputs) {
         ``,
         `No process is tailing this drone's inbox file. SSE delivery is healthy (entries reach disk), but Claude Code has no event source to wake on. Until you arm a Monitor, this session has no wake path and will miss live coordination from other drones:`,
         ``,
-        `> Monitor command: \`${monitorCommand(inboxPath, monitorStateRoot)}\` — persistent, 1h timeout, description "borg inbox for ${droneLabel} on cube ${cubeName}".`,
+        `> Monitor command: \`${claudeMonitorCommand(inboxPath, monitorStateRoot)}\` — persistent, 1h timeout, description "borg inbox for ${droneLabel} on cube ${cubeName}".`,
+        ``,
+        CLAUDE_MONITOR_REARM_THEN_DRAIN,
+        CLAUDE_MONITOR_LOOP_FALLBACK,
+        CLAUDE_MONITOR_DENIED_FALLBACK,
         ``,
         `---`,
         ``,
     ].join('\n');
-}
-function monitorCommand(inboxPath, monitorStateRoot) {
-    return monitorStateRoot
-        ? `borg-inbox-monitor --state-root ${shellEscape(monitorStateRoot)} ${shellEscape(inboxPath)}`
-        : `borg-inbox-monitor ${shellEscape(inboxPath)}`;
 }
 //# sourceMappingURL=stream-status.js.map

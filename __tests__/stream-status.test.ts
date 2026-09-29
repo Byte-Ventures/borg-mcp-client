@@ -14,6 +14,7 @@
  * fires when wire is healthy but the file-watch isn't.
  */
 
+import { CLAUDE_MONITOR_DENIED_FALLBACK, CLAUDE_MONITOR_LOOP_FALLBACK } from '../src/claude-wake-copy';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   renderStreamStatus,
@@ -175,6 +176,10 @@ describe('renderStreamStatus — 5-state top-line per drone-4 contract', () => {
     expect(out).toContain('/work/repo/.borgmcp/inbox-monitor');
     expect(out).toContain('/Users/x/.config/borgmcp/inboxes/cube-uuid/drone-uuid.log');
     expect(out).toContain('## Real-time wake-up');
+    expect(out).toContain('Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.');
+    expect(out).toContain('Invoke `/loop` with no arguments;');
+    expect(out).toContain(CLAUDE_MONITOR_LOOP_FALLBACK);
+    expect(out).toContain(CLAUDE_MONITOR_DENIED_FALLBACK);
   });
 
   it('reports when another local process owns the stream', () => {
@@ -204,7 +209,38 @@ describe('renderStreamStatus — 5-state top-line per drone-4 contract', () => {
     expect(out).toContain('- **stream owner pid**: 1234');
     expect(out).toContain('- **stream owner cwd**: /work/borg-mcp-codex');
     expect(out).toContain('close its duplicate agent session before relaunching from the intended worktree');
-    expect(out).not.toContain('Monitor command');
+    expect(out).not.toContain('> Monitor command');
+  });
+
+  it('always shows a Claude seat its exact Monitor command, which the lean orientation may point to', () => {
+    const out = renderStreamStatus({
+      status: freshStatus({ connected: true, lastWireActivityAt: '2026-05-11T12:00:00.000Z' }),
+      inboxMonitorHealthy: true,
+      inboxPath: '/tmp/inbox dir/drone.log',
+      monitorStateRoot: '/work/repo/.borgmcp/inbox-monitor',
+      droneLabel: 'd',
+      cubeName: 'c',
+      humanAgo: fakeHumanAgo,
+    });
+    expect(out).toContain(
+      "- **inbox Monitor command**: `borg-inbox-monitor --state-root '/work/repo/.borgmcp/inbox-monitor' '/tmp/inbox dir/drone.log'`",
+    );
+    expect(out).not.toContain('Real-time wake-up');
+  });
+
+  it('shows no Monitor command to a Codex or OpenCode seat', () => {
+    for (const agentKind of ['codex', 'opencode'] as const) {
+      const out = renderStreamStatus({
+        status: freshStatus({ connected: true, lastWireActivityAt: '2026-05-11T12:00:00.000Z' }),
+        inboxMonitorHealthy: true,
+        wakePath: { agentKind, healthy: true, openCode: null } as any,
+        inboxPath: '/tmp/inbox.log',
+        droneLabel: 'd',
+        cubeName: 'c',
+        humanAgo: fakeHumanAgo,
+      });
+      expect(out).not.toContain('borg-inbox-monitor');
+    }
   });
 });
 
@@ -231,7 +267,8 @@ describe('renderStreamStatus — precedence rules', () => {
     );
     // State-5 body line should NOT appear when wire is down — the
     // upstream cause owns the surface.
-    expect(out).not.toContain('inbox-monitor');
+    expect(out).not.toContain('**inbox-monitor**');
+    expect(out).not.toContain('> Monitor command');
     expect(out).not.toContain('Real-time wake-up');
   });
 
@@ -408,7 +445,10 @@ describe('formatWakePathPrefix (gh#43 — regen self-heal)', () => {
     expect(out).toContain('/tmp/inbox/cube-a/drone-x.log');
     expect(out).toContain('borg inbox for drone-1 on cube borg-mcp');
     expect(out).toContain('this session has no wake path');
-    expect(out).not.toContain('/loop');
+    expect(out).toContain('Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.');
+    expect(out).toContain('Invoke `/loop` with no arguments;');
+    expect(out).toContain(CLAUDE_MONITOR_LOOP_FALLBACK);
+    expect(out).toContain(CLAUDE_MONITOR_DENIED_FALLBACK);
     // Ends with a separator + trailing newline so the prefix concatenates
     // cleanly with the regen markdown that follows.
     expect(out).toMatch(/---\n$/);

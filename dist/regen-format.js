@@ -11,8 +11,8 @@ import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { formatDroneAddressToken } from 'borgmcp-shared/drone-address';
 import { RUNTIME_METADATA_ADVISORY, renderRuntimeMetadataLines, } from './roster-render.js';
 import { formatDocumentCitations } from './document-render.js';
-import { shellEscape } from './shell-escape.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
+import { CLAUDE_MONITOR_DENIED_FALLBACK, CLAUDE_MONITOR_LOOP_FALLBACK, CLAUDE_MONITOR_REARM_THEN_DRAIN, claudeMonitorCommand, } from './claude-wake-copy.js';
 import { isBorgSession } from './launch-gate.js';
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
@@ -66,7 +66,9 @@ export function shouldRelayPlainSessionReminder(args) {
  * Agent-branched on the existing env-agnostic signal (BORG_SESSION-style
  * `isCodexRemoteWakeEnabled`), NOT on a mutable server-recorded field:
  * - claude: arm the inbox-file tail Monitor, drain unread entries on every
- *   wake, and re-arm the Monitor after an exit or whenever none is armed.
+ *   wake, re-arm the Monitor before draining after an exit or whenever none is
+ *   armed, and fall back to `/loop` when the Monitor cannot be armed (re-arm
+ *   and drain when blocked; drain only, never re-request, when denied).
  * - codex: Borg's activity stream reaches the app-server remote-control inbox
  *   channel; each wake is followed by an unread-log drain. Manual full regen
  *   + drain is a degraded fallback when remote control is unavailable.
@@ -77,6 +79,18 @@ export function shouldRelayPlainSessionReminder(args) {
  * shell-escaped before rendering the launch/orientation command.
  */
 export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
+    const steps = wakePathSteps(agentKind);
+    return agentKind === 'claude'
+        ? `${steps}\n${claudeMonitorCommandLine(inboxPath, monitorStateRoot)}`
+        : steps;
+}
+/**
+ * The fixed wake-path instructions, with no path or identity in them. The
+ * Claude steps refer to the **Monitor command** line, which every surface
+ * renders after them, so a long path can never push an instruction out of a
+ * truncated preview.
+ */
+export function wakePathSteps(agentKind) {
     if (agentKind === 'codex') {
         return [
             'Required Codex wake path: Borg activity stream → inbox wake channel via app-server remote control.',
@@ -88,19 +102,80 @@ export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
     if (agentKind === 'opencode') {
         return OPENCODE_WAKE_PATH_GUIDANCE;
     }
-    // client#394: the stable npm bin survives Node/nvm install-path rotation.
-    // Launch-time health checks make a missing or version-skewed PATH target
-    // visible instead of silently embedding a stale installation path here.
-    const monitorBin = 'borg-inbox-monitor';
-    const monitorCommand = monitorStateRoot
-        ? `${monitorBin} --state-root ${shellEscape(monitorStateRoot)} ${shellEscape(inboxPath)}`
-        : `${monitorBin} ${shellEscape(inboxPath)}`;
     return [
         'Arm your wake path before working:',
-        `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`${monitorCommand}\` so cube posts wake you in real time.`,
+        '1. **Inbox Monitor** — run a persistent Monitor on the **Monitor command** below; cube posts wake you.',
         '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
-        '3. **Monitor recovery** — re-arm the Monitor when its exit notification wakes you, and whenever you notice no Monitor is armed.',
+        `3. **Monitor recovery** — on its exit notification, or when none is armed: ${CLAUDE_MONITOR_REARM_THEN_DRAIN}`,
+        `4. **Monitor not armed** — ${CLAUDE_MONITOR_LOOP_FALLBACK} ${CLAUDE_MONITOR_DENIED_FALLBACK}`,
     ].join('\n');
+}
+/**
+ * The line a Claude drone copies its Monitor command from. Launch-time health
+ * checks make a missing or version-skewed PATH target visible instead of
+ * silently embedding a stale installation path here.
+ */
+export function claudeMonitorCommandLine(inboxPath, monitorStateRoot) {
+    return `**Monitor command:** \`${claudeMonitorCommand(inboxPath, monitorStateRoot)}\``;
+}
+/** Used in place of the command when it would not fit the lean budget. */
+export const CLAUDE_MONITOR_COMMAND_POINTER = '**Monitor command:** in `borg_stream-status` (too long here).';
+/**
+ * The SessionStart hook's output is shown through a preview of about 2 KB.
+ * The lean orientation is always strictly shorter than this many UTF-8 bytes.
+ */
+export const LEAN_ORIENTATION_BUDGET_BYTES = 2048;
+/** Cap on each identity field in the lean orientation, in characters. */
+export const LEAN_IDENTITY_FIELD_MAX = 48;
+const utf8Bytes = (text) => Buffer.byteLength(text, 'utf-8');
+/**
+ * Cut `value` to at most `maxBytes` UTF-8 bytes at a code-point boundary
+ * (never inside a surrogate pair), marking a cut with "…". Returns '' when
+ * not even the marker fits.
+ */
+export function truncateUtf8(value, maxBytes) {
+    if (utf8Bytes(value) <= maxBytes)
+        return value;
+    const marker = '…';
+    let room = maxBytes - utf8Bytes(marker);
+    if (room < 0)
+        return '';
+    let kept = '';
+    for (const codePoint of value) {
+        const size = utf8Bytes(codePoint);
+        if (size > room)
+            break;
+        kept += codePoint;
+        room -= size;
+    }
+    return `${kept}${marker}`;
+}
+/** One line, at most LEAN_IDENTITY_FIELD_MAX code points. */
+export function boundLeanIdentityField(value) {
+    const oneLine = value.replace(/[\r\n\t]+/g, ' ');
+    const chars = Array.from(oneLine);
+    return chars.length <= LEAN_IDENTITY_FIELD_MAX
+        ? oneLine
+        : `${chars.slice(0, LEAN_IDENTITY_FIELD_MAX - 1).join('')}…`;
+}
+/**
+ * Share `budget` bytes between the fields: a field that needs less than an
+ * even share keeps all of it, and what it leaves goes to the others. Every
+ * returned value is at most its share, cut at a code-point boundary.
+ */
+export function fitFieldsToBytes(values, budget) {
+    const result = new Array(values.length);
+    let remaining = Math.max(0, budget);
+    const order = values
+        .map((value, index) => ({ index, size: utf8Bytes(value) }))
+        .sort((a, b) => a.size - b.size);
+    order.forEach(({ index, size }, position) => {
+        const share = Math.floor(remaining / (order.length - position));
+        const value = size <= share ? values[index] : truncateUtf8(values[index], share);
+        result[index] = value;
+        remaining -= utf8Bytes(value);
+    });
+    return result;
 }
 /**
  * Resolve the lean-orientation identity (gh#927), preferring the fresh
@@ -150,22 +225,62 @@ export function formatLeanOrientation(args) {
             : agentKind === 'claude'
                 ? [
                     '\n_(`/clear` cleared Claude\'s conversation — re-arm the inbox Monitor now.)_',
-                    '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, drain `borg_read-log unread_only=true`, then re-arm the Monitor._\n',
+                    '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, re-arm the Monitor, then drain the unread log._\n',
                 ].join('\n')
                 : '\n_(OpenCode started a new session; Borg supplied this orientation automatically.)_\n'
         : '';
-    return [
-        `# Cube: ${cubeName} — ${droneLabel}`,
-        '',
-        `**Your role:** ${roleName || '_(call `borg_regen` to load)_'}`,
+    // Every fixed instruction first; identity and the Monitor command last.
+    const fixed = [
+        '# Borg drone orientation',
         clearNote,
         'You are a Borg drone — coordinate through the cube log, and never pause for the user. Blocked → escalate to your cube\'s coordinating role.',
         '',
-        wakePathArming(agentKind, inboxPath, monitorStateRoot),
+        wakePathSteps(agentKind),
         '',
-        'REQUIRED BEFORE ACTING OR POSTING: (1) `borg_regen mode="full"`; (2) `borg_cube` for directive + conventions; (3) confirm role playbook loaded — full regen supplies it, else `borg_role`; (4) `borg_playbook` once per session for operating disciplines. This orientation stays lean — they are not inlined. Include `model="<model-id>"` in initial regen when known.',
+        'REQUIRED BEFORE ACTING OR POSTING: (1) `borg_regen mode="full"`; (2) `borg_cube` for directive + conventions; (3) confirm role playbook loaded — full regen supplies it, else `borg_role`; (4) `borg_playbook` once per session for operating disciplines. Include `model="<model-id>"` in initial regen when known.',
         '',
     ].join('\n');
+    return fitLeanOrientation({
+        fixed,
+        fields: [
+            boundLeanIdentityField(cubeName),
+            boundLeanIdentityField(droneLabel),
+            roleName ? boundLeanIdentityField(roleName) : '_(call `borg_regen` to load)_',
+        ],
+        command: agentKind === 'claude' ? claudeMonitorCommandLine(inboxPath, monitorStateRoot) : null,
+    });
+}
+const renderLeanIdentity = ([cube, drone, role]) => `**Cube:** ${cube} — **Drone:** ${drone}\n**Your role:** ${role}`;
+/**
+ * Byte-exact assembly of the lean orientation (CR 17522f50):
+ * 1. The fixed instructions and, for Claude, the pointer line are measured
+ *    first; the pointer's bytes are always reserved.
+ * 2. The identity fields share whatever bytes remain.
+ * 3. The inline command replaces the pointer only if everything still fits.
+ * 4. The result is asserted to be under the budget; if it were not, the
+ *    identity is dropped before any instruction or the pointer.
+ */
+export function fitLeanOrientation(args) {
+    const { fixed, fields, command } = args;
+    const limit = LEAN_ORIENTATION_BUDGET_BYTES - 1;
+    const assemble = (identity, tail) => [fixed, ...(identity === null ? [] : [identity]), ...(tail === null ? [] : [tail])].join('\n') + '\n';
+    const pointer = command === null ? null : CLAUDE_MONITOR_COMMAND_POINTER;
+    const skeleton = utf8Bytes(assemble(renderLeanIdentity(fields.map(() => '')), pointer));
+    const fitted = fitFieldsToBytes(fields, limit - skeleton);
+    // An identity with nothing left in a field says nothing; leave it out.
+    const identity = fitted.some((value) => value === '') ? null : renderLeanIdentity(fitted);
+    let out = assemble(identity, pointer);
+    if (command !== null) {
+        const inline = assemble(identity, command);
+        if (utf8Bytes(inline) <= limit)
+            out = inline;
+    }
+    if (utf8Bytes(out) > limit)
+        out = assemble(null, pointer);
+    if (utf8Bytes(out) > limit) {
+        throw new Error(`lean orientation fixed text exceeds ${LEAN_ORIENTATION_BUDGET_BYTES} bytes`);
+    }
+    return out;
 }
 // gh#927 S3: formatClearReorientation (gh#926) is SUPERSEDED by the shared
 // formatLeanOrientation core — the /clear case is now just

@@ -16,13 +16,17 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
 import {
   acquireInboxLock,
+  ARM_REPLAY_CAP,
+  ArmReplayProgress,
   claimModernMonitorSafely,
+  cursorForLine,
   defaultInboxLockDeps,
   ensureInboxDir,
   ensureMonitorStateDir,
   evaluateInboxTailStall,
   formatEventLine,
   formatFreshEventLine,
+  formatReplayOmittedLine,
   heartbeatPathFor,
   INBOX_ARM_TIMESTAMP_SKEW_MS,
   isEntryInvocation,
@@ -32,12 +36,18 @@ import {
   monitorStateRootForWorktree,
   parsePidfileContent,
   parseMonitorInvocation,
+  parseReplayCursor,
   pidfilePathFor,
+  planArmReplay,
   readHeartbeatSidecar,
+  readReplayCursor,
   RecentLineDeduper,
+  replayCursorPathFor,
+  serializeReplayCursor,
   seedDeduperFromInboxTail,
   tailArgsFor,
   writeHeartbeat,
+  writeReplayCursor,
   type InboxLockDeps,
   type TailStallState,
 } from '../src/inbox-monitor';
@@ -1017,6 +1027,213 @@ distDescribe('borg-inbox-monitor — end-to-end symlink spawn (gh#114)', () => {
     }
   });
 
+  const armMonitor = async (stateRoot: string, inboxFile: string, env: NodeJS.ProcessEnv = process.env) => {
+    const proc = spawn(process.execPath, [DIST_BIN, '--state-root', stateRoot, inboxFile], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    });
+    const out = { stdout: '', stderr: '' };
+    proc.stdout?.on('data', (chunk) => { out.stdout += chunk.toString(); });
+    proc.stderr?.on('data', (chunk) => { out.stderr += chunk.toString(); });
+    const pidfile = pidfilePathFor(inboxFile, stateRoot);
+    const deadline = Date.now() + 2_000;
+    while (!existsSync(pidfile) && proc.exitCode === null && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(existsSync(pidfile), out.stderr).toBe(true);
+    // Let tail read the file from its first line before the test acts.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const stop = async () => {
+      const exited = new Promise<void>((resolve) => {
+        if (proc.exitCode !== null) return resolve();
+        proc.once('exit', () => resolve());
+      });
+      proc.kill('SIGTERM');
+      await exited;
+    };
+    return { proc, out, stop };
+  };
+
+  const countOf = (haystack: string, needle: string) => haystack.split(needle).length - 1;
+
+  it('emits an entry written between one monitor stopping and the next arming exactly once', async () => {
+    const dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-monitor-e2e-arm-gap-'));
+    tmpDirs.push(dir);
+    const inboxFile = path.join(dir, 'config-inboxes', 'inbox.log');
+    const worktree = path.join(dir, 'worktree');
+    mkdirSync(worktree);
+    const stateRoot = monitorStateRootForWorktree(worktree);
+    ensureInboxDir(inboxFile);
+    writeFileSync(inboxFile, '2020-01-01T00:00:00.000Z drone-1 (Coordinator): ancient history\n');
+
+    const first = await armMonitor(stateRoot, inboxFile);
+    writeFileSync(inboxFile, `${new Date().toISOString()} drone-1 (Coordinator): live while armed\n`, { flag: 'a' });
+    const liveDeadline = Date.now() + 2_000;
+    while (!first.out.stdout.includes('live while armed') && Date.now() < liveDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await first.stop();
+    expect(countOf(first.out.stdout, 'live while armed')).toBe(1);
+
+    // The 10:24 race: an entry lands after the monitor stopped, before re-arm.
+    writeFileSync(inboxFile, `${new Date().toISOString()} drone-1 (Coordinator): arrived in the gap\n`, { flag: 'a' });
+
+    const second = await armMonitor(stateRoot, inboxFile);
+    try {
+      writeFileSync(inboxFile, `${new Date().toISOString()} drone-1 (Coordinator): live after re-arm\n`, { flag: 'a' });
+      const deadline = Date.now() + 2_000;
+      while (!second.out.stdout.includes('live after re-arm') && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(countOf(second.out.stdout, 'arrived in the gap')).toBe(1);
+      expect(countOf(second.out.stdout, 'live after re-arm')).toBe(1);
+      expect(second.out.stdout.indexOf('arrived in the gap')).toBeLessThan(second.out.stdout.indexOf('live after re-arm'));
+      expect(second.out.stdout).not.toContain('live while armed');
+      expect(second.out.stdout).not.toContain('ancient history');
+      expect(second.out.stdout).toContain(CUBE_ACTIVITY_RESUME_WAKE_MESSAGE);
+      expect(second.out.stderr).toBe('');
+    } finally {
+      await second.stop();
+    }
+    expect(statSync(replayCursorPathFor(inboxFile, stateRoot)).mode & 0o777).toBe(0o600);
+    expect(readFileSync(replayCursorPathFor(inboxFile, stateRoot), 'utf8')).not.toContain('arrived in the gap');
+  });
+
+  it('replays no old history on a restart with nothing new, and a fresh state root skips history', async () => {
+    const dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-monitor-e2e-restart-'));
+    tmpDirs.push(dir);
+    const inboxFile = path.join(dir, 'config-inboxes', 'inbox.log');
+    const worktree = path.join(dir, 'worktree');
+    mkdirSync(worktree);
+    const stateRoot = monitorStateRootForWorktree(worktree);
+    ensureInboxDir(inboxFile);
+    const recent = new Date(Date.now() - 1_000).toISOString();
+    writeFileSync(
+      inboxFile,
+      `2020-01-01T00:00:00.000Z drone-1 (Coordinator): ancient history\n` +
+        `${recent} drone-1 (Coordinator): recent history before the first arm\n`,
+    );
+
+    const first = await armMonitor(stateRoot, inboxFile);
+    await first.stop();
+    expect(first.out.stdout).toBe('');
+    expect(first.out.stderr).toBe('');
+    expect(existsSync(replayCursorPathFor(inboxFile, stateRoot))).toBe(true);
+
+    const second = await armMonitor(stateRoot, inboxFile);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await second.stop();
+    expect(second.out.stdout).toBe('');
+    expect(second.out.stderr).toBe('');
+  });
+
+  it('an arm interrupted after the first of N replay entries leaves the other N-1 for the next arm (CR F1)', async () => {
+    const dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-monitor-e2e-partial-replay-'));
+    tmpDirs.push(dir);
+    const inboxFile = path.join(dir, 'config-inboxes', 'inbox.log');
+    const worktree = path.join(dir, 'worktree');
+    mkdirSync(worktree);
+    const stateRoot = monitorStateRootForWorktree(worktree);
+    ensureInboxDir(inboxFile);
+    writeFileSync(inboxFile, '2020-01-01T00:00:00.000Z drone-1 (Coordinator): old anchor\n');
+
+    // First arm: fresh, anchors the cursor at the old line with its boundary.
+    const first = await armMonitor(stateRoot, inboxFile);
+    await first.stop();
+    const stored = parseReplayCursor(readFileSync(replayCursorPathFor(inboxFile, stateRoot), 'utf8'))!;
+    expect(stored).not.toBeNull();
+
+    // Three entries land while no monitor is armed, timestamped just after the
+    // stored boundary and so before the next arm's boundary.
+    const at = (offsetMs: number) => new Date(stored.sinceMs + offsetMs).toISOString();
+    writeFileSync(
+      inboxFile,
+      `${at(100)} drone-1 (Coordinator): replay A\n` +
+        `${at(200)} drone-1 (Coordinator): replay B\n` +
+        `${at(300)} drone-1 (Coordinator): replay C\n`,
+      { flag: 'a' },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    // Second arm: a tail that delivers only the anchor and A, then stays alive.
+    const fakeBin = path.join(dir, 'fake-bin');
+    mkdirSync(fakeBin);
+    writeFileSync(
+      path.join(fakeBin, 'tail'),
+      '#!/bin/sh\nfor arg; do file="$arg"; done\n/usr/bin/head -n 2 "$file"\nexec /bin/sleep 60\n',
+      { mode: 0o755 },
+    );
+    const second = await armMonitor(stateRoot, inboxFile, { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ''}` });
+    const deadline = Date.now() + 2_000;
+    while (!second.out.stdout.includes('replay A') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await second.stop();
+    expect(countOf(second.out.stdout, 'replay A')).toBe(1);
+    expect(second.out.stdout).not.toContain('replay B');
+    expect(second.out.stderr).toBe('');
+
+    // Third arm with the real tail: B and C exactly once, A not again.
+    const third = await armMonitor(stateRoot, inboxFile);
+    try {
+      const doneBy = Date.now() + 2_000;
+      while (!third.out.stdout.includes('replay C') && Date.now() < doneBy) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(countOf(third.out.stdout, 'replay A')).toBe(0);
+      expect(countOf(third.out.stdout, 'replay B')).toBe(1);
+      expect(countOf(third.out.stdout, 'replay C')).toBe(1);
+      expect(third.out.stdout).not.toContain('old anchor');
+      expect(third.out.stderr).toBe('');
+    } finally {
+      await third.stop();
+    }
+  });
+
+  it('keeps delivering when the cursor cannot be written, and the next arm skips history (CR F2)', async () => {
+    const dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-monitor-e2e-cursor-failure-'));
+    tmpDirs.push(dir);
+    const inboxFile = path.join(dir, 'config-inboxes', 'inbox.log');
+    const worktree = path.join(dir, 'worktree');
+    mkdirSync(worktree);
+    const stateRoot = monitorStateRootForWorktree(worktree);
+    ensureInboxDir(inboxFile);
+    writeFileSync(inboxFile, `${new Date(Date.now() - 1_000).toISOString()} drone-1 (Coordinator): history\n`);
+    ensureMonitorStateDir(stateRoot);
+    // A directory where the cursor belongs: every read refuses it, and every
+    // write fails to rename over it.
+    mkdirSync(replayCursorPathFor(inboxFile, stateRoot));
+
+    const first = await armMonitor(stateRoot, inboxFile);
+    try {
+      expect(first.proc.exitCode).toBeNull();
+      writeFileSync(inboxFile, `${new Date().toISOString()} drone-1 (Coordinator): live one\n`, { flag: 'a' });
+      writeFileSync(inboxFile, `${new Date().toISOString()} drone-1 (Coordinator): live two\n`, { flag: 'a' });
+      const deadline = Date.now() + 2_000;
+      while (!first.out.stdout.includes('live two') && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(countOf(first.out.stdout, 'live one')).toBe(1);
+      expect(countOf(first.out.stdout, 'live two')).toBe(1);
+      expect(first.out.stdout).not.toContain('history');
+      expect(first.out.stderr).toContain('ignoring replay cursor (not a regular file)');
+      expect(countOf(first.out.stderr, 'cannot write replay cursor')).toBe(1);
+      expect(first.out.stderr).not.toContain('ReferenceError');
+      expect(first.proc.exitCode).toBeNull();
+    } finally {
+      await first.stop();
+    }
+
+    writeFileSync(inboxFile, `${new Date().toISOString()} drone-1 (Coordinator): while unarmed\n`, { flag: 'a' });
+    const second = await armMonitor(stateRoot, inboxFile);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await second.stop();
+    // No usable cursor: the fallback is the previous skip-history arm.
+    expect(second.out.stdout).toBe('');
+  });
+
   it('fails loud and preserves a stale legacy artifact instead of racing a cross-version handoff', async () => {
     const dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-monitor-e2e-legacy-veto-'));
     tmpDirs.push(dir);
@@ -1113,6 +1330,10 @@ describe('tailArgsFor — gh#822 arm vs recovery byte-seek (CR item 3)', () => {
     expect(tailArgsFor('/inbox.log', null)).toEqual(['-F', '-n', '0', '/inbox.log']);
   });
 
+  it('STATE-ROOT ARM → tail -F -n +1 (whole file, classified by the arm plan)', () => {
+    expect(tailArgsFor('/inbox.log', 'start')).toEqual(['-F', '-n', '+1', '/inbox.log']);
+  });
+
   it('RECOVERY → byte-seek `-c +<N+1>` from the last delivered offset, NOT -n 0', () => {
     // The un-emitted bytes a stalled tail dropped are [offset .. EOF]; re-read
     // them FORWARD via -c +<offset+1>. -n 0 would start at the new EOF and skip
@@ -1120,6 +1341,169 @@ describe('tailArgsFor — gh#822 arm vs recovery byte-seek (CR item 3)', () => {
     expect(tailArgsFor('/inbox.log', 4096)).toEqual(['-F', '-c', '+4097', '/inbox.log']);
     expect(tailArgsFor('/inbox.log', 0)).toEqual(['-F', '-c', '+1', '/inbox.log']); // whole file
     expect(tailArgsFor('/inbox.log', 4096)).not.toContain('-n'); // never -n 0 on recovery
+  });
+});
+
+describe('arm replay cursor — close the stop→re-arm gap (6.0.2)', () => {
+  const ARM = Date.parse('2026-09-29T10:24:10.000Z');
+  const since = ARM - INBOX_ARM_TIMESTAMP_SKEW_MS;
+  const line = (iso: string, body: string) => `${iso} coordinator-1 (Coordinator): ${body}`;
+  const old1 = line('2026-09-29T09:00:00.000Z', 'old one');
+  const old2 = line('2026-09-29T09:30:00.000Z', 'old two');
+  const gap = line('2026-09-29T10:24:05.000Z', 'written while no monitor was armed');
+
+  it('a fresh state root keeps skip-history and anchors the cursor at the last entry', () => {
+    const raw = `${old1}\ncontinuation\n${old2}\n`;
+    const plan = planArmReplay(raw, null, since);
+    expect(plan.replay).toEqual([]);
+    expect(plan.omitted).toBe(0);
+    expect([...plan.history]).toEqual([old1, 'continuation', old2]);
+    expect(plan.cursorAtArm).toEqual(cursorForLine(old2, since));
+  });
+
+  it('a fresh empty inbox anchors a line-less cursor at the arm boundary', () => {
+    expect(planArmReplay('', null, since).cursorAtArm).toEqual({ lineSha256: null, lineTs: null, sinceMs: since });
+  });
+
+  it('replays exactly the entries after the cursor line, and never the history before it', () => {
+    const previousSince = Date.parse('2026-09-29T08:00:00.000Z');
+    const cursor = cursorForLine(old2, previousSince)!;
+    const plan = planArmReplay(`${old1}\n${old2}\n${gap}\n`, cursor, since);
+    expect(plan.replay).toEqual([gap]);
+    expect(plan.history.has(old1)).toBe(true);
+    expect(plan.history.has(old2)).toBe(true);
+    expect(plan.history.has(gap)).toBe(false);
+    expect(plan.cursorAtArm).toBeNull();
+  });
+
+  it('replays nothing when no entry was written after the cursor (restart)', () => {
+    const cursor = cursorForLine(old2, Date.parse('2026-09-29T08:00:00.000Z'))!;
+    const plan = planArmReplay(`${old1}\n${old2}\n`, cursor, since);
+    expect(plan.replay).toEqual([]);
+    expect(plan.omitted).toBe(0);
+  });
+
+  it('never replays an entry older than the boundary of the monitor that wrote the cursor', () => {
+    const cursor = cursorForLine(old1, Date.parse('2026-09-29T10:00:00.000Z'))!;
+    const plan = planArmReplay(`${old1}\n${old2}\n${gap}\n`, cursor, since);
+    expect(plan.replay).toEqual([gap]);
+  });
+
+  it('falls back to the cursor line timestamp when a trim removed the cursor line', () => {
+    const trimmedAway = line('2026-09-29T09:15:00.000Z', 'trimmed away');
+    const cursor = cursorForLine(trimmedAway, Date.parse('2026-09-29T08:00:00.000Z'))!;
+    const plan = planArmReplay(`${old1}\n${old2}\n${gap}\n`, cursor, since);
+    expect(plan.replay).toEqual([old2, gap]);
+  });
+
+  it('replays a copy of a line at or before the cursor only once, and a repeated new line once', () => {
+    const cursor = cursorForLine(old2, Date.parse('2026-09-29T08:00:00.000Z'))!;
+    const plan = planArmReplay(`${old2}\n${gap}\n${old2}\n${gap}\n`, cursor, since);
+    expect(plan.replay).toEqual([gap]);
+  });
+
+  it('keeps the replay boundary on the cursor until every replay entry is handled (CR F1)', () => {
+    // CR 3e2a5daa: old 10:00:00, A 10:00:10, B 10:00:20; cursor at old with an
+    // older boundary; this arm's boundary (10:00:55) is later than A and B.
+    const oldLine = line('2026-09-29T10:00:00.000Z', 'old');
+    const a = line('2026-09-29T10:00:10.000Z', 'A');
+    const b = line('2026-09-29T10:00:20.000Z', 'B');
+    const c = line('2026-09-29T10:00:30.000Z', 'C');
+    const raw = `${oldLine}\n${a}\n${b}\n${c}\n`;
+    const stored = cursorForLine(oldLine, Date.parse('2026-09-29T09:59:55.000Z'))!;
+    const armSince = Date.parse('2026-09-29T10:00:55.000Z');
+    const plan = planArmReplay(raw, stored, armSince);
+    expect(plan.replay).toEqual([a, b, c]);
+    expect(plan.replaySinceMs).toBe(stored.sinceMs);
+
+    const progress = new ArmReplayProgress(plan, armSince);
+    const afterA = progress.handled(a)!;
+    expect(afterA.sinceMs).toBe(stored.sinceMs);
+    // Interrupted after A: the next arm still replays B and C, and not A.
+    const laterSince = Date.parse('2026-09-29T10:02:00.000Z');
+    expect(planArmReplay(raw, afterA, laterSince).replay).toEqual([b, c]);
+
+    expect(progress.handled(b)!.sinceMs).toBe(stored.sinceMs);
+    // The last replay entry hands the cursor this arm's boundary.
+    const afterC = progress.handled(c)!;
+    expect(afterC.sinceMs).toBe(armSince);
+    expect(planArmReplay(raw, afterC, laterSince).replay).toEqual([]);
+  });
+
+  it('a fresh arm hands later lines its own boundary', () => {
+    const plan = planArmReplay(`${old1}\n`, null, since);
+    expect(plan.replaySinceMs).toBe(since);
+    const progress = new ArmReplayProgress(plan, since);
+    expect(progress.isHistory(old1)).toBe(true);
+    expect(progress.handled(gap)!.sinceMs).toBe(since);
+  });
+
+  it('caps the replay to the newest entries and counts the rest', () => {
+    const cursor = { lineSha256: null, lineTs: null, sinceMs: Date.parse('2026-09-29T08:00:00.000Z') };
+    const lines = Array.from({ length: ARM_REPLAY_CAP + 3 }, (_, i) =>
+      line(new Date(Date.parse('2026-09-29T09:00:00.000Z') + i * 1000).toISOString(), `entry ${i}`));
+    const plan = planArmReplay(`${lines.join('\n')}\n`, cursor, since);
+    expect(plan.omitted).toBe(3);
+    expect(plan.replay).toEqual(lines.slice(3));
+    expect(plan.history.has(lines[0])).toBe(true);
+    expect(formatReplayOmittedLine(3)).toBe(
+      'borg-inbox-monitor: 3 older entries arrived while no monitor was armed and are not shown; drain `borg_read-log unread_only=true`.',
+    );
+  });
+
+  it('stores a hash and timestamp, never the message text', () => {
+    const cursor = cursorForLine(gap, since)!;
+    const text = serializeReplayCursor(cursor);
+    expect(text).not.toContain('written while no monitor was armed');
+    expect(parseReplayCursor(text)).toEqual(cursor);
+  });
+
+  it('rejects malformed cursors', () => {
+    const valid = JSON.parse(serializeReplayCursor(cursorForLine(gap, since)!));
+    expect(parseReplayCursor('not json')).toBeNull();
+    expect(parseReplayCursor(JSON.stringify({ ...valid, v: 2 }))).toBeNull();
+    expect(parseReplayCursor(JSON.stringify({ ...valid, extra: 1 }))).toBeNull();
+    expect(parseReplayCursor(JSON.stringify({ ...valid, line_sha256: 'abc' }))).toBeNull();
+    expect(parseReplayCursor(JSON.stringify({ ...valid, line_ts: 'yesterday' }))).toBeNull();
+    expect(parseReplayCursor(JSON.stringify({ ...valid, line_ts: null }))).toBeNull();
+    expect(parseReplayCursor(JSON.stringify({ ...valid, since_ms: -1 }))).toBeNull();
+  });
+
+  describe('cursor file', () => {
+    let dir: string;
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    it('round-trips a private 0600 file keyed by the inbox path', () => {
+      dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-cursor-'));
+      const cursorPath = replayCursorPathFor('/inboxes/cube/drone.log', dir);
+      expect(path.dirname(cursorPath)).toBe(dir);
+      expect(cursorPath.endsWith('.monitor.cursor')).toBe(true);
+      const cursor = cursorForLine(gap, since)!;
+      writeReplayCursor(cursorPath, cursor);
+      expect(statSync(cursorPath).mode & 0o777).toBe(0o600);
+      expect(readReplayCursor(cursorPath)).toEqual({ cursor, problem: null });
+    });
+
+    it('treats a missing cursor as fresh and refuses a symlink or a broad mode', () => {
+      dir = mkdtempSync(path.join(realpathSync(tmpdir()), 'inbox-cursor-'));
+      const cursorPath = path.join(dir, 'x.monitor.cursor');
+      expect(readReplayCursor(cursorPath)).toEqual({ cursor: null, problem: null });
+
+      const target = path.join(dir, 'target');
+      writeFileSync(target, serializeReplayCursor(cursorForLine(gap, since)!), { mode: 0o600 });
+      symlinkSync(target, cursorPath);
+      expect(readReplayCursor(cursorPath).cursor).toBeNull();
+      expect(readReplayCursor(cursorPath).problem).toMatch(/cannot open/);
+
+      // A write replaces the planted symlink itself, never its target.
+      const replacement = cursorForLine(old1, since)!;
+      writeReplayCursor(cursorPath, replacement);
+      expect(readReplayCursor(cursorPath).cursor).toEqual(replacement);
+      expect(parseReplayCursor(readFileSync(target, 'utf8'))).toEqual(cursorForLine(gap, since));
+
+      chmodSync(cursorPath, 0o644);
+      expect(readReplayCursor(cursorPath)).toEqual({ cursor: null, problem: 'unexpected mode' });
+    });
   });
 });
 

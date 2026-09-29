@@ -28,6 +28,10 @@
  * The state-root form is the supported launch path. The legacy positional-only
  * form remains accepted for old hand-authored Monitor commands, and keeps its
  * inbox-adjacent sidecars for compatibility while fleets transition.
+ *
+ * Only the state-root form keeps a replay cursor (see `planArmReplay`): an entry
+ * written after the previous monitor for this inbox stopped, and before this
+ * one armed, is emitted once at arm instead of being skipped with history.
  */
 export declare const RECENT_EMITTED_LINE_CAP = 1024;
 /**
@@ -41,6 +45,7 @@ export declare class RecentLineDeduper {
     private readonly seen;
     private readonly order;
     constructor(cap?: number);
+    has(line: string): boolean;
     remember(line: string): boolean;
 }
 /**
@@ -65,6 +70,91 @@ export declare function formatEventLine(inboxLine: string): string | null;
 export declare function isInboxLineAtOrAfterArm(inboxLine: string, armTimeMs: number, skewMs?: number): boolean;
 export declare function formatFreshEventLine(inboxLine: string, deduper: RecentLineDeduper, includeWakeMessage?: boolean, armTimeMs?: number): string | null;
 export declare function seedDeduperFromInboxTail(inboxPath: string, deduper: RecentLineDeduper, maxLines?: number): void;
+/** At most this many entries are replayed at arm; older ones get one notice line. */
+export declare const ARM_REPLAY_CAP = 20;
+export interface ReplayCursor {
+    /** SHA-256 (hex) of the last handled entry line; null = no entry handled yet. */
+    lineSha256: string | null;
+    /** That line's ISO timestamp; null exactly when `lineSha256` is null. */
+    lineTs: string | null;
+    /** Arm boundary (epoch ms) of the monitor that wrote this cursor. */
+    sinceMs: number;
+}
+export interface ArmReplayPlan {
+    /** Inbox lines that are history at this arm and are never emitted. */
+    history: Set<string>;
+    /** Entry lines to emit once as tail reaches them, oldest first. */
+    replay: string[];
+    /** Replay candidates beyond ARM_REPLAY_CAP that were folded into history. */
+    omitted: number;
+    /** Cursor to persist at arm when none was usable; null keeps the stored one. */
+    cursorAtArm: ReplayCursor | null;
+    /**
+     * The boundary the replay was selected with: the stored cursor's, or this
+     * arm's when there was none. It stays on the cursor until the replay is done.
+     */
+    replaySinceMs: number;
+}
+export declare function replayCursorPathFor(inboxPath: string, stateRoot: string): string;
+export declare function cursorForLine(line: string, sinceMs: number): ReplayCursor | null;
+/** Strict decode of a stored cursor; anything unexpected is null (fresh arm). */
+export declare function parseReplayCursor(raw: string): ReplayCursor | null;
+export declare function serializeReplayCursor(cursor: ReplayCursor): string;
+/**
+ * Read the stored cursor. It must be a regular file owned by this user, mode
+ * 0600 and small; it is opened without following a symlink. A missing file is
+ * null; every other refusal is reported so the caller can say why it did not
+ * replay.
+ */
+export declare function readReplayCursor(cursorPath: string): {
+    cursor: ReplayCursor | null;
+    problem: string | null;
+};
+/**
+ * Replace the cursor atomically: a fresh 0600 temp file created exclusively
+ * (never through an existing path or symlink), flushed, then renamed over the
+ * cursor. Renaming replaces a planted symlink itself, never its target.
+ */
+export declare function writeReplayCursor(cursorPath: string, cursor: ReplayCursor): void;
+/**
+ * PURE: decide, from the inbox contents read at arm and the stored cursor,
+ * which lines are history and which are replayed.
+ *
+ * - No cursor (a fresh state root, or an unusable cursor): every line is
+ *   history, exactly the previous skip-history arm, and the cursor to persist
+ *   marks the last entry line (or none) with this arm's boundary.
+ * - Cursor line found: replay the entry lines after its first occurrence.
+ * - Cursor line trimmed away: replay the entry lines timestamped at or after
+ *   it. Equal timestamps are replayed, never dropped.
+ * - A cursor with no line: replay the entry lines at or after its boundary.
+ *
+ * In every case a replayed line is at or after the cursor's `sinceMs`, is not
+ * a copy of a line at or before the cursor, and appears once. Only the newest
+ * ARM_REPLAY_CAP are replayed; the rest are counted in `omitted`.
+ */
+export declare function planArmReplay(inboxRaw: string, cursor: ReplayCursor | null, armSinceMs: number, cap?: number): ArmReplayPlan;
+/**
+ * Tracks one arm's replay as a single ordered sequence and says which cursor
+ * to store after each handled entry line.
+ *
+ * The boundary belongs to the cursor position, not to the arm. While any
+ * replay entry is still unhandled, a stored cursor keeps the boundary the
+ * replay was selected with, so an arm interrupted after the first of N replay
+ * entries still finds the other N-1 at the next arm. Only once every replay
+ * entry has been handled does the cursor take this arm's boundary, which
+ * every later line is already filtered against.
+ */
+export declare class ArmReplayProgress {
+    private readonly plan;
+    private readonly armSinceMs;
+    private readonly pending;
+    constructor(plan: ArmReplayPlan, armSinceMs: number);
+    isReplay(line: string): boolean;
+    isHistory(line: string): boolean;
+    /** Mark an entry line handled; returns the cursor to store after it. */
+    handled(line: string): ReplayCursor | null;
+}
+export declare function formatReplayOmittedLine(omitted: number): string;
 /** Holder-tracked stall state. `lastEmittedOffset` is stat-anchored. */
 export interface TailStallState {
     /** Inbox file size (bytes) as of the last tail delivery; seeded to EOF at arm. */
@@ -185,7 +275,7 @@ export declare const HEARTBEAT_STALE_MS: number;
  * FORWARD — CR build-gate item 3: NOT `-n 0`, which starts at the new EOF and
  * skips exactly the bytes a stalled tail dropped).
  */
-export declare function tailArgsFor(inboxPath: string, fromByteOffset: number | null): string[];
+export declare function tailArgsFor(inboxPath: string, fromByteOffset: number | null | 'start'): string[];
 /**
  * Try to become the SOLE monitor for this inbox. Returns true if we claimed the
  * pidfile (caller proceeds to tail + must release it on exit); false if a LIVE
