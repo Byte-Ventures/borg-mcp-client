@@ -21,6 +21,7 @@ import {
 import { parseRoleSections } from 'borgmcp-shared/role-section';
 import { formatWakePathPrefix } from '../src/stream-status';
 import { shellEscape } from '../src/shell-escape';
+import { CLAUDE_MONITOR_DENIED_FALLBACK, CLAUDE_MONITOR_LOOP_FALLBACK } from '../src/claude-wake-copy';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from '../src/opencode-wake-copy';
 import { CUBE_ACTIVITY_RESUME_WAKE_MESSAGE } from '../src/cube-activity-wake-copy';
 import type { Decision } from 'borgmcp-shared/protocol';
@@ -979,34 +980,44 @@ describe('wakePathArming', () => {
       expect(arming).toMatch(/without a full regen/i);
       expect(arming).toMatch(/liveness post/i);
       expect(arming).toContain(
-        'when its exit notification wakes you, or you notice no Monitor is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
+        'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
       );
       expect(arming).toMatch(/resume prior work/i);
       const recovery = arming.split('\n').find((line) => line.startsWith('3. '))!;
       expect(recovery.indexOf('Re-arm the Monitor')).toBeLessThan(recovery.indexOf('drain'));
     });
 
-    it('falls back to /loop when the Monitor cannot be armed', () => {
-      const fallback = arming.split('\n').find((line) => line.startsWith('4. '))!;
-      expect(fallback).toContain('If the Monitor cannot be armed');
-      expect(fallback).toContain('a permission request blocks, denies or times out the Monitor call');
-      expect(fallback).toContain('do not stop and do not wait for the operator');
-      expect(fallback).toContain('Invoke `/loop` with no arguments.');
-      expect(fallback).toContain(
-        'On every loop tick: re-arm the Monitor, then drain `borg_read-log unread_only=true`.',
+    it('falls back to /loop with re-arm then drain when the Monitor call is blocked', () => {
+      expect(CLAUDE_MONITOR_LOOP_FALLBACK).toBe(
+        'If a permission prompt blocks the Monitor call, or it times out, gets no classifier verdict or errors: ' +
+          'do not stop or wait. Invoke `/loop` with no arguments; each tick, re-arm the Monitor, then drain. ' +
+          'With a Monitor armed, the loop is only a fallback.',
       );
-      expect(fallback).toContain('While a Monitor is armed, the loop is only a fallback heartbeat.');
-      expect(fallback.indexOf('re-arm the Monitor')).toBeLessThan(fallback.indexOf('then drain'));
+      expect(CLAUDE_MONITOR_LOOP_FALLBACK).not.toMatch(/denie/);
+      expect(CLAUDE_MONITOR_LOOP_FALLBACK.indexOf('re-arm the Monitor')).toBeLessThan(
+        CLAUDE_MONITOR_LOOP_FALLBACK.indexOf('then drain'),
+      );
     });
 
-    it('is the exact four-step Claude guidance', () => {
+    it('never re-requests a denied Monitor: /loop only drains, and the seat says so once', () => {
+      expect(CLAUDE_MONITOR_DENIED_FALLBACK).toBe(
+        'If a human denies the Monitor call: never request it again. Invoke `/loop` with no arguments; each tick, only drain. ' +
+          "Once, `borg_log` your cube's coordinating role: Monitor denied, seat polling via `/loop`.",
+      );
+      expect(CLAUDE_MONITOR_DENIED_FALLBACK).not.toMatch(/re-arm/i);
+      expect(CLAUDE_MONITOR_DENIED_FALLBACK).not.toContain('Coordinator');
+    });
+
+    it('is the exact four-step Claude guidance, with both fallback branches in step 4', () => {
       expect(arming).toBe([
         'Arm your wake path before working:',
-        `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`borg-inbox-monitor --state-root '${monitorStateRoot}' '${inboxPath}'\` so cube posts wake you in real time.`,
+        `1. **Inbox Monitor** — run a persistent Monitor on \`borg-inbox-monitor --state-root '${monitorStateRoot}' '${inboxPath}'\`; cube posts wake you.`,
         '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
-        '3. **Monitor recovery** — when its exit notification wakes you, or you notice no Monitor is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
-        '4. **Monitor blocked** — If the Monitor cannot be armed (a permission request blocks, denies or times out the Monitor call): do not stop and do not wait for the operator. Invoke `/loop` with no arguments. On every loop tick: re-arm the Monitor, then drain `borg_read-log unread_only=true`. While a Monitor is armed, the loop is only a fallback heartbeat.',
+        '3. **Monitor recovery** — on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
+        `4. **Monitor not armed** — ${CLAUDE_MONITOR_LOOP_FALLBACK} ${CLAUDE_MONITOR_DENIED_FALLBACK}`,
       ].join('\n'));
+      // Draining is defined (with its exact call) before the fallbacks refer to it.
+      expect(arming.indexOf('drain `borg_read-log unread_only=true`')).toBeLessThan(arming.indexOf('/loop'));
     });
   });
 
@@ -1103,10 +1114,10 @@ describe('formatLeanOrientation', () => {
     expect(out).toContain(base.monitorStateRoot);
     expect(out).toContain('borg_read-log unread_only=true');
     expect(out).toContain(
-      'when its exit notification wakes you, or you notice no Monitor is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
+      'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
     );
     expect(out).toContain(wakePathArming('claude', base.inboxPath, base.monitorStateRoot));
-    expect(out).toContain('Invoke `/loop` with no arguments.');
+    expect(out).toContain('Invoke `/loop` with no arguments;');
     expect(out).not.toContain('ScheduleWakeup');
   });
 

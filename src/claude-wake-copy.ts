@@ -20,8 +20,20 @@ export function claudeMonitorCommand(inboxPath: string, monitorStateRoot?: strin
 export const CLAUDE_MONITOR_REARM_THEN_DRAIN =
   'Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.';
 
+/**
+ * The Monitor could not be armed, but nobody refused it: keep re-arming from
+ * a `/loop` heartbeat so the seat stays awake. "Drain" is the
+ * `borg_read-log unread_only=true` drain every surface names just before this.
+ */
 export const CLAUDE_MONITOR_LOOP_FALLBACK =
-  'If the Monitor cannot be armed (a permission request blocks, denies or times out the Monitor call): ' +
-  'do not stop and do not wait for the operator. Invoke `/loop` with no arguments. ' +
-  'On every loop tick: re-arm the Monitor, then drain `borg_read-log unread_only=true`. ' +
-  'While a Monitor is armed, the loop is only a fallback heartbeat.';
+  'If a permission prompt blocks the Monitor call, or it times out, gets no classifier verdict or errors: ' +
+  'do not stop or wait. Invoke `/loop` with no arguments; each tick, re-arm the Monitor, then drain. ' +
+  'With a Monitor armed, the loop is only a fallback.';
+
+/**
+ * A human refused the Monitor: never ask again. The seat still stays awake by
+ * draining from `/loop`, and says once that it is polling.
+ */
+export const CLAUDE_MONITOR_DENIED_FALLBACK =
+  'If a human denies the Monitor call: never request it again. Invoke `/loop` with no arguments; each tick, only drain. ' +
+  "Once, `borg_log` your cube's coordinating role: Monitor denied, seat polling via `/loop`.";

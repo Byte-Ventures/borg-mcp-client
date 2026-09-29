@@ -14,6 +14,7 @@
  * fires when wire is healthy but the file-watch isn't.
  */
 
+import { CLAUDE_MONITOR_DENIED_FALLBACK, CLAUDE_MONITOR_LOOP_FALLBACK } from '../src/claude-wake-copy';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   renderStreamStatus,
@@ -176,7 +177,9 @@ describe('renderStreamStatus — 5-state top-line per drone-4 contract', () => {
     expect(out).toContain('/Users/x/.config/borgmcp/inboxes/cube-uuid/drone-uuid.log');
     expect(out).toContain('## Real-time wake-up');
     expect(out).toContain('Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.');
-    expect(out).toContain('Invoke `/loop` with no arguments.');
+    expect(out).toContain('Invoke `/loop` with no arguments;');
+    expect(out).toContain(CLAUDE_MONITOR_LOOP_FALLBACK);
+    expect(out).toContain(CLAUDE_MONITOR_DENIED_FALLBACK);
   });
 
   it('reports when another local process owns the stream', () => {
@@ -411,7 +414,9 @@ describe('formatWakePathPrefix (gh#43 — regen self-heal)', () => {
     expect(out).toContain('borg inbox for drone-1 on cube borg-mcp');
     expect(out).toContain('this session has no wake path');
     expect(out).toContain('Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.');
-    expect(out).toContain('Invoke `/loop` with no arguments.');
+    expect(out).toContain('Invoke `/loop` with no arguments;');
+    expect(out).toContain(CLAUDE_MONITOR_LOOP_FALLBACK);
+    expect(out).toContain(CLAUDE_MONITOR_DENIED_FALLBACK);
     // Ends with a separator + trailing newline so the prefix concatenates
     // cleanly with the regen markdown that follows.
     expect(out).toMatch(/---\n$/);

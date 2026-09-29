@@ -76,10 +76,10 @@ describe('codex launch helpers', () => {
     expect(clause).toContain(inboxPath);
     expect(clause).toContain('borg_read-log unread_only=true');
     expect(clause).toContain(
-      'when its exit notification wakes you, or you notice no Monitor is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
+      'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
     );
     expect(clause).toContain(wakePathArming('claude', inboxPath, stateRoot));
-    expect(clause).toContain('Invoke `/loop` with no arguments.');
+    expect(clause).toContain('Invoke `/loop` with no arguments;');
     expect(clause).not.toContain('ScheduleWakeup');
     // NEVER-TaskStop safety reminder preserved (not dropped in the compaction)
     expect(clause).toMatch(/never\s+TaskStop/i);

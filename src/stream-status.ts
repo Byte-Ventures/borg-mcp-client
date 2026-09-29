@@ -28,6 +28,7 @@ import {
   HEARTBEAT_STALE_MS,
 } from './inbox-monitor.js';
 import {
+  CLAUDE_MONITOR_DENIED_FALLBACK,
   CLAUDE_MONITOR_LOOP_FALLBACK,
   CLAUDE_MONITOR_REARM_THEN_DRAIN,
   claudeMonitorCommand,
@@ -341,6 +342,7 @@ export function renderStreamStatus(inputs: RenderInputs): string {
       lines.push('');
       lines.push(CLAUDE_MONITOR_REARM_THEN_DRAIN);
       lines.push(CLAUDE_MONITOR_LOOP_FALLBACK);
+      lines.push(CLAUDE_MONITOR_DENIED_FALLBACK);
     }
   }
 
@@ -427,6 +429,7 @@ export function formatWakePathPrefix(inputs: {
     ``,
     CLAUDE_MONITOR_REARM_THEN_DRAIN,
     CLAUDE_MONITOR_LOOP_FALLBACK,
+    CLAUDE_MONITOR_DENIED_FALLBACK,
     ``,
     `---`,
     ``,

@@ -45,7 +45,8 @@ export declare function shouldRelayPlainSessionReminder(args: {
  * `isCodexRemoteWakeEnabled`), NOT on a mutable server-recorded field:
  * - claude: arm the inbox-file tail Monitor, drain unread entries on every
  *   wake, re-arm the Monitor before draining after an exit or whenever none is
- *   armed, and fall back to `/loop` when the Monitor cannot be armed.
+ *   armed, and fall back to `/loop` when the Monitor cannot be armed (re-arm
+ *   and drain when blocked; drain only, never re-request, when denied).
  * - codex: Borg's activity stream reaches the app-server remote-control inbox
  *   channel; each wake is followed by an unread-log drain. Manual full regen
  *   + drain is a degraded fallback when remote control is unavailable.

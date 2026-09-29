@@ -21,7 +21,7 @@
 import { spawnSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { heartbeatPathFor, legacyHeartbeatPathFor, HEARTBEAT_STALE_MS, } from './inbox-monitor.js';
-import { CLAUDE_MONITOR_LOOP_FALLBACK, CLAUDE_MONITOR_REARM_THEN_DRAIN, claudeMonitorCommand, } from './claude-wake-copy.js';
+import { CLAUDE_MONITOR_DENIED_FALLBACK, CLAUDE_MONITOR_LOOP_FALLBACK, CLAUDE_MONITOR_REARM_THEN_DRAIN, claudeMonitorCommand, } from './claude-wake-copy.js';
 /**
  * Best-effort check: is a process tailing this inbox file?
  *
@@ -262,6 +262,7 @@ export function renderStreamStatus(inputs) {
             lines.push('');
             lines.push(CLAUDE_MONITOR_REARM_THEN_DRAIN);
             lines.push(CLAUDE_MONITOR_LOOP_FALLBACK);
+            lines.push(CLAUDE_MONITOR_DENIED_FALLBACK);
         }
     }
     return lines.join('\n');
@@ -335,6 +336,7 @@ export function formatWakePathPrefix(inputs) {
         ``,
         CLAUDE_MONITOR_REARM_THEN_DRAIN,
         CLAUDE_MONITOR_LOOP_FALLBACK,
+        CLAUDE_MONITOR_DENIED_FALLBACK,
         ``,
         `---`,
         ``,

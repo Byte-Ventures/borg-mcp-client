@@ -12,7 +12,7 @@ import { formatDroneAddressToken } from 'borgmcp-shared/drone-address';
 import { RUNTIME_METADATA_ADVISORY, renderRuntimeMetadataLines, } from './roster-render.js';
 import { formatDocumentCitations } from './document-render.js';
 import { OPENCODE_WAKE_PATH_GUIDANCE } from './opencode-wake-copy.js';
-import { CLAUDE_MONITOR_LOOP_FALLBACK, CLAUDE_MONITOR_REARM_THEN_DRAIN, claudeMonitorCommand, } from './claude-wake-copy.js';
+import { CLAUDE_MONITOR_DENIED_FALLBACK, CLAUDE_MONITOR_LOOP_FALLBACK, CLAUDE_MONITOR_REARM_THEN_DRAIN, claudeMonitorCommand, } from './claude-wake-copy.js';
 import { isBorgSession } from './launch-gate.js';
 /**
  * Extract the SessionStart `source` from a Claude Code hook payload (gh#926).
@@ -67,7 +67,8 @@ export function shouldRelayPlainSessionReminder(args) {
  * `isCodexRemoteWakeEnabled`), NOT on a mutable server-recorded field:
  * - claude: arm the inbox-file tail Monitor, drain unread entries on every
  *   wake, re-arm the Monitor before draining after an exit or whenever none is
- *   armed, and fall back to `/loop` when the Monitor cannot be armed.
+ *   armed, and fall back to `/loop` when the Monitor cannot be armed (re-arm
+ *   and drain when blocked; drain only, never re-request, when denied).
  * - codex: Borg's activity stream reaches the app-server remote-control inbox
  *   channel; each wake is followed by an unread-log drain. Manual full regen
  *   + drain is a degraded fallback when remote control is unavailable.
@@ -94,10 +95,10 @@ export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
     const monitorCommand = claudeMonitorCommand(inboxPath, monitorStateRoot);
     return [
         'Arm your wake path before working:',
-        `1. **Inbox Monitor** (wake path) — run a persistent Monitor on \`${monitorCommand}\` so cube posts wake you in real time.`,
+        `1. **Inbox Monitor** — run a persistent Monitor on \`${monitorCommand}\`; cube posts wake you.`,
         '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
-        `3. **Monitor recovery** — when its exit notification wakes you, or you notice no Monitor is armed: ${CLAUDE_MONITOR_REARM_THEN_DRAIN}`,
-        `4. **Monitor blocked** — ${CLAUDE_MONITOR_LOOP_FALLBACK}`,
+        `3. **Monitor recovery** — on its exit notification, or when none is armed: ${CLAUDE_MONITOR_REARM_THEN_DRAIN}`,
+        `4. **Monitor not armed** — ${CLAUDE_MONITOR_LOOP_FALLBACK} ${CLAUDE_MONITOR_DENIED_FALLBACK}`,
     ].join('\n');
 }
 /**
