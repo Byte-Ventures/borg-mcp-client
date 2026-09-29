@@ -16,6 +16,9 @@ import {
   shouldRelayPlainSessionReminder,
   formatLeanOrientation,
   boundLeanIdentityField,
+  fitFieldsToBytes,
+  fitLeanOrientation,
+  truncateUtf8,
   CLAUDE_MONITOR_COMMAND_POINTER,
   LEAN_IDENTITY_FIELD_MAX,
   LEAN_ORIENTATION_BUDGET_BYTES,
@@ -1218,6 +1221,106 @@ describe('formatLeanOrientation', () => {
         '',
       ].join('\n'));
       expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(LEAN_ORIENTATION_BUDGET_BYTES);
+    });
+
+    it('CR 17522f50 reproduction: 48×界 cube and role names keep the pointer or command inside the budget', () => {
+      const out = formatLeanOrientation({
+        cubeName: '界'.repeat(48),
+        droneLabel: 'security-auditor-d5cb86ae',
+        roleName: '界'.repeat(48),
+        inboxPath:
+          '/Users/theodorstorm/.config/borgmcp/inboxes/326ea162-5d46-4920-9bfb-45686c4c2e7d/d5cb86ae-0000-4000-8000-000000000000.log',
+        monitorStateRoot: '/Users/theodorstorm/.borg/worktrees/borg-mcp/security-auditor/.borgmcp/inbox-monitor',
+        agentKind: 'claude',
+        source: 'clear',
+      });
+      expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(LEAN_ORIENTATION_BUDGET_BYTES);
+      expect(out).toMatch(/\*\*Monitor command:\*\* (`borg-inbox-monitor |in `borg_stream-status`)/);
+      expect(out.isWellFormed()).toBe(true);
+    });
+
+    const wideNames: Array<[string, string]> = [
+      ['CJK (3-byte)', '界'],
+      ['emoji (4-byte)', '🛰'],
+    ];
+    for (const [kind, unit] of wideNames) {
+      for (const length of [48, 300, 2000]) {
+        for (const agentKind of ['claude', 'codex', 'opencode'] as const) {
+          for (const source of [undefined, 'startup', 'clear', 'compact', 'resume']) {
+            it(`${kind} names of ${length} characters, ${agentKind} ${source ?? 'default'}`, () => {
+              const name = unit.repeat(length);
+              const out = formatLeanOrientation({
+                ...base,
+                cubeName: name,
+                droneLabel: name,
+                roleName: name,
+                agentKind,
+                source,
+              });
+              expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(LEAN_ORIENTATION_BUDGET_BYTES);
+              expect(out.isWellFormed()).toBe(true);
+              for (const part of [
+                'You are a Borg drone',
+                wakePathSteps(agentKind),
+                'Include `model="<model-id>"` in initial regen when known.',
+              ]) {
+                expect(out).toContain(part);
+              }
+              if (agentKind === 'claude') {
+                expect(out).toMatch(/\*\*Monitor command:\*\* (`borg-inbox-monitor |in `borg_stream-status`)/);
+              } else {
+                expect(out).not.toContain('**Monitor command:**');
+              }
+            });
+          }
+        }
+      }
+    }
+
+    it('cuts at code-point boundaries, never inside a surrogate pair', () => {
+      expect(truncateUtf8('abc', 3)).toBe('abc');
+      expect(truncateUtf8('abcd', 3)).toBe('…');
+      expect(truncateUtf8('abcd', 2)).toBe('');
+      expect(truncateUtf8('🛰🛰', 7)).toBe('🛰…');
+      expect(truncateUtf8('🛰🛰', 6)).toBe('…');
+      expect(truncateUtf8('界界界', 8)).toBe('界…');
+      for (let max = 0; max < 20; max++) {
+        const cut = truncateUtf8('a🛰界b🛰', max);
+        expect(cut.isWellFormed()).toBe(true);
+        expect(Buffer.byteLength(cut, 'utf-8')).toBeLessThanOrEqual(max);
+      }
+    });
+
+    it('shares the remaining bytes, giving a short field all it needs', () => {
+      const [a, b, c] = fitFieldsToBytes(['short', '界'.repeat(100), 'x'.repeat(100)], 60);
+      expect(a).toBe('short');
+      const total = [a, b, c].reduce((sum, value) => sum + Buffer.byteLength(value, 'utf-8'), 0);
+      expect(total).toBeLessThanOrEqual(60);
+      expect(b.endsWith('…')).toBe(true);
+      expect(c.endsWith('…')).toBe(true);
+      expect(fitFieldsToBytes(['a', 'b'], -5)).toEqual(['', '']);
+    });
+
+    it('drops the identity, never an instruction or the pointer, when nothing else fits', () => {
+      const fixed = 'F'.repeat(LEAN_ORIENTATION_BUDGET_BYTES - 100);
+      const out = fitLeanOrientation({
+        fixed,
+        fields: ['cube', 'drone', 'role'],
+        command: `**Monitor command:** \`${'x'.repeat(200)}\``,
+      });
+      expect(out.startsWith(fixed)).toBe(true);
+      expect(out).not.toContain('**Cube:**');
+      expect(out).toContain(CLAUDE_MONITOR_COMMAND_POINTER);
+      expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(LEAN_ORIENTATION_BUDGET_BYTES);
+      expect(() => fitLeanOrientation({ fixed: 'F'.repeat(LEAN_ORIENTATION_BUDGET_BYTES), fields: [], command: null }))
+        .toThrow(/exceeds/);
+    });
+
+    it('prefers the inline command to an identity squeezed to nothing', () => {
+      const fixed = 'F'.repeat(LEAN_ORIENTATION_BUDGET_BYTES - 100);
+      const command = '**Monitor command:** `x`';
+      const out = fitLeanOrientation({ fixed, fields: ['cube', 'drone', 'role'], command });
+      expect(out).toBe(`${fixed}\n${command}\n`);
     });
 
     it('bounds identity fields to one line of at most 48 characters', () => {

@@ -157,21 +157,62 @@ export const CLAUDE_MONITOR_COMMAND_POINTER =
 
 /**
  * The SessionStart hook's output is shown through a preview of about 2 KB.
- * The lean orientation stays strictly under this, and everything fixed comes
- * before anything variable, so a long value can only lose itself.
+ * The lean orientation is always strictly shorter than this many UTF-8 bytes.
  */
 export const LEAN_ORIENTATION_BUDGET_BYTES = 2048;
 
 /** Cap on each identity field in the lean orientation, in characters. */
 export const LEAN_IDENTITY_FIELD_MAX = 48;
 
-/** One line, at most LEAN_IDENTITY_FIELD_MAX characters. */
+const utf8Bytes = (text: string): number => Buffer.byteLength(text, 'utf-8');
+
+/**
+ * Cut `value` to at most `maxBytes` UTF-8 bytes at a code-point boundary
+ * (never inside a surrogate pair), marking a cut with "…". Returns '' when
+ * not even the marker fits.
+ */
+export function truncateUtf8(value: string, maxBytes: number): string {
+  if (utf8Bytes(value) <= maxBytes) return value;
+  const marker = '…';
+  let room = maxBytes - utf8Bytes(marker);
+  if (room < 0) return '';
+  let kept = '';
+  for (const codePoint of value) {
+    const size = utf8Bytes(codePoint);
+    if (size > room) break;
+    kept += codePoint;
+    room -= size;
+  }
+  return `${kept}${marker}`;
+}
+
+/** One line, at most LEAN_IDENTITY_FIELD_MAX code points. */
 export function boundLeanIdentityField(value: string): string {
   const oneLine = value.replace(/[\r\n\t]+/g, ' ');
   const chars = Array.from(oneLine);
   return chars.length <= LEAN_IDENTITY_FIELD_MAX
     ? oneLine
     : `${chars.slice(0, LEAN_IDENTITY_FIELD_MAX - 1).join('')}…`;
+}
+
+/**
+ * Share `budget` bytes between the fields: a field that needs less than an
+ * even share keeps all of it, and what it leaves goes to the others. Every
+ * returned value is at most its share, cut at a code-point boundary.
+ */
+export function fitFieldsToBytes(values: string[], budget: number): string[] {
+  const result: string[] = new Array(values.length);
+  let remaining = Math.max(0, budget);
+  const order = values
+    .map((value, index) => ({ index, size: utf8Bytes(value) }))
+    .sort((a, b) => a.size - b.size);
+  order.forEach(({ index, size }, position) => {
+    const share = Math.floor(remaining / (order.length - position));
+    const value = size <= share ? values[index] : truncateUtf8(values[index], share);
+    result[index] = value;
+    remaining -= utf8Bytes(value);
+  });
+  return result;
 }
 
 /**
@@ -251,16 +292,51 @@ export function formatLeanOrientation(args: {
     'REQUIRED BEFORE ACTING OR POSTING: (1) `borg_regen mode="full"`; (2) `borg_cube` for directive + conventions; (3) confirm role playbook loaded — full regen supplies it, else `borg_role`; (4) `borg_playbook` once per session for operating disciplines. Include `model="<model-id>"` in initial regen when known.',
     '',
   ].join('\n');
-  const identity = [
-    `**Cube:** ${boundLeanIdentityField(cubeName)} — **Drone:** ${boundLeanIdentityField(droneLabel)}`,
-    `**Your role:** ${roleName ? boundLeanIdentityField(roleName) : '_(call `borg_regen` to load)_'}`,
-  ].join('\n');
-  const withCommand = (commandLine: string) => `${fixed}\n${identity}\n${commandLine}\n`;
-  if (agentKind !== 'claude') return `${fixed}\n${identity}\n`;
-  const full = withCommand(claudeMonitorCommandLine(inboxPath, monitorStateRoot));
-  return Buffer.byteLength(full, 'utf-8') < LEAN_ORIENTATION_BUDGET_BYTES
-    ? full
-    : withCommand(CLAUDE_MONITOR_COMMAND_POINTER);
+  return fitLeanOrientation({
+    fixed,
+    fields: [
+      boundLeanIdentityField(cubeName),
+      boundLeanIdentityField(droneLabel),
+      roleName ? boundLeanIdentityField(roleName) : '_(call `borg_regen` to load)_',
+    ],
+    command: agentKind === 'claude' ? claudeMonitorCommandLine(inboxPath, monitorStateRoot) : null,
+  });
+}
+
+const renderLeanIdentity = ([cube, drone, role]: string[]): string =>
+  `**Cube:** ${cube} — **Drone:** ${drone}\n**Your role:** ${role}`;
+
+/**
+ * Byte-exact assembly of the lean orientation (CR 17522f50):
+ * 1. The fixed instructions and, for Claude, the pointer line are measured
+ *    first; the pointer's bytes are always reserved.
+ * 2. The identity fields share whatever bytes remain.
+ * 3. The inline command replaces the pointer only if everything still fits.
+ * 4. The result is asserted to be under the budget; if it were not, the
+ *    identity is dropped before any instruction or the pointer.
+ */
+export function fitLeanOrientation(args: { fixed: string; fields: string[]; command: string | null }): string {
+  const { fixed, fields, command } = args;
+  const limit = LEAN_ORIENTATION_BUDGET_BYTES - 1;
+  const assemble = (identity: string | null, tail: string | null) =>
+    [fixed, ...(identity === null ? [] : [identity]), ...(tail === null ? [] : [tail])].join('\n') + '\n';
+
+  const pointer = command === null ? null : CLAUDE_MONITOR_COMMAND_POINTER;
+  const skeleton = utf8Bytes(assemble(renderLeanIdentity(fields.map(() => '')), pointer));
+  const fitted = fitFieldsToBytes(fields, limit - skeleton);
+  // An identity with nothing left in a field says nothing; leave it out.
+  const identity = fitted.some((value) => value === '') ? null : renderLeanIdentity(fitted);
+
+  let out = assemble(identity, pointer);
+  if (command !== null) {
+    const inline = assemble(identity, command);
+    if (utf8Bytes(inline) <= limit) out = inline;
+  }
+  if (utf8Bytes(out) > limit) out = assemble(null, pointer);
+  if (utf8Bytes(out) > limit) {
+    throw new Error(`lean orientation fixed text exceeds ${LEAN_ORIENTATION_BUDGET_BYTES} bytes`);
+  }
+  return out;
 }
 
 // gh#927 S3: formatClearReorientation (gh#926) is SUPERSEDED by the shared

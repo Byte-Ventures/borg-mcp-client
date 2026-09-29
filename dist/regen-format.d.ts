@@ -74,14 +74,25 @@ export declare function claudeMonitorCommandLine(inboxPath: string, monitorState
 export declare const CLAUDE_MONITOR_COMMAND_POINTER = "**Monitor command:** in `borg_stream-status` (too long here).";
 /**
  * The SessionStart hook's output is shown through a preview of about 2 KB.
- * The lean orientation stays strictly under this, and everything fixed comes
- * before anything variable, so a long value can only lose itself.
+ * The lean orientation is always strictly shorter than this many UTF-8 bytes.
  */
 export declare const LEAN_ORIENTATION_BUDGET_BYTES = 2048;
 /** Cap on each identity field in the lean orientation, in characters. */
 export declare const LEAN_IDENTITY_FIELD_MAX = 48;
-/** One line, at most LEAN_IDENTITY_FIELD_MAX characters. */
+/**
+ * Cut `value` to at most `maxBytes` UTF-8 bytes at a code-point boundary
+ * (never inside a surrogate pair), marking a cut with "…". Returns '' when
+ * not even the marker fits.
+ */
+export declare function truncateUtf8(value: string, maxBytes: number): string;
+/** One line, at most LEAN_IDENTITY_FIELD_MAX code points. */
 export declare function boundLeanIdentityField(value: string): string;
+/**
+ * Share `budget` bytes between the fields: a field that needs less than an
+ * even share keeps all of it, and what it leaves goes to the others. Every
+ * returned value is at most its share, cut at a code-point boundary.
+ */
+export declare function fitFieldsToBytes(values: string[], budget: number): string[];
 /**
  * Resolve the lean-orientation identity (gh#927), preferring the fresh
  * network `regen()` result and falling back per-field to the local
@@ -136,6 +147,20 @@ export declare function formatLeanOrientation(args: {
     monitorStateRoot?: string | null;
     agentKind: AgentKind;
     source?: string | null;
+}): string;
+/**
+ * Byte-exact assembly of the lean orientation (CR 17522f50):
+ * 1. The fixed instructions and, for Claude, the pointer line are measured
+ *    first; the pointer's bytes are always reserved.
+ * 2. The identity fields share whatever bytes remain.
+ * 3. The inline command replaces the pointer only if everything still fits.
+ * 4. The result is asserted to be under the budget; if it were not, the
+ *    identity is dropped before any instruction or the pointer.
+ */
+export declare function fitLeanOrientation(args: {
+    fixed: string;
+    fields: string[];
+    command: string | null;
 }): string;
 export declare function markArrivalAnnouncedThisProcess(): void;
 /**
