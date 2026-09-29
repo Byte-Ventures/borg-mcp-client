@@ -121,6 +121,26 @@ export interface SessionCandidate {
 }
 export declare function discoverSessionKeys(home: string): Promise<SessionCandidate[] | 'unavailable'>;
 export declare function platformOf(sessionKey: string): string;
+interface Target {
+    sessionKey: string;
+    worktree: string;
+    borgCommand: string;
+}
+/**
+ * The plan's write set as data: every value Borg writes with `config set`. It
+ * is the one list configSteps writes and planProblems validates.
+ */
+export declare function managedWrites(target: Target): Array<[key: string, value: unknown]>;
+/**
+ * Validate: every check a plan's writes apply, run on data before any
+ * question. It calls the same functions the writes call: configSetText for
+ * each value (which ConfigTransaction.set applies), the DM grammar and the
+ * absolute borg path. Empty when the plan is valid.
+ */
+export declare function planProblems(target: Target): Array<{
+    key: string;
+    reason: string;
+}>;
 export type GatewaySupervision = {
     kind: 'service';
     pid: string | null;
@@ -190,4 +210,5 @@ export declare function hermesPluginStatus(deps: Pick<HermesPluginDeps, 'env' | 
  * a rerun finishes a failed or --no-restart uninstall.
  */
 export declare function runHermesPluginUninstall(command: HermesPluginUninstallCommand, deps: HermesPluginDeps): Promise<number>;
+export {};
 //# sourceMappingURL=hermes-plugin-install.d.ts.map

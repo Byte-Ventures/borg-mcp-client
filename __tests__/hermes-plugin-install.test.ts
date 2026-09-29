@@ -30,6 +30,8 @@ import {
   activateHermesPlugin,
   configSetText,
   defaultHermesPluginDeps,
+  managedWrites,
+  planProblems,
   discoverSessionKeys,
   activationPending,
   execFileHermesCli,
@@ -1352,6 +1354,66 @@ describe('6.0.1 round 2: static write-side refusals come before any question (re
     symlinkSync(elsewhere(), join(home, 'backups'));
     expect(await install({ dryRun: true })).toBe(1);
     expect(err.join('')).toContain(`${join(home, 'backups')} is not a directory`);
+  });
+});
+
+describe('6.0.1 round 3: plan -> validate -> ask -> apply (dispatch 33154527)', () => {
+  const newlineWorktree = () => { const path = join(root, 'worktree\nnewline'); mkdirSync(path, { recursive: true }); return path; };
+
+  it('CR F2: a newline worktree as the only candidate refuses with zero questions', async () => {
+    const bad = newlineWorktree();
+    const questions: string[] = [];
+    expect(await install({}, deps({ worktrees: [bad], prompt: async (question) => { questions.push(question); return 'y'; } }))).toBe(1);
+    expect(questions).toEqual([]);
+    expect(err.join('')).toContain('No prepared worktree can be installed; nothing was changed');
+    expect(err.join('')).toContain('Refusing to write a value Hermes would reinterpret');
+    expect(writes()).toEqual([]);
+    expect(existsSync(pluginDir())).toBe(false);
+  });
+
+  it('a newline worktree next to a valid one is shown as not selectable, and the valid one is used', async () => {
+    const bad = newlineWorktree();
+    const questions: string[] = [];
+    expect(await install({}, deps({ worktrees: [bad, worktree], prompt: async (question) => { questions.push(question); return 'y'; } }))).toBe(0);
+    // One selectable worktree: no worktree question, only the DM confirmation.
+    expect(questions).toEqual([`Wake ${DM}  (Theo DM) for Borg Coordinator replies? [y/N] `]);
+    expect(out.join('')).toContain(`Using the only selectable worktree, ${worktree}. Not selectable:`);
+    expect(out.join('')).toContain('(not selectable: plugins.entries.borg-representative-push.settings.worktree: Refusing to write a value Hermes would reinterpret');
+    expect(config().plugins.entries[HERMES_PLUGIN_NAME].settings.worktree).toBe(worktree);
+  });
+
+  it('without a terminal, the several-worktrees refusal offers only valid candidates and names the excluded one', async () => {
+    const bad = newlineWorktree();
+    const second = join(root, 'worktrees', 'second'); mkdirSync(second, { recursive: true });
+    expect(await install({ sessionKey: DM }, deps({ worktrees: [worktree, bad, second], isTTY: () => false }))).toBe(1);
+    const message = err.join('');
+    const lines = message.split('\n').map((line) => line.trim()).filter((line) => line.startsWith('borg representative hermes-plugin install'));
+    expect(lines.map((line) => parseRepresentativeArgs(shellWords(line).slice(2)))).toEqual([worktree, second].map((path) => ({
+      ok: true, command: { action: 'hermes-plugin-install', hermesHome: home, worktree: path, sessionKey: DM, dryRun: false, noRestart: false },
+    })));
+    expect(message).toContain('Not selectable:');
+  });
+
+  it('structural: every value install writes with config set is in the validated write set, and validation runs every value check', async () => {
+    expect(await install()).toBe(0);
+    const target = { sessionKey: DM, worktree, borgCommand: BORG };
+    const validated = new Set(managedWrites(target).map(([key]) => key));
+    const setKeys = calls().filter(({ argv }) => argv[0] === 'config' && argv[1] === 'set').map(({ argv }) => argv[2]);
+    expect(setKeys.length).toBeGreaterThan(0);
+    for (const key of setKeys) expect(validated.has(key), key).toBe(true);
+    // Each written value goes through the same configSetText the write applies.
+    for (const [key, value] of managedWrites(target)) expect(() => configSetText(value), key).not.toThrow();
+    expect(planProblems(target)).toEqual([]);
+    // A value configSetText refuses, in each string setting, is found by validation under that key.
+    const cases: Array<[Partial<typeof target>, string]> = [
+      [{ worktree: '/a\nb' }, 'plugins.entries.borg-representative-push.settings.worktree'],
+      [{ borgCommand: '/bin/borg\n' }, 'plugins.entries.borg-representative-push.settings.borg_command'],
+      [{ borgCommand: 'borg' }, 'plugins.entries.borg-representative-push.settings.borg_command'],
+      [{ sessionKey: 'agent:main:x:group:1' }, 'plugins.entries.borg-representative-push.settings.session_key'],
+    ];
+    for (const [change, key] of cases) {
+      expect(planProblems({ ...target, ...change }).map((problem) => problem.key), key).toContain(key);
+    }
   });
 });
 
