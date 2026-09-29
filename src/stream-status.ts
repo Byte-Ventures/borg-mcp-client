@@ -268,6 +268,12 @@ export function renderStreamStatus(inputs: RenderInputs): string {
     lines.push('Continue as the owning drone, or close its duplicate agent session before relaunching from the intended worktree. The live owner releases this lock on exit; a stale lock is reclaimed automatically.');
   }
 
+  // The lean SessionStart orientation points here when the command is too
+  // long for its preview, so a Claude seat always gets the exact command.
+  if (wakePath.agentKind === 'claude' && inboxPath) {
+    lines.push(`- **inbox Monitor command**: \`${claudeMonitorCommand(inboxPath, monitorStateRoot)}\``);
+  }
+
   if (wakePath.agentKind === 'opencode' && wakePath.openCode) {
     const openCode = wakePath.openCode;
     const delivery = openCode.deliveryStates;

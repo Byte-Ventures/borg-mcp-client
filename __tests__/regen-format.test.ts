@@ -15,6 +15,11 @@ import {
   formatPlainSessionReminder,
   shouldRelayPlainSessionReminder,
   formatLeanOrientation,
+  boundLeanIdentityField,
+  CLAUDE_MONITOR_COMMAND_POINTER,
+  LEAN_IDENTITY_FIELD_MAX,
+  LEAN_ORIENTATION_BUDGET_BYTES,
+  wakePathSteps,
   wakePathArming,
   resolveLeanIdentity,
 } from '../src/regen-format';
@@ -1008,14 +1013,17 @@ describe('wakePathArming', () => {
       expect(CLAUDE_MONITOR_DENIED_FALLBACK).not.toContain('Coordinator');
     });
 
-    it('is the exact four-step Claude guidance, with both fallback branches in step 4', () => {
+    it('is the exact four-step Claude guidance, with both fallback branches in step 4, then the command', () => {
       expect(arming).toBe([
         'Arm your wake path before working:',
-        `1. **Inbox Monitor** — run a persistent Monitor on \`borg-inbox-monitor --state-root '${monitorStateRoot}' '${inboxPath}'\`; cube posts wake you.`,
+        '1. **Inbox Monitor** — run a persistent Monitor on the **Monitor command** below; cube posts wake you.',
         '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
         '3. **Monitor recovery** — on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
         `4. **Monitor not armed** — ${CLAUDE_MONITOR_LOOP_FALLBACK} ${CLAUDE_MONITOR_DENIED_FALLBACK}`,
+        `**Monitor command:** \`borg-inbox-monitor --state-root '${monitorStateRoot}' '${inboxPath}'\``,
       ].join('\n'));
+      expect(arming).toBe(`${wakePathSteps('claude')}\n**Monitor command:** \`borg-inbox-monitor --state-root '${monitorStateRoot}' '${inboxPath}'\``);
+      expect(wakePathSteps('claude')).not.toContain(inboxPath);
       // Draining is defined (with its exact call) before the fallbacks refer to it.
       expect(arming.indexOf('drain `borg_read-log unread_only=true`')).toBeLessThan(arming.indexOf('/loop'));
     });
@@ -1116,9 +1124,109 @@ describe('formatLeanOrientation', () => {
     expect(out).toContain(
       'on its exit notification, or when none is armed: Re-arm the Monitor first, then drain `borg_read-log unread_only=true`.',
     );
-    expect(out).toContain(wakePathArming('claude', base.inboxPath, base.monitorStateRoot));
+    expect(out).toContain(wakePathSteps('claude'));
+    expect(out).toContain(
+      `**Monitor command:** \`borg-inbox-monitor --state-root '${base.monitorStateRoot}' '${base.inboxPath}'\``,
+    );
     expect(out).toContain('Invoke `/loop` with no arguments;');
     expect(out).not.toContain('ScheduleWakeup');
+  });
+
+  describe('size budget: every fixed instruction precedes every variable value (CR db7bafab)', () => {
+    const fixedParts = (agentKind: 'claude' | 'codex' | 'opencode', source?: string) => [
+      'You are a Borg drone — coordinate through the cube log',
+      wakePathSteps(agentKind),
+      'REQUIRED BEFORE ACTING OR POSTING:',
+      'Include `model="<model-id>"` in initial regen when known.',
+      ...(source === 'clear' && agentKind === 'claude' ? ['_Quiet-clear fallback:'] : []),
+    ];
+    const root = (length: number) => {
+      if (length === 0) return null;
+      const suffix = '/.borgmcp/inbox-monitor';
+      const body = `/Users/${'nested-worktree-directory/'.repeat(40)}`.slice(0, Math.max(1, length - suffix.length));
+      return `${body}${suffix}`;
+    };
+    const longLabel = 'x'.repeat(300);
+
+    for (const rootLength of [0, 155, 535, 2000]) {
+      for (const agentKind of ['claude', 'codex', 'opencode'] as const) {
+        for (const source of [undefined, 'startup', 'clear', 'compact', 'resume']) {
+          it(`${agentKind} ${source ?? 'default'} with a ${rootLength}-character state root and long identity`, () => {
+            const out = formatLeanOrientation({
+              ...base,
+              cubeName: `cube-${longLabel}`,
+              droneLabel: `label-${longLabel}\nwith a newline`,
+              roleName: `role-${longLabel}`,
+              inboxPath: `${root(rootLength) ?? '/tmp'}/inboxes/${'a'.repeat(36)}/${'b'.repeat(36)}.log`,
+              monitorStateRoot: root(rootLength),
+              agentKind,
+              source,
+            });
+            expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(LEAN_ORIENTATION_BUDGET_BYTES);
+            const preview = Buffer.from(out, 'utf-8').subarray(0, 2048).toString('utf-8');
+            for (const part of fixedParts(agentKind, source)) expect(preview).toContain(part);
+            // Identity is bounded to one line per field.
+            expect(out).not.toContain(longLabel);
+            expect(out).not.toContain('\nwith a newline');
+            // Fixed instructions all come before the first variable value.
+            const firstVariable = out.indexOf('**Cube:**');
+            for (const part of fixedParts(agentKind, source)) {
+              expect(out.indexOf(part)).toBeLessThan(firstVariable);
+            }
+            if (agentKind === 'claude') {
+              const command = out.includes(root(rootLength) ?? '/tmp/inboxes')
+                ? `**Monitor command:** \``
+                : CLAUDE_MONITOR_COMMAND_POINTER;
+              expect(out).toContain(command);
+              expect(out.indexOf('**Monitor command:**')).toBeGreaterThan(firstVariable);
+            } else {
+              expect(out).not.toContain('**Monitor command:**');
+            }
+          });
+        }
+      }
+    }
+
+    it('renders a realistic seat in full, with the exact command', () => {
+      const inboxPath =
+        '/Users/operator/.config/borgmcp/inboxes/326ea162-5d46-4920-9bfb-45686c4c2e7d/4cf3a767-57a3-4578-9b07-f7113c0b2061.log';
+      const monitorStateRoot = '/Users/operator/Development/borg-mcp-client/wt-wake-path/.borgmcp/inbox-monitor';
+      const out = formatLeanOrientation({
+        cubeName: 'borg-mcp',
+        droneLabel: 'thirty-six-of-forty-builder',
+        roleName: 'Builder',
+        inboxPath,
+        monitorStateRoot,
+        agentKind: 'claude',
+        source: 'clear',
+      });
+      expect(out).toBe([
+        '# Borg drone orientation',
+        '',
+        "_(`/clear` cleared Claude's conversation — re-arm the inbox Monitor now.)_",
+        '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, re-arm the Monitor, then drain the unread log._',
+        '',
+        "You are a Borg drone — coordinate through the cube log, and never pause for the user. Blocked → escalate to your cube's coordinating role.",
+        '',
+        wakePathSteps('claude'),
+        '',
+        'REQUIRED BEFORE ACTING OR POSTING: (1) `borg_regen mode="full"`; (2) `borg_cube` for directive + conventions; (3) confirm role playbook loaded — full regen supplies it, else `borg_role`; (4) `borg_playbook` once per session for operating disciplines. Include `model="<model-id>"` in initial regen when known.',
+        '',
+        '**Cube:** borg-mcp — **Drone:** thirty-six-of-forty-builder',
+        '**Your role:** Builder',
+        `**Monitor command:** \`borg-inbox-monitor --state-root '${monitorStateRoot}' '${inboxPath}'\``,
+        '',
+      ].join('\n'));
+      expect(Buffer.byteLength(out, 'utf-8')).toBeLessThan(LEAN_ORIENTATION_BUDGET_BYTES);
+    });
+
+    it('bounds identity fields to one line of at most 48 characters', () => {
+      expect(boundLeanIdentityField('short')).toBe('short');
+      expect(boundLeanIdentityField('a\nb\r\nc\td')).toBe('a b c d');
+      const bounded = boundLeanIdentityField('y'.repeat(100));
+      expect(Array.from(bounded)).toHaveLength(LEAN_IDENTITY_FIELD_MAX);
+      expect(bounded.endsWith('…')).toBe(true);
+    });
   });
 
   it('embeds the required Codex stream/inbox/log-drain wake path', () => {
@@ -1158,7 +1266,7 @@ describe('formatLeanOrientation', () => {
     expect(out).toContain('borg_read-log unread_only=true');
     expect(out).toContain('Monitor');
     expect(out).toContain(
-      'call `borg_regen mode="full"`, re-arm the Monitor, then drain `borg_read-log unread_only=true`.',
+      'call `borg_regen mode="full"`, re-arm the Monitor, then drain the unread log.',
     );
     expect(out).not.toContain('ScheduleWakeup');
   });

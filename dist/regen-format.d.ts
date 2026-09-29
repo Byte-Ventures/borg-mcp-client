@@ -58,6 +58,31 @@ export declare function shouldRelayPlainSessionReminder(args: {
  */
 export declare function wakePathArming(agentKind: AgentKind, inboxPath: string, monitorStateRoot?: string | null): string;
 /**
+ * The fixed wake-path instructions, with no path or identity in them. The
+ * Claude steps refer to the **Monitor command** line, which every surface
+ * renders after them, so a long path can never push an instruction out of a
+ * truncated preview.
+ */
+export declare function wakePathSteps(agentKind: AgentKind): string;
+/**
+ * The line a Claude drone copies its Monitor command from. Launch-time health
+ * checks make a missing or version-skewed PATH target visible instead of
+ * silently embedding a stale installation path here.
+ */
+export declare function claudeMonitorCommandLine(inboxPath: string, monitorStateRoot?: string | null): string;
+/** Used in place of the command when it would not fit the lean budget. */
+export declare const CLAUDE_MONITOR_COMMAND_POINTER = "**Monitor command:** in `borg_stream-status` (too long here).";
+/**
+ * The SessionStart hook's output is shown through a preview of about 2 KB.
+ * The lean orientation stays strictly under this, and everything fixed comes
+ * before anything variable, so a long value can only lose itself.
+ */
+export declare const LEAN_ORIENTATION_BUDGET_BYTES = 2048;
+/** Cap on each identity field in the lean orientation, in characters. */
+export declare const LEAN_IDENTITY_FIELD_MAX = 48;
+/** One line, at most LEAN_IDENTITY_FIELD_MAX characters. */
+export declare function boundLeanIdentityField(value: string): string;
+/**
  * Resolve the lean-orientation identity (gh#927), preferring the fresh
  * network `regen()` result and falling back per-field to the local
  * `getActiveCube` state. When `result` is null — the net-free fallback path

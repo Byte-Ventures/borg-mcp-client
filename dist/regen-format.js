@@ -79,6 +79,18 @@ export function shouldRelayPlainSessionReminder(args) {
  * shell-escaped before rendering the launch/orientation command.
  */
 export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
+    const steps = wakePathSteps(agentKind);
+    return agentKind === 'claude'
+        ? `${steps}\n${claudeMonitorCommandLine(inboxPath, monitorStateRoot)}`
+        : steps;
+}
+/**
+ * The fixed wake-path instructions, with no path or identity in them. The
+ * Claude steps refer to the **Monitor command** line, which every surface
+ * renders after them, so a long path can never push an instruction out of a
+ * truncated preview.
+ */
+export function wakePathSteps(agentKind) {
     if (agentKind === 'codex') {
         return [
             'Required Codex wake path: Borg activity stream → inbox wake channel via app-server remote control.',
@@ -90,16 +102,39 @@ export function wakePathArming(agentKind, inboxPath, monitorStateRoot) {
     if (agentKind === 'opencode') {
         return OPENCODE_WAKE_PATH_GUIDANCE;
     }
-    // Launch-time health checks make a missing or version-skewed PATH target
-    // visible instead of silently embedding a stale installation path here.
-    const monitorCommand = claudeMonitorCommand(inboxPath, monitorStateRoot);
     return [
         'Arm your wake path before working:',
-        `1. **Inbox Monitor** — run a persistent Monitor on \`${monitorCommand}\`; cube posts wake you.`,
+        '1. **Inbox Monitor** — run a persistent Monitor on the **Monitor command** below; cube posts wake you.',
         '2. **On every wake** — drain `borg_read-log unread_only=true`. If empty, resume prior work without a full regen or liveness post; safety probes may still wake.',
         `3. **Monitor recovery** — on its exit notification, or when none is armed: ${CLAUDE_MONITOR_REARM_THEN_DRAIN}`,
         `4. **Monitor not armed** — ${CLAUDE_MONITOR_LOOP_FALLBACK} ${CLAUDE_MONITOR_DENIED_FALLBACK}`,
     ].join('\n');
+}
+/**
+ * The line a Claude drone copies its Monitor command from. Launch-time health
+ * checks make a missing or version-skewed PATH target visible instead of
+ * silently embedding a stale installation path here.
+ */
+export function claudeMonitorCommandLine(inboxPath, monitorStateRoot) {
+    return `**Monitor command:** \`${claudeMonitorCommand(inboxPath, monitorStateRoot)}\``;
+}
+/** Used in place of the command when it would not fit the lean budget. */
+export const CLAUDE_MONITOR_COMMAND_POINTER = '**Monitor command:** in `borg_stream-status` (too long here).';
+/**
+ * The SessionStart hook's output is shown through a preview of about 2 KB.
+ * The lean orientation stays strictly under this, and everything fixed comes
+ * before anything variable, so a long value can only lose itself.
+ */
+export const LEAN_ORIENTATION_BUDGET_BYTES = 2048;
+/** Cap on each identity field in the lean orientation, in characters. */
+export const LEAN_IDENTITY_FIELD_MAX = 48;
+/** One line, at most LEAN_IDENTITY_FIELD_MAX characters. */
+export function boundLeanIdentityField(value) {
+    const oneLine = value.replace(/[\r\n\t]+/g, ' ');
+    const chars = Array.from(oneLine);
+    return chars.length <= LEAN_IDENTITY_FIELD_MAX
+        ? oneLine
+        : `${chars.slice(0, LEAN_IDENTITY_FIELD_MAX - 1).join('')}…`;
 }
 /**
  * Resolve the lean-orientation identity (gh#927), preferring the fresh
@@ -149,22 +184,32 @@ export function formatLeanOrientation(args) {
             : agentKind === 'claude'
                 ? [
                     '\n_(`/clear` cleared Claude\'s conversation — re-arm the inbox Monitor now.)_',
-                    '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, re-arm the Monitor, then drain `borg_read-log unread_only=true`._\n',
+                    '_Quiet-clear fallback: if a later turn follows silence, inspect `borg_stream-status` + `borg_roster`; call `borg_regen mode="full"`, re-arm the Monitor, then drain the unread log._\n',
                 ].join('\n')
                 : '\n_(OpenCode started a new session; Borg supplied this orientation automatically.)_\n'
         : '';
-    return [
-        `# Cube: ${cubeName} — ${droneLabel}`,
-        '',
-        `**Your role:** ${roleName || '_(call `borg_regen` to load)_'}`,
+    // Every fixed instruction first; identity and the Monitor command last.
+    const fixed = [
+        '# Borg drone orientation',
         clearNote,
         'You are a Borg drone — coordinate through the cube log, and never pause for the user. Blocked → escalate to your cube\'s coordinating role.',
         '',
-        wakePathArming(agentKind, inboxPath, monitorStateRoot),
+        wakePathSteps(agentKind),
         '',
-        'REQUIRED BEFORE ACTING OR POSTING: (1) `borg_regen mode="full"`; (2) `borg_cube` for directive + conventions; (3) confirm role playbook loaded — full regen supplies it, else `borg_role`; (4) `borg_playbook` once per session for operating disciplines. This orientation stays lean — they are not inlined. Include `model="<model-id>"` in initial regen when known.',
+        'REQUIRED BEFORE ACTING OR POSTING: (1) `borg_regen mode="full"`; (2) `borg_cube` for directive + conventions; (3) confirm role playbook loaded — full regen supplies it, else `borg_role`; (4) `borg_playbook` once per session for operating disciplines. Include `model="<model-id>"` in initial regen when known.',
         '',
     ].join('\n');
+    const identity = [
+        `**Cube:** ${boundLeanIdentityField(cubeName)} — **Drone:** ${boundLeanIdentityField(droneLabel)}`,
+        `**Your role:** ${roleName ? boundLeanIdentityField(roleName) : '_(call `borg_regen` to load)_'}`,
+    ].join('\n');
+    const withCommand = (commandLine) => `${fixed}\n${identity}\n${commandLine}\n`;
+    if (agentKind !== 'claude')
+        return `${fixed}\n${identity}\n`;
+    const full = withCommand(claudeMonitorCommandLine(inboxPath, monitorStateRoot));
+    return Buffer.byteLength(full, 'utf-8') < LEAN_ORIENTATION_BUDGET_BYTES
+        ? full
+        : withCommand(CLAUDE_MONITOR_COMMAND_POINTER);
 }
 // gh#927 S3: formatClearReorientation (gh#926) is SUPERSEDED by the shared
 // formatLeanOrientation core — the /clear case is now just

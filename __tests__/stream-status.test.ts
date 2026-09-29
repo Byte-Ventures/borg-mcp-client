@@ -209,7 +209,38 @@ describe('renderStreamStatus — 5-state top-line per drone-4 contract', () => {
     expect(out).toContain('- **stream owner pid**: 1234');
     expect(out).toContain('- **stream owner cwd**: /work/borg-mcp-codex');
     expect(out).toContain('close its duplicate agent session before relaunching from the intended worktree');
-    expect(out).not.toContain('Monitor command');
+    expect(out).not.toContain('> Monitor command');
+  });
+
+  it('always shows a Claude seat its exact Monitor command, which the lean orientation may point to', () => {
+    const out = renderStreamStatus({
+      status: freshStatus({ connected: true, lastWireActivityAt: '2026-05-11T12:00:00.000Z' }),
+      inboxMonitorHealthy: true,
+      inboxPath: '/tmp/inbox dir/drone.log',
+      monitorStateRoot: '/work/repo/.borgmcp/inbox-monitor',
+      droneLabel: 'd',
+      cubeName: 'c',
+      humanAgo: fakeHumanAgo,
+    });
+    expect(out).toContain(
+      "- **inbox Monitor command**: `borg-inbox-monitor --state-root '/work/repo/.borgmcp/inbox-monitor' '/tmp/inbox dir/drone.log'`",
+    );
+    expect(out).not.toContain('Real-time wake-up');
+  });
+
+  it('shows no Monitor command to a Codex or OpenCode seat', () => {
+    for (const agentKind of ['codex', 'opencode'] as const) {
+      const out = renderStreamStatus({
+        status: freshStatus({ connected: true, lastWireActivityAt: '2026-05-11T12:00:00.000Z' }),
+        inboxMonitorHealthy: true,
+        wakePath: { agentKind, healthy: true, openCode: null } as any,
+        inboxPath: '/tmp/inbox.log',
+        droneLabel: 'd',
+        cubeName: 'c',
+        humanAgo: fakeHumanAgo,
+      });
+      expect(out).not.toContain('borg-inbox-monitor');
+    }
   });
 });
 
@@ -236,7 +267,8 @@ describe('renderStreamStatus — precedence rules', () => {
     );
     // State-5 body line should NOT appear when wire is down — the
     // upstream cause owns the surface.
-    expect(out).not.toContain('inbox-monitor');
+    expect(out).not.toContain('**inbox-monitor**');
+    expect(out).not.toContain('> Monitor command');
     expect(out).not.toContain('Real-time wake-up');
   });
 
