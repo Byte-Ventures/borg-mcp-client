@@ -124,6 +124,25 @@ export function defaultHermesPluginDeps() {
     };
 }
 export class HermesPluginError extends Error {
+    commands;
+    /**
+     * @param commands retry commands inside the message. They are printed with
+     *   their exact bytes (shell-quoted, for an exact round-trip); every other
+     *   line is display text and is cleaned when printed.
+     */
+    constructor(message, commands = []) {
+        super(message);
+        this.commands = commands;
+    }
+}
+/**
+ * Stderr text from an error: each line cleaned of control, C1 and bidi
+ * characters (a config value or a Hermes reply can carry them), except the
+ * error's own retry commands, which keep their exact shell-quoted bytes.
+ */
+function printableMessage(message, commands = []) {
+    const exact = new Set(commands);
+    return message.split('\n').map((line) => (exact.has(line.trim()) ? line : printableUntrusted(line, 4096))).join('\n');
 }
 function errnoCode(error) {
     return error?.code;
@@ -756,9 +775,10 @@ async function planSessions(home, configured, explicit, dryRun) {
 }
 /** Without a terminal the conversation is never chosen: refused with the exact commands. */
 function refuseUnconfirmedSession(candidates, retry) {
+    const commands = candidates.map((candidate) => retry(candidate.sessionKey));
     throw new HermesPluginError(`Borg does not choose the conversation to wake without your confirmation. Gateway DM conversations found:\n` +
         `${listCandidates(candidates)}Run install with the one that is yours, for example:\n` +
-        candidates.map((candidate) => `  ${retry(candidate.sessionKey)}\n`).join('').trimEnd());
+        commands.map((command) => `  ${command}\n`).join('').trimEnd(), commands);
 }
 function listCandidates(candidates) {
     return candidates.map((candidate, index) => `  ${index + 1}. ${describeCandidate(candidate)}\n`).join('');
@@ -810,9 +830,10 @@ async function selectPlan(deps, interactive, worktrees, sessions, borgCommand, r
         throw new HermesPluginError(`No prepared worktree can be installed; nothing was changed:\n${notSelectable.trimEnd()}`);
     }
     if (validated.worktrees.length > 1 && !interactive) {
+        const commands = validated.worktrees.map((path) => retry.worktree(path));
         throw new HermesPluginError(`Several representative worktrees are prepared. Run install with the one to use:\n` +
-            validated.worktrees.map((path) => `  ${retry.worktree(path)}\n`).join('') +
-            (notSelectable ? `Not selectable:\n${notSelectable}` : '').trimEnd());
+            commands.map((command) => `  ${command}\n`).join('') +
+            (notSelectable ? `Not selectable:\n${notSelectable}` : '').trimEnd(), commands);
     }
     let worktree;
     if (validated.worktrees.length > 1) {
@@ -1322,11 +1343,12 @@ async function reportFailure(error, tx, deps, restoreFiles) {
     }
     if (tx.backupPath)
         outcome += `config.yaml as it was before this run: ${tx.backupPath}\n`;
-    deps.stderr(`${message}\n${outcome}`);
+    // A rollback's "left" reasons can quote config values and Hermes replies.
+    deps.stderr(`${printableMessage(`${message}\n${outcome}`)}`);
 }
 function failure(error, deps, prefix) {
     const message = error instanceof HermesPluginError ? error.message : `${prefix} failed: ${error instanceof Error ? error.message : String(error)}`;
-    deps.stderr(`${message}\n`);
+    deps.stderr(`${printableMessage(message, error instanceof HermesPluginError ? error.commands : [])}\n`);
     return 1;
 }
 export async function runHermesPluginInstall(command, deps) {

@@ -61,6 +61,13 @@ export declare function execFileHermesCli(command: string, home: string, env: No
 export declare function defaultBorgCommand(): string;
 export declare function defaultHermesPluginDeps(): HermesPluginDeps;
 export declare class HermesPluginError extends Error {
+    readonly commands: readonly string[];
+    /**
+     * @param commands retry commands inside the message. They are printed with
+     *   their exact bytes (shell-quoted, for an exact round-trip); every other
+     *   line is display text and is cleaned when printed.
+     */
+    constructor(message: string, commands?: readonly string[]);
 }
 /** Control, C1 and bidirectional-override characters are removed before anything untrusted is printed. */
 export declare function printableUntrusted(text: string, max?: number): string;

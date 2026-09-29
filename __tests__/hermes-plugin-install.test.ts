@@ -1460,3 +1460,35 @@ describe('6.0.1 Security P3: displayed worktree paths are cleaned (entry 62ca981
   });
 });
 
+describe('6.0.1 Security boundary: failure text is cleaned (dispatch 1f772056)', () => {
+  it('a hostile rollback value is shown cleaned in "Refusing to write a value Hermes would reinterpret"', async () => {
+    // A previous worktree value in Hermes config that configSetText refuses (it spans lines),
+    // carrying ESC, a C1 character (U+009B) and U+202E.
+    const hostile = 'old\n\u001b[31m\u009bX\u202eY';
+    writeFileSync(join(home, 'config.yaml'), JSON.stringify({
+      ...JSON.parse(ORIGINAL_CONFIG),
+      plugins: { enabled: ['other-plugin'], entries: { [HERMES_PLUGIN_NAME]: { settings: { worktree: hostile } } } },
+    }));
+    // Fail after the worktree write, so rollback tries to restore the hostile value.
+    setRules([{ match: 'config set mcp_servers.borg-representative', code: 1, stderr: 'boom' }]);
+    expect(await install()).toBe(1);
+    const message = err.join('');
+    expect(message).toContain('Refusing to write a value Hermes would reinterpret');
+    expect(message).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/);
+    // The value itself stays in Hermes config as it was (never overwritten by a cleaned copy).
+    expect(config().plugins.entries[HERMES_PLUGIN_NAME].settings.worktree).toBe(worktree);
+  });
+
+  it('retry commands in a refusal keep their exact bytes while the rest is cleaned', async () => {
+    const esc = join(root, 'wt\u001b[31mX\u202eY');
+    mkdirSync(esc, { recursive: true });
+    expect(await install({ sessionKey: DM }, deps({ worktrees: [esc, worktree], isTTY: () => false }))).toBe(1);
+    const lines = err.join('').split('\n');
+    const commandLines = lines.filter((line) => line.trim().startsWith('borg representative hermes-plugin install'));
+    expect(commandLines.some((line) => line.includes('\u001b'))).toBe(true); // exact bytes, shell-quoted
+    for (const line of lines.filter((line) => !commandLines.includes(line))) {
+      expect(line, JSON.stringify(line)).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/);
+    }
+  });
+});
+
